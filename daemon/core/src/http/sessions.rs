@@ -8,6 +8,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+mod pane;
+
 pub fn router() -> Router<SessionState> {
     Router::new()
         .route("/sessions", get(list).post(create))
@@ -15,6 +17,7 @@ pub fn router() -> Router<SessionState> {
             "/sessions/{session_id}",
             get(get_session).patch(rename).delete(delete),
         )
+        .merge(pane::router())
 }
 
 #[derive(Deserialize, Default)]
