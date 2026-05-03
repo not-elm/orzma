@@ -75,89 +75,108 @@ impl LayoutCellStore {
 
     /// Close a leaf cell using sibling-promote semantics.
     ///
-    /// # Algorithm
-    /// 1. **Pre-validate (no mutation)**: target exists and is `Cell::Pane`;
-    ///    if non-root, parent exists and is `Cell::Split`; sibling found via
-    ///    `obtain_other_side_cell_id`; grandparent (if any) exists and is `Cell::Split`.
-    ///    Any failure → `Err`, store unchanged.
-    /// 2. **Commit (atomic, fixed order)**: remove target; remove parent split (if any);
-    ///    set sibling.parent = grandparent_id_or_None; rewrite grandparent's child
-    ///    slot from parent_id to sibling_id (preserving lhs/rhs orientation).
-    ///
-    /// # Discipline rule (reviewers must enforce)
-    /// All fallible reads (`?`-returning) MUST appear before any `remove`/`cell_mut`.
-    /// The commit phase is infallible by construction. Rust's type system does not
-    /// enforce this in-function ordering.
+    /// Reads as: validate the target is a closable leaf, plan the collapse from
+    /// pure reads, then atomically apply it. The `&self → CollapsePlan → &mut self`
+    /// flow encodes pre-validate-then-commit atomicity in the type signature: the
+    /// planning phase cannot mutate, so any `Err` it returns leaves the store
+    /// byte-identical to the pre-call state.
     ///
     /// # Identifier stability
     /// Only `id` (and the parent split, if any) are removed from the store.
-    /// All other `CellId`s remain valid; the only `LayoutCell` field updated besides
-    /// removals is the promoted sibling's `parent` (and the grandparent's child slot).
+    /// Every other `CellId` continues to resolve to the same cell; only the
+    /// promoted sibling's `parent` field and the grandparent's child slot are updated.
     pub fn close_cell(&mut self, id: &CellId) -> OzmuxResult<CloseOutcome> {
-        // ─── Pre-validate phase: no mutation ───
         let target = self.cell(id)?;
-        let Cell::Pane(_) = &target.cell else {
+        if !matches!(target.cell, Cell::Pane(_)) {
             return Err(OzmuxError::InvalidCellType(id.clone()));
-        };
-        let parent_id = target.parent.clone();
+        }
 
-        let Some(parent_id) = parent_id else {
-            // Target is the root pane (parentless). Commit phase trivial.
+        let Some(parent_id) = target.parent.clone() else {
+            // Target has no parent — it IS the root pane. Removing it empties the tree.
             self.0.remove(id);
             return Ok(CloseOutcome::TreeEmptied);
         };
 
+        let plan = self.plan_collapse(id, parent_id)?;
+        Ok(self.apply_collapse(id, plan))
+    }
+
+    /// Read-only validation: gather everything `apply_collapse` needs, without mutating.
+    ///
+    /// Taking `&self` makes it a compile-time guarantee that this phase performs no
+    /// writes — any `Err` propagated from here leaves the store unchanged.
+    fn plan_collapse(&self, target_id: &CellId, parent_id: CellId) -> OzmuxResult<CollapsePlan> {
         let parent = self.cell(&parent_id)?;
         let Cell::Split(parent_split) = &parent.cell else {
             return Err(OzmuxError::InvalidCellType(parent_id));
         };
-        let sibling_id = parent_split.obtain_other_side_cell_id(id).clone();
+        let sibling_id = parent_split.obtain_other_side_cell_id(target_id).clone();
         let grandparent_id = parent.parent.clone();
 
         if let Some(gp_id) = grandparent_id.as_ref() {
             let grandparent = self.cell(gp_id)?;
-            let Cell::Split(_) = &grandparent.cell else {
+            if !matches!(grandparent.cell, Cell::Split(_)) {
                 return Err(OzmuxError::InvalidCellType(gp_id.clone()));
-            };
+            }
         }
 
-        // ─── Commit phase: all checks passed; mutations are infallible ───
-        self.0.remove(id);
+        Ok(CollapsePlan {
+            parent_id,
+            sibling_id,
+            grandparent_id,
+        })
+    }
+
+    /// Atomically apply a planned collapse. Infallible by construction — every lookup
+    /// here was already verified during planning, so `expect`/`unreachable!` are safe.
+    fn apply_collapse(&mut self, target_id: &CellId, plan: CollapsePlan) -> CloseOutcome {
+        self.0.remove(target_id);
         self.0
-            .remove(&parent_id)
-            .expect("parent existed in pre-validate");
+            .remove(&plan.parent_id)
+            .expect("parent existed in plan");
         let sibling = self
             .0
-            .get_mut(&sibling_id)
-            .expect("sibling existed in pre-validate");
-        sibling.parent = grandparent_id.clone();
+            .get_mut(&plan.sibling_id)
+            .expect("sibling existed in plan");
+        sibling.parent = plan.grandparent_id.clone();
 
-        match grandparent_id {
+        match plan.grandparent_id {
             Some(gp_id) => {
-                let grandparent = self
-                    .0
-                    .get_mut(&gp_id)
-                    .expect("grandparent existed in pre-validate");
-                let Cell::Split(grandparent_split) = &mut grandparent.cell else {
-                    unreachable!("grandparent type checked in pre-validate phase");
-                };
-                if grandparent_split.lhs_cell == parent_id {
-                    grandparent_split.lhs_cell = sibling_id.clone();
-                } else if grandparent_split.rhs_cell == parent_id {
-                    grandparent_split.rhs_cell = sibling_id.clone();
-                } else {
-                    unreachable!(
-                        "grandparent referenced parent at lhs or rhs in pre-validate phase"
-                    );
-                }
-                Ok(CloseOutcome::SiblingPromoted {
-                    survivor: sibling_id,
+                self.rewire_grandparent_child(&gp_id, &plan.parent_id, &plan.sibling_id);
+                CloseOutcome::SiblingPromoted {
+                    survivor: plan.sibling_id,
                     new_parent: gp_id,
-                })
+                }
             }
-            None => Ok(CloseOutcome::RootReplaced {
-                new_root: sibling_id,
-            }),
+            None => CloseOutcome::RootReplaced {
+                new_root: plan.sibling_id,
+            },
+        }
+    }
+
+    /// Replace `old_child` with `new_child` in `grandparent_id`'s split, preserving
+    /// the lhs/rhs slot orientation (slot pinning).
+    fn rewire_grandparent_child(
+        &mut self,
+        grandparent_id: &CellId,
+        old_child: &CellId,
+        new_child: &CellId,
+    ) {
+        let grandparent = self
+            .0
+            .get_mut(grandparent_id)
+            .expect("grandparent existed in plan");
+        let Cell::Split(gp_split) = &mut grandparent.cell else {
+            unreachable!("grandparent type checked in plan");
+        };
+        if &gp_split.lhs_cell == old_child {
+            gp_split.lhs_cell = new_child.clone();
+        } else if &gp_split.rhs_cell == old_child {
+            gp_split.rhs_cell = new_child.clone();
+        } else {
+            unreachable!(
+                "bidirectional parent/child invariant: grandparent must reference old_child"
+            );
         }
     }
 
@@ -214,6 +233,15 @@ impl LayoutCellStore {
         }
         Ok(())
     }
+}
+
+/// Internal record gathered by `LayoutCellStore::plan_collapse` and consumed by
+/// `apply_collapse`. Constructed only inside `cell.rs`, so its existence implies
+/// every reference inside has been verified against the store.
+struct CollapsePlan {
+    parent_id: CellId,
+    sibling_id: CellId,
+    grandparent_id: Option<CellId>,
 }
 
 define_string_new_type!(CellId);
