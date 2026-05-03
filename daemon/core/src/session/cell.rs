@@ -28,26 +28,37 @@ impl LayoutCellStore {
         }
     }
 
-    pub fn create_split_cell(
+    pub fn split_cell(
         &mut self,
-        lhs: CellId,
-        rhs: CellId,
+        target: CellId,
+        new_cell: CellId,
+        new_cell_side: Side,
         orientation: SplitOrientation,
     ) -> OzmuxResult<CellId> {
         let split_cell_id = CellId::new();
-        let lhs_parent = self.parent(&lhs)?.cloned();
-        let rhs_parent = self.parent(&rhs)?.cloned();
-        self.cell_mut(&lhs)?.parent.replace(split_cell_id.clone());
-        self.cell_mut(&rhs)?.parent.replace(split_cell_id.clone());
+        let target_parent = self.parent(&target)?.cloned();
+        // upfront existence check for new_cell — keeps atomicity: if new_cell
+        // is missing we return Err before any mutation (see Test #7).
+        self.cell(&new_cell)?;
+        self.cell_mut(&target)?
+            .parent
+            .replace(split_cell_id.clone());
+        self.cell_mut(&new_cell)?
+            .parent
+            .replace(split_cell_id.clone());
 
-        self.replace_child_to_split_cell(&lhs, lhs_parent.clone(), split_cell_id.clone())?;
-        self.replace_child_to_split_cell(&rhs, rhs_parent, split_cell_id.clone())?;
+        self.replace_child_to_split_cell(&target, target_parent.clone(), split_cell_id.clone())?;
+
+        let (lhs_cell, rhs_cell) = match new_cell_side {
+            Side::Before => (new_cell, target),
+            Side::After => (target, new_cell),
+        };
 
         self.0.insert(
             split_cell_id.clone(),
             LayoutCell {
-                parent: lhs_parent,
-                cell: Cell::Split(SplitCell::new(lhs, rhs, orientation)),
+                parent: target_parent,
+                cell: Cell::Split(SplitCell::new(lhs_cell, rhs_cell, orientation)),
             },
         );
         Ok(split_cell_id)
@@ -153,6 +164,14 @@ pub enum SplitOrientation {
     Horizontal,
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Side {
+    /// new_cell を target の前 (左/上) に置く
+    Before,
+    /// new_cell を target の後 (右/下) に置く
+    After,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,7 +179,7 @@ mod tests {
     use std::collections::HashMap;
 
     /// parent: None の Pane Cell を作成して store に挿入し、その CellId を返す。
-    /// tmux における「新規ペイン」(create_split_cell の rhs 引数として渡す対象) に相当。
+    /// tmux における「新規ペイン」(split_cell の new_cell 引数として渡す対象) に相当。
     fn new_root_pane(store: &mut LayoutCellStore) -> CellId {
         let pane_id = PaneId::new();
         store.create_pane_cell(pane_id, None)
@@ -275,7 +294,12 @@ mod tests {
         assert_eq!(store.cell(&rhs).unwrap().parent, None);
 
         let split_id = store
-            .create_split_cell(lhs.clone(), rhs.clone(), SplitOrientation::Horizontal)
+            .split_cell(
+                lhs.clone(),
+                rhs.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .expect("split should succeed");
 
         // 新 split がルートになる
@@ -302,19 +326,29 @@ mod tests {
     }
 
     #[test]
-    fn split_lhs_position_of_existing_split() {
+    fn split_target_in_lhs_position_of_existing_split() {
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
         // 初期 split: P{lhs=A, rhs=B}
         let p = store
-            .create_split_cell(a.clone(), b.clone(), SplitOrientation::Horizontal)
+            .split_cell(
+                a.clone(),
+                b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .expect("first split");
 
         // P の lhs 側 (= A) を分割する
         let new_pane = new_root_pane(&mut store);
         let new_split = store
-            .create_split_cell(a.clone(), new_pane.clone(), SplitOrientation::Vertical)
+            .split_cell(
+                a.clone(),
+                new_pane.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
             .expect("second split");
 
         // P.lhs_cell が new_split に差し替わり、P.rhs_cell は B のまま
@@ -353,19 +387,29 @@ mod tests {
     }
 
     #[test]
-    fn split_rhs_position_of_existing_split() {
+    fn split_target_in_rhs_position_of_existing_split() {
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
         // 初期 split: P{lhs=A, rhs=B}
         let p = store
-            .create_split_cell(a.clone(), b.clone(), SplitOrientation::Horizontal)
+            .split_cell(
+                a.clone(),
+                b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .expect("first split");
 
         // P の rhs 側 (= B) を分割する
         let new_pane = new_root_pane(&mut store);
         let new_split = store
-            .create_split_cell(b.clone(), new_pane.clone(), SplitOrientation::Vertical)
+            .split_cell(
+                b.clone(),
+                new_pane.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
             .expect("second split");
 
         // P.rhs_cell が new_split に差し替わり、P.lhs_cell は A のまま
@@ -406,19 +450,34 @@ mod tests {
         let b = new_root_pane(&mut store);
         // p_root{lhs=A, rhs=B}
         let p_root = store
-            .create_split_cell(a.clone(), b.clone(), SplitOrientation::Horizontal)
+            .split_cell(
+                a.clone(),
+                b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .unwrap();
 
         // A をさらに分割: p_root{lhs=mid{lhs=A, rhs=C}, rhs=B}
         let c = new_root_pane(&mut store);
         let mid = store
-            .create_split_cell(a.clone(), c.clone(), SplitOrientation::Vertical)
+            .split_cell(
+                a.clone(),
+                c.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
             .unwrap();
 
         // A をもう一度分割: p_root{lhs=mid{lhs=inner{lhs=A, rhs=D}, rhs=C}, rhs=B}
         let d = new_root_pane(&mut store);
         let inner = store
-            .create_split_cell(a.clone(), d.clone(), SplitOrientation::Horizontal)
+            .split_cell(
+                a.clone(),
+                d.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .unwrap();
 
         // 各 split の構造
@@ -448,7 +507,12 @@ mod tests {
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
 
-        let result = store.create_split_cell(a.clone(), a.clone(), SplitOrientation::Horizontal);
+        let result = store.split_cell(
+            a.clone(),
+            a.clone(),
+            Side::After,
+            SplitOrientation::Horizontal,
+        );
         assert!(
             result.is_err(),
             "splitting a cell with itself should return Err"
@@ -456,37 +520,37 @@ mod tests {
     }
 
     #[test]
-    fn split_with_nonexistent_lhs_leaves_store_intact() {
+    fn split_with_nonexistent_target_leaves_store_intact() {
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
         let nonexistent = CellId::new();
 
         let before = snapshot(&store);
-        let result = store.create_split_cell(nonexistent, a, SplitOrientation::Horizontal);
-        assert!(result.is_err(), "non-existent lhs should return Err");
+        let result = store.split_cell(nonexistent, a, Side::After, SplitOrientation::Horizontal);
+        assert!(result.is_err(), "non-existent target should return Err");
         assert_eq!(
             snapshot(&store),
             before,
-            "store should be unchanged when lhs is missing"
+            "store should be unchanged when target is missing"
         );
     }
 
     #[test]
-    fn split_with_nonexistent_rhs_leaves_store_intact() {
-        // 現コードは parent(&lhs)? / parent(&rhs)? の両方の existence check が
-        // mutation より先に走るため、rhs 不在時もアトミック (lhs.parent は更新されない)。
+    fn split_with_nonexistent_new_cell_leaves_store_intact() {
+        // 現コードは parent(&target)? と cell(&new_cell)? の両方の existence check が
+        // mutation より先に走るため、new_cell 不在時もアトミック (target.parent は更新されない)。
         // 回帰検出用テスト。
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
         let nonexistent = CellId::new();
 
         let before = snapshot(&store);
-        let result = store.create_split_cell(a, nonexistent, SplitOrientation::Horizontal);
-        assert!(result.is_err(), "non-existent rhs should return Err");
+        let result = store.split_cell(a, nonexistent, Side::After, SplitOrientation::Horizontal);
+        assert!(result.is_err(), "non-existent new_cell should return Err");
         assert_eq!(
             snapshot(&store),
             before,
-            "store should be unchanged when rhs is missing"
+            "store should be unchanged when new_cell is missing"
         );
     }
 }

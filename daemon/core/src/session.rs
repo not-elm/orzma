@@ -1,7 +1,9 @@
 use crate::{
     error::OzmuxResult,
     session::{
-        cell::{Cell, CellId, LayoutCell, LayoutCellStore, PaneCell, SplitCell, SplitOrientation},
+        cell::{
+            Cell, CellId, LayoutCell, LayoutCellStore, PaneCell, Side, SplitCell, SplitOrientation,
+        },
         pane::{Pane, PaneId, PaneStore},
     },
 };
@@ -23,7 +25,7 @@ impl SessionStore {
         self.panes
             .insert(rhs_pane_id, Pane::new(rhs_cell_id.clone()));
         self.cells
-            .create_split_cell(lhs_cell_id, rhs_cell_id, orientation)?;
+            .split_cell(lhs_cell_id, rhs_cell_id, Side::After, orientation)?;
 
         Ok(())
     }
