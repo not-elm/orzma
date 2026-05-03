@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 pub fn router() -> Router<SessionState> {
     Router::new()
         .route("/sessions", get(list).post(create))
-        .route("/sessions/{session_id}", get(get_session))
+        .route(
+            "/sessions/{session_id}",
+            get(get_session).patch(rename),
+        )
 }
 
 #[derive(Deserialize, Default)]
@@ -55,6 +58,24 @@ async fn get_session(
     let session = guard
         .get(&session_id)
         .ok_or_else(|| crate::error::OzmuxError::SessionNotFound(session_id.clone()))?;
+    Ok(Json(serde_json::to_value(session).unwrap()))
+}
+
+#[derive(Deserialize)]
+struct RenameRequest {
+    name: String,
+}
+
+async fn rename(
+    State(state): State<SessionState>,
+    Path(session_id): Path<SessionId>,
+    Json(req): Json<RenameRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::OzmuxError> {
+    let mut guard = state.lock().await;
+    let session = guard
+        .get_mut(&session_id)
+        .ok_or_else(|| crate::error::OzmuxError::SessionNotFound(session_id.clone()))?;
+    session.rename(req.name);
     Ok(Json(serde_json::to_value(session).unwrap()))
 }
 
@@ -172,6 +193,55 @@ mod tests {
                 Request::builder()
                     .uri("/sessions/no-such-id")
                     .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"].as_str(), Some("SESSION_NOT_FOUND"));
+    }
+
+    #[tokio::test]
+    async fn rename_updates_name_and_returns_session() {
+        let state = SessionState::default();
+        let session = Session::new("old".to_string());
+        let id = session.id().clone();
+        {
+            let mut guard = state.lock().await;
+            guard.insert(id.clone(), session);
+        }
+        let resp = router_with(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/sessions/{}", id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"new"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["name"].as_str(), Some("new"));
+
+        let guard = state.lock().await;
+        assert_eq!(guard.get(&id).map(|s| s.name()), Some("new"));
+    }
+
+    #[tokio::test]
+    async fn rename_unknown_id_returns_404() {
+        let state = SessionState::default();
+        let resp = router_with(state)
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/sessions/missing")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"x"}"#))
                     .unwrap(),
             )
             .await
