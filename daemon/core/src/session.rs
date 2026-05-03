@@ -2,7 +2,7 @@ use crate::{
     error::OzmuxResult,
     session::{
         cell::{
-            Cell, CellId, LayoutCell, LayoutCellStore, PaneCell, Side, SplitCell, SplitOrientation,
+            LayoutCellStore, Side, SplitOrientation,
         },
         pane::{Pane, PaneId, PaneStore},
     },

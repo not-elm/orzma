@@ -3,7 +3,7 @@ use crate::{
     error::{OzmuxError, OzmuxResult},
     session::cell::CellId,
 };
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default)]
 pub struct PaneStore(HashMap<PaneId, Pane>);
