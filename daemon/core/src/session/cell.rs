@@ -859,4 +859,123 @@ mod tests {
 
         assert_well_formed(&store, Some(&lhs));
     }
+
+    #[test]
+    fn close_leaf_under_nested_split_promotes_sibling_to_grandparent_lhs_slot() {
+        // Build:
+        //                p_root (Split, root)
+        //                /          \
+        //              mid           b
+        //            (Split)
+        //            /    \
+        //           a      c
+        //
+        // p_root.lhs = mid; p_root.rhs = b
+        // mid.lhs = a; mid.rhs = c
+        //
+        // Close `a` → mid collapses; c is promoted into mid's slot in p_root (the lhs slot).
+        // Expected: p_root.lhs = c, p_root.rhs = b unchanged. mid is removed. a is removed.
+        //           c.parent = p_root.
+        let mut store = LayoutCellStore::default();
+        let a = new_root_pane(&mut store);
+        let b = new_root_pane(&mut store);
+        let p_root = store
+            .split_cell(
+                a.clone(),
+                b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .expect("first split");
+        let c = new_root_pane(&mut store);
+        let mid = store
+            .split_cell(
+                a.clone(),
+                c.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
+            .expect("second split");
+        // Sanity check pre-state.
+        assert_split(&store, &p_root, &mid, &b, SplitOrientation::Horizontal);
+        assert_split(&store, &mid, &a, &c, SplitOrientation::Vertical);
+
+        let outcome = store.close_cell(&a).expect("close should succeed");
+        assert_eq!(
+            outcome,
+            CloseOutcome::SiblingPromoted {
+                survivor: c.clone(),
+                new_parent: p_root.clone(),
+            }
+        );
+
+        // mid is removed; a is removed.
+        assert!(store.cell(&a).is_err(), "a should be removed");
+        assert!(store.cell(&mid).is_err(), "mid should be removed");
+
+        // c.parent now points to p_root.
+        assert_eq!(store.cell(&c).unwrap().parent.as_ref(), Some(&p_root));
+
+        // p_root keeps its slot orientation: c sits in lhs (where mid was).
+        assert_split(&store, &p_root, &c, &b, SplitOrientation::Horizontal);
+
+        // b unchanged.
+        assert_eq!(store.cell(&b).unwrap().parent.as_ref(), Some(&p_root));
+
+        assert_well_formed(&store, Some(&p_root));
+    }
+
+    #[test]
+    fn close_leaf_under_nested_split_promotes_sibling_to_grandparent_rhs_slot() {
+        // Build:
+        //                p_root (Split, root)
+        //                /          \
+        //               a           mid
+        //                          (Split)
+        //                          /    \
+        //                         b      c
+        //
+        // Close `b` → mid collapses; c is promoted into mid's slot in p_root (the rhs slot).
+        let mut store = LayoutCellStore::default();
+        let a = new_root_pane(&mut store);
+        let b = new_root_pane(&mut store);
+        let p_root = store
+            .split_cell(
+                a.clone(),
+                b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .expect("first split");
+        let c = new_root_pane(&mut store);
+        let mid = store
+            .split_cell(
+                b.clone(),
+                c.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
+            .expect("second split");
+        // Sanity.
+        assert_split(&store, &p_root, &a, &mid, SplitOrientation::Horizontal);
+        assert_split(&store, &mid, &b, &c, SplitOrientation::Vertical);
+
+        let outcome = store.close_cell(&b).expect("close should succeed");
+        assert_eq!(
+            outcome,
+            CloseOutcome::SiblingPromoted {
+                survivor: c.clone(),
+                new_parent: p_root.clone(),
+            }
+        );
+
+        assert!(store.cell(&b).is_err());
+        assert!(store.cell(&mid).is_err());
+        assert_eq!(store.cell(&c).unwrap().parent.as_ref(), Some(&p_root));
+        // c sits in rhs (where mid was).
+        assert_split(&store, &p_root, &a, &c, SplitOrientation::Horizontal);
+        assert_eq!(store.cell(&a).unwrap().parent.as_ref(), Some(&p_root));
+
+        assert_well_formed(&store, Some(&p_root));
+    }
 }
