@@ -64,3 +64,12 @@ jobs:
         with:
           shared-key: "ci"
       - run: cargo doc --workspace --no-deps
+
+  deny:
+    name: deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
