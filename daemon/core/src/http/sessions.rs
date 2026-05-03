@@ -1,9 +1,33 @@
-use crate::session::{SessionId, SessionState};
-use axum::{Json, Router, extract::State, routing::get};
-use serde::Serialize;
+use crate::session::{Session, SessionId, SessionState};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
 
 pub fn router() -> Router<SessionState> {
-    Router::new().route("/sessions", get(list))
+    Router::new().route("/sessions", get(list).post(create))
+}
+
+#[derive(Deserialize, Default)]
+struct CreateRequest {
+    #[serde(default)]
+    name: String,
+}
+
+async fn create(
+    State(state): State<SessionState>,
+    Json(body): Json<CreateRequest>,
+) -> impl IntoResponse {
+    let session = Session::new(body.name);
+    let id = session.id().clone();
+    let mut guard = state.lock().await;
+    guard.insert(id.clone(), session);
+    let session_ref = guard.get(&id).expect("just inserted");
+    (StatusCode::CREATED, Json(serde_json::to_value(session_ref).unwrap()))
 }
 
 #[derive(Serialize)]
@@ -50,6 +74,56 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["sessions"].as_array().map(|a| a.len()), Some(0));
+    }
+
+    #[tokio::test]
+    async fn create_with_name_returns_201_and_full_session() {
+        let state = SessionState::default();
+        let resp = router_with(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"my session"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["id"].is_string());
+        assert_eq!(v["name"].as_str(), Some("my session"));
+        assert!(v["root"].is_string());
+        assert!(v["cells"].is_object());
+        assert_eq!(v["panes"].as_array().map(|a| a.len()), Some(1));
+
+        // The session is actually persisted in state.
+        let id = v["id"].as_str().unwrap();
+        let guard = state.lock().await;
+        assert!(guard.keys().any(|k| k.as_ref() == id));
+    }
+
+    #[tokio::test]
+    async fn create_without_name_defaults_to_empty_string() {
+        let state = SessionState::default();
+        let resp = router_with(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["name"].as_str(), Some(""));
     }
 
     #[tokio::test]
