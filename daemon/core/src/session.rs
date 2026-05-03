@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::{
@@ -20,6 +21,7 @@ pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
 
 define_string_new_type!(SessionId);
 
+#[derive(Serialize)]
 pub struct Session {
     id: SessionId,
     name: String,
@@ -243,5 +245,36 @@ mod tests {
         let a = Session::new(String::new());
         let b = Session::new(String::new());
         assert_ne!(a.id(), b.id());
+    }
+
+    #[test]
+    fn session_serializes_with_id_name_root_cells_panes() {
+        let s = Session::new("hello".to_string());
+        let v = serde_json::to_value(&s).unwrap();
+
+        assert_eq!(v["id"].as_str(), Some(s.id().as_ref()));
+        assert_eq!(v["name"].as_str(), Some("hello"));
+        assert!(v["root"].is_string(), "root must be a CellId string");
+        assert!(v["cells"].is_object(), "cells must be a flat map");
+        assert!(v["panes"].is_array(), "panes must be an array");
+        assert_eq!(v["panes"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn session_with_horizontal_split_serializes_cells_with_lowercase_orientation() {
+        let mut s = Session::new(String::new());
+        let pane_id = s.panes().any_pane_id().unwrap();
+        s.split_pane(&pane_id, SplitOrientation::Horizontal)
+            .expect("split");
+        let v = serde_json::to_value(&s).unwrap();
+        let cells = v["cells"].as_object().unwrap();
+        let split_present = cells.values().any(|c| {
+            c["cell"]
+                .get("Split")
+                .and_then(|s| s.get("orientation"))
+                .and_then(|o| o.as_str())
+                == Some("horizontal")
+        });
+        assert!(split_present, "expected a Split cell with lowercase orientation");
     }
 }
