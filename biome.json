@@ -1,12 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.4.11/schema.json",
   "files": {
-    "includes": [
-      "daemon/frontend/**",
-      "!**/node_modules",
-      "!**/dist",
-      "!**/target"
-    ],
+    "includes": ["daemon/frontend/**", "!**/node_modules", "!**/dist", "!**/target"],
     "ignoreUnknown": true
   },
   "vcs": {
