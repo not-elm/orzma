@@ -1,10 +1,10 @@
+use crate::session::{pane::PaneStore, pane_node::PaneNode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::session::pane::PaneStore;
-
 mod pane;
+mod pane_node;
 
 #[derive(Clone)]
 pub struct SessionStore {
@@ -16,6 +16,7 @@ pub struct Session {
     pub id: SessionId,
     pub name: String,
     pub pane: PaneStore,
+    pub layout: PaneNode,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
