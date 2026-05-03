@@ -6,7 +6,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize)]
 pub struct LayoutCellState(HashMap<CellId, LayoutCell>);
 
 impl LayoutCellState {
@@ -1120,5 +1120,16 @@ mod tests {
     fn side_deserializes_lowercase() {
         let s: Side = serde_json::from_str("\"before\"").unwrap();
         assert_eq!(s, Side::Before);
+    }
+
+    #[test]
+    fn layout_cell_state_serializes_as_object_keyed_by_cell_id() {
+        let mut state = LayoutCellState::default();
+        let pane_id = crate::session::pane::PaneId::new();
+        let cell_id = state.create_pane_cell(pane_id.clone(), None);
+
+        let v = serde_json::to_value(&state).unwrap();
+        let obj = v.as_object().expect("object");
+        assert!(obj.contains_key(cell_id.as_ref()));
     }
 }
