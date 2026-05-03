@@ -155,4 +155,48 @@ mod tests {
             "root should have changed (the root split is now collapsed)"
         );
     }
+
+    #[test]
+    fn close_pane_under_nested_split_keeps_root_unchanged() {
+        // Build a 3-pane layout: split twice. Closing one of the leaves under the
+        // inner split should NOT change the root.
+        let mut store = SessionStore::default();
+        let first_pane_id = store.panes().any_pane_id().unwrap();
+        store
+            .split_pane(&first_pane_id, SplitOrientation::Horizontal)
+            .expect("first split");
+        let root_after_first = store.root().clone();
+
+        // The new pane created by the split — find its id (the one that's not first_pane_id).
+        let pane_ids: Vec<PaneId> = store.panes().iter().map(|(id, _)| id.clone()).collect();
+        let second_pane_id = pane_ids
+            .into_iter()
+            .find(|id| id != &first_pane_id)
+            .expect("second pane should exist");
+
+        // Split second_pane_id again to create a 3-pane layout.
+        store
+            .split_pane(&second_pane_id, SplitOrientation::Vertical)
+            .expect("second split");
+        let root_after_second = store.root().clone();
+        assert_eq!(
+            root_after_first, root_after_second,
+            "splitting a non-root pane must NOT change root"
+        );
+
+        // Close one of the inner leaves (second_pane_id).
+        store.close_pane(&second_pane_id).expect("close");
+
+        // Root unchanged because the closed pane's parent was not the root split.
+        assert_eq!(store.root(), &root_after_second);
+        assert!(store.panes().get(&second_pane_id).is_err());
+    }
+
+    #[test]
+    fn close_pane_with_nonexistent_pane_id_returns_err() {
+        let mut store = SessionStore::default();
+        let nonexistent = PaneId::new();
+        let result = store.close_pane(&nonexistent);
+        assert!(matches!(result, Err(OzmuxError::PaneNotfound(_))));
+    }
 }
