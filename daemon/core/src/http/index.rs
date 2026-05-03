@@ -1,4 +1,8 @@
-use axum::response::{Html, IntoResponse, Redirect};
+#[cfg(not(debug_assertions))]
+use axum::response::Html;
+#[cfg(debug_assertions)]
+use axum::response::Redirect;
+use axum::response::IntoResponse;
 
 #[cfg(not(debug_assertions))]
 const INDEX_HTML: &str = include_str!("index.html");
