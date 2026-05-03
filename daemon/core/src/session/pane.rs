@@ -1,10 +1,7 @@
 use crate::{
     define_string_new_type,
     error::{OzmuxError, OzmuxResult},
-    session::{
-        activity::Activity,
-        cell::CellId,
-    },
+    session::{activity::Activity, cell::CellId},
 };
 use std::collections::HashMap;
 
