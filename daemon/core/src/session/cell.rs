@@ -978,4 +978,93 @@ mod tests {
 
         assert_well_formed(&store, Some(&p_root));
     }
+
+    #[test]
+    fn close_leaf_when_sibling_is_a_split_preserves_subtree() {
+        // Build:
+        //                p_root (Split, root)
+        //                /          \
+        //               a           mid
+        //                          (Split)
+        //                          /    \
+        //                         b      c
+        //
+        // Close `a` → p_root collapses (it was target's parent and is the root).
+        //              `mid` (the surviving sibling, itself a Split) becomes the new root.
+        //              b and c stay parented to mid.
+        let mut store = LayoutCellStore::default();
+        let a = new_root_pane(&mut store);
+        let b = new_root_pane(&mut store);
+        let p_root = store
+            .split_cell(
+                a.clone(),
+                b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .expect("first split");
+        let c = new_root_pane(&mut store);
+        let mid = store
+            .split_cell(
+                b.clone(),
+                c.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
+            .expect("second split");
+        assert_split(&store, &p_root, &a, &mid, SplitOrientation::Horizontal);
+
+        let outcome = store.close_cell(&a).expect("close should succeed");
+        assert_eq!(
+            outcome,
+            CloseOutcome::RootReplaced {
+                new_root: mid.clone(),
+            }
+        );
+
+        assert!(store.cell(&a).is_err());
+        assert!(store.cell(&p_root).is_err());
+
+        // mid is now the root.
+        assert_eq!(store.cell(&mid).unwrap().parent, None);
+        // mid's subtree (b, c) intact.
+        assert_split(&store, &mid, &b, &c, SplitOrientation::Vertical);
+        assert_eq!(store.cell(&b).unwrap().parent.as_ref(), Some(&mid));
+        assert_eq!(store.cell(&c).unwrap().parent.as_ref(), Some(&mid));
+
+        assert_well_formed(&store, Some(&mid));
+    }
+
+    #[test]
+    fn close_cell_preserves_surviving_cell_ids() {
+        // Verify that the surviving sibling's CellId value (and underlying LayoutCell.cell) is
+        // preserved across close — only its `parent` field changes. This is the Pane.cell
+        // back-pointer stability contract: PaneStore entries holding the surviving CellId
+        // remain valid pointers into LayoutCellStore after a close.
+        let mut store = LayoutCellStore::default();
+        let lhs = new_root_pane(&mut store);
+        let rhs = new_root_pane(&mut store);
+        let _split_id = store
+            .split_cell(
+                lhs.clone(),
+                rhs.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .expect("split");
+
+        // Capture the rhs cell's content before close.
+        let rhs_cell_before = store.cell(&rhs).unwrap().cell.clone();
+
+        let _ = store.close_cell(&lhs).expect("close should succeed");
+
+        // CellId rhs still resolves; the underlying `cell` field (Pane variant + PaneId) is identical.
+        let rhs_cell_after = store.cell(&rhs).unwrap();
+        assert_eq!(
+            rhs_cell_after.cell, rhs_cell_before,
+            "surviving sibling's `cell` field must be byte-identical to pre-close",
+        );
+        // Only parent changed (Some(split_id) -> None for root case).
+        assert_eq!(rhs_cell_after.parent, None);
+    }
 }
