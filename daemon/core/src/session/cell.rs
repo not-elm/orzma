@@ -787,4 +787,76 @@ mod tests {
         assert_eq!(store.0.len(), 0);
         assert_well_formed(&store, None);
     }
+
+    #[test]
+    fn close_lhs_of_two_pane_root_split_replaces_root() {
+        let mut store = LayoutCellStore::default();
+        let lhs = new_root_pane(&mut store);
+        let rhs = new_root_pane(&mut store);
+        let split_id = store
+            .split_cell(
+                lhs.clone(),
+                rhs.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .expect("split");
+
+        let outcome = store.close_cell(&lhs).expect("close should succeed");
+        assert_eq!(
+            outcome,
+            CloseOutcome::RootReplaced {
+                new_root: rhs.clone()
+            }
+        );
+
+        // Surviving sibling is the new root.
+        assert_eq!(
+            store.cell(&rhs).unwrap().parent,
+            None,
+            "rhs.parent must be None after promotion to root"
+        );
+        // Target and parent split are gone.
+        assert!(
+            store.cell(&lhs).is_err(),
+            "closed pane should be removed"
+        );
+        assert!(
+            store.cell(&split_id).is_err(),
+            "parent split should be removed"
+        );
+        assert_eq!(store.0.len(), 1);
+
+        assert_well_formed(&store, Some(&rhs));
+    }
+
+    #[test]
+    fn close_rhs_of_two_pane_root_split_replaces_root() {
+        let mut store = LayoutCellStore::default();
+        let lhs = new_root_pane(&mut store);
+        let rhs = new_root_pane(&mut store);
+        let split_id = store
+            .split_cell(
+                lhs.clone(),
+                rhs.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .expect("split");
+
+        let outcome = store.close_cell(&rhs).expect("close should succeed");
+        assert_eq!(
+            outcome,
+            CloseOutcome::RootReplaced {
+                new_root: lhs.clone()
+            }
+        );
+
+        assert_eq!(store.cell(&lhs).unwrap().parent, None);
+        assert!(store.cell(&rhs).is_err());
+        assert!(store.cell(&split_id).is_err());
+        assert_eq!(store.0.len(), 1);
+
+        assert_well_formed(&store, Some(&lhs));
+    }
 }
