@@ -20,4 +20,7 @@ pub enum OzmuxError {
 
     #[error("split target equals new_cell: cell-id={0}")]
     SplitTargetEqualsNewCell(CellId),
+
+    #[error("cannot close the last pane in a session: pane-id={0}")]
+    CannotCloseLastPane(PaneId),
 }

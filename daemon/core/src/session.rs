@@ -1,7 +1,7 @@
 use crate::{
     error::OzmuxResult,
     session::{
-        cell::{LayoutCellStore, Side, SplitOrientation},
+        cell::{CellId, LayoutCellStore, Side, SplitOrientation},
         pane::{Pane, PaneId, PaneStore},
     },
 };
@@ -11,19 +11,32 @@ pub mod cell;
 pub mod pane;
 
 pub struct SessionStore {
+    root: CellId,
     cells: LayoutCellStore,
     panes: PaneStore,
 }
 
 impl SessionStore {
+    pub fn root(&self) -> &CellId {
+        &self.root
+    }
+
     pub fn split_pane(&mut self, pane_id: &PaneId, orientation: SplitOrientation) -> OzmuxResult {
-        let lhs_cell_id = self.panes.get(pane_id)?.cell.clone();
-        let rhs_pane_id = PaneId::new();
-        let rhs_cell_id = self.cells.create_pane_cell(rhs_pane_id.clone(), None);
+        let target_cell_id = self.panes.get(pane_id)?.cell.clone();
+        let target_was_root = target_cell_id == self.root;
+
+        let new_pane_id = PaneId::new();
+        let new_cell_id = self.cells.create_pane_cell(new_pane_id.clone(), None);
         self.panes
-            .insert(rhs_pane_id, Pane::new(rhs_cell_id.clone()));
-        self.cells
-            .split_cell(lhs_cell_id, rhs_cell_id, Side::After, orientation)?;
+            .insert(new_pane_id, Pane::new(new_cell_id.clone()));
+
+        let new_split_id =
+            self.cells
+                .split_cell(target_cell_id, new_cell_id, Side::After, orientation)?;
+
+        if target_was_root {
+            self.root = new_split_id;
+        }
 
         Ok(())
     }
@@ -36,9 +49,13 @@ impl Default for SessionStore {
         let cell_id = cells.create_pane_cell(pane_id.clone(), None);
 
         let mut panes = PaneStore::default();
-        panes.insert(pane_id, Pane::new(cell_id));
+        panes.insert(pane_id, Pane::new(cell_id.clone()));
 
-        Self { panes, cells }
+        Self {
+            root: cell_id,
+            panes,
+            cells,
+        }
     }
 }
 
