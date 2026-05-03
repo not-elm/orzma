@@ -16,21 +16,19 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
-    pub fn split_pane(
-        &mut self,
-        lhs_pane_id: &PaneId,
-        rhs_pane_id: &PaneId,
-        orientation: SplitOrientation,
-    ) -> OzmuxResult {
-        let lhs_pane = self.panes.get(lhs_pane_id)?;
-        let rhs_pane = self.panes.get(&rhs_pane_id)?;
-        let split_cell_id = CellId::new();
-        let lhs_cell_id = lhs_pane.cell.clone();
-        let rhs_cell_id = rhs_pane.cell.clone();
-        let split_cell = SplitCell::new(lhs_cell_id, rhs_cell_id, orientation);
+    pub fn split_pane(&mut self, pane_id: &PaneId, orientation: SplitOrientation) -> OzmuxResult {
+        let lhs_cell_id = self.panes.get(pane_id)?.cell.clone();
+        let rhs_pane_id = PaneId::new();
+        let rhs_cell_id = self.cells.create_pane_cell(rhs_pane_id.clone(), None);
+        self.panes
+            .insert(rhs_pane_id, Pane::new(rhs_cell_id.clone()));
+        self.cells
+            .create_split_cell(lhs_cell_id, rhs_cell_id, orientation)?;
 
         Ok(())
     }
+
+    fn create_pane(&mut self) {}
 }
 
 impl Default for SessionStore {
