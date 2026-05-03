@@ -13,7 +13,7 @@ pub fn router() -> Router<SessionState> {
         .route("/sessions", get(list).post(create))
         .route(
             "/sessions/{session_id}",
-            get(get_session).patch(rename),
+            get(get_session).patch(rename).delete(delete),
         )
 }
 
@@ -77,6 +77,17 @@ async fn rename(
         .ok_or_else(|| crate::error::OzmuxError::SessionNotFound(session_id.clone()))?;
     session.rename(req.name);
     Ok(Json(serde_json::to_value(session).unwrap()))
+}
+
+async fn delete(
+    State(state): State<SessionState>,
+    Path(session_id): Path<SessionId>,
+) -> Result<StatusCode, crate::error::OzmuxError> {
+    let mut guard = state.lock().await;
+    guard
+        .remove(&session_id)
+        .ok_or_else(|| crate::error::OzmuxError::SessionNotFound(session_id.clone()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -285,5 +296,50 @@ mod tests {
             assert!(s["name"].is_string());
             assert_eq!(s.as_object().unwrap().len(), 2);
         }
+    }
+
+    #[tokio::test]
+    async fn delete_returns_204_and_removes_session() {
+        let state = SessionState::default();
+        let session = Session::new("x".to_string());
+        let id = session.id().clone();
+        {
+            let mut guard = state.lock().await;
+            guard.insert(id.clone(), session);
+        }
+        let resp = router_with(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/sessions/{}", id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert!(body.is_empty(), "204 must have empty body");
+        let guard = state.lock().await;
+        assert!(guard.get(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_unknown_id_returns_404() {
+        let state = SessionState::default();
+        let resp = router_with(state)
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/sessions/nope")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"].as_str(), Some("SESSION_NOT_FOUND"));
     }
 }
