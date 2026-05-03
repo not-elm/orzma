@@ -40,3 +40,14 @@ jobs:
         with:
           shared-key: "ci"
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci"
+      - run: cargo test --workspace --all-targets
