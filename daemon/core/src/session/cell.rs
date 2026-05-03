@@ -299,12 +299,14 @@ impl SplitCell {
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SplitOrientation {
     Vertical,
     Horizontal,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Side {
     /// Place new_cell before target (left or top, depending on orientation).
     Before,
@@ -1094,5 +1096,29 @@ mod tests {
         );
         // Only parent changed (Some(split_id) -> None for root case).
         assert_eq!(rhs_cell_after.parent, None);
+    }
+
+    #[test]
+    fn split_orientation_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&SplitOrientation::Horizontal).unwrap(),
+            "\"horizontal\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SplitOrientation::Vertical).unwrap(),
+            "\"vertical\""
+        );
+    }
+
+    #[test]
+    fn side_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&Side::Before).unwrap(), "\"before\"");
+        assert_eq!(serde_json::to_string(&Side::After).unwrap(), "\"after\"");
+    }
+
+    #[test]
+    fn side_deserializes_lowercase() {
+        let s: Side = serde_json::from_str("\"before\"").unwrap();
+        assert_eq!(s, Side::Before);
     }
 }
