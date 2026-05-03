@@ -19,6 +19,12 @@ pub mod pane;
 #[derive(Clone, Default)]
 pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
 
+impl SessionState {
+    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, HashMap<SessionId, Session>> {
+        self.0.lock().await
+    }
+}
+
 define_string_new_type!(SessionId);
 
 #[derive(Serialize)]
@@ -276,5 +282,25 @@ mod tests {
                 == Some("horizontal")
         });
         assert!(split_present, "expected a Split cell with lowercase orientation");
+    }
+
+    #[tokio::test]
+    async fn session_state_lock_starts_empty() {
+        let state = SessionState::default();
+        let guard = state.lock().await;
+        assert!(guard.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_state_lock_allows_insert_then_get() {
+        let state = SessionState::default();
+        let session = Session::new("a".to_string());
+        let id = session.id().clone();
+        {
+            let mut guard = state.lock().await;
+            guard.insert(id.clone(), session);
+        }
+        let guard = state.lock().await;
+        assert_eq!(guard.get(&id).map(|s| s.name()), Some("a"));
     }
 }
