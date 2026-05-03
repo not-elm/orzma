@@ -1,3 +1,5 @@
+mod split;
+
 use crate::error::OzmuxError;
 use crate::session::{SessionId, SessionState};
 use crate::session::pane::PaneId;
@@ -8,10 +10,12 @@ use axum::{
 };
 
 pub fn router() -> Router<SessionState> {
-    Router::new().route(
-        "/sessions/{session_id}/panes/{pane_id}",
-        delete(close),
-    )
+    Router::new()
+        .route(
+            "/sessions/{session_id}/panes/{pane_id}",
+            delete(close),
+        )
+        .merge(split::router())
 }
 
 async fn close(
