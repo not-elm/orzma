@@ -47,7 +47,7 @@ impl Session {
         let new_pane_id = PaneId::new();
         let new_cell_id = self.cells.create_pane_cell(new_pane_id.clone(), None);
         self.panes
-            .insert(new_pane_id, Pane::new(new_cell_id.clone()));
+            .insert(new_pane_id.clone(), Pane::new(new_pane_id.clone(), new_cell_id.clone()));
 
         let new_split_id =
             self.cells
@@ -109,7 +109,7 @@ impl Default for Session {
         let cell_id = cells.create_pane_cell(pane_id.clone(), None);
 
         let mut panes = PaneStore::default();
-        panes.insert(pane_id, Pane::new(cell_id.clone()));
+        panes.insert(pane_id.clone(), Pane::new(pane_id, cell_id.clone()));
 
         Self {
             name: "".to_string(),

@@ -41,15 +41,19 @@ impl PaneStore {
 
 #[derive(Debug)]
 pub struct Pane {
+    id: PaneId,
     cell: CellId,
     activities: Vec<Activity>,
 }
 
 impl Pane {
-    pub fn new(cell: CellId) -> Self {
-        let terminal = Activity::default();
-        let activities = vec![terminal];
-        Self { cell, activities }
+    pub fn new(id: PaneId, cell: CellId) -> Self {
+        let activities = vec![Activity::default()];
+        Self { id, cell, activities }
+    }
+
+    pub const fn id(&self) -> &PaneId {
+        &self.id
     }
 
     pub const fn cell_id(&self) -> &CellId {
@@ -69,7 +73,7 @@ mod tests {
         let mut store = PaneStore::default();
         let id = PaneId::new();
         let cell_id = CellId::new();
-        store.insert(id.clone(), Pane::new(cell_id.clone()));
+        store.insert(id.clone(), Pane::new(id.clone(), cell_id.clone()));
 
         let removed = store.remove(&id).expect("remove should succeed");
         assert_eq!(removed.cell, cell_id);
@@ -77,6 +81,15 @@ mod tests {
             store.get(&id).is_err(),
             "pane should no longer be retrievable after remove"
         );
+    }
+
+    #[test]
+    fn pane_carries_its_id() {
+        let id = PaneId::new();
+        let cell_id = CellId::new();
+        let pane = Pane::new(id.clone(), cell_id.clone());
+        assert_eq!(pane.id(), &id);
+        assert_eq!(pane.cell_id(), &cell_id);
     }
 
     #[test]
