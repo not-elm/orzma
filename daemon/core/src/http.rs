@@ -10,17 +10,17 @@ mod index;
 mod sessions;
 
 pub async fn launch_server() -> OzmuxResult {
+    let state = SessionState::default();
     let listener = TcpListener::bind("127.0.0.1:3200")
         .await
         .map_err(|e| OzmuxError::FailedLaunchHttpServer(e.to_string()))?;
-    axum::serve(listener, daemon_router())
+    axum::serve(listener, daemon_router(state))
         .await
         .map_err(|e| OzmuxError::FailedLaunchHttpServer(e.to_string()))?;
     Ok(())
 }
 
-fn daemon_router() -> Router {
-    let state = SessionState::default();
+fn daemon_router(state: SessionState) -> Router {
     Router::new()
         .route("/", get(index::handler))
         .route("/health", get(health::check))

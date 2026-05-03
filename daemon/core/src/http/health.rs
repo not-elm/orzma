@@ -15,7 +15,7 @@ mod tests {
 
     #[tokio::test]
     async fn check_health() {
-        let response = daemon_router()
+        let response = daemon_router(crate::session::SessionState::default())
             .oneshot(
                 Request::builder()
                     .uri("/health")
