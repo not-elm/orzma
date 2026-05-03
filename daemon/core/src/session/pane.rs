@@ -27,6 +27,15 @@ impl PaneStore {
             .remove(id)
             .ok_or_else(|| OzmuxError::PaneNotfound(id.clone()))
     }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&PaneId, &Pane)> {
+        self.0.iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn any_pane_id(&self) -> Option<PaneId> {
+        self.0.keys().next().cloned()
+    }
 }
 
 #[derive(Clone, Debug)]
