@@ -2,7 +2,7 @@ use crate::{
     define_string_new_type,
     error::{OzmuxError, OzmuxResult},
     session::{
-        activity::{Activity, ActivityId},
+        activity::Activity,
         cell::CellId,
     },
 };

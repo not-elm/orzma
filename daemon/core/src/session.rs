@@ -1,7 +1,6 @@
 use crate::{
     error::{OzmuxError, OzmuxResult},
     session::{
-        activity::ActivityStore,
         cell::{CellId, CloseOutcome, LayoutCellStore, Side, SplitOrientation},
         pane::{Pane, PaneId, PaneStore},
     },
