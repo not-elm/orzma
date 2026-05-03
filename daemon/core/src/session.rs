@@ -1,9 +1,7 @@
 use crate::{
     error::OzmuxResult,
     session::{
-        cell::{
-            LayoutCellStore, Side, SplitOrientation,
-        },
+        cell::{LayoutCellStore, Side, SplitOrientation},
         pane::{Pane, PaneId, PaneStore},
     },
 };
@@ -29,8 +27,6 @@ impl SessionStore {
 
         Ok(())
     }
-
-    fn create_pane(&mut self) {}
 }
 
 impl Default for SessionStore {

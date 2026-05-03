@@ -21,10 +21,18 @@ impl LayoutCellStore {
     }
 
     #[inline]
-    pub fn pane_cell(&self, id: &CellId) -> OzmuxResult<&PaneCell> {
+    pub fn get_pane_cell(&self, id: &CellId) -> OzmuxResult<&PaneCell> {
         match &self.cell(id)?.cell {
             Cell::Pane(pane) => Ok(pane),
-            _ => Err(OzmuxError::InvalidNodeType(id.clone())),
+            _ => Err(OzmuxError::InvalidCellType(id.clone())),
+        }
+    }
+
+    #[inline]
+    pub fn get_split_cell(&self, id: &CellId) -> OzmuxResult<&SplitCell> {
+        match &self.cell(id)?.cell {
+            Cell::Split(split) => Ok(split),
+            _ => Err(OzmuxError::InvalidCellType(id.clone())),
         }
     }
 
@@ -65,6 +73,25 @@ impl LayoutCellStore {
         Ok(split_cell_id)
     }
 
+    pub fn close_cell(&mut self, id: &CellId) -> OzmuxResult {
+        let cell = self.remove(id)?;
+        if let Some(ref parent_cell_id) = cell.parent
+            && let Ok(parent_cell) = self.remove(parent_cell_id)
+            && let Cell::Split(ref split) = parent_cell.cell
+            && let other_cell_id = split.obtain_other_side_cell_id(id)
+            && let Some(ref grandparent_cell_id) = parent_cell.parent
+            && let Ok(ref mut grandparent_cell) = self.cell_mut(grandparent_cell_id)
+            && let Cell::Split(ref mut grandparent_split) = grandparent_cell.cell
+        {
+            if &grandparent_split.lhs_cell == parent_cell_id {
+                grandparent_split.lhs_cell = other_cell_id.clone();
+            } else if &grandparent_split.rhs_cell == parent_cell_id {
+                grandparent_split.rhs_cell = other_cell_id.clone();
+            }
+        }
+        Ok(())
+    }
+
     #[inline]
     pub fn create_pane_cell(&mut self, pane_id: PaneId, parent: Option<CellId>) -> CellId {
         let id = CellId::new();
@@ -82,14 +109,21 @@ impl LayoutCellStore {
     pub fn cell(&self, id: &CellId) -> OzmuxResult<&LayoutCell> {
         self.0
             .get(id)
-            .ok_or_else(|| OzmuxError::NodeNotfound(id.clone()))
+            .ok_or_else(|| OzmuxError::CellNotfound(id.clone()))
     }
 
     #[inline]
     fn cell_mut(&mut self, id: &CellId) -> OzmuxResult<&mut LayoutCell> {
         self.0
             .get_mut(id)
-            .ok_or_else(|| OzmuxError::NodeNotfound(id.clone()))
+            .ok_or_else(|| OzmuxError::CellNotfound(id.clone()))
+    }
+
+    #[inline]
+    fn remove(&mut self, id: &CellId) -> OzmuxResult<LayoutCell> {
+        self.0
+            .remove(id)
+            .ok_or_else(|| OzmuxError::CellNotfound(id.clone()))
     }
 
     fn replace_child_to_split_cell(
@@ -155,6 +189,14 @@ impl SplitCell {
             lhs_weight: 0.5,
             rhs_cell: rhs,
             rhs_weight: 0.5,
+        }
+    }
+
+    pub fn obtain_other_side_cell_id(&self, id: &CellId) -> &CellId {
+        if &self.lhs_cell == id {
+            &self.rhs_cell
+        } else {
+            &self.lhs_cell
         }
     }
 }
@@ -523,5 +565,19 @@ mod tests {
             before,
             "store should be unchanged when new_cell is missing"
         );
+    }
+
+    #[test]
+    fn failed_close_if_not_exists_cell() {
+        let mut cells = LayoutCellStore::default();
+        assert!(cells.close_cell(&CellId::new()).is_err());
+    }
+
+    #[test]
+    fn remove_cell_from_store() {
+        let mut cells = LayoutCellStore::default();
+        let id = cells.create_pane_cell(PaneId::new(), None);
+        cells.close_cell(&id).unwrap();
+        assert_eq!(cells.0.len(), 0);
     }
 }

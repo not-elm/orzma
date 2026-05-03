@@ -12,11 +12,11 @@ pub enum OzmuxError {
     #[error("pane not found pane-id={0}")]
     PaneNotfound(PaneId),
 
-    #[error("node not found node-id={0}")]
-    NodeNotfound(CellId),
+    #[error("cell not found id={0}")]
+    CellNotfound(CellId),
 
     #[error("invalid node type node-id={0}")]
-    InvalidNodeType(CellId),
+    InvalidCellType(CellId),
 
     #[error("split target equals new_cell: cell-id={0}")]
     SplitTargetEqualsNewCell(CellId),
