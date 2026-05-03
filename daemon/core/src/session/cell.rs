@@ -762,16 +762,29 @@ mod tests {
     }
 
     #[test]
-    fn failed_close_if_not_exists_cell() {
-        let mut cells = LayoutCellStore::default();
-        assert!(cells.close_cell(&CellId::new()).is_err());
+    fn close_cell_with_nonexistent_id_returns_err() {
+        let mut store = LayoutCellStore::default();
+        let _ = new_root_pane(&mut store);
+        let nonexistent = CellId::new();
+
+        let before = snapshot(&store);
+        let result = store.close_cell(&nonexistent);
+        assert!(result.is_err(), "closing a nonexistent CellId should return Err");
+        assert_eq!(
+            snapshot(&store),
+            before,
+            "store must be unchanged when close fails on nonexistent id",
+        );
     }
 
     #[test]
-    fn remove_cell_from_store() {
-        let mut cells = LayoutCellStore::default();
-        let id = cells.create_pane_cell(PaneId::new(), None);
-        cells.close_cell(&id).unwrap();
-        assert_eq!(cells.0.len(), 0);
+    fn close_only_root_pane_returns_tree_emptied() {
+        let mut store = LayoutCellStore::default();
+        let id = store.create_pane_cell(PaneId::new(), None);
+
+        let outcome = store.close_cell(&id).expect("close should succeed");
+        assert_eq!(outcome, CloseOutcome::TreeEmptied);
+        assert_eq!(store.0.len(), 0);
+        assert_well_formed(&store, None);
     }
 }
