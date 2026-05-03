@@ -769,7 +769,10 @@ mod tests {
 
         let before = snapshot(&store);
         let result = store.close_cell(&nonexistent);
-        assert!(result.is_err(), "closing a nonexistent CellId should return Err");
+        assert!(
+            result.is_err(),
+            "closing a nonexistent CellId should return Err"
+        );
         assert_eq!(
             snapshot(&store),
             before,
@@ -817,10 +820,7 @@ mod tests {
             "rhs.parent must be None after promotion to root"
         );
         // Target and parent split are gone.
-        assert!(
-            store.cell(&lhs).is_err(),
-            "closed pane should be removed"
-        );
+        assert!(store.cell(&lhs).is_err(), "closed pane should be removed");
         assert!(
             store.cell(&split_id).is_err(),
             "parent split should be removed"
