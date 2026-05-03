@@ -1,0 +1,57 @@
+name: ci-ts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "daemon/frontend/**"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".npmrc"
+      - "biome.json"
+      - ".github/workflows/ci-ts.yml"
+  pull_request:
+    paths:
+      - "daemon/frontend/**"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".npmrc"
+      - "biome.json"
+      - ".github/workflows/ci-ts.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-ts-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint:ci
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check-types
+      - run: pnpm build
