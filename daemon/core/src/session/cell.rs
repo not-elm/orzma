@@ -40,8 +40,6 @@ impl LayoutCellStore {
         }
         let split_cell_id = CellId::new();
         let target_parent = self.parent(&target)?.cloned();
-        // upfront existence check for new_cell — keeps atomicity: if new_cell
-        // is missing we return Err before any mutation (see Test #7).
         self.cell(&new_cell)?;
         self.cell_mut(&target)?
             .parent
@@ -169,9 +167,9 @@ pub enum SplitOrientation {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Side {
-    /// new_cell を target の前 (左/上) に置く
+    /// Place new_cell before target (left or top, depending on orientation).
     Before,
-    /// new_cell を target の後 (右/下) に置く
+    /// Place new_cell after target (right or bottom, depending on orientation).
     After,
 }
 
@@ -181,20 +179,21 @@ mod tests {
     use crate::session::pane::PaneId;
     use std::collections::HashMap;
 
-    /// parent: None の Pane Cell を作成して store に挿入し、その CellId を返す。
-    /// tmux における「新規ペイン」(split_cell の new_cell 引数として渡す対象) に相当。
+    /// Create a parent-less pane cell, insert it into the store, and return its CellId.
+    /// Equivalent to a freshly-created tmux pane (the kind passed as new_cell to split_cell).
     fn new_root_pane(store: &mut LayoutCellStore) -> CellId {
         let pane_id = PaneId::new();
         store.create_pane_cell(pane_id, None)
     }
 
-    /// 失敗系テスト用: store の内部 HashMap を完全クローンしてスナップショットする。
+    /// Snapshot the store's internal HashMap by full clone.
+    /// Used for "store unchanged" assertions in failure-path tests.
     fn snapshot(store: &LayoutCellStore) -> HashMap<CellId, LayoutCell> {
         store.0.clone()
     }
 
-    /// 指定セルが Split で、期待する (lhs_cell, rhs_cell, orientation) を持ち、
-    /// かつ lhs_weight == rhs_weight == 0.5 (SplitCell::new の初期値) であることを検証。
+    /// Assert the cell is a Split with the expected (lhs_cell, rhs_cell, orientation),
+    /// and that lhs_weight == rhs_weight == 0.5 (the default produced by SplitCell::new).
     fn assert_split(
         store: &LayoutCellStore,
         id: &CellId,
@@ -216,15 +215,14 @@ mod tests {
         assert_eq!(s.rhs_weight, 0.5, "rhs_weight should be 0.5 at split {id}");
     }
 
-    /// store 全体について木の整合性を検証:
-    ///   (a) 各セルの parent が Some(p) なら p は store に存在し Cell::Split で、
-    ///       p.lhs_cell または p.rhs_cell が自身を指す
-    ///   (b) 各 Split の lhs_cell/rhs_cell は store に存在し、その parent が自身を指す
-    ///   (c) 各非ルートセルは store 全体の Split のうちちょうど 1 回だけ子参照される
-    ///       (重複参照・ぶら下がり参照を検出)
+    /// Assert tree integrity across the whole store:
+    ///   (a) every cell whose parent is Some(p) — p exists in the store, is a Cell::Split,
+    ///       and lists this cell as either lhs_cell or rhs_cell.
+    ///   (b) each Split's lhs_cell / rhs_cell exist in the store, and their parent points back.
+    ///   (c) every non-root cell is referenced by exactly one Split in the entire store
+    ///       (catches duplicate references and dangling pointers).
     fn assert_well_formed(store: &LayoutCellStore) {
         for (id, cell) in &store.0 {
-            // (a) parent backref
             if let Some(parent_id) = &cell.parent {
                 let parent = store.0.get(parent_id).unwrap_or_else(|| {
                     panic!("cell {id} claims parent {parent_id} but parent missing from store")
@@ -238,7 +236,6 @@ mod tests {
                 );
             }
 
-            // (b) Split children forward consistency
             if let Cell::Split(s) = &cell.cell {
                 for child_id in [&s.lhs_cell, &s.rhs_cell] {
                     let child = store.0.get(child_id).unwrap_or_else(|| {
@@ -254,7 +251,6 @@ mod tests {
             }
         }
 
-        // (c) each non-root cell referenced exactly once across all Splits
         let mut ref_count: HashMap<&CellId, usize> = HashMap::new();
         for cell in store.0.values() {
             if let Cell::Split(s) = &cell.cell {
@@ -280,7 +276,6 @@ mod tests {
 
     #[test]
     fn helpers_compile_smoke() {
-        // ヘルパーが少なくともコンパイルし、空ストアでもエラーを起こさないことを確認。
         let store = LayoutCellStore::default();
         assert_well_formed(&store);
         let _snap = snapshot(&store);
@@ -292,7 +287,6 @@ mod tests {
         let lhs = new_root_pane(&mut store);
         let rhs = new_root_pane(&mut store);
 
-        // 分割前: 両者とも parent: None
         assert_eq!(store.cell(&lhs).unwrap().parent, None);
         assert_eq!(store.cell(&rhs).unwrap().parent, None);
 
@@ -305,14 +299,12 @@ mod tests {
             )
             .expect("split should succeed");
 
-        // 新 split がルートになる
         assert_eq!(
             store.cell(&split_id).unwrap().parent,
             None,
             "new split should be root"
         );
 
-        // (b) 契約の本丸: rhs.parent が None → split_id へ遷移
         assert_eq!(
             store.cell(&rhs).unwrap().parent.as_ref(),
             Some(&split_id),
@@ -333,7 +325,6 @@ mod tests {
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
-        // 初期 split: P{lhs=A, rhs=B}
         let p = store
             .split_cell(
                 a.clone(),
@@ -343,7 +334,6 @@ mod tests {
             )
             .expect("first split");
 
-        // P の lhs 側 (= A) を分割する
         let new_pane = new_root_pane(&mut store);
         let new_split = store
             .split_cell(
@@ -354,10 +344,8 @@ mod tests {
             )
             .expect("second split");
 
-        // P.lhs_cell が new_split に差し替わり、P.rhs_cell は B のまま
         assert_split(&store, &p, &new_split, &b, SplitOrientation::Horizontal);
 
-        // new_split の構造
         assert_split(
             &store,
             &new_split,
@@ -366,7 +354,6 @@ mod tests {
             SplitOrientation::Vertical,
         );
 
-        // 親子ポインタ
         assert_eq!(store.cell(&new_split).unwrap().parent.as_ref(), Some(&p));
         assert_eq!(
             store.cell(&p).unwrap().parent,
@@ -379,7 +366,6 @@ mod tests {
             Some(&new_split)
         );
 
-        // B は不変 (parent は P のまま)
         assert_eq!(
             store.cell(&b).unwrap().parent.as_ref(),
             Some(&p),
@@ -394,7 +380,6 @@ mod tests {
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
-        // 初期 split: P{lhs=A, rhs=B}
         let p = store
             .split_cell(
                 a.clone(),
@@ -404,7 +389,6 @@ mod tests {
             )
             .expect("first split");
 
-        // P の rhs 側 (= B) を分割する
         let new_pane = new_root_pane(&mut store);
         let new_split = store
             .split_cell(
@@ -415,10 +399,8 @@ mod tests {
             )
             .expect("second split");
 
-        // P.rhs_cell が new_split に差し替わり、P.lhs_cell は A のまま
         assert_split(&store, &p, &a, &new_split, SplitOrientation::Horizontal);
 
-        // new_split の構造
         assert_split(
             &store,
             &new_split,
@@ -427,7 +409,6 @@ mod tests {
             SplitOrientation::Vertical,
         );
 
-        // 親子ポインタ
         assert_eq!(store.cell(&new_split).unwrap().parent.as_ref(), Some(&p));
         assert_eq!(store.cell(&p).unwrap().parent, None);
         assert_eq!(store.cell(&b).unwrap().parent.as_ref(), Some(&new_split));
@@ -436,7 +417,6 @@ mod tests {
             Some(&new_split)
         );
 
-        // A は不変 (parent は P のまま)
         assert_eq!(
             store.cell(&a).unwrap().parent.as_ref(),
             Some(&p),
@@ -451,7 +431,6 @@ mod tests {
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
-        // p_root{lhs=A, rhs=B}
         let p_root = store
             .split_cell(
                 a.clone(),
@@ -461,7 +440,6 @@ mod tests {
             )
             .unwrap();
 
-        // A をさらに分割: p_root{lhs=mid{lhs=A, rhs=C}, rhs=B}
         let c = new_root_pane(&mut store);
         let mid = store
             .split_cell(
@@ -472,7 +450,6 @@ mod tests {
             )
             .unwrap();
 
-        // A をもう一度分割: p_root{lhs=mid{lhs=inner{lhs=A, rhs=D}, rhs=C}, rhs=B}
         let d = new_root_pane(&mut store);
         let inner = store
             .split_cell(
@@ -483,18 +460,15 @@ mod tests {
             )
             .unwrap();
 
-        // 各 split の構造
         assert_split(&store, &p_root, &mid, &b, SplitOrientation::Horizontal);
         assert_split(&store, &mid, &inner, &c, SplitOrientation::Vertical);
         assert_split(&store, &inner, &a, &d, SplitOrientation::Horizontal);
 
-        // 祖先チェーンが正しく繋がっている
         assert_eq!(store.cell(&p_root).unwrap().parent, None);
         assert_eq!(store.cell(&mid).unwrap().parent.as_ref(), Some(&p_root));
         assert_eq!(store.cell(&inner).unwrap().parent.as_ref(), Some(&mid));
         assert_eq!(store.cell(&a).unwrap().parent.as_ref(), Some(&inner));
 
-        // 同レベルの兄弟が壊れていない
         assert_eq!(store.cell(&b).unwrap().parent.as_ref(), Some(&p_root));
         assert_eq!(store.cell(&c).unwrap().parent.as_ref(), Some(&mid));
         assert_eq!(store.cell(&d).unwrap().parent.as_ref(), Some(&inner));
@@ -537,9 +511,6 @@ mod tests {
 
     #[test]
     fn split_with_nonexistent_new_cell_leaves_store_intact() {
-        // 現コードは parent(&target)? と cell(&new_cell)? の両方の existence check が
-        // mutation より先に走るため、new_cell 不在時もアトミック (target.parent は更新されない)。
-        // 回帰検出用テスト。
         let mut store = LayoutCellStore::default();
         let a = new_root_pane(&mut store);
         let nonexistent = CellId::new();
