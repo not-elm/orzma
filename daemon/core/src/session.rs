@@ -71,24 +71,31 @@ impl Session {
         &self.root
     }
 
-    pub fn split_pane(&mut self, pane_id: &PaneId, orientation: SplitOrientation) -> OzmuxResult {
+    pub fn split_pane(
+        &mut self,
+        pane_id: &PaneId,
+        orientation: SplitOrientation,
+        side: Side,
+    ) -> OzmuxResult<PaneId> {
         let target_cell_id = self.panes.get(pane_id)?.cell_id().clone();
         let target_was_root = target_cell_id == self.root;
 
         let new_pane_id = PaneId::new();
         let new_cell_id = self.cells.create_pane_cell(new_pane_id.clone(), None);
-        self.panes
-            .insert(new_pane_id.clone(), Pane::new(new_pane_id.clone(), new_cell_id.clone()));
+        self.panes.insert(
+            new_pane_id.clone(),
+            Pane::new(new_pane_id.clone(), new_cell_id.clone()),
+        );
 
         let new_split_id =
             self.cells
-                .split_cell(target_cell_id, new_cell_id, Side::After, orientation)?;
+                .split_cell(target_cell_id, new_cell_id, side, orientation)?;
 
         if target_was_root {
             self.root = new_split_id;
         }
 
-        Ok(())
+        Ok(new_pane_id)
     }
 
     /// Close a pane and propagate the structural change.
@@ -172,7 +179,7 @@ mod tests {
         let original_root = store.root().clone();
 
         store
-            .split_pane(&first_pane_id, SplitOrientation::Horizontal)
+            .split_pane(&first_pane_id, SplitOrientation::Horizontal, Side::After)
             .expect("split");
         let root_after_split = store.root().clone();
         assert_ne!(
@@ -202,7 +209,7 @@ mod tests {
         let mut store = Session::default();
         let first_pane_id = store.panes().any_pane_id().unwrap();
         store
-            .split_pane(&first_pane_id, SplitOrientation::Horizontal)
+            .split_pane(&first_pane_id, SplitOrientation::Horizontal, Side::After)
             .expect("first split");
         let root_after_first = store.root().clone();
 
@@ -215,7 +222,7 @@ mod tests {
 
         // Split second_pane_id again to create a 3-pane layout.
         store
-            .split_pane(&second_pane_id, SplitOrientation::Vertical)
+            .split_pane(&second_pane_id, SplitOrientation::Vertical, Side::After)
             .expect("second split");
         let root_after_second = store.root().clone();
         assert_eq!(
@@ -270,7 +277,7 @@ mod tests {
     fn session_with_horizontal_split_serializes_cells_with_lowercase_orientation() {
         let mut s = Session::new(String::new());
         let pane_id = s.panes().any_pane_id().unwrap();
-        s.split_pane(&pane_id, SplitOrientation::Horizontal)
+        s.split_pane(&pane_id, SplitOrientation::Horizontal, Side::After)
             .expect("split");
         let v = serde_json::to_value(&s).unwrap();
         let cells = v["cells"].as_object().unwrap();
@@ -282,6 +289,19 @@ mod tests {
                 == Some("horizontal")
         });
         assert!(split_present, "expected a Split cell with lowercase orientation");
+    }
+
+    #[test]
+    fn split_pane_returns_new_pane_id() {
+        let mut s = Session::new(String::new());
+        let pane_id = s.panes().any_pane_id().unwrap();
+
+        let new_id = s
+            .split_pane(&pane_id, SplitOrientation::Horizontal, Side::After)
+            .expect("split");
+
+        assert!(s.panes().get(&new_id).is_ok());
+        assert_ne!(new_id, pane_id);
     }
 
     #[tokio::test]
