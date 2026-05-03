@@ -73,23 +73,92 @@ impl LayoutCellStore {
         Ok(split_cell_id)
     }
 
-    pub fn close_cell(&mut self, id: &CellId) -> OzmuxResult {
-        let cell = self.remove(id)?;
-        if let Some(ref parent_cell_id) = cell.parent
-            && let Ok(parent_cell) = self.remove(parent_cell_id)
-            && let Cell::Split(ref split) = parent_cell.cell
-            && let other_cell_id = split.obtain_other_side_cell_id(id)
-            && let Some(ref grandparent_cell_id) = parent_cell.parent
-            && let Ok(ref mut grandparent_cell) = self.cell_mut(grandparent_cell_id)
-            && let Cell::Split(ref mut grandparent_split) = grandparent_cell.cell
-        {
-            if &grandparent_split.lhs_cell == parent_cell_id {
-                grandparent_split.lhs_cell = other_cell_id.clone();
-            } else if &grandparent_split.rhs_cell == parent_cell_id {
-                grandparent_split.rhs_cell = other_cell_id.clone();
-            }
+    /// Close a leaf cell using sibling-promote semantics.
+    ///
+    /// # Algorithm
+    /// 1. **Pre-validate (no mutation)**: target exists and is `Cell::Pane`;
+    ///    if non-root, parent exists and is `Cell::Split`; sibling found via
+    ///    `obtain_other_side_cell_id`; grandparent (if any) exists and is `Cell::Split`.
+    ///    Any failure → `Err`, store unchanged.
+    /// 2. **Commit (atomic, fixed order)**: remove target; remove parent split (if any);
+    ///    set sibling.parent = grandparent_id_or_None; rewrite grandparent's child
+    ///    slot from parent_id to sibling_id (preserving lhs/rhs orientation).
+    ///
+    /// # Discipline rule (reviewers must enforce)
+    /// All fallible reads (`?`-returning) MUST appear before any `remove`/`cell_mut`.
+    /// The commit phase is infallible by construction. Rust's type system does not
+    /// enforce this in-function ordering.
+    ///
+    /// # Identifier stability
+    /// Only `id` (and the parent split, if any) are removed from the store.
+    /// All other `CellId`s remain valid; the only `LayoutCell` field updated besides
+    /// removals is the promoted sibling's `parent` (and the grandparent's child slot).
+    pub fn close_cell(&mut self, id: &CellId) -> OzmuxResult<CloseOutcome> {
+        // ─── Pre-validate phase: no mutation ───
+        let target = self.cell(id)?;
+        let Cell::Pane(_) = &target.cell else {
+            return Err(OzmuxError::InvalidCellType(id.clone()));
+        };
+        let parent_id = target.parent.clone();
+
+        let Some(parent_id) = parent_id else {
+            // Target is the root pane (parentless). Commit phase trivial.
+            self.0.remove(id);
+            return Ok(CloseOutcome::TreeEmptied);
+        };
+
+        let parent = self.cell(&parent_id)?;
+        let Cell::Split(parent_split) = &parent.cell else {
+            return Err(OzmuxError::InvalidCellType(parent_id));
+        };
+        let sibling_id = parent_split.obtain_other_side_cell_id(id).clone();
+        let grandparent_id = parent.parent.clone();
+
+        if let Some(gp_id) = grandparent_id.as_ref() {
+            let grandparent = self.cell(gp_id)?;
+            let Cell::Split(_) = &grandparent.cell else {
+                return Err(OzmuxError::InvalidCellType(gp_id.clone()));
+            };
         }
-        Ok(())
+
+        // ─── Commit phase: all checks passed; mutations are infallible ───
+        self.0.remove(id);
+        self.0
+            .remove(&parent_id)
+            .expect("parent existed in pre-validate");
+        let sibling = self
+            .0
+            .get_mut(&sibling_id)
+            .expect("sibling existed in pre-validate");
+        sibling.parent = grandparent_id.clone();
+
+        match grandparent_id {
+            Some(gp_id) => {
+                let grandparent = self
+                    .0
+                    .get_mut(&gp_id)
+                    .expect("grandparent existed in pre-validate");
+                let Cell::Split(grandparent_split) = &mut grandparent.cell else {
+                    unreachable!("grandparent type checked in pre-validate phase");
+                };
+                if grandparent_split.lhs_cell == parent_id {
+                    grandparent_split.lhs_cell = sibling_id.clone();
+                } else if grandparent_split.rhs_cell == parent_id {
+                    grandparent_split.rhs_cell = sibling_id.clone();
+                } else {
+                    unreachable!(
+                        "grandparent referenced parent at lhs or rhs in pre-validate phase"
+                    );
+                }
+                Ok(CloseOutcome::SiblingPromoted {
+                    survivor: sibling_id,
+                    new_parent: gp_id,
+                })
+            }
+            None => Ok(CloseOutcome::RootReplaced {
+                new_root: sibling_id,
+            }),
+        }
     }
 
     #[inline]
@@ -662,6 +731,33 @@ mod tests {
             snapshot(&store),
             before,
             "store should be unchanged when new_cell is missing"
+        );
+    }
+
+    #[test]
+    fn close_cell_rejects_split_target() {
+        let mut store = LayoutCellStore::default();
+        let lhs = new_root_pane(&mut store);
+        let rhs = new_root_pane(&mut store);
+        let split_id = store
+            .split_cell(
+                lhs.clone(),
+                rhs.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .expect("split");
+
+        let before = snapshot(&store);
+        let result = store.close_cell(&split_id);
+        assert!(
+            matches!(result, Err(OzmuxError::InvalidCellType(ref id)) if id == &split_id),
+            "closing a Split cell should return InvalidCellType, got {result:?}",
+        );
+        assert_eq!(
+            snapshot(&store),
+            before,
+            "store must be unchanged when close rejects a Split target",
         );
     }
 
