@@ -3,6 +3,7 @@ use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
 mod health;
+mod index;
 
 pub async fn launch_server() -> OzmuxResult {
     let listener = TcpListener::bind("127.0.0.1:3200")
@@ -15,5 +16,7 @@ pub async fn launch_server() -> OzmuxResult {
 }
 
 fn daemon_router() -> Router {
-    Router::new().route("/health", get(health::check))
+    Router::new()
+        .route("/", get(index::handler))
+        .route("/health", get(health::check))
 }
