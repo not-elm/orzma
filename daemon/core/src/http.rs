@@ -1,4 +1,7 @@
-use crate::error::{OzmuxError, OzmuxResult};
+use crate::{
+    error::{OzmuxError, OzmuxResult},
+    session::SessionState,
+};
 use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
@@ -16,7 +19,9 @@ pub async fn launch_server() -> OzmuxResult {
 }
 
 fn daemon_router() -> Router {
+    let state = SessionState::default();
     Router::new()
         .route("/", get(index::handler))
         .route("/health", get(health::check))
+        .with_state(state)
 }

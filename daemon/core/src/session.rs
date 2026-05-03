@@ -1,4 +1,9 @@
+use std::{collections::HashMap, sync::Arc};
+
+use tokio::sync::Mutex;
+
 use crate::{
+    define_string_new_type,
     error::{OzmuxError, OzmuxResult},
     session::{
         cell::{CellId, CloseOutcome, LayoutCellStore, Side, SplitOrientation},
@@ -10,13 +15,27 @@ mod activity;
 pub mod cell;
 pub mod pane;
 
-pub struct SessionStore {
+#[derive(Clone, Default)]
+pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
+
+define_string_new_type!(SessionId);
+
+pub struct Session {
+    name: String,
     root: CellId,
     cells: LayoutCellStore,
     panes: PaneStore,
 }
 
-impl SessionStore {
+impl Session {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn rename(&mut self, name: impl Into<String>) {
+        self.name = name.into();
+    }
+
     pub fn root(&self) -> &CellId {
         &self.root
     }
@@ -77,13 +96,13 @@ impl SessionStore {
 }
 
 #[cfg(test)]
-impl SessionStore {
+impl Session {
     pub(crate) fn panes(&self) -> &PaneStore {
         &self.panes
     }
 }
 
-impl Default for SessionStore {
+impl Default for Session {
     fn default() -> Self {
         let pane_id = PaneId::new();
         let mut cells = LayoutCellStore::default();
@@ -93,6 +112,7 @@ impl Default for SessionStore {
         panes.insert(pane_id, Pane::new(cell_id.clone()));
 
         Self {
+            name: "".to_string(),
             root: cell_id,
             panes,
             cells,
@@ -107,7 +127,7 @@ mod tests {
 
     #[test]
     fn default_session_root_points_to_initial_pane() {
-        let store = SessionStore::default();
+        let store = Session::default();
         let root_id = store.root();
         let pane_id = store.panes().any_pane_id().expect("default has 1 pane");
         let pane = store.panes().get(&pane_id).expect("pane should exist");
@@ -116,7 +136,7 @@ mod tests {
 
     #[test]
     fn close_pane_on_last_pane_returns_err() {
-        let mut store = SessionStore::default();
+        let mut store = Session::default();
         let last_pane_id = store.panes().any_pane_id().expect("default has 1 pane");
 
         let result = store.close_pane(&last_pane_id);
@@ -128,7 +148,7 @@ mod tests {
 
     #[test]
     fn close_pane_after_split_removes_one_pane_and_updates_root() {
-        let mut store = SessionStore::default();
+        let mut store = Session::default();
         let first_pane_id = store.panes().any_pane_id().expect("default has 1 pane");
         let original_root = store.root().clone();
 
@@ -160,7 +180,7 @@ mod tests {
     fn close_pane_under_nested_split_keeps_root_unchanged() {
         // Build a 3-pane layout: split twice. Closing one of the leaves under the
         // inner split should NOT change the root.
-        let mut store = SessionStore::default();
+        let mut store = Session::default();
         let first_pane_id = store.panes().any_pane_id().unwrap();
         store
             .split_pane(&first_pane_id, SplitOrientation::Horizontal)
@@ -194,7 +214,7 @@ mod tests {
 
     #[test]
     fn close_pane_with_nonexistent_pane_id_returns_err() {
-        let mut store = SessionStore::default();
+        let mut store = Session::default();
         let nonexistent = PaneId::new();
         let result = store.close_pane(&nonexistent);
         assert!(matches!(result, Err(OzmuxError::PaneNotfound(_))));
