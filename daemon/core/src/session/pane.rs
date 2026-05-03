@@ -1,11 +1,14 @@
 use crate::{
     define_string_new_type,
     error::{OzmuxError, OzmuxResult},
-    session::cell::CellId,
+    session::{
+        activity::{Activity, ActivityId},
+        cell::CellId,
+    },
 };
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct PaneStore(HashMap<PaneId, Pane>);
 
 impl PaneStore {
@@ -28,6 +31,7 @@ impl PaneStore {
             .ok_or_else(|| OzmuxError::PaneNotfound(id.clone()))
     }
 
+    #[inline]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&PaneId, &Pane)> {
         self.0.iter()
     }
@@ -38,14 +42,17 @@ impl PaneStore {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Pane {
     pub cell: CellId,
+    pub activities: Vec<Activity>,
 }
 
 impl Pane {
     pub fn new(cell: CellId) -> Self {
-        Self { cell }
+        let terminal = Activity::default();
+        let activities = vec![terminal];
+        Self { cell, activities }
     }
 }
 
