@@ -11,13 +11,13 @@ help:
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
 	@echo "  dev-backend        - Run axum server on :3200 (debug build redirects / to :5173)"
 	@echo "  ensure-placeholder - Copy placeholder to index.html if missing (for cargo check)"
-	@echo "  clean              - Remove frontend node_modules, cargo target, and built index.html"
+	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
 ensure-placeholder:
 	@test -f $(INDEX_HTML) || cp $(PLACEHOLDER) $(INDEX_HTML)
 
 verify-out-dir:
-	@stray=$$(find $(HTTP_DIR) -maxdepth 1 -mindepth 1 ! -name '*.rs' ! -name 'index.html' ! -name 'index.html.placeholder' 2>/dev/null); \
+	@stray=$$(find $(HTTP_DIR) -mindepth 1 ! -name '*.rs' ! -name 'index.html' ! -name 'index.html.placeholder' 2>/dev/null); \
 	if [ -n "$$stray" ]; then \
 		echo "ERROR: unexpected files in $(HTTP_DIR):"; \
 		echo "$$stray"; \
@@ -28,7 +28,7 @@ verify-out-dir:
 build: ensure-placeholder
 	pnpm --dir $(FRONTEND_DIR) install --frozen-lockfile
 	pnpm --dir $(FRONTEND_DIR) build
-	$(MAKE) verify-out-dir
+	@$(MAKE) --no-print-directory verify-out-dir
 	cargo build --release -p ozmux_core
 
 dev-frontend:
