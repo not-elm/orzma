@@ -1,7 +1,7 @@
 use crate::session::{Session, SessionId, SessionState};
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
@@ -9,7 +9,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 pub fn router() -> Router<SessionState> {
-    Router::new().route("/sessions", get(list).post(create))
+    Router::new()
+        .route("/sessions", get(list).post(create))
+        .route("/sessions/{session_id}", get(get_session))
 }
 
 #[derive(Deserialize, Default)]
@@ -43,6 +45,17 @@ async fn list(State(state): State<SessionState>) -> Json<serde_json::Value> {
         .map(|(id, s)| SessionSummary { id, name: s.name() })
         .collect();
     Json(serde_json::json!({ "sessions": summaries }))
+}
+
+async fn get_session(
+    State(state): State<SessionState>,
+    Path(session_id): Path<SessionId>,
+) -> Result<Json<serde_json::Value>, crate::error::OzmuxError> {
+    let guard = state.lock().await;
+    let session = guard
+        .get(&session_id)
+        .ok_or_else(|| crate::error::OzmuxError::SessionNotFound(session_id.clone()))?;
+    Ok(Json(serde_json::to_value(session).unwrap()))
 }
 
 #[cfg(test)]
@@ -124,6 +137,49 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["name"].as_str(), Some(""));
+    }
+
+    #[tokio::test]
+    async fn get_returns_full_session() {
+        let state = SessionState::default();
+        let session = Session::new("xyz".to_string());
+        let id = session.id().clone();
+        {
+            let mut guard = state.lock().await;
+            guard.insert(id.clone(), session);
+        }
+        let resp = router_with(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/sessions/{}", id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["id"].as_str(), Some(id.as_ref()));
+        assert_eq!(v["name"].as_str(), Some("xyz"));
+    }
+
+    #[tokio::test]
+    async fn get_returns_404_with_session_not_found_code_for_unknown_id() {
+        let state = SessionState::default();
+        let resp = router_with(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/no-such-id")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"].as_str(), Some("SESSION_NOT_FOUND"));
     }
 
     #[tokio::test]
