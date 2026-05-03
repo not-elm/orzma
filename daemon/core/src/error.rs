@@ -17,4 +17,7 @@ pub enum OzmuxError {
 
     #[error("invalid node type node-id={0}")]
     InvalidNodeType(CellId),
+
+    #[error("split target equals new_cell: cell-id={0}")]
+    SplitTargetEqualsNewCell(CellId),
 }

@@ -35,6 +35,9 @@ impl LayoutCellStore {
         new_cell_side: Side,
         orientation: SplitOrientation,
     ) -> OzmuxResult<CellId> {
+        if target == new_cell {
+            return Err(OzmuxError::SplitTargetEqualsNewCell(target));
+        }
         let split_cell_id = CellId::new();
         let target_parent = self.parent(&target)?.cloned();
         // upfront existence check for new_cell — keeps atomicity: if new_cell
@@ -499,9 +502,6 @@ mod tests {
         assert_well_formed(&store);
     }
 
-    // TODO(phase-2): 現コードは lhs == rhs を検証せず Ok を返し、SplitCell が
-    // 同じ ID を lhs_cell/rhs_cell の両方に持つ縮退状態になる。
-    // Phase 2 で create_split_cell に同一性検証を追加し、Err 化する。
     #[test]
     fn split_with_same_lhs_rhs_returns_error() {
         let mut store = LayoutCellStore::default();
