@@ -219,7 +219,7 @@ pub enum Side {
 mod tests {
     use super::*;
     use crate::session::pane::PaneId;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     /// Create a parent-less pane cell, insert it into the store, and return its CellId.
     /// Equivalent to a freshly-created tmux pane (the kind passed as new_cell to split_cell).
@@ -257,13 +257,22 @@ mod tests {
         assert_eq!(s.rhs_weight, 0.5, "rhs_weight should be 0.5 at split {id}");
     }
 
-    /// Assert tree integrity across the whole store:
-    ///   (a) every cell whose parent is Some(p) — p exists in the store, is a Cell::Split,
-    ///       and lists this cell as either lhs_cell or rhs_cell.
-    ///   (b) each Split's lhs_cell / rhs_cell exist in the store, and their parent points back.
-    ///   (c) every non-root cell is referenced by exactly one Split in the entire store
-    ///       (catches duplicate references and dangling pointers).
-    fn assert_well_formed(store: &LayoutCellStore) {
+    /// Assert tree integrity across the whole store.
+    ///
+    /// Axioms checked:
+    /// 1. Every cell whose parent is `Some(p)`: `p` exists in the store, is a `Cell::Split`,
+    ///    and lists this cell as either `lhs_cell` or `rhs_cell`.
+    /// 2. Each `Split`'s `lhs_cell` / `rhs_cell` exist in the store, and their parent
+    ///    points back to the split.
+    /// 3. Every non-root cell is referenced by exactly one `Split`; root is referenced 0 times.
+    /// 4. (Single-root) If `root` is `Some`, exactly one cell has `parent.is_none()` and it equals `root`.
+    ///    If `root` is `None`, the store is empty.
+    /// 5. (Reachability) If `root` is `Some`, every cell is reachable from `root` via `lhs`/`rhs`
+    ///    descent into `Cell::Split`.
+    /// 6. (Acyclicity) The descent visits each cell at most once and terminates within
+    ///    `store.len()` steps.
+    fn assert_well_formed(store: &LayoutCellStore, root: Option<&CellId>) {
+        // Axiom 1 & 2: bidirectional parent/child links.
         for (id, cell) in &store.0 {
             if let Some(parent_id) = &cell.parent {
                 let parent = store.0.get(parent_id).unwrap_or_else(|| {
@@ -293,6 +302,7 @@ mod tests {
             }
         }
 
+        // Axiom 3: reference cardinality.
         let mut ref_count: HashMap<&CellId, usize> = HashMap::new();
         for cell in store.0.values() {
             if let Cell::Split(s) = &cell.cell {
@@ -314,12 +324,74 @@ mod tests {
                 );
             }
         }
+
+        // Axiom 4: single-root uniqueness.
+        let parentless: Vec<&CellId> = store
+            .0
+            .iter()
+            .filter(|(_, c)| c.parent.is_none())
+            .map(|(id, _)| id)
+            .collect();
+        match root {
+            Some(root_id) => {
+                assert_eq!(
+                    parentless.len(),
+                    1,
+                    "expected exactly 1 parentless cell when root is Some, found {}: {:?}",
+                    parentless.len(),
+                    parentless,
+                );
+                assert_eq!(
+                    parentless[0], root_id,
+                    "parentless cell {} does not match expected root {}",
+                    parentless[0], root_id,
+                );
+            }
+            None => {
+                assert!(
+                    store.0.is_empty(),
+                    "expected empty store when root is None, found {} cells",
+                    store.0.len(),
+                );
+            }
+        }
+
+        // Axioms 5 & 6: reachability + acyclicity (DFS from root).
+        if let Some(root_id) = root {
+            let mut visited: HashSet<CellId> = HashSet::new();
+            let mut stack: Vec<CellId> = vec![root_id.clone()];
+            while let Some(id) = stack.pop() {
+                assert!(
+                    visited.insert(id.clone()),
+                    "cycle or duplicate reference detected at cell {id}",
+                );
+                assert!(
+                    visited.len() <= store.0.len(),
+                    "DFS exceeded store size — possible cycle"
+                );
+                let cell = store
+                    .0
+                    .get(&id)
+                    .unwrap_or_else(|| panic!("reachability descent reached missing cell {id}"));
+                if let Cell::Split(s) = &cell.cell {
+                    stack.push(s.lhs_cell.clone());
+                    stack.push(s.rhs_cell.clone());
+                }
+            }
+            assert_eq!(
+                visited.len(),
+                store.0.len(),
+                "{} cells reachable from root but store has {} cells",
+                visited.len(),
+                store.0.len(),
+            );
+        }
     }
 
     #[test]
     fn helpers_compile_smoke() {
         let store = LayoutCellStore::default();
-        assert_well_formed(&store);
+        assert_well_formed(&store, None);
         let _snap = snapshot(&store);
     }
 
@@ -359,7 +431,7 @@ mod tests {
         );
 
         assert_split(&store, &split_id, &lhs, &rhs, SplitOrientation::Horizontal);
-        assert_well_formed(&store);
+        assert_well_formed(&store, Some(&split_id));
     }
 
     #[test]
@@ -414,7 +486,7 @@ mod tests {
             "B should be unchanged"
         );
 
-        assert_well_formed(&store);
+        assert_well_formed(&store, Some(&p));
     }
 
     #[test]
@@ -465,7 +537,7 @@ mod tests {
             "A should be unchanged"
         );
 
-        assert_well_formed(&store);
+        assert_well_formed(&store, Some(&p));
     }
 
     #[test]
@@ -515,7 +587,7 @@ mod tests {
         assert_eq!(store.cell(&c).unwrap().parent.as_ref(), Some(&mid));
         assert_eq!(store.cell(&d).unwrap().parent.as_ref(), Some(&inner));
 
-        assert_well_formed(&store);
+        assert_well_formed(&store, Some(&p_root));
     }
 
     #[test]
