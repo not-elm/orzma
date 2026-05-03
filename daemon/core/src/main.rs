@@ -1,5 +1,6 @@
 mod error;
 mod http;
+mod session;
 
 #[tokio::main]
 async fn main() {
