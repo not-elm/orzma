@@ -21,6 +21,7 @@ pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
 define_string_new_type!(SessionId);
 
 pub struct Session {
+    id: SessionId,
     name: String,
     root: CellId,
     cells: LayoutCellState,
@@ -28,6 +29,28 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn new(name: String) -> Self {
+        let id = SessionId::new();
+        let pane_id = PaneId::new();
+        let mut cells = LayoutCellState::default();
+        let cell_id = cells.create_pane_cell(pane_id.clone(), None);
+
+        let mut panes = PaneStore::default();
+        panes.insert(pane_id.clone(), Pane::new(pane_id, cell_id.clone()));
+
+        Self {
+            id,
+            name,
+            root: cell_id,
+            cells,
+            panes,
+        }
+    }
+
+    pub const fn id(&self) -> &SessionId {
+        &self.id
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -104,19 +127,7 @@ impl Session {
 
 impl Default for Session {
     fn default() -> Self {
-        let pane_id = PaneId::new();
-        let mut cells = LayoutCellState::default();
-        let cell_id = cells.create_pane_cell(pane_id.clone(), None);
-
-        let mut panes = PaneStore::default();
-        panes.insert(pane_id.clone(), Pane::new(pane_id, cell_id.clone()));
-
-        Self {
-            name: "".to_string(),
-            root: cell_id,
-            panes,
-            cells,
-        }
+        Self::new(String::new())
     }
 }
 
@@ -218,5 +229,19 @@ mod tests {
         let nonexistent = PaneId::new();
         let result = store.close_pane(&nonexistent);
         assert!(matches!(result, Err(OzmuxError::PaneNotfound(_))));
+    }
+
+    #[test]
+    fn session_carries_its_id() {
+        let s = Session::new("demo".to_string());
+        assert!(!s.id().as_ref().is_empty());
+        assert_eq!(s.name(), "demo");
+    }
+
+    #[test]
+    fn two_new_sessions_get_distinct_ids() {
+        let a = Session::new(String::new());
+        let b = Session::new(String::new());
+        assert_ne!(a.id(), b.id());
     }
 }
