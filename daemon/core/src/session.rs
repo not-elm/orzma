@@ -1,37 +1,53 @@
-use crate::session::{pane::PaneStore, pane_node::PaneNode};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use uuid::Uuid;
+use crate::{
+    error::OzmuxResult,
+    session::{
+        cell::{Cell, CellId, LayoutCell, LayoutCellStore, PaneCell, SplitCell, SplitOrientation},
+        pane::{Pane, PaneId, PaneStore},
+    },
+};
 
-mod pane;
-mod pane_node;
+mod activity;
+pub mod cell;
+pub mod pane;
 
-#[derive(Clone)]
 pub struct SessionStore {
-    pub sessions: HashMap<SessionId, Session>,
+    cells: LayoutCellStore,
+    panes: PaneStore,
 }
 
-#[derive(Clone, Debug)]
-pub struct Session {
-    pub id: SessionId,
-    pub name: String,
-    pub pane: PaneStore,
-    pub layout: PaneNode,
-}
+impl SessionStore {
+    pub fn split_pane(
+        &mut self,
+        lhs_pane_id: &PaneId,
+        rhs_pane_id: &PaneId,
+        orientation: SplitOrientation,
+    ) -> OzmuxResult {
+        let lhs_pane = self.panes.get(lhs_pane_id)?;
+        let rhs_pane = self.panes.get(&rhs_pane_id)?;
+        let split_cell_id = CellId::new();
+        let lhs_cell_id = lhs_pane.cell.clone();
+        let rhs_cell_id = rhs_pane.cell.clone();
+        let split_cell = SplitCell::new(lhs_cell_id, rhs_cell_id, orientation);
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct SessionId(String);
-
-impl SessionId {
-    /// Create the new session-id with a unique identifier
-    pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
+        Ok(())
     }
 }
 
-impl AsRef<str> for SessionId {
-    #[inline]
-    fn as_ref(&self) -> &str {
-        &self.0
+impl Default for SessionStore {
+    fn default() -> Self {
+        let pane_id = PaneId::new();
+        let mut cells = LayoutCellStore::default();
+        let cell_id = cells.create_pane_cell(pane_id.clone(), None);
+
+        let mut panes = PaneStore::default();
+        panes.insert(pane_id, Pane::new(cell_id));
+
+        Self { panes, cells }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_pane_create() {}
 }

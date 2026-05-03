@@ -1,14 +1,36 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::{
+    define_string_new_type,
+    error::{OzmuxError, OzmuxResult},
+    session::cell::CellId,
+};
+use std::{collections::HashMap, fmt::Display};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PaneStore(HashMap<PaneId, Pane>);
 
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct PaneId(pub String);
+impl PaneStore {
+    #[inline]
+    pub fn insert(&mut self, id: PaneId, pane: Pane) {
+        self.0.insert(id, pane);
+    }
+
+    #[inline]
+    pub fn get(&self, id: &PaneId) -> OzmuxResult<&Pane> {
+        self.0
+            .get(id)
+            .ok_or_else(|| OzmuxError::PaneNotfound(id.clone()))
+    }
+}
 
 #[derive(Clone, Debug)]
-pub struct Pane {}
+pub struct Pane {
+    pub cell: CellId,
+}
 
-#[derive(Clone, Debug)]
-pub struct PaneLayout {}
+impl Pane {
+    pub fn new(cell: CellId) -> Self {
+        Self { cell }
+    }
+}
+
+define_string_new_type!(PaneId);
