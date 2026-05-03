@@ -215,6 +215,32 @@ pub enum Side {
     After,
 }
 
+/// Structural outcome of `LayoutCellStore::close_cell`.
+///
+/// Callers (typically `SessionStore::close_pane`) must handle every variant.
+/// `#[must_use]` is a lint-level nudge; type-level enforcement comes from
+/// requiring the caller to consume the value via `match`.
+#[must_use]
+#[derive(Debug, Clone, PartialEq)]
+pub enum CloseOutcome {
+    /// Target had no parent; the store is now empty.
+    /// Callers should treat this as "session ended" — closing the only pane
+    /// equals tearing down the layout entirely.
+    TreeEmptied,
+
+    /// Target's parent split was the root; the surviving sibling becomes
+    /// the new root (its `parent` field is now `None`).
+    RootReplaced { new_root: CellId },
+
+    /// Target's grandparent existed; the surviving sibling now occupies
+    /// `new_parent`'s child slot in the same lhs/rhs position the deleted
+    /// parent occupied (slot pinning).
+    SiblingPromoted {
+        survivor: CellId,
+        new_parent: CellId,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
