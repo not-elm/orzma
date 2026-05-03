@@ -1,13 +1,9 @@
 use crate::define_string_new_type;
-use std::collections::HashMap;
-
-#[derive(Debug, Default)]
-pub struct ActivityStore(HashMap<ActivityId, Activity>);
 
 #[derive(Debug)]
 pub struct Activity {
-    pub id: ActivityId,
-    pub name: String,
+    id: ActivityId,
+    name: String,
 }
 
 impl Default for Activity {

@@ -7,6 +7,7 @@ use tokio::net::TcpListener;
 
 mod health;
 mod index;
+mod sessions;
 
 pub async fn launch_server() -> OzmuxResult {
     let listener = TcpListener::bind("127.0.0.1:3200")

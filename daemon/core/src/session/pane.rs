@@ -41,8 +41,8 @@ impl PaneStore {
 
 #[derive(Debug)]
 pub struct Pane {
-    pub cell: CellId,
-    pub activities: Vec<Activity>,
+    cell: CellId,
+    activities: Vec<Activity>,
 }
 
 impl Pane {
@@ -50,6 +50,10 @@ impl Pane {
         let terminal = Activity::default();
         let activities = vec![terminal];
         Self { cell, activities }
+    }
+
+    pub const fn cell_id(&self) -> &CellId {
+        &self.cell
     }
 }
 

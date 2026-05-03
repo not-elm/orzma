@@ -6,7 +6,7 @@ use crate::{
     define_string_new_type,
     error::{OzmuxError, OzmuxResult},
     session::{
-        cell::{CellId, CloseOutcome, LayoutCellStore, Side, SplitOrientation},
+        cell::{CellId, CloseOutcome, LayoutCellState, Side, SplitOrientation},
         pane::{Pane, PaneId, PaneStore},
     },
 };
@@ -23,7 +23,7 @@ define_string_new_type!(SessionId);
 pub struct Session {
     name: String,
     root: CellId,
-    cells: LayoutCellStore,
+    cells: LayoutCellState,
     panes: PaneStore,
 }
 
@@ -41,7 +41,7 @@ impl Session {
     }
 
     pub fn split_pane(&mut self, pane_id: &PaneId, orientation: SplitOrientation) -> OzmuxResult {
-        let target_cell_id = self.panes.get(pane_id)?.cell.clone();
+        let target_cell_id = self.panes.get(pane_id)?.cell_id().clone();
         let target_was_root = target_cell_id == self.root;
 
         let new_pane_id = PaneId::new();
@@ -68,7 +68,7 @@ impl Session {
     /// On success: the pane is removed from `PaneStore`, the layout cell tree is
     /// updated via sibling-promote, and `self.root` is updated if the root changed.
     pub fn close_pane(&mut self, pane_id: &PaneId) -> OzmuxResult {
-        let cell_id = self.panes.get(pane_id)?.cell.clone();
+        let cell_id = self.panes.get(pane_id)?.cell_id().clone();
 
         // Pre-check: closing the only cell empties the tree, which equals "session ended".
         // The session-level invariant is "≥1 pane"; reject before mutating.
@@ -105,7 +105,7 @@ impl Session {
 impl Default for Session {
     fn default() -> Self {
         let pane_id = PaneId::new();
-        let mut cells = LayoutCellStore::default();
+        let mut cells = LayoutCellState::default();
         let cell_id = cells.create_pane_cell(pane_id.clone(), None);
 
         let mut panes = PaneStore::default();
@@ -131,7 +131,7 @@ mod tests {
         let root_id = store.root();
         let pane_id = store.panes().any_pane_id().expect("default has 1 pane");
         let pane = store.panes().get(&pane_id).expect("pane should exist");
-        assert_eq!(&pane.cell, root_id);
+        assert_eq!(pane.cell_id(), root_id);
     }
 
     #[test]

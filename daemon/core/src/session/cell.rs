@@ -7,33 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Default, Debug)]
-pub struct LayoutCellStore(HashMap<CellId, LayoutCell>);
+pub struct LayoutCellState(HashMap<CellId, LayoutCell>);
 
-impl LayoutCellStore {
+impl LayoutCellState {
     #[inline]
     pub fn insert(&mut self, id: CellId, node: LayoutCell) {
         self.0.insert(id, node);
-    }
-
-    #[inline]
-    pub fn parent(&self, id: &CellId) -> OzmuxResult<Option<&CellId>> {
-        Ok(self.cell(id)?.parent.as_ref())
-    }
-
-    #[inline]
-    pub fn get_pane_cell(&self, id: &CellId) -> OzmuxResult<&PaneCell> {
-        match &self.cell(id)?.cell {
-            Cell::Pane(pane) => Ok(pane),
-            _ => Err(OzmuxError::InvalidCellType(id.clone())),
-        }
-    }
-
-    #[inline]
-    pub fn get_split_cell(&self, id: &CellId) -> OzmuxResult<&SplitCell> {
-        match &self.cell(id)?.cell {
-            Cell::Split(split) => Ok(split),
-            _ => Err(OzmuxError::InvalidCellType(id.clone())),
-        }
     }
 
     pub fn split_cell(
@@ -233,6 +212,27 @@ impl LayoutCellStore {
         }
         Ok(())
     }
+
+    #[inline]
+    fn parent(&self, id: &CellId) -> OzmuxResult<Option<&CellId>> {
+        Ok(self.cell(id)?.parent.as_ref())
+    }
+
+    #[inline]
+    fn get_pane_cell(&self, id: &CellId) -> OzmuxResult<&PaneCell> {
+        match &self.cell(id)?.cell {
+            Cell::Pane(pane) => Ok(pane),
+            _ => Err(OzmuxError::InvalidCellType(id.clone())),
+        }
+    }
+
+    #[inline]
+    fn get_split_cell(&self, id: &CellId) -> OzmuxResult<&SplitCell> {
+        match &self.cell(id)?.cell {
+            Cell::Split(split) => Ok(split),
+            _ => Err(OzmuxError::InvalidCellType(id.clone())),
+        }
+    }
 }
 
 /// Internal record gathered by `LayoutCellStore::plan_collapse` and consumed by
@@ -346,21 +346,21 @@ mod tests {
 
     /// Create a parent-less pane cell, insert it into the store, and return its CellId.
     /// Equivalent to a freshly-created tmux pane (the kind passed as new_cell to split_cell).
-    fn new_root_pane(store: &mut LayoutCellStore) -> CellId {
+    fn new_root_pane(store: &mut LayoutCellState) -> CellId {
         let pane_id = PaneId::new();
         store.create_pane_cell(pane_id, None)
     }
 
     /// Snapshot the store's internal HashMap by full clone.
     /// Used for "store unchanged" assertions in failure-path tests.
-    fn snapshot(store: &LayoutCellStore) -> HashMap<CellId, LayoutCell> {
+    fn snapshot(store: &LayoutCellState) -> HashMap<CellId, LayoutCell> {
         store.0.clone()
     }
 
     /// Assert the cell is a Split with the expected (lhs_cell, rhs_cell, orientation),
     /// and that lhs_weight == rhs_weight == 0.5 (the default produced by SplitCell::new).
     fn assert_split(
-        store: &LayoutCellStore,
+        store: &LayoutCellState,
         id: &CellId,
         lhs: &CellId,
         rhs: &CellId,
@@ -394,7 +394,7 @@ mod tests {
     ///    descent into `Cell::Split`.
     /// 6. (Acyclicity) The descent visits each cell at most once and terminates within
     ///    `store.len()` steps.
-    fn assert_well_formed(store: &LayoutCellStore, root: Option<&CellId>) {
+    fn assert_well_formed(store: &LayoutCellState, root: Option<&CellId>) {
         // Axiom 1 & 2: bidirectional parent/child links.
         for (id, cell) in &store.0 {
             if let Some(parent_id) = &cell.parent {
@@ -513,14 +513,14 @@ mod tests {
 
     #[test]
     fn helpers_compile_smoke() {
-        let store = LayoutCellStore::default();
+        let store = LayoutCellState::default();
         assert_well_formed(&store, None);
         let _snap = snapshot(&store);
     }
 
     #[test]
     fn split_root_pane() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let lhs = new_root_pane(&mut store);
         let rhs = new_root_pane(&mut store);
 
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn split_target_in_lhs_position_of_existing_split() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
         let p = store
@@ -614,7 +614,7 @@ mod tests {
 
     #[test]
     fn split_target_in_rhs_position_of_existing_split() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
         let p = store
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn split_twice_deeply() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
         let p_root = store
@@ -715,7 +715,7 @@ mod tests {
 
     #[test]
     fn split_with_same_lhs_rhs_returns_error() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
 
         let result = store.split_cell(
@@ -732,7 +732,7 @@ mod tests {
 
     #[test]
     fn split_with_nonexistent_target_leaves_store_intact() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
         let nonexistent = CellId::new();
 
@@ -748,7 +748,7 @@ mod tests {
 
     #[test]
     fn split_with_nonexistent_new_cell_leaves_store_intact() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
         let nonexistent = CellId::new();
 
@@ -764,7 +764,7 @@ mod tests {
 
     #[test]
     fn close_cell_rejects_split_target() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let lhs = new_root_pane(&mut store);
         let rhs = new_root_pane(&mut store);
         let split_id = store
@@ -791,7 +791,7 @@ mod tests {
 
     #[test]
     fn close_cell_with_nonexistent_id_returns_err() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let _ = new_root_pane(&mut store);
         let nonexistent = CellId::new();
 
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn close_only_root_pane_returns_tree_emptied() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let id = store.create_pane_cell(PaneId::new(), None);
 
         let outcome = store.close_cell(&id).expect("close should succeed");
@@ -821,7 +821,7 @@ mod tests {
 
     #[test]
     fn close_lhs_of_two_pane_root_split_replaces_root() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let lhs = new_root_pane(&mut store);
         let rhs = new_root_pane(&mut store);
         let split_id = store
@@ -860,7 +860,7 @@ mod tests {
 
     #[test]
     fn close_rhs_of_two_pane_root_split_replaces_root() {
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let lhs = new_root_pane(&mut store);
         let rhs = new_root_pane(&mut store);
         let split_id = store
@@ -904,7 +904,7 @@ mod tests {
         // Close `a` → mid collapses; c is promoted into mid's slot in p_root (the lhs slot).
         // Expected: p_root.lhs = c, p_root.rhs = b unchanged. mid is removed. a is removed.
         //           c.parent = p_root.
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
         let p_root = store
@@ -964,7 +964,7 @@ mod tests {
         //                         b      c
         //
         // Close `b` → mid collapses; c is promoted into mid's slot in p_root (the rhs slot).
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
         let p_root = store
@@ -1020,7 +1020,7 @@ mod tests {
         // Close `a` → p_root collapses (it was target's parent and is the root).
         //              `mid` (the surviving sibling, itself a Split) becomes the new root.
         //              b and c stay parented to mid.
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let a = new_root_pane(&mut store);
         let b = new_root_pane(&mut store);
         let p_root = store
@@ -1069,7 +1069,7 @@ mod tests {
         // preserved across close — only its `parent` field changes. This is the Pane.cell
         // back-pointer stability contract: PaneStore entries holding the surviving CellId
         // remain valid pointers into LayoutCellStore after a close.
-        let mut store = LayoutCellStore::default();
+        let mut store = LayoutCellState::default();
         let lhs = new_root_pane(&mut store);
         let rhs = new_root_pane(&mut store);
         let _split_id = store
