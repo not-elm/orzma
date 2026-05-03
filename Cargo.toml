@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["daemon/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+readme = "README.md"
+authors = ["notelm"]
+
+[workspace.dependencies]
+tokio = { version = "1.52" }
+thiserror = { version = "2" }
+serde = { version = "1" }
+serde_json = { version = "1" }
