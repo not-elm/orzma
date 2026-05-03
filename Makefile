@@ -1,23 +1,18 @@
-.PHONY: build dev-frontend dev-backend ensure-placeholder verify-out-dir clean help
+.PHONY: build dev-frontend dev-backend verify-out-dir clean help
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
 INDEX_HTML := $(HTTP_DIR)/index.html
-PLACEHOLDER := $(INDEX_HTML).placeholder
 
 help:
 	@echo "Targets:"
 	@echo "  build              - Build frontend to single HTML, then build release binary"
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
 	@echo "  dev-backend        - Run axum server on :3200 (debug build redirects / to :5173)"
-	@echo "  ensure-placeholder - Copy placeholder to index.html if missing (for cargo check)"
 	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
-ensure-placeholder:
-	@test -f $(INDEX_HTML) || cp $(PLACEHOLDER) $(INDEX_HTML)
-
 verify-out-dir:
-	@stray=$$(find $(HTTP_DIR) -mindepth 1 ! -name '*.rs' ! -name 'index.html' ! -name 'index.html.placeholder' 2>/dev/null); \
+	@stray=$$(find $(HTTP_DIR) -mindepth 1 ! -name '*.rs' ! -name 'index.html' 2>/dev/null); \
 	if [ -n "$$stray" ]; then \
 		echo "ERROR: unexpected files in $(HTTP_DIR):"; \
 		echo "$$stray"; \
@@ -25,7 +20,7 @@ verify-out-dir:
 		exit 1; \
 	fi
 
-build: ensure-placeholder
+build:
 	pnpm --dir $(FRONTEND_DIR) install --frozen-lockfile
 	pnpm --dir $(FRONTEND_DIR) build
 	@$(MAKE) --no-print-directory verify-out-dir
@@ -34,7 +29,7 @@ build: ensure-placeholder
 dev-frontend:
 	pnpm --dir $(FRONTEND_DIR) dev
 
-dev-backend: ensure-placeholder
+dev-backend:
 	cargo run -p ozmux_core
 
 clean:
