@@ -16,11 +16,16 @@ impl ScrollbackBuffer {
         Self(Arc::new(Mutex::new(RingBuffer::with_capacity(capacity))))
     }
 
+    /// Bare push/snapshot are test-only — production code MUST use
+    /// `push_and_broadcast` and `snapshot_and_subscribe` to keep the producer
+    /// and consumer sides serialized through a single critical section.
+    #[cfg(test)]
     #[inline]
     pub async fn push(&self, data: &[u8]) {
         self.0.lock().await.push(data);
     }
 
+    #[cfg(test)]
     #[inline]
     pub async fn snapshot(&self) -> Vec<u8> {
         self.0.lock().await.snapshot()
@@ -37,7 +42,6 @@ impl ScrollbackBuffer {
         let mut guard = self.0.lock().await;
         guard.push(&chunk);
         let _ = sender.send(TerminalEvent::Data { buffer: chunk });
-        // mutex dropped here
     }
 
     /// Consumer-side primitive: take the scrollback snapshot AND subscribe to

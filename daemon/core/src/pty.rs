@@ -19,7 +19,7 @@ pub enum TerminalEvent {
 
 #[derive(Default, Clone)]
 pub struct TerminalService {
-    pub ptys: Arc<RwLock<HashMap<ActivityId, PtyHandle>>>,
+    ptys: Arc<RwLock<HashMap<ActivityId, PtyHandle>>>,
 }
 
 pub struct SpawnOptions {
@@ -31,9 +31,15 @@ pub struct SpawnOptions {
 
 impl TerminalService {
     pub async fn spawn(&self, activity_id: ActivityId, opts: SpawnOptions) -> OzmuxResult {
-        if self.ptys.read().await.contains_key(&activity_id) {
+        // Hold the write lock for the entire spawn-then-insert so concurrent
+        // callers with the same ActivityId cannot both pass the existence
+        // check and end up double-spawning a PTY (which would leak the
+        // overwritten one's child process and reader thread).
+        let mut ptys = self.ptys.write().await;
+        if ptys.contains_key(&activity_id) {
             return Ok(());
         }
+
         let pty_pair = native_pty_system()
             .openpty(PtySize {
                 rows: opts.rows,
@@ -60,7 +66,7 @@ impl TerminalService {
         spawn_pty_reader(reader, child, scrollback.clone(), event_sender.clone());
 
         let handle = PtyHandle::new(pty_pair.master, writer, event_sender, killer, scrollback);
-        self.ptys.write().await.insert(activity_id, handle);
+        ptys.insert(activity_id, handle);
         Ok(())
     }
 

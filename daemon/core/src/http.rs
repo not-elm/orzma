@@ -102,9 +102,21 @@ fn activities_router() -> Router<AppState> {
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
+    use crate::{pty::TerminalService, session::SessionState};
     use axum::Router;
+
     pub fn daemon_router_for_test(state: AppState) -> Router {
         daemon_router(state)
+    }
+
+    /// Build a router from just a `SessionState`, supplying a default
+    /// `TerminalService`. Used by sessions/pane/split tests that don't
+    /// exercise the WS endpoint.
+    pub fn router_with_sessions(sessions: SessionState) -> Router {
+        daemon_router(AppState {
+            sessions,
+            terminal: TerminalService::default(),
+        })
     }
 }
 

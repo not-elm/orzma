@@ -36,13 +36,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    fn router_with(state: SessionState) -> axum::Router {
-        let app_state = crate::http::AppState {
-            sessions: state,
-            terminal: crate::pty::TerminalService::default(),
-        };
-        crate::http::test_helpers::daemon_router_for_test(app_state)
-    }
+    use crate::http::test_helpers::router_with_sessions as router_with;
 
     #[tokio::test]
     async fn split_horizontal_returns_new_pane_id_and_full_session() {
