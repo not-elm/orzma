@@ -1,9 +1,8 @@
-import "@xterm/xterm/css/xterm.css";
-
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { type RefObject, useEffect, useRef } from "react";
-import type { TerminalSocket } from "./useTerminalSocket";
+import '@xterm/xterm/css/xterm.css';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { type RefObject, useEffect, useRef } from 'react';
+import type { TerminalSocket } from './useTerminalSocket';
 
 const encoder = new TextEncoder();
 
@@ -13,10 +12,22 @@ export function useXtermTerminal(
 ) {
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const observerRef = useRef<ResizeObserver | null>(null);
 
-  // Effect 1: mount xterm once. Independent of socket lifecycle so that
-  // disconnect/reconnect does NOT destroy the on-screen scrollback.
+  // Effect 1: mount xterm exactly once via a ref guard.
+  //
+  // We deliberately do NOT dispose in cleanup. xterm.js (5.x) schedules an
+  // internal setTimeout from Viewport's constructor inside `term.open()`; if
+  // the term is disposed before that fires (which happens under React 19
+  // StrictMode's mount-cleanup-mount cycle), the deferred callback throws
+  // `Cannot read properties of undefined (reading 'dimensions')`.
+  //
+  // The ref guard ensures only one xterm instance is ever created per
+  // component instance. Terminal is the application root so it never
+  // unmounts in practice; the term lives for the page lifetime.
+  // See https://github.com/xtermjs/xterm.js/issues/4757
   useEffect(() => {
+    if (termRef.current) return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -34,23 +45,23 @@ export function useXtermTerminal(
       resizeTimer = window.setTimeout(() => {
         fit.fit();
         socket.sendControl({
-          type: "resize",
+          type: 'resize',
           cols: term.cols,
           rows: term.rows,
         });
       }, 150);
     });
     observer.observe(container);
+    observerRef.current = observer;
 
+    // Cleanup the observer (but not the xterm instance) if the effect ever
+    // re-runs. The xterm itself is intentionally leaked — see comment above.
     return () => {
-      observer.disconnect();
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
-      term.dispose();
-      termRef.current = null;
-      fitRef.current = null;
+      observer.disconnect();
+      observerRef.current = null;
     };
-    // socket は意図的に依存に入れない: xterm は mount-once
-  }, [containerRef]);
+  }, [containerRef, socket.sendControl]);
 
   // Effect 2: bridge xterm <-> socket whenever the socket transitions
   // through "connected". On disconnect this effect cleans up the listeners
@@ -58,9 +69,12 @@ export function useXtermTerminal(
   // socket.setBinaryHandler buffers any frames that arrived before this
   // effect ran (e.g. the initial scrollback snapshot) and drains them
   // synchronously when the handler is registered.
+  // note: snapshot リプレイ時に xterm が capability-query の応答を生成し、
+  // それが PTY stdin に逆流する既知の問題がある (DA1/DECRQM/OSC 11)。
+  // 根本対策は server 側 VT エミュレータ導入 (docs/plans/server-side-vt-emulator.md)。
   useEffect(() => {
     const term = termRef.current;
-    if (!term || socket.status !== "connected") return;
+    if (!term || socket.status !== 'connected') return;
 
     const dataDisp = term.onData((data) => {
       socket.sendBinary(encoder.encode(data));
@@ -72,15 +86,12 @@ export function useXtermTerminal(
     });
 
     socket.setBinaryHandler((bytes) => term.write(bytes));
-    socket.sendControl({ type: "resize", cols: term.cols, rows: term.rows });
+    socket.sendControl({ type: 'resize', cols: term.cols, rows: term.rows });
 
     return () => {
       dataDisp.dispose();
       binDisp.dispose();
       socket.setBinaryHandler(null);
     };
-    // status の変化のみ effect 再実行のトリガにする (socket オブジェクト自体は
-    // 毎レンダー作り直されるため依存に入れてはいけない。setBinaryHandler は
-    // useCallback で安定参照)。
-  }, [socket.status]);
+  }, [socket.status, socket.sendBinary, socket.sendControl, socket.setBinaryHandler]);
 }
