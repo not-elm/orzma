@@ -25,6 +25,33 @@ impl ScrollbackBuffer {
     pub async fn snapshot(&self) -> Vec<u8> {
         self.0.lock().await.snapshot()
     }
+
+    /// Producer-side primitive: push a chunk and broadcast under the same lock.
+    /// Used by the PTY bridge task. Races with `snapshot_and_subscribe` are
+    /// serialized through the scrollback mutex.
+    pub async fn push_and_broadcast(
+        &self,
+        sender: &Sender<TerminalEvent>,
+        chunk: Vec<u8>,
+    ) {
+        let mut guard = self.0.lock().await;
+        guard.push(&chunk);
+        let _ = sender.send(TerminalEvent::Data { buffer: chunk });
+        // mutex dropped here
+    }
+
+    /// Consumer-side primitive: take the scrollback snapshot AND subscribe to
+    /// the broadcast channel under the same lock. Used by the WS handler at
+    /// connect time. Guarantees zero duplicates and zero gaps.
+    pub async fn snapshot_and_subscribe(
+        &self,
+        sender: &Sender<TerminalEvent>,
+    ) -> (Vec<u8>, Receiver<TerminalEvent>) {
+        let guard = self.0.lock().await;
+        let snap = guard.snapshot();
+        let rx = sender.subscribe();
+        (snap, rx)
+    }
 }
 
 pub(super) struct PtyHandle {
@@ -55,5 +82,47 @@ impl PtyHandle {
     #[inline]
     pub fn subscribe(&self) -> Receiver<TerminalEvent> {
         self.event_sender.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pty::TerminalEvent;
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn push_and_broadcast_writes_to_scrollback_and_sends_event() {
+        let scrollback = ScrollbackBuffer::new();
+        let (tx, mut rx) = broadcast::channel(16);
+
+        scrollback.push_and_broadcast(&tx, b"hello".to_vec()).await;
+
+        assert_eq!(scrollback.snapshot().await, b"hello");
+        match rx.recv().await.unwrap() {
+            TerminalEvent::Data { buffer } => assert_eq!(buffer, b"hello"),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_subscribe_captures_prior_pushes_only_in_snapshot() {
+        let scrollback = ScrollbackBuffer::new();
+        let (tx, _) = broadcast::channel(16);
+
+        scrollback.push_and_broadcast(&tx, b"old".to_vec()).await;
+
+        let (snap, mut rx) = scrollback.snapshot_and_subscribe(&tx).await;
+        assert_eq!(snap, b"old");
+
+        scrollback.push_and_broadcast(&tx, b"new".to_vec()).await;
+
+        // rx receives ONLY the new bytes, not the old ones (which are in snap).
+        match rx.recv().await.unwrap() {
+            TerminalEvent::Data { buffer } => assert_eq!(buffer, b"new"),
+            other => panic!("unexpected event: {other:?}"),
+        }
+        // No more pending events.
+        assert!(rx.try_recv().is_err());
     }
 }
