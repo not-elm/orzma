@@ -11,4 +11,11 @@ export default defineConfig({
     outDir: '../core/src/http',
     emptyOutDir: false,
   },
+  server: {
+    proxy: {
+      '/sessions': 'http://127.0.0.1:3200',
+      '/activities': { target: 'http://127.0.0.1:3200', ws: true },
+      '/health': 'http://127.0.0.1:3200',
+    },
+  },
 });
