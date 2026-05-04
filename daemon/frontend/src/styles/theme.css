@@ -1,0 +1,91 @@
+@import 'tailwindcss';
+
+/* ============================================================
+ * Layer 1 — Raw palette (Tokyo Night night)
+ * Future color themes override these on a [data-theme="X"] block.
+ * Do NOT reference --tn-* variables from components.
+ * ============================================================ */
+:root {
+  --tn-bg: #1a1b26;
+  --tn-bg-card: #24283b;
+  --tn-bg-popover: #1f2335;
+  --tn-bg-muted: #292e42;
+  --tn-bg-status: #16161e;
+
+  --tn-fg: #c0caf5;
+  --tn-fg-muted: #9aa5ce;
+
+  --tn-border: #414868;
+  --tn-blue: #7aa2f7;
+  --tn-magenta: #bb9af7;
+  --tn-green: #9ece6a;
+  --tn-yellow: #e0af68;
+  --tn-cyan: #7dcfff;
+  --tn-red: #f7768e;
+}
+
+/* ============================================================
+ * Layer 2 — Semantic tokens (Tailwind v4 @theme inline)
+ * Reference Layer 1 only. Components consume utilities derived
+ * from these names (e.g. bg-background, text-foreground).
+ * ============================================================ */
+@theme inline {
+  /* Surfaces */
+  --color-background: var(--tn-bg);
+  --color-foreground: var(--tn-fg);
+  --color-card: var(--tn-bg-card);
+  --color-card-foreground: var(--tn-fg);
+  --color-popover: var(--tn-bg-popover);
+  --color-popover-foreground: var(--tn-fg);
+  --color-muted: var(--tn-bg-muted);
+  --color-muted-foreground: var(--tn-fg-muted);
+
+  /* Action / emphasis */
+  --color-primary: var(--tn-blue);
+  --color-primary-foreground: var(--tn-bg);
+  --color-secondary: var(--tn-magenta);
+  --color-secondary-foreground: var(--tn-bg);
+  --color-accent: var(--tn-border);
+  --color-accent-foreground: var(--tn-fg);
+  --color-destructive: var(--tn-red);
+  --color-destructive-foreground: var(--tn-bg);
+
+  /* Form / boundary */
+  --color-border: var(--tn-border);
+  --color-input: var(--tn-border);
+  --color-ring: var(--tn-blue);
+
+  /* Status */
+  --color-success: var(--tn-green);
+  --color-success-foreground: var(--tn-bg);
+  --color-warning: var(--tn-yellow);
+  --color-warning-foreground: var(--tn-bg);
+  --color-info: var(--tn-cyan);
+  --color-info-foreground: var(--tn-bg);
+
+  /* tmux-specific */
+  --color-tmux-pane-border: var(--tn-border);
+  --color-tmux-pane-active: var(--tn-blue);
+  --color-tmux-status-bar: var(--tn-bg-status);
+  --color-tmux-status-bar-foreground: var(--tn-blue);
+
+  /* Typography */
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.125rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.25rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.125rem;
+  --text-xl--line-height: 1.625rem;
+
+  /* Radius */
+  --radius-sm: 0.125rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.5rem;
+}
