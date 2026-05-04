@@ -1,2 +1,9 @@
 packages:
   - daemon/frontend
+  - extension-host
+
+catalog:
+  '@types/node': ^24.12.2
+  typescript: ~6.0.3
+
+catalogMode: strict

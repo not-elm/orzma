@@ -4,6 +4,15 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    '@types/node':
+      specifier: ^24.12.2
+      version: 24.12.2
+    typescript:
+      specifier: ~6.0.3
+      version: 6.0.3
+
 importers:
 
   .:
@@ -66,6 +75,15 @@ importers:
       vite-plugin-singlefile:
         specifier: ^2.3.3
         version: 2.3.3(vite@8.0.10(@types/node@24.12.2)(jiti@2.6.1))
+
+  extension-host:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.12.2
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
 
 packages:
 
