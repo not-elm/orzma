@@ -57,7 +57,7 @@ impl TerminalService {
         let scrollback = ScrollbackBuffer::new();
         let (event_sender, _) = broadcast::channel(1024);
 
-        spawn_pty_thread(reader, child, scrollback.clone(), event_sender.clone());
+        spawn_pty_reader(reader, child, scrollback.clone(), event_sender.clone());
 
         let handle = PtyHandle::new(pty_pair.master, writer, event_sender, killer, scrollback);
         self.ptys.write().await.insert(activity_id, handle);
@@ -145,29 +145,88 @@ mod tests {
         // Cleanup
         svc.kill(&id).await.unwrap();
     }
+
+    #[tokio::test]
+    async fn pty_output_is_broadcast_to_subscribers() {
+        let svc = TerminalService::default();
+        let id = ActivityId::new();
+        svc.spawn(id.clone(), SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+        }).await.unwrap();
+
+        let (_snap, mut rx) = svc.snapshot_and_subscribe(&id).await.unwrap();
+
+        // Trigger output: send a known string and read it back from broadcast.
+        svc.write(&id, b"echo race_free_marker\n").await.unwrap();
+
+        let mut got = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                rx.recv(),
+            ).await {
+                Ok(Ok(TerminalEvent::Data { buffer })) => {
+                    got.extend_from_slice(&buffer);
+                    if got.windows(b"race_free_marker".len())
+                        .any(|w| w == b"race_free_marker") {
+                        break;
+                    }
+                }
+                Ok(Ok(TerminalEvent::Exit { .. })) => break,
+                Ok(Err(_)) => break,
+                Err(_) => continue,
+            }
+        }
+        svc.kill(&id).await.unwrap();
+
+        let s = String::from_utf8_lossy(&got);
+        assert!(s.contains("race_free_marker"), "expected marker in output, got: {s}");
+    }
 }
 
-fn spawn_pty_thread(
+/// Spawn a dedicated OS thread for blocking PTY reads, plus a tokio bridge
+/// task that pushes data to the scrollback and broadcasts under the same
+/// lock (race-free with snapshot_and_subscribe).
+///
+/// The OS thread is preferred over `tokio::spawn` here because `read()` is
+/// blocking and would otherwise occupy a tokio worker.
+fn spawn_pty_reader(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
     scrollback: ScrollbackBuffer,
-    event_tx: broadcast::Sender<TerminalEvent>,
+    event_sender: broadcast::Sender<TerminalEvent>,
 ) {
-    tokio::spawn(async move {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    let exit_event_sender = event_sender.clone();
+
+    // 1) blocking read 専用の OS スレッド
+    std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
             match std::io::Read::read(&mut reader, &mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    scrollback.push(&buf[..n]).await;
-                    let _ = event_tx.send(TerminalEvent::Data {
-                        buffer: buf[..n].to_vec(),
-                    });
+                    if tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        break; // bridge task が落ちた / drop された
+                    }
                 }
                 Err(_) => break,
             }
         }
+        // child.wait() もブロッキング → 同じ OS スレッドで実行
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
-        let _ = event_tx.send(TerminalEvent::Exit { code });
+        let _ = exit_event_sender.send(TerminalEvent::Exit { code });
+        // tx は drop され、bridge task の rx.recv() が None を返して終わる
+    });
+
+    // 2) bridge task: mpsc → scrollback + broadcast を「同じロック内」で
+    tokio::spawn(async move {
+        while let Some(chunk) = rx.recv().await {
+            scrollback.push_and_broadcast(&event_sender, chunk).await;
+        }
     });
 }
