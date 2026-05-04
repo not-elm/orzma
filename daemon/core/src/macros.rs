@@ -5,7 +5,7 @@ macro_rules! define_string_new_type {
         pub struct $name(String);
 
         impl $name {
-            /// Create the new session-id with a unique identifier
+            /// Creates a new unique identifier.
             pub fn new() -> Self {
                 Self(uuid::Uuid::new_v4().to_string())
             }

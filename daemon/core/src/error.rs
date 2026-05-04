@@ -13,10 +13,10 @@ pub enum OzmuxError {
     SessionNotFound(SessionId),
 
     #[error("pane not found pane-id={0}")]
-    PaneNotfound(PaneId),
+    PaneNotFound(PaneId),
 
     #[error("cell not found id={0}")]
-    CellNotfound(CellId),
+    CellNotFound(CellId),
 
     #[error("invalid node type node-id={0}")]
     InvalidCellType(CellId),
@@ -33,8 +33,8 @@ impl axum::response::IntoResponse for OzmuxError {
         use axum::http::StatusCode;
         let (status, code) = match &self {
             OzmuxError::SessionNotFound(_) => (StatusCode::NOT_FOUND, "SESSION_NOT_FOUND"),
-            OzmuxError::PaneNotfound(_) => (StatusCode::NOT_FOUND, "PANE_NOT_FOUND"),
-            OzmuxError::CellNotfound(_) => (StatusCode::NOT_FOUND, "CELL_NOT_FOUND"),
+            OzmuxError::PaneNotFound(_) => (StatusCode::NOT_FOUND, "PANE_NOT_FOUND"),
+            OzmuxError::CellNotFound(_) => (StatusCode::NOT_FOUND, "CELL_NOT_FOUND"),
             OzmuxError::InvalidCellType(_) => (StatusCode::BAD_REQUEST, "INVALID_CELL_TYPE"),
             OzmuxError::CannotCloseLastPane(_) => (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_PANE"),
             OzmuxError::SplitTargetEqualsNewCell(_) | OzmuxError::FailedLaunchHttpServer(_) => {

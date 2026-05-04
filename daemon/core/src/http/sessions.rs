@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 
 pub mod pane;
 
+/// Serializes a `Session` into the JSON body used by every successful
+/// session-returning handler.
+pub(super) fn session_json(session: &Session) -> Json<serde_json::Value> {
+    Json(serde_json::to_value(session).expect("Session implements Serialize"))
+}
+
 #[derive(Deserialize, Default)]
 pub struct CreateRequest {
     #[serde(default)]
@@ -21,14 +27,9 @@ pub async fn create(
     Json(body): Json<CreateRequest>,
 ) -> impl IntoResponse {
     let session = Session::new(body.name);
-    let id = session.id().clone();
-    let mut guard = state.lock().await;
-    guard.insert(id.clone(), session);
-    let session_ref = guard.get(&id).expect("just inserted");
-    (
-        StatusCode::CREATED,
-        Json(serde_json::to_value(session_ref).unwrap()),
-    )
+    let response_body = session_json(&session);
+    state.lock().await.insert(session.id().clone(), session);
+    (StatusCode::CREATED, response_body)
 }
 
 #[derive(Serialize)]
@@ -51,7 +52,7 @@ pub async fn get_session(
     Path(session_id): Path<SessionId>,
 ) -> OzmuxResult<Json<serde_json::Value>> {
     let session = state.session(&session_id).await?;
-    Ok(Json(serde_json::to_value(&*session).unwrap()))
+    Ok(session_json(&session))
 }
 
 #[derive(Deserialize)]
@@ -66,7 +67,7 @@ pub async fn rename(
 ) -> OzmuxResult<Json<serde_json::Value>> {
     let mut session = state.session_mut(&session_id).await?;
     session.rename(req.name);
-    Ok(Json(serde_json::to_value(&*session).unwrap()))
+    Ok(session_json(&session))
 }
 
 pub async fn delete(

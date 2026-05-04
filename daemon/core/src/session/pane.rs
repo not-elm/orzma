@@ -19,16 +19,22 @@ impl PaneStore {
     pub fn get(&self, id: &PaneId) -> OzmuxResult<&Pane> {
         self.0
             .get(id)
-            .ok_or_else(|| OzmuxError::PaneNotfound(id.clone()))
+            .ok_or_else(|| OzmuxError::PaneNotFound(id.clone()))
     }
 
     #[inline]
     pub fn remove(&mut self, id: &PaneId) -> OzmuxResult<Pane> {
         self.0
             .remove(id)
-            .ok_or_else(|| OzmuxError::PaneNotfound(id.clone()))
+            .ok_or_else(|| OzmuxError::PaneNotFound(id.clone()))
     }
 
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[cfg(test)]
     #[inline]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&PaneId, &Pane)> {
         self.0.iter()
@@ -109,7 +115,7 @@ mod tests {
         let mut store = PaneStore::default();
         let id = PaneId::new();
         let result = store.remove(&id);
-        assert!(matches!(result, Err(OzmuxError::PaneNotfound(ref err_id)) if err_id == &id));
+        assert!(matches!(result, Err(OzmuxError::PaneNotFound(ref err_id)) if err_id == &id));
     }
 
     #[test]

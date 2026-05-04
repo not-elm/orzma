@@ -173,7 +173,7 @@ impl Session {
 
         // Pre-check: closing the only cell empties the tree, which equals "session ended".
         // The session-level invariant is "≥1 pane"; reject before mutating.
-        if cell_id == self.root && self.panes.iter().count() == 1 {
+        if cell_id == self.root && self.panes.len() == 1 {
             return Err(OzmuxError::CannotCloseLastPane(pane_id.clone()));
         }
 
@@ -186,9 +186,7 @@ impl Session {
             CloseOutcome::RootReplaced { new_root } => {
                 self.root = new_root;
             }
-            CloseOutcome::SiblingPromoted { .. } => {
-                // No root change.
-            }
+            CloseOutcome::SiblingPromoted { .. } => {}
         }
 
         self.panes.remove(pane_id)?;
@@ -306,7 +304,7 @@ mod tests {
         let mut store = Session::default();
         let nonexistent = PaneId::new();
         let result = store.close_pane(&nonexistent);
-        assert!(matches!(result, Err(OzmuxError::PaneNotfound(_))));
+        assert!(matches!(result, Err(OzmuxError::PaneNotFound(_))));
     }
 
     #[test]

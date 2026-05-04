@@ -1,5 +1,6 @@
 pub mod split;
 
+use super::session_json;
 use crate::error::OzmuxResult;
 use crate::session::pane::PaneId;
 use crate::session::{SessionId, SessionState};
@@ -14,7 +15,7 @@ pub async fn close(
 ) -> OzmuxResult<Json<serde_json::Value>> {
     let mut session = state.session_mut(&session_id).await?;
     session.close_pane(&pane_id)?;
-    Ok(Json(serde_json::to_value(&*session).unwrap()))
+    Ok(session_json(&session))
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ pub struct LayoutCellState(HashMap<CellId, LayoutCell>);
 
 impl LayoutCellState {
     #[inline]
-    pub fn insert(&mut self, id: CellId, node: LayoutCell) {
+    fn insert(&mut self, id: CellId, node: LayoutCell) {
         self.0.insert(id, node);
     }
 
@@ -35,7 +35,7 @@ impl LayoutCellState {
             .parent
             .replace(split_cell_id.clone());
 
-        self.replace_child_to_split_cell(&target, target_parent.clone(), split_cell_id.clone())?;
+        self.repoint_parent_to_split(&target, target_parent.clone(), split_cell_id.clone())?;
 
         let (lhs_cell, rhs_cell) = match new_cell_side {
             Side::Before => (new_cell, target),
@@ -58,7 +58,7 @@ impl LayoutCellState {
     /// pure reads, then atomically apply it. The `&self → CollapsePlan → &mut self`
     /// flow encodes pre-validate-then-commit atomicity in the type signature: the
     /// planning phase cannot mutate, so any `Err` it returns leaves the store
-    /// byte-identical to the pre-call state.
+    /// logically unchanged (no keys added, removed, or reassigned).
     ///
     /// # Identifier stability
     /// Only `id` (and the parent split, if any) are removed from the store.
@@ -89,7 +89,7 @@ impl LayoutCellState {
         let Cell::Split(parent_split) = &parent.cell else {
             return Err(OzmuxError::InvalidCellType(parent_id));
         };
-        let sibling_id = parent_split.obtain_other_side_cell_id(target_id).clone();
+        let sibling_id = parent_split.sibling_cell_id(target_id).clone();
         let grandparent_id = parent.parent.clone();
 
         if let Some(gp_id) = grandparent_id.as_ref() {
@@ -176,17 +176,17 @@ impl LayoutCellState {
     pub fn cell(&self, id: &CellId) -> OzmuxResult<&LayoutCell> {
         self.0
             .get(id)
-            .ok_or_else(|| OzmuxError::CellNotfound(id.clone()))
+            .ok_or_else(|| OzmuxError::CellNotFound(id.clone()))
     }
 
     #[inline]
     fn cell_mut(&mut self, id: &CellId) -> OzmuxResult<&mut LayoutCell> {
         self.0
             .get_mut(id)
-            .ok_or_else(|| OzmuxError::CellNotfound(id.clone()))
+            .ok_or_else(|| OzmuxError::CellNotFound(id.clone()))
     }
 
-    fn replace_child_to_split_cell(
+    fn repoint_parent_to_split(
         &mut self,
         cell: &CellId,
         parent: Option<CellId>,
@@ -212,9 +212,10 @@ impl LayoutCellState {
     }
 }
 
-/// Internal record gathered by `LayoutCellStore::plan_collapse` and consumed by
+/// Internal record gathered by `LayoutCellState::plan_collapse` and consumed by
 /// `apply_collapse`. Constructed only inside `cell.rs`, so its existence implies
 /// every reference inside has been verified against the store.
+#[derive(Debug)]
 struct CollapsePlan {
     parent_id: CellId,
     sibling_id: CellId,
@@ -260,7 +261,7 @@ impl SplitCell {
         }
     }
 
-    pub fn obtain_other_side_cell_id(&self, id: &CellId) -> &CellId {
+    pub fn sibling_cell_id(&self, id: &CellId) -> &CellId {
         if &self.lhs_cell == id {
             &self.rhs_cell
         } else {
@@ -286,9 +287,9 @@ pub enum Side {
     After,
 }
 
-/// Structural outcome of `LayoutCellStore::close_cell`.
+/// Structural outcome of `LayoutCellState::close_cell`.
 ///
-/// Callers (typically `SessionStore::close_pane`) must handle every variant.
+/// Callers (typically `Session::close_pane`) must handle every variant.
 /// `#[must_use]` is a lint-level nudge; type-level enforcement comes from
 /// requiring the caller to consume the value via `match`.
 #[must_use]
@@ -1042,7 +1043,7 @@ mod tests {
         // Verify that the surviving sibling's CellId value (and underlying LayoutCell.cell) is
         // preserved across close — only its `parent` field changes. This is the Pane.cell
         // back-pointer stability contract: PaneStore entries holding the surviving CellId
-        // remain valid pointers into LayoutCellStore after a close.
+        // remain valid pointers into LayoutCellState after a close.
         let mut store = LayoutCellState::default();
         let lhs = new_root_pane(&mut store);
         let rhs = new_root_pane(&mut store);
