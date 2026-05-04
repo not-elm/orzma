@@ -10,10 +10,14 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-axum = { version = "0.8" }
+axum = { version = "0.8", features = ["ws"] }
 uuid = { version = "1", features = ["v4"] }
 portable-pty = "0.9"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tokio-tungstenite = "0.24"
