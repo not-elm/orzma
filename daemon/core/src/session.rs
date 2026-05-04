@@ -67,6 +67,7 @@ impl Session {
         self.name = name.into();
     }
 
+    #[cfg(test)]
     pub fn root(&self) -> &CellId {
         &self.root
     }
@@ -87,9 +88,9 @@ impl Session {
             Pane::new(new_pane_id.clone(), new_cell_id.clone()),
         );
 
-        let new_split_id =
-            self.cells
-                .split_cell(target_cell_id, new_cell_id, side, orientation)?;
+        let new_split_id = self
+            .cells
+            .split_cell(target_cell_id, new_cell_id, side, orientation)?;
 
         if target_was_root {
             self.root = new_split_id;
@@ -288,7 +289,10 @@ mod tests {
                 .and_then(|o| o.as_str())
                 == Some("horizontal")
         });
-        assert!(split_present, "expected a Split cell with lowercase orientation");
+        assert!(
+            split_present,
+            "expected a Split cell with lowercase orientation"
+        );
     }
 
     #[test]

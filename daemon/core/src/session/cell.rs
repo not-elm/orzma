@@ -186,13 +186,6 @@ impl LayoutCellState {
             .ok_or_else(|| OzmuxError::CellNotfound(id.clone()))
     }
 
-    #[inline]
-    fn remove(&mut self, id: &CellId) -> OzmuxResult<LayoutCell> {
-        self.0
-            .remove(id)
-            .ok_or_else(|| OzmuxError::CellNotfound(id.clone()))
-    }
-
     fn replace_child_to_split_cell(
         &mut self,
         cell: &CellId,
@@ -217,22 +210,6 @@ impl LayoutCellState {
     fn parent(&self, id: &CellId) -> OzmuxResult<Option<&CellId>> {
         Ok(self.cell(id)?.parent.as_ref())
     }
-
-    #[inline]
-    fn get_pane_cell(&self, id: &CellId) -> OzmuxResult<&PaneCell> {
-        match &self.cell(id)?.cell {
-            Cell::Pane(pane) => Ok(pane),
-            _ => Err(OzmuxError::InvalidCellType(id.clone())),
-        }
-    }
-
-    #[inline]
-    fn get_split_cell(&self, id: &CellId) -> OzmuxResult<&SplitCell> {
-        match &self.cell(id)?.cell {
-            Cell::Split(split) => Ok(split),
-            _ => Err(OzmuxError::InvalidCellType(id.clone())),
-        }
-    }
 }
 
 /// Internal record gathered by `LayoutCellStore::plan_collapse` and consumed by
@@ -256,12 +233,6 @@ pub struct LayoutCell {
 pub enum Cell {
     Pane(PaneCell),
     Split(SplitCell),
-}
-
-impl Cell {
-    pub fn pane(pane: PaneId) -> Self {
-        Self::Pane(PaneCell { pane })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

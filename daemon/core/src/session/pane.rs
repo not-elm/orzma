@@ -56,9 +56,14 @@ pub struct Pane {
 impl Pane {
     pub fn new(id: PaneId, cell: CellId) -> Self {
         let activities = vec![Activity::default()];
-        Self { id, cell, activities }
+        Self {
+            id,
+            cell,
+            activities,
+        }
     }
 
+    #[cfg(test)]
     pub const fn id(&self) -> &PaneId {
         &self.id
     }
