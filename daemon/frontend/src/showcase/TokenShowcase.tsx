@@ -1,4 +1,5 @@
 import { ColorSection } from './ColorSection';
+import { SpacingSection } from './SpacingSection';
 import { TypographySection } from './TypographySection';
 
 export function TokenShowcase() {
@@ -7,6 +8,7 @@ export function TokenShowcase() {
       <h1 className="text-xl text-primary mb-6">Token Showcase</h1>
       <ColorSection />
       <TypographySection />
+      <SpacingSection />
     </div>
   );
 }
