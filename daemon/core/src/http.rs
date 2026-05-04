@@ -2,7 +2,10 @@ use crate::{
     error::{OzmuxError, OzmuxResult},
     session::SessionState,
 };
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{delete as method_delete, get, post},
+};
 use tokio::net::TcpListener;
 
 mod health;
@@ -24,7 +27,21 @@ fn daemon_router(state: SessionState) -> Router {
     Router::new()
         .route("/", get(index::handler))
         .route("/health", get(health::check))
-        .merge(sessions::router())
+        .route("/sessions", get(sessions::list).post(sessions::create))
+        .route(
+            "/sessions/{session_id}",
+            get(sessions::get_session)
+                .patch(sessions::rename)
+                .delete(sessions::delete),
+        )
+        .route(
+            "/sessions/{session_id}/panes/{pane_id}",
+            method_delete(sessions::pane::close),
+        )
+        .route(
+            "/sessions/{session_id}/panes/{pane_id}/split",
+            post(sessions::pane::split::split),
+        )
         .with_state(state)
 }
 

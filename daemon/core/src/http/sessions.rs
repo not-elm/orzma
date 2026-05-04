@@ -1,33 +1,22 @@
 use crate::error::OzmuxResult;
 use crate::session::{Session, SessionId, SessionState};
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
 };
 use serde::{Deserialize, Serialize};
 
-mod pane;
-
-pub fn router() -> Router<SessionState> {
-    Router::new()
-        .route("/sessions", get(list).post(create))
-        .route(
-            "/sessions/{session_id}",
-            get(get_session).patch(rename).delete(delete),
-        )
-        .merge(pane::router())
-}
+pub mod pane;
 
 #[derive(Deserialize, Default)]
-struct CreateRequest {
+pub struct CreateRequest {
     #[serde(default)]
     name: String,
 }
 
-async fn create(
+pub async fn create(
     State(state): State<SessionState>,
     Json(body): Json<CreateRequest>,
 ) -> impl IntoResponse {
@@ -48,7 +37,7 @@ struct SessionSummary<'a> {
     name: &'a str,
 }
 
-async fn list(State(state): State<SessionState>) -> Json<serde_json::Value> {
+pub async fn list(State(state): State<SessionState>) -> Json<serde_json::Value> {
     let guard = state.lock().await;
     let summaries: Vec<SessionSummary> = guard
         .iter()
@@ -57,7 +46,7 @@ async fn list(State(state): State<SessionState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "sessions": summaries }))
 }
 
-async fn get_session(
+pub async fn get_session(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
 ) -> OzmuxResult<Json<serde_json::Value>> {
@@ -66,11 +55,11 @@ async fn get_session(
 }
 
 #[derive(Deserialize)]
-struct RenameRequest {
+pub struct RenameRequest {
     name: String,
 }
 
-async fn rename(
+pub async fn rename(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
     Json(req): Json<RenameRequest>,
@@ -80,7 +69,7 @@ async fn rename(
     Ok(Json(serde_json::to_value(&*session).unwrap()))
 }
 
-async fn delete(
+pub async fn delete(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
 ) -> OzmuxResult<StatusCode> {

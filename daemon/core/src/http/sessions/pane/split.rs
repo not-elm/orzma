@@ -3,18 +3,13 @@ use crate::session::cell::{Side, SplitOrientation};
 use crate::session::pane::PaneId;
 use crate::session::{SessionId, SessionState};
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, State},
-    routing::post,
 };
 use serde::Deserialize;
 
-pub fn router() -> Router<SessionState> {
-    Router::new().route("/sessions/{session_id}/panes/{pane_id}/split", post(split))
-}
-
 #[derive(Deserialize)]
-struct SplitRequest {
+pub struct SplitRequest {
     orientation: SplitOrientation,
     #[serde(default = "default_side")]
     side: Side,
@@ -24,7 +19,7 @@ const fn default_side() -> Side {
     Side::After
 }
 
-async fn split(
+pub async fn split(
     State(state): State<SessionState>,
     Path((session_id, pane_id)): Path<(SessionId, PaneId)>,
     Json(req): Json<SplitRequest>,

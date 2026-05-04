@@ -1,21 +1,14 @@
-mod split;
+pub mod split;
 
 use crate::error::OzmuxResult;
 use crate::session::pane::PaneId;
 use crate::session::{SessionId, SessionState};
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, State},
-    routing::delete,
 };
 
-pub fn router() -> Router<SessionState> {
-    Router::new()
-        .route("/sessions/{session_id}/panes/{pane_id}", delete(close))
-        .merge(split::router())
-}
-
-async fn close(
+pub async fn close(
     State(state): State<SessionState>,
     Path((session_id, pane_id)): Path<(SessionId, PaneId)>,
 ) -> OzmuxResult<Json<serde_json::Value>> {
