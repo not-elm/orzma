@@ -34,9 +34,8 @@ impl PaneStore {
         self.0.len()
     }
 
-    #[cfg(test)]
     #[inline]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&PaneId, &Pane)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&PaneId, &Pane)> {
         self.0.iter()
     }
 

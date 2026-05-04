@@ -166,6 +166,10 @@ impl Session {
     ///
     /// On success: the pane is removed from `PaneStore`, the layout cell tree is
     /// updated via sibling-promote, and `self.root` is updated if the root changed.
+    pub fn first_pane(&self) -> Option<&Pane> {
+        self.panes.iter().next().map(|(_, p)| p)
+    }
+
     pub fn close_pane(&mut self, pane_id: &PaneId) -> OzmuxResult {
         let cell_id = self.panes.get(pane_id)?.cell_id().clone();
 
@@ -445,5 +449,13 @@ mod tests {
         let id = SessionId::new();
         let err = state.remove(&id).await.unwrap_err();
         assert!(matches!(err, OzmuxError::SessionNotFound(ref got) if got == &id));
+    }
+
+    #[test]
+    fn session_first_pane_returns_default_pane() {
+        let s = Session::new("hello".to_string());
+        assert!(s.first_pane().is_some());
+        let pane = s.first_pane().unwrap();
+        assert!(pane.first_activity().is_some());
     }
 }
