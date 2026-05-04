@@ -1,6 +1,4 @@
 use clap::{Parser, Subcommand};
-use interprocess::local_socket::{ConnectOptions, GenericFilePath, ToFsName};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::extension::ExtensionCommand;
 
