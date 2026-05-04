@@ -86,9 +86,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    fn router_with(state: SessionState) -> axum::Router {
-        crate::http::test_helpers::daemon_router_for_test(state)
-    }
+    use crate::http::test_helpers::router_with_sessions as router_with;
 
     #[tokio::test]
     async fn list_returns_empty_when_no_sessions() {
