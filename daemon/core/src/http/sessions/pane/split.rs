@@ -1,4 +1,4 @@
-use crate::error::{OzmuxError, OzmuxResult};
+use crate::error::OzmuxResult;
 use crate::session::cell::{Side, SplitOrientation};
 use crate::session::pane::PaneId;
 use crate::session::{SessionId, SessionState};
@@ -29,14 +29,11 @@ async fn split(
     Path((session_id, pane_id)): Path<(SessionId, PaneId)>,
     Json(req): Json<SplitRequest>,
 ) -> OzmuxResult<Json<serde_json::Value>> {
-    let mut guard = state.lock().await;
-    let session = guard
-        .get_mut(&session_id)
-        .ok_or_else(|| OzmuxError::SessionNotFound(session_id.clone()))?;
+    let mut session = state.session_mut(&session_id).await?;
     let new_pane_id = session.split_pane(&pane_id, req.orientation, req.side)?;
     Ok(Json(serde_json::json!({
         "new_pane_id": new_pane_id,
-        "session": session,
+        "session": &*session,
     })))
 }
 

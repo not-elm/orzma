@@ -1,6 +1,6 @@
 mod split;
 
-use crate::error::{OzmuxError, OzmuxResult};
+use crate::error::OzmuxResult;
 use crate::session::pane::PaneId;
 use crate::session::{SessionId, SessionState};
 use axum::{
@@ -19,12 +19,9 @@ async fn close(
     State(state): State<SessionState>,
     Path((session_id, pane_id)): Path<(SessionId, PaneId)>,
 ) -> OzmuxResult<Json<serde_json::Value>> {
-    let mut guard = state.lock().await;
-    let session = guard
-        .get_mut(&session_id)
-        .ok_or_else(|| OzmuxError::SessionNotFound(session_id.clone()))?;
+    let mut session = state.session_mut(&session_id).await?;
     session.close_pane(&pane_id)?;
-    Ok(Json(serde_json::to_value(session).unwrap()))
+    Ok(Json(serde_json::to_value(&*session).unwrap()))
 }
 
 #[cfg(test)]

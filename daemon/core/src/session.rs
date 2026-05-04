@@ -1,7 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use serde::Serialize;
-use tokio::sync::Mutex;
+use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 
 use crate::{
     define_string_new_type,
@@ -19,15 +23,73 @@ pub mod pane;
 #[derive(Clone, Default)]
 pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
 
+/// Read-only guard returned by [`SessionState::session`].
+///
+/// Holds the underlying mutex lock until dropped; only `Deref` is exposed
+/// so callers cannot mutate the session through this type.
+#[derive(Debug)]
+pub struct SessionRef<'a>(MappedMutexGuard<'a, Session>);
+
+impl Deref for SessionRef<'_> {
+    type Target = Session;
+
+    fn deref(&self) -> &Session {
+        &self.0
+    }
+}
+
+/// Exclusive guard returned by [`SessionState::session_mut`].
+///
+/// Holds the underlying mutex lock until dropped. Implements both `Deref`
+/// and `DerefMut`, so callers can mutate the session in place and serialize
+/// the result while still holding the lock.
+#[derive(Debug)]
+pub struct SessionGuard<'a>(MappedMutexGuard<'a, Session>);
+
+impl Deref for SessionGuard<'_> {
+    type Target = Session;
+
+    fn deref(&self) -> &Session {
+        &self.0
+    }
+}
+
+impl DerefMut for SessionGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Session {
+        &mut self.0
+    }
+}
+
 impl SessionState {
-    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, HashMap<SessionId, Session>> {
+    pub async fn lock(&self) -> MutexGuard<'_, HashMap<SessionId, Session>> {
         self.0.lock().await
+    }
+
+    pub async fn session(&self, id: &SessionId) -> OzmuxResult<SessionRef<'_>> {
+        let guard = self.0.lock().await;
+        let session = MutexGuard::try_map(guard, |sessions| sessions.get_mut(id))
+            .map_err(|_| OzmuxError::SessionNotFound(id.clone()))?;
+        Ok(SessionRef(session))
+    }
+
+    pub async fn session_mut(&self, id: &SessionId) -> OzmuxResult<SessionGuard<'_>> {
+        let guard = self.0.lock().await;
+        let session = MutexGuard::try_map(guard, |sessions| sessions.get_mut(id))
+            .map_err(|_| OzmuxError::SessionNotFound(id.clone()))?;
+        Ok(SessionGuard(session))
+    }
+
+    pub async fn remove(&self, id: &SessionId) -> OzmuxResult<Session> {
+        let mut guard = self.0.lock().await;
+        guard
+            .remove(id)
+            .ok_or_else(|| OzmuxError::SessionNotFound(id.clone()))
     }
 }
 
 define_string_new_type!(SessionId);
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct Session {
     id: SessionId,
     name: String,
@@ -326,5 +388,66 @@ mod tests {
         }
         let guard = state.lock().await;
         assert_eq!(guard.get(&id).map(|s| s.name()), Some("a"));
+    }
+
+    #[tokio::test]
+    async fn session_returns_ref_for_existing_id() {
+        let state = SessionState::default();
+        let session = Session::new("hello".to_string());
+        let id = session.id().clone();
+        state.lock().await.insert(id.clone(), session);
+
+        let session_ref = state.session(&id).await.expect("session exists");
+        assert_eq!(session_ref.name(), "hello");
+    }
+
+    #[tokio::test]
+    async fn session_returns_err_for_unknown_id() {
+        let state = SessionState::default();
+        let id = SessionId::new();
+        let err = state.session(&id).await.unwrap_err();
+        assert!(matches!(err, OzmuxError::SessionNotFound(ref got) if got == &id));
+    }
+
+    #[tokio::test]
+    async fn session_mut_allows_in_place_mutation() {
+        let state = SessionState::default();
+        let session = Session::new("old".to_string());
+        let id = session.id().clone();
+        state.lock().await.insert(id.clone(), session);
+
+        {
+            let mut guard = state.session_mut(&id).await.expect("session exists");
+            guard.rename("new");
+        }
+        assert_eq!(state.session(&id).await.unwrap().name(), "new");
+    }
+
+    #[tokio::test]
+    async fn session_mut_returns_err_for_unknown_id() {
+        let state = SessionState::default();
+        let id = SessionId::new();
+        let err = state.session_mut(&id).await.unwrap_err();
+        assert!(matches!(err, OzmuxError::SessionNotFound(ref got) if got == &id));
+    }
+
+    #[tokio::test]
+    async fn remove_returns_session_and_removes_it() {
+        let state = SessionState::default();
+        let session = Session::new(String::new());
+        let id = session.id().clone();
+        state.lock().await.insert(id.clone(), session);
+
+        let removed = state.remove(&id).await.expect("session exists");
+        assert_eq!(removed.id(), &id);
+        assert!(state.lock().await.get(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_returns_err_for_unknown_id() {
+        let state = SessionState::default();
+        let id = SessionId::new();
+        let err = state.remove(&id).await.unwrap_err();
+        assert!(matches!(err, OzmuxError::SessionNotFound(ref got) if got == &id));
     }
 }
