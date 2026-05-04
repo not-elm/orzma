@@ -28,7 +28,11 @@ mod tests {
     use tower::ServiceExt;
 
     fn router_with(state: SessionState) -> axum::Router {
-        crate::http::test_helpers::daemon_router_for_test(state)
+        let app_state = crate::http::AppState {
+            sessions: state,
+            terminal: crate::pty::TerminalService::default(),
+        };
+        crate::http::test_helpers::daemon_router_for_test(app_state)
     }
 
     #[tokio::test]
