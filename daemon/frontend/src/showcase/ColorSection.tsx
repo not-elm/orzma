@@ -90,7 +90,17 @@ function contrast(a: string, b: string): number | null {
 }
 
 function readVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(`--color-${name}`).trim();
+  const style = getComputedStyle(document.documentElement);
+  let value = style.getPropertyValue(`--color-${name}`).trim();
+  // Under @theme inline, semantic tokens store as `var(--tn-*)`. Resolve the chain.
+  let depth = 0;
+  while (depth < 8) {
+    const ref = value.match(/^var\((--[^,)\s]+)/);
+    if (!ref) break;
+    value = style.getPropertyValue(ref[1]).trim();
+    depth += 1;
+  }
+  return value;
 }
 
 export function ColorSection() {
