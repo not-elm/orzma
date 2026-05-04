@@ -1,15 +1,12 @@
 use crate::{
     error::{OzmuxError, OzmuxResult, PtyErrorBridge},
-    pty::{
-        pty_handle::{PtyHandle, ScrollbackBuffer},
-        ring_buffer::RingBuffer,
-    },
+    pty::pty_handle::{PtyHandle, ScrollbackBuffer},
     session::activity::ActivityId,
 };
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Read, num::NonZero, sync::Arc};
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard, broadcast};
+use std::{collections::HashMap, io::Read, sync::Arc};
+use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
 pub mod pty_handle;
 mod ring_buffer;

@@ -1,8 +1,5 @@
-use crate::{
-    error::{OzmuxResult, PtyErrorBridge},
-    pty::{TerminalEvent, ring_buffer::RingBuffer},
-};
-use portable_pty::{ChildKiller, MasterPty, PtyPair, PtySize};
+use crate::pty::{TerminalEvent, ring_buffer::RingBuffer};
+use portable_pty::{ChildKiller, MasterPty};
 use std::{io::Write, num::NonZero, sync::Arc};
 use tokio::sync::{
     Mutex,
