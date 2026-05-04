@@ -1,3 +1,4 @@
+use crate::error::{OzmuxError, OzmuxResult};
 use crate::session::{Session, SessionId, SessionState};
 use axum::{
     Json, Router,
@@ -59,11 +60,11 @@ async fn list(State(state): State<SessionState>) -> Json<serde_json::Value> {
 async fn get_session(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
-) -> Result<Json<serde_json::Value>, crate::error::OzmuxError> {
+) -> OzmuxResult<Json<serde_json::Value>> {
     let guard = state.lock().await;
     let session = guard
         .get(&session_id)
-        .ok_or_else(|| crate::error::OzmuxError::SessionNotFound(session_id.clone()))?;
+        .ok_or_else(|| OzmuxError::SessionNotFound(session_id.clone()))?;
     Ok(Json(serde_json::to_value(session).unwrap()))
 }
 
@@ -76,11 +77,11 @@ async fn rename(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
     Json(req): Json<RenameRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::OzmuxError> {
+) -> OzmuxResult<Json<serde_json::Value>> {
     let mut guard = state.lock().await;
     let session = guard
         .get_mut(&session_id)
-        .ok_or_else(|| crate::error::OzmuxError::SessionNotFound(session_id.clone()))?;
+        .ok_or_else(|| OzmuxError::SessionNotFound(session_id.clone()))?;
     session.rename(req.name);
     Ok(Json(serde_json::to_value(session).unwrap()))
 }
@@ -88,11 +89,11 @@ async fn rename(
 async fn delete(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
-) -> Result<StatusCode, crate::error::OzmuxError> {
+) -> OzmuxResult<StatusCode> {
     let mut guard = state.lock().await;
     guard
         .remove(&session_id)
-        .ok_or_else(|| crate::error::OzmuxError::SessionNotFound(session_id.clone()))?;
+        .ok_or_else(|| OzmuxError::SessionNotFound(session_id.clone()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 

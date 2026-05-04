@@ -1,6 +1,6 @@
 mod split;
 
-use crate::error::OzmuxError;
+use crate::error::{OzmuxError, OzmuxResult};
 use crate::session::pane::PaneId;
 use crate::session::{SessionId, SessionState};
 use axum::{
@@ -18,7 +18,7 @@ pub fn router() -> Router<SessionState> {
 async fn close(
     State(state): State<SessionState>,
     Path((session_id, pane_id)): Path<(SessionId, PaneId)>,
-) -> Result<Json<serde_json::Value>, OzmuxError> {
+) -> OzmuxResult<Json<serde_json::Value>> {
     let mut guard = state.lock().await;
     let session = guard
         .get_mut(&session_id)
