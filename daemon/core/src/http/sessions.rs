@@ -35,7 +35,10 @@ async fn create(
     let mut guard = state.lock().await;
     guard.insert(id.clone(), session);
     let session_ref = guard.get(&id).expect("just inserted");
-    (StatusCode::CREATED, Json(serde_json::to_value(session_ref).unwrap()))
+    (
+        StatusCode::CREATED,
+        Json(serde_json::to_value(session_ref).unwrap()),
+    )
 }
 
 #[derive(Serialize)]
@@ -97,7 +100,7 @@ async fn delete(
 mod tests {
     use super::*;
     use crate::session::Session;
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
@@ -289,8 +292,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let arr = v["sessions"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
-        let names: std::collections::HashSet<_> =
-            arr.iter().map(|s| s["name"].as_str().unwrap().to_string()).collect();
+        let names: std::collections::HashSet<_> = arr
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect();
         assert!(names.contains("a"));
         assert!(names.contains("b"));
         // Each summary has id + name only.

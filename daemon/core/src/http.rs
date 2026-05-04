@@ -30,7 +30,7 @@ fn daemon_router(state: SessionState) -> Router {
 
 #[cfg(test)]
 pub(crate) mod test_helpers {
-    use super::{daemon_router, SessionState};
+    use super::{SessionState, daemon_router};
     use axum::Router;
     pub fn daemon_router_for_test(state: SessionState) -> Router {
         daemon_router(state)

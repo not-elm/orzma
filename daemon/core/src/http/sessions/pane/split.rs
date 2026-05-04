@@ -10,10 +10,7 @@ use axum::{
 use serde::Deserialize;
 
 pub fn router() -> Router<SessionState> {
-    Router::new().route(
-        "/sessions/{session_id}/panes/{pane_id}/split",
-        post(split),
-    )
+    Router::new().route("/sessions/{session_id}/panes/{pane_id}/split", post(split))
 }
 
 #[derive(Deserialize)]
@@ -47,7 +44,7 @@ async fn split(
 mod tests {
     use super::*;
     use crate::session::Session;
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
@@ -151,7 +148,11 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/sessions/{}/panes/{}/split", session_id, PaneId::new()))
+                    .uri(format!(
+                        "/sessions/{}/panes/{}/split",
+                        session_id,
+                        PaneId::new()
+                    ))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"orientation":"horizontal"}"#))
                     .unwrap(),

@@ -1,8 +1,8 @@
 mod split;
 
 use crate::error::OzmuxError;
-use crate::session::{SessionId, SessionState};
 use crate::session::pane::PaneId;
+use crate::session::{SessionId, SessionState};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -11,10 +11,7 @@ use axum::{
 
 pub fn router() -> Router<SessionState> {
     Router::new()
-        .route(
-            "/sessions/{session_id}/panes/{pane_id}",
-            delete(close),
-        )
+        .route("/sessions/{session_id}/panes/{pane_id}", delete(close))
         .merge(split::router())
 }
 
@@ -35,7 +32,7 @@ mod tests {
     use super::*;
     use crate::session::Session;
     use crate::session::cell::{Side, SplitOrientation};
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
@@ -73,7 +70,14 @@ mod tests {
         assert_eq!(v["panes"].as_array().unwrap().len(), 1);
 
         let guard = state.lock().await;
-        assert!(guard.get(&session_id).unwrap().panes().get(&new_pane).is_err());
+        assert!(
+            guard
+                .get(&session_id)
+                .unwrap()
+                .panes()
+                .get(&new_pane)
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::session::{cell::CellId, pane::PaneId, SessionId};
+use crate::session::{SessionId, cell::CellId, pane::PaneId};
 
 pub type OzmuxResult<T = ()> = Result<T, OzmuxError>;
 
@@ -37,8 +37,7 @@ impl axum::response::IntoResponse for OzmuxError {
             OzmuxError::CellNotfound(_) => (StatusCode::NOT_FOUND, "CELL_NOT_FOUND"),
             OzmuxError::InvalidCellType(_) => (StatusCode::BAD_REQUEST, "INVALID_CELL_TYPE"),
             OzmuxError::CannotCloseLastPane(_) => (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_PANE"),
-            OzmuxError::SplitTargetEqualsNewCell(_)
-            | OzmuxError::FailedLaunchHttpServer(_) => {
+            OzmuxError::SplitTargetEqualsNewCell(_) | OzmuxError::FailedLaunchHttpServer(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL")
             }
         };
