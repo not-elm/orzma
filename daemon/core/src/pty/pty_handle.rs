@@ -79,9 +79,12 @@ impl PtyHandle {
         }
     }
 
-    #[inline]
-    pub fn subscribe(&self) -> Receiver<TerminalEvent> {
-        self.event_sender.subscribe()
+    /// Thin wrapper for the WS handler. The PTY bridge task does not go through
+    /// this — it holds its own (scrollback, event_sender) clones.
+    pub async fn snapshot_and_subscribe(&self) -> (Vec<u8>, Receiver<TerminalEvent>) {
+        self.scrollback
+            .snapshot_and_subscribe(&self.event_sender)
+            .await
     }
 }
 
