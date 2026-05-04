@@ -83,6 +83,22 @@ impl SessionState {
             .remove(id)
             .ok_or_else(|| OzmuxError::SessionNotFound(id.clone()))
     }
+
+    /// Insert a default Session (with a default Pane and a default Terminal Activity)
+    /// and return the ID of that Activity. Caller-controlled bootstrap (called once
+    /// from `launch_server`); tests use the empty `Default` impl.
+    pub async fn bootstrap_default(&self) -> crate::session::activity::ActivityId {
+        let session = Session::new("default".to_string());
+        let activity_id = session
+            .first_pane()
+            .expect("Session::default has one Pane")
+            .first_activity()
+            .expect("Pane::default has one Activity")
+            .id()
+            .clone();
+        self.0.lock().await.insert(session.id().clone(), session);
+        activity_id
+    }
 }
 
 define_string_new_type!(SessionId);
@@ -457,5 +473,28 @@ mod tests {
         assert!(s.first_pane().is_some());
         let pane = s.first_pane().unwrap();
         assert!(pane.first_activity().is_some());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_default_inserts_one_session_and_returns_terminal_activity_id() {
+        use crate::session::activity::ActivityKind;
+        let state = SessionState::default();
+        assert!(state.lock().await.is_empty(), "default starts empty");
+
+        let activity_id = state.bootstrap_default().await;
+
+        let guard = state.lock().await;
+        assert_eq!(guard.len(), 1);
+        let session = guard.values().next().unwrap();
+        let pane = session.first_pane().unwrap();
+        let activity = pane.first_activity().unwrap();
+        assert_eq!(activity.id(), &activity_id);
+        assert!(matches!(activity.kind(), ActivityKind::Terminal));
+    }
+
+    #[tokio::test]
+    async fn default_state_remains_empty_when_bootstrap_not_called() {
+        let state = SessionState::default();
+        assert!(state.lock().await.is_empty());
     }
 }
