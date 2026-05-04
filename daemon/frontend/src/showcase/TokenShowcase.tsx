@@ -1,4 +1,5 @@
 import { ColorSection } from './ColorSection';
+import { PaneMockup } from './PaneMockup';
 import { RadiusSection } from './RadiusSection';
 import { SpacingSection } from './SpacingSection';
 import { TypographySection } from './TypographySection';
@@ -11,6 +12,7 @@ export function TokenShowcase() {
       <TypographySection />
       <SpacingSection />
       <RadiusSection />
+      <PaneMockup />
     </div>
   );
 }
