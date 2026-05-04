@@ -7,6 +7,13 @@ type TokenRow = {
   bgClass: string;
   /** Literal Tailwind foreground class for the paired -foreground token, or null */
   textClass: string | null;
+  /**
+   * Underlying Layer 1 variable backing this token (e.g. `--tn-bg`).
+   * `@theme inline` does NOT emit `--color-*` into `:root` at runtime — it only
+   * inlines `var(--tn-*)` into the generated utility classes. To resolve the
+   * actual hex value at runtime we must read the Layer 1 variable directly.
+   */
+  rawVar: string;
 };
 
 type Group = {
@@ -18,46 +25,112 @@ const GROUPS: Group[] = [
   {
     title: 'Surfaces',
     rows: [
-      { name: 'background', bgClass: 'bg-background', textClass: 'text-foreground' },
-      { name: 'card', bgClass: 'bg-card', textClass: 'text-card-foreground' },
-      { name: 'popover', bgClass: 'bg-popover', textClass: 'text-popover-foreground' },
-      { name: 'muted', bgClass: 'bg-muted', textClass: 'text-muted-foreground' },
+      {
+        name: 'background',
+        bgClass: 'bg-background',
+        textClass: 'text-foreground',
+        rawVar: '--tn-bg',
+      },
+      {
+        name: 'card',
+        bgClass: 'bg-card',
+        textClass: 'text-card-foreground',
+        rawVar: '--tn-bg-card',
+      },
+      {
+        name: 'popover',
+        bgClass: 'bg-popover',
+        textClass: 'text-popover-foreground',
+        rawVar: '--tn-bg-popover',
+      },
+      {
+        name: 'muted',
+        bgClass: 'bg-muted',
+        textClass: 'text-muted-foreground',
+        rawVar: '--tn-bg-muted',
+      },
     ],
   },
   {
     title: 'Action / Emphasis',
     rows: [
-      { name: 'primary', bgClass: 'bg-primary', textClass: 'text-primary-foreground' },
-      { name: 'secondary', bgClass: 'bg-secondary', textClass: 'text-secondary-foreground' },
-      { name: 'accent', bgClass: 'bg-accent', textClass: 'text-accent-foreground' },
-      { name: 'destructive', bgClass: 'bg-destructive', textClass: 'text-destructive-foreground' },
+      {
+        name: 'primary',
+        bgClass: 'bg-primary',
+        textClass: 'text-primary-foreground',
+        rawVar: '--tn-blue',
+      },
+      {
+        name: 'secondary',
+        bgClass: 'bg-secondary',
+        textClass: 'text-secondary-foreground',
+        rawVar: '--tn-magenta',
+      },
+      {
+        name: 'accent',
+        bgClass: 'bg-accent',
+        textClass: 'text-accent-foreground',
+        rawVar: '--tn-border',
+      },
+      {
+        name: 'destructive',
+        bgClass: 'bg-destructive',
+        textClass: 'text-destructive-foreground',
+        rawVar: '--tn-red',
+      },
     ],
   },
   {
     title: 'Form & Boundary',
     rows: [
-      { name: 'border', bgClass: 'bg-border', textClass: null },
-      { name: 'input', bgClass: 'bg-input', textClass: null },
-      { name: 'ring', bgClass: 'bg-ring', textClass: null },
+      { name: 'border', bgClass: 'bg-border', textClass: null, rawVar: '--tn-border' },
+      { name: 'input', bgClass: 'bg-input', textClass: null, rawVar: '--tn-border' },
+      { name: 'ring', bgClass: 'bg-ring', textClass: null, rawVar: '--tn-blue' },
     ],
   },
   {
     title: 'Status',
     rows: [
-      { name: 'success', bgClass: 'bg-success', textClass: 'text-success-foreground' },
-      { name: 'warning', bgClass: 'bg-warning', textClass: 'text-warning-foreground' },
-      { name: 'info', bgClass: 'bg-info', textClass: 'text-info-foreground' },
+      {
+        name: 'success',
+        bgClass: 'bg-success',
+        textClass: 'text-success-foreground',
+        rawVar: '--tn-green',
+      },
+      {
+        name: 'warning',
+        bgClass: 'bg-warning',
+        textClass: 'text-warning-foreground',
+        rawVar: '--tn-yellow',
+      },
+      {
+        name: 'info',
+        bgClass: 'bg-info',
+        textClass: 'text-info-foreground',
+        rawVar: '--tn-cyan',
+      },
     ],
   },
   {
     title: 'tmux',
     rows: [
-      { name: 'tmux-pane-border', bgClass: 'bg-tmux-pane-border', textClass: null },
-      { name: 'tmux-pane-active', bgClass: 'bg-tmux-pane-active', textClass: null },
+      {
+        name: 'tmux-pane-border',
+        bgClass: 'bg-tmux-pane-border',
+        textClass: null,
+        rawVar: '--tn-border',
+      },
+      {
+        name: 'tmux-pane-active',
+        bgClass: 'bg-tmux-pane-active',
+        textClass: null,
+        rawVar: '--tn-blue',
+      },
       {
         name: 'tmux-status-bar',
         bgClass: 'bg-tmux-status-bar',
         textClass: 'text-tmux-status-bar-foreground',
+        rawVar: '--tn-bg-status',
       },
     ],
   },
@@ -73,7 +146,7 @@ function hexToRgb(hex: string): [number, number, number] | null {
 function relLuminance([r, g, b]: [number, number, number]): number {
   const lin = (c: number) => {
     const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
   };
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
@@ -89,19 +162,6 @@ function contrast(a: string, b: string): number | null {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-// Under @theme inline, semantic tokens store as `var(--tn-*)`. Resolve the chain.
-function readVar(style: CSSStyleDeclaration, name: string): string {
-  let value = style.getPropertyValue(`--color-${name}`).trim();
-  let depth = 0;
-  while (depth < 8) {
-    const ref = value.match(/^var\((--[^,)\s]+)/);
-    if (!ref) break;
-    value = style.getPropertyValue(ref[1]).trim();
-    depth += 1;
-  }
-  return value;
-}
-
 export function ColorSection() {
   const [resolved, setResolved] = useState<Record<string, string>>({});
 
@@ -110,7 +170,7 @@ export function ColorSection() {
     const map: Record<string, string> = {};
     for (const g of GROUPS) {
       for (const r of g.rows) {
-        map[r.name] = readVar(style, r.name);
+        map[r.name] = style.getPropertyValue(r.rawVar).trim();
       }
     }
     setResolved(map);
