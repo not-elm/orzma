@@ -27,22 +27,31 @@ fn daemon_router(state: SessionState) -> Router {
     Router::new()
         .route("/", get(index::handler))
         .route("/health", get(health::check))
-        .route("/sessions", get(sessions::list).post(sessions::create))
+        .nest("/sessions", sessions_router())
+        .with_state(state)
+}
+
+fn sessions_router() -> Router<SessionState> {
+    Router::new()
+        .route("/", get(sessions::list).post(sessions::create))
+        .nest("/{session_id}", session_id_router())
+}
+
+fn session_id_router() -> Router<SessionState> {
+    Router::new()
         .route(
-            "/sessions/{session_id}",
+            "/",
             get(sessions::get_session)
                 .patch(sessions::rename)
                 .delete(sessions::delete),
         )
-        .route(
-            "/sessions/{session_id}/panes/{pane_id}",
-            method_delete(sessions::pane::close),
-        )
-        .route(
-            "/sessions/{session_id}/panes/{pane_id}/split",
-            post(sessions::pane::split::split),
-        )
-        .with_state(state)
+        .nest("/panes/{pane_id}", pane_id_router())
+}
+
+fn pane_id_router() -> Router<SessionState> {
+    Router::new()
+        .route("/", method_delete(sessions::pane::close))
+        .route("/split", post(sessions::pane::split::split))
 }
 
 #[cfg(test)]
