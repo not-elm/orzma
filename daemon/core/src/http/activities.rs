@@ -117,7 +117,11 @@ async fn forward_pty_to_ws(mut ws_tx: WsSink, mut rx: broadcast::Receiver<Termin
 
 /// Forward client frames to the PTY: binary frames as raw input, text frames
 /// as JSON-encoded control messages (currently only `resize`).
-async fn forward_ws_to_pty(mut ws_rx: WsStream, terminal: TerminalService, activity_id: ActivityId) {
+async fn forward_ws_to_pty(
+    mut ws_rx: WsStream,
+    terminal: TerminalService,
+    activity_id: ActivityId,
+) {
     while let Some(msg) = ws_rx.next().await {
         match msg {
             Ok(Message::Binary(bytes)) => {
