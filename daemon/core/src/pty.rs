@@ -99,11 +99,12 @@ impl TerminalService {
         Ok(())
     }
 
-    pub async fn replay(&self, activity: &ActivityId) -> Vec<u8> {
-        let Ok(handle) = self.read(activity).await else {
-            return Vec::new();
-        };
-        handle.scrollback.snapshot().await
+    pub async fn snapshot_and_subscribe(
+        &self,
+        activity: &ActivityId,
+    ) -> OzmuxResult<(Vec<u8>, broadcast::Receiver<TerminalEvent>)> {
+        let handle = self.read(activity).await?;
+        Ok(handle.snapshot_and_subscribe().await)
     }
 
     #[inline]
@@ -111,6 +112,38 @@ impl TerminalService {
         let guard = self.ptys.read().await;
         RwLockReadGuard::try_map(guard, |ptys| ptys.get(activity_id))
             .map_err(|_| OzmuxError::ActivityNotFound(activity_id.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn snapshot_and_subscribe_returns_err_for_unknown_activity() {
+        let svc = TerminalService::default();
+        let id = ActivityId::new();
+        let result = svc.snapshot_and_subscribe(&id).await;
+        assert!(matches!(result, Err(OzmuxError::ActivityNotFound(ref got)) if got == &id));
+    }
+
+    #[tokio::test]
+    async fn spawn_then_snapshot_and_subscribe_succeeds() {
+        let svc = TerminalService::default();
+        let id = ActivityId::new();
+        svc.spawn(id.clone(), SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+        }).await.unwrap();
+
+        let (snap, _rx) = svc.snapshot_and_subscribe(&id).await.unwrap();
+        // snapshot may be empty depending on shell startup speed; just confirm Ok.
+        let _ = snap;
+
+        // Cleanup
+        svc.kill(&id).await.unwrap();
     }
 }
 
