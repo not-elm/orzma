@@ -1,4 +1,4 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
 /* ============================================================
  * Layer 1 — Raw palette (Tokyo Night night)
@@ -64,8 +64,8 @@
   --color-tmux-status-bar: var(--tn-bg-status);
   --color-tmux-status-bar-foreground: var(--tn-blue);
 
-  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   --text-xs: 0.75rem;
   --text-xs--line-height: 1rem;
   --text-sm: 0.8125rem;
