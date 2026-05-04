@@ -33,14 +33,11 @@ export function useXtermTerminal(
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
         fit.fit();
-        const ws = socket.wsRef.current;
-        if (ws?.readyState === WebSocket.OPEN) {
-          socket.sendControl({
-            type: "resize",
-            cols: term.cols,
-            rows: term.rows,
-          });
-        }
+        socket.sendControl({
+          type: "resize",
+          cols: term.cols,
+          rows: term.rows,
+        });
       }, 150);
     });
     observer.observe(container);
@@ -58,10 +55,12 @@ export function useXtermTerminal(
   // Effect 2: bridge xterm <-> socket whenever the socket transitions
   // through "connected". On disconnect this effect cleans up the listeners
   // but the xterm instance and its on-screen content are preserved.
+  // socket.setBinaryHandler buffers any frames that arrived before this
+  // effect ran (e.g. the initial scrollback snapshot) and drains them
+  // synchronously when the handler is registered.
   useEffect(() => {
     const term = termRef.current;
-    const ws = socket.wsRef.current;
-    if (!term || !ws || socket.status !== "connected") return;
+    if (!term || socket.status !== "connected") return;
 
     const dataDisp = term.onData((data) => {
       socket.sendBinary(encoder.encode(data));
@@ -72,22 +71,16 @@ export function useXtermTerminal(
       socket.sendBinary(bytes);
     });
 
-    const onMessage = (ev: MessageEvent) => {
-      if (ev.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(ev.data));
-      }
-    };
-    ws.addEventListener("message", onMessage);
-
+    socket.setBinaryHandler((bytes) => term.write(bytes));
     socket.sendControl({ type: "resize", cols: term.cols, rows: term.rows });
 
     return () => {
       dataDisp.dispose();
       binDisp.dispose();
-      ws.removeEventListener("message", onMessage);
+      socket.setBinaryHandler(null);
     };
-    // wsRef は useRef で安定参照、sendBinary/sendControl は wsRef を読むだけ。
     // status の変化のみ effect 再実行のトリガにする (socket オブジェクト自体は
-    // 毎レンダー作り直されるため依存に入れてはいけない)。
+    // 毎レンダー作り直されるため依存に入れてはいけない。setBinaryHandler は
+    // useCallback で安定参照)。
   }, [socket.status]);
 }

@@ -1,14 +1,20 @@
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { terminalWsUrl } from "./api";
 
 export type SocketStatus = "connecting" | "connected" | "disconnected" | "exited";
+
+export type BinaryHandler = (data: Uint8Array) => void;
 
 export interface TerminalSocket {
   status: SocketStatus;
   sendBinary: (data: Uint8Array) => void;
   sendControl: (msg: object) => void;
-  /** Direct WS access for the xterm hook to attach a 'message' listener. */
-  wsRef: RefObject<WebSocket | null>;
+  /**
+   * Register a handler for inbound binary frames (PTY output).
+   * If a frame arrived before a handler was registered, the buffered frames
+   * are delivered synchronously when the handler is set. Pass null to clear.
+   */
+  setBinaryHandler: (handler: BinaryHandler | null) => void;
 }
 
 export function useTerminalSocket(
@@ -16,6 +22,8 @@ export function useTerminalSocket(
   reconnectKey: number,
 ): TerminalSocket {
   const wsRef = useRef<WebSocket | null>(null);
+  const handlerRef = useRef<BinaryHandler | null>(null);
+  const pendingRef = useRef<Uint8Array[]>([]);
   const [status, setStatus] = useState<SocketStatus>("connecting");
 
   useEffect(() => {
@@ -23,18 +31,28 @@ export function useTerminalSocket(
     const ws = new WebSocket(terminalWsUrl(activityId));
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
+    pendingRef.current = [];
     setStatus("connecting");
 
     ws.onopen = () => setStatus("connected");
     ws.onmessage = (ev) => {
-      // Text frames carry server control messages; we update status here.
-      // Binary frames are handled by useXtermTerminal via addEventListener.
       if (typeof ev.data === "string") {
         try {
           const msg = JSON.parse(ev.data);
           if (msg?.type === "exit") setStatus("exited");
         } catch {
           // Ignore malformed text frames
+        }
+        return;
+      }
+      if (ev.data instanceof ArrayBuffer) {
+        const bytes = new Uint8Array(ev.data);
+        const handler = handlerRef.current;
+        if (handler) {
+          handler(bytes);
+        } else {
+          // Buffer until useXtermTerminal mounts and registers a handler.
+          pendingRef.current.push(bytes);
         }
       }
     };
@@ -43,9 +61,20 @@ export function useTerminalSocket(
 
     return () => {
       wsRef.current = null;
+      handlerRef.current = null;
+      pendingRef.current = [];
       ws.close();
     };
   }, [activityId, reconnectKey]);
+
+  const setBinaryHandler = useCallback((handler: BinaryHandler | null) => {
+    handlerRef.current = handler;
+    if (handler) {
+      const drained = pendingRef.current;
+      pendingRef.current = [];
+      for (const bytes of drained) handler(bytes);
+    }
+  }, []);
 
   return {
     status,
@@ -57,6 +86,6 @@ export function useTerminalSocket(
       const ws = wsRef.current;
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
     },
-    wsRef,
+    setBinaryHandler,
   };
 }
