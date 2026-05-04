@@ -6,11 +6,13 @@ license.workspace = true
 
 [dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 axum = { version = "0.8" }
 uuid = { version = "1", features = ["v4"] }
+portable-pty = "0.9"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -1,12 +1,3 @@
-use std::{
-    collections::HashMap,
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
-
-use serde::Serialize;
-use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
-
 use crate::{
     define_string_new_type,
     error::{OzmuxError, OzmuxResult},
@@ -15,8 +6,15 @@ use crate::{
         pane::{Pane, PaneId, PaneStore},
     },
 };
+use serde::Serialize;
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
+use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 
-mod activity;
+pub mod activity;
 pub mod cell;
 pub mod pane;
 

@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::session::{SessionId, cell::CellId, pane::PaneId};
+use crate::session::{SessionId, activity::ActivityId, cell::CellId, pane::PaneId};
 
 pub type OzmuxResult<T = ()> = Result<T, OzmuxError>;
 
@@ -26,6 +26,25 @@ pub enum OzmuxError {
 
     #[error("cannot close the last pane in a session: pane-id={0}")]
     CannotCloseLastPane(PaneId),
+
+    #[error("activity not found activity-id={0}")]
+    ActivityNotFound(ActivityId),
+
+    #[error("failed pty: {0}")]
+    Pty(String),
+}
+
+pub trait PtyErrorBridge<T> {
+    fn to_ozmux_result(self) -> OzmuxResult<T>;
+}
+
+impl<T> PtyErrorBridge<T> for anyhow::Result<T> {
+    fn to_ozmux_result(self) -> OzmuxResult<T> {
+        match self {
+            Ok(t) => Ok(t),
+            Err(e) => Err(OzmuxError::Pty(e.to_string())),
+        }
+    }
 }
 
 impl axum::response::IntoResponse for OzmuxError {
@@ -37,9 +56,8 @@ impl axum::response::IntoResponse for OzmuxError {
             OzmuxError::CellNotFound(_) => (StatusCode::NOT_FOUND, "CELL_NOT_FOUND"),
             OzmuxError::InvalidCellType(_) => (StatusCode::BAD_REQUEST, "INVALID_CELL_TYPE"),
             OzmuxError::CannotCloseLastPane(_) => (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_PANE"),
-            OzmuxError::SplitTargetEqualsNewCell(_) | OzmuxError::FailedLaunchHttpServer(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL")
-            }
+            OzmuxError::ActivityNotFound(_) => (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND"),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
         };
         let body = serde_json::json!({
             "error": { "code": code, "message": self.to_string() }
