@@ -1,6 +1,7 @@
 mod error;
 mod http;
 mod macros;
+mod pty;
 mod session;
 
 #[tokio::main]
