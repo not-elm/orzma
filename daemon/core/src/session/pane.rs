@@ -48,7 +48,9 @@ impl PaneStore {
 
 impl Serialize for PaneStore {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(self.0.values())
+        let mut panes: Vec<&Pane> = self.0.values().collect();
+        panes.sort_by(|a, b| a.id.as_ref().cmp(b.id.as_ref()));
+        serializer.collect_seq(panes)
     }
 }
 
@@ -145,5 +147,25 @@ mod tests {
             .collect();
         assert!(ids.contains(id1.as_ref()));
         assert!(ids.contains(id2.as_ref()));
+    }
+
+    #[test]
+    fn pane_store_serializes_in_id_sorted_order() {
+        let mut store = PaneStore::default();
+        let id_a = PaneId::new();
+        let id_b = PaneId::new();
+        let (lo, hi) = if id_a.as_ref() < id_b.as_ref() {
+            (id_a, id_b)
+        } else {
+            (id_b, id_a)
+        };
+        // Insert larger id first; serialization must still emit smaller id first.
+        store.insert(hi.clone(), Pane::new(hi.clone(), CellId::new()));
+        store.insert(lo.clone(), Pane::new(lo.clone(), CellId::new()));
+
+        let v = serde_json::to_value(&store).unwrap();
+        let arr = v.as_array().expect("array");
+        assert_eq!(arr[0]["id"].as_str(), Some(lo.as_ref()));
+        assert_eq!(arr[1]["id"].as_str(), Some(hi.as_ref()));
     }
 }
