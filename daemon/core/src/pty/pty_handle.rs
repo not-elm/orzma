@@ -34,11 +34,7 @@ impl ScrollbackBuffer {
     /// Producer-side primitive: push a chunk and broadcast under the same lock.
     /// Used by the PTY bridge task. Races with `snapshot_and_subscribe` are
     /// serialized through the scrollback mutex.
-    pub async fn push_and_broadcast(
-        &self,
-        sender: &Sender<TerminalEvent>,
-        chunk: Vec<u8>,
-    ) {
+    pub async fn push_and_broadcast(&self, sender: &Sender<TerminalEvent>, chunk: Vec<u8>) {
         let mut guard = self.0.lock().await;
         guard.push(&chunk);
         let _ = sender.send(TerminalEvent::Data { buffer: chunk });

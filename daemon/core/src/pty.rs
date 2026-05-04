@@ -137,12 +137,17 @@ mod tests {
     async fn spawn_then_snapshot_and_subscribe_succeeds() {
         let svc = TerminalService::default();
         let id = ActivityId::new();
-        svc.spawn(id.clone(), SpawnOptions {
-            cols: 80,
-            rows: 24,
-            shell: "/bin/sh".to_string(),
-            cwd: None,
-        }).await.unwrap();
+        svc.spawn(
+            id.clone(),
+            SpawnOptions {
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
+            },
+        )
+        .await
+        .unwrap();
 
         let (snap, _rx) = svc.snapshot_and_subscribe(&id).await.unwrap();
         // snapshot may be empty depending on shell startup speed; just confirm Ok.
@@ -156,12 +161,17 @@ mod tests {
     async fn pty_output_is_broadcast_to_subscribers() {
         let svc = TerminalService::default();
         let id = ActivityId::new();
-        svc.spawn(id.clone(), SpawnOptions {
-            cols: 80,
-            rows: 24,
-            shell: "/bin/sh".to_string(),
-            cwd: None,
-        }).await.unwrap();
+        svc.spawn(
+            id.clone(),
+            SpawnOptions {
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
+            },
+        )
+        .await
+        .unwrap();
 
         let (_snap, mut rx) = svc.snapshot_and_subscribe(&id).await.unwrap();
 
@@ -171,14 +181,13 @@ mod tests {
         let mut got = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(200),
-                rx.recv(),
-            ).await {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
                 Ok(Ok(TerminalEvent::Data { buffer })) => {
                     got.extend_from_slice(&buffer);
-                    if got.windows(b"race_free_marker".len())
-                        .any(|w| w == b"race_free_marker") {
+                    if got
+                        .windows(b"race_free_marker".len())
+                        .any(|w| w == b"race_free_marker")
+                    {
                         break;
                     }
                 }
@@ -190,7 +199,10 @@ mod tests {
         svc.kill(&id).await.unwrap();
 
         let s = String::from_utf8_lossy(&got);
-        assert!(s.contains("race_free_marker"), "expected marker in output, got: {s}");
+        assert!(
+            s.contains("race_free_marker"),
+            "expected marker in output, got: {s}"
+        );
     }
 }
 

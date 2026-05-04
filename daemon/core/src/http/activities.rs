@@ -56,10 +56,8 @@ async fn handle_terminal_socket(
     };
 
     // 1) Send snapshot as one binary frame.
-    if !snapshot.is_empty() {
-        if ws_tx.send(Message::Binary(snapshot.into())).await.is_err() {
-            return;
-        }
+    if !snapshot.is_empty() && ws_tx.send(Message::Binary(snapshot.into())).await.is_err() {
+        return;
     }
 
     // 2) Outbound task: broadcast → ws frames.
@@ -111,9 +109,7 @@ async fn handle_terminal_socket(
                     if let Ok(ClientControl::Resize { cols, rows }) =
                         serde_json::from_str::<ClientControl>(&text)
                     {
-                        let _ = inbound_terminal
-                            .resize(&inbound_activity, cols, rows)
-                            .await;
+                        let _ = inbound_terminal.resize(&inbound_activity, cols, rows).await;
                     }
                 }
                 Ok(Message::Close(_)) => break,

@@ -53,7 +53,9 @@ mod tests {
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("Terminal"));
         // kind is nested: {"kind": {"type": "terminal"}}
         assert_eq!(
-            v.get("kind").and_then(|k| k.get("type")).and_then(|t| t.as_str()),
+            v.get("kind")
+                .and_then(|k| k.get("type"))
+                .and_then(|t| t.as_str()),
             Some("terminal"),
         );
     }

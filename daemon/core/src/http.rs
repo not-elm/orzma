@@ -93,10 +93,7 @@ fn pane_id_router() -> Router<AppState> {
 }
 
 fn activities_router() -> Router<AppState> {
-    Router::new().route(
-        "/{activity_id}/terminal/ws",
-        get(activities::terminal_ws),
-    )
+    Router::new().route("/{activity_id}/terminal/ws", get(activities::terminal_ws))
 }
 
 #[cfg(test)]
