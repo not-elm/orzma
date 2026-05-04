@@ -11,3 +11,7 @@ name = "ozmux"
 path = "src/main.rs"
 
 [dependencies]
+tokio = { workspace = true, features = ["full"] }
+anyhow = { workspace = true }
+clap = { version = "4.6", features = ["derive"] }
+interprocess = { version = "2.4", features = ["tokio", "async"] }
