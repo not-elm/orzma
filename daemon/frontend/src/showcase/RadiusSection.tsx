@@ -1,8 +1,8 @@
 const RADII = [
-  { name: 'rounded-sm', token: '--radius-sm', px: '2px' },
-  { name: 'rounded-md', token: '--radius-md', px: '4px (default)' },
-  { name: 'rounded-lg', token: '--radius-lg', px: '6px' },
-  { name: 'rounded-xl', token: '--radius-xl', px: '8px' },
+  { name: 'rounded-sm', px: '2px' },
+  { name: 'rounded-md', px: '4px (default)' },
+  { name: 'rounded-lg', px: '6px' },
+  { name: 'rounded-xl', px: '8px' },
 ] as const;
 
 export function RadiusSection() {

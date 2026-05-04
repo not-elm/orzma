@@ -89,10 +89,9 @@ function contrast(a: string, b: string): number | null {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-function readVar(name: string): string {
-  const style = getComputedStyle(document.documentElement);
+// Under @theme inline, semantic tokens store as `var(--tn-*)`. Resolve the chain.
+function readVar(style: CSSStyleDeclaration, name: string): string {
   let value = style.getPropertyValue(`--color-${name}`).trim();
-  // Under @theme inline, semantic tokens store as `var(--tn-*)`. Resolve the chain.
   let depth = 0;
   while (depth < 8) {
     const ref = value.match(/^var\((--[^,)\s]+)/);
@@ -105,18 +104,19 @@ function readVar(name: string): string {
 
 export function ColorSection() {
   const [resolved, setResolved] = useState<Record<string, string>>({});
-  const [bg, setBg] = useState<string>('');
 
   useEffect(() => {
+    const style = getComputedStyle(document.documentElement);
     const map: Record<string, string> = {};
     for (const g of GROUPS) {
       for (const r of g.rows) {
-        map[r.name] = readVar(r.name);
+        map[r.name] = readVar(style, r.name);
       }
     }
     setResolved(map);
-    setBg(readVar('background'));
   }, []);
+
+  const bg = resolved.background ?? '';
 
   return (
     <section className="mb-12">
