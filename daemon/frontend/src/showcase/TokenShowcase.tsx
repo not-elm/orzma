@@ -1,8 +1,10 @@
+import { ColorSection } from './ColorSection';
+
 export function TokenShowcase() {
   return (
     <div className="min-h-screen bg-background text-foreground font-mono p-6">
-      <h1 className="text-xl text-primary">Token Showcase</h1>
-      <p className="text-base text-muted-foreground mt-2">Sections coming in subsequent tasks.</p>
+      <h1 className="text-xl text-primary mb-6">Token Showcase</h1>
+      <ColorSection />
     </div>
   );
 }
