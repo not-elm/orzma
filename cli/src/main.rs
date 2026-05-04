@@ -1,6 +1,5 @@
-use clap::{Parser, Subcommand};
-
 use crate::extension::ExtensionCommand;
+use clap::{Parser, Subcommand};
 
 mod extension;
 

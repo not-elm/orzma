@@ -675,6 +675,8 @@ dependencies = [
  "anyhow",
  "clap",
  "interprocess",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
