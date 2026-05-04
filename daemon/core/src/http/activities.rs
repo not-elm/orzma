@@ -9,9 +9,15 @@ use axum::{
     },
     response::IntoResponse,
 };
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+
+type WsSink = SplitSink<WebSocket, Message>;
+type WsStream = SplitStream<WebSocket>;
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -38,12 +44,34 @@ async fn handle_terminal_socket(
     terminal: TerminalService,
     activity_id: ActivityId,
 ) {
-    let (mut ws_tx, mut ws_rx) = socket.split();
+    let (mut ws_tx, ws_rx) = socket.split();
 
-    // Refined-A: race-free snapshot + subscribe (single critical section in
-    // ScrollbackBuffer, see pty/pty_handle.rs).
-    let (snapshot, mut rx) = match terminal.snapshot_and_subscribe(&activity_id).await {
-        Ok(pair) => pair,
+    let Some((snapshot, rx)) = acquire_session(&terminal, &activity_id, &mut ws_tx).await else {
+        return;
+    };
+    if send_snapshot(&mut ws_tx, snapshot).await.is_err() {
+        return;
+    }
+
+    let outbound = tokio::spawn(forward_pty_to_ws(ws_tx, rx));
+    let inbound = tokio::spawn(forward_ws_to_pty(ws_rx, terminal, activity_id));
+
+    tokio::select! {
+        _ = outbound => {},
+        _ = inbound => {},
+    }
+}
+
+/// Race-free snapshot + subscribe (single critical section inside
+/// `ScrollbackBuffer`, see `pty/pty_handle.rs`). On lookup failure, send a
+/// Close frame and signal the caller to bail out by returning `None`.
+async fn acquire_session(
+    terminal: &TerminalService,
+    activity_id: &ActivityId,
+    ws_tx: &mut WsSink,
+) -> Option<(Vec<u8>, broadcast::Receiver<TerminalEvent>)> {
+    match terminal.snapshot_and_subscribe(activity_id).await {
+        Ok(pair) => Some(pair),
         Err(_) => {
             let _ = ws_tx
                 .send(Message::Close(Some(CloseFrame {
@@ -51,78 +79,83 @@ async fn handle_terminal_socket(
                     reason: "activity not found".into(),
                 })))
                 .await;
-            return;
+            None
         }
-    };
+    }
+}
 
-    // 1) Send snapshot as one binary frame.
-    if !snapshot.is_empty() && ws_tx.send(Message::Binary(snapshot.into())).await.is_err() {
+/// Send the initial scrollback as a single binary frame, if non-empty.
+async fn send_snapshot(ws_tx: &mut WsSink, snapshot: Vec<u8>) -> Result<(), axum::Error> {
+    if snapshot.is_empty() {
+        return Ok(());
+    }
+    ws_tx.send(Message::Binary(snapshot.into())).await
+}
+
+/// Forward broadcast events to the client until the PTY exits, the receiver
+/// lags, or the WS write fails.
+async fn forward_pty_to_ws(mut ws_tx: WsSink, mut rx: broadcast::Receiver<TerminalEvent>) {
+    loop {
+        match rx.recv().await {
+            Ok(TerminalEvent::Data { buffer }) => {
+                if ws_tx.send(Message::Binary(buffer.into())).await.is_err() {
+                    break;
+                }
+            }
+            Ok(TerminalEvent::Exit { code }) => {
+                send_exit_and_close(&mut ws_tx, code).await;
+                break;
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                close_with_reason(&mut ws_tx, "lagged", n).await;
+                break;
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+/// Forward client frames to the PTY: binary frames as raw input, text frames
+/// as JSON-encoded control messages (currently only `resize`).
+async fn forward_ws_to_pty(mut ws_rx: WsStream, terminal: TerminalService, activity_id: ActivityId) {
+    while let Some(msg) = ws_rx.next().await {
+        match msg {
+            Ok(Message::Binary(bytes)) => {
+                if terminal.write(&activity_id, &bytes).await.is_err() {
+                    break;
+                }
+            }
+            Ok(Message::Text(text)) => apply_client_control(&terminal, &activity_id, &text).await,
+            Ok(Message::Close(_)) => break,
+            Ok(_) => {} // Ping/Pong handled by axum
+            Err(_) => break,
+        }
+    }
+}
+
+async fn apply_client_control(terminal: &TerminalService, activity_id: &ActivityId, text: &str) {
+    let Ok(ClientControl::Resize { cols, rows }) = serde_json::from_str::<ClientControl>(text)
+    else {
         return;
-    }
+    };
+    let _ = terminal.resize(activity_id, cols, rows).await;
+}
 
-    // 2) Outbound task: broadcast → ws frames.
-    let outbound = tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(TerminalEvent::Data { buffer }) => {
-                    if ws_tx.send(Message::Binary(buffer.into())).await.is_err() {
-                        break;
-                    }
-                }
-                Ok(TerminalEvent::Exit { code }) => {
-                    let payload = serde_json::to_string(&ServerControl::Exit { code }).unwrap();
-                    let _ = ws_tx.send(Message::Text(payload.into())).await;
-                    let _ = ws_tx.send(Message::Close(None)).await;
-                    break;
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(lagged = n, "ws receiver lagged, closing");
-                    let _ = ws_tx
-                        .send(Message::Close(Some(CloseFrame {
-                            code: 1011,
-                            reason: "lagged".into(),
-                        })))
-                        .await;
-                    break;
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
+async fn send_exit_and_close(ws_tx: &mut WsSink, code: Option<i32>) {
+    let payload = serde_json::to_string(&ServerControl::Exit { code })
+        .expect("ServerControl::Exit is always serializable");
+    let _ = ws_tx.send(Message::Text(payload.into())).await;
+    let _ = ws_tx.send(Message::Close(None)).await;
+}
 
-    // 3) Inbound task: ws frames → terminal write/resize.
-    let inbound_terminal = terminal.clone();
-    let inbound_activity = activity_id.clone();
-    let inbound = tokio::spawn(async move {
-        while let Some(msg) = ws_rx.next().await {
-            match msg {
-                Ok(Message::Binary(bytes)) => {
-                    if inbound_terminal
-                        .write(&inbound_activity, &bytes)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Ok(Message::Text(text)) => {
-                    if let Ok(ClientControl::Resize { cols, rows }) =
-                        serde_json::from_str::<ClientControl>(&text)
-                    {
-                        let _ = inbound_terminal.resize(&inbound_activity, cols, rows).await;
-                    }
-                }
-                Ok(Message::Close(_)) => break,
-                Ok(_) => {} // Ping/Pong handled by axum
-                Err(_) => break,
-            }
-        }
-    });
-
-    tokio::select! {
-        _ = outbound => {},
-        _ = inbound => {},
-    }
+async fn close_with_reason(ws_tx: &mut WsSink, reason: &'static str, lagged: u64) {
+    tracing::warn!(lagged, reason, "closing ws");
+    let _ = ws_tx
+        .send(Message::Close(Some(CloseFrame {
+            code: 1011,
+            reason: reason.into(),
+        })))
+        .await;
 }
 
 #[cfg(test)]
