@@ -276,12 +276,13 @@ pub enum SplitOrientation {
     Horizontal,
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     /// Place new_cell before target (left or top, depending on orientation).
     Before,
     /// Place new_cell after target (right or bottom, depending on orientation).
+    #[default]
     After,
 }
 

@@ -11,12 +11,8 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct SplitRequest {
     orientation: SplitOrientation,
-    #[serde(default = "default_side")]
+    #[serde(default)]
     side: Side,
-}
-
-const fn default_side() -> Side {
-    Side::After
 }
 
 pub async fn split(
