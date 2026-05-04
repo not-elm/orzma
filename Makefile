@@ -34,3 +34,7 @@ dev-backend:
 
 clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
+
+fix-lint:
+	cargo clippy --fix
+	cargo fmt
