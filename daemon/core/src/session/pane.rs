@@ -79,6 +79,14 @@ impl Pane {
     pub const fn cell_id(&self) -> &CellId {
         &self.cell
     }
+
+    pub fn activities(&self) -> &[Activity] {
+        &self.activities
+    }
+
+    pub fn first_activity(&self) -> Option<&Activity> {
+        self.activities.first()
+    }
 }
 
 define_string_new_type!(PaneId);
@@ -147,6 +155,21 @@ mod tests {
             .collect();
         assert!(ids.contains(id1.as_ref()));
         assert!(ids.contains(id2.as_ref()));
+    }
+
+    #[test]
+    fn pane_activities_returns_default_terminal_activity() {
+        use crate::session::activity::ActivityKind;
+        let pane = Pane::new(PaneId::new(), CellId::new());
+        let activities = pane.activities();
+        assert_eq!(activities.len(), 1);
+        assert!(matches!(activities[0].kind(), ActivityKind::Terminal));
+    }
+
+    #[test]
+    fn pane_first_activity_returns_some_for_default_pane() {
+        let pane = Pane::new(PaneId::new(), CellId::new());
+        assert!(pane.first_activity().is_some());
     }
 
     #[test]
