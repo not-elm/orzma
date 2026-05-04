@@ -4,11 +4,9 @@ import path from "node:path";
 
 function getIpcPath(name: string): string {
   if (process.platform === "win32") {
-    // Windows named pipe
     return `\\\\.\\pipe\\${name}`;
   }
 
-  // macOS / Linux Unix domain socket
   return path.join(os.tmpdir(), `${name}.sock`);
 }
 
