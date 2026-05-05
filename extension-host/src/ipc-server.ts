@@ -46,7 +46,6 @@ export function launchIpcServer() {
         return;
       }
 
-      console.log(raw);
       const result = IpcMessage.safeParse(raw);
       if (!result.success) {
         writeLine(socket, {
@@ -87,8 +86,8 @@ function startWorker(cmd: RunCommand) {
     workerData: {
       scriptPath: join(HERE, "hello.js"),
       command: cmd.command,
-      argv: cmd.argv,
     },
+    argv: cmd.argv,
   });
 }
 

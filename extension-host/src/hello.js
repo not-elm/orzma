@@ -1,1 +1,1 @@
-console.log("DADASIIJIIJOJOJJO");
+console.log("DADASIIJIIJOJOJJO", process.argv);
