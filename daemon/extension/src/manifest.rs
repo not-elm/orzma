@@ -1,0 +1,23 @@
+use std::{collections::HashMap, path::PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use ozmux_macros::NewType;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExtensionManifest {
+    pub commands: HashMap<CommandName, CommandScriptPath>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+#[newtype(as_ref(str), display)]
+pub struct CommandName(String);
+
+impl CommandName {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommandScriptPath(pub PathBuf);

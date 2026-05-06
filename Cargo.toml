@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["daemon/core"]
+members = [
+  "cli",
+  "daemon/bootstrap",
+  "daemon/macros",
+  "daemon/session",
+  "daemon/terminal",
+  "daemon/extension",
+  "daemon/http_server",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,6 +16,7 @@ edition = "2024"
 license = "MIT"
 readme = "README.md"
 authors = ["notelm"]
+publish = false
 
 [workspace.dependencies]
 tokio = { version = "1.52" }
@@ -15,3 +24,13 @@ anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+interprocess = { version = "2.4", features = ["tokio", "async"] }
+axum = { version = "0.8", features = ["ws"] }
+portable-pty = "0.9"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures-util = { version = "0.3", default-features = false, features = [
+  "sink",
+] }
+tempfile = "3"

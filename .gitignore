@@ -40,6 +40,6 @@ lerna-debug.log*
 node_modules
 *.local
 
-# Vite build output, embedded into ozmux_core via include_str!
-daemon/core/src/http/index.html
+# Vite build output, embedded into ozmux_http_server via include_str!
+daemon/http_server/src/handlers/index.html
 

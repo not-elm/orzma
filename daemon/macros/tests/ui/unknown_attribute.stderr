@@ -1,0 +1,5 @@
+error: Unknown field: `unknown_key`
+ --> tests/ui/unknown_attribute.rs:4:11
+  |
+4 | #[newtype(unknown_key)]
+  |           ^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: NewType requires a tuple struct
+ --> tests/ui/named_fields.rs:4:8
+  |
+4 | struct NamedFields {
+  |        ^^^^^^^^^^^

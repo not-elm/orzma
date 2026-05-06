@@ -1,2 +1,11 @@
 packages:
   - daemon/frontend
+  - sdk/*
+  - extensions/*
+
+catalog:
+  "@types/node": ^24.12.2
+  typescript: ~6.0.3
+  zod: ^4.4.3
+
+catalogMode: strict

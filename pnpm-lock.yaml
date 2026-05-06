@@ -4,6 +4,18 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    '@types/node':
+      specifier: ^24.12.2
+      version: 24.12.2
+    typescript:
+      specifier: ~6.0.3
+      version: 6.0.3
+    zod:
+      specifier: ^4.4.3
+      version: 4.4.3
+
 importers:
 
   .:
@@ -66,6 +78,45 @@ importers:
       vite-plugin-singlefile:
         specifier: ^2.3.3
         version: 2.3.3(vite@8.0.10(@types/node@24.12.2)(jiti@2.6.1))
+
+  extension-host:
+    dependencies:
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.12.2
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+
+  extensions/memo:
+    dependencies:
+      '@ozmux/node-sdk':
+        specifier: workspace:*
+        version: link:../../sdk/node
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.12.2
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+
+  sdk/node:
+    dependencies:
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.12.2
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
 
 packages:
 
@@ -805,6 +856,9 @@ packages:
   yallist@3.1.1:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
 
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
 snapshots:
 
   '@babel/code-frame@7.29.0':
@@ -1389,3 +1443,5 @@ snapshots:
       jiti: 2.6.1
 
   yallist@3.1.1: {}
+
+  zod@4.4.3: {}

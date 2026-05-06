@@ -1,0 +1,5 @@
+error: as_ref(T) specified more than once for the same type
+ --> tests/ui/duplicate_as_ref.rs:4:31
+  |
+4 | #[newtype(as_ref(str), as_ref(str))]
+  |                               ^^^
