@@ -36,6 +36,11 @@ impl PaneStore {
     }
 
     #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (&PaneId, &Pane)> {
         self.0.iter()
     }

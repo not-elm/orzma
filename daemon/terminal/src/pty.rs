@@ -121,6 +121,49 @@ impl TerminalService {
     }
 }
 
+/// Spawn a dedicated OS thread for blocking PTY reads, plus a tokio bridge
+/// task that pushes data to the scrollback and broadcasts under the same
+/// lock (race-free with snapshot_and_subscribe).
+///
+/// The OS thread is preferred over `tokio::spawn` here because `read()` is
+/// blocking and would otherwise occupy a tokio worker.
+fn spawn_pty_reader(
+    mut reader: Box<dyn Read + Send>,
+    mut child: Box<dyn Child + Send + Sync>,
+    scrollback: ScrollbackBuffer,
+    event_sender: broadcast::Sender<TerminalEvent>,
+) {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    let exit_event_sender = event_sender.clone();
+
+    // 1) blocking read 専用の OS スレッド
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match std::io::Read::read(&mut reader, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        break; // bridge task が落ちた / drop された
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        // child.wait() もブロッキング → 同じ OS スレッドで実行
+        let code = child.wait().ok().map(|s| s.exit_code() as i32);
+        let _ = exit_event_sender.send(TerminalEvent::Exit { code });
+        // tx は drop され、bridge task の rx.recv() が None を返して終わる
+    });
+
+    // 2) bridge task: mpsc → scrollback + broadcast を「同じロック内」で
+    tokio::spawn(async move {
+        while let Some(chunk) = rx.recv().await {
+            scrollback.push_and_broadcast(&event_sender, chunk).await;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,47 +247,4 @@ mod tests {
             "expected marker in output, got: {s}"
         );
     }
-}
-
-/// Spawn a dedicated OS thread for blocking PTY reads, plus a tokio bridge
-/// task that pushes data to the scrollback and broadcasts under the same
-/// lock (race-free with snapshot_and_subscribe).
-///
-/// The OS thread is preferred over `tokio::spawn` here because `read()` is
-/// blocking and would otherwise occupy a tokio worker.
-fn spawn_pty_reader(
-    mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn Child + Send + Sync>,
-    scrollback: ScrollbackBuffer,
-    event_sender: broadcast::Sender<TerminalEvent>,
-) {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-    let exit_event_sender = event_sender.clone();
-
-    // 1) blocking read 専用の OS スレッド
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match std::io::Read::read(&mut reader, &mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if tx.blocking_send(buf[..n].to_vec()).is_err() {
-                        break; // bridge task が落ちた / drop された
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        // child.wait() もブロッキング → 同じ OS スレッドで実行
-        let code = child.wait().ok().map(|s| s.exit_code() as i32);
-        let _ = exit_event_sender.send(TerminalEvent::Exit { code });
-        // tx は drop され、bridge task の rx.recv() が None を返して終わる
-    });
-
-    // 2) bridge task: mpsc → scrollback + broadcast を「同じロック内」で
-    tokio::spawn(async move {
-        while let Some(chunk) = rx.recv().await {
-            scrollback.push_and_broadcast(&event_sender, chunk).await;
-        }
-    });
 }

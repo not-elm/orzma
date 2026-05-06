@@ -20,6 +20,7 @@ impl ScrollbackBuffer {
     /// `push_and_broadcast` and `snapshot_and_subscribe` to keep the producer
     /// and consumer sides serialized through a single critical section.
     #[cfg(test)]
+    #[allow(dead_code)]
     #[inline]
     pub async fn push(&self, data: &[u8]) {
         self.0.lock().await.push(data);
