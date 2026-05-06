@@ -1,9 +1,9 @@
 use crate::http::AppState;
+pub use ozmux_macros::define_string_new_type;
 
 mod error;
 mod extension;
 mod http;
-pub use ozmux_macros::define_string_new_type;
 mod pty;
 mod session;
 
