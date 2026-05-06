@@ -7,7 +7,7 @@ use tokio::sync::{
 };
 
 #[derive(Clone, Debug)]
-pub struct ScrollbackBuffer(Arc<Mutex<RingBuffer>>);
+pub(crate) struct ScrollbackBuffer(Arc<Mutex<RingBuffer>>);
 
 impl ScrollbackBuffer {
     const SCROLLBACK_BYTES: usize = 256 * 1024;
@@ -54,7 +54,7 @@ impl ScrollbackBuffer {
     }
 }
 
-pub(super) struct PtyHandle {
+pub(crate) struct PtyHandle {
     pub master: Mutex<Box<dyn MasterPty + Send>>,
     pub writer: Mutex<Box<dyn Write + Send>>,
     pub scrollback: ScrollbackBuffer,

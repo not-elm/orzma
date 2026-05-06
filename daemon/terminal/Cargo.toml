@@ -8,7 +8,7 @@ authors.workspace = true
 
 [dependencies]
 ozmux_session = { path = "../session" }
-tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "time"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }

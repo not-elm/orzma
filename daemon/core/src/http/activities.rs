@@ -1,4 +1,4 @@
-use crate::pty::{TerminalEvent, TerminalService};
+use ozmux_terminal::{TerminalEvent, TerminalService};
 use ozmux_session::activity::ActivityId;
 use axum::{
     extract::{
@@ -164,7 +164,7 @@ async fn close_with_reason(ws_tx: &mut WsSink, reason: &'static str, lagged: u64
 mod tests {
     use super::*;
     use crate::http::AppState;
-    use crate::pty::SpawnOptions;
+    use ozmux_terminal::SpawnOptions;
     use futures_util::{SinkExt, StreamExt};
     use std::time::Duration;
     use tokio::net::TcpListener;

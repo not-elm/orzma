@@ -1,5 +1,5 @@
 use crate::{
-    error::{OzmuxError, OzmuxResult, PtyErrorBridge},
+    error::{PtyErrorBridge, TerminalError, TerminalResult},
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
 };
 use ozmux_session::activity::ActivityId;
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Read, sync::Arc};
 use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
-pub mod pty_handle;
+pub(crate) mod pty_handle;
 mod ring_buffer;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ pub struct SpawnOptions {
 }
 
 impl TerminalService {
-    pub async fn spawn(&self, activity_id: ActivityId, opts: SpawnOptions) -> OzmuxResult {
+    pub async fn spawn(&self, activity_id: ActivityId, opts: SpawnOptions) -> TerminalResult {
         // Hold the write lock for the entire spawn-then-insert so concurrent
         // callers with the same ActivityId cannot both pass the existence
         // check and end up double-spawning a PTY (which would leak the
@@ -47,19 +47,19 @@ impl TerminalService {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .to_ozmux_result()?;
+            .to_terminal_result()?;
 
         let mut cmd = CommandBuilder::new(&opts.shell);
         if let Some(cwd) = &opts.cwd {
             cmd.cwd(cwd);
         }
-        let child = pty_pair.slave.spawn_command(cmd).to_ozmux_result()?;
+        let child = pty_pair.slave.spawn_command(cmd).to_terminal_result()?;
         let killer = child.clone_killer();
         // Drop slave fd in this process so EOF propagates when shell exits.
         drop(pty_pair.slave);
 
-        let reader = pty_pair.master.try_clone_reader().to_ozmux_result()?;
-        let writer = pty_pair.master.take_writer().to_ozmux_result()?;
+        let reader = pty_pair.master.try_clone_reader().to_terminal_result()?;
+        let writer = pty_pair.master.take_writer().to_terminal_result()?;
         let scrollback = ScrollbackBuffer::new();
         let (event_sender, _) = broadcast::channel(1024);
 
@@ -70,18 +70,18 @@ impl TerminalService {
         Ok(())
     }
 
-    pub async fn write(&self, activity: &ActivityId, data: &[u8]) -> OzmuxResult {
+    pub async fn write(&self, activity: &ActivityId, data: &[u8]) -> TerminalResult {
         let handle = self.read(activity).await?;
         handle
             .writer
             .lock()
             .await
             .write_all(data)
-            .map_err(|e| OzmuxError::Pty(e.to_string()))?;
+            .map_err(|e| TerminalError::Pty(e.to_string()))?;
         Ok(())
     }
 
-    pub async fn resize(&self, activity: &ActivityId, cols: u16, rows: u16) -> OzmuxResult {
+    pub async fn resize(&self, activity: &ActivityId, cols: u16, rows: u16) -> TerminalResult {
         let handle = self.read(activity).await?;
         handle
             .master
@@ -93,11 +93,11 @@ impl TerminalService {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .to_ozmux_result()?;
+            .to_terminal_result()?;
         Ok(())
     }
 
-    pub async fn kill(&self, activity: &ActivityId) -> OzmuxResult {
+    pub async fn kill(&self, activity: &ActivityId) -> TerminalResult {
         if let Some(h) = self.ptys.write().await.remove(activity) {
             // Drop the handle; reader thread will exit when reader EOFs.
             drop(h);
@@ -108,16 +108,16 @@ impl TerminalService {
     pub async fn snapshot_and_subscribe(
         &self,
         activity: &ActivityId,
-    ) -> OzmuxResult<(Vec<u8>, broadcast::Receiver<TerminalEvent>)> {
+    ) -> TerminalResult<(Vec<u8>, broadcast::Receiver<TerminalEvent>)> {
         let handle = self.read(activity).await?;
         Ok(handle.snapshot_and_subscribe().await)
     }
 
     #[inline]
-    async fn read(&self, activity_id: &ActivityId) -> OzmuxResult<RwLockReadGuard<'_, PtyHandle>> {
+    async fn read(&self, activity_id: &ActivityId) -> TerminalResult<RwLockReadGuard<'_, PtyHandle>> {
         let guard = self.ptys.read().await;
         RwLockReadGuard::try_map(guard, |ptys| ptys.get(activity_id))
-            .map_err(|_| OzmuxError::ActivityNotFound(activity_id.clone()))
+            .map_err(|_| TerminalError::ActivityNotFound(activity_id.clone()))
     }
 }
 
@@ -130,7 +130,7 @@ mod tests {
         let svc = TerminalService::default();
         let id = ActivityId::new();
         let result = svc.snapshot_and_subscribe(&id).await;
-        assert!(matches!(result, Err(OzmuxError::ActivityNotFound(ref got)) if got == &id));
+        assert!(matches!(result, Err(TerminalError::ActivityNotFound(ref got)) if got == &id));
     }
 
     #[tokio::test]

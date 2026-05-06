@@ -1,8 +1,6 @@
-use crate::{
-    error::{OzmuxError, OzmuxResult},
-    pty::TerminalService,
-};
+use crate::error::{OzmuxError, OzmuxResult};
 use ozmux_session::SessionState;
+use ozmux_terminal::TerminalService;
 use axum::{
     Router,
     extract::FromRef,
@@ -40,7 +38,7 @@ pub async fn serve(state: AppState) -> OzmuxResult {
         .terminal
         .spawn(
             activity_id,
-            crate::pty::SpawnOptions {
+            ozmux_terminal::SpawnOptions {
                 cols: 80,
                 rows: 24,
                 shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
@@ -97,8 +95,8 @@ fn activities_router() -> Router<AppState> {
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
-    use crate::pty::TerminalService;
     use ozmux_session::SessionState;
+    use ozmux_terminal::TerminalService;
     use axum::Router;
 
     pub fn daemon_router_for_test(state: AppState) -> Router {

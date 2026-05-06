@@ -1,6 +1,7 @@
-use thiserror::Error;
-
 use ozmux_session::{SessionId, activity::ActivityId, cell::CellId, pane::PaneId};
+use ozmux_session::error::SessionError;
+use ozmux_terminal::TerminalError;
+use thiserror::Error;
 
 pub type OzmuxResult<T = ()> = Result<T, OzmuxError>;
 
@@ -34,19 +35,6 @@ pub enum OzmuxError {
     Pty(String),
 }
 
-pub trait PtyErrorBridge<T> {
-    fn to_ozmux_result(self) -> OzmuxResult<T>;
-}
-
-impl<T> PtyErrorBridge<T> for anyhow::Result<T> {
-    fn to_ozmux_result(self) -> OzmuxResult<T> {
-        match self {
-            Ok(t) => Ok(t),
-            Err(e) => Err(OzmuxError::Pty(e.to_string())),
-        }
-    }
-}
-
 impl axum::response::IntoResponse for OzmuxError {
     fn into_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
@@ -66,8 +54,8 @@ impl axum::response::IntoResponse for OzmuxError {
     }
 }
 
-impl From<ozmux_session::error::SessionError> for OzmuxError {
-    fn from(e: ozmux_session::error::SessionError) -> Self {
+impl From<SessionError> for OzmuxError {
+    fn from(e: SessionError) -> Self {
         use ozmux_session::error::SessionError as S;
         match e {
             S::SessionNotFound(id) => OzmuxError::SessionNotFound(id),
@@ -76,6 +64,15 @@ impl From<ozmux_session::error::SessionError> for OzmuxError {
             S::InvalidCellType(id) => OzmuxError::InvalidCellType(id),
             S::SplitTargetEqualsNewCell(id) => OzmuxError::SplitTargetEqualsNewCell(id),
             S::CannotCloseLastPane(id) => OzmuxError::CannotCloseLastPane(id),
+        }
+    }
+}
+
+impl From<TerminalError> for OzmuxError {
+    fn from(e: TerminalError) -> Self {
+        match e {
+            TerminalError::ActivityNotFound(id) => OzmuxError::ActivityNotFound(id),
+            TerminalError::Pty(msg) => OzmuxError::Pty(msg),
         }
     }
 }

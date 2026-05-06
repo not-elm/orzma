@@ -674,6 +674,7 @@ dependencies = [
  "interprocess",
  "ozmux_macros",
  "ozmux_session",
+ "ozmux_terminal",
  "portable-pty",
  "serde",
  "serde_json",

@@ -4,7 +4,6 @@ pub use ozmux_macros::define_string_new_type;
 mod error;
 mod extension;
 mod http;
-mod pty;
 
 #[tokio::main]
 async fn main() {
