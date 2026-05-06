@@ -16,6 +16,7 @@ edition = "2024"
 license = "MIT"
 readme = "README.md"
 authors = ["notelm"]
+publish = false
 
 [workspace.dependencies]
 tokio = { version = "1.52" }
