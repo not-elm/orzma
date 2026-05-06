@@ -1,5 +1,7 @@
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{Mutex, MutexGuard};
 use crate::{
     SessionId,
     cell::{CellId, LayoutCellState},
@@ -72,6 +74,15 @@ impl Window {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct WindowStore(Arc<Mutex<HashMap<WindowId, Window>>>);
+
+impl WindowStore {
+    pub async fn lock(&self) -> MutexGuard<'_, HashMap<WindowId, Window>> {
+        self.0.lock().await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +120,20 @@ mod tests {
         assert!(v["cells"].is_object());
         assert!(v["panes"].is_array());
         assert!(v["active_pane"].is_string());
+    }
+
+    #[tokio::test]
+    async fn window_store_starts_empty() {
+        let store = WindowStore::default();
+        assert!(store.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn window_store_supports_insert_and_get() {
+        let store = WindowStore::default();
+        let w = Window::new(WindowId::new(), SessionId::new(), String::new());
+        let id = w.id().clone();
+        store.lock().await.insert(id.clone(), w);
+        assert!(store.lock().await.get(&id).is_some());
     }
 }

@@ -18,6 +18,7 @@ pub mod pane;
 pub mod window;
 
 pub use error::{SessionError, SessionResult};
+pub use window::{Window, WindowId, WindowStore};
 
 #[derive(Clone, Default)]
 pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
