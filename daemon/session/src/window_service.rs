@@ -7,7 +7,9 @@
 use crate::{
     SessionId, SessionState,
     activity::ActivityId,
+    cell::{Side, SplitOrientation},
     error::{SessionError, SessionResult},
+    pane::PaneId,
     window::{Window, WindowId, WindowStore},
 };
 
@@ -140,6 +142,80 @@ impl WindowService {
         }
         session.active_window = window_id;
         Ok(())
+    }
+}
+
+impl WindowService {
+    /// Split a pane within a window. Caller pre-generates `new_pane_id` so the
+    /// PTY spawn can use it before the state mutation; if spawn fails, the
+    /// caller invokes [`close_pane`] to roll back.
+    pub async fn split_pane(
+        &self,
+        session_id: SessionId,
+        window_id: WindowId,
+        target_pane_id: PaneId,
+        new_pane_id: PaneId,
+        orientation: SplitOrientation,
+        side: Side,
+    ) -> SessionResult<()> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        if !session.windows.contains(&window_id) {
+            return Err(SessionError::WindowNotFound(window_id));
+        }
+        drop(sessions);
+
+        let mut win_store = self.windows.lock().await;
+        let window = win_store
+            .get_mut(&window_id)
+            .ok_or_else(|| SessionError::WindowNotFound(window_id.clone()))?;
+        if window.session_id() != &session_id {
+            return Err(SessionError::WindowDoesNotBelongToSession {
+                session_id,
+                window_id,
+            });
+        }
+        window.split_pane(&target_pane_id, new_pane_id, orientation, side)?;
+        Ok(())
+    }
+
+    /// Close a pane within a window. Returns the activity_id whose PTY the
+    /// caller must kill (None if the pane has no terminal activity).
+    pub async fn close_pane(
+        &self,
+        session_id: SessionId,
+        window_id: WindowId,
+        pane_id: PaneId,
+    ) -> SessionResult<Option<ActivityId>> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        if !session.windows.contains(&window_id) {
+            return Err(SessionError::WindowNotFound(window_id));
+        }
+        drop(sessions);
+
+        let mut win_store = self.windows.lock().await;
+        let window = win_store
+            .get_mut(&window_id)
+            .ok_or_else(|| SessionError::WindowNotFound(window_id.clone()))?;
+        if window.session_id() != &session_id {
+            return Err(SessionError::WindowDoesNotBelongToSession {
+                session_id,
+                window_id,
+            });
+        }
+        // Capture the activity_id before close mutates the pane.
+        let activity_id = window
+            .panes()
+            .get(&pane_id)
+            .ok()
+            .and_then(|p| p.first_activity().map(|a| a.id().clone()));
+        window.close_pane(&pane_id)?;
+        Ok(activity_id)
     }
 }
 
