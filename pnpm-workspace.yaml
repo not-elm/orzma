@@ -1,6 +1,5 @@
 packages:
   - daemon/frontend
-  - extension-host
   - sdk/*
   - extensions/*
 
