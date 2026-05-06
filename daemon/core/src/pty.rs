@@ -1,8 +1,8 @@
 use crate::{
     error::{OzmuxError, OzmuxResult, PtyErrorBridge},
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
-    session::activity::ActivityId,
 };
+use ozmux_session::activity::ActivityId;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Read, sync::Arc};

@@ -1,24 +1,27 @@
 //! Domain errors for the session layer.
-//!
-//! NOTE: Real ID types (`SessionId`, `PaneId`, `CellId`) move in Task 3.
-//! Until then this file defines a placeholder string-based error.
 
+use crate::{SessionId, cell::CellId, pane::PaneId};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum SessionError {
     #[error("session not found session-id={0}")]
-    SessionNotFound(String),
+    SessionNotFound(SessionId),
+
     #[error("pane not found pane-id={0}")]
-    PaneNotFound(String),
+    PaneNotFound(PaneId),
+
     #[error("cell not found id={0}")]
-    CellNotFound(String),
+    CellNotFound(CellId),
+
     #[error("invalid node type node-id={0}")]
-    InvalidCellType(String),
+    InvalidCellType(CellId),
+
     #[error("split target equals new_cell: cell-id={0}")]
-    SplitTargetEqualsNewCell(String),
+    SplitTargetEqualsNewCell(CellId),
+
     #[error("cannot close the last pane in a session: pane-id={0}")]
-    CannotCloseLastPane(String),
+    CannotCloseLastPane(PaneId),
 }
 
 pub type SessionResult<T = ()> = Result<T, SessionError>;
@@ -29,8 +32,8 @@ mod tests {
 
     #[test]
     fn session_not_found_carries_id_in_message() {
-        let id = "some-id".to_string();
+        let id = SessionId::new();
         let err = SessionError::SessionNotFound(id.clone());
-        assert!(err.to_string().contains(&id));
+        assert!(err.to_string().contains(id.as_ref()));
     }
 }

@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::session::{SessionId, activity::ActivityId, cell::CellId, pane::PaneId};
+use ozmux_session::{SessionId, activity::ActivityId, cell::CellId, pane::PaneId};
 
 pub type OzmuxResult<T = ()> = Result<T, OzmuxError>;
 
@@ -66,10 +66,24 @@ impl axum::response::IntoResponse for OzmuxError {
     }
 }
 
+impl From<ozmux_session::error::SessionError> for OzmuxError {
+    fn from(e: ozmux_session::error::SessionError) -> Self {
+        use ozmux_session::error::SessionError as S;
+        match e {
+            S::SessionNotFound(id) => OzmuxError::SessionNotFound(id),
+            S::PaneNotFound(id) => OzmuxError::PaneNotFound(id),
+            S::CellNotFound(id) => OzmuxError::CellNotFound(id),
+            S::InvalidCellType(id) => OzmuxError::InvalidCellType(id),
+            S::SplitTargetEqualsNewCell(id) => OzmuxError::SplitTargetEqualsNewCell(id),
+            S::CannotCloseLastPane(id) => OzmuxError::CannotCloseLastPane(id),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SessionId;
+    use ozmux_session::SessionId;
 
     #[test]
     fn session_not_found_carries_id_in_message() {
@@ -80,12 +94,12 @@ mod tests {
 
     #[tokio::test]
     async fn session_not_found_maps_to_404_with_code() {
-        use crate::session::pane::PaneId;
+        use ozmux_session::pane::PaneId;
         use axum::body::to_bytes;
         use axum::http::StatusCode;
         use axum::response::IntoResponse;
 
-        let err = OzmuxError::SessionNotFound(crate::session::SessionId::new());
+        let err = OzmuxError::SessionNotFound(ozmux_session::SessionId::new());
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
@@ -100,7 +114,7 @@ mod tests {
 
     #[test]
     fn cannot_close_last_pane_maps_to_409() {
-        use crate::session::pane::PaneId;
+        use ozmux_session::pane::PaneId;
         use axum::http::StatusCode;
         use axum::response::IntoResponse;
 
@@ -111,7 +125,7 @@ mod tests {
 
     #[test]
     fn invalid_cell_type_maps_to_400() {
-        use crate::session::cell::CellId;
+        use ozmux_session::cell::CellId;
         use axum::http::StatusCode;
         use axum::response::IntoResponse;
 
@@ -122,7 +136,7 @@ mod tests {
 
     #[test]
     fn split_target_equals_new_cell_falls_through_to_500() {
-        use crate::session::cell::CellId;
+        use ozmux_session::cell::CellId;
         use axum::http::StatusCode;
         use axum::response::IntoResponse;
 

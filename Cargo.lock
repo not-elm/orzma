@@ -672,6 +672,8 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "interprocess",
+ "ozmux_macros",
+ "ozmux_session",
  "portable-pty",
  "serde",
  "serde_json",

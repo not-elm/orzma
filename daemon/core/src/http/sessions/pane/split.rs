@@ -1,7 +1,7 @@
 use crate::error::OzmuxResult;
-use crate::session::cell::{Side, SplitOrientation};
-use crate::session::pane::PaneId;
-use crate::session::{SessionId, SessionState};
+use ozmux_session::cell::{Side, SplitOrientation};
+use ozmux_session::pane::PaneId;
+use ozmux_session::{SessionId, SessionState};
 use axum::{
     Json,
     extract::{Path, State},
@@ -31,7 +31,7 @@ pub async fn split(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::Session;
+    use ozmux_session::Session;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;

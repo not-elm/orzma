@@ -1,8 +1,9 @@
 use crate::{
-    define_string_new_type,
-    error::{OzmuxError, OzmuxResult},
-    session::{activity::Activity, cell::CellId},
+    activity::Activity,
+    cell::CellId,
+    error::{SessionError, SessionResult},
 };
+use ozmux_macros::define_string_new_type;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -16,17 +17,17 @@ impl PaneStore {
     }
 
     #[inline]
-    pub fn get(&self, id: &PaneId) -> OzmuxResult<&Pane> {
+    pub fn get(&self, id: &PaneId) -> SessionResult<&Pane> {
         self.0
             .get(id)
-            .ok_or_else(|| OzmuxError::PaneNotFound(id.clone()))
+            .ok_or_else(|| SessionError::PaneNotFound(id.clone()))
     }
 
     #[inline]
-    pub fn remove(&mut self, id: &PaneId) -> OzmuxResult<Pane> {
+    pub fn remove(&mut self, id: &PaneId) -> SessionResult<Pane> {
         self.0
             .remove(id)
-            .ok_or_else(|| OzmuxError::PaneNotFound(id.clone()))
+            .ok_or_else(|| SessionError::PaneNotFound(id.clone()))
     }
 
     #[inline]
@@ -39,8 +40,7 @@ impl PaneStore {
         self.0.iter()
     }
 
-    #[cfg(test)]
-    pub(crate) fn any_pane_id(&self) -> Option<PaneId> {
+    pub fn any_pane_id(&self) -> Option<PaneId> {
         self.0.keys().next().cloned()
     }
 }
@@ -93,7 +93,7 @@ define_string_new_type!(PaneId);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::cell::CellId;
+    use crate::cell::CellId;
 
     #[test]
     fn remove_existing_pane_returns_pane() {
@@ -124,7 +124,7 @@ mod tests {
         let mut store = PaneStore::default();
         let id = PaneId::new();
         let result = store.remove(&id);
-        assert!(matches!(result, Err(OzmuxError::PaneNotFound(ref err_id)) if err_id == &id));
+        assert!(matches!(result, Err(SessionError::PaneNotFound(ref err_id)) if err_id == &id));
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn pane_activities_returns_default_terminal_activity() {
-        use crate::session::activity::ActivityKind;
+        use crate::activity::ActivityKind;
         let pane = Pane::new(PaneId::new(), CellId::new());
         let activities = pane.activities();
         assert_eq!(activities.len(), 1);

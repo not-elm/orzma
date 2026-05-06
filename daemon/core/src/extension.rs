@@ -1,8 +1,6 @@
 use {
-    crate::{
-        http::AppState,
-        session::{SessionId, SessionState, pane::PaneId},
-    },
+    crate::http::AppState,
+    ozmux_session::{SessionId, SessionState, pane::PaneId},
     interprocess::local_socket::{
         GenericFilePath, GenericNamespaced, ListenerOptions, Name, NameType, ToFsName, ToNsName,
         tokio::prelude::*,

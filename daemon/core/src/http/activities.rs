@@ -1,7 +1,5 @@
-use crate::{
-    pty::{TerminalEvent, TerminalService},
-    session::activity::ActivityId,
-};
+use crate::pty::{TerminalEvent, TerminalService};
+use ozmux_session::activity::ActivityId;
 use axum::{
     extract::{
         Path, State, WebSocketUpgrade,

@@ -1,5 +1,5 @@
 use crate::error::OzmuxResult;
-use crate::session::{Session, SessionId, SessionState};
+use ozmux_session::{Session, SessionId, SessionState};
 use axum::{
     Json,
     extract::{Path, State},
@@ -81,7 +81,7 @@ pub async fn delete(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::Session;
+    use ozmux_session::Session;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ozmux_macros = { path = "../macros" }
+ozmux_session = { path = "../session" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

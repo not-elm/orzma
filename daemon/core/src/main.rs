@@ -5,7 +5,6 @@ mod error;
 mod extension;
 mod http;
 mod pty;
-mod session;
 
 #[tokio::main]
 async fn main() {

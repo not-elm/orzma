@@ -1,4 +1,4 @@
-use crate::define_string_new_type;
+use ozmux_macros::define_string_new_type;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]

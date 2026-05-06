@@ -1,8 +1,8 @@
 use crate::{
     error::{OzmuxError, OzmuxResult},
     pty::TerminalService,
-    session::SessionState,
 };
+use ozmux_session::SessionState;
 use axum::{
     Router,
     extract::FromRef,
@@ -97,7 +97,8 @@ fn activities_router() -> Router<AppState> {
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
-    use crate::{pty::TerminalService, session::SessionState};
+    use crate::pty::TerminalService;
+    use ozmux_session::SessionState;
     use axum::Router;
 
     pub fn daemon_router_for_test(state: AppState) -> Router {

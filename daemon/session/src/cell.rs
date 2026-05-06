@@ -1,8 +1,8 @@
 use crate::{
-    define_string_new_type,
-    error::{OzmuxError, OzmuxResult},
-    session::pane::PaneId,
+    error::{SessionError, SessionResult},
+    pane::PaneId,
 };
+use ozmux_macros::define_string_new_type;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,9 +21,9 @@ impl LayoutCellState {
         new_cell: CellId,
         new_cell_side: Side,
         orientation: SplitOrientation,
-    ) -> OzmuxResult<CellId> {
+    ) -> SessionResult<CellId> {
         if target == new_cell {
-            return Err(OzmuxError::SplitTargetEqualsNewCell(target));
+            return Err(SessionError::SplitTargetEqualsNewCell(target));
         }
         let split_cell_id = CellId::new();
         let target_parent = self.parent(&target)?.cloned();
@@ -64,10 +64,10 @@ impl LayoutCellState {
     /// Only `id` (and the parent split, if any) are removed from the store.
     /// Every other `CellId` continues to resolve to the same cell; only the
     /// promoted sibling's `parent` field and the grandparent's child slot are updated.
-    pub fn close_cell(&mut self, id: &CellId) -> OzmuxResult<CloseOutcome> {
+    pub fn close_cell(&mut self, id: &CellId) -> SessionResult<CloseOutcome> {
         let target = self.cell(id)?;
         if !matches!(target.cell, Cell::Pane(_)) {
-            return Err(OzmuxError::InvalidCellType(id.clone()));
+            return Err(SessionError::InvalidCellType(id.clone()));
         }
 
         let Some(parent_id) = target.parent.clone() else {
@@ -84,10 +84,10 @@ impl LayoutCellState {
     ///
     /// Taking `&self` makes it a compile-time guarantee that this phase performs no
     /// writes — any `Err` propagated from here leaves the store unchanged.
-    fn plan_collapse(&self, target_id: &CellId, parent_id: CellId) -> OzmuxResult<CollapsePlan> {
+    fn plan_collapse(&self, target_id: &CellId, parent_id: CellId) -> SessionResult<CollapsePlan> {
         let parent = self.cell(&parent_id)?;
         let Cell::Split(parent_split) = &parent.cell else {
-            return Err(OzmuxError::InvalidCellType(parent_id));
+            return Err(SessionError::InvalidCellType(parent_id));
         };
         let sibling_id = parent_split.sibling_cell_id(target_id).clone();
         let grandparent_id = parent.parent.clone();
@@ -95,7 +95,7 @@ impl LayoutCellState {
         if let Some(gp_id) = grandparent_id.as_ref() {
             let grandparent = self.cell(gp_id)?;
             if !matches!(grandparent.cell, Cell::Split(_)) {
-                return Err(OzmuxError::InvalidCellType(gp_id.clone()));
+                return Err(SessionError::InvalidCellType(gp_id.clone()));
             }
         }
 
@@ -173,17 +173,17 @@ impl LayoutCellState {
     }
 
     #[inline]
-    pub fn cell(&self, id: &CellId) -> OzmuxResult<&LayoutCell> {
+    pub fn cell(&self, id: &CellId) -> SessionResult<&LayoutCell> {
         self.0
             .get(id)
-            .ok_or_else(|| OzmuxError::CellNotFound(id.clone()))
+            .ok_or_else(|| SessionError::CellNotFound(id.clone()))
     }
 
     #[inline]
-    fn cell_mut(&mut self, id: &CellId) -> OzmuxResult<&mut LayoutCell> {
+    fn cell_mut(&mut self, id: &CellId) -> SessionResult<&mut LayoutCell> {
         self.0
             .get_mut(id)
-            .ok_or_else(|| OzmuxError::CellNotFound(id.clone()))
+            .ok_or_else(|| SessionError::CellNotFound(id.clone()))
     }
 
     fn repoint_parent_to_split(
@@ -191,7 +191,7 @@ impl LayoutCellState {
         cell: &CellId,
         parent: Option<CellId>,
         split_cell: CellId,
-    ) -> OzmuxResult {
+    ) -> SessionResult {
         let Some(parent) = parent.as_ref() else {
             return Ok(());
         };
@@ -207,7 +207,7 @@ impl LayoutCellState {
     }
 
     #[inline]
-    fn parent(&self, id: &CellId) -> OzmuxResult<Option<&CellId>> {
+    fn parent(&self, id: &CellId) -> SessionResult<Option<&CellId>> {
         Ok(self.cell(id)?.parent.as_ref())
     }
 }
@@ -316,7 +316,7 @@ pub enum CloseOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::pane::PaneId;
+    use crate::pane::PaneId;
     use std::collections::{HashMap, HashSet};
 
     /// Create a parent-less pane cell, insert it into the store, and return its CellId.
@@ -754,7 +754,7 @@ mod tests {
         let before = snapshot(&store);
         let result = store.close_cell(&split_id);
         assert!(
-            matches!(result, Err(OzmuxError::InvalidCellType(ref id)) if id == &split_id),
+            matches!(result, Err(SessionError::InvalidCellType(ref id)) if id == &split_id),
             "closing a Split cell should return InvalidCellType, got {result:?}",
         );
         assert_eq!(
@@ -1098,7 +1098,7 @@ mod tests {
     #[test]
     fn layout_cell_state_serializes_as_object_keyed_by_cell_id() {
         let mut state = LayoutCellState::default();
-        let pane_id = crate::session::pane::PaneId::new();
+        let pane_id = crate::pane::PaneId::new();
         let cell_id = state.create_pane_cell(pane_id.clone(), None);
 
         let v = serde_json::to_value(&state).unwrap();
