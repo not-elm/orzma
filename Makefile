@@ -1,14 +1,16 @@
-.PHONY: build dev-frontend dev-backend verify-out-dir clean help
+.PHONY: build dev-frontend dev-backend dev-daemon verify-out-dir clean help
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
 INDEX_HTML := $(HTTP_DIR)/index.html
+EXTENSIONS_DIR := $(CURDIR)/extensions
 
 help:
 	@echo "Targets:"
 	@echo "  build              - Build frontend to single HTML, then build release binary"
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
 	@echo "  dev-backend        - Run axum server on :3200 (debug build redirects / to :5173)"
+	@echo "  dev-daemon         - Run daemon_bootstrap with OZMUX_EXTENSION_DIR=$(EXTENSIONS_DIR)"
 	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
 verify-out-dir:
@@ -31,6 +33,9 @@ dev-frontend:
 
 dev-backend:
 	cargo run -p ozmux_core
+
+dev-daemon:
+	OZMUX_EXTENSION_DIR=$(EXTENSIONS_DIR) cargo run -p daemon_bootstrap
 
 clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
