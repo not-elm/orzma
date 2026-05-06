@@ -10,7 +10,6 @@ authors.workspace = true
 ozmux_macros = { path = "../macros" }
 ozmux_session = { path = "../session" }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
