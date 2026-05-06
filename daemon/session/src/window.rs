@@ -127,9 +127,14 @@ impl Window {
         self.panes.remove(pane_id)?;
 
         // If the closed pane was active, promote the surviving sibling.
+        // If the surviving cell is a split (not a leaf), fall back to any
+        // remaining pane in the window — guarantees active_pane never
+        // dangles after close.
         if &self.active_pane == pane_id {
-            if let Some(sibling) = surviving_pane_id {
-                self.active_pane = sibling;
+            let new_active = surviving_pane_id
+                .or_else(|| self.panes.any_pane_id());
+            if let Some(id) = new_active {
+                self.active_pane = id;
             }
         }
         Ok(())
@@ -246,5 +251,34 @@ mod tests {
         // After split, new_id is active. Close it; original should become active.
         w.close_pane(&new_id).expect("close should succeed");
         assert_eq!(w.active_pane(), &original);
+    }
+
+    #[test]
+    fn close_active_pane_when_surviving_root_is_split_promotes_some_pane() {
+        // Build 3-pane layout: a → split with b, then split a → with c.
+        // After two splits the layout has 3 panes (a, b, c) and the active is c (last split).
+        // Close c → surviving root after RootReplaced is a SPLIT node (the inner split of a/b),
+        // so pane_id_for_cell returns None; without the fallback, active_pane would dangle.
+        let mut w = Window::new(WindowId::new(), SessionId::new(), String::new());
+        let a = w.panes().any_pane_id().unwrap();
+        let b = PaneId::new();
+        w.split_pane(&a, b.clone(), SplitOrientation::Horizontal, Side::After)
+            .expect("split a/b");
+        let c = PaneId::new();
+        w.split_pane(&a, c.clone(), SplitOrientation::Vertical, Side::After)
+            .expect("split a/c");
+        // After both splits, c is active.
+        assert_eq!(w.active_pane(), &c);
+
+        // Close c (the active pane). The active_pane must end up as some valid pane (a or b).
+        w.close_pane(&c).expect("close c");
+        let panes_remaining: Vec<PaneId> = w.panes().iter().map(|(id, _)| id.clone()).collect();
+        assert_eq!(panes_remaining.len(), 2);
+        assert!(
+            panes_remaining.contains(w.active_pane()),
+            "active_pane {:?} must be one of the surviving panes {:?}",
+            w.active_pane(),
+            panes_remaining
+        );
     }
 }
