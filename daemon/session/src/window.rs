@@ -4,7 +4,8 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{Mutex, MutexGuard};
 use crate::{
     SessionId,
-    cell::{CellId, LayoutCellState},
+    cell::{CellId, CloseOutcome, LayoutCellState, Side, SplitOrientation},
+    error::{SessionError, SessionResult},
     pane::{Pane, PaneId, PaneStore},
 };
 
@@ -72,6 +73,78 @@ impl Window {
     pub fn rename(&mut self, name: impl Into<String>) {
         self.name = name.into();
     }
+
+    pub fn split_pane(
+        &mut self,
+        target_pane_id: &PaneId,
+        new_pane_id: PaneId,
+        orientation: SplitOrientation,
+        side: Side,
+    ) -> SessionResult<PaneId> {
+        let target_cell_id = self.panes.get(target_pane_id)?.cell_id().clone();
+        let target_was_root = target_cell_id == self.root;
+
+        let new_cell_id = self.cells.create_pane_cell(new_pane_id.clone(), None);
+        self.panes.insert(
+            new_pane_id.clone(),
+            Pane::new(new_pane_id.clone(), new_cell_id.clone()),
+        );
+
+        let new_split_id =
+            self.cells
+                .split_cell(target_cell_id, new_cell_id, side, orientation)?;
+
+        if target_was_root {
+            self.root = new_split_id;
+        }
+
+        // Newly created pane becomes active (matches tmux split-window default).
+        self.active_pane = new_pane_id.clone();
+        Ok(new_pane_id)
+    }
+
+    /// Close a pane and propagate the structural change.
+    /// Rejects closing the last pane in the window.
+    pub fn close_pane(&mut self, pane_id: &PaneId) -> SessionResult {
+        let cell_id = self.panes.get(pane_id)?.cell_id().clone();
+
+        if cell_id == self.root && self.panes.len() == 1 {
+            return Err(SessionError::CannotCloseLastPaneInWindow(self.id.clone()));
+        }
+
+        let outcome = self.cells.close_cell(&cell_id)?;
+        let surviving_pane_id = match outcome {
+            CloseOutcome::TreeEmptied => {
+                return Err(SessionError::CannotCloseLastPaneInWindow(self.id.clone()));
+            }
+            CloseOutcome::RootReplaced { new_root } => {
+                self.root = new_root.clone();
+                self.pane_id_for_cell(&new_root)
+            }
+            CloseOutcome::SiblingPromoted { survivor, .. } => self.pane_id_for_cell(&survivor),
+        };
+
+        self.panes.remove(pane_id)?;
+
+        // If the closed pane was active, promote the surviving sibling.
+        if &self.active_pane == pane_id {
+            if let Some(sibling) = surviving_pane_id {
+                self.active_pane = sibling;
+            }
+        }
+        Ok(())
+    }
+
+    fn pane_id_for_cell(&self, cell_id: &CellId) -> Option<PaneId> {
+        self.panes
+            .iter()
+            .find(|(_, p)| p.cell_id() == cell_id)
+            .map(|(id, _)| id.clone())
+    }
+
+    pub fn first_pane(&self) -> Option<&Pane> {
+        self.panes.iter().next().map(|(_, p)| p)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -135,5 +208,43 @@ mod tests {
         let id = w.id().clone();
         store.lock().await.insert(id.clone(), w);
         assert!(store.lock().await.get(&id).is_some());
+    }
+
+    use crate::cell::{Side, SplitOrientation};
+
+    #[test]
+    fn split_pane_makes_new_pane_active() {
+        let mut w = Window::new(WindowId::new(), SessionId::new(), String::new());
+        let target = w.panes().any_pane_id().unwrap();
+        let new_id = PaneId::new();
+        let returned = w
+            .split_pane(&target, new_id.clone(), SplitOrientation::Horizontal, Side::After)
+            .expect("split should succeed");
+        assert_eq!(returned, new_id);
+        assert_eq!(w.active_pane(), &new_id);
+    }
+
+    #[test]
+    fn close_last_pane_returns_cannot_close_last_pane_in_window() {
+        let mut w = Window::new(WindowId::new(), SessionId::new(), String::new());
+        let only = w.panes().any_pane_id().unwrap();
+        let err = w.close_pane(&only).unwrap_err();
+        let wid = w.id().clone();
+        assert!(matches!(
+            err,
+            SessionError::CannotCloseLastPaneInWindow(ref id) if id == &wid
+        ));
+    }
+
+    #[test]
+    fn close_pane_promotes_sibling_to_active_when_active_was_closed() {
+        let mut w = Window::new(WindowId::new(), SessionId::new(), String::new());
+        let original = w.panes().any_pane_id().unwrap();
+        let new_id = PaneId::new();
+        w.split_pane(&original, new_id.clone(), SplitOrientation::Horizontal, Side::After)
+            .expect("split");
+        // After split, new_id is active. Close it; original should become active.
+        w.close_pane(&new_id).expect("close should succeed");
+        assert_eq!(w.active_pane(), &original);
     }
 }
