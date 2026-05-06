@@ -1,3 +1,6 @@
+mod parse;
+
+use darling::FromDeriveInput;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, parse_macro_input};
@@ -57,6 +60,17 @@ pub fn derive_new_type(input: TokenStream) -> TokenStream {
         .to_compile_error()
         .into();
     }
+
+    // Parse attributes (not yet used for codegen — Task 5 wires this up).
+    let attrs = match parse::NewTypeAttrs::from_derive_input(&input) {
+        Ok(a) => a,
+        Err(e) => return e.write_errors().into(),
+    };
+    if let Err(ts) = parse::validate(&attrs) {
+        return ts.into();
+    }
+    // Suppress unused-variable warning until Task 5.
+    let _ = attrs;
 
     quote! {
         impl #name {
