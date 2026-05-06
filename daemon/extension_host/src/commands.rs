@@ -2,11 +2,10 @@ use crate::error::ExtensionHostResult;
 use crate::manifest::{CommandName, CommandScriptPath, ExtensionManifest};
 use std::{collections::HashMap, path::Path};
 
-pub struct ExtensionRegistry {
-    commands: HashMap<CommandName, CommandScriptPath>,
-}
+#[derive(Debug, Clone)]
+pub struct ExtensionCommands(HashMap<CommandName, CommandScriptPath>);
 
-impl ExtensionRegistry {
+impl ExtensionCommands {
     pub async fn load() -> ExtensionHostResult<Self> {
         let mut commands = HashMap::default();
         let extension_root = std::env::var("OZMUX_EXTENSION_DIR")?;
@@ -15,11 +14,7 @@ impl ExtensionRegistry {
                 commands.extend(manifest.commands);
             }
         }
-        Ok(Self { commands })
-    }
-
-    pub fn commands(&self) -> &HashMap<CommandName, CommandScriptPath> {
-        &self.commands
+        Ok(Self(commands))
     }
 }
 
