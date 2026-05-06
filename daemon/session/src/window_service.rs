@@ -125,6 +125,22 @@ impl WindowService {
             .collect();
         Ok(activity_ids)
     }
+
+    pub async fn select_active(
+        &self,
+        session_id: SessionId,
+        window_id: WindowId,
+    ) -> SessionResult<()> {
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        if !session.windows.contains(&window_id) {
+            return Err(SessionError::WindowNotFound(window_id));
+        }
+        session.active_window = window_id;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
