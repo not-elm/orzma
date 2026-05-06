@@ -1,22 +1,29 @@
 use crate::error::ExtensionHostResult;
-use crate::manifest::{CommandName, CommandScriptPath};
-use std::collections::HashMap;
+use crate::manifest::{CommandName, CommandScriptPath, ExtensionManifest};
+use std::{collections::HashMap, path::Path};
 
 pub struct ExtensionRegistry {
     commands: HashMap<CommandName, CommandScriptPath>,
 }
 
 impl ExtensionRegistry {
-    /// Load extensions from `OZMUX_EXTENSION_DIR`.
-    ///
-    /// TODO: implementation deferred to a follow-up PR. The pre-split
-    /// version had unresolved compile errors (`extension_root` vs
-    /// `extension_dir`, missing return). Type signature is preserved.
     pub async fn load() -> ExtensionHostResult<Self> {
-        todo!("ExtensionRegistry::load implementation deferred to subsequent PR")
+        let mut commands = HashMap::default();
+        let extension_root = std::env::var("OZMUX_EXTENSION_DIR")?;
+        for entry in std::fs::read_dir(&extension_root)?.filter_map(|r| r.ok()) {
+            if let Some(manifest) = load_manifest(&entry.path()) {
+                commands.extend(manifest.commands);
+            }
+        }
+        Ok(Self { commands })
     }
 
     pub fn commands(&self) -> &HashMap<CommandName, CommandScriptPath> {
         &self.commands
     }
+}
+
+fn load_manifest(extension_dir: &Path) -> Option<ExtensionManifest> {
+    let buff = std::fs::read_to_string(extension_dir.join("ozmux.json")).ok()?;
+    serde_json::from_str(&buff).ok()
 }
