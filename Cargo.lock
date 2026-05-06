@@ -289,10 +289,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "extension"
-version = "0.1.0"
-
-[[package]]
 name = "filedescriptor"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -446,10 +442,6 @@ dependencies = [
  "http-body",
  "pin-project-lite",
 ]
-
-[[package]]
-name = "http_server"
-version = "0.1.0"
 
 [[package]]
 name = "httparse"
@@ -690,6 +682,69 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "ozmux_extension_host"
+version = "0.1.0"
+dependencies = [
+ "interprocess",
+ "ozmux_macros",
+ "ozmux_session",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ozmux_http_server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "http-body-util",
+ "ozmux_extension_host",
+ "ozmux_session",
+ "ozmux_terminal",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ozmux_macros"
+version = "0.1.0"
+
+[[package]]
+name = "ozmux_session"
+version = "0.1.0"
+dependencies = [
+ "ozmux_macros",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "ozmux_terminal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ozmux_session",
+ "portable-pty",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -1049,10 +1104,6 @@ name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
-
-[[package]]
-name = "terminal"
-version = "0.1.0"
 
 [[package]]
 name = "thiserror"
