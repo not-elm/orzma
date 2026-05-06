@@ -6,7 +6,7 @@ use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Default, Debug, Serialize)]
+#[derive(Default, Debug, Clone, Serialize)]
 pub struct LayoutCellState(HashMap<CellId, LayoutCell>);
 
 impl LayoutCellState {

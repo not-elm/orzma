@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon verify-out-dir clean help
+.PHONY: build dev-frontend dev-backend dev-daemon verify-out-dir clean help fix-lint
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
@@ -41,5 +41,6 @@ clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
 
 fix-lint:
-	cargo clippy --fix
+	cargo clippy --fix --allow-dirty --allow-staged
 	cargo fmt
+	pnpm lint:fix

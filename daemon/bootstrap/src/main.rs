@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ozmux_extension::commands::ExtensionCommands;
 use ozmux_http_server::AppState;
-use ozmux_session::SessionState;
+use ozmux_session::{SessionState, WindowStore};
 use ozmux_terminal::TerminalService;
 
 #[tokio::main]
@@ -20,6 +20,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         sessions: SessionState::default(),
+        windows: WindowStore::default(),
         terminal: TerminalService::with_extension_wrappers(wrappers),
     };
 

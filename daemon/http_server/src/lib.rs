@@ -8,19 +8,32 @@ use axum::{
     extract::FromRef,
     routing::{delete as method_delete, get, post},
 };
-use ozmux_session::SessionState;
+use ozmux_session::{SessionState, WindowService, WindowStore};
 use ozmux_terminal::TerminalService;
 use tokio::net::TcpListener;
 
 #[derive(Clone, Default)]
 pub struct AppState {
     pub sessions: SessionState,
+    pub windows: WindowStore,
     pub terminal: TerminalService,
 }
 
 impl FromRef<AppState> for SessionState {
     fn from_ref(input: &AppState) -> Self {
         input.sessions.clone()
+    }
+}
+
+impl FromRef<AppState> for WindowStore {
+    fn from_ref(input: &AppState) -> Self {
+        input.windows.clone()
+    }
+}
+
+impl FromRef<AppState> for WindowService {
+    fn from_ref(input: &AppState) -> Self {
+        WindowService::new(input.sessions.clone(), input.windows.clone())
     }
 }
 
@@ -31,12 +44,14 @@ impl FromRef<AppState> for TerminalService {
 }
 
 pub async fn serve(state: AppState) -> HttpResult {
-    let (pane_id, activity_id) = state.sessions.bootstrap_default().await;
-    state
+    let (sid, wid, pid, aid) = state.sessions.bootstrap_default(&state.windows).await;
+    if let Err(e) = state
         .terminal
         .spawn(
-            activity_id,
-            pane_id,
+            aid,
+            pid,
+            wid,
+            sid,
             ozmux_terminal::SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -44,7 +59,11 @@ pub async fn serve(state: AppState) -> HttpResult {
                 cwd: None,
             },
         )
-        .await?;
+        .await
+    {
+        // Bootstrap PTY spawn failure must not yield a half-initialized server.
+        panic!("bootstrap PTY spawn failed: {e}");
+    }
 
     let listener = TcpListener::bind("127.0.0.1:3200")
         .await
@@ -81,13 +100,37 @@ fn session_id_router() -> Router<AppState> {
                 .patch(handlers::sessions::rename)
                 .delete(handlers::sessions::delete),
         )
+        .nest("/windows", windows_router())
+}
+
+fn windows_router() -> Router<AppState> {
+    Router::new()
+        .route("/", post(handlers::sessions::windows::create))
+        .nest("/{window_id}", window_id_router())
+}
+
+fn window_id_router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/",
+            get(handlers::sessions::windows::get_window)
+                .patch(handlers::sessions::windows::rename)
+                .delete(handlers::sessions::windows::delete),
+        )
+        .route("/select", post(handlers::sessions::windows::select))
         .nest("/panes/{pane_id}", pane_id_router())
 }
 
 fn pane_id_router() -> Router<AppState> {
     Router::new()
-        .route("/", method_delete(handlers::sessions::pane::close))
-        .route("/split", post(handlers::sessions::pane::split::split))
+        .route(
+            "/",
+            method_delete(handlers::sessions::windows::panes::close),
+        )
+        .route(
+            "/split",
+            post(handlers::sessions::windows::panes::split::split),
+        )
 }
 
 fn activities_router() -> Router<AppState> {
@@ -101,19 +144,19 @@ fn activities_router() -> Router<AppState> {
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
     use axum::Router;
-    use ozmux_session::SessionState;
+    use ozmux_session::{SessionState, WindowStore};
     use ozmux_terminal::TerminalService;
 
     pub fn daemon_router_for_test(state: AppState) -> Router {
         daemon_router(state)
     }
 
-    /// Build a router from just a `SessionState`, supplying a default
-    /// `TerminalService`. Used by sessions/pane/split tests that don't
-    /// exercise the WS endpoint.
-    pub fn router_with_sessions(sessions: SessionState) -> Router {
+    /// Build a router from a `SessionState` + `WindowStore`, supplying a default
+    /// `TerminalService`. Used by handler tests that don't exercise the WS endpoint.
+    pub fn router_with_state(sessions: SessionState, windows: WindowStore) -> Router {
         daemon_router(AppState {
             sessions,
+            windows,
             terminal: TerminalService::default(),
         })
     }

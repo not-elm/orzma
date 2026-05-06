@@ -1,14 +1,14 @@
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ActivityKind {
     Terminal,
     Custom { iframe_path: String },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Activity {
     id: ActivityId,
     name: String,
