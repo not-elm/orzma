@@ -1,6 +1,8 @@
-//! Errors for the extension host.
-
 use thiserror::Error;
+
+use crate::manifest::CommandName;
+
+pub type ExtensionHostResult<T = ()> = Result<T, ExtensionHostError>;
 
 #[derive(Error, Debug)]
 pub enum ExtensionHostError {
@@ -12,6 +14,7 @@ pub enum ExtensionHostError {
 
     #[error("manifest parse failed: {0}")]
     Manifest(String),
-}
 
-pub type ExtensionHostResult<T = ()> = Result<T, ExtensionHostError>;
+    #[error("command not found: {0}")]
+    CommandNotFound(CommandName),
+}

@@ -5,6 +5,13 @@ use interprocess::local_socket::{
 use ozmux_session::SessionState;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::{
+    commands::ExtensionCommands, error::ExtensionHostResult,
+    host::request_schema::ExtensionIpcRequest,
+};
+
+mod request_schema;
+
 /// Spawn the extension host listener on a tokio task.
 ///
 /// Currently the loop only logs received lines. Future commands that
@@ -17,10 +24,11 @@ pub fn serve(sessions: SessionState) {
     });
 }
 
-async fn run(_sessions: SessionState) -> std::io::Result<()> {
+async fn run(_sessions: SessionState) -> ExtensionHostResult {
     let listener = ListenerOptions::new()
         .name(resolve_socket_name()?)
         .create_tokio()?;
+    let commands = ExtensionCommands::load().await?;
 
     loop {
         let conn = listener.accept().await?;
@@ -31,8 +39,26 @@ async fn run(_sessions: SessionState) -> std::io::Result<()> {
                 buffer.clear();
                 match recver.read_line(&mut buffer).await {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => tracing::debug!(line = %buffer.trim_end(), "received line"),
+                    Ok(_) => {}
                 }
+                let request = match serde_json::from_str::<ExtensionIpcRequest>(&buffer) {
+                    Ok(request) => request,
+                    Err(e) => {
+                        tracing::warn!("Failed to parse extension ipc requset: {e}");
+                        continue;
+                    }
+                };
+                match request {
+                    ExtensionIpcRequest::ExecuteCommand {
+                        pane,
+                        activity,
+                        command,
+                        argv,
+                    } => {
+                        commands.execute(&command, &argv).await?;
+                    }
+                }
+                tracing::debug!(line = %buffer.trim_end(), "received line")
             }
         });
     }
