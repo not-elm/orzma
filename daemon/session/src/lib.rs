@@ -176,8 +176,11 @@ impl Session {
 
 impl Default for Session {
     fn default() -> Self {
-        // Default impl is preserved for tests; pairs with `Window::default()` semantics
-        // by creating both Session and Window inline. Used only inside `bootstrap_default`.
+        // Default impl is a test scaffold only. The fresh `WindowId` it allocates has
+        // no backing `Window` in any `WindowStore`, so callers that read `active_window`
+        // through a store will fail. Use `Session::empty(...)` and pair with a real
+        // `Window` insert (as `bootstrap_default` does) for any code that touches the
+        // store.
         let session_id = SessionId::new();
         let window_id = crate::window::WindowId::new();
         Self::empty(session_id, String::new(), window_id)
@@ -268,6 +271,22 @@ mod tests {
         let removed = state.remove(&id).await.unwrap();
         assert_eq!(removed.id(), &id);
         assert!(state.lock().await.get(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn session_mut_returns_err_for_unknown_id() {
+        let state = SessionState::default();
+        let id = SessionId::new();
+        let err = state.session_mut(&id).await.unwrap_err();
+        assert!(matches!(err, SessionError::SessionNotFound(ref got) if got == &id));
+    }
+
+    #[tokio::test]
+    async fn remove_returns_err_for_unknown_id() {
+        let state = SessionState::default();
+        let id = SessionId::new();
+        let err = state.remove(&id).await.unwrap_err();
+        assert!(matches!(err, SessionError::SessionNotFound(ref got) if got == &id));
     }
 
     #[tokio::test]
