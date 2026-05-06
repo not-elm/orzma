@@ -51,6 +51,36 @@ impl WindowService {
             .clone_for_response();
         Ok(cloned)
     }
+
+    pub async fn rename(
+        &self,
+        session_id: SessionId,
+        window_id: WindowId,
+        name: String,
+    ) -> SessionResult<Window> {
+        // Validate session ownership without keeping the SessionState lock.
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        if !session.windows.contains(&window_id) {
+            return Err(SessionError::WindowNotFound(window_id));
+        }
+        drop(sessions);
+
+        let mut win_store = self.windows.lock().await;
+        let window = win_store
+            .get_mut(&window_id)
+            .ok_or_else(|| SessionError::WindowNotFound(window_id.clone()))?;
+        if window.session_id() != &session_id {
+            return Err(SessionError::WindowDoesNotBelongToSession {
+                session_id,
+                window_id,
+            });
+        }
+        window.rename(name);
+        Ok(window.clone_for_response())
+    }
 }
 
 #[cfg(test)]
