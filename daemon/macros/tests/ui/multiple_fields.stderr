@@ -1,0 +1,5 @@
+error: NewType requires exactly one field, found 2
+ --> tests/ui/multiple_fields.rs:4:18
+  |
+4 | struct TwoFields(String, String);
+  |                  ^^^^^^^^^^^^^^

@@ -18,3 +18,4 @@ proc-macro2 = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+trybuild = "1"

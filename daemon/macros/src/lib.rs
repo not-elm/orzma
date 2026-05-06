@@ -12,12 +12,47 @@ pub fn derive_new_type(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
 
-    // Minimal validation up front; richer errors come in Task 3.
-    if !matches!(&input.data, Data::Struct(s) if matches!(s.fields, Fields::Unnamed(ref f) if f.unnamed.len() == 1))
-    {
+    // Shape validation
+    if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
         return syn::Error::new_spanned(
-            &input.ident,
-            "NewType requires a tuple struct with exactly one field",
+            &input.generics,
+            "NewType does not support generic parameters",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let data_struct = match &input.data {
+        Data::Struct(s) => s,
+        Data::Enum(_) | Data::Union(_) => {
+            return syn::Error::new_spanned(
+                &input.ident,
+                "NewType can only be derived for structs",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    let unnamed = match &data_struct.fields {
+        Fields::Unnamed(f) => f,
+        Fields::Named(_) | Fields::Unit => {
+            return syn::Error::new_spanned(
+                &input.ident,
+                "NewType requires a tuple struct",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    if unnamed.unnamed.len() != 1 {
+        return syn::Error::new_spanned(
+            &unnamed.unnamed,
+            format!(
+                "NewType requires exactly one field, found {}",
+                unnamed.unnamed.len()
+            ),
         )
         .to_compile_error()
         .into();
