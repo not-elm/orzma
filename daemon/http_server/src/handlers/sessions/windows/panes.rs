@@ -69,6 +69,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+
+        // Body has the updated session with 1 pane in the window.
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let panes = v["windows"][0]["panes"].as_array().expect("panes array");
+        assert_eq!(panes.len(), 1, "window should have 1 pane after close");
+
+        // In-memory state confirms removal.
+        let store = windows.lock().await;
+        let window = store.get(&wid).expect("window exists");
+        assert!(
+            window.panes().get(&new_pane_id).is_err(),
+            "new_pane_id should be gone from PaneStore"
+        );
     }
 
     #[tokio::test]
