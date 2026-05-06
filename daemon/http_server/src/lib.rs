@@ -6,7 +6,7 @@ pub use error::{HttpError, HttpResult};
 use axum::{
     Router,
     extract::FromRef,
-    routing::{get, post},
+    routing::{delete as method_delete, get, post},
 };
 use ozmux_session::{SessionState, WindowService, WindowStore};
 use ozmux_terminal::TerminalService;
@@ -122,8 +122,15 @@ fn window_id_router() -> Router<AppState> {
 }
 
 fn pane_id_router() -> Router<AppState> {
-    // Stub: restored in Task 20 with delete + split routes
     Router::new()
+        .route(
+            "/",
+            method_delete(handlers::sessions::windows::panes::close),
+        )
+        .route(
+            "/split",
+            post(handlers::sessions::windows::panes::split::split),
+        )
 }
 
 fn activities_router() -> Router<AppState> {

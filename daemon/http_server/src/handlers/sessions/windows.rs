@@ -1,3 +1,5 @@
+pub mod panes;
+
 use crate::error::HttpResult;
 use axum::{
     Json,
