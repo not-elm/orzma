@@ -6,7 +6,7 @@ pub use error::{HttpError, HttpResult};
 use axum::{
     Router,
     extract::FromRef,
-    routing::get,
+    routing::{get, post},
 };
 use ozmux_session::{SessionState, WindowService, WindowStore};
 use ozmux_terminal::TerminalService;
@@ -100,11 +100,29 @@ fn session_id_router() -> Router<AppState> {
                 .patch(handlers::sessions::rename)
                 .delete(handlers::sessions::delete),
         )
+        .nest("/windows", windows_router())
+}
+
+fn windows_router() -> Router<AppState> {
+    Router::new()
+        .route("/", post(handlers::sessions::windows::create))
+        .nest("/{window_id}", window_id_router())
+}
+
+fn window_id_router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/",
+            get(handlers::sessions::windows::get_window)
+                .patch(handlers::sessions::windows::rename)
+                .delete(handlers::sessions::windows::delete),
+        )
+        .route("/select", post(handlers::sessions::windows::select))
         .nest("/panes/{pane_id}", pane_id_router())
 }
 
 fn pane_id_router() -> Router<AppState> {
-    // TODO: restore in Task 20 (pane handlers migrated to windows/panes)
+    // Stub: restored in Task 20 with delete + split routes
     Router::new()
 }
 

@@ -9,7 +9,7 @@ use ozmux_session::{Session, SessionId, SessionState, Window, WindowId, WindowSt
 use serde::{Deserialize, Serialize};
 
 // pub mod pane;     // TODO: restore in Task 20 (migrated under windows/panes)
-// pub mod windows;  // TODO: restore in Task 19
+pub mod windows;
 
 /// Build the Session+Windows JSON used by every successful session-returning
 /// handler. Inlines all owned windows.
