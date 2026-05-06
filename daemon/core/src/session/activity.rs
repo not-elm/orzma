@@ -5,6 +5,7 @@ use serde::Serialize;
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ActivityKind {
     Terminal,
+    Custom { iframe_path: String },
 }
 
 #[derive(Debug, Serialize)]

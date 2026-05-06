@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["cli", "daemon/core"]
+members = [
+  "cli",
+  "daemon/core",
+  "daemon/extension-host",
+  "daemon/http_server",
+  "daemon/terminal",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,3 +21,4 @@ anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+interprocess = { version = "2.4", features = ["tokio", "async"] }

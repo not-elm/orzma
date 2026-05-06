@@ -1,0 +1,9 @@
+[package]
+name = "ozmux_http_server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+
+[dependencies]

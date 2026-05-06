@@ -33,9 +33,7 @@ impl FromRef<AppState> for TerminalService {
     }
 }
 
-pub async fn launch_server() -> OzmuxResult {
-    let state = AppState::default();
-
+pub async fn serve(state: AppState) -> OzmuxResult {
     // Bootstrap: derive default Activity ID, then drop the lock before await on spawn.
     let activity_id = state.sessions.bootstrap_default().await;
     state

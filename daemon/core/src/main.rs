@@ -1,4 +1,7 @@
+use crate::http::AppState;
+
 mod error;
+mod extension;
 mod http;
 mod macros;
 mod pty;
@@ -12,5 +15,7 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("ozmux_core=info,warn")),
         )
         .init();
-    http::launch_server().await.unwrap();
+    let state = AppState::default();
+    extension::serve(state.clone());
+    http::serve(state).await.unwrap();
 }

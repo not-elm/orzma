@@ -1,9 +1,11 @@
 packages:
   - daemon/frontend
   - extension-host
+  - sdk/*
+  - extensions/*
 
 catalog:
-  '@types/node': ^24.12.2
+  "@types/node": ^24.12.2
   typescript: ~6.0.3
   zod: ^4.4.3
 

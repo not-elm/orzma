@@ -1,3 +1,3 @@
-import { launchIpcServer } from "./ipc-server.ts";
+import { host } from "./host.ts";
 
-launchIpcServer();
+host.serve();
