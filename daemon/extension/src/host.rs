@@ -3,19 +3,15 @@ use interprocess::local_socket::{
     tokio::prelude::*,
 };
 use ozmux_session::SessionState;
-use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::{
-    commands::ExtensionCommands, error::ExtensionHostResult,
-    host::request_schema::ExtensionIpcRequest,
-};
+use crate::error::ExtensionHostResult;
 
-mod request_schema;
-
-/// Spawn the extension host listener on a tokio task.
+/// Spawn the extension host UDS listener on a tokio task.
 ///
-/// Currently the loop only logs received lines. Future commands that
-/// mutate session state will use the supplied `SessionState`.
+/// Currently no IPC requests are defined; the listener accepts and
+/// immediately drops connections. The scaffold is preserved so future
+/// session-mutating commands can be added without re-introducing the
+/// transport layer.
 pub fn serve(sessions: SessionState) {
     tokio::spawn(async move {
         if let Err(e) = run(sessions).await {
@@ -28,39 +24,10 @@ async fn run(_sessions: SessionState) -> ExtensionHostResult {
     let listener = ListenerOptions::new()
         .name(resolve_socket_name()?)
         .create_tokio()?;
-    let commands = ExtensionCommands::load().await?;
 
     loop {
         let conn = listener.accept().await?;
-        tokio::spawn(async move {
-            let mut buffer = String::new();
-            let mut recver = BufReader::new(&conn);
-            loop {
-                buffer.clear();
-                match recver.read_line(&mut buffer).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let request = match serde_json::from_str::<ExtensionIpcRequest>(&buffer) {
-                    Ok(request) => request,
-                    Err(e) => {
-                        tracing::warn!("Failed to parse extension ipc requset: {e}");
-                        continue;
-                    }
-                };
-                match request {
-                    ExtensionIpcRequest::ExecuteCommand {
-                        pane,
-                        activity,
-                        command,
-                        argv,
-                    } => {
-                        commands.execute(&command, &argv).await?;
-                    }
-                }
-                tracing::debug!(line = %buffer.trim_end(), "received line")
-            }
-        });
+        drop(conn);
     }
 }
 

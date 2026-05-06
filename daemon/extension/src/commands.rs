@@ -1,4 +1,4 @@
-use crate::error::{ExtensionHostError, ExtensionHostResult};
+use crate::error::ExtensionHostResult;
 use crate::manifest::{CommandName, CommandScriptPath, ExtensionManifest};
 use std::{collections::HashMap, path::Path};
 
@@ -17,17 +17,6 @@ impl ExtensionCommands {
         Ok(Self(commands))
     }
 
-    pub async fn execute(&self, command: &CommandName, argv: &[String]) -> ExtensionHostResult {
-        let cmd_path = self
-            .0
-            .get(command)
-            .ok_or_else(|| ExtensionHostError::CommandNotFound(command.clone()))?;
-        tokio::process::Command::new("node")
-            .arg(&cmd_path.0)
-            .args(argv)
-            .spawn()?;
-        Ok(())
-    }
 }
 
 fn load_manifest(extension_dir: &Path) -> Option<ExtensionManifest> {
