@@ -31,7 +31,11 @@ impl ExtensionCommands {
                     continue;
                 }
                 if commands.insert(name.clone(), script).is_some() {
-                    tracing::warn!(name = %name, "duplicate extension command name; later one overrides");
+                    tracing::warn!(
+                        name = %name,
+                        extension_dir = %entry.path().display(),
+                        "duplicate extension command name; later one overrides"
+                    );
                 }
             }
         }
@@ -279,8 +283,8 @@ mod tests {
             r#"{"commands":{"../../etc/passwd":"/x.js","":"/y.js","good":"/z.js"}}"#,
         ).unwrap();
         let commands = ExtensionCommands::load_from(Some(temp.path())).await.unwrap();
-        let names: Vec<String> = commands.iter().map(|(n, _)| n.as_ref().to_string()).collect();
-        assert_eq!(names, vec!["good".to_string()]);
+        assert_eq!(commands.iter().count(), 1);
+        assert!(commands.iter().any(|(n, _)| n.as_ref() == "good"));
     }
 
     #[tokio::test]
