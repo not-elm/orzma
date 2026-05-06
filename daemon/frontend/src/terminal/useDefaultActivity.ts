@@ -25,9 +25,11 @@ export function useDefaultActivity(): DefaultActivityState {
         const sessionId = list.sessions?.[0]?.id;
         if (!sessionId) throw new Error('no default session');
         const session = (await fetchJson(sessionEndpoint(sessionId))) as {
-          panes?: Array<{ activities?: Array<{ id?: string }> }>;
+          windows?: Array<{
+            panes?: Array<{ activities?: Array<{ id?: string }> }>;
+          }>;
         };
-        const activityId = session.panes?.[0]?.activities?.[0]?.id;
+        const activityId = session.windows?.[0]?.panes?.[0]?.activities?.[0]?.id;
         if (!activityId) throw new Error('no default activity');
         if (!cancelled) setState({ status: 'ready', activityId });
       } catch (e) {
