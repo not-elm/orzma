@@ -2,7 +2,6 @@ use crate::http::AppState;
 pub use ozmux_macros::define_string_new_type;
 
 mod error;
-mod extension;
 mod http;
 
 #[tokio::main]
@@ -14,6 +13,6 @@ async fn main() {
         )
         .init();
     let state = AppState::default();
-    extension::serve(state.clone());
+    ozmux_extension_host::serve(state.sessions.clone());
     http::serve(state).await.unwrap();
 }
