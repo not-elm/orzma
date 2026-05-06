@@ -25,6 +25,12 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::Session(SessionError::SessionNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "SESSION_NOT_FOUND")
             }
+            HttpError::Session(SessionError::WindowNotFound(_)) => {
+                (StatusCode::NOT_FOUND, "WINDOW_NOT_FOUND")
+            }
+            HttpError::Session(SessionError::WindowDoesNotBelongToSession { .. }) => {
+                (StatusCode::NOT_FOUND, "WINDOW_NOT_FOUND")
+            }
             HttpError::Session(SessionError::PaneNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "PANE_NOT_FOUND")
             }
@@ -34,13 +40,17 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::Session(SessionError::InvalidCellType(_)) => {
                 (StatusCode::BAD_REQUEST, "INVALID_CELL_TYPE")
             }
-            HttpError::Session(SessionError::CannotCloseLastPane(_)) => {
+            HttpError::Session(SessionError::CannotCloseLastWindow(_)) => {
+                (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_WINDOW")
+            }
+            HttpError::Session(SessionError::CannotCloseLastPaneInWindow(_)) => {
                 (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_PANE")
             }
             HttpError::Terminal(TerminalError::ActivityNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
             }
-            // SplitTargetEqualsNewCell, Terminal::Pty, FailedLaunch fallthrough → 500
+            // SplitTargetEqualsNewCell, ActivePaneMustBelongToWindow, Terminal::Pty,
+            // FailedLaunch fall through → 500
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
         };
         let body = serde_json::json!({
@@ -59,7 +69,6 @@ mod tests {
     use ozmux_session::activity::ActivityId;
     use ozmux_session::cell::CellId;
     use ozmux_session::error::SessionError;
-    use ozmux_session::pane::PaneId;
     use ozmux_terminal::TerminalError;
 
     #[tokio::test]
@@ -74,8 +83,26 @@ mod tests {
     }
 
     #[test]
-    fn cannot_close_last_pane_maps_to_409() {
-        let err = HttpError::Session(SessionError::CannotCloseLastPane(PaneId::new()));
+    fn window_not_found_maps_to_404() {
+        use ozmux_session::WindowId;
+        let err = HttpError::Session(SessionError::WindowNotFound(WindowId::new()));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn cannot_close_last_window_maps_to_409() {
+        let err = HttpError::Session(SessionError::CannotCloseLastWindow(
+            ozmux_session::SessionId::new(),
+        ));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn cannot_close_last_pane_in_window_maps_to_409() {
+        use ozmux_session::WindowId;
+        let err = HttpError::Session(SessionError::CannotCloseLastPaneInWindow(WindowId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
