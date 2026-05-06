@@ -1,3 +1,3 @@
-export * from "./uds-client.ts";
-
-export function createActivity() {}
+export function createActivity() {
+  console.log("dada");
+}

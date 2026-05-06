@@ -30,7 +30,11 @@ impl ExtensionCommands {
                     tracing::warn!(name = %name, "extension command name has invalid characters; skipping");
                     continue;
                 }
-                if commands.insert(name.clone(), script).is_some() {
+                let script_path = root.join(entry.file_name()).join(script.0);
+                if commands
+                    .insert(name.clone(), CommandScriptPath(script_path))
+                    .is_some()
+                {
                     tracing::warn!(
                         name = %name,
                         extension_dir = %entry.path().display(),
@@ -111,7 +115,9 @@ fn sh_single_quote(s: &str) -> String {
 /// shell-friendly (no quoting needed when invoking).
 fn is_valid_command_name(name: &str) -> bool {
     !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 #[cfg(test)]
@@ -134,10 +140,7 @@ mod tests {
 
     #[test]
     fn materialize_creates_wrapper_per_command() {
-        let commands = make_commands(&[
-            ("settings", "/x/s.js"),
-            ("open", "/x/o.js"),
-        ]);
+        let commands = make_commands(&[("settings", "/x/s.js"), ("open", "/x/o.js")]);
         let dir = commands.materialize_wrappers().unwrap();
         assert!(dir.path().join("@settings").exists());
         assert!(dir.path().join("@open").exists());
@@ -175,7 +178,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let commands = make_commands(&[("x", "/x.js")]);
         let dir = commands.materialize_wrappers().unwrap();
-        let perms = std::fs::metadata(dir.path().join("@x")).unwrap().permissions();
+        let perms = std::fs::metadata(dir.path().join("@x"))
+            .unwrap()
+            .permissions();
         assert_eq!(perms.mode() & 0o777, 0o755);
     }
 
@@ -268,8 +273,11 @@ mod tests {
         std::fs::write(
             ext_dir.join("ozmux.json"),
             r#"{"commands":{"settings":"/abs/settings.js"}}"#,
-        ).unwrap();
-        let commands = ExtensionCommands::load_from(Some(temp.path())).await.unwrap();
+        )
+        .unwrap();
+        let commands = ExtensionCommands::load_from(Some(temp.path()))
+            .await
+            .unwrap();
         assert_eq!(commands.iter().count(), 1);
     }
 
@@ -281,8 +289,11 @@ mod tests {
         std::fs::write(
             ext_dir.join("ozmux.json"),
             r#"{"commands":{"../../etc/passwd":"/x.js","":"/y.js","good":"/z.js"}}"#,
-        ).unwrap();
-        let commands = ExtensionCommands::load_from(Some(temp.path())).await.unwrap();
+        )
+        .unwrap();
+        let commands = ExtensionCommands::load_from(Some(temp.path()))
+            .await
+            .unwrap();
         assert_eq!(commands.iter().count(), 1);
         assert!(commands.iter().any(|(n, _)| n.as_ref() == "good"));
     }
@@ -296,9 +307,12 @@ mod tests {
             std::fs::write(
                 ext_dir.join("ozmux.json"),
                 r#"{"commands":{"shared":"/some.js"}}"#,
-            ).unwrap();
+            )
+            .unwrap();
         }
-        let commands = ExtensionCommands::load_from(Some(temp.path())).await.unwrap();
+        let commands = ExtensionCommands::load_from(Some(temp.path()))
+            .await
+            .unwrap();
         // 重複した name は 1 件にまとまる（warn ログは出るが値は last-write-wins）
         assert_eq!(commands.iter().count(), 1);
     }
