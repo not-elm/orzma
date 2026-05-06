@@ -4,11 +4,8 @@
 //! All multi-store mutations go through this service. Handlers must not lock
 //! `SessionState` and `WindowStore` directly.
 
-#![allow(unused_imports)]
-
 use crate::{
     SessionId, SessionState,
-    activity::ActivityId,
     error::{SessionError, SessionResult},
     window::{Window, WindowId, WindowStore},
 };

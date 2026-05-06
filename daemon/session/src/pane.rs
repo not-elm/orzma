@@ -7,7 +7,7 @@ use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PaneStore(HashMap<PaneId, Pane>);
 
 impl PaneStore {
@@ -58,7 +58,7 @@ impl Serialize for PaneStore {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Pane {
     id: PaneId,
     cell: CellId,

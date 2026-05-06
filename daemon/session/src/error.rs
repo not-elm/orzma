@@ -40,11 +40,6 @@ pub enum SessionError {
         window_id: WindowId,
         pane_id: PaneId,
     },
-
-    // Kept temporarily until Task 14 finishes the Session refactor.
-    // Deprecated alias; remove in Task 14.
-    #[error("cannot close the last pane in a session: pane-id={0}")]
-    CannotCloseLastPane(PaneId),
 }
 
 pub type SessionResult<T = ()> = Result<T, SessionError>;

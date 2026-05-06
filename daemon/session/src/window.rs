@@ -13,7 +13,7 @@ use crate::{
 #[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct WindowId(String);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Window {
     id: WindowId,
     name: String,
@@ -72,6 +72,11 @@ impl Window {
 
     pub fn rename(&mut self, name: impl Into<String>) {
         self.name = name.into();
+    }
+
+    /// Clone the window for use in HTTP responses (released from any guard).
+    pub fn clone_for_response(&self) -> Self {
+        self.clone()
     }
 
     pub fn split_pane(

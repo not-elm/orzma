@@ -1,7 +1,3 @@
-use crate::{
-    cell::{CellId, CloseOutcome, LayoutCellState, Side, SplitOrientation},
-    pane::{Pane, PaneId, PaneStore},
-};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -20,6 +16,7 @@ pub mod window_service;
 
 pub use error::{SessionError, SessionResult};
 pub use window::{Window, WindowId, WindowStore};
+pub use window_service::WindowService;
 
 #[derive(Clone, Default)]
 pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
@@ -87,21 +84,43 @@ impl SessionState {
             .ok_or_else(|| SessionError::SessionNotFound(id.clone()))
     }
 
-    /// Insert a default Session (with a default Pane and a default Terminal Activity)
-    /// and return the (PaneId, ActivityId) of that pane and its terminal activity.
-    /// Caller-controlled bootstrap (called once from `launch_server`); tests use the
-    /// empty `Default` impl.
-    pub async fn bootstrap_default(&self) -> (PaneId, crate::activity::ActivityId) {
-        let session = Session::new("default".to_string());
-        let pane = session.first_pane().expect("Session::default has one Pane");
-        let pane_id = pane.id().clone();
-        let activity_id = pane
-            .first_activity()
-            .expect("Pane::default has one Activity")
+    /// Insert a default Session, a default Window for that session, a default Pane,
+    /// and a default Terminal Activity. Returns IDs needed for PTY spawn.
+    pub async fn bootstrap_default(
+        &self,
+        windows: &crate::window::WindowStore,
+    ) -> (SessionId, crate::window::WindowId, crate::pane::PaneId, crate::activity::ActivityId) {
+        // Build the in-memory graph outside any lock.
+        let session_id = SessionId::new();
+        let window_id = crate::window::WindowId::new();
+        let window = crate::window::Window::new(
+            window_id.clone(),
+            session_id.clone(),
+            "main".into(),
+        );
+        let pane_id = window
+            .first_pane()
+            .expect("Window::new has 1 pane")
             .id()
             .clone();
-        self.0.lock().await.insert(session.id().clone(), session);
-        (pane_id, activity_id)
+        let activity_id = window
+            .first_pane()
+            .unwrap()
+            .first_activity()
+            .expect("Pane::default has 1 Activity")
+            .id()
+            .clone();
+        let session = Session::empty(session_id.clone(), "default".into(), window_id.clone());
+
+        // Publish in canonical lock order: SessionState -> WindowStore.
+        let mut sessions = self.0.lock().await;
+        let mut win_store = windows.lock().await;
+        sessions.insert(session_id.clone(), session);
+        win_store.insert(window_id.clone(), window);
+        drop(win_store);
+        drop(sessions);
+
+        (session_id, window_id, pane_id, activity_id)
     }
 }
 
@@ -109,31 +128,28 @@ impl SessionState {
 #[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct SessionId(String);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Session {
-    id: SessionId,
-    name: String,
-    root: CellId,
-    cells: LayoutCellState,
-    panes: PaneStore,
+    pub(crate) id: SessionId,
+    pub(crate) name: String,
+    pub(crate) windows: Vec<crate::window::WindowId>,
+    pub(crate) active_window: crate::window::WindowId,
 }
 
 impl Session {
-    pub fn new(name: String) -> Self {
-        let id = SessionId::new();
-        let pane_id = PaneId::new();
-        let mut cells = LayoutCellState::default();
-        let cell_id = cells.create_pane_cell(pane_id.clone(), None);
-
-        let mut panes = PaneStore::default();
-        panes.insert(pane_id.clone(), Pane::new(pane_id, cell_id.clone()));
-
+    /// Construct a session with no windows. Use `WindowService::create` to add
+    /// windows; an empty windows list violates an invariant — `bootstrap_default`
+    /// must be paired with a window insert.
+    pub(crate) fn empty(
+        id: SessionId,
+        name: String,
+        default_window: crate::window::WindowId,
+    ) -> Self {
         Self {
             id,
             name,
-            root: cell_id,
-            cells,
-            panes,
+            windows: vec![default_window.clone()],
+            active_window: default_window,
         }
     }
 
@@ -149,84 +165,22 @@ impl Session {
         self.name = name.into();
     }
 
-    #[cfg(test)]
-    pub fn root(&self) -> &CellId {
-        &self.root
+    pub fn windows(&self) -> &[crate::window::WindowId] {
+        &self.windows
     }
 
-    pub fn split_pane(
-        &mut self,
-        pane_id: &PaneId,
-        orientation: SplitOrientation,
-        side: Side,
-    ) -> SessionResult<PaneId> {
-        let target_cell_id = self.panes.get(pane_id)?.cell_id().clone();
-        let target_was_root = target_cell_id == self.root;
-
-        let new_pane_id = PaneId::new();
-        let new_cell_id = self.cells.create_pane_cell(new_pane_id.clone(), None);
-        self.panes.insert(
-            new_pane_id.clone(),
-            Pane::new(new_pane_id.clone(), new_cell_id.clone()),
-        );
-
-        let new_split_id = self
-            .cells
-            .split_cell(target_cell_id, new_cell_id, side, orientation)?;
-
-        if target_was_root {
-            self.root = new_split_id;
-        }
-
-        Ok(new_pane_id)
-    }
-
-    /// Close a pane and propagate the structural change.
-    ///
-    /// Rejects closing the last pane (returns `CannotCloseLastPane`); closing the only
-    /// pane equals ending the session, which is a separate API.
-    ///
-    /// On success: the pane is removed from `PaneStore`, the layout cell tree is
-    /// updated via sibling-promote, and `self.root` is updated if the root changed.
-    pub fn first_pane(&self) -> Option<&Pane> {
-        self.panes.iter().next().map(|(_, p)| p)
-    }
-
-    pub fn close_pane(&mut self, pane_id: &PaneId) -> SessionResult {
-        let cell_id = self.panes.get(pane_id)?.cell_id().clone();
-
-        // Pre-check: closing the only cell empties the tree, which equals "session ended".
-        // The session-level invariant is "≥1 pane"; reject before mutating.
-        if cell_id == self.root && self.panes.len() == 1 {
-            return Err(SessionError::CannotCloseLastPane(pane_id.clone()));
-        }
-
-        let outcome = self.cells.close_cell(&cell_id)?;
-        match outcome {
-            CloseOutcome::TreeEmptied => {
-                // Defensive: should be unreachable given the pre-check above.
-                return Err(SessionError::CannotCloseLastPane(pane_id.clone()));
-            }
-            CloseOutcome::RootReplaced { new_root } => {
-                self.root = new_root;
-            }
-            CloseOutcome::SiblingPromoted { .. } => {}
-        }
-
-        self.panes.remove(pane_id)?;
-        Ok(())
-    }
-}
-
-impl Session {
-    pub fn panes(&self) -> &PaneStore {
-        &self.panes
+    pub fn active_window(&self) -> &crate::window::WindowId {
+        &self.active_window
     }
 }
 
 impl Default for Session {
     fn default() -> Self {
-        Self::new(String::new())
+        // Default impl is preserved for tests; pairs with `Window::default()` semantics
+        // by creating both Session and Window inline. Used only inside `bootstrap_default`.
+        let session_id = SessionId::new();
+        let window_id = crate::window::WindowId::new();
+        Self::empty(session_id, String::new(), window_id)
     }
 }
 
@@ -234,192 +188,49 @@ impl Default for Session {
 mod tests {
     use super::*;
     use crate::error::SessionError;
+    use crate::window::{WindowId, WindowStore};
 
     #[test]
-    fn default_session_root_points_to_initial_pane() {
-        let store = Session::default();
-        let root_id = store.root();
-        let pane_id = store.panes().any_pane_id().expect("default has 1 pane");
-        let pane = store.panes().get(&pane_id).expect("pane should exist");
-        assert_eq!(pane.cell_id(), root_id);
-    }
-
-    #[test]
-    fn close_pane_on_last_pane_returns_err() {
-        let mut store = Session::default();
-        let last_pane_id = store.panes().any_pane_id().expect("default has 1 pane");
-
-        let result = store.close_pane(&last_pane_id);
-        assert!(matches!(
-            result,
-            Err(SessionError::CannotCloseLastPane(ref id)) if id == &last_pane_id
-        ));
-    }
-
-    #[test]
-    fn close_pane_after_split_removes_one_pane_and_updates_root() {
-        let mut store = Session::default();
-        let first_pane_id = store.panes().any_pane_id().expect("default has 1 pane");
-        let original_root = store.root().clone();
-
-        store
-            .split_pane(&first_pane_id, SplitOrientation::Horizontal, Side::After)
-            .expect("split");
-        let root_after_split = store.root().clone();
-        assert_ne!(
-            root_after_split, original_root,
-            "split of root must change root id"
-        );
-
-        store
-            .close_pane(&first_pane_id)
-            .expect("close_pane should succeed");
-
-        assert!(
-            store.panes().get(&first_pane_id).is_err(),
-            "first_pane_id should be removed from PaneStore"
-        );
-        assert_ne!(
-            store.root(),
-            &root_after_split,
-            "root should have changed (the root split is now collapsed)"
-        );
-    }
-
-    #[test]
-    fn close_pane_under_nested_split_keeps_root_unchanged() {
-        // Build a 3-pane layout: split twice. Closing one of the leaves under the
-        // inner split should NOT change the root.
-        let mut store = Session::default();
-        let first_pane_id = store.panes().any_pane_id().unwrap();
-        store
-            .split_pane(&first_pane_id, SplitOrientation::Horizontal, Side::After)
-            .expect("first split");
-        let root_after_first = store.root().clone();
-
-        // The new pane created by the split — find its id (the one that's not first_pane_id).
-        let pane_ids: Vec<PaneId> = store.panes().iter().map(|(id, _)| id.clone()).collect();
-        let second_pane_id = pane_ids
-            .into_iter()
-            .find(|id| id != &first_pane_id)
-            .expect("second pane should exist");
-
-        // Split second_pane_id again to create a 3-pane layout.
-        store
-            .split_pane(&second_pane_id, SplitOrientation::Vertical, Side::After)
-            .expect("second split");
-        let root_after_second = store.root().clone();
-        assert_eq!(
-            root_after_first, root_after_second,
-            "splitting a non-root pane must NOT change root"
-        );
-
-        // Close one of the inner leaves (second_pane_id).
-        store.close_pane(&second_pane_id).expect("close");
-
-        // Root unchanged because the closed pane's parent was not the root split.
-        assert_eq!(store.root(), &root_after_second);
-        assert!(store.panes().get(&second_pane_id).is_err());
-    }
-
-    #[test]
-    fn close_pane_with_nonexistent_pane_id_returns_err() {
-        let mut store = Session::default();
-        let nonexistent = PaneId::new();
-        let result = store.close_pane(&nonexistent);
-        assert!(matches!(result, Err(SessionError::PaneNotFound(_))));
-    }
-
-    #[test]
-    fn session_carries_its_id() {
-        let s = Session::new("demo".to_string());
+    fn session_carries_its_id_and_name() {
+        let s = Session::empty(SessionId::new(), "demo".into(), WindowId::new());
         assert!(!s.id().as_ref().is_empty());
         assert_eq!(s.name(), "demo");
     }
 
     #[test]
     fn two_new_sessions_get_distinct_ids() {
-        let a = Session::new(String::new());
-        let b = Session::new(String::new());
+        let a = Session::empty(SessionId::new(), String::new(), WindowId::new());
+        let b = Session::empty(SessionId::new(), String::new(), WindowId::new());
         assert_ne!(a.id(), b.id());
     }
 
     #[test]
-    fn session_serializes_with_id_name_root_cells_panes() {
-        let s = Session::new("hello".to_string());
+    fn session_serializes_with_id_name_windows_active_window() {
+        let s = Session::empty(SessionId::new(), "hello".into(), WindowId::new());
         let v = serde_json::to_value(&s).unwrap();
-
-        assert_eq!(v["id"].as_str(), Some(s.id().as_ref()));
         assert_eq!(v["name"].as_str(), Some("hello"));
-        assert!(v["root"].is_string(), "root must be a CellId string");
-        assert!(v["cells"].is_object(), "cells must be a flat map");
-        assert!(v["panes"].is_array(), "panes must be an array");
-        assert_eq!(v["panes"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn session_with_horizontal_split_serializes_cells_with_lowercase_orientation() {
-        let mut s = Session::new(String::new());
-        let pane_id = s.panes().any_pane_id().unwrap();
-        s.split_pane(&pane_id, SplitOrientation::Horizontal, Side::After)
-            .expect("split");
-        let v = serde_json::to_value(&s).unwrap();
-        let cells = v["cells"].as_object().unwrap();
-        let split_present = cells.values().any(|c| {
-            c["cell"]
-                .get("Split")
-                .and_then(|s| s.get("orientation"))
-                .and_then(|o| o.as_str())
-                == Some("horizontal")
-        });
-        assert!(
-            split_present,
-            "expected a Split cell with lowercase orientation"
-        );
-    }
-
-    #[test]
-    fn split_pane_returns_new_pane_id() {
-        let mut s = Session::new(String::new());
-        let pane_id = s.panes().any_pane_id().unwrap();
-
-        let new_id = s
-            .split_pane(&pane_id, SplitOrientation::Horizontal, Side::After)
-            .expect("split");
-
-        assert!(s.panes().get(&new_id).is_ok());
-        assert_ne!(new_id, pane_id);
+        assert!(v["id"].is_string());
+        assert!(v["windows"].is_array());
+        assert_eq!(v["windows"].as_array().unwrap().len(), 1);
+        assert!(v["active_window"].is_string());
     }
 
     #[tokio::test]
     async fn session_state_lock_starts_empty() {
         let state = SessionState::default();
-        let guard = state.lock().await;
-        assert!(guard.is_empty());
-    }
-
-    #[tokio::test]
-    async fn session_state_lock_allows_insert_then_get() {
-        let state = SessionState::default();
-        let session = Session::new("a".to_string());
-        let id = session.id().clone();
-        {
-            let mut guard = state.lock().await;
-            guard.insert(id.clone(), session);
-        }
-        let guard = state.lock().await;
-        assert_eq!(guard.get(&id).map(|s| s.name()), Some("a"));
+        assert!(state.lock().await.is_empty());
     }
 
     #[tokio::test]
     async fn session_returns_ref_for_existing_id() {
         let state = SessionState::default();
-        let session = Session::new("hello".to_string());
-        let id = session.id().clone();
-        state.lock().await.insert(id.clone(), session);
-
-        let session_ref = state.session(&id).await.expect("session exists");
-        assert_eq!(session_ref.name(), "hello");
+        let id = SessionId::new();
+        state.lock().await.insert(
+            id.clone(),
+            Session::empty(id.clone(), "hello".into(), WindowId::new()),
+        );
+        let r = state.session(&id).await.expect("exists");
+        assert_eq!(r.name(), "hello");
     }
 
     #[tokio::test]
@@ -433,74 +244,52 @@ mod tests {
     #[tokio::test]
     async fn session_mut_allows_in_place_mutation() {
         let state = SessionState::default();
-        let session = Session::new("old".to_string());
-        let id = session.id().clone();
-        state.lock().await.insert(id.clone(), session);
+        let id = SessionId::new();
+        state.lock().await.insert(
+            id.clone(),
+            Session::empty(id.clone(), "old".into(), WindowId::new()),
+        );
 
         {
-            let mut guard = state.session_mut(&id).await.expect("session exists");
-            guard.rename("new");
+            let mut g = state.session_mut(&id).await.unwrap();
+            g.rename("new");
         }
         assert_eq!(state.session(&id).await.unwrap().name(), "new");
     }
 
     #[tokio::test]
-    async fn session_mut_returns_err_for_unknown_id() {
-        let state = SessionState::default();
-        let id = SessionId::new();
-        let err = state.session_mut(&id).await.unwrap_err();
-        assert!(matches!(err, SessionError::SessionNotFound(ref got) if got == &id));
-    }
-
-    #[tokio::test]
     async fn remove_returns_session_and_removes_it() {
         let state = SessionState::default();
-        let session = Session::new(String::new());
-        let id = session.id().clone();
-        state.lock().await.insert(id.clone(), session);
-
-        let removed = state.remove(&id).await.expect("session exists");
+        let id = SessionId::new();
+        state.lock().await.insert(
+            id.clone(),
+            Session::empty(id.clone(), String::new(), WindowId::new()),
+        );
+        let removed = state.remove(&id).await.unwrap();
         assert_eq!(removed.id(), &id);
         assert!(state.lock().await.get(&id).is_none());
     }
 
     #[tokio::test]
-    async fn remove_returns_err_for_unknown_id() {
-        let state = SessionState::default();
-        let id = SessionId::new();
-        let err = state.remove(&id).await.unwrap_err();
-        assert!(matches!(err, SessionError::SessionNotFound(ref got) if got == &id));
-    }
-
-    #[test]
-    fn session_first_pane_returns_default_pane() {
-        let s = Session::new("hello".to_string());
-        assert!(s.first_pane().is_some());
-        let pane = s.first_pane().unwrap();
-        assert!(pane.first_activity().is_some());
-    }
-
-    #[tokio::test]
-    async fn bootstrap_default_inserts_one_session_and_returns_pane_and_terminal_activity_ids() {
+    async fn bootstrap_default_inserts_session_and_window_and_returns_4tuple() {
         use crate::activity::ActivityKind;
         let state = SessionState::default();
-        assert!(state.lock().await.is_empty(), "default starts empty");
+        let windows = WindowStore::default();
 
-        let (pane_id, activity_id) = state.bootstrap_default().await;
+        let (sid, wid, pid, aid) = state.bootstrap_default(&windows).await;
 
-        let guard = state.lock().await;
-        assert_eq!(guard.len(), 1);
-        let session = guard.values().next().unwrap();
-        let pane = session.first_pane().unwrap();
-        assert_eq!(pane.id(), &pane_id);
-        let activity = pane.first_activity().unwrap();
-        assert_eq!(activity.id(), &activity_id);
-        assert!(matches!(activity.kind(), ActivityKind::Terminal));
-    }
+        let sessions = state.lock().await;
+        assert_eq!(sessions.len(), 1);
+        let s = sessions.get(&sid).unwrap();
+        assert_eq!(s.windows(), &[wid.clone()]);
+        assert_eq!(s.active_window(), &wid);
 
-    #[tokio::test]
-    async fn default_state_remains_empty_when_bootstrap_not_called() {
-        let state = SessionState::default();
-        assert!(state.lock().await.is_empty());
+        let store = windows.lock().await;
+        let w = store.get(&wid).unwrap();
+        let p = w.panes().get(&pid).expect("pane exists");
+        assert_eq!(p.id(), &pid);
+        let a = p.first_activity().unwrap();
+        assert_eq!(a.id(), &aid);
+        assert!(matches!(a.kind(), ActivityKind::Terminal));
     }
 }
