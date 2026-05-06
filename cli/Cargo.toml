@@ -11,9 +11,5 @@ name = "ozmux"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 anyhow = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-clap = { version = "4.6", features = ["derive"] }
-interprocess = { workspace = true }
