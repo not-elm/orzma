@@ -1,0 +1,17 @@
+[package]
+name = "daemon_bootstrap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "daemon_bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+ozmux_http_server = { path = "../http_server" }
+ozmux_extension_host = { path = "../extension_host" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing-subscriber = { workspace = true }

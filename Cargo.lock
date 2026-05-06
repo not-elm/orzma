@@ -245,6 +245,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "daemon_bootstrap"
+version = "0.1.0"
+dependencies = [
+ "ozmux_extension_host",
+ "ozmux_http_server",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -695,7 +705,6 @@ dependencies = [
  "tokio-tungstenite",
  "tower",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

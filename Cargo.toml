@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "cli",
+  "daemon/bootstrap",
   "daemon/macros",
   "daemon/session",
   "daemon/terminal",
