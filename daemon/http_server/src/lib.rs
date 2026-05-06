@@ -44,12 +44,14 @@ impl FromRef<AppState> for TerminalService {
 }
 
 pub async fn serve(state: AppState) -> HttpResult {
-    let (pane_id, activity_id) = state.sessions.bootstrap_default().await;
-    state
+    let (sid, wid, pid, aid) = state.sessions.bootstrap_default(&state.windows).await;
+    if let Err(e) = state
         .terminal
         .spawn(
-            activity_id,
-            pane_id,
+            aid,
+            pid,
+            wid,
+            sid,
             ozmux_terminal::SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -57,7 +59,11 @@ pub async fn serve(state: AppState) -> HttpResult {
                 cwd: None,
             },
         )
-        .await?;
+        .await
+    {
+        // Bootstrap PTY spawn failure must not yield a half-initialized server.
+        panic!("bootstrap PTY spawn failed: {e}");
+    }
 
     let listener = TcpListener::bind("127.0.0.1:3200")
         .await
@@ -114,20 +120,19 @@ fn activities_router() -> Router<AppState> {
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
     use axum::Router;
-    use ozmux_session::SessionState;
+    use ozmux_session::{SessionState, WindowStore};
     use ozmux_terminal::TerminalService;
 
     pub fn daemon_router_for_test(state: AppState) -> Router {
         daemon_router(state)
     }
 
-    /// Build a router from just a `SessionState`, supplying a default
-    /// `TerminalService`. Used by sessions/pane/split tests that don't
-    /// exercise the WS endpoint.
-    pub fn router_with_sessions(sessions: SessionState) -> Router {
+    /// Build a router from a `SessionState` + `WindowStore`, supplying a default
+    /// `TerminalService`. Used by handler tests that don't exercise the WS endpoint.
+    pub fn router_with_state(sessions: SessionState, windows: WindowStore) -> Router {
         daemon_router(AppState {
             sessions,
-            windows: Default::default(),
+            windows,
             terminal: TerminalService::default(),
         })
     }
