@@ -16,6 +16,7 @@ pub mod cell;
 pub mod error;
 pub mod pane;
 pub mod window;
+pub mod window_service;
 
 pub use error::{SessionError, SessionResult};
 pub use window::{Window, WindowId, WindowStore};
