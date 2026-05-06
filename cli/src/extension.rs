@@ -16,12 +16,12 @@ impl CommandExecutor for ExtensionCommand {
         let name = socket_path.to_fs_name::<GenericFilePath>()?;
         let mut conn = ConnectOptions::new().name(name).connect_tokio().await?;
 
-        let message = serde_json::to_vec(&serde_json::json!({
-            "type": "run",
+        let request = serde_json::to_vec(&serde_json::json!({
+            "type": "executeCommand",
             "command": self.command,
             "argv": self.argv,
         }))?;
-        conn.write_all(&message).await?;
+        conn.write_all(&request).await?;
         conn.write_all(b"\n").await?;
 
         let mut reader = BufReader::new(conn);
