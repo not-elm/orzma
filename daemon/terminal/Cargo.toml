@@ -7,3 +7,9 @@ readme.workspace = true
 authors.workspace = true
 
 [dependencies]
+ozmux_session = { path = "../session" }
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+portable-pty = { workspace = true }

@@ -3,9 +3,11 @@ resolver = "2"
 members = [
   "cli",
   "daemon/core",
-  "daemon/extension-host",
-  "daemon/http_server",
+  "daemon/macros",
+  "daemon/session",
   "daemon/terminal",
+  "daemon/extension_host",
+  "daemon/http_server",
 ]
 
 [workspace.package]
@@ -22,3 +24,9 @@ thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 interprocess = { version = "2.4", features = ["tokio", "async"] }
+axum = { version = "0.8", features = ["ws"] }
+portable-pty = "0.9"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }

@@ -6,4 +6,24 @@ license.workspace = true
 readme.workspace = true
 authors.workspace = true
 
+[[bin]]
+name = "ozmux_http_server"
+path = "src/main.rs"
+
 [dependencies]
+ozmux_session = { path = "../session" }
+ozmux_terminal = { path = "../terminal" }
+ozmux_extension_host = { path = "../extension_host" }
+axum = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio-tungstenite = "0.29"
