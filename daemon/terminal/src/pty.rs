@@ -6,7 +6,8 @@ use ozmux_session::activity::ActivityId;
 use ozmux_session::pane::PaneId;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Read, sync::Arc};
+use std::{collections::HashMap, io::Read, path::Path, sync::Arc};
+use tempfile::TempDir;
 use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
 pub(crate) mod pty_handle;
@@ -21,6 +22,7 @@ pub enum TerminalEvent {
 #[derive(Default, Clone)]
 pub struct TerminalService {
     ptys: Arc<RwLock<HashMap<ActivityId, PtyHandle>>>,
+    extension_wrappers: Option<Arc<TempDir>>,
 }
 
 pub struct SpawnOptions {
@@ -31,6 +33,20 @@ pub struct SpawnOptions {
 }
 
 impl TerminalService {
+    pub fn with_extension_wrappers(wrappers: Arc<TempDir>) -> Self {
+        Self {
+            ptys: Arc::new(RwLock::new(HashMap::new())),
+            extension_wrappers: Some(wrappers),
+        }
+    }
+
+    fn prepend_to_path(dir: &Path) -> String {
+        match std::env::var("PATH") {
+            Ok(p) if !p.is_empty() => format!("{}:{}", dir.display(), p),
+            _ => dir.display().to_string(),
+        }
+    }
+
     pub async fn spawn(
         &self,
         activity_id: ActivityId,
@@ -61,6 +77,9 @@ impl TerminalService {
         }
         cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
         cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
+        if let Some(wrappers) = &self.extension_wrappers {
+            cmd.env("PATH", Self::prepend_to_path(wrappers.path()));
+        }
         let child = pty_pair.slave.spawn_command(cmd).to_terminal_result()?;
         let killer = child.clone_killer();
         // Drop slave fd in this process so EOF propagates when shell exits.
@@ -317,5 +336,60 @@ mod tests {
             s.contains("race_free_marker"),
             "expected marker in output, got: {s}"
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_with_extension_wrappers_prepends_path() {
+        use std::sync::Arc;
+
+        let temp = Arc::new(tempfile::tempdir().unwrap());
+        let temp_path = temp.path().to_path_buf();
+        let svc = TerminalService::with_extension_wrappers(Arc::clone(&temp));
+        let activity_id = ActivityId::new();
+        let pane_id = PaneId::new();
+        svc.spawn(
+            activity_id.clone(),
+            pane_id,
+            SpawnOptions {
+                cols: 80, rows: 24, shell: "/bin/sh".to_string(), cwd: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity_id).await.unwrap();
+        svc.write(&activity_id, b"echo PATHHEAD=\"$PATH\"\n").await.unwrap();
+
+        let needle = format!("PATHHEAD={}", temp_path.display());
+        let mut got = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(TerminalEvent::Data { buffer })) => {
+                    got.extend_from_slice(&buffer);
+                    if got.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                        break;
+                    }
+                }
+                Ok(Ok(TerminalEvent::Exit { .. })) => break,
+                Ok(Err(_)) => break,
+                Err(_) => continue,
+            }
+        }
+        svc.kill(&activity_id).await.unwrap();
+        let s = String::from_utf8_lossy(&got);
+        assert!(s.contains(&needle), "expected `{needle}` in output, got: {s}");
+    }
+
+    #[tokio::test]
+    async fn extension_wrappers_arc_keeps_tempdir_alive_until_service_dropped() {
+        use std::sync::Arc;
+        let temp = Arc::new(tempfile::tempdir().unwrap());
+        let path = temp.path().to_path_buf();
+        let svc = TerminalService::with_extension_wrappers(Arc::clone(&temp));
+        drop(temp);
+        assert!(path.exists(), "Arc inside service keeps TempDir alive");
+        drop(svc);
+        assert!(!path.exists(), "service drop releases last Arc → TempDir Drop");
     }
 }
