@@ -6,15 +6,33 @@ use std::{collections::HashMap, path::Path};
 pub struct ExtensionCommands(HashMap<CommandName, CommandScriptPath>);
 
 impl ExtensionCommands {
+    /// Load all extensions from `OZMUX_EXTENSION_DIR`. Returns an
+    /// empty set if the env var is unset (or set to non-UTF-8).
     pub async fn load() -> ExtensionResult<Self> {
+        let root = std::env::var("OZMUX_EXTENSION_DIR").ok();
+        Self::load_from(root.as_deref().map(std::path::Path::new)).await
+    }
+
+    /// Load extensions from a specific directory (or `None` = empty).
+    /// Per-extension parse failures are skipped silently. Invalid
+    /// command names and duplicates are warn-logged.
+    pub async fn load_from(extension_root: Option<&std::path::Path>) -> ExtensionResult<Self> {
         let mut commands = HashMap::default();
-        let extension_root = match std::env::var("OZMUX_EXTENSION_DIR") {
-            Ok(root) => root,
-            Err(_) => return Ok(Self(commands)), // Missing env var is not an error
+        let Some(root) = extension_root else {
+            return Ok(Self(commands));
         };
-        for entry in std::fs::read_dir(&extension_root)?.filter_map(|r| r.ok()) {
-            if let Some(manifest) = load_manifest(&entry.path()) {
-                commands.extend(manifest.commands);
+        for entry in std::fs::read_dir(root)?.filter_map(|r| r.ok()) {
+            let Some(manifest) = load_manifest(&entry.path()) else {
+                continue;
+            };
+            for (name, script) in manifest.commands {
+                if !is_valid_command_name(name.as_ref()) {
+                    tracing::warn!(name = %name, "extension command name has invalid characters; skipping");
+                    continue;
+                }
+                if commands.insert(name.clone(), script).is_some() {
+                    tracing::warn!(name = %name, "duplicate extension command name; later one overrides");
+                }
             }
         }
         Ok(Self(commands))
@@ -32,6 +50,14 @@ impl ExtensionCommands {
             Self::set_executable(&wrapper_path)?;
         }
         Ok(dir)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&CommandName, &CommandScriptPath)> {
+        self.0.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     fn wrapper_body(script: &CommandScriptPath) -> String {
@@ -222,5 +248,54 @@ mod tests {
         assert!(!is_valid_command_name("a b"));
         assert!(!is_valid_command_name("hello!"));
         assert!(!is_valid_command_name("a@b"));
+    }
+
+    #[tokio::test]
+    async fn load_from_returns_empty_when_dir_is_none() {
+        let commands = ExtensionCommands::load_from(None).await.unwrap();
+        assert!(commands.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_from_reads_ozmux_json_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let ext_dir = temp.path().join("memo");
+        std::fs::create_dir(&ext_dir).unwrap();
+        std::fs::write(
+            ext_dir.join("ozmux.json"),
+            r#"{"commands":{"settings":"/abs/settings.js"}}"#,
+        ).unwrap();
+        let commands = ExtensionCommands::load_from(Some(temp.path())).await.unwrap();
+        assert_eq!(commands.iter().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn load_from_skips_invalid_command_names() {
+        let temp = tempfile::tempdir().unwrap();
+        let ext_dir = temp.path().join("evil");
+        std::fs::create_dir(&ext_dir).unwrap();
+        std::fs::write(
+            ext_dir.join("ozmux.json"),
+            r#"{"commands":{"../../etc/passwd":"/x.js","":"/y.js","good":"/z.js"}}"#,
+        ).unwrap();
+        let commands = ExtensionCommands::load_from(Some(temp.path())).await.unwrap();
+        let names: Vec<String> = commands.iter().map(|(n, _)| n.as_ref().to_string()).collect();
+        assert_eq!(names, vec!["good".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn load_from_handles_duplicate_command_names_with_one_winner() {
+        let temp = tempfile::tempdir().unwrap();
+        for ext in ["a", "b"] {
+            let ext_dir = temp.path().join(ext);
+            std::fs::create_dir(&ext_dir).unwrap();
+            std::fs::write(
+                ext_dir.join("ozmux.json"),
+                r#"{"commands":{"shared":"/some.js"}}"#,
+            ).unwrap();
+        }
+        let commands = ExtensionCommands::load_from(Some(temp.path())).await.unwrap();
+        // 重複した name は 1 件にまとまる（warn ログは出るが値は last-write-wins）
+        assert_eq!(commands.iter().count(), 1);
     }
 }
