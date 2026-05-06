@@ -158,7 +158,7 @@ impl WindowService {
 impl WindowService {
     /// Split a pane within a window. Caller pre-generates `new_pane_id` so the
     /// PTY spawn can use it before the state mutation; if spawn fails, the
-    /// caller invokes [`close_pane`] to roll back.
+    /// caller invokes [`Self::close_pane`] to roll back.
     pub async fn split_pane(
         &self,
         session_id: SessionId,
