@@ -66,7 +66,10 @@ pub fn daemon_router(state: AppState) -> Router {
 
 fn sessions_router() -> Router<AppState> {
     Router::new()
-        .route("/", get(handlers::sessions::list).post(handlers::sessions::create))
+        .route(
+            "/",
+            get(handlers::sessions::list).post(handlers::sessions::create),
+        )
         .nest("/{session_id}", session_id_router())
 }
 
@@ -88,7 +91,10 @@ fn pane_id_router() -> Router<AppState> {
 }
 
 fn activities_router() -> Router<AppState> {
-    Router::new().route("/{activity_id}/terminal/ws", get(handlers::activities::terminal_ws))
+    Router::new().route(
+        "/{activity_id}/terminal/ws",
+        get(handlers::activities::terminal_ws),
+    )
 }
 
 #[cfg(test)]

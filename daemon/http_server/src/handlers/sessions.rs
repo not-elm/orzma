@@ -1,11 +1,11 @@
 use crate::error::HttpResult;
-use ozmux_session::{Session, SessionId, SessionState};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
+use ozmux_session::{Session, SessionId, SessionState};
 use serde::{Deserialize, Serialize};
 
 pub mod pane;
@@ -81,9 +81,9 @@ pub async fn delete(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_session::Session;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use ozmux_session::Session;
     use tower::ServiceExt;
 
     use crate::test_helpers::router_with_sessions as router_with;

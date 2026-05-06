@@ -141,7 +141,10 @@ impl TerminalService {
     }
 
     #[inline]
-    async fn read(&self, activity_id: &ActivityId) -> TerminalResult<RwLockReadGuard<'_, PtyHandle>> {
+    async fn read(
+        &self,
+        activity_id: &ActivityId,
+    ) -> TerminalResult<RwLockReadGuard<'_, PtyHandle>> {
         let guard = self.ptys.read().await;
         RwLockReadGuard::try_map(guard, |ptys| ptys.get(activity_id))
             .map_err(|_| TerminalError::ActivityNotFound(activity_id.clone()))
@@ -258,19 +261,12 @@ mod tests {
 
         let mut got = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-        let needle = format!(
-            "ACT={} PANE={}",
-            activity_id.as_ref(),
-            pane_id.as_ref()
-        );
+        let needle = format!("ACT={} PANE={}", activity_id.as_ref(), pane_id.as_ref());
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
                 Ok(Ok(TerminalEvent::Data { buffer })) => {
                     got.extend_from_slice(&buffer);
-                    if got
-                        .windows(needle.len())
-                        .any(|w| w == needle.as_bytes())
-                    {
+                    if got.windows(needle.len()).any(|w| w == needle.as_bytes()) {
                         break;
                     }
                 }
@@ -351,14 +347,19 @@ mod tests {
             activity_id.clone(),
             pane_id,
             SpawnOptions {
-                cols: 80, rows: 24, shell: "/bin/sh".to_string(), cwd: None,
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
             },
         )
         .await
         .unwrap();
 
         let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity_id).await.unwrap();
-        svc.write(&activity_id, b"echo PATHHEAD=\"$PATH\"\n").await.unwrap();
+        svc.write(&activity_id, b"echo PATHHEAD=\"$PATH\"\n")
+            .await
+            .unwrap();
 
         let needle = format!("PATHHEAD={}", temp_path.display());
         let mut got = Vec::new();
@@ -378,7 +379,10 @@ mod tests {
         }
         svc.kill(&activity_id).await.unwrap();
         let s = String::from_utf8_lossy(&got);
-        assert!(s.contains(&needle), "expected `{needle}` in output, got: {s}");
+        assert!(
+            s.contains(&needle),
+            "expected `{needle}` in output, got: {s}"
+        );
     }
 
     #[tokio::test]
@@ -390,6 +394,9 @@ mod tests {
         drop(temp);
         assert!(path.exists(), "Arc inside service keeps TempDir alive");
         drop(svc);
-        assert!(!path.exists(), "service drop releases last Arc → TempDir Drop");
+        assert!(
+            !path.exists(),
+            "service drop releases last Arc → TempDir Drop"
+        );
     }
 }

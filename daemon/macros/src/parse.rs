@@ -50,9 +50,7 @@ impl FromMeta for NewVariant {
             ));
         };
         let ident: syn::Ident = syn::parse2(list.tokens.clone()).map_err(|_| {
-            darling::Error::custom(
-                "new requires one of: uuid_v4_string, uuid_v4, default",
-            )
+            darling::Error::custom("new requires one of: uuid_v4_string, uuid_v4, default")
         })?;
         match ident.to_string().as_str() {
             "uuid_v4_string" => Ok(NewVariant::UuidV4String),

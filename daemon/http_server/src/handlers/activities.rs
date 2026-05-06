@@ -1,5 +1,3 @@
-use ozmux_terminal::{TerminalEvent, TerminalService};
-use ozmux_session::activity::ActivityId;
 use axum::{
     extract::{
         Path, State, WebSocketUpgrade,
@@ -11,6 +9,8 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
+use ozmux_session::activity::ActivityId;
+use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
@@ -164,8 +164,8 @@ async fn close_with_reason(ws_tx: &mut WsSink, reason: &'static str, lagged: u64
 mod tests {
     use super::*;
     use crate::AppState;
-    use ozmux_terminal::SpawnOptions;
     use futures_util::{SinkExt, StreamExt};
+    use ozmux_terminal::SpawnOptions;
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::Message as TtMessage;

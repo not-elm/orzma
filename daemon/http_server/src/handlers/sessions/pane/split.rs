@@ -1,11 +1,11 @@
 use crate::error::HttpResult;
-use ozmux_session::cell::{Side, SplitOrientation};
-use ozmux_session::pane::PaneId;
-use ozmux_session::{SessionId, SessionState};
 use axum::{
     Json,
     extract::{Path, State},
 };
+use ozmux_session::cell::{Side, SplitOrientation};
+use ozmux_session::pane::PaneId;
+use ozmux_session::{SessionId, SessionState};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -31,9 +31,9 @@ pub async fn split(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_session::Session;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use ozmux_session::Session;
     use tower::ServiceExt;
 
     use crate::test_helpers::router_with_sessions as router_with;

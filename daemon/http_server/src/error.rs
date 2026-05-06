@@ -22,12 +22,24 @@ impl axum::response::IntoResponse for HttpError {
     fn into_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
         let (status, code) = match &self {
-            HttpError::Session(SessionError::SessionNotFound(_))      => (StatusCode::NOT_FOUND, "SESSION_NOT_FOUND"),
-            HttpError::Session(SessionError::PaneNotFound(_))         => (StatusCode::NOT_FOUND, "PANE_NOT_FOUND"),
-            HttpError::Session(SessionError::CellNotFound(_))         => (StatusCode::NOT_FOUND, "CELL_NOT_FOUND"),
-            HttpError::Session(SessionError::InvalidCellType(_))      => (StatusCode::BAD_REQUEST, "INVALID_CELL_TYPE"),
-            HttpError::Session(SessionError::CannotCloseLastPane(_))  => (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_PANE"),
-            HttpError::Terminal(TerminalError::ActivityNotFound(_))   => (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND"),
+            HttpError::Session(SessionError::SessionNotFound(_)) => {
+                (StatusCode::NOT_FOUND, "SESSION_NOT_FOUND")
+            }
+            HttpError::Session(SessionError::PaneNotFound(_)) => {
+                (StatusCode::NOT_FOUND, "PANE_NOT_FOUND")
+            }
+            HttpError::Session(SessionError::CellNotFound(_)) => {
+                (StatusCode::NOT_FOUND, "CELL_NOT_FOUND")
+            }
+            HttpError::Session(SessionError::InvalidCellType(_)) => {
+                (StatusCode::BAD_REQUEST, "INVALID_CELL_TYPE")
+            }
+            HttpError::Session(SessionError::CannotCloseLastPane(_)) => {
+                (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_PANE")
+            }
+            HttpError::Terminal(TerminalError::ActivityNotFound(_)) => {
+                (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
+            }
             // SplitTargetEqualsNewCell, Terminal::Pty, FailedLaunch fallthrough → 500
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
         };
@@ -44,11 +56,11 @@ mod tests {
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+    use ozmux_session::activity::ActivityId;
+    use ozmux_session::cell::CellId;
     use ozmux_session::error::SessionError;
     use ozmux_session::pane::PaneId;
-    use ozmux_session::cell::CellId;
     use ozmux_terminal::TerminalError;
-    use ozmux_session::activity::ActivityId;
 
     #[tokio::test]
     async fn session_not_found_maps_to_404_with_code() {

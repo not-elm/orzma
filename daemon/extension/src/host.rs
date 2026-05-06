@@ -1,8 +1,8 @@
-use interprocess::local_socket::{ListenerOptions, Name, tokio::prelude::*};
-#[cfg(target_os = "linux")]
-use interprocess::local_socket::{GenericNamespaced, NameType, ToNsName};
 #[cfg(not(target_os = "linux"))]
 use interprocess::local_socket::{GenericFilePath, ToFsName};
+#[cfg(target_os = "linux")]
+use interprocess::local_socket::{GenericNamespaced, NameType, ToNsName};
+use interprocess::local_socket::{ListenerOptions, Name, tokio::prelude::*};
 use ozmux_session::SessionState;
 
 use crate::error::ExtensionResult;

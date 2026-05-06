@@ -48,12 +48,9 @@ pub fn derive_new_type(input: TokenStream) -> TokenStream {
     let unnamed = match &data_struct.fields {
         Fields::Unnamed(f) => f,
         Fields::Named(_) | Fields::Unit => {
-            return syn::Error::new_spanned(
-                &input.ident,
-                "NewType requires a tuple struct",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(&input.ident, "NewType requires a tuple struct")
+                .to_compile_error()
+                .into();
         }
     };
 
