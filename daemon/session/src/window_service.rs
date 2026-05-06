@@ -6,6 +6,7 @@
 
 use crate::{
     SessionId, SessionState,
+    activity::ActivityId,
     error::{SessionError, SessionResult},
     window::{Window, WindowId, WindowStore},
 };
@@ -19,6 +20,36 @@ pub struct WindowService {
 impl WindowService {
     pub fn new(sessions: SessionState, windows: WindowStore) -> Self {
         Self { sessions, windows }
+    }
+}
+
+impl WindowService {
+    /// Create a new window in the given session.
+    /// Lock order: SessionState -> WindowStore.
+    pub async fn create(
+        &self,
+        session_id: SessionId,
+        name: Option<String>,
+    ) -> SessionResult<Window> {
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+
+        let window_id = WindowId::new();
+        let assigned_name =
+            name.unwrap_or_else(|| format!("window-{}", session.windows.len() + 1));
+        let window = Window::new(window_id.clone(), session_id.clone(), assigned_name);
+
+        session.windows.push(window_id.clone());
+
+        let mut win_store = self.windows.lock().await;
+        win_store.insert(window_id.clone(), window);
+        let cloned = win_store
+            .get(&window_id)
+            .expect("just inserted")
+            .clone_for_response();
+        Ok(cloned)
     }
 }
 
