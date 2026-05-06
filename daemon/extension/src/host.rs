@@ -1,7 +1,8 @@
-use interprocess::local_socket::{
-    GenericFilePath, GenericNamespaced, ListenerOptions, Name, NameType, ToFsName, ToNsName,
-    tokio::prelude::*,
-};
+use interprocess::local_socket::{ListenerOptions, Name, tokio::prelude::*};
+#[cfg(target_os = "linux")]
+use interprocess::local_socket::{GenericNamespaced, NameType, ToNsName};
+#[cfg(not(target_os = "linux"))]
+use interprocess::local_socket::{GenericFilePath, ToFsName};
 use ozmux_session::SessionState;
 
 use crate::error::ExtensionResult;
@@ -31,15 +32,24 @@ async fn run(_sessions: SessionState) -> ExtensionResult {
     }
 }
 
+const SOCKET_NAME: &str = "ozmux-extension-host.sock";
+
+#[cfg(target_os = "linux")]
 fn resolve_socket_name() -> std::io::Result<Name<'static>> {
-    const SOCKET_NAME: &str = "ozmux-extension-host.sock";
-    if GenericNamespaced::is_supported() {
-        SOCKET_NAME.to_ns_name::<GenericNamespaced>()
-    } else {
-        let path = std::env::temp_dir().join(SOCKET_NAME);
-        if std::fs::exists(&path)? {
-            std::fs::remove_file(&path)?;
-        }
-        path.to_fs_name::<GenericFilePath>()
-    }
+    // Linux abstract namespace sockets are ephemeral (vanish when the
+    // last fd closes), so no filesystem cleanup is needed.
+    SOCKET_NAME.to_ns_name::<GenericNamespaced>()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn resolve_socket_name() -> std::io::Result<Name<'static>> {
+    // On non-Linux Unix (notably macOS), `GenericNamespaced::is_supported()`
+    // returns true but interprocess maps the namespaced name to a real
+    // file at `/tmp/<name>` that survives process exit and breaks the
+    // next bind with EADDRINUSE. Use an explicit filesystem path so we
+    // know exactly where the socket lives and can clean it up before
+    // binding.
+    let path = std::env::temp_dir().join(SOCKET_NAME);
+    let _ = std::fs::remove_file(&path);
+    path.to_fs_name::<GenericFilePath>()
 }
