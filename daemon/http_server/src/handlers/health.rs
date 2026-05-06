@@ -6,7 +6,7 @@ pub async fn check() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use crate::http::daemon_router;
+    use crate::daemon_router;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -15,7 +15,7 @@ mod tests {
 
     #[tokio::test]
     async fn check_health() {
-        let response = daemon_router(crate::http::AppState::default())
+        let response = daemon_router(crate::AppState::default())
             .oneshot(
                 Request::builder()
                     .uri("/health")

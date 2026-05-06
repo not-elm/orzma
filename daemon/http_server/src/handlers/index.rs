@@ -20,7 +20,7 @@ pub async fn handler() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use crate::http::daemon_router;
+    use crate::daemon_router;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -30,7 +30,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[tokio::test]
     async fn debug_build_redirects_to_vite_dev() {
-        let response = daemon_router(crate::http::AppState::default())
+        let response = daemon_router(crate::AppState::default())
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -50,7 +50,7 @@ mod tests {
     async fn release_build_returns_html() {
         use http_body_util::BodyExt;
 
-        let response = daemon_router(crate::http::AppState::default())
+        let response = daemon_router(crate::AppState::default())
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();

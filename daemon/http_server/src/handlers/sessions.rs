@@ -1,4 +1,4 @@
-use crate::error::OzmuxResult;
+use crate::error::HttpResult;
 use ozmux_session::{Session, SessionId, SessionState};
 use axum::{
     Json,
@@ -50,7 +50,7 @@ pub async fn list(State(state): State<SessionState>) -> Json<serde_json::Value> 
 pub async fn get_session(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
-) -> OzmuxResult<Json<serde_json::Value>> {
+) -> HttpResult<Json<serde_json::Value>> {
     let session = state.session(&session_id).await?;
     Ok(session_json(&session))
 }
@@ -64,7 +64,7 @@ pub async fn rename(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
     Json(req): Json<RenameRequest>,
-) -> OzmuxResult<Json<serde_json::Value>> {
+) -> HttpResult<Json<serde_json::Value>> {
     let mut session = state.session_mut(&session_id).await?;
     session.rename(req.name);
     Ok(session_json(&session))
@@ -73,7 +73,7 @@ pub async fn rename(
 pub async fn delete(
     State(state): State<SessionState>,
     Path(session_id): Path<SessionId>,
-) -> OzmuxResult<StatusCode> {
+) -> HttpResult<StatusCode> {
     state.remove(&session_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -86,7 +86,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    use crate::http::test_helpers::router_with_sessions as router_with;
+    use crate::test_helpers::router_with_sessions as router_with;
 
     #[tokio::test]
     async fn list_returns_empty_when_no_sessions() {

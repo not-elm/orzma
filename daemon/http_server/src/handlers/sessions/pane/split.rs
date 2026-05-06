@@ -1,4 +1,4 @@
-use crate::error::OzmuxResult;
+use crate::error::HttpResult;
 use ozmux_session::cell::{Side, SplitOrientation};
 use ozmux_session::pane::PaneId;
 use ozmux_session::{SessionId, SessionState};
@@ -19,7 +19,7 @@ pub async fn split(
     State(state): State<SessionState>,
     Path((session_id, pane_id)): Path<(SessionId, PaneId)>,
     Json(req): Json<SplitRequest>,
-) -> OzmuxResult<Json<serde_json::Value>> {
+) -> HttpResult<Json<serde_json::Value>> {
     let mut session = state.session_mut(&session_id).await?;
     let new_pane_id = session.split_pane(&pane_id, req.orientation, req.side)?;
     Ok(Json(serde_json::json!({
@@ -36,7 +36,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    use crate::http::test_helpers::router_with_sessions as router_with;
+    use crate::test_helpers::router_with_sessions as router_with;
 
     #[tokio::test]
     async fn split_horizontal_returns_new_pane_id_and_full_session() {

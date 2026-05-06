@@ -1,7 +1,7 @@
 pub mod split;
 
 use super::session_json;
-use crate::error::OzmuxResult;
+use crate::error::HttpResult;
 use ozmux_session::pane::PaneId;
 use ozmux_session::{SessionId, SessionState};
 use axum::{
@@ -12,7 +12,7 @@ use axum::{
 pub async fn close(
     State(state): State<SessionState>,
     Path((session_id, pane_id)): Path<(SessionId, PaneId)>,
-) -> OzmuxResult<Json<serde_json::Value>> {
+) -> HttpResult<Json<serde_json::Value>> {
     let mut session = state.session_mut(&session_id).await?;
     session.close_pane(&pane_id)?;
     Ok(session_json(&session))
@@ -27,7 +27,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    use crate::http::test_helpers::router_with_sessions as router_with;
+    use crate::test_helpers::router_with_sessions as router_with;
 
     #[tokio::test]
     async fn close_returns_updated_session() {

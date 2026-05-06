@@ -9,6 +9,7 @@ ozmux_macros = { path = "../macros" }
 ozmux_session = { path = "../session" }
 ozmux_extension_host = { path = "../extension_host" }
 ozmux_terminal = { path = "../terminal" }
+ozmux_http_server = { path = "../http_server" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

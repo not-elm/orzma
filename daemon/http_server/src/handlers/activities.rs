@@ -163,7 +163,7 @@ async fn close_with_reason(ws_tx: &mut WsSink, reason: &'static str, lagged: u64
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::AppState;
+    use crate::AppState;
     use ozmux_terminal::SpawnOptions;
     use futures_util::{SinkExt, StreamExt};
     use std::time::Duration;
@@ -189,7 +189,7 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let app = crate::http::test_helpers::daemon_router_for_test(state.clone());
+        let app = crate::test_helpers::daemon_router_for_test(state.clone());
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });

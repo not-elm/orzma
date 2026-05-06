@@ -1,8 +1,4 @@
-use crate::http::AppState;
 pub use ozmux_macros::define_string_new_type;
-
-mod error;
-mod http;
 
 #[tokio::main]
 async fn main() {
@@ -12,7 +8,7 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("ozmux_core=info,warn")),
         )
         .init();
-    let state = AppState::default();
+    let state = ozmux_http_server::AppState::default();
     ozmux_extension_host::serve(state.sessions.clone());
-    http::serve(state).await.unwrap();
+    ozmux_http_server::serve(state).await.unwrap();
 }
