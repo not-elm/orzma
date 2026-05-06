@@ -156,6 +156,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["id"].as_str(), Some(wid.as_ref()));
+        assert_eq!(v["name"].as_str(), Some("main"));
+        assert_eq!(v["session_id"].as_str(), Some(sid.as_ref()));
+        assert!(v["panes"].is_array());
     }
 
     #[tokio::test]
@@ -251,5 +257,36 @@ mod tests {
         // Session.active_window should now be the new window.
         let g = sessions.lock().await;
         assert_eq!(g.get(&sid).unwrap().active_window(), new_window.id());
+    }
+
+    #[tokio::test]
+    async fn delete_non_last_window_returns_204_and_removes_it() {
+        let sessions = SessionState::default();
+        let windows = WindowStore::default();
+        let (sid, _wid_default, _, _) = sessions.bootstrap_default(&windows).await;
+
+        // Create a 2nd window via the service so the session has 2.
+        let svc = WindowService::new(sessions.clone(), windows.clone());
+        let new_window = svc
+            .create(sid.clone(), Some("logs".into()))
+            .await
+            .expect("create");
+        let new_wid = new_window.id().clone();
+
+        let resp = router_with(sessions.clone(), windows.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/sessions/{}/windows/{}", sid, new_wid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        // Verify the deleted window is gone from WindowStore.
+        let store = windows.lock().await;
+        assert!(store.get(&new_wid).is_none());
     }
 }
