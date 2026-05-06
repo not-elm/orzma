@@ -264,4 +264,41 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["name"].as_str(), Some("new"));
     }
+
+    #[tokio::test]
+    async fn rename_unknown_id_returns_404() {
+        let resp = router_with(SessionState::default(), WindowStore::default())
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/sessions/missing")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"x"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"].as_str(), Some("SESSION_NOT_FOUND"));
+    }
+
+    #[tokio::test]
+    async fn delete_unknown_id_returns_404() {
+        let resp = router_with(SessionState::default(), WindowStore::default())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/sessions/nope")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"].as_str(), Some("SESSION_NOT_FOUND"));
+    }
 }
