@@ -75,7 +75,6 @@ impl Pane {
         }
     }
 
-    #[cfg(test)]
     pub const fn id(&self) -> &PaneId {
         &self.id
     }

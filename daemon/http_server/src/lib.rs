@@ -31,11 +31,12 @@ impl FromRef<AppState> for TerminalService {
 }
 
 pub async fn serve(state: AppState) -> HttpResult {
-    let activity_id = state.sessions.bootstrap_default().await;
+    let (pane_id, activity_id) = state.sessions.bootstrap_default().await;
     state
         .terminal
         .spawn(
             activity_id,
+            pane_id,
             ozmux_terminal::SpawnOptions {
                 cols: 80,
                 rows: 24,

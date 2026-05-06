@@ -3,6 +3,7 @@ use crate::{
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
 };
 use ozmux_session::activity::ActivityId;
+use ozmux_session::pane::PaneId;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Read, sync::Arc};
@@ -30,7 +31,12 @@ pub struct SpawnOptions {
 }
 
 impl TerminalService {
-    pub async fn spawn(&self, activity_id: ActivityId, opts: SpawnOptions) -> TerminalResult {
+    pub async fn spawn(
+        &self,
+        activity_id: ActivityId,
+        pane_id: PaneId,
+        opts: SpawnOptions,
+    ) -> TerminalResult {
         // Hold the write lock for the entire spawn-then-insert so concurrent
         // callers with the same ActivityId cannot both pass the existence
         // check and end up double-spawning a PTY (which would leak the
@@ -53,6 +59,8 @@ impl TerminalService {
         if let Some(cwd) = &opts.cwd {
             cmd.cwd(cwd);
         }
+        cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
+        cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
         let child = pty_pair.slave.spawn_command(cmd).to_terminal_result()?;
         let killer = child.clone_killer();
         // Drop slave fd in this process so EOF propagates when shell exits.
@@ -180,8 +188,10 @@ mod tests {
     async fn spawn_then_snapshot_and_subscribe_succeeds() {
         let svc = TerminalService::default();
         let id = ActivityId::new();
+        let pane_id = PaneId::new();
         svc.spawn(
             id.clone(),
+            pane_id,
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -201,11 +211,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_injects_ozmux_ids_into_shell_env() {
+        let svc = TerminalService::default();
+        let activity_id = ActivityId::new();
+        let pane_id = PaneId::new();
+        svc.spawn(
+            activity_id.clone(),
+            pane_id.clone(),
+            SpawnOptions {
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity_id).await.unwrap();
+
+        svc.write(
+            &activity_id,
+            b"printf 'ACT=%s PANE=%s\\n' \"$OZMUX_ACTIVITY_ID\" \"$OZMUX_PANE_ID\"\n",
+        )
+        .await
+        .unwrap();
+
+        let mut got = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let needle = format!(
+            "ACT={} PANE={}",
+            activity_id.as_ref(),
+            pane_id.as_ref()
+        );
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(TerminalEvent::Data { buffer })) => {
+                    got.extend_from_slice(&buffer);
+                    if got
+                        .windows(needle.len())
+                        .any(|w| w == needle.as_bytes())
+                    {
+                        break;
+                    }
+                }
+                Ok(Ok(TerminalEvent::Exit { .. })) => break,
+                Ok(Err(_)) => break,
+                Err(_) => continue,
+            }
+        }
+        svc.kill(&activity_id).await.unwrap();
+
+        let s = String::from_utf8_lossy(&got);
+        assert!(
+            s.contains(&needle),
+            "expected `{needle}` in shell output, got: {s}"
+        );
+    }
+
+    #[tokio::test]
     async fn pty_output_is_broadcast_to_subscribers() {
         let svc = TerminalService::default();
         let id = ActivityId::new();
+        let pane_id = PaneId::new();
         svc.spawn(
             id.clone(),
+            pane_id,
             SpawnOptions {
                 cols: 80,
                 rows: 24,

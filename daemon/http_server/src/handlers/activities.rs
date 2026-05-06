@@ -172,11 +172,12 @@ mod tests {
 
     async fn boot_server() -> (std::net::SocketAddr, AppState, ActivityId) {
         let state = AppState::default();
-        let activity_id = state.sessions.bootstrap_default().await;
+        let (pane_id, activity_id) = state.sessions.bootstrap_default().await;
         state
             .terminal
             .spawn(
                 activity_id.clone(),
+                pane_id,
                 SpawnOptions {
                     cols: 80,
                     rows: 24,
