@@ -12,12 +12,15 @@ pub struct ExtensionRegistory {
 
 impl ExtensionRegistory {
     pub async fn load() -> OzmuxResult<Self> {
+        let mut commands = HashMap::default();
         let extension_root = std::env::var("OZMUX_EXTENSION_DIR")?;
-        for dir in std::fs::read_dir(extension_dir)?
+        for manifest in std::fs::read_dir(extension_dir)?
             .filter_map(|r| r.ok())
             .filter_map(load_manifest)
-        {}
-        Ok(())
+        {
+            commands.extend(manifest.commands);
+        }
+        Ok(Self { commands })
     }
 }
 
