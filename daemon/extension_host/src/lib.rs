@@ -43,7 +43,7 @@ async fn run(_sessions: SessionState) -> std::io::Result<()> {
                 buffer.clear();
                 match recver.read_line(&mut buffer).await {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => println!("recive: {buffer}"),
+                    Ok(_) => tracing::debug!(line = %buffer.trim_end(), "received line"),
                 }
             }
         });
