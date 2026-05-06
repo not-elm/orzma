@@ -248,7 +248,7 @@ dependencies = [
 name = "daemon_bootstrap"
 version = "0.1.0"
 dependencies = [
- "ozmux_extension_host",
+ "ozmux_extension",
  "ozmux_http_server",
  "tokio",
  "tracing-subscriber",
@@ -674,7 +674,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ozmux_extension_host"
+name = "ozmux_extension"
 version = "0.1.0"
 dependencies = [
  "interprocess",
@@ -695,7 +695,6 @@ dependencies = [
  "axum",
  "futures-util",
  "http-body-util",
- "ozmux_extension_host",
  "ozmux_session",
  "ozmux_terminal",
  "serde",

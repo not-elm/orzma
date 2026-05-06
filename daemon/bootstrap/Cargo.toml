@@ -12,6 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 ozmux_http_server = { path = "../http_server" }
-ozmux_extension_host = { path = "../extension_host" }
+ozmux_extension = { path = "../extension" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = { workspace = true }

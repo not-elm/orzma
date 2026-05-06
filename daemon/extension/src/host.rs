@@ -1,12 +1,3 @@
-//! Extension host: Unix-domain-socket / Named-pipe IPC server.
-pub mod commands;
-pub mod error;
-pub mod manifest;
-
-pub use commands::ExtensionCommands;
-pub use error::{ExtensionHostError, ExtensionHostResult};
-pub use manifest::{CommandName, CommandScriptPath, ExtensionManifest};
-
 use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, NameType, ToFsName, ToNsName,
     tokio::prelude::*,

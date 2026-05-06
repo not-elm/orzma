@@ -6,7 +6,7 @@ members = [
   "daemon/macros",
   "daemon/session",
   "daemon/terminal",
-  "daemon/extension_host",
+  "daemon/extension",
   "daemon/http_server",
 ]
 
@@ -29,4 +29,6 @@ portable-pty = "0.9"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+futures-util = { version = "0.3", default-features = false, features = [
+  "sink",
+] }
