@@ -3,7 +3,10 @@ use crate::manifest::{CommandName, CommandScriptPath, ExtensionManifest};
 use std::{collections::HashMap, path::Path};
 
 #[derive(Debug, Clone)]
-pub struct ExtensionCommands(HashMap<CommandName, CommandScriptPath>);
+pub struct ExtensionCommands(
+    // TODO: remove allow once Task 3 (materialize_wrappers) reads the field.
+    #[allow(dead_code)] HashMap<CommandName, CommandScriptPath>,
+);
 
 impl ExtensionCommands {
     pub async fn load() -> ExtensionHostResult<Self> {
