@@ -39,8 +39,7 @@ impl WindowService {
             .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
 
         let window_id = WindowId::new();
-        let assigned_name =
-            name.unwrap_or_else(|| format!("window-{}", session.windows.len() + 1));
+        let assigned_name = name.unwrap_or_else(|| format!("window-{}", session.windows.len() + 1));
         let window = Window::new(window_id.clone(), session_id.clone(), assigned_name);
 
         session.windows.push(window_id.clone());
@@ -361,10 +360,7 @@ mod tests {
 
         let (session_id, window_id, _pid, _aid) = sessions.bootstrap_default(&windows).await;
 
-        let err = svc
-            .close(session_id.clone(), window_id)
-            .await
-            .unwrap_err();
+        let err = svc.close(session_id.clone(), window_id).await.unwrap_err();
         assert!(matches!(
             err,
             SessionError::CannotCloseLastWindow(ref sid) if sid == &session_id
@@ -511,11 +507,20 @@ mod tests {
             entry.windows.push(wid_extra.clone());
         }
         windows.lock().await.insert(wid_real.clone(), real_window);
-        windows.lock().await.insert(wid_extra.clone(), mismatched_window);
+        windows
+            .lock()
+            .await
+            .insert(wid_extra.clone(), mismatched_window);
 
         // Closing wid_extra should detect the back-ref violation and refuse.
-        let err = svc.close(sid_a.clone(), wid_extra.clone()).await.unwrap_err();
-        assert!(matches!(err, SessionError::WindowDoesNotBelongToSession { .. }));
+        let err = svc
+            .close(sid_a.clone(), wid_extra.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            SessionError::WindowDoesNotBelongToSession { .. }
+        ));
 
         // The window should still be in WindowStore (rolled back).
         assert!(windows.lock().await.get(&wid_extra).is_some());

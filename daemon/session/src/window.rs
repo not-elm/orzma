@@ -1,13 +1,13 @@
-use ozmux_macros::NewType;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{Mutex, MutexGuard};
 use crate::{
     SessionId,
     cell::{CellId, CloseOutcome, LayoutCellState, Side, SplitOrientation},
     error::{SessionError, SessionResult},
     pane::{Pane, PaneId, PaneStore},
 };
+use ozmux_macros::NewType;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
 #[newtype(as_ref(str), display, new(uuid_v4_string), default)]
@@ -95,9 +95,9 @@ impl Window {
             Pane::new(new_pane_id.clone(), new_cell_id.clone()),
         );
 
-        let new_split_id =
-            self.cells
-                .split_cell(target_cell_id, new_cell_id, side, orientation)?;
+        let new_split_id = self
+            .cells
+            .split_cell(target_cell_id, new_cell_id, side, orientation)?;
 
         if target_was_root {
             self.root = new_split_id;
@@ -136,8 +136,7 @@ impl Window {
         // remaining pane in the window — guarantees active_pane never
         // dangles after close.
         if &self.active_pane == pane_id {
-            let new_active = surviving_pane_id
-                .or_else(|| self.panes.any_pane_id());
+            let new_active = surviving_pane_id.or_else(|| self.panes.any_pane_id());
             if let Some(id) = new_active {
                 self.active_pane = id;
             }
@@ -228,7 +227,12 @@ mod tests {
         let target = w.panes().any_pane_id().unwrap();
         let new_id = PaneId::new();
         let returned = w
-            .split_pane(&target, new_id.clone(), SplitOrientation::Horizontal, Side::After)
+            .split_pane(
+                &target,
+                new_id.clone(),
+                SplitOrientation::Horizontal,
+                Side::After,
+            )
             .expect("split should succeed");
         assert_eq!(returned, new_id);
         assert_eq!(w.active_pane(), &new_id);
@@ -251,8 +255,13 @@ mod tests {
         let mut w = Window::new(WindowId::new(), SessionId::new(), String::new());
         let original = w.panes().any_pane_id().unwrap();
         let new_id = PaneId::new();
-        w.split_pane(&original, new_id.clone(), SplitOrientation::Horizontal, Side::After)
-            .expect("split");
+        w.split_pane(
+            &original,
+            new_id.clone(),
+            SplitOrientation::Horizontal,
+            Side::After,
+        )
+        .expect("split");
         // After split, new_id is active. Close it; original should become active.
         w.close_pane(&new_id).expect("close should succeed");
         assert_eq!(w.active_pane(), &original);

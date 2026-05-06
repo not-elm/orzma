@@ -362,9 +362,9 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_with_extension_wrappers_prepends_path() {
-        use std::sync::Arc;
         use ozmux_session::SessionId;
         use ozmux_session::window::WindowId;
+        use std::sync::Arc;
 
         let temp = Arc::new(tempfile::tempdir().unwrap());
         let temp_path = temp.path().to_path_buf();

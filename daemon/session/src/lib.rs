@@ -89,15 +89,17 @@ impl SessionState {
     pub async fn bootstrap_default(
         &self,
         windows: &crate::window::WindowStore,
-    ) -> (SessionId, crate::window::WindowId, crate::pane::PaneId, crate::activity::ActivityId) {
+    ) -> (
+        SessionId,
+        crate::window::WindowId,
+        crate::pane::PaneId,
+        crate::activity::ActivityId,
+    ) {
         // Build the in-memory graph outside any lock.
         let session_id = SessionId::new();
         let window_id = crate::window::WindowId::new();
-        let window = crate::window::Window::new(
-            window_id.clone(),
-            session_id.clone(),
-            "main".into(),
-        );
+        let window =
+            crate::window::Window::new(window_id.clone(), session_id.clone(), "main".into());
         let pane_id = window
             .first_pane()
             .expect("Window::new has 1 pane")
@@ -140,11 +142,7 @@ impl Session {
     /// Construct a session with no windows. Use `WindowService::create` to add
     /// windows; an empty windows list violates an invariant — `bootstrap_default`
     /// must be paired with a window insert.
-    pub fn empty(
-        id: SessionId,
-        name: String,
-        default_window: crate::window::WindowId,
-    ) -> Self {
+    pub fn empty(id: SessionId, name: String, default_window: crate::window::WindowId) -> Self {
         Self {
             id,
             name,

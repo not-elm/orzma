@@ -7,9 +7,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use ozmux_session::{
-    SessionId, SessionState, Window, WindowId, WindowService, WindowStore,
-};
+use ozmux_session::{SessionId, SessionState, Window, WindowId, WindowService, WindowStore};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
 
@@ -49,7 +47,9 @@ pub async fn get_window(
     let window = store
         .get(&window_id)
         .ok_or_else(|| ozmux_session::SessionError::WindowNotFound(window_id.clone()))?;
-    Ok(Json(serde_json::to_value(window).expect("Window is Serialize")))
+    Ok(Json(
+        serde_json::to_value(window).expect("Window is Serialize"),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -63,7 +63,9 @@ pub async fn rename(
     Json(req): Json<RenameWindowRequest>,
 ) -> HttpResult<Json<serde_json::Value>> {
     let window = svc.rename(session_id, window_id, req.name).await?;
-    Ok(Json(serde_json::to_value(&window).expect("Window is Serialize")))
+    Ok(Json(
+        serde_json::to_value(&window).expect("Window is Serialize"),
+    ))
 }
 
 pub async fn delete(
@@ -226,7 +228,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["error"]["code"].as_str(), Some("CANNOT_CLOSE_LAST_WINDOW"));
+        assert_eq!(
+            v["error"]["code"].as_str(),
+            Some("CANNOT_CLOSE_LAST_WINDOW")
+        );
     }
 
     #[tokio::test]
