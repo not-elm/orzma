@@ -140,7 +140,7 @@ impl Session {
     /// Construct a session with no windows. Use `WindowService::create` to add
     /// windows; an empty windows list violates an invariant — `bootstrap_default`
     /// must be paired with a window insert.
-    pub(crate) fn empty(
+    pub fn empty(
         id: SessionId,
         name: String,
         default_window: crate::window::WindowId,
