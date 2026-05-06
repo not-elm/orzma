@@ -2,7 +2,7 @@ use crate::{
     error::{SessionError, SessionResult},
     pane::PaneId,
 };
-use ozmux_macros::define_string_new_type;
+use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -222,7 +222,8 @@ struct CollapsePlan {
     grandparent_id: Option<CellId>,
 }
 
-define_string_new_type!(CellId);
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+pub struct CellId(String);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayoutCell {

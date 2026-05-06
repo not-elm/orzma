@@ -2,8 +2,8 @@ use crate::{
     cell::{CellId, CloseOutcome, LayoutCellState, Side, SplitOrientation},
     pane::{Pane, PaneId, PaneStore},
 };
-use ozmux_macros::define_string_new_type;
-use serde::Serialize;
+use ozmux_macros::NewType;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -102,7 +102,8 @@ impl SessionState {
     }
 }
 
-define_string_new_type!(SessionId);
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+pub struct SessionId(String);
 
 #[derive(Debug, Serialize)]
 pub struct Session {

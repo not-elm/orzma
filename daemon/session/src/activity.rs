@@ -1,5 +1,5 @@
-use ozmux_macros::define_string_new_type;
-use serde::Serialize;
+use ozmux_macros::NewType;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -34,7 +34,8 @@ impl Activity {
     }
 }
 
-define_string_new_type!(ActivityId);
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+pub struct ActivityId(String);
 
 #[cfg(test)]
 mod tests {
