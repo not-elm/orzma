@@ -8,19 +8,32 @@ use axum::{
     extract::FromRef,
     routing::{delete as method_delete, get, post},
 };
-use ozmux_session::SessionState;
+use ozmux_session::{SessionState, WindowService, WindowStore};
 use ozmux_terminal::TerminalService;
 use tokio::net::TcpListener;
 
 #[derive(Clone, Default)]
 pub struct AppState {
     pub sessions: SessionState,
+    pub windows: WindowStore,
     pub terminal: TerminalService,
 }
 
 impl FromRef<AppState> for SessionState {
     fn from_ref(input: &AppState) -> Self {
         input.sessions.clone()
+    }
+}
+
+impl FromRef<AppState> for WindowStore {
+    fn from_ref(input: &AppState) -> Self {
+        input.windows.clone()
+    }
+}
+
+impl FromRef<AppState> for WindowService {
+    fn from_ref(input: &AppState) -> Self {
+        WindowService::new(input.sessions.clone(), input.windows.clone())
     }
 }
 
@@ -114,6 +127,7 @@ pub(crate) mod test_helpers {
     pub fn router_with_sessions(sessions: SessionState) -> Router {
         daemon_router(AppState {
             sessions,
+            windows: Default::default(),
             terminal: TerminalService::default(),
         })
     }
