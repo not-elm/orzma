@@ -13,5 +13,11 @@ pub struct ExtensionManifest {
 #[newtype(as_ref(str), display)]
 pub struct CommandName(String);
 
+impl CommandName {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CommandScriptPath(pub PathBuf);

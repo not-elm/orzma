@@ -3,10 +3,7 @@ use crate::manifest::{CommandName, CommandScriptPath, ExtensionManifest};
 use std::{collections::HashMap, path::Path};
 
 #[derive(Debug, Clone)]
-pub struct ExtensionCommands(
-    // TODO: remove allow once Task 3 (materialize_wrappers) reads the field.
-    #[allow(dead_code)] HashMap<CommandName, CommandScriptPath>,
-);
+pub struct ExtensionCommands(HashMap<CommandName, CommandScriptPath>);
 
 impl ExtensionCommands {
     pub async fn load() -> ExtensionResult<Self> {
@@ -23,6 +20,38 @@ impl ExtensionCommands {
         Ok(Self(commands))
     }
 
+    /// Materialize the command set as PATH wrapper scripts in a fresh
+    /// temp directory. Each wrapper is named `@<command>` and execs
+    /// `node '<escaped_script>' "$@"`. Returns the `TempDir` so its
+    /// `Drop` tears down the directory.
+    pub fn materialize_wrappers(&self) -> ExtensionResult<tempfile::TempDir> {
+        let dir = tempfile::TempDir::new()?;
+        for (name, script) in &self.0 {
+            let wrapper_path = dir.path().join(format!("@{name}"));
+            std::fs::write(&wrapper_path, Self::wrapper_body(script))?;
+            Self::set_executable(&wrapper_path)?;
+        }
+        Ok(dir)
+    }
+
+    fn wrapper_body(script: &CommandScriptPath) -> String {
+        format!(
+            "#!/bin/sh\nexec node {} \"$@\"\n",
+            sh_single_quote(&script.0.display().to_string()),
+        )
+    }
+
+    fn set_executable(path: &std::path::Path) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(path)?.permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(path, perm)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_map(m: HashMap<CommandName, CommandScriptPath>) -> Self {
+        Self(m)
+    }
 }
 
 fn load_manifest(extension_dir: &Path) -> Option<ExtensionManifest> {
@@ -58,6 +87,85 @@ fn is_valid_command_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::{CommandName, CommandScriptPath};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn make_commands(entries: &[(&str, &str)]) -> ExtensionCommands {
+        let mut map = HashMap::new();
+        for (name, path) in entries {
+            map.insert(
+                CommandName::new(*name),
+                CommandScriptPath(PathBuf::from(path)),
+            );
+        }
+        ExtensionCommands::from_map(map)
+    }
+
+    #[test]
+    fn materialize_creates_wrapper_per_command() {
+        let commands = make_commands(&[
+            ("settings", "/x/s.js"),
+            ("open", "/x/o.js"),
+        ]);
+        let dir = commands.materialize_wrappers().unwrap();
+        assert!(dir.path().join("@settings").exists());
+        assert!(dir.path().join("@open").exists());
+    }
+
+    #[test]
+    fn wrapper_script_invokes_node_with_quoted_script_and_argv() {
+        let commands = make_commands(&[("hello", "/path/hello.js")]);
+        let dir = commands.materialize_wrappers().unwrap();
+        let body = std::fs::read_to_string(dir.path().join("@hello")).unwrap();
+        assert!(body.starts_with("#!/bin/sh\n"));
+        assert!(body.contains("exec node '/path/hello.js'"));
+        assert!(body.contains("\"$@\""));
+    }
+
+    #[test]
+    fn wrapper_script_escapes_paths_with_spaces() {
+        let commands = make_commands(&[("x", "/p ath/x.js")]);
+        let dir = commands.materialize_wrappers().unwrap();
+        let body = std::fs::read_to_string(dir.path().join("@x")).unwrap();
+        assert!(body.contains("'/p ath/x.js'"));
+    }
+
+    #[test]
+    fn wrapper_script_escapes_paths_with_single_quotes() {
+        let commands = make_commands(&[("x", "/p'q/x.js")]);
+        let dir = commands.materialize_wrappers().unwrap();
+        let body = std::fs::read_to_string(dir.path().join("@x")).unwrap();
+        // /p'q/x.js → '/p'\''q/x.js'
+        assert!(body.contains(r"'/p'\''q/x.js'"));
+    }
+
+    #[test]
+    fn wrapper_files_are_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let commands = make_commands(&[("x", "/x.js")]);
+        let dir = commands.materialize_wrappers().unwrap();
+        let perms = std::fs::metadata(dir.path().join("@x")).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o755);
+    }
+
+    #[test]
+    fn empty_commands_creates_empty_dir() {
+        let commands = make_commands(&[]);
+        let dir = commands.materialize_wrappers().unwrap();
+        assert!(dir.path().is_dir());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn temp_dir_is_removed_when_dropped() {
+        let commands = make_commands(&[]);
+        let dir = commands.materialize_wrappers().unwrap();
+        let path = dir.path().to_path_buf();
+        assert!(path.exists());
+        drop(dir);
+        assert!(!path.exists());
+    }
 
     #[test]
     fn sh_single_quote_wraps_simple_string() {
