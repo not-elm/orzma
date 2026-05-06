@@ -15,6 +15,7 @@ pub mod activity;
 pub mod cell;
 pub mod error;
 pub mod pane;
+pub mod window;
 
 pub use error::{SessionError, SessionResult};
 
