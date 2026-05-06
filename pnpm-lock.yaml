@@ -79,19 +79,6 @@ importers:
         specifier: ^2.3.3
         version: 2.3.3(vite@8.0.10(@types/node@24.12.2)(jiti@2.6.1))
 
-  extension-host:
-    dependencies:
-      zod:
-        specifier: 'catalog:'
-        version: 4.4.3
-    devDependencies:
-      '@types/node':
-        specifier: 'catalog:'
-        version: 24.12.2
-      typescript:
-        specifier: 'catalog:'
-        version: 6.0.3
-
   extensions/memo:
     dependencies:
       '@ozmux/node-sdk':
