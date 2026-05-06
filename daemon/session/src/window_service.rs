@@ -33,8 +33,7 @@ impl WindowService {
         session_id: SessionId,
         name: Option<String>,
     ) -> SessionResult<Window> {
-        let mut sessions = self.sessions.lock().await;
-        let session = SessionState::require_mut(&mut sessions, &session_id)?;
+        let mut session = self.sessions.session_mut(&session_id).await?;
 
         let window_id = WindowId::new();
         let assigned_name = name.unwrap_or_else(|| format!("window-{}", session.windows.len() + 1));
@@ -57,13 +56,13 @@ impl WindowService {
         window_id: WindowId,
         name: String,
     ) -> SessionResult<Window> {
-        // Validate session ownership without keeping the SessionState lock.
-        let sessions = self.sessions.lock().await;
-        let session = SessionState::require(&sessions, &session_id)?;
+        // Validate session ownership, then drop the SessionState guard before
+        // acquiring WindowStore.
+        let session = self.sessions.session(&session_id).await?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
-        drop(sessions);
+        drop(session);
 
         let mut win_store = self.windows.lock().await;
         let window = win_store
@@ -86,8 +85,7 @@ impl WindowService {
         session_id: SessionId,
         window_id: WindowId,
     ) -> SessionResult<Vec<ActivityId>> {
-        let mut sessions = self.sessions.lock().await;
-        let session = SessionState::require_mut(&mut sessions, &session_id)?;
+        let mut session = self.sessions.session_mut(&session_id).await?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
@@ -107,7 +105,7 @@ impl WindowService {
             let new_active_idx = if position == 0 { 0 } else { position - 1 };
             session.active_window = session.windows[new_active_idx].clone();
         }
-        drop(sessions);
+        drop(session);
 
         let mut win_store = self.windows.lock().await;
         let removed = win_store
@@ -137,8 +135,7 @@ impl WindowService {
         session_id: SessionId,
         window_id: WindowId,
     ) -> SessionResult<()> {
-        let mut sessions = self.sessions.lock().await;
-        let session = SessionState::require_mut(&mut sessions, &session_id)?;
+        let mut session = self.sessions.session_mut(&session_id).await?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
@@ -160,12 +157,11 @@ impl WindowService {
         orientation: SplitOrientation,
         side: Side,
     ) -> SessionResult<()> {
-        let sessions = self.sessions.lock().await;
-        let session = SessionState::require(&sessions, &session_id)?;
+        let session = self.sessions.session(&session_id).await?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
-        drop(sessions);
+        drop(session);
 
         let mut win_store = self.windows.lock().await;
         let window = win_store
@@ -189,12 +185,11 @@ impl WindowService {
         window_id: WindowId,
         pane_id: PaneId,
     ) -> SessionResult<Option<ActivityId>> {
-        let sessions = self.sessions.lock().await;
-        let session = SessionState::require(&sessions, &session_id)?;
+        let session = self.sessions.session(&session_id).await?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
-        drop(sessions);
+        drop(session);
 
         let mut win_store = self.windows.lock().await;
         let window = win_store
@@ -223,11 +218,7 @@ impl WindowService {
         session_id: SessionId,
     ) -> SessionResult<Vec<ActivityId>> {
         // Step 1: take the session out of SessionState (closing the entry point).
-        let mut sessions = self.sessions.lock().await;
-        let removed = sessions
-            .remove(&session_id)
-            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
-        drop(sessions);
+        let removed = self.sessions.remove(&session_id).await?;
 
         // Step 2: remove all windows from WindowStore and collect activity_ids.
         let mut win_store = self.windows.lock().await;

@@ -18,9 +18,6 @@ pub use error::{SessionError, SessionResult};
 pub use window::{Window, WindowId, WindowStore};
 pub use window_service::WindowService;
 
-#[derive(Clone, Default)]
-pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
-
 /// Read-only guard returned by [`SessionState::session`].
 ///
 /// Holds the underlying mutex lock until dropped; only `Deref` is exposed
@@ -58,6 +55,9 @@ impl DerefMut for SessionGuard<'_> {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct SessionState(Arc<Mutex<HashMap<SessionId, Session>>>);
+
 impl SessionState {
     pub async fn lock(&self) -> MutexGuard<'_, HashMap<SessionId, Session>> {
         self.0.lock().await
@@ -65,6 +65,10 @@ impl SessionState {
 
     pub async fn session(&self, id: &SessionId) -> SessionResult<SessionRef<'_>> {
         let guard = self.0.lock().await;
+        // tokio's MutexGuard::try_map requires the projection to return `&mut T`,
+        // even when the caller will only use `&T`. The returned SessionRef wraps
+        // the MappedMutexGuard and exposes only `Deref` (not `DerefMut`),
+        // enforcing read-only access at the API surface.
         let session = MutexGuard::try_map(guard, |sessions| sessions.get_mut(id))
             .map_err(|_| SessionError::SessionNotFound(id.clone()))?;
         Ok(SessionRef(session))
@@ -81,30 +85,6 @@ impl SessionState {
         let mut guard = self.0.lock().await;
         guard
             .remove(id)
-            .ok_or_else(|| SessionError::SessionNotFound(id.clone()))
-    }
-
-    /// Look up a session inside an already-locked guard.
-    ///
-    /// Use this when you need to hold the SessionState guard across additional
-    /// operations (e.g., acquiring `WindowStore` under the canonical lock order).
-    /// For one-shot reads or mutations that do not coordinate with another store,
-    /// prefer [`Self::session`] / [`Self::session_mut`].
-    pub(crate) fn require<'a>(
-        guard: &'a HashMap<SessionId, Session>,
-        id: &SessionId,
-    ) -> SessionResult<&'a Session> {
-        guard
-            .get(id)
-            .ok_or_else(|| SessionError::SessionNotFound(id.clone()))
-    }
-
-    pub(crate) fn require_mut<'a>(
-        guard: &'a mut HashMap<SessionId, Session>,
-        id: &SessionId,
-    ) -> SessionResult<&'a mut Session> {
-        guard
-            .get_mut(id)
             .ok_or_else(|| SessionError::SessionNotFound(id.clone()))
     }
 
