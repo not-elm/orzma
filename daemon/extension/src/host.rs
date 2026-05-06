@@ -4,7 +4,7 @@ use interprocess::local_socket::{
 };
 use ozmux_session::SessionState;
 
-use crate::error::ExtensionHostResult;
+use crate::error::ExtensionResult;
 
 /// Spawn the extension host UDS listener on a tokio task.
 ///
@@ -20,7 +20,7 @@ pub fn serve(sessions: SessionState) {
     });
 }
 
-async fn run(_sessions: SessionState) -> ExtensionHostResult {
+async fn run(_sessions: SessionState) -> ExtensionResult {
     let listener = ListenerOptions::new()
         .name(resolve_socket_name()?)
         .create_tokio()?;

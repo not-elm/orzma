@@ -1,20 +1,12 @@
 use thiserror::Error;
 
-use crate::manifest::CommandName;
-
-pub type ExtensionHostResult<T = ()> = Result<T, ExtensionHostError>;
+pub type ExtensionResult<T = ()> = Result<T, ExtensionError>;
 
 #[derive(Error, Debug)]
-pub enum ExtensionHostError {
+pub enum ExtensionError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("env var missing: {0}")]
-    EnvVar(#[from] std::env::VarError),
-
     #[error("manifest parse failed: {0}")]
     Manifest(String),
-
-    #[error("command not found: {0}")]
-    CommandNotFound(CommandName),
 }
