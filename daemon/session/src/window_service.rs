@@ -217,6 +217,34 @@ impl WindowService {
         window.close_pane(&pane_id)?;
         Ok(activity_id)
     }
+
+    /// Remove a session and all of its windows. Returns the activity_ids whose
+    /// PTYs the caller must kill.
+    pub async fn cascade_delete_session(
+        &self,
+        session_id: SessionId,
+    ) -> SessionResult<Vec<ActivityId>> {
+        // Step 1: take the session out of SessionState (closing the entry point).
+        let mut sessions = self.sessions.lock().await;
+        let removed = sessions
+            .remove(&session_id)
+            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        drop(sessions);
+
+        // Step 2: remove all windows from WindowStore and collect activity_ids.
+        let mut win_store = self.windows.lock().await;
+        let mut activity_ids = Vec::new();
+        for wid in &removed.windows {
+            if let Some(w) = win_store.remove(wid) {
+                for (_, pane) in w.panes().iter() {
+                    for activity in pane.activities() {
+                        activity_ids.push(activity.id().clone());
+                    }
+                }
+            }
+        }
+        Ok(activity_ids)
+    }
 }
 
 #[cfg(test)]
