@@ -3,7 +3,7 @@ use crate::http::AppState;
 mod error;
 mod extension;
 mod http;
-mod macros;
+pub use ozmux_macros::define_string_new_type;
 mod pty;
 mod session;
 
