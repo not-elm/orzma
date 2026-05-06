@@ -120,6 +120,17 @@ impl WindowService {
         let removed = win_store
             .remove(&window_id)
             .ok_or_else(|| SessionError::WindowNotFound(window_id.clone()))?;
+        if removed.session_id() != &session_id {
+            // Restore the window to the store and signal the integrity violation.
+            // This branch indicates a bug — the Session.windows list pointed at a
+            // window that doesn't actually belong to that session.
+            let inconsistent_id = removed.id().clone();
+            win_store.insert(window_id.clone(), removed);
+            return Err(SessionError::WindowDoesNotBelongToSession {
+                session_id,
+                window_id: inconsistent_id,
+            });
+        }
         let activity_ids: Vec<ActivityId> = removed
             .panes()
             .iter()
@@ -471,5 +482,42 @@ mod tests {
 
         // First window is gone.
         assert!(windows.lock().await.get(&window_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn close_returns_back_ref_error_when_window_session_id_mismatch() {
+        use crate::Session;
+
+        let sessions = SessionState::default();
+        let windows = WindowStore::default();
+        let svc = WindowService::new(sessions.clone(), windows.clone());
+
+        // Build session A with a window that claims to belong to session B.
+        let sid_a = SessionId::new();
+        let sid_b = SessionId::new();
+        let wid_real = WindowId::new();
+        let wid_extra = WindowId::new();
+
+        // Session A lists wid_real (legitimate, session_id=A) and wid_extra (corrupt, session_id=B).
+        let session_a = Session::empty(sid_a.clone(), "a".into(), wid_real.clone());
+        let real_window = Window::new(wid_real.clone(), sid_a.clone(), "real".into());
+        let mismatched_window = Window::new(wid_extra.clone(), sid_b, "mismatched".into());
+
+        sessions.lock().await.insert(sid_a.clone(), session_a);
+        // Manually inject a 2nd window into Session A's list to bypass create's enforcement.
+        {
+            let mut s = sessions.lock().await;
+            let entry = s.get_mut(&sid_a).unwrap();
+            entry.windows.push(wid_extra.clone());
+        }
+        windows.lock().await.insert(wid_real.clone(), real_window);
+        windows.lock().await.insert(wid_extra.clone(), mismatched_window);
+
+        // Closing wid_extra should detect the back-ref violation and refuse.
+        let err = svc.close(sid_a.clone(), wid_extra.clone()).await.unwrap_err();
+        assert!(matches!(err, SessionError::WindowDoesNotBelongToSession { .. }));
+
+        // The window should still be in WindowStore (rolled back).
+        assert!(windows.lock().await.get(&wid_extra).is_some());
     }
 }

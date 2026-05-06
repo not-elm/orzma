@@ -300,7 +300,7 @@ mod tests {
         let sessions = state.lock().await;
         assert_eq!(sessions.len(), 1);
         let s = sessions.get(&sid).unwrap();
-        assert_eq!(s.windows(), &[wid.clone()]);
+        assert_eq!(s.windows(), std::slice::from_ref(&wid));
         assert_eq!(s.active_window(), &wid);
 
         let store = windows.lock().await;
