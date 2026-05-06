@@ -35,6 +35,7 @@ impl Activity {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+#[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct ActivityId(String);
 
 #[cfg(test)]

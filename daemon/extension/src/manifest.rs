@@ -10,6 +10,7 @@ pub struct ExtensionManifest {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+#[newtype(as_ref(str), display)]
 pub struct CommandName(String);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

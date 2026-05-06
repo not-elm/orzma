@@ -1,21 +1,29 @@
-mod parse;
-
 use darling::FromDeriveInput;
 use proc_macro::TokenStream;
-use quote::quote;
 use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
-/// Derive a newtype helper impl set on a single-field tuple struct.
+mod codegen;
+mod parse;
+
+/// Derive helper impls on a single-field tuple struct based on
+/// `#[newtype(...)]` attributes. See the spec for full attribute reference.
 ///
-/// Currently emits a fixed kitchen-sink set of impls (`AsRef<str>`,
-/// `Display`, and a UUID-generating `new()`). This will be replaced
-/// with attribute-driven generation in a follow-up task.
+/// # Caller-side dependencies
+///
+/// - `serde` (with `derive` feature) when the call site uses `Serialize`/`Deserialize`
+/// - `uuid` (with `v4` feature) when using `new(uuid_v4_string)` or `new(uuid_v4)`
+///
+/// `display` and `as_ref(T)` are not pre-validated; if the inner type does not
+/// implement the required trait, rustc will emit a trait-resolution error
+/// against the generated impl.
+///
+/// Manual `impl Default` or inherent `fn new()` collide with what this macro
+/// emits; remove the corresponding `#[newtype(...)]` attribute when defining
+/// them by hand.
 #[proc_macro_derive(NewType, attributes(newtype))]
 pub fn derive_new_type(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let name = &input.ident;
 
-    // Shape validation
     if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
         return syn::Error::new_spanned(
             &input.generics,
@@ -61,7 +69,6 @@ pub fn derive_new_type(input: TokenStream) -> TokenStream {
         .into();
     }
 
-    // Parse attributes (not yet used for codegen — Task 5 wires this up).
     let attrs = match parse::NewTypeAttrs::from_derive_input(&input) {
         Ok(a) => a,
         Err(e) => return e.write_errors().into(),
@@ -69,24 +76,6 @@ pub fn derive_new_type(input: TokenStream) -> TokenStream {
     if let Err(ts) = parse::validate(&attrs) {
         return ts.into();
     }
-    // Suppress unused-variable warning until Task 5.
-    let _ = attrs;
 
-    quote! {
-        impl #name {
-            pub fn new() -> Self {
-                Self(::uuid::Uuid::new_v4().to_string())
-            }
-        }
-        impl ::core::convert::AsRef<str> for #name {
-            #[inline]
-            fn as_ref(&self) -> &str { &self.0 }
-        }
-        impl ::core::fmt::Display for #name {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                ::core::fmt::Display::fmt(&self.0, f)
-            }
-        }
-    }
-    .into()
+    codegen::generate(&input.ident, &attrs).into()
 }

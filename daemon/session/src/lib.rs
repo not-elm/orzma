@@ -103,6 +103,7 @@ impl SessionState {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+#[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct SessionId(String);
 
 #[derive(Debug, Serialize)]

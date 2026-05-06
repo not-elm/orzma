@@ -223,6 +223,7 @@ struct CollapsePlan {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+#[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct CellId(String);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
