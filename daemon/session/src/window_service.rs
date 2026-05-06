@@ -34,9 +34,7 @@ impl WindowService {
         name: Option<String>,
     ) -> SessionResult<Window> {
         let mut sessions = self.sessions.lock().await;
-        let session = sessions
-            .get_mut(&session_id)
-            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        let session = SessionState::require_mut(&mut sessions, &session_id)?;
 
         let window_id = WindowId::new();
         let assigned_name = name.unwrap_or_else(|| format!("window-{}", session.windows.len() + 1));
@@ -61,9 +59,7 @@ impl WindowService {
     ) -> SessionResult<Window> {
         // Validate session ownership without keeping the SessionState lock.
         let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(&session_id)
-            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        let session = SessionState::require(&sessions, &session_id)?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
@@ -91,9 +87,7 @@ impl WindowService {
         window_id: WindowId,
     ) -> SessionResult<Vec<ActivityId>> {
         let mut sessions = self.sessions.lock().await;
-        let session = sessions
-            .get_mut(&session_id)
-            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        let session = SessionState::require_mut(&mut sessions, &session_id)?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
@@ -144,9 +138,7 @@ impl WindowService {
         window_id: WindowId,
     ) -> SessionResult<()> {
         let mut sessions = self.sessions.lock().await;
-        let session = sessions
-            .get_mut(&session_id)
-            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        let session = SessionState::require_mut(&mut sessions, &session_id)?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
@@ -169,9 +161,7 @@ impl WindowService {
         side: Side,
     ) -> SessionResult<()> {
         let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(&session_id)
-            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        let session = SessionState::require(&sessions, &session_id)?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }
@@ -200,9 +190,7 @@ impl WindowService {
         pane_id: PaneId,
     ) -> SessionResult<Option<ActivityId>> {
         let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(&session_id)
-            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        let session = SessionState::require(&sessions, &session_id)?;
         if !session.windows.contains(&window_id) {
             return Err(SessionError::WindowNotFound(window_id));
         }

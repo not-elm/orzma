@@ -84,6 +84,30 @@ impl SessionState {
             .ok_or_else(|| SessionError::SessionNotFound(id.clone()))
     }
 
+    /// Look up a session inside an already-locked guard.
+    ///
+    /// Use this when you need to hold the SessionState guard across additional
+    /// operations (e.g., acquiring `WindowStore` under the canonical lock order).
+    /// For one-shot reads or mutations that do not coordinate with another store,
+    /// prefer [`Self::session`] / [`Self::session_mut`].
+    pub(crate) fn require<'a>(
+        guard: &'a HashMap<SessionId, Session>,
+        id: &SessionId,
+    ) -> SessionResult<&'a Session> {
+        guard
+            .get(id)
+            .ok_or_else(|| SessionError::SessionNotFound(id.clone()))
+    }
+
+    pub(crate) fn require_mut<'a>(
+        guard: &'a mut HashMap<SessionId, Session>,
+        id: &SessionId,
+    ) -> SessionResult<&'a mut Session> {
+        guard
+            .get_mut(id)
+            .ok_or_else(|| SessionError::SessionNotFound(id.clone()))
+    }
+
     /// Insert a default Session, a default Window for that session, a default Pane,
     /// and a default Terminal Activity. Returns IDs needed for PTY spawn.
     pub async fn bootstrap_default(
