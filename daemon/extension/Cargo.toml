@@ -20,3 +20,4 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 interprocess = { workspace = true }
 uuid = { workspace = true }
+tempfile = { workspace = true }
