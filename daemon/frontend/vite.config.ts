@@ -8,7 +8,7 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 export default defineConfig({
   plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss(), viteSingleFile()],
   build: {
-    outDir: '../core/src/http',
+    outDir: '../http_server/src/handlers',
     emptyOutDir: false,
   },
   server: {
