@@ -1,5 +1,5 @@
 {
-  "name": "@ozmux/node-sdk",
+  "name": "@ozmux/sdk",
   "version": "1.0.0",
   "description": "",
   "type": "module",
@@ -20,7 +20,8 @@
   "packageManager": "pnpm@10.30.2",
   "devDependencies": {
     "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "dependencies": {
     "zod": "catalog:"
