@@ -1,6 +1,6 @@
 use crate::{
     error::{ExtensionError, ExtensionResult},
-    host::resolve_socket_name,
+    host::resolve_socket_path,
     service::package_json::PackageJson,
 };
 use std::{
@@ -46,7 +46,7 @@ fn node_handle(package: PackageJson) -> std::io::Result<Child> {
     Command::new("node")
         .arg(package.main)
         .env("EXTENSION_NAME", package.name)
-        .env("EXTENSION_HOST_SOCKET_PATH", *resolve_socket_name()?)
+        .env("EXTENSION_HOST_SOCKET_PATH", resolve_socket_path())
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

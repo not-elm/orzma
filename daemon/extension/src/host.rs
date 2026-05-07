@@ -35,15 +35,32 @@ async fn run(_sessions: SessionState) -> ExtensionResult {
 
 const SOCKET_NAME: &str = "ozmux-extension-host.sock";
 
+/// Path string that Node's `net.connect` (and our own listener) use to
+/// reach the extension host socket. Shared between the host bind site
+/// and the env var passed to spawned extensions so both ends agree.
 #[cfg(target_os = "linux")]
-pub(crate) fn resolve_socket_name() -> std::io::Result<Name<'static>> {
+pub(crate) fn resolve_socket_path() -> String {
+    // Linux abstract namespace: leading NUL byte, no filesystem entry.
+    format!("\0{SOCKET_NAME}")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn resolve_socket_path() -> String {
+    std::env::temp_dir()
+        .join(SOCKET_NAME)
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_socket_name() -> std::io::Result<Name<'static>> {
     // Linux abstract namespace sockets are ephemeral (vanish when the
     // last fd closes), so no filesystem cleanup is needed.
     SOCKET_NAME.to_ns_name::<GenericNamespaced>()
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn resolve_socket_name() -> std::io::Result<Name<'static>> {
+fn resolve_socket_name() -> std::io::Result<Name<'static>> {
     // On non-Linux Unix (notably macOS), `GenericNamespaced::is_supported()`
     // returns true but interprocess maps the namespaced name to a real
     // file at `/tmp/<name>` that survives process exit and breaks the
