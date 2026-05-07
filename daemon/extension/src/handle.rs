@@ -1,7 +1,7 @@
 use crate::{
     error::{ExtensionError, ExtensionResult},
+    handle::package_json::PackageJson,
     host::resolve_socket_path,
-    service::package_json::PackageJson,
 };
 use std::{
     path::Path,
@@ -10,11 +10,11 @@ use std::{
 
 mod package_json;
 
-pub struct ExtensionService {
+pub struct ExtensionHandles {
     _node_handles: Vec<Child>,
 }
 
-impl ExtensionService {
+impl ExtensionHandles {
     pub fn load() -> ExtensionResult<Self> {
         const OZMUX_EXTENSION_ROOT: &str = "OZMUX_EXTENSION_ROOT";
         let root = std::env::var(OZMUX_EXTENSION_ROOT)

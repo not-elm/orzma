@@ -1,12 +1,14 @@
+use crate::error::ExtensionResult;
 #[cfg(not(target_os = "linux"))]
 use interprocess::local_socket::{GenericFilePath, ToFsName};
 #[cfg(target_os = "linux")]
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
-use interprocess::local_socket::{ListenerOptions, Name, tokio::Stream, tokio::prelude::*};
+use interprocess::local_socket::{
+    ListenerOptions, Name,
+    tokio::{RecvHalf, Stream, prelude::*},
+};
 use ozmux_session::SessionState;
 use tokio::io::{AsyncBufReadExt, BufReader};
-
-use crate::error::ExtensionResult;
 
 /// Spawn the extension host UDS listener on a tokio task.
 ///
@@ -29,11 +31,13 @@ async fn run(_sessions: SessionState) -> ExtensionResult {
 
     loop {
         let conn = listener.accept().await?;
-        tokio::spawn(handle_connection(conn));
+        let (rx, tx) = conn.split();
+
+        tokio::spawn(handle_connection(rx));
     }
 }
 
-async fn handle_connection(conn: Stream) {
+async fn handle_connection(conn: RecvHalf) {
     let mut reader = BufReader::new(conn);
     let mut line = String::new();
     loop {

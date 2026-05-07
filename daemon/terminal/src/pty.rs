@@ -22,7 +22,6 @@ pub enum TerminalEvent {
 #[derive(Default, Clone)]
 pub struct TerminalService {
     ptys: Arc<RwLock<HashMap<ActivityId, PtyHandle>>>,
-    extension_wrappers: Option<Arc<TempDir>>,
 }
 
 pub struct SpawnOptions {
@@ -33,20 +32,6 @@ pub struct SpawnOptions {
 }
 
 impl TerminalService {
-    pub fn with_extension_wrappers(wrappers: Arc<TempDir>) -> Self {
-        Self {
-            ptys: Arc::new(RwLock::new(HashMap::new())),
-            extension_wrappers: Some(wrappers),
-        }
-    }
-
-    fn prepend_to_path(dir: &Path) -> String {
-        match std::env::var("PATH") {
-            Ok(p) if !p.is_empty() => format!("{}:{}", dir.display(), p),
-            _ => dir.display().to_string(),
-        }
-    }
-
     pub async fn spawn(
         &self,
         activity_id: ActivityId,
@@ -77,9 +62,6 @@ impl TerminalService {
         cmd.env("OZMUX_WINDOW_ID", window_id.as_ref());
         cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
         cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
-        if let Some(wrappers) = &self.extension_wrappers {
-            cmd.env("PATH", Self::prepend_to_path(wrappers.path()));
-        }
         let child = pty_pair.slave.spawn_command(cmd).to_terminal_result()?;
         let killer = child.clone_killer();
         drop(pty_pair.slave);

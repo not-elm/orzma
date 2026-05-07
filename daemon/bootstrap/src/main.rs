@@ -1,6 +1,3 @@
-use std::sync::Arc;
-
-use ozmux_extension::commands::ExtensionCommands;
 use ozmux_http_server::AppState;
 use ozmux_session::{SessionState, WindowStore};
 use ozmux_terminal::TerminalService;
@@ -15,13 +12,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let commands = ExtensionCommands::load().await?;
-    let wrappers = Arc::new(commands.materialize_wrappers()?);
-
     let state = AppState {
         sessions: SessionState::default(),
         windows: WindowStore::default(),
-        terminal: TerminalService::with_extension_wrappers(wrappers),
+        terminal: TerminalService::default(),
     };
 
     ozmux_extension::host::serve(state.sessions.clone());
