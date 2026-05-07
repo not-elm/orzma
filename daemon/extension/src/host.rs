@@ -28,6 +28,7 @@ async fn run(_sessions: SessionState) -> ExtensionResult {
 
     loop {
         let conn = listener.accept().await?;
+
         drop(conn);
     }
 }
@@ -35,14 +36,14 @@ async fn run(_sessions: SessionState) -> ExtensionResult {
 const SOCKET_NAME: &str = "ozmux-extension-host.sock";
 
 #[cfg(target_os = "linux")]
-fn resolve_socket_name() -> std::io::Result<Name<'static>> {
+pub(crate) fn resolve_socket_name() -> std::io::Result<Name<'static>> {
     // Linux abstract namespace sockets are ephemeral (vanish when the
     // last fd closes), so no filesystem cleanup is needed.
     SOCKET_NAME.to_ns_name::<GenericNamespaced>()
 }
 
 #[cfg(not(target_os = "linux"))]
-fn resolve_socket_name() -> std::io::Result<Name<'static>> {
+pub(crate) fn resolve_socket_name() -> std::io::Result<Name<'static>> {
     // On non-Linux Unix (notably macOS), `GenericNamespaced::is_supported()`
     // returns true but interprocess maps the namespaced name to a real
     // file at `/tmp/<name>` that survives process exit and breaks the

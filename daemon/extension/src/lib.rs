@@ -2,4 +2,4 @@
 pub mod commands;
 pub mod error;
 pub mod host;
-pub mod manifest;
+pub mod service;
