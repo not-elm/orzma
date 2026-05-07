@@ -4,7 +4,7 @@ import { memoActivity } from "./activities/memo.ts";
 bootstrap({
   commands: {
     memo: async ({ pane }) => {
-      await memoActivity.craete();
+      await memoActivity.craete({});
     },
   },
 });

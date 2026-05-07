@@ -5,13 +5,19 @@ const encoder = new TextEncoder();
 
 interface EventMaps {
   "command-invoke": CommandInvoke;
+  shutdown: Shutdown;
 }
+
 type Handler<K extends keyof EventMaps> = (payload: EventMaps[K]) => void;
 
 interface CommandInvoke {
   type: "command-invoke";
   command: string;
   ctx: CommandContext;
+}
+
+interface Shutdown {
+  type: "shutdown";
 }
 
 export class ExtensionHostClient {
@@ -41,6 +47,18 @@ export class ExtensionHostClient {
     this.addHandler(eventName, f);
   }
 
+  static async connect(): Promise<ExtensionHostClient> {
+    return new Promise((resolve, reject) => {
+      const socketPath = process.env.EXTENSION_HOST_SOCKET_PATH;
+      if (!socketPath) {
+        throw new Error("Missing EXTENSION_HOST_SOCKET_PATH");
+      }
+      const socket = uds.connect(socketPath);
+      socket.once("connect", () => resolve(new ExtensionHostClient(socket)));
+      socket.once("error", reject);
+    });
+  }
+
   private ensureDataListener(): void {
     if (this.dataListenerInstalled) return;
     this.socket.on("data", (chunk) => this.ingest(chunk));
@@ -56,9 +74,14 @@ export class ExtensionHostClient {
 
   private dispatchLine(line: string): void {
     if (line.length === 0) return;
-    const frame = JSON.parse(line) as CommandInvoke;
-    if (frame.type === "command-invoke") {
-      this.emit("command-invoke", frame);
+    const frame = JSON.parse(line);
+    switch (frame.type) {
+      case "command-invoke":
+        this.emit("command-invoke", frame);
+        break;
+      case "shutdown":
+        this.emit("shutdown", frame);
+        break;
     }
   }
 
@@ -81,17 +104,5 @@ export class ExtensionHostClient {
       this.handlers.set(eventName, set);
     }
     set.add(f as Handler<keyof EventMaps>);
-  }
-
-  static async connect(): Promise<ExtensionHostClient> {
-    return new Promise((resolve, reject) => {
-      const socketPath = process.env.EXTENSION_HOST_SOCKET_PATH;
-      if (!socketPath) {
-        throw new Error("Missing EXTENSION_HOST_SOCKET_PATH");
-      }
-      const socket = uds.connect(socketPath);
-      socket.once("connect", () => resolve(new ExtensionHostClient(socket)));
-      socket.once("error", reject);
-    });
   }
 }

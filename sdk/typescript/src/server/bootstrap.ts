@@ -22,5 +22,8 @@ export async function bootstrap(args: {
     const cmd = args.commands[m.command];
     cmd(m.ctx);
   });
+  client.on("shutdown", () => {
+    args.onShutdown?.();
+  });
   client.registerCommands(extensionName, Object.keys(args.commands));
 }
