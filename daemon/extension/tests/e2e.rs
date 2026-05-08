@@ -57,6 +57,21 @@ async fn pane_command_invokes_extension_handler() {
 }
 
 #[tokio::test]
+async fn load_pre_creates_extension_bin_dirs() {
+    let parent = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
+    unsafe { std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root()); }
+    let _handles = ExtensionHandles::load(&runtime).expect("load extensions");
+    for name in ["echoext", "crashext"] {
+        let bin_dir = runtime.bin_dir().join(name);
+        assert!(
+            bin_dir.is_dir(),
+            "expected bin dir {bin_dir:?} to exist immediately after load"
+        );
+    }
+}
+
+#[tokio::test]
 async fn daemon_drop_removes_runtime_root() {
     let parent = tempfile::tempdir().unwrap();
     let path;

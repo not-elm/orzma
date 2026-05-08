@@ -57,6 +57,14 @@ fn node_handle(
 ) -> ExtensionResult<Child> {
     let bin_dir = runtime.bin_dir().join(&package.name);
     let sock_path = runtime.sock_dir().join(format!("{}.sock", package.name));
+
+    std::fs::create_dir_all(&bin_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+
     let child = Command::new("node")
         .arg(&package.main)
         .current_dir(extension_dir)

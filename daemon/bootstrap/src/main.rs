@@ -29,9 +29,6 @@ async fn main() -> anyhow::Result<()> {
 
     let _ext_handles = ExtensionHandles::load(&runtime)?;
 
-    //TODO: Extensionのコマンドが登録されるまで待機する必要がある。現状は単純な遅延で解決
-    tokio::time::sleep(std::time::Duration::from_secs_f64(3.)).await;
-
     let state = AppState {
         sessions: SessionState::default(),
         windows: WindowStore::default(),
