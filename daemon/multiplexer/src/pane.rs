@@ -15,15 +15,8 @@ pub struct PaneState(HashMap<PaneId, Pane>);
 
 impl PaneState {
     #[inline]
-    pub fn register(&mut self, id: PaneId, pane: Pane) {
+    pub fn insert(&mut self, id: PaneId, pane: Pane) {
         self.0.insert(id, pane);
-    }
-
-    #[inline]
-    pub fn get(&self, id: &PaneId) -> SessionResult<&Pane> {
-        self.0
-            .get(id)
-            .ok_or_else(|| SessionError::PaneNotFound(id.clone()))
     }
 
     #[inline]
@@ -41,11 +34,6 @@ impl PaneState {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (&PaneId, &Pane)> {
-        self.0.iter()
     }
 
     pub fn any_pane_id(&self) -> Option<PaneId> {

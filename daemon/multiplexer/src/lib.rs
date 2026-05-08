@@ -13,18 +13,15 @@ pub mod error;
 pub mod pane;
 pub mod session;
 pub mod window;
-pub mod window_service;
 
 pub use error::{SessionError, SessionResult};
-pub use window::{Window, WindowId, WindowStore};
-pub use window_service::WindowService;
+pub use window::*;
 
 use crate::{
     activity::{Activity, ActivityId, ActivityState},
     cells::{CellId, LayoutCellState, Side, SplitOrientation},
     pane::{Pane, PaneId, PaneState},
     session::{Session, SessionId, SessionState},
-    window::WindowState,
 };
 
 pub struct MultiplexerService {
@@ -50,12 +47,12 @@ impl MultiplexerService {
         let id = WindowId::new();
         let activity_id = self.new_activity(Activity::default());
         let pane_id = PaneId::new();
-        self.panes.register(pane_id.clone(), Pane::new(activity_id));
+        self.panes.insert(pane_id.clone(), Pane::new(activity_id));
         let (root_cell, pane_cell_id) = self.cells.new_window_layout(pane_id.clone());
         self.pane_to_cell.insert(pane_id.clone(), pane_cell_id);
         let name = format!("Window{}", self.windows.len());
         self.windows
-            .register(id.clone(), Window::new(name, root_cell, pane_id));
+            .insert(id.clone(), Window::new(name, root_cell, pane_id));
         id
     }
 
@@ -65,7 +62,7 @@ impl MultiplexerService {
         parent_cell: Option<CellId>,
     ) -> (PaneId, CellId) {
         let id = PaneId::new();
-        self.panes.register(id.clone(), Pane::new(activity_id));
+        self.panes.insert(id.clone(), Pane::new(activity_id));
         let cell_id = self.cells.new_pane(id.clone(), parent_cell);
         self.pane_to_cell.insert(id.clone(), cell_id.clone());
         (id, cell_id)
@@ -73,7 +70,7 @@ impl MultiplexerService {
 
     pub fn new_activity(&mut self, activity: Activity) -> ActivityId {
         let id = ActivityId::new();
-        self.activities.register(id.clone(), activity);
+        self.activities.insert(id.clone(), activity);
         id
     }
 
@@ -91,6 +88,16 @@ impl MultiplexerService {
         self.windows
             .replace_active_pane(&target_pane_id, &new_pane_id);
         Ok(new_pane_id)
+    }
+
+    pub fn close_pane(&mut self, pane_id: &PaneId) -> SessionResult {
+        let pane = self.panes.remove(pane_id)?;
+        self.pane_to_cell.remove(&pane_id);
+        for activity_id in pane.activities {
+            self.activities.remove(&activity_id);
+        }
+
+        Ok(())
     }
 
     fn pane_to_cell(&self, pane_id: &PaneId) -> SessionResult<&CellId> {

@@ -10,8 +10,13 @@ pub struct ActivityState(HashMap<ActivityId, Activity>);
 
 impl ActivityState {
     #[inline]
-    pub fn register(&mut self, id: ActivityId, activity: Activity) {
+    pub fn insert(&mut self, id: ActivityId, activity: Activity) {
         self.0.insert(id, activity);
+    }
+
+    #[inline]
+    pub fn remove(&mut self, id: &ActivityId) {
+        self.0.remove(id);
     }
 }
 
