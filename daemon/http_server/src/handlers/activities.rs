@@ -9,7 +9,7 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use ozmux_session::activity::ActivityId;
+use ozmux_multiplexer::activity::ActivityId;
 use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -43,26 +43,20 @@ async fn handle_terminal_socket(
     activity_id: ActivityId,
 ) {
     let (mut ws_tx, ws_rx) = socket.split();
-
     let Some((snapshot, rx)) = acquire_session(&terminal, &activity_id, &mut ws_tx).await else {
         return;
     };
     if send_snapshot(&mut ws_tx, snapshot).await.is_err() {
         return;
     }
-
     let outbound = tokio::spawn(forward_pty_to_ws(ws_tx, rx));
     let inbound = tokio::spawn(forward_ws_to_pty(ws_rx, terminal, activity_id));
-
     tokio::select! {
         _ = outbound => {},
         _ = inbound => {},
     }
 }
 
-/// Race-free snapshot + subscribe (single critical section inside
-/// `ScrollbackBuffer`, see `pty/pty_handle.rs`). On lookup failure, send a
-/// Close frame and signal the caller to bail out by returning `None`.
 async fn acquire_session(
     terminal: &TerminalService,
     activity_id: &ActivityId,
@@ -82,7 +76,6 @@ async fn acquire_session(
     }
 }
 
-/// Send the initial scrollback as a single binary frame, if non-empty.
 async fn send_snapshot(ws_tx: &mut WsSink, snapshot: Vec<u8>) -> Result<(), axum::Error> {
     if snapshot.is_empty() {
         return Ok(());
@@ -90,8 +83,6 @@ async fn send_snapshot(ws_tx: &mut WsSink, snapshot: Vec<u8>) -> Result<(), axum
     ws_tx.send(Message::Binary(snapshot.into())).await
 }
 
-/// Forward broadcast events to the client until the PTY exits, the receiver
-/// lags, or the WS write fails.
 async fn forward_pty_to_ws(mut ws_tx: WsSink, mut rx: broadcast::Receiver<TerminalEvent>) {
     loop {
         match rx.recv().await {
@@ -113,8 +104,6 @@ async fn forward_pty_to_ws(mut ws_tx: WsSink, mut rx: broadcast::Receiver<Termin
     }
 }
 
-/// Forward client frames to the PTY: binary frames as raw input, text frames
-/// as JSON-encoded control messages (currently only `resize`).
 async fn forward_ws_to_pty(
     mut ws_rx: WsStream,
     terminal: TerminalService,
@@ -129,7 +118,7 @@ async fn forward_ws_to_pty(
             }
             Ok(Message::Text(text)) => apply_client_control(&terminal, &activity_id, &text).await,
             Ok(Message::Close(_)) => break,
-            Ok(_) => {} // Ping/Pong handled by axum
+            Ok(_) => {}
             Err(_) => break,
         }
     }
@@ -165,21 +154,26 @@ mod tests {
     use super::*;
     use crate::AppState;
     use futures_util::{SinkExt, StreamExt};
+    use ozmux_multiplexer::MultiplexerService;
     use ozmux_terminal::SpawnOptions;
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message as TtMessage;
 
     async fn boot_server() -> (std::net::SocketAddr, AppState, ActivityId) {
-        let state = AppState::default();
-        let (sid, wid, pid, activity_id) = state.sessions.bootstrap_default(&state.windows).await;
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, pid, activity_id) = ms.bootstrap_default().unwrap();
+        let state = AppState {
+            multiplexer: Arc::new(Mutex::new(ms)),
+            terminal: TerminalService::default(),
+        };
         state
             .terminal
             .spawn(
-                activity_id.clone(),
                 pid,
-                wid,
-                sid,
+                activity_id.clone(),
                 SpawnOptions {
                     cols: 80,
                     rows: 24,
@@ -189,7 +183,6 @@ mod tests {
             )
             .await
             .unwrap();
-
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let app = crate::test_helpers::daemon_router_for_test(state.clone());
@@ -204,13 +197,10 @@ mod tests {
         let (addr, state, activity_id) = boot_server().await;
         let url = format!("ws://{addr}/activities/{activity_id}/terminal/ws");
         let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-
-        // Send input that produces a unique marker in output.
         ws.send(TtMessage::Binary(b"echo ws_marker_test\n".to_vec().into()))
             .await
             .unwrap();
 
-        // Drain frames up to ~3s, looking for marker.
         let mut got = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         while tokio::time::Instant::now() < deadline {
@@ -229,7 +219,6 @@ mod tests {
                 Err(_) => continue,
             }
         }
-
         state.terminal.kill(&activity_id).await.unwrap();
         let s = String::from_utf8_lossy(&got);
         assert!(s.contains("ws_marker_test"), "expected marker, got: {s}");
@@ -240,24 +229,18 @@ mod tests {
         let (addr, state, activity_id) = boot_server().await;
         let url = format!("ws://{addr}/activities/{activity_id}/terminal/ws");
         let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-
         ws.send(TtMessage::Text(
             r#"{"type":"resize","cols":120,"rows":40}"#.into(),
         ))
         .await
         .unwrap();
-
-        // After resize, connection should still be alive (give it 200ms).
         let result = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
-        // Either we got data (still alive) or timeout (no data yet, still alive).
-        // We just need to confirm the connection wasn't closed.
         match result {
-            Err(_) => { /* timeout, connection still open */ }
-            Ok(Some(Ok(TtMessage::Binary(_)))) => { /* alive */ }
+            Err(_) => {}
+            Ok(Some(Ok(TtMessage::Binary(_)))) => {}
             Ok(Some(Ok(TtMessage::Close(_)))) => panic!("connection closed unexpectedly"),
             other => panic!("unexpected: {other:?}"),
         }
-
         state.terminal.kill(&activity_id).await.unwrap();
     }
 
@@ -267,14 +250,12 @@ mod tests {
         let bogus = ActivityId::new();
         let url = format!("ws://{addr}/activities/{bogus}/terminal/ws");
         let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-
-        // Should receive Close frame quickly.
         let result = tokio::time::timeout(Duration::from_secs(2), ws.next()).await;
         match result {
             Ok(Some(Ok(TtMessage::Close(Some(frame))))) => {
                 assert!(frame.reason.contains("activity not found"));
             }
-            Ok(Some(Ok(TtMessage::Close(None)))) => { /* also acceptable */ }
+            Ok(Some(Ok(TtMessage::Close(None)))) => {}
             other => panic!("expected Close frame, got: {other:?}"),
         }
     }

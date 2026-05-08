@@ -3,8 +3,7 @@ use crate::{
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
 };
 use ozmux_extension::runtime::RuntimeRoot;
-use ozmux_session::activity::ActivityId;
-use ozmux_session::pane::PaneId;
+use ozmux_multiplexer::{activity::ActivityId, pane::PaneId};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Read, sync::Arc};
@@ -40,24 +39,10 @@ impl TerminalService {
         }
     }
 
-    fn extension_path_prefix(&self) -> Option<String> {
-        let root = self.runtime_root.as_ref()?;
-        let bin_dir = root.bin_dir();
-        let mut entries: Vec<String> = std::fs::read_dir(bin_dir).ok()?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
-            .map(|e| e.path().to_string_lossy().into_owned())
-            .collect();
-        entries.sort();
-        if entries.is_empty() { None } else { Some(entries.join(":")) }
-    }
-
     pub async fn spawn(
         &self,
-        activity_id: ActivityId,
         pane_id: PaneId,
-        window_id: ozmux_session::window::WindowId,
-        session_id: ozmux_session::SessionId,
+        activity_id: ActivityId,
         opts: SpawnOptions,
     ) -> TerminalResult {
         let mut ptys = self.ptys.write().await;
@@ -78,8 +63,6 @@ impl TerminalService {
         if let Some(cwd) = &opts.cwd {
             cmd.cwd(cwd);
         }
-        cmd.env("OZMUX_SESSION_ID", session_id.as_ref());
-        cmd.env("OZMUX_WINDOW_ID", window_id.as_ref());
         cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
         cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
         if let Some(prefix) = self.extension_path_prefix() {
@@ -165,6 +148,23 @@ impl TerminalService {
         let guard = self.ptys.read().await;
         RwLockReadGuard::try_map(guard, |ptys| ptys.get(activity_id))
             .map_err(|_| TerminalError::ActivityNotFound(activity_id.clone()))
+    }
+
+    fn extension_path_prefix(&self) -> Option<String> {
+        let root = self.runtime_root.as_ref()?;
+        let bin_dir = root.bin_dir();
+        let mut entries: Vec<String> = std::fs::read_dir(bin_dir)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
+            .map(|e| e.path().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        if entries.is_empty() {
+            None
+        } else {
+            Some(entries.join(":"))
+        }
     }
 }
 
@@ -387,12 +387,24 @@ mod tests {
         let activity_id = ActivityId::new();
         let pane_id = PaneId::new();
         svc.spawn(
-            activity_id.clone(), pane_id, WindowId::new(), SessionId::new(),
-            SpawnOptions { cols: 80, rows: 24, shell: "/bin/sh".to_string(), cwd: None },
-        ).await.unwrap();
+            activity_id.clone(),
+            pane_id,
+            WindowId::new(),
+            SessionId::new(),
+            SpawnOptions {
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
+            },
+        )
+        .await
+        .unwrap();
 
         let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity_id).await.unwrap();
-        svc.write(&activity_id, b"echo PATHHEAD=\"$PATH\"\n").await.unwrap();
+        svc.write(&activity_id, b"echo PATHHEAD=\"$PATH\"\n")
+            .await
+            .unwrap();
 
         let needle = format!("PATHHEAD={}", ext_bin.display());
         let mut got = Vec::new();
@@ -429,7 +441,10 @@ mod tests {
         drop(rt);
         assert!(path.exists(), "Arc inside service keeps RuntimeRoot alive");
         drop(svc);
-        assert!(!path.exists(), "service drop releases last Arc → RuntimeRoot Drop");
+        assert!(
+            !path.exists(),
+            "service drop releases last Arc → RuntimeRoot Drop"
+        );
     }
 
     #[tokio::test]
@@ -446,8 +461,15 @@ mod tests {
             pane_id,
             ozmux_session::window::WindowId::new(),
             ozmux_session::SessionId::new(),
-            SpawnOptions { cols: 80, rows: 24, shell: "/bin/sh".to_string(), cwd: None },
-        ).await.expect("spawn must succeed even with empty bin/");
+            SpawnOptions {
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
+            },
+        )
+        .await
+        .expect("spawn must succeed even with empty bin/");
         svc.kill(&activity_id).await.unwrap();
     }
 }

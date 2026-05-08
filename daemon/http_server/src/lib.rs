@@ -6,34 +6,23 @@ pub use error::{HttpError, HttpResult};
 use axum::{
     Router,
     extract::FromRef,
-    routing::{delete as method_delete, get, post},
+    routing::{delete as method_delete, get, patch, post},
 };
-use ozmux_session::{SessionState, WindowService, WindowStore};
+use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
+use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 
 #[derive(Clone, Default)]
 pub struct AppState {
-    pub sessions: SessionState,
-    pub windows: WindowStore,
+    pub multiplexer: Arc<Mutex<MultiplexerService>>,
     pub terminal: TerminalService,
 }
 
-impl FromRef<AppState> for SessionState {
+impl FromRef<AppState> for Arc<Mutex<MultiplexerService>> {
     fn from_ref(input: &AppState) -> Self {
-        input.sessions.clone()
-    }
-}
-
-impl FromRef<AppState> for WindowStore {
-    fn from_ref(input: &AppState) -> Self {
-        input.windows.clone()
-    }
-}
-
-impl FromRef<AppState> for WindowService {
-    fn from_ref(input: &AppState) -> Self {
-        WindowService::new(input.sessions.clone(), input.windows.clone())
+        input.multiplexer.clone()
     }
 }
 
@@ -44,14 +33,16 @@ impl FromRef<AppState> for TerminalService {
 }
 
 pub async fn serve(state: AppState) -> HttpResult {
-    let (sid, wid, pid, aid) = state.sessions.bootstrap_default(&state.windows).await;
+    let (sid, wid, pid, aid) = {
+        let mut ms = state.multiplexer.lock().await;
+        ms.bootstrap_default().expect("bootstrap_default cannot fail on empty MultiplexerService")
+    };
+    let _ = (sid, wid); // not needed for spawn; kept for clarity / future use.
     if let Err(e) = state
         .terminal
         .spawn(
-            aid,
             pid,
-            wid,
-            sid,
+            aid,
             ozmux_terminal::SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -61,7 +52,6 @@ pub async fn serve(state: AppState) -> HttpResult {
         )
         .await
     {
-        // Bootstrap PTY spawn failure must not yield a half-initialized server.
         panic!("bootstrap PTY spawn failed: {e}");
     }
 
@@ -78,87 +68,60 @@ pub fn daemon_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(handlers::index::handler))
         .route("/health", get(handlers::health::check))
-        .nest("/sessions", sessions_router())
-        .nest("/activities", activities_router())
+        .route(
+            "/sessions",
+            post(handlers::sessions::create),
+        )
+        .route(
+            "/sessions/{session_id}",
+            patch(handlers::sessions::rename).delete(handlers::sessions::delete),
+        )
+        .route(
+            "/windows",
+            post(handlers::windows::create),
+        )
+        .route(
+            "/windows/{window_id}",
+            patch(handlers::windows::rename).delete(handlers::windows::delete),
+        )
+        .route(
+            "/windows/{window_id}/select",
+            post(handlers::windows::select),
+        )
+        .route(
+            "/panes/{pane_id}/split",
+            post(handlers::panes::split),
+        )
+        .route(
+            "/panes/{pane_id}",
+            method_delete(handlers::panes::close),
+        )
+        .route(
+            "/activities/{activity_id}/terminal/ws",
+            get(handlers::activities::terminal_ws),
+        )
         .with_state(state)
-}
-
-fn sessions_router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/",
-            get(handlers::sessions::list).post(handlers::sessions::create),
-        )
-        .nest("/{session_id}", session_id_router())
-}
-
-fn session_id_router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/",
-            get(handlers::sessions::get_session)
-                .patch(handlers::sessions::rename)
-                .delete(handlers::sessions::delete),
-        )
-        .nest("/windows", windows_router())
-}
-
-fn windows_router() -> Router<AppState> {
-    Router::new()
-        .route("/", post(handlers::sessions::windows::create))
-        .nest("/{window_id}", window_id_router())
-}
-
-fn window_id_router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/",
-            get(handlers::sessions::windows::get_window)
-                .patch(handlers::sessions::windows::rename)
-                .delete(handlers::sessions::windows::delete),
-        )
-        .route("/select", post(handlers::sessions::windows::select))
-        .nest("/panes/{pane_id}", pane_id_router())
-}
-
-fn pane_id_router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/",
-            method_delete(handlers::sessions::windows::panes::close),
-        )
-        .route(
-            "/split",
-            post(handlers::sessions::windows::panes::split::split),
-        )
-}
-
-fn activities_router() -> Router<AppState> {
-    Router::new().route(
-        "/{activity_id}/terminal/ws",
-        get(handlers::activities::terminal_ws),
-    )
 }
 
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
     use axum::Router;
-    use ozmux_session::{SessionState, WindowStore};
+    use ozmux_multiplexer::MultiplexerService;
     use ozmux_terminal::TerminalService;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     pub fn daemon_router_for_test(state: AppState) -> Router {
         daemon_router(state)
     }
 
-    /// Build a router from a `SessionState` + `WindowStore`, supplying a default
-    /// `TerminalService`. Used by handler tests that don't exercise the WS endpoint.
-    pub fn router_with_state(sessions: SessionState, windows: WindowStore) -> Router {
-        daemon_router(AppState {
-            sessions,
-            windows,
+    pub fn router_with(ms: MultiplexerService) -> (Router, AppState) {
+        let state = AppState {
+            multiplexer: Arc::new(Mutex::new(ms)),
             terminal: TerminalService::default(),
-        })
+        };
+        (daemon_router(state.clone()), state)
     }
 }
 
@@ -167,14 +130,17 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use ozmux_multiplexer::MultiplexerService;
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn unknown_session_route_returns_404() {
-        let resp = daemon_router(AppState::default())
+    async fn unknown_pane_route_returns_404() {
+        let (router, _) = test_helpers::router_with(MultiplexerService::default());
+        let resp = router
             .oneshot(
                 Request::builder()
-                    .uri("/sessions/does-not-exist")
+                    .method("DELETE")
+                    .uri("/panes/does-not-exist")
                     .body(Body::empty())
                     .unwrap(),
             )

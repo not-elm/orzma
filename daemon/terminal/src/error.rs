@@ -1,6 +1,6 @@
 //! Domain errors for the terminal layer.
 
-use ozmux_session::activity::ActivityId;
+use ozmux_multiplexer::activity::ActivityId;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
