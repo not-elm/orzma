@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+
 const COMMAND_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 
 export function assertCommandName(name: string): void {
@@ -9,8 +11,6 @@ export function assertCommandName(name: string): void {
 export function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
-
-import * as fs from "node:fs/promises";
 
 export interface WriteShimArgs {
   filePath: string;
