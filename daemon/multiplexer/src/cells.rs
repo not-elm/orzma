@@ -26,7 +26,7 @@ impl LayoutCellState {
             return Err(SessionError::SplitTargetEqualsNewCell(target));
         }
         let split_cell_id = CellId::new();
-        let target_parent = self.parent(&target)?.cloned();
+        let target_parent = self.cell(&target)?.parent()?;
         self.cell(&new_cell)?;
         self.cell_mut(&target)?
             .parent
@@ -35,7 +35,7 @@ impl LayoutCellState {
             .parent
             .replace(split_cell_id.clone());
 
-        self.repoint_parent_to_split(&target, target_parent.clone(), split_cell_id.clone())?;
+        self.repoint_parent_to_split(&target, &target_parent, split_cell_id.clone())?;
 
         let (lhs_cell, rhs_cell) = match new_cell_side {
             Side::Before => (new_cell, target),
@@ -44,10 +44,7 @@ impl LayoutCellState {
 
         self.0.insert(
             split_cell_id.clone(),
-            LayoutCell {
-                parent: target_parent,
-                cell: Cell::Split(SplitCell::new(lhs_cell, rhs_cell, orientation)),
-            },
+            Cell::Split(SplitCell::new(target, lhs_cell, rhs_cell, orientation)),
         );
         Ok(split_cell_id)
     }
@@ -168,25 +165,23 @@ impl LayoutCellState {
     #[inline]
     pub fn new_pane(&mut self, pane_id: PaneId, parent: CellId) -> CellId {
         let id = CellId::new();
-        self.register(
-            id.clone(),
-            LayoutCell {
-                parent,
-                cell: Cell::Pane(PaneCell { pane: pane_id }),
-            },
-        );
+        let cell = Cell::Pane(PaneCell {
+            parent: parent,
+            pane: pane_id,
+        });
+        self.register(id.clone(), cell);
         id
     }
 
     #[inline]
-    pub fn cell(&self, id: &CellId) -> SessionResult<&LayoutCell> {
+    pub fn cell(&self, id: &CellId) -> SessionResult<&Cell> {
         self.0
             .get(id)
             .ok_or_else(|| SessionError::CellNotFound(id.clone()))
     }
 
     #[inline]
-    fn cell_mut(&mut self, id: &CellId) -> SessionResult<&mut LayoutCell> {
+    fn cell_mut(&mut self, id: &CellId) -> SessionResult<&mut Cell> {
         self.0
             .get_mut(id)
             .ok_or_else(|| SessionError::CellNotFound(id.clone()))
@@ -195,12 +190,9 @@ impl LayoutCellState {
     fn repoint_parent_to_split(
         &mut self,
         cell: &CellId,
-        parent: Option<CellId>,
+        parent: &CellId,
         split_cell: CellId,
     ) -> SessionResult {
-        let Some(parent) = parent.as_ref() else {
-            return Ok(());
-        };
         let Cell::Split(ref mut p) = self.cell_mut(parent)?.cell else {
             return Ok(());
         };
@@ -210,11 +202,6 @@ impl LayoutCellState {
             p.rhs_cell = split_cell;
         }
         Ok(())
-    }
-
-    #[inline]
-    fn parent(&self, id: &CellId) -> SessionResult<Option<&CellId>> {
-        Ok(self.cell(id)?.parent.as_ref())
     }
 }
 
@@ -239,6 +226,20 @@ pub enum Cell {
     Split(SplitCell),
 }
 
+impl Cell {
+    pub fn parent(&self) -> Option<CellId> {
+        match self {
+            Self::Pane(c) => Some(c.parent.clone()),
+            Self::Split(c) => Some(c.parent.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn require_parent(&self) -> SessionResult<CellId> {
+        self.parent().ok_or_else(|| SessionError::MissingParentCell)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaneCell {
     pub parent: CellId,
@@ -256,8 +257,9 @@ pub struct SplitCell {
 }
 
 impl SplitCell {
-    pub fn new(lhs: CellId, rhs: CellId, orientation: SplitOrientation) -> Self {
+    pub fn new(parent: CellId, elhs: CellId, rhs: CellId, orientation: SplitOrientation) -> Self {
         Self {
+            parent,
             orientation,
             lhs_cell: lhs,
             lhs_weight: 0.5,

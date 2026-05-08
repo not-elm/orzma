@@ -1,8 +1,7 @@
 use crate::{
-    SessionId,
-    cell::{CellId, CloseOutcome, LayoutCellState, Side, SplitOrientation},
+    cells::{CellId, CloseOutcome, LayoutCellState, Side, SplitOrientation},
     error::{SessionError, SessionResult},
-    pane::{Pane, PaneId, PaneStore},
+    pane::{Pane, PaneId},
 };
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
