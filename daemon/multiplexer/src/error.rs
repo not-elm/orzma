@@ -1,6 +1,6 @@
 //! Domain errors for the session layer.
 
-use crate::{CellId, SessionId, pane::PaneId, window::WindowId};
+use crate::{cells::CellId, pane::PaneId, session::SessionId, window::WindowId};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -25,6 +25,9 @@ pub enum SessionError {
 
     #[error("cell not found id={0}")]
     CellNotFound(CellId),
+
+    #[error("cell mapping not found for pane-id={0}")]
+    CellForPaneNotFound(PaneId),
 
     #[error("invalid node type node-id={0}")]
     InvalidCellType(CellId),

@@ -5,9 +5,9 @@
 //! `SessionState` and `WindowStore` directly.
 
 use crate::{
-    SessionId, SessionState,
+    SessionId,
     activity::ActivityId,
-    cell::{Side, SplitOrientation},
+    cells::{Side, SplitOrientation},
     error::{SessionError, SessionResult},
     pane::PaneId,
     window::{Window, WindowId, WindowStore},
@@ -15,12 +15,12 @@ use crate::{
 
 #[derive(Clone)]
 pub struct WindowService {
-    sessions: SessionState,
+    sessions: SessionStateOld,
     windows: WindowStore,
 }
 
 impl WindowService {
-    pub fn new(sessions: SessionState, windows: WindowStore) -> Self {
+    pub fn new(sessions: SessionStateOld, windows: WindowStore) -> Self {
         Self { sessions, windows }
     }
 }
@@ -242,14 +242,14 @@ mod tests {
 
     #[tokio::test]
     async fn window_service_can_be_constructed() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let _svc = WindowService::new(sessions, windows);
     }
 
     #[tokio::test]
     async fn create_adds_window_to_session_and_store() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_unknown_session_returns_session_not_found() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions, windows);
 
@@ -286,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn rename_changes_window_name() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
@@ -302,7 +302,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_removes_window_and_returns_activity_ids() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
@@ -333,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_last_window_returns_cannot_close_last_window() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
@@ -348,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn select_active_updates_session_active_window() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
@@ -372,7 +372,7 @@ mod tests {
 
     #[tokio::test]
     async fn split_pane_adds_pane_to_window() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
@@ -398,7 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_pane_removes_pane_and_returns_activity_id() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
@@ -433,7 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn cascade_delete_session_removes_session_and_all_windows() {
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
@@ -463,7 +463,7 @@ mod tests {
     async fn close_returns_back_ref_error_when_window_session_id_mismatch() {
         use crate::Session;
 
-        let sessions = SessionState::default();
+        let sessions = SessionStateOld::default();
         let windows = WindowStore::default();
         let svc = WindowService::new(sessions.clone(), windows.clone());
 
