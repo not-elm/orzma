@@ -1,5 +1,5 @@
 use ozmux_extension::{handle::ExtensionHandles, runtime::RuntimeRoot};
-use ozmux_session::{SessionId, activity::ActivityId, pane::PaneId, window::WindowId};
+use ozmux_multiplexer::{activity::ActivityId, pane::PaneId};
 use ozmux_terminal::{SpawnOptions, TerminalService};
 use std::{path::PathBuf, sync::Arc, time::{Duration, Instant}};
 
@@ -27,10 +27,8 @@ async fn pane_command_invokes_extension_handler() {
     let svc = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let activity = ActivityId::new();
     svc.spawn(
-        activity.clone(),
         PaneId::new(),
-        WindowId::new(),
-        SessionId::new(),
+        activity.clone(),
         SpawnOptions { cols: 80, rows: 24, shell: "/bin/sh".to_string(), cwd: None },
     ).await.unwrap();
 

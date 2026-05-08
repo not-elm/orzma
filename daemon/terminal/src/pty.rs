@@ -225,17 +225,12 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_then_snapshot_and_subscribe_succeeds() {
-        use ozmux_session::SessionId;
-        use ozmux_session::window::WindowId;
-
         let svc = TerminalService::default();
         let id = ActivityId::new();
         let pane_id = PaneId::new();
         svc.spawn(
-            id.clone(),
             pane_id,
-            WindowId::new(),
-            SessionId::new(),
+            id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -255,20 +250,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_injects_ozmux_ids_into_shell_env() {
-        use ozmux_session::SessionId;
-        use ozmux_session::window::WindowId;
-
+    async fn spawn_injects_pane_and_activity_ids_into_shell_env() {
         let svc = TerminalService::default();
         let activity_id = ActivityId::new();
         let pane_id = PaneId::new();
-        let window_id = WindowId::new();
-        let session_id = SessionId::new();
         svc.spawn(
-            activity_id.clone(),
             pane_id.clone(),
-            window_id.clone(),
-            session_id.clone(),
+            activity_id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -283,18 +271,12 @@ mod tests {
 
         svc.write(
             &activity_id,
-            b"printf 'SES=%s WIN=%s PANE=%s ACT=%s\\n' \"$OZMUX_SESSION_ID\" \"$OZMUX_WINDOW_ID\" \"$OZMUX_PANE_ID\" \"$OZMUX_ACTIVITY_ID\"\n",
+            b"printf 'PANE=%s ACT=%s\\n' \"$OZMUX_PANE_ID\" \"$OZMUX_ACTIVITY_ID\"\n",
         )
         .await
         .unwrap();
 
-        let needle = format!(
-            "SES={} WIN={} PANE={} ACT={}",
-            session_id.as_ref(),
-            window_id.as_ref(),
-            pane_id.as_ref(),
-            activity_id.as_ref()
-        );
+        let needle = format!("PANE={} ACT={}", pane_id.as_ref(), activity_id.as_ref());
 
         let mut got = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -313,22 +295,17 @@ mod tests {
         }
         svc.kill(&activity_id).await.unwrap();
         let s = String::from_utf8_lossy(&got);
-        assert!(s.contains(&needle), "expected `{needle}`, got: {s}");
+        assert!(s.contains(&needle), "expected {needle}, got: {s}");
     }
 
     #[tokio::test]
     async fn pty_output_is_broadcast_to_subscribers() {
-        use ozmux_session::SessionId;
-        use ozmux_session::window::WindowId;
-
         let svc = TerminalService::default();
         let id = ActivityId::new();
         let pane_id = PaneId::new();
         svc.spawn(
-            id.clone(),
             pane_id,
-            WindowId::new(),
-            SessionId::new(),
+            id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -374,8 +351,6 @@ mod tests {
     #[tokio::test]
     async fn spawn_with_runtime_root_prepends_path() {
         use ozmux_extension::runtime::RuntimeRoot;
-        use ozmux_session::SessionId;
-        use ozmux_session::window::WindowId;
         use std::sync::Arc;
 
         let parent = tempfile::tempdir().unwrap();
@@ -387,10 +362,8 @@ mod tests {
         let activity_id = ActivityId::new();
         let pane_id = PaneId::new();
         svc.spawn(
-            activity_id.clone(),
             pane_id,
-            WindowId::new(),
-            SessionId::new(),
+            activity_id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -457,10 +430,8 @@ mod tests {
         let activity_id = ActivityId::new();
         let pane_id = PaneId::new();
         svc.spawn(
-            activity_id.clone(),
             pane_id,
-            ozmux_session::window::WindowId::new(),
-            ozmux_session::SessionId::new(),
+            activity_id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
