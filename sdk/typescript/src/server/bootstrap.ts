@@ -1,32 +1,15 @@
-import { ExtensionHostClient } from "./extension-host-client.ts";
-
-export interface CommandContext {
-  argv: string[];
-  pane: { sessionId: string; windowId: string; paneId: string };
-  env: Record<string, string>;
-  cwd: string;
+export interface BootstrapEnv {
+  binDir: string;
+  sockPath: string;
+  extensionName: string;
 }
 
-export type CommandHandler = (ctx: CommandContext) => Promise<void>;
-
-export async function bootstrap(args: {
-  commands: Record<string, CommandHandler>;
-  onShutdown?: () => void | Promise<void>;
-}) {
-  const extensionName = process.env.EXTENSION_NAME;
-  if (!extensionName) {
-    throw new Error("Missing EXTENSION_NAME");
+export function resolveBootstrapEnv(env: Record<string, string | undefined>): BootstrapEnv {
+  const binDir = env.OZMUX_BIN_DIR;
+  const sockPath = env.OZMUX_SOCK_PATH;
+  const extensionName = env.EXTENSION_NAME;
+  for (const [k, v] of Object.entries({ OZMUX_BIN_DIR: binDir, OZMUX_SOCK_PATH: sockPath, EXTENSION_NAME: extensionName })) {
+    if (!v) throw new Error(`missing required env: ${k}`);
   }
-  const client = await ExtensionHostClient.connect();
-  client.on("command-invoke", (m) => {
-    const cmd = args.commands[m.command];
-    cmd(m.ctx);
-  });
-  const onShutdown = args.onShutdown;
-  if (onShutdown) {
-    client.on("shutdown", () => {
-      onShutdown();
-    });
-  }
-  client.registerCommands(extensionName, Object.keys(args.commands));
+  return { binDir: binDir!, sockPath: sockPath!, extensionName: extensionName! };
 }
