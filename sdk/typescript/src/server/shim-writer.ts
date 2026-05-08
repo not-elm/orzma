@@ -5,3 +5,7 @@ export function assertCommandName(name: string): void {
     throw new Error(`invalid command name: ${JSON.stringify(name)}`);
   }
 }
+
+export function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
