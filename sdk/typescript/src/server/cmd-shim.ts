@@ -1,4 +1,5 @@
 import * as net from "node:net";
+import { pathToFileURL } from "node:url";
 import type { Writable } from "node:stream";
 import type { InvokeFrame, ServerFrame } from "./protocol.ts";
 import { encodeFrame } from "./protocol.ts";
@@ -118,5 +119,45 @@ export function runShim(args: RunShimArgs): Promise<number> {
     });
 
     sock.on("error", () => { /* close handler resolves */ });
+  });
+}
+
+interface ParsedArgs { socket: string; command: string; argv: string[] }
+
+export function parseShimArgs(argv: string[]): ParsedArgs {
+  let socket: string | undefined;
+  let command: string | undefined;
+  let i = 0;
+  while (i < argv.length) {
+    const a = argv[i];
+    if (a === "--socket") { socket = argv[++i]; i++; continue; }
+    if (a === "--command") { command = argv[++i]; i++; continue; }
+    if (a === "--") { i++; break; }
+    throw new Error(`unexpected argument: ${a}`);
+  }
+  if (!socket || !command) throw new Error("missing --socket or --command");
+  return { socket, command, argv: argv.slice(i) };
+}
+
+async function main() {
+  const parsed = parseShimArgs(process.argv.slice(2));
+  const code = await runShim({
+    socketPath: parsed.socket,
+    command: parsed.command,
+    argv: parsed.argv,
+    cwd: process.cwd(),
+    env: process.env,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    connectTimeoutMs: 5000,
+    signals: process,
+  });
+  process.exit(code);
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((err) => {
+    process.stderr.write(`ozmux: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(2);
   });
 }

@@ -7,6 +7,10 @@
     "./server": {
       "types": "./src/server/index.ts",
       "default": "./src/server/index.ts"
+    },
+    "./cmd-shim": {
+      "types": "./src/server/cmd-shim.ts",
+      "default": "./src/server/cmd-shim.ts"
     }
   },
   "scripts": {

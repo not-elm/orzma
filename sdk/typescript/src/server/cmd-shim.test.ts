@@ -4,7 +4,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { LineSplitter, buildInvokeFrame, runShim } from "./cmd-shim.ts";
+import { LineSplitter, buildInvokeFrame, parseShimArgs, runShim } from "./cmd-shim.ts";
+
+describe("parseShimArgs", () => {
+  it("parses --socket / --command and forwards trailing argv", () => {
+    expect(parseShimArgs(["--socket", "/x", "--command", "memo", "--", "a", "b"]))
+      .toEqual({ socket: "/x", command: "memo", argv: ["a", "b"] });
+  });
+  it("throws on missing options", () => {
+    expect(() => parseShimArgs(["--socket", "/x"])).toThrow();
+  });
+});
 
 describe("buildInvokeFrame", () => {
   it("includes argv, cwd, and only OZMUX_* env keys", () => {
