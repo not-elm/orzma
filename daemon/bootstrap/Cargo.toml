@@ -16,6 +16,7 @@ ozmux_http_server = { path = "../http_server" }
 ozmux_extension = { path = "../extension" }
 ozmux_session = { path = "../session" }
 ozmux_terminal = { path = "../terminal" }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
