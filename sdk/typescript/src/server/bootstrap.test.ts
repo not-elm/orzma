@@ -3,7 +3,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { bindServer, materializeShims, resolveBootstrapEnv } from "./bootstrap.ts";
+import { Writable } from "node:stream";
+import { bindServer, handleConnection, materializeShims, resolveBootstrapEnv, type CommandHandler } from "./bootstrap.ts";
 
 describe("resolveBootstrapEnv", () => {
   it("returns the trio when all are set", () => {
@@ -73,5 +74,35 @@ describe("materializeShims", () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+function clientPair() {
+  const chunks: Buffer[] = [];
+  const sink = new Writable({
+    write(c: Buffer, _e, cb) { chunks.push(c); cb(); },
+  });
+  return { sink, chunks };
+}
+
+describe("handleConnection", () => {
+  it("routes invoke to the handler and emits stdout/exit frames", async () => {
+    const handlers: Record<string, CommandHandler> = {
+      memo: async (ctx) => {
+        ctx.stdout.write(Buffer.from("hello"));
+        return 0;
+      },
+    };
+    const { sink, chunks } = clientPair();
+    await handleConnection(sink as any, handlers, (line) => JSON.parse(line), JSON.stringify({
+      type: "invoke",
+      command: "memo",
+      argv: [],
+      cwd: "/tmp",
+      env: { OZMUX_SESSION_ID: "s", OZMUX_WINDOW_ID: "w", OZMUX_PANE_ID: "p", OZMUX_ACTIVITY_ID: "a" },
+    }));
+    const text = Buffer.concat(chunks).toString("utf8");
+    expect(text).toMatch(/"type":"stdout"/);
+    expect(text).toMatch(/"type":"exit","code":0/);
   });
 });
