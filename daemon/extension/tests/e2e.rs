@@ -1,7 +1,7 @@
 use ozmux_extension::{handle::ExtensionHandles, runtime::RuntimeRoot};
 use ozmux_session::{SessionId, activity::ActivityId, pane::PaneId, window::WindowId};
 use ozmux_terminal::{SpawnOptions, TerminalService};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::{Duration, Instant}};
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -54,4 +54,16 @@ async fn pane_command_invokes_extension_handler() {
     let s = String::from_utf8_lossy(&got);
     assert!(s.contains("ARGV=alpha,beta"), "expected ARGV line, got: {s}");
     svc.kill(&activity).await.unwrap();
+}
+
+#[tokio::test]
+async fn daemon_drop_removes_runtime_root() {
+    let parent = tempfile::tempdir().unwrap();
+    let path;
+    {
+        let runtime = RuntimeRoot::new_in(parent.path(), std::process::id() + 1).unwrap();
+        path = runtime.root().to_path_buf();
+        assert!(path.exists());
+    }
+    assert!(!path.exists(), "expected runtime root to be cleaned up by Drop");
 }
