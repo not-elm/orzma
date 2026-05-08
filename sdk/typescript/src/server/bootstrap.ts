@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises";
+import * as net from "node:net";
+
 export interface BootstrapEnv {
   binDir: string;
   sockPath: string;
@@ -12,4 +15,21 @@ export function resolveBootstrapEnv(env: Record<string, string | undefined>): Bo
     if (!v) throw new Error(`missing required env: ${k}`);
   }
   return { binDir: binDir!, sockPath: sockPath!, extensionName: extensionName! };
+}
+
+export async function bindServer(
+  sockPath: string,
+  onConnection: (conn: net.Socket) => void,
+): Promise<net.Server> {
+  await fs.unlink(sockPath).catch(() => {});
+  const server = net.createServer(onConnection);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(sockPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  await fs.chmod(sockPath, 0o600);
+  return server;
 }
