@@ -49,7 +49,10 @@ impl MultiplexerService {
     pub fn new_window(&mut self) -> WindowId {
         let id = WindowId::new();
         let activity_id = self.new_activity(Activity::default());
-        let (pane_id, root_cell) = self.new_pane(activity_id, None);
+        let pane_id = PaneId::new();
+        self.panes.register(pane_id.clone(), Pane::new(activity_id));
+        let (root_cell, pane_cell_id) = self.cells.new_window_layout(pane_id.clone());
+        self.pane_to_cell.insert(pane_id.clone(), pane_cell_id);
         let name = format!("Window{}", self.windows.len());
         self.windows
             .register(id.clone(), Window::new(name, root_cell, pane_id));
@@ -64,7 +67,7 @@ impl MultiplexerService {
         let id = PaneId::new();
         self.panes.register(id.clone(), Pane::new(activity_id));
         let cell_id = self.cells.new_pane(id.clone(), parent_cell);
-        *self.pane_to_cell.entry(id.clone()).or_default() = cell_id.clone();
+        self.pane_to_cell.insert(id.clone(), cell_id.clone());
         (id, cell_id)
     }
 
@@ -85,6 +88,8 @@ impl MultiplexerService {
         let (new_pane_id, new_cell_id) = self.new_pane(new_activity_id, None);
         self.cells
             .split_cell(target_cell_id, new_cell_id, side, orientation)?;
+        self.windows
+            .replace_active_pane(&target_pane_id, &new_pane_id);
         Ok(new_pane_id)
     }
 

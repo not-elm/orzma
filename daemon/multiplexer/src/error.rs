@@ -29,6 +29,9 @@ pub enum SessionError {
     #[error("cell mapping not found for pane-id={0}")]
     CellForPaneNotFound(PaneId),
 
+    #[error("cannot close the last pane under root: cell-id={0}")]
+    CannotCloseLastPane(CellId),
+
     #[error("invalid node type node-id={0}")]
     InvalidCellType(CellId),
 

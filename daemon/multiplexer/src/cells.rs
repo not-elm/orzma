@@ -10,9 +10,32 @@ use std::collections::HashMap;
 pub struct LayoutCellState(HashMap<CellId, Cell>);
 
 impl LayoutCellState {
-    /// Register a pane cell. `parent == None` makes the new cell the tree's
-    /// root — the caller (typically `Window`) is responsible for storing the
-    /// returned `CellId` as `Window.root_cell`.
+    /// Initialize a new window's layout: a `Cell::Root` and its single initial
+    /// `Cell::Pane`, registered atomically so `RootCell::child` is always valid.
+    /// `Window.root_cell` is set to the returned root id and stays invariant
+    /// across subsequent splits / closes.
+    pub fn new_window_layout(&mut self, pane_id: PaneId) -> (CellId, CellId) {
+        let root_id = CellId::new();
+        let pane_cell_id = CellId::new();
+        self.0.insert(
+            pane_cell_id.clone(),
+            Cell::Pane(PaneCell {
+                parent: Some(root_id.clone()),
+                pane: pane_id,
+            }),
+        );
+        self.0.insert(
+            root_id.clone(),
+            Cell::Root(RootCell {
+                child: pane_cell_id.clone(),
+            }),
+        );
+        (root_id, pane_cell_id)
+    }
+
+    /// Register a pane cell. `parent == None` produces an orphan that callers
+    /// (typically `split_cell`) are expected to attach into the tree shortly
+    /// after creation.
     pub fn new_pane(&mut self, pane_id: PaneId, parent: Option<CellId>) -> CellId {
         let id = CellId::new();
         self.0.insert(
@@ -35,21 +58,14 @@ impl LayoutCellState {
         if target == new_cell {
             return Err(SessionError::SplitTargetEqualsNewCell(target));
         }
-        let target_parent = self.cell(&target)?.parent().cloned();
+        let target_parent = self.cell(&target)?.require_parent()?;
         self.cell(&new_cell)?;
 
         let split_id = CellId::new();
         self.reparent(&target, Some(split_id.clone()))?;
         self.reparent(&new_cell, Some(split_id.clone()))?;
-
-        // If target had a parent split, swap the target slot to the new split.
-        // If target was the tree root (parent == None), there is no upward link
-        // to rewire here — the caller must update `Window.root_cell` to
-        // `split_id` to keep the window pointing at the new top.
-        if let Some(parent_id) = target_parent.as_ref() {
-            self.cell_mut(parent_id)?
-                .replace_child(&target, split_id.clone());
-        }
+        self.cell_mut(&target_parent)?
+            .replace_child(&target, split_id.clone());
 
         let (lhs_cell, rhs_cell) = match new_cell_side {
             Side::Before => (new_cell, target),
@@ -57,7 +73,12 @@ impl LayoutCellState {
         };
         self.0.insert(
             split_id.clone(),
-            Cell::Split(SplitCell::new(target_parent, lhs_cell, rhs_cell, orientation)),
+            Cell::Split(SplitCell::new(
+                Some(target_parent),
+                lhs_cell,
+                rhs_cell,
+                orientation,
+            )),
         );
         Ok(split_id)
     }
@@ -70,39 +91,37 @@ impl LayoutCellState {
     /// planning phase cannot mutate, so any `Err` it returns leaves the store
     /// logically unchanged.
     pub fn close_cell(&mut self, id: &CellId) -> SessionResult<CloseOutcome> {
-        let Some(parent_id) = self.target_pane_parent(id)? else {
-            // Target was the lone root pane — removing it empties the tree.
-            // Window layer interprets this as "tear down the window".
-            self.0.remove(id);
-            return Ok(CloseOutcome::TreeEmptied);
-        };
+        let parent_id = self.target_pane_parent(id)?;
         let plan = self.plan_collapse(id, parent_id)?;
         Ok(self.apply_collapse(id, plan))
     }
 
-    fn target_pane_parent(&self, id: &CellId) -> SessionResult<Option<CellId>> {
+    fn target_pane_parent(&self, id: &CellId) -> SessionResult<CellId> {
         match self.cell(id)? {
-            Cell::Pane(p) => Ok(p.parent.clone()),
-            Cell::Split(_) => Err(SessionError::InvalidCellType(id.clone())),
+            Cell::Pane(p) => p.parent.clone().ok_or(SessionError::MissingParentCell),
+            _ => Err(SessionError::InvalidCellType(id.clone())),
         }
     }
 
     /// Read-only validation: gather everything `apply_collapse` needs, without
     /// mutating. Taking `&self` makes it a compile-time guarantee that this
-    /// phase performs no writes — any `Err` propagated from here leaves the
-    /// store unchanged.
+    /// phase performs no writes.
     fn plan_collapse(&self, target_id: &CellId, parent_id: CellId) -> SessionResult<CollapsePlan> {
         let parent_split = match self.cell(&parent_id)? {
             Cell::Split(s) => s,
+            // Pane is the only child of Root — closing it would empty the
+            // window's layout, which the model forbids.
+            Cell::Root(_) => return Err(SessionError::CannotCloseLastPane(target_id.clone())),
             Cell::Pane(_) => return Err(SessionError::InvalidCellType(parent_id)),
         };
         let sibling_id = parent_split.sibling_cell_id(target_id).clone();
-        let grandparent_id = parent_split.parent.clone();
-
-        if let Some(gp_id) = grandparent_id.as_ref() {
-            if matches!(self.cell(gp_id)?, Cell::Pane(_)) {
-                return Err(SessionError::InvalidCellType(gp_id.clone()));
-            }
+        let grandparent_id = parent_split
+            .parent
+            .clone()
+            .ok_or(SessionError::MissingParentCell)?;
+        match self.cell(&grandparent_id)? {
+            Cell::Root(_) | Cell::Split(_) => {}
+            Cell::Pane(_) => return Err(SessionError::InvalidCellType(grandparent_id)),
         }
         Ok(CollapsePlan {
             parent_id,
@@ -111,29 +130,31 @@ impl LayoutCellState {
         })
     }
 
-    /// Atomically apply a planned collapse. Infallible by construction — every
-    /// lookup here was verified during planning, so `expect` is safe.
     fn apply_collapse(&mut self, target_id: &CellId, plan: CollapsePlan) -> CloseOutcome {
         self.0.remove(target_id);
         self.0
             .remove(&plan.parent_id)
             .expect("parent existed in plan");
-        self.reparent(&plan.sibling_id, plan.grandparent_id.clone())
+        self.reparent(&plan.sibling_id, Some(plan.grandparent_id.clone()))
             .expect("sibling existed in plan");
 
-        match plan.grandparent_id {
-            Some(gp_id) => {
-                self.cell_mut(&gp_id)
-                    .expect("grandparent existed in plan")
-                    .replace_child(&plan.parent_id, plan.sibling_id.clone());
-                CloseOutcome::SiblingPromoted {
-                    survivor: plan.sibling_id,
-                    new_parent: gp_id,
-                }
+        let grandparent = self
+            .0
+            .get_mut(&plan.grandparent_id)
+            .expect("grandparent existed in plan");
+        let promoted_to_root = matches!(grandparent, Cell::Root(_));
+        grandparent.replace_child(&plan.parent_id, plan.sibling_id.clone());
+
+        if promoted_to_root {
+            CloseOutcome::PromotedToRootChild {
+                survivor: plan.sibling_id,
+                root: plan.grandparent_id,
             }
-            None => CloseOutcome::RootReplaced {
-                new_root: plan.sibling_id,
-            },
+        } else {
+            CloseOutcome::SiblingPromoted {
+                survivor: plan.sibling_id,
+                new_parent: plan.grandparent_id,
+            }
         }
     }
 
@@ -164,7 +185,7 @@ impl LayoutCellState {
 struct CollapsePlan {
     parent_id: CellId,
     sibling_id: CellId,
-    grandparent_id: Option<CellId>,
+    grandparent_id: CellId,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
@@ -173,6 +194,7 @@ pub struct CellId(String);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Cell {
+    Root(RootCell),
     Pane(PaneCell),
     Split(SplitCell),
 }
@@ -180,22 +202,34 @@ pub enum Cell {
 impl Cell {
     pub fn parent(&self) -> Option<&CellId> {
         match self {
+            Self::Root(_) => None,
             Self::Pane(c) => c.parent.as_ref(),
             Self::Split(c) => c.parent.as_ref(),
         }
+    }
+
+    pub fn require_parent(&self) -> SessionResult<CellId> {
+        self.parent().cloned().ok_or(SessionError::MissingParentCell)
     }
 
     fn set_parent(&mut self, parent: Option<CellId>) {
         match self {
             Self::Pane(c) => c.parent = parent,
             Self::Split(c) => c.parent = parent,
+            Self::Root(_) => unreachable!("Cell::Root has no parent"),
         }
     }
 
-    /// Replace a downward child reference. Only `Split` carries children;
-    /// calling this on a `Pane` is an invariant violation.
+    /// Replace a downward child reference. `Root` swaps `child`; `Split` swaps
+    /// whichever of `lhs_cell` / `rhs_cell` matches `old`. Calling on `Pane` or
+    /// with an `old` not currently occupying a child slot is an invariant
+    /// violation.
     fn replace_child(&mut self, old: &CellId, new: CellId) {
         match self {
+            Self::Root(r) => {
+                debug_assert_eq!(&r.child, old, "root child invariant");
+                r.child = new;
+            }
             Self::Split(s) => {
                 if &s.lhs_cell == old {
                     s.lhs_cell = new;
@@ -208,6 +242,11 @@ impl Cell {
             Self::Pane(_) => unreachable!("Cell::Pane has no children"),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RootCell {
+    pub child: CellId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -271,26 +310,21 @@ pub enum Side {
 
 /// Structural outcome of `LayoutCellState::close_cell`.
 ///
-/// Callers (typically `Window::close_pane`) must handle every variant.
-/// `#[must_use]` is a lint-level nudge; type-level enforcement comes from
-/// requiring the caller to consume the value via `match`.
+/// Callers must handle every variant. `#[must_use]` is a lint-level nudge;
+/// type-level enforcement comes from requiring the caller to consume the value
+/// via `match`.
 #[must_use]
 #[derive(Debug, Clone, PartialEq)]
 pub enum CloseOutcome {
-    /// Target was the lone root pane. The store is now empty for this tree;
-    /// the caller should treat this as "tear down the window".
-    TreeEmptied,
-    /// Target's parent split was the tree root. `new_root` (the surviving
-    /// sibling) now has `parent == None` and the caller must update
-    /// `Window.root_cell` to point at it.
-    RootReplaced { new_root: CellId },
     /// Target's grandparent was a split; survivor occupies the same lhs/rhs
     /// slot of `new_parent` that the deleted parent occupied (slot pinning).
-    /// `Window.root_cell` is unchanged.
     SiblingPromoted {
         survivor: CellId,
         new_parent: CellId,
     },
+    /// Target's grandparent was the window's `Cell::Root`; survivor was promoted
+    /// to be `RootCell::child`. `Window.root_cell` itself is unchanged.
+    PromotedToRootChild { survivor: CellId, root: CellId },
 }
 
 #[cfg(test)]
@@ -302,23 +336,27 @@ mod tests {
     }
 
     #[test]
-    fn new_pane_with_no_parent_is_root() {
+    fn new_window_layout_creates_root_with_child() {
         let mut state = LayoutCellState::default();
         let pane_id = pid();
-        let cell_id = state.new_pane(pane_id.clone(), None);
+        let (root_id, pane_cell_id) = state.new_window_layout(pane_id.clone());
 
-        let Cell::Pane(pane) = state.cell(&cell_id).unwrap() else {
+        let Cell::Root(root) = state.cell(&root_id).unwrap() else {
+            panic!("expected Root");
+        };
+        assert_eq!(root.child, pane_cell_id);
+        let Cell::Pane(pane) = state.cell(&pane_cell_id).unwrap() else {
             panic!("expected Pane");
         };
-        assert!(pane.parent.is_none());
+        assert_eq!(pane.parent.as_ref(), Some(&root_id));
         assert_eq!(pane.pane, pane_id);
     }
 
     #[test]
-    fn split_cell_on_root_pane_promotes_split_to_root() {
+    fn split_cell_under_root_updates_root_child() {
         let mut state = LayoutCellState::default();
-        let pane_a = state.new_pane(pid(), None);
-        let pane_b = state.new_pane(pid(), Some(pane_a.clone()));
+        let (root_id, pane_a) = state.new_window_layout(pid());
+        let pane_b = state.new_pane(pid(), None);
 
         let split_id = state
             .split_cell(
@@ -329,28 +367,23 @@ mod tests {
             )
             .unwrap();
 
+        let Cell::Root(root) = state.cell(&root_id).unwrap() else {
+            panic!()
+        };
+        assert_eq!(root.child, split_id);
         let Cell::Split(split) = state.cell(&split_id).unwrap() else {
             panic!()
         };
-        assert!(split.parent.is_none());
+        assert_eq!(split.parent.as_ref(), Some(&root_id));
         assert_eq!(split.lhs_cell, pane_a);
         assert_eq!(split.rhs_cell, pane_b);
-
-        let Cell::Pane(a) = state.cell(&pane_a).unwrap() else {
-            panic!()
-        };
-        assert_eq!(a.parent.as_ref(), Some(&split_id));
-        let Cell::Pane(b) = state.cell(&pane_b).unwrap() else {
-            panic!()
-        };
-        assert_eq!(b.parent.as_ref(), Some(&split_id));
     }
 
     #[test]
-    fn split_cell_on_non_root_pane_rewires_parent_split_slot() {
+    fn split_cell_under_split_updates_parent_split_slot() {
         let mut state = LayoutCellState::default();
-        let pane_a = state.new_pane(pid(), None);
-        let pane_b = state.new_pane(pid(), Some(pane_a.clone()));
+        let (_, pane_a) = state.new_window_layout(pid());
+        let pane_b = state.new_pane(pid(), None);
         let outer = state
             .split_cell(
                 pane_a.clone(),
@@ -360,7 +393,7 @@ mod tests {
             )
             .unwrap();
 
-        let pane_c = state.new_pane(pid(), Some(outer.clone()));
+        let pane_c = state.new_pane(pid(), None);
         let inner = state
             .split_cell(
                 pane_b.clone(),
@@ -384,20 +417,19 @@ mod tests {
     }
 
     #[test]
-    fn close_cell_on_lone_root_pane_empties_tree() {
+    fn close_cell_rejects_last_pane_under_root() {
         let mut state = LayoutCellState::default();
-        let pane = state.new_pane(pid(), None);
+        let (_, pane_cell) = state.new_window_layout(pid());
 
-        let outcome = state.close_cell(&pane).unwrap();
-        assert_eq!(outcome, CloseOutcome::TreeEmptied);
-        assert!(state.cell(&pane).is_err());
+        let result = state.close_cell(&pane_cell);
+        assert!(matches!(result, Err(SessionError::CannotCloseLastPane(_))));
     }
 
     #[test]
-    fn close_cell_under_root_split_promotes_sibling_to_new_root() {
+    fn close_cell_under_root_split_promotes_sibling_to_root_child() {
         let mut state = LayoutCellState::default();
-        let pane_a = state.new_pane(pid(), None);
-        let pane_b = state.new_pane(pid(), Some(pane_a.clone()));
+        let (root_id, pane_a) = state.new_window_layout(pid());
+        let pane_b = state.new_pane(pid(), None);
         let split_id = state
             .split_cell(
                 pane_a.clone(),
@@ -410,23 +442,28 @@ mod tests {
         let outcome = state.close_cell(&pane_a).unwrap();
         assert_eq!(
             outcome,
-            CloseOutcome::RootReplaced {
-                new_root: pane_b.clone()
+            CloseOutcome::PromotedToRootChild {
+                survivor: pane_b.clone(),
+                root: root_id.clone(),
             }
         );
 
+        let Cell::Root(root) = state.cell(&root_id).unwrap() else {
+            panic!()
+        };
+        assert_eq!(root.child, pane_b);
         let Cell::Pane(survivor) = state.cell(&pane_b).unwrap() else {
             panic!()
         };
-        assert!(survivor.parent.is_none());
+        assert_eq!(survivor.parent.as_ref(), Some(&root_id));
         assert!(state.cell(&split_id).is_err());
     }
 
     #[test]
     fn close_cell_under_nested_split_promotes_sibling_in_grandparent_slot() {
         let mut state = LayoutCellState::default();
-        let pane_a = state.new_pane(pid(), None);
-        let pane_b = state.new_pane(pid(), Some(pane_a.clone()));
+        let (_, pane_a) = state.new_window_layout(pid());
+        let pane_b = state.new_pane(pid(), None);
         let outer = state
             .split_cell(
                 pane_a.clone(),
@@ -435,7 +472,7 @@ mod tests {
                 SplitOrientation::Horizontal,
             )
             .unwrap();
-        let pane_c = state.new_pane(pid(), Some(outer.clone()));
+        let pane_c = state.new_pane(pid(), None);
         let inner = state
             .split_cell(
                 pane_b.clone(),

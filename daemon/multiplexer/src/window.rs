@@ -128,6 +128,60 @@ impl WindowState {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    /// Replace `active_pane` with `new` on every window currently active on
+    /// `old`. Used after `split_pane` to mirror tmux's default behavior of
+    /// promoting the freshly-created pane to active.
+    pub fn replace_active_pane(&mut self, old: &PaneId, new: &PaneId) {
+        for window in self.0.values_mut() {
+            if &window.active_pane == old {
+                window.active_pane = new.clone();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cells::CellId;
+
+    fn window_with_active(active: PaneId) -> Window {
+        Window::new("w", CellId::new(), active)
+    }
+
+    #[test]
+    fn replace_active_pane_swaps_matching_window() {
+        let mut state = WindowState::default();
+        let target = PaneId::new();
+        let other = PaneId::new();
+        let new = PaneId::new();
+        state.register(WindowId::new(), window_with_active(target.clone()));
+        state.register(WindowId::new(), window_with_active(other.clone()));
+
+        state.replace_active_pane(&target, &new);
+
+        let actives: Vec<&PaneId> = state.0.values().map(|w| &w.active_pane).collect();
+        assert!(actives.contains(&&new));
+        assert!(actives.contains(&&other));
+        assert!(!actives.contains(&&target));
+    }
+
+    #[test]
+    fn replace_active_pane_no_op_when_no_match() {
+        let mut state = WindowState::default();
+        let active = PaneId::new();
+        let unrelated = PaneId::new();
+        let new = PaneId::new();
+        state.register(WindowId::new(), window_with_active(active.clone()));
+
+        state.replace_active_pane(&unrelated, &new);
+
+        assert_eq!(
+            state.0.values().next().unwrap().active_pane,
+            active
+        );
+    }
 }
 
 #[derive(Clone, Default)]
