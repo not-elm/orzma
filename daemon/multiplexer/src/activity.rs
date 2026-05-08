@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::activity;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ActivityState(HashMap<ActivityId, Activity>);
 
 impl ActivityState {
@@ -17,6 +17,11 @@ impl ActivityState {
     #[inline]
     pub fn remove(&mut self, id: &ActivityId) {
         self.0.remove(id);
+    }
+
+    #[inline]
+    pub fn contains(&self, id: &ActivityId) -> bool {
+        self.0.contains_key(id)
     }
 }
 

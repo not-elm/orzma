@@ -163,6 +163,20 @@ impl LayoutCellState {
         Ok(())
     }
 
+    /// Walk down `start`'s subtree along the lhs/child branch and return the
+    /// first `Cell::Pane` reached. Used to pick a representative pane id when
+    /// promoting a survivor subtree to be active.
+    pub fn leftmost_pane(&self, start: &CellId) -> SessionResult<&PaneId> {
+        let mut current: &CellId = start;
+        loop {
+            match self.cell(current)? {
+                Cell::Pane(c) => return Ok(&c.pane),
+                Cell::Split(s) => current = &s.lhs_cell,
+                Cell::Root(r) => current = &r.child,
+            }
+        }
+    }
+
     #[inline]
     pub fn cell(&self, id: &CellId) -> SessionResult<&Cell> {
         self.0
@@ -325,6 +339,18 @@ pub enum CloseOutcome {
     /// Target's grandparent was the window's `Cell::Root`; survivor was promoted
     /// to be `RootCell::child`. `Window.root_cell` itself is unchanged.
     PromotedToRootChild { survivor: CellId, root: CellId },
+}
+
+impl CloseOutcome {
+    /// The cell that took the closed target's place in the tree. May be a
+    /// `Cell::Pane` or a `Cell::Split` subtree, depending on what was sitting
+    /// next to the closed pane.
+    pub fn survivor(&self) -> &CellId {
+        match self {
+            Self::SiblingPromoted { survivor, .. } => survivor,
+            Self::PromotedToRootChild { survivor, .. } => survivor,
+        }
+    }
 }
 
 #[cfg(test)]
