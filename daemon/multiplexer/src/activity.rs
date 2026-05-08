@@ -1,9 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 
-use crate::activity;
 
 #[derive(Debug, Clone, Default)]
 pub struct ActivityState(HashMap<ActivityId, Activity>);

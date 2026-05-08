@@ -1,12 +1,10 @@
 use crate::{
-    cells::{CellId, CloseOutcome, LayoutCellState, Side, SplitOrientation},
-    error::{SessionError, SessionResult},
-    pane::{Pane, PaneId},
+    cells::CellId,
+    pane::PaneId,
 };
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{Mutex, MutexGuard};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
 #[newtype(as_ref(str), display, new(uuid_v4_string), default)]

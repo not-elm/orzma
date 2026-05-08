@@ -153,6 +153,7 @@ name = "daemon_bootstrap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ozmux_extension",
  "ozmux_http_server",
  "ozmux_multiplexer",
  "ozmux_terminal",

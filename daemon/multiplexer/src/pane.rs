@@ -1,5 +1,5 @@
 use crate::{
-    activity::{self, Activity, ActivityId},
+    activity::ActivityId,
     error::{SessionError, SessionResult},
 };
 use ozmux_macros::NewType;
