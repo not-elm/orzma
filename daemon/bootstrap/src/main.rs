@@ -1,8 +1,10 @@
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::runtime::RuntimeRoot;
 use ozmux_http_server::AppState;
+use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,8 +31,7 @@ async fn main() -> anyhow::Result<()> {
     let _ext_handles = ExtensionHandles::load(&runtime)?;
 
     let state = AppState {
-        sessions: SessionState::default(),
-        windows: WindowStore::default(),
+        multiplexer: Arc::new(Mutex::new(MultiplexerService::default())),
         terminal: TerminalService::with_runtime_root(Arc::clone(&runtime)),
     };
 
