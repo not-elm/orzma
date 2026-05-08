@@ -13,9 +13,9 @@ use tokio::sync::Mutex;
 #[derive(Deserialize, Default)]
 pub struct CreateRequest {
     #[serde(default)]
-    pub session_id: Option<SessionId>,
+    session_id: Option<SessionId>,
     #[serde(default)]
-    pub name: Option<String>,
+    name: Option<String>,
 }
 
 pub async fn create(
@@ -34,7 +34,7 @@ pub async fn create(
 
 #[derive(Deserialize)]
 pub struct RenameRequest {
-    pub name: String,
+    name: String,
 }
 
 pub async fn rename(

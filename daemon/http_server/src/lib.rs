@@ -33,11 +33,10 @@ impl FromRef<AppState> for TerminalService {
 }
 
 pub async fn serve(state: AppState) -> HttpResult {
-    let (sid, wid, pid, aid) = {
+    let (_sid, _wid, pid, aid) = {
         let mut ms = state.multiplexer.lock().await;
         ms.bootstrap_default().expect("bootstrap_default cannot fail on empty MultiplexerService")
     };
-    let _ = (sid, wid); // not needed for spawn; kept for clarity / future use.
     if let Err(e) = state
         .terminal
         .spawn(

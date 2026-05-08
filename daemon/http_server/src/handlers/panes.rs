@@ -16,9 +16,9 @@ use tokio::sync::Mutex;
 
 #[derive(Deserialize)]
 pub struct SplitRequest {
-    pub orientation: SplitOrientation,
+    orientation: SplitOrientation,
     #[serde(default)]
-    pub side: Side,
+    side: Side,
 }
 
 pub async fn split(
@@ -45,7 +45,13 @@ pub async fn split(
         )
         .await
     {
-        let _ = ms.lock().await.close_pane(&new_pane_id);
+        if let Err(rollback_err) = ms.lock().await.close_pane(&new_pane_id) {
+            tracing::warn!(
+                error = %rollback_err,
+                new_pane_id = %new_pane_id,
+                "split rollback failed to close pane after spawn failure"
+            );
+        }
         return Err(spawn_err.into());
     }
 
@@ -88,10 +94,11 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn split_returns_201_with_new_ids() {
+    async fn split_either_succeeds_or_rolls_back() {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, pid, _aid) = ms.bootstrap_default().unwrap();
-        let (router, _) = router_with(ms);
+        let panes_before = ms.panes().len();
+        let (router, state) = router_with(ms);
         let resp = router
             .oneshot(
                 Request::builder()
@@ -103,17 +110,45 @@ mod tests {
             )
             .await
             .unwrap();
-        // The terminal.spawn call may fail in test (no real shell), so accept
-        // either 201 (success) or 500 (spawn failure with rollback). Assert
-        // schema on success only.
         let status = resp.status();
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        let panes_after = state.multiplexer.lock().await.panes().len();
         if status == StatusCode::CREATED {
             assert!(v["new_pane_id"].is_string());
             assert!(v["new_activity_id"].is_string());
+            assert_eq!(panes_after, panes_before + 1, "split must add a pane on success");
+        } else {
+            assert_eq!(panes_after, panes_before, "split rollback must restore pane count on spawn failure");
         }
-        // On spawn failure: rollback happened in the handler.
+    }
+
+    #[tokio::test]
+    async fn close_non_last_pane_returns_204_and_removes_it() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, original_pid, _aid) = ms.bootstrap_default().unwrap();
+        // Split to have 2 panes (without going through HTTP, to avoid PTY).
+        let (new_pid, _new_aid) = ms
+            .split_pane(original_pid.clone(), Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+        let panes_before = ms.panes().len();
+        let (router, state) = router_with(ms);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/panes/{}", new_pid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let ms = state.multiplexer.lock().await;
+        assert_eq!(ms.panes().len(), panes_before - 1);
+        assert!(!ms.pane_to_cell_index().contains_key(&new_pid));
     }
 
     #[tokio::test]
