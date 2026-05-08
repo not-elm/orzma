@@ -19,16 +19,31 @@ use crate::{
 
 #[derive(Default)]
 pub struct MultiplexerService {
-    pub sessions: SessionState,
-    pub windows: WindowState,
-    pub panes: PaneState,
+    sessions: SessionState,
+    windows: WindowState,
+    panes: PaneState,
     cells: LayoutCellState,
     // どのセルが指定のセルを描画しているかを参照するためのマップ
-    pub pane_to_cell: HashMap<PaneId, CellId>,
-    pub activities: ActivityState,
+    pane_to_cell: HashMap<PaneId, CellId>,
+    activities: ActivityState,
 }
 
 impl MultiplexerService {
+    // ── Narrow read-only accessors ────────────────────────────────────────────
+
+    pub fn sessions(&self) -> &SessionState { &self.sessions }
+    pub fn windows(&self) -> &WindowState { &self.windows }
+    pub fn panes(&self) -> &PaneState { &self.panes }
+    pub fn activities(&self) -> &ActivityState { &self.activities }
+
+    /// Internal index exposed for assertions in tests and bookkeeping in callers.
+    pub fn pane_to_cell_index(&self) -> &HashMap<PaneId, CellId> { &self.pane_to_cell }
+
+    /// Read-only view of the cell tree, e.g. for serialization or test assertions.
+    pub fn cells_ref(&self) -> &LayoutCellState { &self.cells }
+
+    // ── Mutating operations ───────────────────────────────────────────────────
+
     /// Create an empty session (no windows). Returns the new id so callers can
     /// attach windows or echo it back to clients.
     pub fn new_session(&mut self, name: Option<String>) -> SessionId {
@@ -167,7 +182,7 @@ impl MultiplexerService {
         side: Side,
         orientation: SplitOrientation,
     ) -> SessionResult<(PaneId, ActivityId)> {
-        let target_cell_id = self.pane_to_cell(&target_pane_id)?.clone();
+        let target_cell_id = self.cell_id_for_pane(&target_pane_id)?.clone();
         let new_activity_id = self.new_activity(Activity::default());
         let (new_pane_id, new_cell_id) = self.new_pane(new_activity_id.clone(), None);
         self.cells
@@ -178,7 +193,7 @@ impl MultiplexerService {
     }
 
     pub fn close_pane(&mut self, pane_id: &PaneId) -> SessionResult {
-        let cell_id = self.pane_to_cell(pane_id)?.clone();
+        let cell_id = self.cell_id_for_pane(pane_id)?.clone();
         let outcome = self.cells.close_cell(&cell_id)?;
         let survivor_pane_id = self.cells.leftmost_pane(outcome.survivor())?.clone();
         self.windows.replace_active_pane(pane_id, &survivor_pane_id);
@@ -200,15 +215,19 @@ impl MultiplexerService {
         }
     }
 
-    pub fn pane_to_cell(&self, pane_id: &PaneId) -> SessionResult<&CellId> {
+    pub fn cell_id_for_pane(&self, pane_id: &PaneId) -> SessionResult<&CellId> {
         self.pane_to_cell
             .get(pane_id)
             .ok_or_else(|| SessionError::CellForPaneNotFound(pane_id.clone()))
     }
 
     /// Find the session that owns `window_id` and set its `active_window`.
-    /// Returns `WindowNotAttachedToSession` for orphan windows.
+    /// Returns `WindowNotFound` for a window that doesn't exist at all, and
+    /// `WindowNotAttachedToSession` for orphan windows.
     pub fn select_active_window(&mut self, window_id: &WindowId) -> SessionResult {
+        if !self.windows.contains_key(window_id) {
+            return Err(SessionError::WindowNotFound(window_id.clone()));
+        }
         for (_, session) in self.sessions.iter_mut() {
             if session.windows.contains(window_id) {
                 session.active_window = Some(window_id.clone());
@@ -225,20 +244,14 @@ impl MultiplexerService {
     ) -> SessionResult<(SessionId, WindowId, PaneId, ActivityId)> {
         let session_id = self.new_session(None);
         let window_id = self.new_window_in(Some(&session_id), None)?;
-        let window = self
-            .windows
-            .get(&window_id)
-            .expect("just created");
+        let window = self.windows.get(&window_id).expect("just created");
         let pane_id = window.active_pane.clone();
         let activity_id = self
             .panes
-            .remove(&pane_id)
-            .map(|pane| {
-                let aid = pane.activities[0].clone();
-                self.panes.insert(pane_id.clone(), pane);
-                aid
-            })
-            .expect("just created pane has activities");
+            .get(&pane_id)
+            .expect("just created pane has activities")
+            .activities[0]
+            .clone();
         Ok((session_id, window_id, pane_id, activity_id))
     }
 }
@@ -259,9 +272,9 @@ mod tests {
     fn fresh_window() -> WindowFixture {
         let mut ms = MultiplexerService::default();
         let window_id = ms.new_window_in(None, None).unwrap();
-        let window = ms.windows.get(&window_id).expect("window exists").clone();
+        let window = ms.windows().get(&window_id).expect("window exists").clone();
         let pane_id = window.active_pane.clone();
-        let pane_cell = ms.pane_to_cell(&pane_id).unwrap().clone();
+        let pane_cell = ms.cell_id_for_pane(&pane_id).unwrap().clone();
         WindowFixture {
             ms,
             window_id,
@@ -280,7 +293,7 @@ mod tests {
             pane_cell: original_cell,
             root_cell,
         } = fresh_window();
-        let panes_before = ms.panes.len();
+        let panes_before = ms.panes().len();
 
         let (new_pane, new_activity) = ms
             .split_pane(
@@ -289,27 +302,27 @@ mod tests {
                 SplitOrientation::Horizontal,
             )
             .unwrap();
-        assert_eq!(ms.windows.get(&window_id).unwrap().active_pane, new_pane);
+        assert_eq!(ms.windows().get(&window_id).unwrap().active_pane, new_pane);
 
         ms.close_pane(&new_pane).unwrap();
 
         // pane/index/activity for the closed pane are gone.
-        assert_eq!(ms.panes.len(), panes_before);
-        assert!(!ms.pane_to_cell.contains_key(&new_pane));
-        assert!(!ms.activities.contains(&new_activity));
+        assert_eq!(ms.panes().len(), panes_before);
+        assert!(!ms.pane_to_cell_index().contains_key(&new_pane));
+        assert!(!ms.activities().contains(&new_activity));
 
         // active_pane is rerouted back to the surviving original.
         assert_eq!(
-            ms.windows.get(&window_id).unwrap().active_pane,
+            ms.windows().get(&window_id).unwrap().active_pane,
             original_pane
         );
 
         // The cell tree is collapsed: root.child points at the original pane cell.
-        let Cell::Root(root) = ms.cells.cell(&root_cell).unwrap() else {
+        let Cell::Root(root) = ms.cells_ref().cell(&root_cell).unwrap() else {
             panic!("root cell missing");
         };
         assert_eq!(root.child, original_cell);
-        let Cell::Pane(pane_cell) = ms.cells.cell(&original_cell).unwrap() else {
+        let Cell::Pane(pane_cell) = ms.cells_ref().cell(&original_cell).unwrap() else {
             panic!("original pane cell missing");
         };
         assert_eq!(pane_cell.parent.as_ref(), Some(&root_cell));
@@ -325,17 +338,17 @@ mod tests {
             pane_cell,
             root_cell,
         } = fresh_window();
-        let panes_before = ms.panes.len();
+        let panes_before = ms.panes().len();
 
         let result = ms.close_pane(&pane_id);
 
         assert!(matches!(result, Err(SessionError::CannotCloseLastPane(_))));
         // No store was mutated.
-        assert_eq!(ms.panes.len(), panes_before);
-        assert_eq!(ms.pane_to_cell(&pane_id).unwrap(), &pane_cell);
-        assert!(ms.cells.cell(&pane_cell).is_ok());
-        assert!(ms.cells.cell(&root_cell).is_ok());
-        assert_eq!(ms.windows.get(&window_id).unwrap().active_pane, pane_id);
+        assert_eq!(ms.panes().len(), panes_before);
+        assert_eq!(ms.cell_id_for_pane(&pane_id).unwrap(), &pane_cell);
+        assert!(ms.cells_ref().cell(&pane_cell).is_ok());
+        assert!(ms.cells_ref().cell(&root_cell).is_ok());
+        assert_eq!(ms.windows().get(&window_id).unwrap().active_pane, pane_id);
     }
 
     #[test]
@@ -371,7 +384,7 @@ mod tests {
         ms.close_pane(&new_pane).unwrap();
 
         assert_eq!(
-            ms.windows.get(&window_id).unwrap().active_pane,
+            ms.windows().get(&window_id).unwrap().active_pane,
             original_pane
         );
     }
@@ -380,7 +393,7 @@ mod tests {
     fn new_session_returns_id_without_window() {
         let mut ms = MultiplexerService::default();
         let sid = ms.new_session(None);
-        let session = ms.sessions.get(&sid).unwrap();
+        let session = ms.sessions().get(&sid).unwrap();
         assert!(session.windows.is_empty());
         assert!(session.active_window.is_none());
     }
@@ -390,7 +403,7 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let sid = ms.new_session(Some("orig".into()));
         ms.rename_session(&sid, "renamed".into()).unwrap();
-        assert_eq!(ms.sessions.get(&sid).unwrap().name, "renamed");
+        assert_eq!(ms.sessions().get(&sid).unwrap().name, "renamed");
     }
 
     #[test]
@@ -408,7 +421,7 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let sid = ms.new_session(None);
         let wid = ms.new_window_in(Some(&sid), None).unwrap();
-        let session = ms.sessions.get(&sid).unwrap();
+        let session = ms.sessions().get(&sid).unwrap();
         assert_eq!(session.windows, vec![wid.clone()]);
         assert_eq!(session.active_window.as_ref(), Some(&wid));
     }
@@ -417,9 +430,9 @@ mod tests {
     fn new_window_in_with_no_session_creates_orphan() {
         let mut ms = MultiplexerService::default();
         let wid = ms.new_window_in(None, None).unwrap();
-        assert!(ms.windows.get(&wid).is_some());
+        assert!(ms.windows().get(&wid).is_some());
         // No session should reference it.
-        for (_, s) in ms.sessions.iter_mut() {
+        for (_, s) in ms.sessions().iter() {
             assert!(!s.windows.contains(&wid));
         }
     }
@@ -439,27 +452,45 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let wid = ms.new_window_in(None, Some("orig".into())).unwrap();
         ms.rename_window(&wid, "renamed".into()).unwrap();
-        assert_eq!(ms.windows.get(&wid).unwrap().name, "renamed");
+        assert_eq!(ms.windows().get(&wid).unwrap().name, "renamed");
     }
 
     #[test]
-    fn close_window_drops_panes_cells_and_detaches_session() {
+    fn rename_window_unknown_returns_window_not_found() {
+        let mut ms = MultiplexerService::default();
+        let bogus = WindowId::new();
+        assert!(matches!(
+            ms.rename_window(&bogus, "x".into()),
+            Err(SessionError::WindowNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn close_window_drops_panes_cells_activities_and_detaches_session() {
         let mut ms = MultiplexerService::default();
         let sid = ms.new_session(None);
         let wid = ms.new_window_in(Some(&sid), None).unwrap();
-        let pane_count = ms.panes.len();
-        let cell_count_before_close = {
-            // root + pane cell = 2 cells per fresh window
-            2
-        };
+        let root_cell = ms.windows().get(&wid).unwrap().root_cell.clone();
+        let pane_id = ms.windows().get(&wid).unwrap().active_pane.clone();
+        let pane_count_before = ms.panes().len();
 
         let activities = ms.close_window(&wid).unwrap();
         assert_eq!(activities.len(), 1);
-        assert!(ms.windows.get(&wid).is_none());
-        assert_eq!(ms.panes.len(), pane_count - 1);
-        assert!(ms.sessions.get(&sid).unwrap().windows.is_empty());
-        assert!(ms.sessions.get(&sid).unwrap().active_window.is_none());
-        let _ = cell_count_before_close;
+        let activity_id = &activities[0];
+
+        // Window gone from WindowState
+        assert!(ms.windows().get(&wid).is_none());
+        // Pane gone from PaneState
+        assert_eq!(ms.panes().len(), pane_count_before - 1);
+        // pane_to_cell index cleared for that pane
+        assert!(!ms.pane_to_cell_index().contains_key(&pane_id));
+        // Activity gone from ActivityState
+        assert!(!ms.activities().contains(activity_id));
+        // Cell tree (root + pane cell) is dropped
+        assert!(ms.cells_ref().cell(&root_cell).is_err());
+        // Session detached
+        assert!(ms.sessions().get(&sid).unwrap().windows.is_empty());
+        assert!(ms.sessions().get(&sid).unwrap().active_window.is_none());
     }
 
     #[test]
@@ -481,9 +512,9 @@ mod tests {
 
         let activities = ms.delete_session(&sid).unwrap();
         assert_eq!(activities.len(), 2);
-        assert!(ms.sessions.get(&sid).is_none());
-        assert!(ms.windows.get(&wid_a).is_none());
-        assert!(ms.windows.get(&wid_b).is_none());
+        assert!(ms.sessions().get(&sid).is_none());
+        assert!(ms.windows().get(&wid_a).is_none());
+        assert!(ms.windows().get(&wid_b).is_none());
     }
 
     #[test]
@@ -497,29 +528,39 @@ mod tests {
     }
 
     #[test]
+    fn select_active_window_for_unknown_id_returns_window_not_found() {
+        let mut ms = MultiplexerService::default();
+        let bogus = WindowId::new();
+        assert!(matches!(
+            ms.select_active_window(&bogus),
+            Err(SessionError::WindowNotFound(_))
+        ));
+    }
+
+    #[test]
     fn select_active_window_updates_session_active_window() {
         let mut ms = MultiplexerService::default();
         let sid = ms.new_session(None);
         let wid_a = ms.new_window_in(Some(&sid), None).unwrap();
         let wid_b = ms.new_window_in(Some(&sid), None).unwrap();
         // active is whatever attached first (wid_a).
-        assert_eq!(ms.sessions.get(&sid).unwrap().active_window.as_ref(), Some(&wid_a));
+        assert_eq!(ms.sessions().get(&sid).unwrap().active_window.as_ref(), Some(&wid_a));
         ms.select_active_window(&wid_b).unwrap();
-        assert_eq!(ms.sessions.get(&sid).unwrap().active_window.as_ref(), Some(&wid_b));
+        assert_eq!(ms.sessions().get(&sid).unwrap().active_window.as_ref(), Some(&wid_b));
     }
 
     #[test]
     fn bootstrap_default_yields_four_consistent_ids() {
         let mut ms = MultiplexerService::default();
         let (sid, wid, pid, aid) = ms.bootstrap_default().unwrap();
-        let session = ms.sessions.get(&sid).unwrap();
+        let session = ms.sessions().get(&sid).unwrap();
         assert_eq!(session.windows, vec![wid.clone()]);
         assert_eq!(session.active_window.as_ref(), Some(&wid));
-        let window = ms.windows.get(&wid).unwrap();
+        let window = ms.windows().get(&wid).unwrap();
         assert_eq!(window.active_pane, pid);
-        let pane_cell = ms.pane_to_cell(&pid).unwrap();
+        let pane_cell = ms.cell_id_for_pane(&pid).unwrap();
         let _ = pane_cell;
         // The activity must be in ActivityState (we exposed `contains` earlier).
-        assert!(ms.activities.contains(&aid));
+        assert!(ms.activities().contains(&aid));
     }
 }

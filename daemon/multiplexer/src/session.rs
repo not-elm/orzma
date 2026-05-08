@@ -34,6 +34,11 @@ impl SessionState {
     }
 
     #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (&SessionId, &Session)> {
+        self.0.iter()
+    }
+
+    #[inline]
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&SessionId, &mut Session)> {
         self.0.iter_mut()
     }

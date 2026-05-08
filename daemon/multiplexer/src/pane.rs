@@ -39,6 +39,11 @@ impl PaneState {
     pub fn any_pane_id(&self) -> Option<PaneId> {
         self.0.keys().next().cloned()
     }
+
+    #[inline]
+    pub fn get(&self, id: &PaneId) -> Option<&Pane> {
+        self.0.get(id)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
