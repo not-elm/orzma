@@ -79,6 +79,34 @@ async function bindEcho(sockPath: string, reply: (invoke: any) => string[]): Pro
 }
 
 describe("runShim", () => {
+  it("writes only one stderr message on malformed server frame", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ozmux-shim-mf-"));
+    const sock = path.join(dir, "x.sock");
+    const srv = await bindEcho(sock, () => ["this-is-not-json"]);
+    try {
+      const stdout = new CollectStream();
+      const stderr = new CollectStream();
+      const code = await runShim({
+        socketPath: sock,
+        command: "memo",
+        argv: [],
+        cwd: "/tmp",
+        env: {},
+        stdout,
+        stderr,
+        connectTimeoutMs: 1000,
+        signals: { addListener() {}, removeListener() {} },
+      });
+      expect(code).toBe(2);
+      const errText = stderr.text();
+      expect(errText).toContain("malformed frame");
+      expect(errText).not.toContain("closed unexpectedly");
+    } finally {
+      await new Promise<void>((res) => srv.close(() => res()));
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("pipes stdout/stderr base64 payloads and resolves exit code", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ozmux-shim-rt-"));
     const sock = path.join(dir, "x.sock");

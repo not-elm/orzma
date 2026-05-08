@@ -59,15 +59,22 @@ export function runShim(args: RunShimArgs): Promise<number> {
     const sock = net.connect(args.socketPath);
     const splitter = new LineSplitter();
     let exitCode: number | null = null;
+    let settled = false;
 
     const onSigint = () => sock.write(encodeFrame({ type: "signal", signal: "SIGINT" }));
     const cleanup = () => args.signals.removeListener("SIGINT", onSigint);
 
+    const settle = (code: number, msg?: string) => {
+      if (settled) return;
+      settled = true;
+      if (msg) args.stderr.write(msg);
+      cleanup();
+      resolve(code);
+    };
+
     const timer = setTimeout(() => {
       sock.destroy();
-      args.stderr.write(`ozmux: failed to connect to extension socket within ${args.connectTimeoutMs}ms\n`);
-      cleanup();
-      resolve(127);
+      settle(127, `ozmux: failed to connect to extension socket within ${args.connectTimeoutMs}ms\n`);
     }, args.connectTimeoutMs);
 
     sock.once("connect", () => {
@@ -82,14 +89,12 @@ export function runShim(args: RunShimArgs): Promise<number> {
     });
 
     sock.on("data", (chunk: Buffer) => {
-      let frames;
+      let frames: ServerFrame[];
       try {
         frames = splitter.feed(chunk);
-      } catch (e) {
-        args.stderr.write(`ozmux: malformed frame from extension server\n`);
+      } catch {
         sock.destroy();
-        cleanup();
-        resolve(2);
+        settle(2, "ozmux: malformed frame from extension server\n");
         return;
       }
       for (const f of frames) {
@@ -101,12 +106,10 @@ export function runShim(args: RunShimArgs): Promise<number> {
 
     sock.on("close", () => {
       clearTimeout(timer);
-      cleanup();
       if (exitCode === null) {
-        args.stderr.write("ozmux: extension server closed unexpectedly\n");
-        resolve(1);
+        settle(1, "ozmux: extension server closed unexpectedly\n");
       } else {
-        resolve(exitCode);
+        settle(exitCode);
       }
     });
 
