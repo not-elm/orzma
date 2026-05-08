@@ -67,3 +67,25 @@ async fn daemon_drop_removes_runtime_root() {
     }
     assert!(!path.exists(), "expected runtime root to be cleaned up by Drop");
 }
+
+#[tokio::test]
+async fn extension_crash_does_not_break_other_extensions() {
+    let parent = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
+    unsafe { std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root()); }
+    let _handles = ExtensionHandles::load(&runtime).unwrap();
+
+    let echo = runtime.bin_dir().join("echoext").join("echoext");
+    let crash = runtime.bin_dir().join("crashext").join("crashext");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !(echo.exists() && crash.exists()) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(echo.exists() && crash.exists());
+
+    // Wait for the crash extension to die (its setTimeout exits after 200ms).
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Echo extension's bin dir must still exist.
+    assert!(echo.exists(), "echo bin disappeared after crash extension died");
+}
