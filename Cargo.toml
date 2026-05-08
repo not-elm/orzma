@@ -6,7 +6,7 @@ members = [
   "daemon/macros",
   "daemon/session",
   "daemon/terminal",
-  "daemon/extension",
+  "daemon/multiplexer",
   "daemon/http_server",
 ]
 

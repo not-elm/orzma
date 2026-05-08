@@ -1,7 +1,6 @@
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::runtime::RuntimeRoot;
 use ozmux_http_server::AppState;
-use ozmux_session::{SessionState, WindowStore};
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
 

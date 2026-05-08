@@ -1,0 +1,44 @@
+use std::{collections::HashMap, sync::Arc};
+
+use ozmux_macros::NewType;
+use serde::{Deserialize, Serialize};
+
+use crate::activity;
+
+#[derive(Debug, Clone)]
+pub struct ActivityState(HashMap<ActivityId, Activity>);
+
+impl ActivityState {
+    #[inline]
+    pub fn register(&mut self, id: ActivityId, activity: Activity) {
+        self.0.insert(id, activity);
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+#[newtype(as_ref(str), display, new(uuid_v4_string), default)]
+pub struct ActivityId(String);
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ActivityKind {
+    Terminal,
+    Extension { iframe_path: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Activity {
+    pub id: ActivityId,
+    pub name: String,
+    pub kind: ActivityKind,
+}
+
+impl Default for Activity {
+    fn default() -> Self {
+        Self {
+            id: ActivityId::new(),
+            name: "Terminal".to_string(),
+            kind: ActivityKind::Terminal,
+        }
+    }
+}

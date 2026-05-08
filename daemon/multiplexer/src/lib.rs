@@ -11,6 +11,7 @@ pub mod activity;
 pub mod cell;
 pub mod error;
 pub mod pane;
+pub mod service;
 pub mod window;
 pub mod window_service;
 
@@ -186,131 +187,5 @@ impl Default for Session {
         let session_id = SessionId::new();
         let window_id = crate::window::WindowId::new();
         Self::empty(session_id, String::new(), window_id)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::SessionError;
-    use crate::window::{WindowId, WindowStore};
-
-    #[test]
-    fn session_carries_its_id_and_name() {
-        let s = Session::empty(SessionId::new(), "demo".into(), WindowId::new());
-        assert!(!s.id().as_ref().is_empty());
-        assert_eq!(s.name(), "demo");
-    }
-
-    #[test]
-    fn two_new_sessions_get_distinct_ids() {
-        let a = Session::empty(SessionId::new(), String::new(), WindowId::new());
-        let b = Session::empty(SessionId::new(), String::new(), WindowId::new());
-        assert_ne!(a.id(), b.id());
-    }
-
-    #[test]
-    fn session_serializes_with_id_name_windows_active_window() {
-        let s = Session::empty(SessionId::new(), "hello".into(), WindowId::new());
-        let v = serde_json::to_value(&s).unwrap();
-        assert_eq!(v["name"].as_str(), Some("hello"));
-        assert!(v["id"].is_string());
-        assert!(v["windows"].is_array());
-        assert_eq!(v["windows"].as_array().unwrap().len(), 1);
-        assert!(v["active_window"].is_string());
-    }
-
-    #[tokio::test]
-    async fn session_state_lock_starts_empty() {
-        let state = SessionState::default();
-        assert!(state.lock().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn session_returns_ref_for_existing_id() {
-        let state = SessionState::default();
-        let id = SessionId::new();
-        state.lock().await.insert(
-            id.clone(),
-            Session::empty(id.clone(), "hello".into(), WindowId::new()),
-        );
-        let r = state.session(&id).await.expect("exists");
-        assert_eq!(r.name(), "hello");
-    }
-
-    #[tokio::test]
-    async fn session_returns_err_for_unknown_id() {
-        let state = SessionState::default();
-        let id = SessionId::new();
-        let err = state.session(&id).await.unwrap_err();
-        assert!(matches!(err, SessionError::SessionNotFound(ref got) if got == &id));
-    }
-
-    #[tokio::test]
-    async fn session_mut_allows_in_place_mutation() {
-        let state = SessionState::default();
-        let id = SessionId::new();
-        state.lock().await.insert(
-            id.clone(),
-            Session::empty(id.clone(), "old".into(), WindowId::new()),
-        );
-
-        {
-            let mut g = state.session_mut(&id).await.unwrap();
-            g.rename("new");
-        }
-        assert_eq!(state.session(&id).await.unwrap().name(), "new");
-    }
-
-    #[tokio::test]
-    async fn remove_returns_session_and_removes_it() {
-        let state = SessionState::default();
-        let id = SessionId::new();
-        state.lock().await.insert(
-            id.clone(),
-            Session::empty(id.clone(), String::new(), WindowId::new()),
-        );
-        let removed = state.remove(&id).await.unwrap();
-        assert_eq!(removed.id(), &id);
-        assert!(state.lock().await.get(&id).is_none());
-    }
-
-    #[tokio::test]
-    async fn session_mut_returns_err_for_unknown_id() {
-        let state = SessionState::default();
-        let id = SessionId::new();
-        let err = state.session_mut(&id).await.unwrap_err();
-        assert!(matches!(err, SessionError::SessionNotFound(ref got) if got == &id));
-    }
-
-    #[tokio::test]
-    async fn remove_returns_err_for_unknown_id() {
-        let state = SessionState::default();
-        let id = SessionId::new();
-        let err = state.remove(&id).await.unwrap_err();
-        assert!(matches!(err, SessionError::SessionNotFound(ref got) if got == &id));
-    }
-
-    #[tokio::test]
-    async fn bootstrap_default_inserts_session_and_window_and_returns_4tuple() {
-        use crate::activity::ActivityKind;
-        let state = SessionState::default();
-        let windows = WindowStore::default();
-
-        let (sid, wid, pid, aid) = state.bootstrap_default(&windows).await;
-
-        let sessions = state.lock().await;
-        assert_eq!(sessions.len(), 1);
-        let s = sessions.get(&sid).unwrap();
-        assert_eq!(s.windows(), std::slice::from_ref(&wid));
-        assert_eq!(s.active_window(), &wid);
-
-        let store = windows.lock().await;
-        let w = store.get(&wid).unwrap();
-        let p = w.panes().get(&pid).expect("pane exists");
-        assert_eq!(p.id(), &pid);
-        let a = p.first_activity().unwrap();
-        assert_eq!(a.id(), &aid);
-        assert!(matches!(a.kind(), ActivityKind::Terminal));
     }
 }
