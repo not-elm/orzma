@@ -1,6 +1,5 @@
 use crate::{
-    activity::{Activity, ActivityId},
-    cell::CellId,
+    activity::{self, Activity, ActivityId},
     error::{SessionError, SessionResult},
 };
 use ozmux_macros::NewType;
@@ -11,12 +10,12 @@ use std::collections::HashMap;
 #[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct PaneId(String);
 
-#[derive(Debug, Default, Clone)]
-pub struct PaneStore(HashMap<PaneId, Pane>);
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct PaneState(HashMap<PaneId, Pane>);
 
-impl PaneStore {
+impl PaneState {
     #[inline]
-    pub fn insert(&mut self, id: PaneId, pane: Pane) {
+    pub fn register(&mut self, id: PaneId, pane: Pane) {
         self.0.insert(id, pane);
     }
 
@@ -54,23 +53,15 @@ impl PaneStore {
     }
 }
 
-impl Serialize for PaneStore {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut panes: Vec<&Pane> = self.0.values().collect();
-        panes.sort_by(|a, b| a.id.as_ref().cmp(b.id.as_ref()));
-        serializer.collect_seq(panes)
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Pane {
-    pub id: PaneId,
     pub activities: Vec<ActivityId>,
 }
 
 impl Pane {
-    pub fn new(id: PaneId) -> Self {
-        let activities = vec![Activity::default()];
-        Self { id, activities }
+    pub fn new(activity: ActivityId) -> Self {
+        Self {
+            activities: vec![activity],
+        }
     }
 }

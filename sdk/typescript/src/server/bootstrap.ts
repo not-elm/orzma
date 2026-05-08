@@ -176,7 +176,6 @@ export interface BootstrapArgs {
 export async function bootstrap(args: BootstrapArgs): Promise<void> {
   const env = resolveBootstrapEnv(process.env);
   for (const name of Object.keys(args.commands)) assertCommandName(name);
-
   const helperPath = fileURLToPath(import.meta.resolve("./cmd-shim.ts"));
   await materializeShims({
     binDir: env.binDir,

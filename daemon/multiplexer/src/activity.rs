@@ -28,7 +28,6 @@ pub enum ActivityKind {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Activity {
-    pub id: ActivityId,
     pub name: String,
     pub kind: ActivityKind,
 }
@@ -36,7 +35,6 @@ pub struct Activity {
 impl Default for Activity {
     fn default() -> Self {
         Self {
-            id: ActivityId::new(),
             name: "Terminal".to_string(),
             kind: ActivityKind::Terminal,
         }

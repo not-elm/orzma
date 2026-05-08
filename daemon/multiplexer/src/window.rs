@@ -22,22 +22,11 @@ pub struct Window {
 
 impl Window {
     /// Construct a window with a single initial pane.
-    pub fn new(id: WindowId, session_id: SessionId, name: String) -> Self {
-        let pane_id = PaneId::new();
-        let mut cells = LayoutCellState::default();
-        let cell_id = cells.create_pane_cell(pane_id.clone(), None);
-
-        let mut panes = PaneStore::default();
-        panes.insert(pane_id.clone(), Pane::new(pane_id.clone(), cell_id.clone()));
-
+    pub fn new(name: impl Into<String>, root_cell: CellId, active_pane: PaneId) -> Self {
         Self {
-            id,
-            name,
-            session_id,
-            root: cell_id,
-            cells,
-            panes,
-            active_pane: pane_id,
+            name: name.into(),
+            root_cell,
+            active_pane,
         }
     }
 
@@ -124,6 +113,21 @@ impl Window {
 
     pub fn first_pane(&self) -> Option<&Pane> {
         self.panes.iter().next().map(|(_, p)| p)
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct WindowState(HashMap<WindowId, Window>);
+
+impl WindowState {
+    #[inline]
+    pub fn register(&mut self, id: WindowId, window: Window) {
+        self.0.insert(id, window);
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 

@@ -153,9 +153,8 @@ name = "daemon_bootstrap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ozmux_extension",
  "ozmux_http_server",
- "ozmux_session",
+ "ozmux_multiplexer",
  "ozmux_terminal",
  "tokio",
  "tracing",
@@ -628,7 +627,7 @@ dependencies = [
  "interprocess",
  "libc",
  "ozmux_macros",
- "ozmux_session",
+ "ozmux_multiplexer",
  "ozmux_terminal",
  "serde",
  "serde_json",
@@ -646,7 +645,7 @@ dependencies = [
  "axum",
  "futures-util",
  "http-body-util",
- "ozmux_session",
+ "ozmux_multiplexer",
  "ozmux_terminal",
  "serde",
  "serde_json",
@@ -672,7 +671,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ozmux_session"
+name = "ozmux_multiplexer"
 version = "0.1.0"
 dependencies = [
  "ozmux_macros",
@@ -689,7 +688,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ozmux_extension",
- "ozmux_session",
+ "ozmux_multiplexer",
  "portable-pty",
  "serde",
  "tempfile",
