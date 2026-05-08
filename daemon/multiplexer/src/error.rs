@@ -49,6 +49,9 @@ pub enum SessionError {
         window_id: WindowId,
         pane_id: PaneId,
     },
+
+    #[error("window {0} is not attached to any session")]
+    WindowNotAttachedToSession(WindowId),
 }
 
 pub type SessionResult<T = ()> = Result<T, SessionError>;
@@ -82,6 +85,13 @@ mod tests {
     fn cannot_close_last_pane_in_window_carries_window_id() {
         let wid = WindowId::new();
         let err = SessionError::CannotCloseLastPaneInWindow(wid.clone());
+        assert!(err.to_string().contains(wid.as_ref()));
+    }
+
+    #[test]
+    fn window_not_attached_carries_window_id() {
+        let wid = WindowId::new();
+        let err = SessionError::WindowNotAttachedToSession(wid.clone());
         assert!(err.to_string().contains(wid.as_ref()));
     }
 }

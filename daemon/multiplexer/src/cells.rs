@@ -177,6 +177,60 @@ impl LayoutCellState {
         }
     }
 
+    /// Collect every `PaneId` reachable from `start`'s subtree (Root or Split
+    /// roots are descended; Pane leaves contribute their `PaneId`).
+    pub fn pane_ids_in_subtree(&self, start: &CellId) -> SessionResult<Vec<PaneId>> {
+        let mut out = Vec::new();
+        self.collect_panes(start, &mut out)?;
+        Ok(out)
+    }
+
+    fn collect_panes(&self, id: &CellId, out: &mut Vec<PaneId>) -> SessionResult {
+        match self.cell(id)? {
+            Cell::Root(r) => {
+                let child = r.child.clone();
+                self.collect_panes(&child, out)?;
+            }
+            Cell::Split(s) => {
+                let lhs = s.lhs_cell.clone();
+                let rhs = s.rhs_cell.clone();
+                self.collect_panes(&lhs, out)?;
+                self.collect_panes(&rhs, out)?;
+            }
+            Cell::Pane(p) => out.push(p.pane.clone()),
+        }
+        Ok(())
+    }
+
+    /// Drop every cell in `start`'s subtree (including `start` itself).
+    /// Used during window close to vacate the cell store atomically.
+    pub fn remove_subtree(&mut self, start: &CellId) -> SessionResult {
+        let mut ids = Vec::new();
+        self.collect_cell_ids(start, &mut ids)?;
+        for id in ids {
+            self.0.remove(&id);
+        }
+        Ok(())
+    }
+
+    fn collect_cell_ids(&self, id: &CellId, out: &mut Vec<CellId>) -> SessionResult {
+        out.push(id.clone());
+        match self.cell(id)? {
+            Cell::Root(r) => {
+                let child = r.child.clone();
+                self.collect_cell_ids(&child, out)?;
+            }
+            Cell::Split(s) => {
+                let lhs = s.lhs_cell.clone();
+                let rhs = s.rhs_cell.clone();
+                self.collect_cell_ids(&lhs, out)?;
+                self.collect_cell_ids(&rhs, out)?;
+            }
+            Cell::Pane(_) => {}
+        }
+        Ok(())
+    }
+
     #[inline]
     pub fn cell(&self, id: &CellId) -> SessionResult<&Cell> {
         self.0
@@ -527,5 +581,63 @@ mod tests {
         };
         assert_eq!(survivor.parent.as_ref(), Some(&outer));
         assert!(state.cell(&inner).is_err());
+    }
+
+    #[test]
+    fn pane_ids_in_subtree_collects_all_leaves() {
+        let mut state = LayoutCellState::default();
+        let (root_id, pane_a) = state.new_window_layout(pid());
+        let pane_b = state.new_pane(pid(), None);
+        let outer = state
+            .split_cell(
+                pane_a.clone(),
+                pane_b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap();
+        let pane_c = state.new_pane(pid(), None);
+        state
+            .split_cell(
+                pane_b.clone(),
+                pane_c.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
+            .unwrap();
+
+        let mut ids = state.pane_ids_in_subtree(&root_id).unwrap();
+        ids.sort();
+        let mut expected: Vec<_> = [&pane_a, &pane_b, &pane_c]
+            .iter()
+            .map(|c| match state.cell(c).unwrap() {
+                Cell::Pane(p) => p.pane.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        expected.sort();
+        assert_eq!(ids, expected);
+        let _ = outer;
+    }
+
+    #[test]
+    fn remove_subtree_drops_every_cell_below_root() {
+        let mut state = LayoutCellState::default();
+        let (root_id, pane_a) = state.new_window_layout(pid());
+        let pane_b = state.new_pane(pid(), None);
+        let split_id = state
+            .split_cell(
+                pane_a.clone(),
+                pane_b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap();
+
+        state.remove_subtree(&root_id).unwrap();
+        assert!(state.cell(&root_id).is_err());
+        assert!(state.cell(&split_id).is_err());
+        assert!(state.cell(&pane_a).is_err());
+        assert!(state.cell(&pane_b).is_err());
     }
 }

@@ -54,6 +54,21 @@ impl WindowState {
     }
 
     #[inline]
+    pub fn get_mut(&mut self, id: &WindowId) -> Option<&mut Window> {
+        self.0.get_mut(id)
+    }
+
+    #[inline]
+    pub fn remove(&mut self, id: &WindowId) -> Option<Window> {
+        self.0.remove(id)
+    }
+
+    #[inline]
+    pub fn contains_key(&self, id: &WindowId) -> bool {
+        self.0.contains_key(id)
+    }
+
+    #[inline]
     pub fn len(&self) -> usize {
         self.0.len()
     }

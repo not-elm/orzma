@@ -1,4 +1,4 @@
-use crate::WindowId;
+use crate::{error::SessionResult, WindowId};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,6 +16,29 @@ impl SessionState {
         self.0.insert(id, session);
     }
 
+    #[inline]
+    pub fn get(&self, id: &SessionId) -> Option<&Session> {
+        self.0.get(id)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, id: &SessionId) -> Option<&mut Session> {
+        self.0.get_mut(id)
+    }
+
+    #[inline]
+    pub fn remove(&mut self, id: &SessionId) -> SessionResult<Session> {
+        self.0
+            .remove(id)
+            .ok_or_else(|| crate::error::SessionError::SessionNotFound(id.clone()))
+    }
+
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&SessionId, &mut Session)> {
+        self.0.iter_mut()
+    }
+
+    #[inline]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -25,22 +48,38 @@ impl SessionState {
 pub struct Session {
     pub name: String,
     pub windows: Vec<WindowId>,
-    pub active_window: WindowId,
+    pub active_window: Option<WindowId>,
 }
 
 impl Session {
-    /// Construct a session with no windows. Use `WindowService::create` to add
-    /// windows; an empty windows list violates an invariant — `bootstrap_default`
-    /// must be paired with a window insert.
-    pub fn new(name: impl Into<String>, default_window: WindowId) -> Self {
+    /// Construct a session with no windows. `active_window` becomes `Some` the
+    /// first time a window is attached.
+    pub fn empty(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            windows: vec![default_window.clone()],
-            active_window: default_window,
+            windows: Vec::new(),
+            active_window: None,
         }
     }
 
     pub fn rename(&mut self, name: impl Into<String>) {
         self.name = name.into();
+    }
+
+    /// Append `window_id`; promote to `active_window` if none was set.
+    pub fn attach_window(&mut self, window_id: WindowId) {
+        if self.active_window.is_none() {
+            self.active_window = Some(window_id.clone());
+        }
+        self.windows.push(window_id);
+    }
+
+    /// Remove `window_id` from `windows`; if it was active, fall back to the
+    /// first remaining window (or `None` if empty).
+    pub fn detach_window(&mut self, window_id: &WindowId) {
+        self.windows.retain(|w| w != window_id);
+        if self.active_window.as_ref() == Some(window_id) {
+            self.active_window = self.windows.first().cloned();
+        }
     }
 }

@@ -6,7 +6,7 @@ use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, NewType)]
 #[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct PaneId(String);
 
