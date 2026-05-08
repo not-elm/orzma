@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 ozmux_session = { path = "../session" }
+ozmux_extension = { path = "../extension" }
 tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "time"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
