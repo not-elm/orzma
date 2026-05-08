@@ -2,6 +2,8 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { Writable } from "node:stream";
 import { bindServer, handleConnection, materializeShims, resolveBootstrapEnv, type CommandHandler } from "./bootstrap.ts";
@@ -105,4 +107,50 @@ describe("handleConnection", () => {
     expect(text).toMatch(/"type":"stdout"/);
     expect(text).toMatch(/"type":"exit","code":0/);
   });
+});
+
+describe("bootstrap()", () => {
+  it("materializes shims, binds the socket, and cleans up on SIGTERM", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ozmux-bs-"));
+    const binDir = path.join(dir, "bin");
+    const sockPath = path.join(dir, "x.sock");
+
+    const harness = `
+      import { bootstrap } from ${JSON.stringify(fileURLToPath(new URL("./bootstrap.ts", import.meta.url)))};
+      bootstrap({ commands: { memo: async () => {} } }).catch((e) => { console.error(e); process.exit(11); });
+      // keep alive
+      setInterval(() => {}, 1000);
+    `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", harness], {
+      env: {
+        ...process.env,
+        OZMUX_BIN_DIR: binDir,
+        OZMUX_SOCK_PATH: sockPath,
+        EXTENSION_NAME: "memo",
+      },
+      stdio: "inherit",
+    });
+    try {
+      // Wait until shim + sock exist
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        try {
+          await fs.stat(path.join(binDir, "memo"));
+          await fs.stat(sockPath);
+          break;
+        } catch { await new Promise((r) => setTimeout(r, 50)); }
+      }
+      await fs.stat(path.join(binDir, "memo"));
+      await fs.stat(sockPath);
+
+      child.kill("SIGTERM");
+      await new Promise<void>((res) => child.once("exit", () => res()));
+
+      await expect(fs.stat(path.join(binDir, "memo"))).rejects.toBeTruthy();
+      await expect(fs.stat(sockPath)).rejects.toBeTruthy();
+    } finally {
+      try { child.kill("SIGKILL"); } catch {}
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }, 10000);
 });

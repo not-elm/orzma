@@ -1,2 +1,2 @@
 export * from "./activity.ts";
-export * from "./bootstrap.ts";
+export { bootstrap, type CommandContext, type CommandHandler } from "./bootstrap.ts";

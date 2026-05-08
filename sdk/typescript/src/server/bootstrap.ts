@@ -2,8 +2,9 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
 import { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { encodeFrame, MAX_FRAME_PAYLOAD_BYTES, type ClientFrame } from "./protocol.ts";
-import { writeShim } from "./shim-writer.ts";
+import { assertCommandName, writeShim } from "./shim-writer.ts";
 
 export interface BootstrapEnv {
   binDir: string;
@@ -132,4 +133,61 @@ export async function handleConnection(
     exitCode = 1;
   }
   socket.write(encodeFrame({ type: "exit", code: exitCode }));
+}
+
+export interface BootstrapArgs {
+  commands: Record<string, CommandHandler>;
+}
+
+export async function bootstrap(args: BootstrapArgs): Promise<void> {
+  const env = resolveBootstrapEnv(process.env);
+  for (const name of Object.keys(args.commands)) assertCommandName(name);
+
+  const helperPath = fileURLToPath(import.meta.resolve("./cmd-shim.ts"));
+  await materializeShims({
+    binDir: env.binDir,
+    sockPath: env.sockPath,
+    commandNames: Object.keys(args.commands),
+    execPath: process.execPath,
+    helperPath,
+  });
+
+  const server = await bindServer(env.sockPath, (conn) => {
+    let buffer = "";
+    let dispatched = false;
+    conn.on("data", async (chunk: Buffer) => {
+      if (dispatched) return;
+      buffer += chunk.toString("utf8");
+      const idx = buffer.indexOf("\n");
+      if (idx === -1) return;
+      const line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      dispatched = true;
+      let frame: ClientFrame;
+      try { frame = JSON.parse(line); }
+      catch {
+        conn.write(encodeFrame({ type: "exit", code: 2 }));
+        conn.end();
+        return;
+      }
+      try {
+        await handleConnection(conn, args.commands, () => frame, line);
+      } finally {
+        conn.end();
+      }
+    });
+  });
+
+  let cleaningUp = false;
+  const cleanup = async () => {
+    if (cleaningUp) return;
+    cleaningUp = true;
+    await new Promise<void>((res) => server.close(() => res()));
+    await fs.rm(env.binDir, { recursive: true, force: true });
+    await fs.unlink(env.sockPath).catch(() => {});
+  };
+  for (const sig of ["SIGTERM", "SIGINT"] as const) {
+    process.on(sig, () => { cleanup().finally(() => process.exit(0)); });
+  }
+  process.on("beforeExit", () => { cleanup(); });
 }
