@@ -1,5 +1,7 @@
 // daemon/extension/src/runtime.rs
 use std::{fs, path::{Path, PathBuf}};
+#[cfg(unix)]
+use libc;
 
 pub struct RuntimeRoot {
     root: PathBuf,
@@ -55,6 +57,35 @@ impl RuntimeRoot {
     }
 }
 
+impl RuntimeRoot {
+    /// Remove `<parent>/<pid>/` subtrees whose pid is no longer running.
+    /// Non-numeric entries are left untouched.
+    pub fn gc_stale(parent: &Path) -> std::io::Result<()> {
+        let dir = match std::fs::read_dir(parent) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        for entry in dir.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            let Ok(pid) = name_str.parse::<u32>() else { continue };
+            if !pid_is_alive(pid) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    // kill(pid, 0): 0 → alive, ESRCH → dead, EPERM → alive but other-owner.
+    let rc = unsafe { libc::kill(pid as i32, 0) };
+    if rc == 0 { return true; }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
 impl Drop for RuntimeRoot {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
@@ -107,5 +138,23 @@ mod tests {
             "expected /tmp fallback, got {:?}",
             rt.root()
         );
+    }
+
+    #[test]
+    fn gc_removes_stale_pid_dirs() {
+        let parent = tempdir().unwrap();
+        let live_pid = std::process::id();
+        let candidate: u32 = 999_999_999;
+        let stale_pid = if unsafe { libc::kill(candidate as i32, 0) } == -1 { candidate } else { 1 };
+
+        std::fs::create_dir_all(parent.path().join(live_pid.to_string())).unwrap();
+        std::fs::create_dir_all(parent.path().join(stale_pid.to_string())).unwrap();
+        std::fs::create_dir_all(parent.path().join("not-a-pid")).unwrap();
+
+        RuntimeRoot::gc_stale(parent.path()).unwrap();
+
+        assert!(parent.path().join(live_pid.to_string()).exists());
+        assert!(!parent.path().join(stale_pid.to_string()).exists());
+        assert!(parent.path().join("not-a-pid").exists()); // non-numeric names left alone
     }
 }
