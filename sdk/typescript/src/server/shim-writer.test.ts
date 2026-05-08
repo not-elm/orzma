@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertCommandName } from "./shim-writer.ts";
-import { shellSingleQuote } from "./shim-writer.ts";
+import { assertCommandName, shellSingleQuote } from "./shim-writer.ts";
 
 describe("assertCommandName", () => {
   it("accepts simple lowercase names", () => {
