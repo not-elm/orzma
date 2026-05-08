@@ -78,6 +78,31 @@ async function bindEcho(sockPath: string, reply: (invoke: any) => string[]): Pro
   return srv;
 }
 
+describe("runShim connect timeout", () => {
+  it("resolves 127 when the socket cannot be reached", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ozmux-shim-to-"));
+    try {
+      const stdout = new CollectStream();
+      const stderr = new CollectStream();
+      const code = await runShim({
+        socketPath: path.join(dir, "missing.sock"),
+        command: "memo",
+        argv: [],
+        cwd: "/tmp",
+        env: {},
+        stdout,
+        stderr,
+        connectTimeoutMs: 50,
+        signals: { addListener() {}, removeListener() {} },
+      });
+      expect(code).toBe(127);
+      expect(stderr.text()).toMatch(/failed to connect/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("runShim", () => {
   it("writes only one stderr message on malformed server frame", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ozmux-shim-mf-"));

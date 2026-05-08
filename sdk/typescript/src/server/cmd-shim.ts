@@ -60,6 +60,7 @@ export function runShim(args: RunShimArgs): Promise<number> {
     const splitter = new LineSplitter();
     let exitCode: number | null = null;
     let settled = false;
+    let connected = false;
 
     const onSigint = () => sock.write(encodeFrame({ type: "signal", signal: "SIGINT" }));
     const cleanup = () => args.signals.removeListener("SIGINT", onSigint);
@@ -78,6 +79,7 @@ export function runShim(args: RunShimArgs): Promise<number> {
     }, args.connectTimeoutMs);
 
     sock.once("connect", () => {
+      connected = true;
       clearTimeout(timer);
       args.signals.addListener("SIGINT", onSigint);
       sock.write(encodeFrame(buildInvokeFrame({
@@ -106,7 +108,9 @@ export function runShim(args: RunShimArgs): Promise<number> {
 
     sock.on("close", () => {
       clearTimeout(timer);
-      if (exitCode === null) {
+      if (!connected) {
+        settle(127, `ozmux: failed to connect to extension socket\n`);
+      } else if (exitCode === null) {
         settle(1, "ozmux: extension server closed unexpectedly\n");
       } else {
         settle(exitCode);
