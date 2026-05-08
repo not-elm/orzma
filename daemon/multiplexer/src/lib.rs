@@ -14,6 +14,7 @@ pub mod pane;
 pub mod service;
 pub mod window;
 pub mod window_service;
+pub mod session;
 
 pub use error::{SessionError, SessionResult};
 pub use window::{Window, WindowId, WindowStore};

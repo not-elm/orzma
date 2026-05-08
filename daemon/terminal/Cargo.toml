@@ -8,7 +8,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-ozmux_session = { path = "../session" }
+ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_extension = { path = "../extension" }
 tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "time"] }
 serde = { workspace = true, features = ["derive"] }
