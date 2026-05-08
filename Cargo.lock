@@ -158,6 +158,7 @@ dependencies = [
  "ozmux_session",
  "ozmux_terminal",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 
@@ -625,8 +626,10 @@ name = "ozmux_extension"
 version = "0.1.0"
 dependencies = [
  "interprocess",
+ "libc",
  "ozmux_macros",
  "ozmux_session",
+ "ozmux_terminal",
  "serde",
  "serde_json",
  "tempfile",
@@ -685,6 +688,7 @@ name = "ozmux_terminal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ozmux_extension",
  "ozmux_session",
  "portable-pty",
  "serde",
@@ -982,6 +986,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1113,6 +1127,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys",

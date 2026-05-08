@@ -21,8 +21,9 @@ impl ExtensionHandles {
             .map_err(|_| ExtensionError::MissingEnv(OZMUX_EXTENSION_ROOT.to_string()))?;
         let mut handles = Vec::new();
         for entry in std::fs::read_dir(root)?.filter_map(|r| r.ok()) {
-            let Some(package) = load_package_json(&entry.path()) else { continue };
-            match node_handle(package, runtime) {
+            let extension_dir = entry.path();
+            let Some(package) = load_package_json(&extension_dir) else { continue };
+            match node_handle(package, &extension_dir, runtime) {
                 Ok(h) => handles.push(h),
                 Err(e) => tracing::error!("{e}"),
             }
@@ -36,11 +37,12 @@ fn load_package_json(extension_dir: &Path) -> Option<PackageJson> {
     serde_json::from_str(&buff).ok()
 }
 
-fn node_handle(package: PackageJson, runtime: &RuntimeRoot) -> std::io::Result<Child> {
+fn node_handle(package: PackageJson, extension_dir: &Path, runtime: &RuntimeRoot) -> std::io::Result<Child> {
     let bin_dir = runtime.bin_dir().join(&package.name);
     let sock_path = runtime.sock_dir().join(format!("{}.sock", package.name));
     Command::new("node")
         .arg(&package.main)
+        .current_dir(extension_dir)
         .env("EXTENSION_NAME", &package.name)
         .env("OZMUX_BIN_DIR", &bin_dir)
         .env("OZMUX_SOCK_PATH", &sock_path)

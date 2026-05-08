@@ -27,6 +27,12 @@ importers:
         specifier: ^2.4.11
         version: 2.4.14
 
+  daemon/extension/tests/fixtures/echo-ext:
+    dependencies:
+      '@ozmux/sdk':
+        specifier: workspace:*
+        version: link:../../../../../sdk/typescript
+
   daemon/frontend:
     dependencies:
       '@tailwindcss/vite':

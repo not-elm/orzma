@@ -2,6 +2,7 @@ packages:
   - daemon/frontend
   - sdk/*
   - extensions/*
+  - daemon/extension/tests/fixtures/*
 
 catalog:
   '@types/node': ^24.12.2
