@@ -1,15 +1,6 @@
-interface DefineArgs {
+interface DefineArgs<T> {
   html: string;
+  initialData: T;
 }
 
-export function defineActivity(_args: DefineArgs) {
-  return {
-    create: () => {},
-    /** Typo alias kept for compatibility with existing extension code. */
-    craete: (_args?: unknown) => {},
-  };
-}
-
-export const activity = {
-  define: defineActivity,
-};
+export async function createActivity<T>(args: DefineArgs<T>) {}
