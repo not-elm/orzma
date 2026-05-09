@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerService, session::SessionId};
+use ozmux_multiplexer::{MultiplexerService, SessionError, session::SessionId};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -77,6 +77,18 @@ fn session_view(
         "windows": session.windows,
         "active_window": session.active_window,
     })
+}
+
+pub async fn get(
+    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    Path(session_id): Path<SessionId>,
+) -> HttpResult<Json<serde_json::Value>> {
+    let ms = ms.lock().await;
+    let session = ms
+        .sessions()
+        .get(&session_id)
+        .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+    Ok(Json(session_view(&session_id, session)))
 }
 
 #[cfg(test)]
@@ -262,5 +274,67 @@ mod tests {
         assert_eq!(s["name"].as_str(), Some("test"));
         assert_eq!(s["windows"][0].as_str(), Some(wid.as_ref()));
         assert_eq!(s["active_window"].as_str(), Some(wid.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn get_returns_session_view() {
+        let mut ms = MultiplexerService::default();
+        let sid = ms.new_session(Some("named".into()));
+        let wid = ms.new_window_in(Some(&sid), None).unwrap();
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/sessions/{}", sid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["id"].as_str(), Some(sid.as_ref()));
+        assert_eq!(v["name"].as_str(), Some("named"));
+        assert_eq!(v["windows"][0].as_str(), Some(wid.as_ref()));
+        assert_eq!(v["active_window"].as_str(), Some(wid.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn get_unknown_session_returns_404() {
+        let (router, _) = router_with(MultiplexerService::default());
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/missing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"].as_str(), Some("SESSION_NOT_FOUND"));
+    }
+
+    #[tokio::test]
+    async fn get_session_with_no_windows_serializes_active_window_null() {
+        let mut ms = MultiplexerService::default();
+        let sid = ms.new_session(None);
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/sessions/{}", sid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["active_window"].is_null());
+        assert_eq!(v["windows"].as_array().map(|a| a.len()), Some(0));
     }
 }

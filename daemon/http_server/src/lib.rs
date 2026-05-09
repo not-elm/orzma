@@ -73,7 +73,9 @@ pub fn daemon_router(state: AppState) -> Router {
         )
         .route(
             "/sessions/{session_id}",
-            patch(handlers::sessions::rename).delete(handlers::sessions::delete),
+            get(handlers::sessions::get)
+                .patch(handlers::sessions::rename)
+                .delete(handlers::sessions::delete),
         )
         .route(
             "/windows",
