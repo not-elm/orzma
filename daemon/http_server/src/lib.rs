@@ -69,7 +69,7 @@ pub fn daemon_router(state: AppState) -> Router {
         .route("/health", get(handlers::health::check))
         .route(
             "/sessions",
-            post(handlers::sessions::create),
+            get(handlers::sessions::list).post(handlers::sessions::create),
         )
         .route(
             "/sessions/{session_id}",

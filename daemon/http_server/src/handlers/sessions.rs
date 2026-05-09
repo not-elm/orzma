@@ -53,6 +53,32 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn list(
+    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+) -> Json<serde_json::Value> {
+    let ms = ms.lock().await;
+    let mut entries: Vec<(&SessionId, &ozmux_multiplexer::session::Session)> =
+        ms.sessions().iter().collect();
+    entries.sort_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
+    let sessions: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(id, session)| session_view(id, session))
+        .collect();
+    Json(serde_json::json!({ "sessions": sessions }))
+}
+
+fn session_view(
+    id: &SessionId,
+    session: &ozmux_multiplexer::session::Session,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "name": session.name,
+        "windows": session.windows,
+        "active_window": session.active_window,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +200,67 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_returns_empty_when_no_sessions() {
+        let (router, _) = router_with(MultiplexerService::default());
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["sessions"].as_array().map(|a| a.len()), Some(0));
+    }
+
+    #[tokio::test]
+    async fn list_returns_sessions_sorted_by_id() {
+        let mut ms = MultiplexerService::default();
+        let sid_a = ms.new_session(Some("a".into()));
+        let sid_b = ms.new_session(Some("b".into()));
+        let mut expected = [sid_a.to_string(), sid_b.to_string()];
+        expected.sort();
+
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(Request::builder().uri("/sessions").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let ids: Vec<String> = v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids, expected.to_vec());
+    }
+
+    #[tokio::test]
+    async fn list_includes_full_session_view() {
+        let mut ms = MultiplexerService::default();
+        let sid = ms.new_session(Some("test".into()));
+        let wid = ms.new_window_in(Some(&sid), None).unwrap();
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(Request::builder().uri("/sessions").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let s = &v["sessions"][0];
+        assert_eq!(s["id"].as_str(), Some(sid.as_ref()));
+        assert_eq!(s["name"].as_str(), Some("test"));
+        assert_eq!(s["windows"][0].as_str(), Some(wid.as_ref()));
+        assert_eq!(s["active_window"].as_str(), Some(wid.as_ref()));
     }
 }
