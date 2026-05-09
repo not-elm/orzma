@@ -21,10 +21,7 @@ pub async fn create(
     Json(body): Json<CreateRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let id = ms.lock().await.new_session(body.name);
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "id": id })),
-    )
+    (StatusCode::CREATED, Json(serde_json::json!({ "id": id })))
 }
 
 #[derive(Deserialize)]
@@ -53,9 +50,7 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn list(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
-) -> Json<serde_json::Value> {
+pub async fn list(State(ms): State<Arc<Mutex<MultiplexerService>>>) -> Json<serde_json::Value> {
     let ms = ms.lock().await;
     let mut entries: Vec<(&SessionId, &ozmux_multiplexer::session::Session)> =
         ms.sessions().iter().collect();
@@ -242,7 +237,12 @@ mod tests {
 
         let (router, _) = router_with(ms);
         let resp = router
-            .oneshot(Request::builder().uri("/sessions").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -264,7 +264,12 @@ mod tests {
         let wid = ms.new_window_in(Some(&sid), None).unwrap();
         let (router, _) = router_with(ms);
         let resp = router
-            .oneshot(Request::builder().uri("/sessions").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();

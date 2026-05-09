@@ -1,7 +1,11 @@
 use ozmux_extension::{handle::ExtensionHandles, runtime::RuntimeRoot};
 use ozmux_multiplexer::{activity::ActivityId, pane::PaneId};
 use ozmux_terminal::{SpawnOptions, TerminalService};
-use std::{path::PathBuf, sync::Arc, time::{Duration, Instant}};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -13,7 +17,9 @@ async fn pane_command_invokes_extension_handler() {
     let runtime = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
 
     // Tell ExtensionHandles where to look:
-    unsafe { std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root()); }
+    unsafe {
+        std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
+    }
     let _handles = ExtensionHandles::load(&runtime).expect("spawn extension");
 
     // Wait for the extension to materialize its shim.
@@ -29,8 +35,15 @@ async fn pane_command_invokes_extension_handler() {
     svc.spawn(
         PaneId::new(),
         activity.clone(),
-        SpawnOptions { cols: 80, rows: 24, shell: "/bin/sh".to_string(), cwd: None },
-    ).await.unwrap();
+        SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
 
     let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity).await.unwrap();
     svc.write(&activity, b"echoext alpha beta\n").await.unwrap();
@@ -50,7 +63,10 @@ async fn pane_command_invokes_extension_handler() {
         }
     }
     let s = String::from_utf8_lossy(&got);
-    assert!(s.contains("ARGV=alpha,beta"), "expected ARGV line, got: {s}");
+    assert!(
+        s.contains("ARGV=alpha,beta"),
+        "expected ARGV line, got: {s}"
+    );
     svc.kill(&activity).await.unwrap();
 }
 
@@ -58,7 +74,9 @@ async fn pane_command_invokes_extension_handler() {
 async fn load_pre_creates_extension_bin_dirs() {
     let parent = tempfile::tempdir().unwrap();
     let runtime = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
-    unsafe { std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root()); }
+    unsafe {
+        std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
+    }
     let _handles = ExtensionHandles::load(&runtime).expect("load extensions");
     for name in ["echoext", "crashext"] {
         let bin_dir = runtime.bin_dir().join(name);
@@ -78,14 +96,19 @@ async fn daemon_drop_removes_runtime_root() {
         path = runtime.root().to_path_buf();
         assert!(path.exists());
     }
-    assert!(!path.exists(), "expected runtime root to be cleaned up by Drop");
+    assert!(
+        !path.exists(),
+        "expected runtime root to be cleaned up by Drop"
+    );
 }
 
 #[tokio::test]
 async fn extension_crash_does_not_break_other_extensions() {
     let parent = tempfile::tempdir().unwrap();
     let runtime = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
-    unsafe { std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root()); }
+    unsafe {
+        std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
+    }
     let _handles = ExtensionHandles::load(&runtime).unwrap();
 
     let echo = runtime.bin_dir().join("echoext").join("echoext");
@@ -100,5 +123,8 @@ async fn extension_crash_does_not_break_other_extensions() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Echo extension's bin dir must still exist.
-    assert!(echo.exists(), "echo bin disappeared after crash extension died");
+    assert!(
+        echo.exists(),
+        "echo bin disappeared after crash extension died"
+    );
 }

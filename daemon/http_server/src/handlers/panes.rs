@@ -69,11 +69,12 @@ pub async fn close(
     State(terminal): State<TerminalService>,
     Path(pane_id): Path<PaneId>,
 ) -> HttpResult<StatusCode> {
-    // Snapshot the activities to kill before closing, so we can drive PTY
-    // teardown without holding the multiplexer lock during await.
     let activities_to_kill = {
         let ms = ms.lock().await;
-        ms.panes().get(&pane_id).map(|p| p.activities.clone()).unwrap_or_default()
+        ms.panes()
+            .get(&pane_id)
+            .map(|p| p.activities.clone())
+            .unwrap_or_default()
     };
     {
         let mut ms = ms.lock().await;
@@ -117,9 +118,16 @@ mod tests {
         if status == StatusCode::CREATED {
             assert!(v["new_pane_id"].is_string());
             assert!(v["new_activity_id"].is_string());
-            assert_eq!(panes_after, panes_before + 1, "split must add a pane on success");
+            assert_eq!(
+                panes_after,
+                panes_before + 1,
+                "split must add a pane on success"
+            );
         } else {
-            assert_eq!(panes_after, panes_before, "split rollback must restore pane count on spawn failure");
+            assert_eq!(
+                panes_after, panes_before,
+                "split rollback must restore pane count on spawn failure"
+            );
         }
     }
 
@@ -129,7 +137,11 @@ mod tests {
         let (_sid, _wid, original_pid, _aid) = ms.bootstrap_default().unwrap();
         // Split to have 2 panes (without going through HTTP, to avoid PTY).
         let (new_pid, _new_aid) = ms
-            .split_pane(original_pid.clone(), Side::After, SplitOrientation::Horizontal)
+            .split_pane(
+                original_pid.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .unwrap();
         let panes_before = ms.panes().len();
         let (router, state) = router_with(ms);

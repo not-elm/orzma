@@ -1,8 +1,4 @@
-use crate::{
-    error::ExtensionResult,
-    handle::package_json::PackageJson,
-    runtime::RuntimeRoot,
-};
+use crate::{error::ExtensionResult, handle::package_json::PackageJson, runtime::RuntimeRoot};
 use std::{
     path::Path,
     process::{Child, Command, Stdio},

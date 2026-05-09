@@ -1,7 +1,4 @@
-use crate::{
-    cells::CellId,
-    pane::PaneId,
-};
+use crate::{cells::CellId, pane::PaneId};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

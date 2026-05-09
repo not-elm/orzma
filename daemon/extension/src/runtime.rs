@@ -1,7 +1,10 @@
 // daemon/extension/src/runtime.rs
-use std::{fs, path::{Path, PathBuf}};
 #[cfg(unix)]
 use libc;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 pub struct RuntimeRoot {
     root: PathBuf,
@@ -24,12 +27,22 @@ impl RuntimeRoot {
                 fs::set_permissions(p, fs::Permissions::from_mode(0o700))?;
             }
         }
-        Ok(Self { root, bin_dir, sock_dir })
+        Ok(Self {
+            root,
+            bin_dir,
+            sock_dir,
+        })
     }
 
-    pub fn root(&self) -> &Path { &self.root }
-    pub fn bin_dir(&self) -> &Path { &self.bin_dir }
-    pub fn sock_dir(&self) -> &Path { &self.sock_dir }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    pub fn bin_dir(&self) -> &Path {
+        &self.bin_dir
+    }
+    pub fn sock_dir(&self) -> &Path {
+        &self.sock_dir
+    }
 }
 
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
@@ -37,11 +50,17 @@ const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
 impl RuntimeRoot {
     /// Resolve a runtime root under `parent`/`<pid>/`, falling back to `/tmp/`
     /// when the resulting socket path would overflow the platform's sun_path limit.
-    pub fn resolve_in(parent: &Path, pid: u32, longest_extension_name: &str) -> std::io::Result<Self> {
+    pub fn resolve_in(
+        parent: &Path,
+        pid: u32,
+        longest_extension_name: &str,
+    ) -> std::io::Result<Self> {
         let needed = |base: &Path| -> usize {
-            base.join(pid.to_string()).join("sock")
+            base.join(pid.to_string())
+                .join("sock")
                 .join(format!("{longest_extension_name}.sock"))
-                .as_os_str().len()
+                .as_os_str()
+                .len()
         };
         if needed(parent) <= SUN_PATH_MAX {
             return Self::new_in(parent, pid);
@@ -68,8 +87,12 @@ impl RuntimeRoot {
         };
         for entry in dir.flatten() {
             let name = entry.file_name();
-            let Some(name_str) = name.to_str() else { continue };
-            let Ok(pid) = name_str.parse::<u32>() else { continue };
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
+            let Ok(pid) = name_str.parse::<u32>() else {
+                continue;
+            };
             if !pid_is_alive(pid) {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
@@ -82,7 +105,9 @@ impl RuntimeRoot {
 fn pid_is_alive(pid: u32) -> bool {
     // kill(pid, 0): 0 → alive, ESRCH → dead, EPERM → alive but other-owner.
     let rc = unsafe { libc::kill(pid as i32, 0) };
-    if rc == 0 { return true; }
+    if rc == 0 {
+        return true;
+    }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
@@ -128,7 +153,10 @@ mod tests {
     #[test]
     fn resolve_falls_back_to_slash_tmp_when_tmpdir_too_long() {
         // Make a parent path so long that adding "/<pid>/sock/<ext>.sock" overflows sun_path.
-        let deep = std::iter::repeat("a").take(120).collect::<Vec<_>>().join("/");
+        let deep = std::iter::repeat("a")
+            .take(120)
+            .collect::<Vec<_>>()
+            .join("/");
         let outer = tempdir().unwrap();
         let tmp = outer.path().join(deep);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -145,7 +173,11 @@ mod tests {
         let parent = tempdir().unwrap();
         let live_pid = std::process::id();
         let candidate: u32 = 999_999_999;
-        let stale_pid = if unsafe { libc::kill(candidate as i32, 0) } == -1 { candidate } else { 1 };
+        let stale_pid = if unsafe { libc::kill(candidate as i32, 0) } == -1 {
+            candidate
+        } else {
+            1
+        };
 
         std::fs::create_dir_all(parent.path().join(live_pid.to_string())).unwrap();
         std::fs::create_dir_all(parent.path().join(stale_pid.to_string())).unwrap();

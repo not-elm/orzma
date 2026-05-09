@@ -26,10 +26,7 @@ pub async fn create(
         .lock()
         .await
         .new_window_in(body.session_id.as_ref(), body.name)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "id": id })),
-    ))
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
 }
 
 #[derive(Deserialize)]
@@ -394,6 +391,9 @@ mod tests {
             .unwrap();
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["panes"][0]["active_activity"].as_str(), Some(aid.as_ref()));
+        assert_eq!(
+            v["panes"][0]["active_activity"].as_str(),
+            Some(aid.as_ref())
+        );
     }
 }

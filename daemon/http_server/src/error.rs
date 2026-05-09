@@ -70,11 +70,11 @@ mod tests {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use ozmux_multiplexer::SessionError;
+    use ozmux_multiplexer::activity::ActivityId;
     use ozmux_multiplexer::cells::CellId;
     use ozmux_multiplexer::pane::PaneId;
     use ozmux_multiplexer::session::SessionId;
     use ozmux_multiplexer::window::WindowId;
-    use ozmux_multiplexer::activity::ActivityId;
     use ozmux_terminal::TerminalError;
 
     #[tokio::test]
@@ -128,7 +128,10 @@ mod tests {
     #[test]
     fn split_target_equals_new_cell_falls_through_to_500() {
         let err = HttpError::Session(SessionError::SplitTargetEqualsNewCell(CellId::new()));
-        assert_eq!(err.into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[test]

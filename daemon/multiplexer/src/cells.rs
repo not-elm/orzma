@@ -277,7 +277,9 @@ impl Cell {
     }
 
     pub fn require_parent(&self) -> SessionResult<CellId> {
-        self.parent().cloned().ok_or(SessionError::MissingParentCell)
+        self.parent()
+            .cloned()
+            .ok_or(SessionError::MissingParentCell)
     }
 
     fn set_parent(&mut self, parent: Option<CellId>) {

@@ -36,8 +36,7 @@ export function useDefaultActivity(): DefaultActivityState {
           active_pane: string;
           panes: Array<{ id: string; active_activity: string }>;
         };
-        const activePane =
-          win.panes.find((p) => p.id === win.active_pane) ?? win.panes[0];
+        const activePane = win.panes.find((p) => p.id === win.active_pane) ?? win.panes[0];
         const activityId = activePane?.active_activity;
         if (!activityId) throw new Error('no default activity');
 

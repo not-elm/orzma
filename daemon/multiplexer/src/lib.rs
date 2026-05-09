@@ -31,16 +31,28 @@ pub struct MultiplexerService {
 impl MultiplexerService {
     // ── Narrow read-only accessors ────────────────────────────────────────────
 
-    pub fn sessions(&self) -> &SessionState { &self.sessions }
-    pub fn windows(&self) -> &WindowState { &self.windows }
-    pub fn panes(&self) -> &PaneState { &self.panes }
-    pub fn activities(&self) -> &ActivityState { &self.activities }
+    pub fn sessions(&self) -> &SessionState {
+        &self.sessions
+    }
+    pub fn windows(&self) -> &WindowState {
+        &self.windows
+    }
+    pub fn panes(&self) -> &PaneState {
+        &self.panes
+    }
+    pub fn activities(&self) -> &ActivityState {
+        &self.activities
+    }
 
     /// Internal index exposed for assertions in tests and bookkeeping in callers.
-    pub fn pane_to_cell_index(&self) -> &HashMap<PaneId, CellId> { &self.pane_to_cell }
+    pub fn pane_to_cell_index(&self) -> &HashMap<PaneId, CellId> {
+        &self.pane_to_cell
+    }
 
     /// Read-only view of the cell tree, e.g. for serialization or test assertions.
-    pub fn cells_ref(&self) -> &LayoutCellState { &self.cells }
+    pub fn cells_ref(&self) -> &LayoutCellState {
+        &self.cells
+    }
 
     // ── Mutating operations ───────────────────────────────────────────────────
 
@@ -97,10 +109,10 @@ impl MultiplexerService {
         session_id: Option<&SessionId>,
         name: Option<String>,
     ) -> SessionResult<WindowId> {
-        if let Some(sid) = session_id {
-            if self.sessions.get(sid).is_none() {
-                return Err(SessionError::SessionNotFound(sid.clone()));
-            }
+        if let Some(sid) = session_id
+            && self.sessions.get(sid).is_none()
+        {
+            return Err(SessionError::SessionNotFound(sid.clone()));
         }
         let window_id = self.new_window_internal(name);
         if let Some(sid) = session_id {
@@ -378,8 +390,7 @@ mod tests {
             )
             .unwrap();
         // Make the original pane active again before closing the new one.
-        ms.windows
-            .replace_active_pane(&new_pane, &original_pane);
+        ms.windows.replace_active_pane(&new_pane, &original_pane);
 
         ms.close_pane(&new_pane).unwrap();
 
@@ -544,9 +555,15 @@ mod tests {
         let wid_a = ms.new_window_in(Some(&sid), None).unwrap();
         let wid_b = ms.new_window_in(Some(&sid), None).unwrap();
         // active is whatever attached first (wid_a).
-        assert_eq!(ms.sessions().get(&sid).unwrap().active_window.as_ref(), Some(&wid_a));
+        assert_eq!(
+            ms.sessions().get(&sid).unwrap().active_window.as_ref(),
+            Some(&wid_a)
+        );
         ms.select_active_window(&wid_b).unwrap();
-        assert_eq!(ms.sessions().get(&sid).unwrap().active_window.as_ref(), Some(&wid_b));
+        assert_eq!(
+            ms.sessions().get(&sid).unwrap().active_window.as_ref(),
+            Some(&wid_b)
+        );
     }
 
     #[test]

@@ -35,7 +35,8 @@ impl FromRef<AppState> for TerminalService {
 pub async fn serve(state: AppState) -> HttpResult {
     let (_sid, _wid, pid, aid) = {
         let mut ms = state.multiplexer.lock().await;
-        ms.bootstrap_default().expect("bootstrap_default cannot fail on empty MultiplexerService")
+        ms.bootstrap_default()
+            .expect("bootstrap_default cannot fail on empty MultiplexerService")
     };
     if let Err(e) = state
         .terminal
@@ -77,10 +78,7 @@ pub fn daemon_router(state: AppState) -> Router {
                 .patch(handlers::sessions::rename)
                 .delete(handlers::sessions::delete),
         )
-        .route(
-            "/windows",
-            post(handlers::windows::create),
-        )
+        .route("/windows", post(handlers::windows::create))
         .route(
             "/windows/{window_id}",
             get(handlers::windows::get)
@@ -91,14 +89,8 @@ pub fn daemon_router(state: AppState) -> Router {
             "/windows/{window_id}/select",
             post(handlers::windows::select),
         )
-        .route(
-            "/panes/{pane_id}/split",
-            post(handlers::panes::split),
-        )
-        .route(
-            "/panes/{pane_id}",
-            method_delete(handlers::panes::close),
-        )
+        .route("/panes/{pane_id}/split", post(handlers::panes::split))
+        .route("/panes/{pane_id}", method_delete(handlers::panes::close))
         .route(
             "/activities/{activity_id}/terminal/ws",
             get(handlers::activities::terminal_ws),

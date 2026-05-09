@@ -1,4 +1,4 @@
-use crate::{error::SessionResult, WindowId};
+use crate::{WindowId, error::SessionResult};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
