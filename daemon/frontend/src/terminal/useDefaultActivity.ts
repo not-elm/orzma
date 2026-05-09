@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { SESSIONS_ENDPOINT, sessionEndpoint } from './api';
+import { SESSIONS_ENDPOINT, sessionEndpoint, windowEndpoint } from './api';
 
 export type DefaultActivityState =
   | { status: 'loading' }
@@ -20,17 +20,27 @@ export function useDefaultActivity(): DefaultActivityState {
     (async () => {
       try {
         const list = (await fetchJson(SESSIONS_ENDPOINT)) as {
-          sessions?: Array<{ id?: string }>;
+          sessions: Array<{ id: string }>;
         };
-        const sessionId = list.sessions?.[0]?.id;
+        const sessionId = list.sessions[0]?.id;
         if (!sessionId) throw new Error('no default session');
+
         const session = (await fetchJson(sessionEndpoint(sessionId))) as {
-          windows?: Array<{
-            panes?: Array<{ activities?: Array<{ id?: string }> }>;
-          }>;
+          windows: string[];
+          active_window: string | null;
         };
-        const activityId = session.windows?.[0]?.panes?.[0]?.activities?.[0]?.id;
+        const windowId = session.active_window ?? session.windows[0];
+        if (!windowId) throw new Error('no default window');
+
+        const win = (await fetchJson(windowEndpoint(windowId))) as {
+          active_pane: string;
+          panes: Array<{ id: string; active_activity: string }>;
+        };
+        const activePane =
+          win.panes.find((p) => p.id === win.active_pane) ?? win.panes[0];
+        const activityId = activePane?.active_activity;
         if (!activityId) throw new Error('no default activity');
+
         if (!cancelled) setState({ status: 'ready', activityId });
       } catch (e) {
         if (!cancelled) {
