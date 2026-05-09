@@ -7,6 +7,9 @@ pub enum ExtensionError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("manifest parse failed: {0}")]
-    Manifest(String),
+    #[error("serialize error: {0}")]
+    Serialize(#[from] serde_json::Error),
+
+    #[error("mission env: {0}")]
+    MissingEnv(String),
 }

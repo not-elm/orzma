@@ -1,5 +1,4 @@
-//! Extension host: Unix-domain-socket / Named-pipe IPC server.
-pub mod commands;
+//! Extension lifecycle: spawns Node extensions and owns the per-PID runtime tree.
 pub mod error;
-pub mod host;
-pub mod manifest;
+pub mod handle;
+pub mod runtime;

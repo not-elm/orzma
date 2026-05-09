@@ -1,0 +1,32 @@
+{
+  "name": "@ozmux/sdk",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "exports": {
+    "./server": {
+      "types": "./src/server/index.ts",
+      "default": "./src/server/index.ts"
+    },
+    "./cmd-shim": {
+      "types": "./src/server/cmd-shim.ts",
+      "default": "./src/server/cmd-shim.ts"
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.30.2",
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  }
+}

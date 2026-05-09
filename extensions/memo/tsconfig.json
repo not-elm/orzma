@@ -17,5 +17,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["commands"]
+  "include": ["activities/**/*.ts", "bootstrap.ts"]
 }

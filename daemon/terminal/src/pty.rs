@@ -2,12 +2,11 @@ use crate::{
     error::{PtyErrorBridge, TerminalError, TerminalResult},
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
 };
-use ozmux_session::activity::ActivityId;
-use ozmux_session::pane::PaneId;
+use ozmux_extension::runtime::RuntimeRoot;
+use ozmux_multiplexer::{activity::ActivityId, pane::PaneId};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Read, path::Path, sync::Arc};
-use tempfile::TempDir;
+use std::{collections::HashMap, io::Read, sync::Arc};
 use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
 pub(crate) mod pty_handle;
@@ -22,7 +21,7 @@ pub enum TerminalEvent {
 #[derive(Default, Clone)]
 pub struct TerminalService {
     ptys: Arc<RwLock<HashMap<ActivityId, PtyHandle>>>,
-    extension_wrappers: Option<Arc<TempDir>>,
+    runtime_root: Option<Arc<RuntimeRoot>>,
 }
 
 pub struct SpawnOptions {
@@ -33,26 +32,17 @@ pub struct SpawnOptions {
 }
 
 impl TerminalService {
-    pub fn with_extension_wrappers(wrappers: Arc<TempDir>) -> Self {
+    pub fn with_runtime_root(root: Arc<RuntimeRoot>) -> Self {
         Self {
-            ptys: Arc::new(RwLock::new(HashMap::new())),
-            extension_wrappers: Some(wrappers),
-        }
-    }
-
-    fn prepend_to_path(dir: &Path) -> String {
-        match std::env::var("PATH") {
-            Ok(p) if !p.is_empty() => format!("{}:{}", dir.display(), p),
-            _ => dir.display().to_string(),
+            ptys: Arc::default(),
+            runtime_root: Some(root),
         }
     }
 
     pub async fn spawn(
         &self,
-        activity_id: ActivityId,
         pane_id: PaneId,
-        window_id: ozmux_session::window::WindowId,
-        session_id: ozmux_session::SessionId,
+        activity_id: ActivityId,
         opts: SpawnOptions,
     ) -> TerminalResult {
         let mut ptys = self.ptys.write().await;
@@ -73,12 +63,16 @@ impl TerminalService {
         if let Some(cwd) = &opts.cwd {
             cmd.cwd(cwd);
         }
-        cmd.env("OZMUX_SESSION_ID", session_id.as_ref());
-        cmd.env("OZMUX_WINDOW_ID", window_id.as_ref());
         cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
         cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
-        if let Some(wrappers) = &self.extension_wrappers {
-            cmd.env("PATH", Self::prepend_to_path(wrappers.path()));
+        if let Some(prefix) = self.extension_path_prefix() {
+            let existing = std::env::var("PATH").unwrap_or_default();
+            let combined = if existing.is_empty() {
+                prefix
+            } else {
+                format!("{prefix}:{existing}")
+            };
+            cmd.env("PATH", combined);
         }
         let child = pty_pair.slave.spawn_command(cmd).to_terminal_result()?;
         let killer = child.clone_killer();
@@ -155,6 +149,23 @@ impl TerminalService {
         RwLockReadGuard::try_map(guard, |ptys| ptys.get(activity_id))
             .map_err(|_| TerminalError::ActivityNotFound(activity_id.clone()))
     }
+
+    fn extension_path_prefix(&self) -> Option<String> {
+        let root = self.runtime_root.as_ref()?;
+        let bin_dir = root.bin_dir();
+        let mut entries: Vec<String> = std::fs::read_dir(bin_dir)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
+            .map(|e| e.path().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        if entries.is_empty() {
+            None
+        } else {
+            Some(entries.join(":"))
+        }
+    }
 }
 
 /// Spawn a dedicated OS thread for blocking PTY reads, plus a tokio bridge
@@ -214,17 +225,12 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_then_snapshot_and_subscribe_succeeds() {
-        use ozmux_session::SessionId;
-        use ozmux_session::window::WindowId;
-
         let svc = TerminalService::default();
         let id = ActivityId::new();
         let pane_id = PaneId::new();
         svc.spawn(
-            id.clone(),
             pane_id,
-            WindowId::new(),
-            SessionId::new(),
+            id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -244,20 +250,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_injects_ozmux_ids_into_shell_env() {
-        use ozmux_session::SessionId;
-        use ozmux_session::window::WindowId;
-
+    async fn spawn_injects_pane_and_activity_ids_into_shell_env() {
         let svc = TerminalService::default();
         let activity_id = ActivityId::new();
         let pane_id = PaneId::new();
-        let window_id = WindowId::new();
-        let session_id = SessionId::new();
         svc.spawn(
-            activity_id.clone(),
             pane_id.clone(),
-            window_id.clone(),
-            session_id.clone(),
+            activity_id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -272,18 +271,12 @@ mod tests {
 
         svc.write(
             &activity_id,
-            b"printf 'SES=%s WIN=%s PANE=%s ACT=%s\\n' \"$OZMUX_SESSION_ID\" \"$OZMUX_WINDOW_ID\" \"$OZMUX_PANE_ID\" \"$OZMUX_ACTIVITY_ID\"\n",
+            b"printf 'PANE=%s ACT=%s\\n' \"$OZMUX_PANE_ID\" \"$OZMUX_ACTIVITY_ID\"\n",
         )
         .await
         .unwrap();
 
-        let needle = format!(
-            "SES={} WIN={} PANE={} ACT={}",
-            session_id.as_ref(),
-            window_id.as_ref(),
-            pane_id.as_ref(),
-            activity_id.as_ref()
-        );
+        let needle = format!("PANE={} ACT={}", pane_id.as_ref(), activity_id.as_ref());
 
         let mut got = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -302,22 +295,17 @@ mod tests {
         }
         svc.kill(&activity_id).await.unwrap();
         let s = String::from_utf8_lossy(&got);
-        assert!(s.contains(&needle), "expected `{needle}`, got: {s}");
+        assert!(s.contains(&needle), "expected {needle}, got: {s}");
     }
 
     #[tokio::test]
     async fn pty_output_is_broadcast_to_subscribers() {
-        use ozmux_session::SessionId;
-        use ozmux_session::window::WindowId;
-
         let svc = TerminalService::default();
         let id = ActivityId::new();
         let pane_id = PaneId::new();
         svc.spawn(
-            id.clone(),
             pane_id,
-            WindowId::new(),
-            SessionId::new(),
+            id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -361,21 +349,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_with_extension_wrappers_prepends_path() {
-        use ozmux_session::SessionId;
-        use ozmux_session::window::WindowId;
+    async fn spawn_with_runtime_root_prepends_path() {
+        use ozmux_extension::runtime::RuntimeRoot;
         use std::sync::Arc;
 
-        let temp = Arc::new(tempfile::tempdir().unwrap());
-        let temp_path = temp.path().to_path_buf();
-        let svc = TerminalService::with_extension_wrappers(Arc::clone(&temp));
+        let parent = tempfile::tempdir().unwrap();
+        let rt = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
+        let ext_bin = rt.bin_dir().join("memo");
+        std::fs::create_dir_all(&ext_bin).unwrap();
+
+        let svc = TerminalService::with_runtime_root(Arc::clone(&rt));
         let activity_id = ActivityId::new();
         let pane_id = PaneId::new();
         svc.spawn(
-            activity_id.clone(),
             pane_id,
-            WindowId::new(),
-            SessionId::new(),
+            activity_id.clone(),
             SpawnOptions {
                 cols: 80,
                 rows: 24,
@@ -391,7 +379,7 @@ mod tests {
             .await
             .unwrap();
 
-        let needle = format!("PATHHEAD={}", temp_path.display());
+        let needle = format!("PATHHEAD={}", ext_bin.display());
         let mut got = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         while tokio::time::Instant::now() < deadline {
@@ -416,17 +404,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extension_wrappers_arc_keeps_tempdir_alive_until_service_dropped() {
+    async fn runtime_root_arc_keeps_tree_alive_until_service_dropped() {
+        use ozmux_extension::runtime::RuntimeRoot;
         use std::sync::Arc;
-        let temp = Arc::new(tempfile::tempdir().unwrap());
-        let path = temp.path().to_path_buf();
-        let svc = TerminalService::with_extension_wrappers(Arc::clone(&temp));
-        drop(temp);
-        assert!(path.exists(), "Arc inside service keeps TempDir alive");
+        let parent = tempfile::tempdir().unwrap();
+        let rt = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
+        let path = rt.root().to_path_buf();
+        let svc = TerminalService::with_runtime_root(Arc::clone(&rt));
+        drop(rt);
+        assert!(path.exists(), "Arc inside service keeps RuntimeRoot alive");
         drop(svc);
         assert!(
             !path.exists(),
-            "service drop releases last Arc → TempDir Drop"
+            "service drop releases last Arc → RuntimeRoot Drop"
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_root_skips_when_empty() {
+        use ozmux_extension::runtime::RuntimeRoot;
+        use std::sync::Arc;
+        let parent = tempfile::tempdir().unwrap();
+        let rt = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
+        let svc = TerminalService::with_runtime_root(Arc::clone(&rt));
+        let activity_id = ActivityId::new();
+        let pane_id = PaneId::new();
+        svc.spawn(
+            pane_id,
+            activity_id.clone(),
+            SpawnOptions {
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
+            },
+        )
+        .await
+        .expect("spawn must succeed even with empty bin/");
+        svc.kill(&activity_id).await.unwrap();
     }
 }

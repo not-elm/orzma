@@ -4,9 +4,8 @@ members = [
   "cli",
   "daemon/bootstrap",
   "daemon/macros",
-  "daemon/session",
   "daemon/terminal",
-  "daemon/extension",
+  "daemon/multiplexer",
   "daemon/http_server",
 ]
 
@@ -34,3 +33,4 @@ futures-util = { version = "0.3", default-features = false, features = [
   "sink",
 ] }
 tempfile = "3"
+libc = "0.2"

@@ -1,5 +1,6 @@
 {
   "name": "memo",
+  "main": "bootstrap.ts",
   "version": "1.0.0",
   "description": "",
   "type": "module",
@@ -11,7 +12,7 @@
   "license": "ISC",
   "packageManager": "pnpm@10.30.2",
   "dependencies": {
-    "@ozmux/node-sdk": "workspace:*"
+    "@ozmux/sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

@@ -3,7 +3,7 @@
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
 INDEX_HTML := $(HTTP_DIR)/index.html
-EXTENSIONS_DIR := $(CURDIR)/extensions
+OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
 
 help:
 	@echo "Targets:"
@@ -35,7 +35,7 @@ dev-backend:
 	cargo run -p ozmux_core
 
 dev-daemon:
-	OZMUX_EXTENSION_DIR=$(EXTENSIONS_DIR) cargo run -p daemon_bootstrap
+	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) cargo run -p daemon_bootstrap
 
 clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
