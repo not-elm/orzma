@@ -49,12 +49,27 @@ impl PaneState {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Pane {
     pub activities: Vec<ActivityId>,
+    pub active_activity: ActivityId,
 }
 
 impl Pane {
     pub fn new(activity: ActivityId) -> Self {
         Self {
-            activities: vec![activity],
+            activities: vec![activity.clone()],
+            active_activity: activity,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_new_initializes_active_activity_to_only_activity() {
+        let aid = ActivityId::new();
+        let pane = Pane::new(aid.clone());
+        assert_eq!(pane.activities, vec![aid.clone()]);
+        assert_eq!(pane.active_activity, aid);
     }
 }
