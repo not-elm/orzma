@@ -6,7 +6,7 @@ pub use error::{HttpError, HttpResult};
 use axum::{
     Router,
     extract::FromRef,
-    routing::{delete as method_delete, get, patch, post},
+    routing::{delete as method_delete, get, post},
 };
 use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
@@ -83,7 +83,9 @@ pub fn daemon_router(state: AppState) -> Router {
         )
         .route(
             "/windows/{window_id}",
-            patch(handlers::windows::rename).delete(handlers::windows::delete),
+            get(handlers::windows::get)
+                .patch(handlers::windows::rename)
+                .delete(handlers::windows::delete),
         )
         .route(
             "/windows/{window_id}/select",
