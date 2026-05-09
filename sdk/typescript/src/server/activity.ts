@@ -3,4 +3,4 @@ interface DefineArgs<T> {
   initialData: T;
 }
 
-export async function createActivity<T>(args: DefineArgs<T>) {}
+export async function createActivity<T>(_args: DefineArgs<T>) {}
