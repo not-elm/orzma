@@ -58,6 +58,9 @@ pub enum SessionError {
 
     #[error("pane already placed in cell tree: {0}")]
     PaneAlreadyPlaced(crate::pane::PaneId),
+
+    #[error("no window owns pane {0}")]
+    WindowNotFoundForPane(PaneId),
 }
 
 pub type SessionResult<T = ()> = Result<T, SessionError>;

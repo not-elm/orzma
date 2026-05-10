@@ -274,6 +274,29 @@ impl MultiplexerService {
             .ok_or_else(|| SessionError::CellForPaneNotFound(pane_id.clone()))
     }
 
+    /// Return the `WindowId` whose layout subtree currently contains `pane_id`.
+    /// Walks pane → cell → ... → root, then matches the root cell against `WindowState`.
+    pub fn window_id_of_pane(&self, pane_id: &PaneId) -> SessionResult<WindowId> {
+        let start_cell = self
+            .pane_to_cell
+            .get(pane_id)
+            .ok_or_else(|| SessionError::PaneNotFound(pane_id.clone()))?;
+        let mut current = start_cell.clone();
+        loop {
+            let cell = self.cells.cell(&current)?;
+            match cell.parent() {
+                Some(parent) => current = parent.clone(),
+                None => break, // current is the Root
+            }
+        }
+        for (wid, window) in self.windows.iter() {
+            if window.root_cell == current {
+                return Ok(wid.clone());
+            }
+        }
+        Err(SessionError::WindowNotFoundForPane(pane_id.clone()))
+    }
+
     /// Find the session that owns `window_id` and set its `active_window`.
     /// Returns `WindowNotFound` for a window that doesn't exist at all, and
     /// `WindowNotAttachedToSession` for orphan windows.
@@ -687,6 +710,31 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, SessionError::PaneNotFound(id) if id == phantom));
+    }
+
+    #[test]
+    fn window_id_of_pane_returns_owner_window() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pane_a, _aid) = ms.bootstrap_default().unwrap();
+        let (pane_b, _) = ms
+            .split_pane(
+                pane_a.clone(),
+                crate::cells::Side::After,
+                crate::cells::SplitOrientation::Horizontal,
+            )
+            .unwrap();
+        assert_eq!(ms.window_id_of_pane(&pane_a).unwrap(), wid);
+        assert_eq!(ms.window_id_of_pane(&pane_b).unwrap(), wid);
+    }
+
+    #[test]
+    fn window_id_of_pane_unknown_returns_pane_not_found() {
+        let ms = MultiplexerService::default();
+        let pid = crate::pane::PaneId::new();
+        assert!(matches!(
+            ms.window_id_of_pane(&pid),
+            Err(SessionError::PaneNotFound(_))
+        ));
     }
 
     #[test]
