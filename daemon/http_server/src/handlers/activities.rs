@@ -580,4 +580,52 @@ mod tests {
         ));
         let _ = std::fs::remove_file(outside);
     }
+
+    #[tokio::test]
+    async fn iframe_for_memo_extension_returns_visible_content() {
+        // Resolve the real extensions/memo/ path so this test verifies the
+        // file shipped in the repo (not a tempdir copy). CARGO_MANIFEST_DIR
+        // is daemon/http_server, so ../.. lands at the workspace root and
+        // extensions/memo is just below it.
+        let memo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../extensions/memo")
+            .canonicalize()
+            .expect("extensions/memo must exist relative to daemon/http_server");
+
+        let (router, state) = router_with_extension("memo", memo_root.clone());
+        let activity_id = {
+            let mut ms = state.multiplexer.lock().await;
+            ms.new_activity(Activity {
+                name: "ext".to_string(),
+                kind: ActivityKind::Extension {
+                    html_root: memo_root.clone(),
+                },
+            })
+        };
+
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/index.html"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/html"), "expected text/html, got {ct}");
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+        assert!(
+            body_str.contains("Memo"),
+            "expected memo HTML to contain visible 'Memo' heading, got: {body_str}"
+        );
+    }
 }
