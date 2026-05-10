@@ -82,4 +82,55 @@ describe('<CellNode>', () => {
     const { getByText } = render(<CellNode node={bogus} view={baseView} />);
     expect(getByText(/Unknown layout node type/)).toBeInTheDocument();
   });
+
+  it('renders an iframe (not Terminal) for an active extension pane', () => {
+    const node: WindowLayoutNode = {
+      type: 'pane',
+      cell_id: 'cid-ext',
+      pane_id: 'pid-ext',
+    };
+    const view: WindowView = {
+      ...baseView,
+      active_pane: 'pid-ext',
+      panes: [
+        {
+          id: 'pid-ext',
+          active_activity: 'aid-ext',
+          activities: [
+            {
+              id: 'aid-ext',
+              kind: 'extension',
+              iframe_url: '/activities/aid-ext/iframe/index.html',
+            },
+          ],
+        },
+      ],
+    };
+    const { container } = render(<CellNode node={node} view={view} />);
+    const iframe = container.querySelector('iframe');
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute('src')).toBe('/activities/aid-ext/iframe/index.html');
+  });
+
+  it('falls back to PanePlaceholder for an extension activity without iframe_url', () => {
+    const node: WindowLayoutNode = {
+      type: 'pane',
+      cell_id: 'cid-ext',
+      pane_id: 'pid-ext',
+    };
+    const view: WindowView = {
+      ...baseView,
+      active_pane: 'pid-ext',
+      panes: [
+        {
+          id: 'pid-ext',
+          active_activity: 'aid-ext',
+          activities: [{ id: 'aid-ext', kind: 'extension' }],
+        },
+      ],
+    };
+    const { getByText, container } = render(<CellNode node={node} view={view} />);
+    expect(getByText(/pid-ext/)).toBeInTheDocument();
+    expect(container.querySelector('iframe')).toBeNull();
+  });
 });
