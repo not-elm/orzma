@@ -83,12 +83,15 @@ fn window_view(
         .iter()
         .filter_map(|pid| ms.panes().get(pid).map(|pane| pane_view(ms, pid, pane)))
         .collect();
+    let layout = crate::layout_dto::build_layout(&window.root_cell, ms.cells_ref())?;
     Ok(serde_json::json!({
         "id": id,
         "name": window.name,
         "root_cell": window.root_cell,
         "active_pane": window.active_pane,
         "panes": panes,
+        "layout_schema_version": 1,
+        "layout": layout,
     }))
 }
 
@@ -433,6 +436,74 @@ mod tests {
         let activities = panes[0]["activities"].as_array().unwrap();
         assert!(activities[0]["id"].is_string());
         assert_eq!(activities[0]["kind"].as_str(), Some("terminal"));
+    }
+
+    #[tokio::test]
+    async fn get_window_includes_layout_schema_version_1() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/windows/{}", wid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["layout_schema_version"].as_u64(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn get_window_includes_layout_root_with_pane_for_single_pane_window() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/windows/{}", wid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let layout = &v["layout"];
+        assert_eq!(layout["type"].as_str(), Some("root"));
+        let child = &layout["child"];
+        assert_eq!(child["type"].as_str(), Some("pane"));
+        assert_eq!(child["pane_id"].as_str(), Some(pid.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn get_window_layout_after_split_has_split_node() {
+        use ozmux_multiplexer::cells::{Side, SplitOrientation};
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        ms.split_pane(pid, Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/windows/{}", wid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let split = &v["layout"]["child"];
+        assert_eq!(split["type"].as_str(), Some("split"));
+        assert_eq!(split["orientation"].as_str(), Some("horizontal"));
+        assert!(split["lhs"].is_object());
+        assert!(split["rhs"].is_object());
     }
 
     #[tokio::test]
