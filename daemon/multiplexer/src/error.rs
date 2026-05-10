@@ -59,7 +59,7 @@ pub enum SessionError {
     #[error("pane already placed in cell tree: {0}")]
     PaneAlreadyPlaced(crate::pane::PaneId),
 
-    #[error("no window owns pane {0}")]
+    #[error("window not found for pane pane-id={0}")]
     WindowNotFoundForPane(PaneId),
 }
 

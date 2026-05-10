@@ -277,11 +277,8 @@ impl MultiplexerService {
     /// Return the `WindowId` whose layout subtree currently contains `pane_id`.
     /// Walks pane → cell → ... → root, then matches the root cell against `WindowState`.
     pub fn window_id_of_pane(&self, pane_id: &PaneId) -> SessionResult<WindowId> {
-        let start_cell = self
-            .pane_to_cell
-            .get(pane_id)
-            .ok_or_else(|| SessionError::PaneNotFound(pane_id.clone()))?;
-        let mut current = start_cell.clone();
+        let start_cell = self.cell_id_for_pane(pane_id)?.clone();
+        let mut current = start_cell;
         loop {
             let cell = self.cells.cell(&current)?;
             match cell.parent() {
@@ -713,27 +710,47 @@ mod tests {
     }
 
     #[test]
-    fn window_id_of_pane_returns_owner_window() {
+    fn window_id_of_pane_disambiguates_between_windows() {
         let mut ms = MultiplexerService::default();
-        let (_sid, wid, pane_a, _aid) = ms.bootstrap_default().unwrap();
-        let (pane_b, _) = ms
+        let (sid, wid_a, pane_a, _aid_a) = ms.bootstrap_default().unwrap();
+        let (pane_a2, _) = ms
             .split_pane(
                 pane_a.clone(),
                 crate::cells::Side::After,
                 crate::cells::SplitOrientation::Horizontal,
             )
             .unwrap();
-        assert_eq!(ms.window_id_of_pane(&pane_a).unwrap(), wid);
-        assert_eq!(ms.window_id_of_pane(&pane_b).unwrap(), wid);
+        // Create a second window with its own pane in the same session.
+        let wid_b = ms.new_window_in(Some(&sid), Some("second".into())).unwrap();
+        let pane_b = {
+            let win = ms.windows().get(&wid_b).unwrap();
+            win.active_pane.clone()
+        };
+
+        assert_eq!(ms.window_id_of_pane(&pane_a).unwrap(), wid_a);
+        assert_eq!(ms.window_id_of_pane(&pane_a2).unwrap(), wid_a);
+        assert_eq!(ms.window_id_of_pane(&pane_b).unwrap(), wid_b);
     }
 
     #[test]
-    fn window_id_of_pane_unknown_returns_pane_not_found() {
+    fn window_id_of_pane_unknown_returns_cell_for_pane_not_found() {
         let ms = MultiplexerService::default();
         let pid = crate::pane::PaneId::new();
         assert!(matches!(
             ms.window_id_of_pane(&pid),
-            Err(SessionError::PaneNotFound(_))
+            Err(SessionError::CellForPaneNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn window_id_of_pane_for_limbo_pane_returns_cell_for_pane_not_found() {
+        let mut ms = MultiplexerService::default();
+        let aid = ms.new_activity(crate::activity::Activity::default());
+        let limbo_pane = ms.new_pane_with_activity(aid).unwrap();
+        // limbo_pane is in `panes` but has no cell mapping yet.
+        assert!(matches!(
+            ms.window_id_of_pane(&limbo_pane),
+            Err(SessionError::CellForPaneNotFound(_))
         ));
     }
 
