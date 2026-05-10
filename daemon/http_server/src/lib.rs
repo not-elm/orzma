@@ -160,7 +160,7 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn unknown_pane_route_returns_404() {
+    async fn delete_pane_without_extension_header_returns_401() {
         let (router, _) = test_helpers::router_with(MultiplexerService::default());
         let resp = router
             .oneshot(
@@ -172,6 +172,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }
