@@ -1,7 +1,5 @@
 use crate::{
-    error::ExtensionResult,
-    handle::package_json::PackageJson,
-    registry::ExtensionRegistry,
+    error::ExtensionResult, handle::package_json::PackageJson, registry::ExtensionRegistry,
     runtime::RuntimeRoot,
 };
 use std::{

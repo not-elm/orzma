@@ -1,3 +1,6 @@
+use crate::MultiplexerState;
+use crate::error::HttpError;
+use crate::extractors::ExtensionName;
 use axum::{
     extract::{
         Path, State, WebSocketUpgrade,
@@ -10,15 +13,12 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
+use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::activity::{Activity, ActivityId, ActivityKind};
 use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::sync::broadcast;
-use crate::error::HttpError;
-use crate::extractors::ExtensionName;
-use crate::MultiplexerState;
-use ozmux_extension::ExtensionRegistry;
 
 type WsSink = SplitSink<WebSocket, Message>;
 type WsStream = SplitStream<WebSocket>;
@@ -246,6 +246,7 @@ mod tests {
     use super::*;
     use crate::AppState;
     use futures_util::{SinkExt, StreamExt};
+    use ozmux_extension::ExtensionRegistry;
     use ozmux_multiplexer::MultiplexerService;
     use ozmux_terminal::SpawnOptions;
     use std::path::PathBuf;
@@ -254,7 +255,6 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message as TtMessage;
-    use ozmux_extension::ExtensionRegistry;
     use tower::ServiceExt;
 
     async fn boot_server() -> (std::net::SocketAddr, AppState, ActivityId) {
@@ -366,7 +366,10 @@ mod tests {
             terminal: ozmux_terminal::TerminalService::default(),
             extensions: registry,
         };
-        (crate::test_helpers::daemon_router_for_test(state.clone()), state)
+        (
+            crate::test_helpers::daemon_router_for_test(state.clone()),
+            state,
+        )
     }
 
     #[tokio::test]
@@ -490,7 +493,9 @@ mod tests {
                 },
             })
         };
-        state.extensions.record_activity_owner(&activity_id, ext_name);
+        state
+            .extensions
+            .record_activity_owner(&activity_id, ext_name);
         (router, state, activity_id, tmp)
     }
 
@@ -561,9 +566,7 @@ mod tests {
         let resp = router
             .oneshot(
                 axum::http::Request::builder()
-                    .uri(format!(
-                        "/activities/{activity_id}/iframe/../outside.txt"
-                    ))
+                    .uri(format!("/activities/{activity_id}/iframe/../outside.txt"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )

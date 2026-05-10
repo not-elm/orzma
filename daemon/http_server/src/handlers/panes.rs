@@ -1,10 +1,13 @@
-use crate::{MultiplexerState, error::{HttpError, HttpResult}};
+use crate::extractors::ExtensionName;
+use crate::{
+    MultiplexerState,
+    error::{HttpError, HttpResult},
+};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
-use crate::extractors::ExtensionName;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
     activity::ActivityId,
@@ -75,13 +78,11 @@ pub async fn create(
     State(registry): State<ExtensionRegistry>,
     Json(body): Json<CreatePaneRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    let owner = registry
-        .activity_owner(&body.activity_id)
-        .ok_or_else(|| {
-            HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
-                body.activity_id.clone(),
-            ))
-        })?;
+    let owner = registry.activity_owner(&body.activity_id).ok_or_else(|| {
+        HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
+            body.activity_id.clone(),
+        ))
+    })?;
     if owner != ext_name {
         return Err(HttpError::ActivityNotOwned);
     }
@@ -134,7 +135,9 @@ pub async fn close(
     Path(pane_id): Path<PaneId>,
 ) -> HttpResult<StatusCode> {
     // 1. owner check（system-owned pane は entry 無しで 403）
-    let owner = registry.pane_owner(&pane_id).ok_or(HttpError::PaneNotOwned)?;
+    let owner = registry
+        .pane_owner(&pane_id)
+        .ok_or(HttpError::PaneNotOwned)?;
     if owner != ext_name {
         return Err(HttpError::PaneNotOwned);
     }
@@ -168,8 +171,8 @@ mod tests {
     use crate::{AppState, TerminalService};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
-    use ozmux_multiplexer::MultiplexerService;
     use ozmux_extension::ExtensionRegistry;
+    use ozmux_multiplexer::MultiplexerService;
     use ozmux_multiplexer::activity::{Activity, ActivityKind};
     use std::path::PathBuf;
     use tower::ServiceExt;
@@ -394,9 +397,7 @@ mod tests {
                     .uri("/panes")
                     .header("X-Ozmux-Extension", "memo")
                     .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"activity_id":"{activity_id}"}}"#
-                    )))
+                    .body(Body::from(format!(r#"{{"activity_id":"{activity_id}"}}"#)))
                     .unwrap(),
             )
             .await

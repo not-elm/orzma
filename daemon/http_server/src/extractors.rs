@@ -38,11 +38,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::Body;
     use axum::extract::State;
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
-    use axum::Router;
     use std::path::Path as StdPath;
     use tower::ServiceExt;
 

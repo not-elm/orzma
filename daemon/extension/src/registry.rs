@@ -50,7 +50,8 @@ impl ExtensionRegistry {
 
     pub fn record_activity_owner(&self, activity_id: &ActivityId, name: &str) {
         let mut g = self.inner.write().expect("registry poisoned");
-        g.activity_owner.insert(activity_id.clone(), name.to_string());
+        g.activity_owner
+            .insert(activity_id.clone(), name.to_string());
     }
 
     pub fn record_pane_owner(&self, pane_id: &PaneId, name: &str) {

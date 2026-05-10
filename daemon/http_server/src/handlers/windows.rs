@@ -4,9 +4,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{
-    MultiplexerService, SessionError, session::SessionId, window::WindowId,
-};
+use ozmux_multiplexer::{MultiplexerService, SessionError, session::SessionId, window::WindowId};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
 
@@ -475,9 +473,7 @@ mod tests {
             .iter()
             .find(|p| p["activities"][0]["kind"].as_str() == Some("extension"))
             .expect("extension pane not found");
-        let iframe_url = ext_pane["activities"][0]["iframe_url"]
-            .as_str()
-            .unwrap();
+        let iframe_url = ext_pane["activities"][0]["iframe_url"].as_str().unwrap();
         assert_eq!(
             iframe_url,
             format!("/activities/{activity_id}/iframe/index.html")

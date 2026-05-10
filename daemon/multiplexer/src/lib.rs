@@ -170,10 +170,7 @@ impl MultiplexerService {
         Ok(activity_ids)
     }
 
-    pub fn new_pane_with_activity(
-        &mut self,
-        activity_id: ActivityId,
-    ) -> SessionResult<PaneId> {
+    pub fn new_pane_with_activity(&mut self, activity_id: ActivityId) -> SessionResult<PaneId> {
         if !self.activities.contains(&activity_id) {
             return Err(SessionError::ActivityNotFound(activity_id));
         }
@@ -231,9 +228,9 @@ impl MultiplexerService {
         }
         let target_cell_id = self.cell_id_for_pane(&src)?.clone();
         let new_cell_id = self.cells.new_pane(new_pane.clone(), None);
-        if let Err(e) = self
-            .cells
-            .split_cell(target_cell_id, new_cell_id.clone(), side, orientation)
+        if let Err(e) =
+            self.cells
+                .split_cell(target_cell_id, new_cell_id.clone(), side, orientation)
         {
             // rollback: orphan の new_cell を消す
             let _ = self.cells.remove_subtree(&new_cell_id);
