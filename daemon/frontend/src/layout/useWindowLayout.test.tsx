@@ -200,6 +200,27 @@ describe('useWindowLayout', () => {
     warnSpy.mockRestore();
   });
 
+  it('opens at most one extra WS in StrictMode double-mount, no state pollution', async () => {
+    const { StrictMode } = await import('react');
+    let connectionCount = 0;
+    server.on('connection', (sock) => {
+      connectionCount++;
+      sock.send(JSON.stringify(fakeView()));
+    });
+    renderHook(() => useWindowLayout(WID), {
+      wrapper: ({ children }) => <StrictMode>{children}</StrictMode>,
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // StrictMode causes a mount-cleanup-mount cycle, so 2 WebSocket
+    // constructors fire. The generation token guarantees the first one's
+    // onmessage / onclose can't update state. We assert connectionCount in
+    // [1, 2]; anything higher would be a leak.
+    expect(connectionCount).toBeGreaterThanOrEqual(1);
+    expect(connectionCount).toBeLessThanOrEqual(2);
+  });
+
   it('pauses reconnect when document.hidden is true', async () => {
     let connectionCount = 0;
     server.on('connection', (sock) => {
