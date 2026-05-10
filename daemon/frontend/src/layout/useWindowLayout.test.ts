@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { Server } from 'mock-socket';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WindowView } from './types';
 import { useWindowLayout } from './useWindowLayout';
 
@@ -173,6 +173,31 @@ describe('useWindowLayout', () => {
     });
     expect(result.current.status).toBe('gone');
     expect((result.current as { reason: string }).reason).toBe('window_closed');
+  });
+
+  it('logs reconnect attempts via console.warn with attempt and reason', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    server.on('connection', (sock) => {
+      sock.close({ code: 1011, reason: 'internal_error', wasClean: true });
+    });
+    renderHook(() => useWindowLayout(WID));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(warnSpy).toHaveBeenCalled();
+    const found = warnSpy.mock.calls.some((args) => {
+      const tag = args[0];
+      const payload = args[1] as undefined | { attempt?: number; prevReason?: string };
+      return (
+        typeof tag === 'string' &&
+        tag.includes('useWindowLayout') &&
+        typeof payload === 'object' &&
+        payload?.attempt === 1 &&
+        payload?.prevReason === 'internal_error'
+      );
+    });
+    expect(found).toBe(true);
+    warnSpy.mockRestore();
   });
 
   it('pauses reconnect when document.hidden is true', async () => {

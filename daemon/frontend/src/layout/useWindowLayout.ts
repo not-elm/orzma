@@ -81,6 +81,13 @@ export function useWindowLayout(wid: string | null): LayoutState {
           RECONNECT_RECOVERABLE_REASONS.has(ev.reason);
         if (!recoverable) return;
         attemptRef.current++;
+        const logFn: (...args: unknown[]) => void =
+          attemptRef.current <= 5 ? console.warn : console.debug;
+        logFn('[useWindowLayout] reconnect', {
+          attempt: attemptRef.current,
+          prevCloseCode: ev.code,
+          prevReason: ev.reason,
+        });
         if (attemptRef.current === 1) {
           setState({ status: 'reconnecting', view: lastViewRef.current, retryInSec: 0 });
           scheduleReconnect(0);
