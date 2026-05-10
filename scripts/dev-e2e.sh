@@ -42,6 +42,10 @@ cmd_start() {
   : > "${vite_log}"
   : > "${daemon_log}"
 
+  # Enable job control so each `&` job becomes its own process group leader.
+  # That makes `$!` equal the PGID, so cmd_stop can take down the whole group.
+  set -m
+
   echo "start: launching vite (logs: ${vite_log})" >&2
   (cd "${REPO_ROOT}/daemon/frontend" && exec pnpm dev) \
     >"${vite_log}" 2>&1 &
@@ -54,6 +58,8 @@ cmd_start() {
     >"${daemon_log}" 2>&1 &
   local daemon_pid=$!
   printf '%s\n' "${daemon_pid}" >> "${PID_FILE}"
+
+  set +m
 
   echo "start: waiting for /health (max ${READY_TIMEOUT_SECONDS}s)" >&2
   local deadline=$(( $(date +%s) + READY_TIMEOUT_SECONDS ))
