@@ -245,10 +245,14 @@ impl MultiplexerService {
     }
 
     pub fn close_pane(&mut self, pane_id: &PaneId) -> SessionResult {
-        let cell_id = self.cell_id_for_pane(pane_id)?.clone();
-        let outcome = self.cells.close_cell(&cell_id)?;
-        let survivor_pane_id = self.cells.leftmost_pane(outcome.survivor())?.clone();
-        self.windows.replace_active_pane(pane_id, &survivor_pane_id);
+        if !self.panes.contains_key(pane_id) {
+            return Err(SessionError::PaneNotFound(pane_id.clone()));
+        }
+        if let Some(cell_id) = self.pane_to_cell.get(pane_id).cloned() {
+            let outcome = self.cells.close_cell(&cell_id)?;
+            let survivor_pane_id = self.cells.leftmost_pane(outcome.survivor())?.clone();
+            self.windows.replace_active_pane(pane_id, &survivor_pane_id);
+        }
         self.forget_pane(pane_id);
         Ok(())
     }
@@ -404,12 +408,12 @@ mod tests {
     }
 
     #[test]
-    fn close_pane_unknown_id_returns_cell_for_pane_not_found() {
+    fn close_pane_unknown_id_returns_pane_not_found() {
         let mut ms = MultiplexerService::default();
         let unknown = PaneId::new();
         assert!(matches!(
             ms.close_pane(&unknown),
-            Err(SessionError::CellForPaneNotFound(_))
+            Err(SessionError::PaneNotFound(_))
         ));
     }
 
@@ -686,5 +690,19 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, SessionError::PaneNotFound(id) if id == phantom));
+    }
+
+    #[test]
+    fn close_pane_handles_limbo_pane_without_touching_cell_tree() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let cells_before = ms.cells_ref().clone();
+        let activity_id = ms.new_activity(Activity::default());
+        let limbo = ms.new_pane_with_activity(activity_id).unwrap();
+        ms.close_pane(&limbo).unwrap();
+        assert!(!ms.panes().contains_key(&limbo));
+        let serialized_before = serde_json::to_string(&cells_before).unwrap();
+        let serialized_after = serde_json::to_string(ms.cells_ref()).unwrap();
+        assert_eq!(serialized_before, serialized_after);
     }
 }
