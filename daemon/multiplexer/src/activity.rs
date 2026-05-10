@@ -20,6 +20,11 @@ impl ActivityState {
     pub fn contains(&self, id: &ActivityId) -> bool {
         self.0.contains_key(id)
     }
+
+    #[inline]
+    pub fn get(&self, id: &ActivityId) -> Option<&Activity> {
+        self.0.get(id)
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]

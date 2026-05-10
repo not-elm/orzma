@@ -52,6 +52,12 @@ pub enum SessionError {
 
     #[error("window {0} is not attached to any session")]
     WindowNotAttachedToSession(WindowId),
+
+    #[error("activity not found: {0}")]
+    ActivityNotFound(crate::activity::ActivityId),
+
+    #[error("pane already placed in cell tree: {0}")]
+    PaneAlreadyPlaced(crate::pane::PaneId),
 }
 
 pub type SessionResult<T = ()> = Result<T, SessionError>;
