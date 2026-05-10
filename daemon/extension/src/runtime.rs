@@ -153,10 +153,7 @@ mod tests {
     #[test]
     fn resolve_falls_back_to_slash_tmp_when_tmpdir_too_long() {
         // Make a parent path so long that adding "/<pid>/sock/<ext>.sock" overflows sun_path.
-        let deep = std::iter::repeat("a")
-            .take(120)
-            .collect::<Vec<_>>()
-            .join("/");
+        let deep = std::iter::repeat_n("a", 120).collect::<Vec<_>>().join("/");
         let outer = tempdir().unwrap();
         let tmp = outer.path().join(deep);
         std::fs::create_dir_all(&tmp).unwrap();

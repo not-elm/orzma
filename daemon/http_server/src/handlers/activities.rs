@@ -1,17 +1,23 @@
+use crate::MultiplexerState;
+use crate::error::HttpError;
+use crate::extractors::ExtensionName;
 use axum::{
     extract::{
         Path, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
     },
-    response::IntoResponse,
+    http::header::CONTENT_TYPE,
+    response::{IntoResponse, Response},
 };
 use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use ozmux_multiplexer::activity::ActivityId;
+use ozmux_extension::ExtensionRegistry;
+use ozmux_multiplexer::activity::{Activity, ActivityId, ActivityKind};
 use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use tokio::sync::broadcast;
 
 type WsSink = SplitSink<WebSocket, Message>;
@@ -149,25 +155,115 @@ async fn close_with_reason(ws_tx: &mut WsSink, reason: &'static str, lagged: u64
         .await;
 }
 
+#[derive(Deserialize)]
+pub struct CreateActivityRequest {
+    html: String,
+}
+
+pub async fn create(
+    ExtensionName(ext_name): ExtensionName,
+    State(ms): State<MultiplexerState>,
+    State(registry): State<ExtensionRegistry>,
+    axum::Json(body): axum::Json<CreateActivityRequest>,
+) -> Result<(axum::http::StatusCode, axum::Json<serde_json::Value>), HttpError> {
+    let info = registry
+        .get(&ext_name)
+        .ok_or_else(|| HttpError::UnknownExtension(ext_name.clone()))?;
+    let html_path = PathBuf::from(&body.html)
+        .canonicalize()
+        .map_err(|_| HttpError::InvalidHtmlPath(body.html.clone()))?;
+    let launch_dir_canon = info
+        .launch_dir
+        .canonicalize()
+        .map_err(|_| HttpError::InvalidHtmlPath(body.html.clone()))?;
+    if !html_path.starts_with(&launch_dir_canon) {
+        return Err(HttpError::InvalidHtmlPath(body.html));
+    }
+    let html_root = html_path
+        .parent()
+        .ok_or_else(|| HttpError::InvalidHtmlPath(body.html.clone()))?
+        .to_path_buf();
+
+    let activity_id = {
+        let mut ms = ms.lock().await;
+        ms.new_activity(Activity {
+            name: format!("Extension: {ext_name}"),
+            kind: ActivityKind::Extension { html_root },
+        })
+    };
+    registry.record_activity_owner(&activity_id, &ext_name);
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        axum::Json(serde_json::json!({ "activity_id": activity_id })),
+    ))
+}
+
+pub async fn iframe_serve(
+    State(ms): State<MultiplexerState>,
+    Path((activity_id, path)): Path<(ActivityId, String)>,
+) -> Result<Response, HttpError> {
+    let html_root = {
+        let ms = ms.lock().await;
+        let activity = ms.activities().get(&activity_id).ok_or_else(|| {
+            HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
+                activity_id.clone(),
+            ))
+        })?;
+        match &activity.kind {
+            ActivityKind::Extension { html_root } => html_root.clone(),
+            ActivityKind::Terminal => {
+                return Err(HttpError::IframeFileNotFound(path));
+            }
+        }
+    };
+    let html_root_canon = html_root
+        .canonicalize()
+        .map_err(|_| HttpError::IframeFileNotFound(path.clone()))?;
+    let resolved = html_root_canon
+        .join(&path)
+        .canonicalize()
+        .map_err(|_| HttpError::IframeFileNotFound(path.clone()))?;
+    if !resolved.starts_with(&html_root_canon) {
+        return Err(HttpError::InvalidHtmlPath(path));
+    }
+    let resolved_clone = resolved.clone();
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(&resolved_clone))
+        .await
+        .map_err(|_| HttpError::IframeFileNotFound(path.clone()))?
+        .map_err(|_| HttpError::IframeFileNotFound(path.clone()))?;
+    let mime = mime_guess::from_path(&resolved).first_or_octet_stream();
+    Ok((
+        axum::http::StatusCode::OK,
+        [(CONTENT_TYPE, mime.as_ref().to_string())],
+        bytes,
+    )
+        .into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::AppState;
     use futures_util::{SinkExt, StreamExt};
+    use ozmux_extension::ExtensionRegistry;
     use ozmux_multiplexer::MultiplexerService;
     use ozmux_terminal::SpawnOptions;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message as TtMessage;
+    use tower::ServiceExt;
 
     async fn boot_server() -> (std::net::SocketAddr, AppState, ActivityId) {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, pid, activity_id) = ms.bootstrap_default().unwrap();
         let state = AppState {
-            multiplexer: Arc::new(Mutex::new(ms)),
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
         };
         state
             .terminal
@@ -258,5 +354,228 @@ mod tests {
             Ok(Some(Ok(TtMessage::Close(None)))) => {}
             other => panic!("expected Close frame, got: {other:?}"),
         }
+    }
+
+    fn router_with_extension(ext_name: &str, launch_dir: PathBuf) -> (axum::Router, AppState) {
+        let mut ms = ozmux_multiplexer::MultiplexerService::default();
+        let _ = ms.bootstrap_default().unwrap();
+        let registry = ExtensionRegistry::default();
+        registry.register(ext_name, &launch_dir);
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
+            terminal: ozmux_terminal::TerminalService::default(),
+            extensions: registry,
+        };
+        (
+            crate::test_helpers::daemon_router_for_test(state.clone()),
+            state,
+        )
+    }
+
+    #[tokio::test]
+    async fn create_activity_returns_201_with_activity_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let html = tmp.path().join("index.html");
+        std::fs::write(&html, "<html></html>").unwrap();
+        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf());
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/activities")
+                    .header("X-Ozmux-Extension", "memo")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(format!(
+                        r#"{{"html":"{}"}}"#,
+                        html.display()
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["activity_id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn create_activity_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let html = "/etc/passwd";
+        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf());
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/activities")
+                    .header("X-Ozmux-Extension", "memo")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(format!(r#"{{"html":"{html}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_activity_rejects_unknown_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let html = tmp.path().join("index.html");
+        std::fs::write(&html, "<html></html>").unwrap();
+        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf());
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/activities")
+                    .header("X-Ozmux-Extension", "ghost")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(format!(
+                        r#"{{"html":"{}"}}"#,
+                        html.display()
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn create_activity_requires_extension_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let html = tmp.path().join("index.html");
+        std::fs::write(&html, "<html></html>").unwrap();
+        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf());
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/activities")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(format!(
+                        r#"{{"html":"{}"}}"#,
+                        html.display()
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    async fn setup_extension_with_html(
+        ext_name: &str,
+    ) -> (
+        axum::Router,
+        AppState,
+        ozmux_multiplexer::activity::ActivityId,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("index.html"),
+            b"<html><body>memo</body></html>",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("style.css"), b"body { color: red; }").unwrap();
+        let (router, state) = router_with_extension(ext_name, tmp.path().to_path_buf());
+        let activity_id = {
+            let mut ms = state.multiplexer.lock().await;
+            ms.new_activity(Activity {
+                name: "ext".to_string(),
+                kind: ActivityKind::Extension {
+                    html_root: tmp.path().to_path_buf(),
+                },
+            })
+        };
+        state
+            .extensions
+            .record_activity_owner(&activity_id, ext_name);
+        (router, state, activity_id, tmp)
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_html_with_correct_content_type() {
+        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/index.html"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/html"));
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_css_with_correct_content_type() {
+        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/style.css"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/css"));
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_404_for_missing_file() {
+        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/missing.html"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_blocks_path_traversal() {
+        let (router, _state, activity_id, tmp) = setup_extension_with_html("memo").await;
+        let outside = tmp.path().parent().unwrap().join("outside.txt");
+        std::fs::write(&outside, b"secret").ok();
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/../outside.txt"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            resp.status(),
+            axum::http::StatusCode::BAD_REQUEST | axum::http::StatusCode::NOT_FOUND
+        ));
+        let _ = std::fs::remove_file(outside);
     }
 }

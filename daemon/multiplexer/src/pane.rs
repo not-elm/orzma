@@ -44,6 +44,11 @@ impl PaneState {
     pub fn get(&self, id: &PaneId) -> Option<&Pane> {
         self.0.get(id)
     }
+
+    #[inline]
+    pub fn contains_key(&self, id: &PaneId) -> bool {
+        self.0.contains_key(id)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

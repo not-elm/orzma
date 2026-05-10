@@ -1,4 +1,5 @@
 pub mod error;
+pub mod extractors;
 pub mod handlers;
 
 pub use error::{HttpError, HttpResult};
@@ -8,19 +9,32 @@ use axum::{
     extract::FromRef,
     routing::{delete as method_delete, get, post},
 };
+use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 #[derive(Clone, Default)]
 pub struct AppState {
-    pub multiplexer: Arc<Mutex<MultiplexerService>>,
+    pub multiplexer: MultiplexerState,
     pub terminal: TerminalService,
+    pub extensions: ExtensionRegistry,
 }
 
-impl FromRef<AppState> for Arc<Mutex<MultiplexerService>> {
+#[derive(Clone, Default)]
+pub struct MultiplexerState(pub Arc<Mutex<MultiplexerService>>);
+
+impl Deref for MultiplexerState {
+    type Target = Arc<Mutex<MultiplexerService>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl FromRef<AppState> for MultiplexerState {
     fn from_ref(input: &AppState) -> Self {
         input.multiplexer.clone()
     }
@@ -29,6 +43,12 @@ impl FromRef<AppState> for Arc<Mutex<MultiplexerService>> {
 impl FromRef<AppState> for TerminalService {
     fn from_ref(input: &AppState) -> Self {
         input.terminal.clone()
+    }
+}
+
+impl FromRef<AppState> for ExtensionRegistry {
+    fn from_ref(input: &AppState) -> Self {
+        input.extensions.clone()
     }
 }
 
@@ -89,11 +109,18 @@ pub fn daemon_router(state: AppState) -> Router {
             "/windows/{window_id}/select",
             post(handlers::windows::select),
         )
+        .route("/panes", post(handlers::panes::create))
         .route("/panes/{pane_id}/split", post(handlers::panes::split))
+        .route("/panes/{src}/split-with", post(handlers::panes::split_with))
         .route("/panes/{pane_id}", method_delete(handlers::panes::close))
+        .route("/activities", post(handlers::activities::create))
         .route(
             "/activities/{activity_id}/terminal/ws",
             get(handlers::activities::terminal_ws),
+        )
+        .route(
+            "/activities/{activity_id}/iframe/{*path}",
+            get(handlers::activities::iframe_serve),
         )
         .with_state(state)
 }
@@ -113,8 +140,9 @@ pub(crate) mod test_helpers {
 
     pub fn router_with(ms: MultiplexerService) -> (Router, AppState) {
         let state = AppState {
-            multiplexer: Arc::new(Mutex::new(ms)),
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
         };
         (daemon_router(state.clone()), state)
     }
@@ -129,7 +157,7 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn unknown_pane_route_returns_404() {
+    async fn delete_pane_without_extension_header_returns_401() {
         let (router, _) = test_helpers::router_with(MultiplexerService::default());
         let resp = router
             .oneshot(
@@ -141,6 +169,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -1,14 +1,12 @@
-use crate::error::HttpResult;
+use crate::{MultiplexerState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerService, SessionError, session::SessionId};
+use ozmux_multiplexer::{SessionError, session::SessionId};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[derive(Deserialize, Default)]
 pub struct CreateRequest {
@@ -17,7 +15,7 @@ pub struct CreateRequest {
 }
 
 pub async fn create(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     Json(body): Json<CreateRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let id = ms.lock().await.new_session(body.name);
@@ -30,7 +28,7 @@ pub struct RenameRequest {
 }
 
 pub async fn rename(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     Path(session_id): Path<SessionId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
@@ -39,7 +37,7 @@ pub async fn rename(
 }
 
 pub async fn delete(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
     Path(session_id): Path<SessionId>,
 ) -> HttpResult<StatusCode> {
@@ -50,7 +48,7 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn list(State(ms): State<Arc<Mutex<MultiplexerService>>>) -> Json<serde_json::Value> {
+pub async fn list(State(ms): State<MultiplexerState>) -> Json<serde_json::Value> {
     let ms = ms.lock().await;
     let mut entries: Vec<(&SessionId, &ozmux_multiplexer::session::Session)> =
         ms.sessions().iter().collect();
@@ -75,7 +73,7 @@ fn session_view(
 }
 
 pub async fn get(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     Path(session_id): Path<SessionId>,
 ) -> HttpResult<Json<serde_json::Value>> {
     let ms = ms.lock().await;
@@ -88,10 +86,10 @@ pub async fn get(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::test_helpers::router_with;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use ozmux_multiplexer::MultiplexerService;
     use tower::ServiceExt;
 
     #[tokio::test]

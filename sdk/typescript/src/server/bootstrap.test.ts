@@ -9,12 +9,18 @@ import { Writable } from "node:stream";
 import { bindServer, handleConnection, materializeShims, resolveBootstrapEnv, type CommandHandler } from "./bootstrap.ts";
 
 describe("resolveBootstrapEnv", () => {
-  it("returns the trio when all are set", () => {
+  it("returns the quartet when all are set", () => {
     expect(resolveBootstrapEnv({
       OZMUX_BIN_DIR: "/b",
       OZMUX_SOCK_PATH: "/s.sock",
       EXTENSION_NAME: "memo",
-    })).toEqual({ binDir: "/b", sockPath: "/s.sock", extensionName: "memo" });
+      OZMUX_DAEMON_URL: "http://127.0.0.1:3200",
+    })).toEqual({
+      binDir: "/b",
+      sockPath: "/s.sock",
+      extensionName: "memo",
+      daemonUrl: "http://127.0.0.1:3200",
+    });
   });
   it("throws when any required key is missing", () => {
     expect(() => resolveBootstrapEnv({ OZMUX_BIN_DIR: "/b", OZMUX_SOCK_PATH: "/s.sock" }))
@@ -127,6 +133,7 @@ describe("bootstrap()", () => {
         OZMUX_BIN_DIR: binDir,
         OZMUX_SOCK_PATH: sockPath,
         EXTENSION_NAME: "memo",
+        OZMUX_DAEMON_URL: "http://127.0.0.1:3200",
       },
       stdio: "inherit",
     });

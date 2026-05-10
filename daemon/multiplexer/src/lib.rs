@@ -170,6 +170,15 @@ impl MultiplexerService {
         Ok(activity_ids)
     }
 
+    pub fn new_pane_with_activity(&mut self, activity_id: ActivityId) -> SessionResult<PaneId> {
+        if !self.activities.contains(&activity_id) {
+            return Err(SessionError::ActivityNotFound(activity_id));
+        }
+        let id = PaneId::new();
+        self.panes.insert(id.clone(), Pane::new(activity_id));
+        Ok(id)
+    }
+
     pub fn new_pane(
         &mut self,
         activity_id: ActivityId,
@@ -204,11 +213,43 @@ impl MultiplexerService {
         Ok((new_pane_id, new_activity_id))
     }
 
+    pub fn split_with_pane(
+        &mut self,
+        src: PaneId,
+        new_pane: PaneId,
+        side: crate::cells::Side,
+        orientation: crate::cells::SplitOrientation,
+    ) -> SessionResult<()> {
+        if !self.panes.contains_key(&new_pane) {
+            return Err(SessionError::PaneNotFound(new_pane));
+        }
+        if self.pane_to_cell.contains_key(&new_pane) {
+            return Err(SessionError::PaneAlreadyPlaced(new_pane));
+        }
+        let target_cell_id = self.cell_id_for_pane(&src)?.clone();
+        let new_cell_id = self.cells.new_pane(new_pane.clone(), None);
+        if let Err(e) =
+            self.cells
+                .split_cell(target_cell_id, new_cell_id.clone(), side, orientation)
+        {
+            // rollback: orphan の new_cell を消す
+            let _ = self.cells.remove_subtree(&new_cell_id);
+            return Err(e);
+        }
+        self.pane_to_cell.insert(new_pane.clone(), new_cell_id);
+        self.windows.replace_active_pane(&src, &new_pane);
+        Ok(())
+    }
+
     pub fn close_pane(&mut self, pane_id: &PaneId) -> SessionResult {
-        let cell_id = self.cell_id_for_pane(pane_id)?.clone();
-        let outcome = self.cells.close_cell(&cell_id)?;
-        let survivor_pane_id = self.cells.leftmost_pane(outcome.survivor())?.clone();
-        self.windows.replace_active_pane(pane_id, &survivor_pane_id);
+        if !self.panes.contains_key(pane_id) {
+            return Err(SessionError::PaneNotFound(pane_id.clone()));
+        }
+        if let Some(cell_id) = self.pane_to_cell.get(pane_id).cloned() {
+            let outcome = self.cells.close_cell(&cell_id)?;
+            let survivor_pane_id = self.cells.leftmost_pane(outcome.survivor())?.clone();
+            self.windows.replace_active_pane(pane_id, &survivor_pane_id);
+        }
         self.forget_pane(pane_id);
         Ok(())
     }
@@ -364,12 +405,12 @@ mod tests {
     }
 
     #[test]
-    fn close_pane_unknown_id_returns_cell_for_pane_not_found() {
+    fn close_pane_unknown_id_returns_pane_not_found() {
         let mut ms = MultiplexerService::default();
         let unknown = PaneId::new();
         assert!(matches!(
             ms.close_pane(&unknown),
-            Err(SessionError::CellForPaneNotFound(_))
+            Err(SessionError::PaneNotFound(_))
         ));
     }
 
@@ -567,6 +608,23 @@ mod tests {
     }
 
     #[test]
+    fn new_pane_with_activity_creates_limbo_pane() {
+        let mut ms = MultiplexerService::default();
+        let activity_id = ms.new_activity(Activity::default());
+        let pane_id = ms.new_pane_with_activity(activity_id.clone()).unwrap();
+        assert!(ms.panes().contains_key(&pane_id));
+        assert!(ms.cell_id_for_pane(&pane_id).is_err());
+    }
+
+    #[test]
+    fn new_pane_with_activity_rejects_unknown_activity() {
+        let mut ms = MultiplexerService::default();
+        let phantom = ActivityId::new();
+        let err = ms.new_pane_with_activity(phantom.clone()).unwrap_err();
+        assert!(matches!(err, SessionError::ActivityNotFound(id) if id == phantom));
+    }
+
+    #[test]
     fn bootstrap_default_yields_four_consistent_ids() {
         let mut ms = MultiplexerService::default();
         let (sid, wid, pid, aid) = ms.bootstrap_default().unwrap();
@@ -579,5 +637,69 @@ mod tests {
         let _ = pane_cell;
         // The activity must be in ActivityState (we exposed `contains` earlier).
         assert!(ms.activities().contains(&aid));
+    }
+
+    #[test]
+    fn split_with_pane_places_limbo_pane_after_target() {
+        use crate::cells::{Side, SplitOrientation};
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
+        let activity_id = ms.new_activity(Activity::default());
+        let limbo = ms.new_pane_with_activity(activity_id).unwrap();
+        ms.split_with_pane(
+            target_pane.clone(),
+            limbo.clone(),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        assert!(ms.cell_id_for_pane(&limbo).is_ok());
+    }
+
+    #[test]
+    fn split_with_pane_rejects_already_placed_pane() {
+        use crate::cells::{Side, SplitOrientation};
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
+        let err = ms
+            .split_with_pane(
+                target_pane.clone(),
+                target_pane.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, SessionError::PaneAlreadyPlaced(id) if id == target_pane));
+    }
+
+    #[test]
+    fn split_with_pane_rejects_unknown_new_pane() {
+        use crate::cells::{Side, SplitOrientation};
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
+        let phantom = PaneId::new();
+        let err = ms
+            .split_with_pane(
+                target_pane,
+                phantom.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, SessionError::PaneNotFound(id) if id == phantom));
+    }
+
+    #[test]
+    fn close_pane_handles_limbo_pane_without_touching_cell_tree() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let cells_before = ms.cells_ref().clone();
+        let activity_id = ms.new_activity(Activity::default());
+        let limbo = ms.new_pane_with_activity(activity_id).unwrap();
+        ms.close_pane(&limbo).unwrap();
+        assert!(!ms.panes().contains_key(&limbo));
+        let serialized_before = serde_json::to_string(&cells_before).unwrap();
+        let serialized_after = serde_json::to_string(ms.cells_ref()).unwrap();
+        assert_eq!(serialized_before, serialized_after);
     }
 }

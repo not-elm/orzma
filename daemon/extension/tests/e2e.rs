@@ -1,4 +1,6 @@
-use ozmux_extension::{handle::ExtensionHandles, runtime::RuntimeRoot};
+use ozmux_extension::{
+    handle::ExtensionHandles, registry::ExtensionRegistry, runtime::RuntimeRoot,
+};
 use ozmux_multiplexer::{activity::ActivityId, pane::PaneId};
 use ozmux_terminal::{SpawnOptions, TerminalService};
 use std::{
@@ -20,7 +22,8 @@ async fn pane_command_invokes_extension_handler() {
     unsafe {
         std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
     }
-    let _handles = ExtensionHandles::load(&runtime).expect("spawn extension");
+    let _handles =
+        ExtensionHandles::load(&runtime, ExtensionRegistry::default()).expect("spawn extension");
 
     // Wait for the extension to materialize its shim.
     let shim = runtime.bin_dir().join("echoext").join("echoext");
@@ -52,14 +55,13 @@ async fn pane_command_invokes_extension_handler() {
     let needle = b"ARGV=alpha,beta";
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-            Ok(Ok(ozmux_terminal::TerminalEvent::Data { buffer })) => {
-                got.extend_from_slice(&buffer);
-                if got.windows(needle.len()).any(|w| w == needle) {
-                    break;
-                }
+        if let Ok(Ok(ozmux_terminal::TerminalEvent::Data { buffer })) =
+            tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
+        {
+            got.extend_from_slice(&buffer);
+            if got.windows(needle.len()).any(|w| w == needle) {
+                break;
             }
-            _ => {}
         }
     }
     let s = String::from_utf8_lossy(&got);
@@ -77,7 +79,8 @@ async fn load_pre_creates_extension_bin_dirs() {
     unsafe {
         std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
     }
-    let _handles = ExtensionHandles::load(&runtime).expect("load extensions");
+    let _handles =
+        ExtensionHandles::load(&runtime, ExtensionRegistry::default()).expect("load extensions");
     for name in ["echoext", "crashext"] {
         let bin_dir = runtime.bin_dir().join(name);
         assert!(
@@ -109,7 +112,7 @@ async fn extension_crash_does_not_break_other_extensions() {
     unsafe {
         std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
     }
-    let _handles = ExtensionHandles::load(&runtime).unwrap();
+    let _handles = ExtensionHandles::load(&runtime, ExtensionRegistry::default()).unwrap();
 
     let echo = runtime.bin_dir().join("echoext").join("echoext");
     let crash = runtime.bin_dir().join("crashext").join("crashext");
