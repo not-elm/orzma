@@ -38,6 +38,7 @@ async fn main() -> anyhow::Result<()> {
         ))),
         terminal: TerminalService::with_runtime_root(Arc::clone(&runtime)),
         extensions: registry,
+        layout_broadcast: ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
     };
 
     let serve = ozmux_http_server::serve(state);

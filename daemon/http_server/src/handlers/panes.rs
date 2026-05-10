@@ -233,6 +233,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state.clone());
         let resp = router
@@ -280,6 +281,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -306,6 +308,7 @@ mod tests {
             ))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -341,6 +344,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -379,6 +383,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         (
             crate::test_helpers::daemon_router_for_test(state.clone()),
@@ -421,6 +426,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms2))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -448,6 +454,7 @@ mod tests {
             ))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let phantom = ozmux_multiplexer::activity::ActivityId::new();
@@ -485,6 +492,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -518,6 +526,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -548,6 +557,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router

@@ -11,6 +11,7 @@ use axum::{
     extract::FromRef,
     routing::{delete as method_delete, get, post},
 };
+use layout_broadcast::LayoutBroadcaster;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub multiplexer: MultiplexerState,
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
+    pub layout_broadcast: LayoutBroadcaster,
 }
 
 #[derive(Clone, Default)]
@@ -51,6 +53,12 @@ impl FromRef<AppState> for TerminalService {
 impl FromRef<AppState> for ExtensionRegistry {
     fn from_ref(input: &AppState) -> Self {
         input.extensions.clone()
+    }
+}
+
+impl FromRef<AppState> for LayoutBroadcaster {
+    fn from_ref(input: &AppState) -> Self {
+        input.layout_broadcast.clone()
     }
 }
 
@@ -145,6 +153,7 @@ pub(crate) mod test_helpers {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         (daemon_router(state.clone()), state)
     }
@@ -157,6 +166,15 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use ozmux_multiplexer::MultiplexerService;
     use tower::ServiceExt;
+
+    #[test]
+    fn app_state_default_includes_layout_broadcaster() {
+        let state = AppState::default();
+        // Ability to subscribe shows the broadcaster is wired and constructable.
+        let _ = state
+            .layout_broadcast
+            .subscribe_or_create(&ozmux_multiplexer::window::WindowId::new());
+    }
 
     #[tokio::test]
     async fn delete_pane_without_extension_header_returns_401() {

@@ -264,6 +264,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         state
             .terminal
@@ -365,6 +366,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: ozmux_terminal::TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         (
             crate::test_helpers::daemon_router_for_test(state.clone()),
