@@ -17,6 +17,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 futures-util = { workspace = true }
+mime_guess = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

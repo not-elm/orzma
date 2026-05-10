@@ -33,4 +33,5 @@ futures-util = { version = "0.3", default-features = false, features = [
   "sink",
 ] }
 tempfile = "3"
+mime_guess = "2.0"
 libc = "0.2"
