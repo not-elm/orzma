@@ -1,0 +1,44 @@
+import { useEffect, useState } from 'react';
+
+export type DefaultWindowState =
+  | { status: 'loading' }
+  | { status: 'ready'; windowId: string }
+  | { status: 'error'; message: string };
+
+async function fetchJson(url: string): Promise<unknown> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: ${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+export function useDefaultWindow(): DefaultWindowState {
+  const [state, setState] = useState<DefaultWindowState>({ status: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = (await fetchJson('/sessions')) as { sessions: Array<{ id: string }> };
+        const sessionId = list.sessions[0]?.id;
+        if (!sessionId) throw new Error('no default session');
+        const session = (await fetchJson(`/sessions/${sessionId}`)) as {
+          windows: string[];
+          active_window: string | null;
+        };
+        const windowId = session.active_window ?? session.windows[0];
+        if (!windowId) throw new Error('no default window');
+        if (!cancelled) setState({ status: 'ready', windowId });
+      } catch (e) {
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : String(e);
+          setState({ status: 'error', message });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return state;
+}
