@@ -97,4 +97,24 @@ describe('useWindowLayout', () => {
     expect((result.current as { view: { id: string; name: string } }).view.name).toBe('second');
     server2.stop();
   });
+
+  it('reconnects immediately on 1011 "lagged" close', async () => {
+    let connectionCount = 0;
+    server.on('connection', (sock) => {
+      connectionCount++;
+      sock.send(JSON.stringify(fakeView({ name: `n${connectionCount}` })));
+      if (connectionCount === 1) {
+        sock.close({ code: 1011, reason: 'lagged', wasClean: true });
+      }
+    });
+    const { result } = renderHook(() => useWindowLayout(WID));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(connectionCount).toBeGreaterThanOrEqual(2);
+    expect(result.current.status).toBe('live');
+    expect((result.current as { view: { name: string } }).view.name).toBe(
+      `n${connectionCount}`,
+    );
+  });
 });
