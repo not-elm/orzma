@@ -34,10 +34,18 @@ pub struct RenameRequest {
 
 pub async fn rename(
     State(ms): State<MultiplexerState>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(window_id): Path<WindowId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
-    ms.lock().await.rename_window(&window_id, body.name)?;
+    let mut ms = ms.lock().await;
+    ms.rename_window(&window_id, body.name)?;
+    if let Some(window) = ms.windows().get(&window_id) {
+        match window_view_for(&ms, &window_id, window) {
+            Ok(view) => broadcaster.publish(&window_id, view),
+            Err(e) => tracing::warn!(error = %e, %window_id, "skipped layout publish on rename"),
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -373,6 +381,33 @@ mod tests {
         assert_eq!(v["id"].as_str(), Some(wid.as_ref()));
         assert_eq!(v["name"].as_str(), Some("orphan"));
         assert_eq!(v["panes"].as_array().map(|a| a.len()), Some(1));
+    }
+
+    #[tokio::test]
+    async fn rename_publishes_layout_with_new_name() {
+        let mut ms = MultiplexerService::default();
+        let wid = ms.new_window_in(None, Some("orig".into())).unwrap();
+        let (router, state) = router_with(ms);
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/windows/{}", wid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"renamed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["name"].as_str(), Some("renamed"));
     }
 
     #[tokio::test]
