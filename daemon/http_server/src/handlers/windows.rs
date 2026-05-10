@@ -1,9 +1,13 @@
 use crate::{MultiplexerState, error::HttpResult};
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{
+        Path, State, WebSocketUpgrade,
+        ws::{CloseFrame, Message, WebSocket},
+    },
     http::StatusCode,
 };
+use futures_util::{SinkExt, StreamExt, stream::SplitSink};
 use ozmux_multiplexer::{MultiplexerService, SessionError, session::SessionId, window::WindowId};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
@@ -131,6 +135,79 @@ fn pane_view(
         "activities": activities,
         "active_activity": pane.active_activity,
     })
+}
+
+pub async fn events(
+    State(ms): State<MultiplexerState>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
+    Path(window_id): Path<WindowId>,
+    ws: WebSocketUpgrade,
+) -> impl axum::response::IntoResponse {
+    ws.on_upgrade(move |socket| handle_events_socket(socket, ms, broadcaster, window_id))
+}
+
+async fn handle_events_socket(
+    socket: WebSocket,
+    ms: MultiplexerState,
+    broadcaster: crate::layout_broadcast::LayoutBroadcaster,
+    window_id: WindowId,
+) {
+    let (mut tx, _rx) = socket.split();
+
+    // Atomic snapshot + subscribe under ms.lock.
+    let (snapshot, mut receiver) = {
+        let ms_guard = ms.lock().await;
+        let Some(window) = ms_guard.windows().get(&window_id) else {
+            close_with(&mut tx, 1011, "window_not_found").await;
+            return;
+        };
+        let snapshot = match window_view_for(&ms_guard, &window_id, window) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, %window_id, "snapshot build failed");
+                close_with(&mut tx, 1011, "internal_error").await;
+                return;
+            }
+        };
+        let receiver = broadcaster.subscribe_or_create(&window_id);
+        (snapshot, receiver)
+    };
+
+    if tx.send(Message::Text(snapshot.to_string().into())).await.is_err() {
+        return;
+    }
+
+    use tokio::sync::broadcast::error::RecvError;
+    loop {
+        match receiver.recv().await {
+            Ok(view) => {
+                if tx.send(Message::Text(view.to_string().into())).await.is_err() {
+                    return;
+                }
+            }
+            Err(RecvError::Lagged(_)) => {
+                close_with(&mut tx, 1011, "lagged").await;
+                return;
+            }
+            Err(RecvError::Closed) => {
+                close_with(&mut tx, 1011, "window_closed").await;
+                return;
+            }
+        }
+    }
+}
+
+async fn close_with(
+    tx: &mut SplitSink<WebSocket, Message>,
+    code: u16,
+    reason: &'static str,
+) {
+    let _ = tx
+        .send(Message::Close(Some(CloseFrame {
+            code,
+            reason: reason.into(),
+        })))
+        .await;
 }
 
 #[cfg(test)]
@@ -568,6 +645,156 @@ mod tests {
             .expect("recv timed out")
             .expect_err("expected RecvError::Closed");
         assert!(matches!(err, RecvError::Closed));
+    }
+
+    use crate::layout_broadcast::LayoutBroadcaster;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tokio::net::TcpListener as TokioTcpListener;
+    use tokio::sync::Mutex;
+
+    async fn spawn_server(state: crate::AppState) -> SocketAddr {
+        let listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, crate::daemon_router(state)).await.unwrap();
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn events_ws_sends_initial_snapshot() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::{connect_async, tungstenite::Message as TtMessage};
+
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let state = crate::AppState {
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
+            terminal: ozmux_terminal::TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: LayoutBroadcaster::default(),
+        };
+        let addr = spawn_server(state).await;
+        let url = format!("ws://{}/windows/{}/events", addr, wid);
+        let (mut ws, _) = connect_async(&url).await.unwrap();
+        let msg = ws.next().await.unwrap().unwrap();
+        let text = match msg {
+            TtMessage::Text(t) => t,
+            other => panic!("expected text frame, got {other:?}"),
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["id"].as_str(), Some(wid.as_ref()));
+        assert!(v["layout"].is_object());
+    }
+
+    #[tokio::test]
+    async fn events_ws_closes_with_window_not_found_for_unknown_wid() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::{connect_async, tungstenite::Message as TtMessage};
+        let state = crate::AppState::default();
+        let addr = spawn_server(state).await;
+        let url = format!("ws://{}/windows/does-not-exist/events", addr);
+        let (mut ws, _) = connect_async(&url).await.unwrap();
+        match ws.next().await.unwrap().unwrap() {
+            TtMessage::Close(Some(frame)) => {
+                assert_eq!(u16::from(frame.code), 1011);
+                assert!(frame.reason.contains("window_not_found"));
+            }
+            other => panic!("expected close frame, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn events_ws_sends_frame_after_external_publish() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::{connect_async, tungstenite::Message as TtMessage};
+
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let state = crate::AppState {
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
+            terminal: ozmux_terminal::TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: LayoutBroadcaster::default(),
+        };
+        let bc = state.layout_broadcast.clone();
+        let addr = spawn_server(state).await;
+        let url = format!("ws://{}/windows/{}/events", addr, wid);
+        let (mut ws, _) = connect_async(&url).await.unwrap();
+        let _initial = ws.next().await.unwrap().unwrap();
+
+        bc.publish(&wid, serde_json::json!({ "id": wid.as_ref(), "marker": "second" }));
+
+        match ws.next().await.unwrap().unwrap() {
+            TtMessage::Text(t) => {
+                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                assert_eq!(v["marker"].as_str(), Some("second"));
+            }
+            other => panic!("expected text frame, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn events_ws_closes_with_window_closed_when_broadcaster_drops() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::{connect_async, tungstenite::Message as TtMessage};
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let state = crate::AppState {
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
+            terminal: ozmux_terminal::TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: LayoutBroadcaster::default(),
+        };
+        let bc = state.layout_broadcast.clone();
+        let addr = spawn_server(state).await;
+        let url = format!("ws://{}/windows/{}/events", addr, wid);
+        let (mut ws, _) = connect_async(&url).await.unwrap();
+        let _initial = ws.next().await.unwrap().unwrap();
+        bc.close(&wid);
+        match ws.next().await.unwrap().unwrap() {
+            TtMessage::Close(Some(frame)) => {
+                assert_eq!(u16::from(frame.code), 1011);
+                assert!(frame.reason.contains("window_closed"));
+            }
+            other => panic!("expected close frame, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn events_ws_closes_with_lagged_when_subscriber_falls_behind() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::{connect_async, tungstenite::Message as TtMessage};
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let state = crate::AppState {
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
+            terminal: ozmux_terminal::TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: LayoutBroadcaster::new(1),
+        };
+        let bc = state.layout_broadcast.clone();
+        let addr = spawn_server(state).await;
+        let url = format!("ws://{}/windows/{}/events", addr, wid);
+        let (mut ws, _) = connect_async(&url).await.unwrap();
+        let _initial = ws.next().await.unwrap().unwrap();
+        // Don't read further; force the channel to lag.
+        bc.publish(&wid, serde_json::json!({ "n": 1 }));
+        bc.publish(&wid, serde_json::json!({ "n": 2 }));
+        bc.publish(&wid, serde_json::json!({ "n": 3 }));
+        // Read until we get a Close frame.
+        loop {
+            match ws.next().await.unwrap().unwrap() {
+                TtMessage::Close(Some(frame)) => {
+                    assert_eq!(u16::from(frame.code), 1011);
+                    assert!(frame.reason.contains("lagged"));
+                    break;
+                }
+                TtMessage::Text(_) => continue,
+                other => panic!("unexpected frame: {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]
