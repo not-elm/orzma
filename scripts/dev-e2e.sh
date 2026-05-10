@@ -27,7 +27,7 @@ main() {
   esac
 }
 
-cmd_setup() { echo "setup: not yet implemented" >&2; exit 1; }
+cmd_setup() { echo "setup: not yet implemented" >&2; return 1; }
 cmd_start() {
   handle_existing_pid_file
   require_free_port "${VITE_PORT}"
@@ -35,7 +35,7 @@ cmd_start() {
   echo "start: pre-flight ok (servers not yet implemented)" >&2
   exit 1
 }
-cmd_stop()  { echo "stop: not yet implemented" >&2;  exit 1; }
+cmd_stop()  { echo "stop: not yet implemented" >&2;  return 1; }
 
 port_in_use() {
   # Returns 0 (success) when the TCP port is being listened on.
@@ -70,7 +70,7 @@ handle_existing_pid_file() {
   done < "${PID_FILE}"
   if [[ "${any_alive}" -eq 1 ]]; then
     echo "error: harness already running (see ${PID_FILE})." >&2
-    echo "       run: make dev-e2e:stop" >&2
+    echo "       run: make dev-e2e-stop" >&2
     exit 1
   fi
   echo "info: removing stale ${PID_FILE}" >&2
