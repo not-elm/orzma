@@ -117,4 +117,36 @@ describe('useWindowLayout', () => {
       `n${connectionCount}`,
     );
   });
+
+  it('uses backoff for non-first reconnect attempts', async () => {
+    // Force Math.random to 0 for deterministic jitter.
+    const origRandom = Math.random;
+    Math.random = () => 0;
+    try {
+      let connectionCount = 0;
+      server.on('connection', (sock) => {
+        connectionCount++;
+        if (connectionCount <= 3) {
+          // Note: send a frame so onmessage handler exists, then close immediately.
+          // Don't wait — close on the same tick.
+          sock.close({ code: 1011, reason: 'internal_error', wasClean: true });
+        } else {
+          sock.send(JSON.stringify(fakeView()));
+        }
+      });
+      const start = performance.now();
+      renderHook(() => useWindowLayout(WID));
+      // Wait long enough for ~3 reconnect attempts including backoffs.
+      // 1st: immediate, 2nd: ~500ms (jitter=0), 3rd: ~1000ms.
+      // Total ~1500ms, so connectionCount should be at least 3.
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 1700));
+      });
+      const elapsed = performance.now() - start;
+      expect(connectionCount).toBeGreaterThanOrEqual(3);
+      expect(elapsed).toBeGreaterThan(1000);
+    } finally {
+      Math.random = origRandom;
+    }
+  });
 });

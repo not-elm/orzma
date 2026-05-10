@@ -55,9 +55,24 @@ export function useWindowLayout(wid: string | null): LayoutState {
           RECONNECT_RECOVERABLE_REASONS.has(ev.reason);
         if (!recoverable) return;
         attemptRef.current++;
-        setState({ status: 'reconnecting', view: lastViewRef.current, retryInSec: 0 });
-        // 1st reconnect = immediate. Backoff added in Task 20.
-        connect();
+        if (attemptRef.current === 1) {
+          // 1st reconnect: immediate (e.g., bursty lagged scenario)
+          setState({ status: 'reconnecting', view: lastViewRef.current, retryInSec: 0 });
+          connect();
+        } else {
+          const baseDelay = Math.min(30_000, 500 * Math.pow(2, attemptRef.current - 2));
+          const jitter = Math.random() * 500;
+          const delay = baseDelay + jitter;
+          setState({
+            status: 'reconnecting',
+            view: lastViewRef.current,
+            retryInSec: delay / 1000,
+          });
+          setTimeout(() => {
+            if (generationRef.current !== myGen) return;
+            connect();
+          }, delay);
+        }
       };
     };
 
