@@ -66,7 +66,7 @@ fn compute_split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_multiplexer::cells::{Side, SplitOrientation};
+    use ozmux_multiplexer::cells::Side;
 
     #[test]
     fn build_layout_for_single_pane_window() {
@@ -93,15 +93,15 @@ mod tests {
     fn build_layout_after_horizontal_split_gives_split_with_two_panes() {
         let mut cells = LayoutCellState::default();
         let pane_a = PaneId::new();
-        let (root_id, _) = cells.new_window_layout(pane_a.clone());
+        let (root_id, pane_a_cell) = cells.new_window_layout(pane_a.clone());
         let pane_b = PaneId::new();
-        let new_cell = cells.new_pane(pane_b.clone(), None);
+        let pane_b_cell = cells.new_pane(pane_b.clone(), None);
         let target_cell = match cells.cell(&root_id).unwrap() {
             Cell::Root(r) => r.child.clone(),
             _ => unreachable!(),
         };
         cells
-            .split_cell(target_cell, new_cell, Side::After, SplitOrientation::Horizontal)
+            .split_cell(target_cell, pane_b_cell.clone(), Side::After, SplitOrientation::Horizontal)
             .unwrap();
 
         let layout = build_layout(&root_id, &cells).unwrap();
@@ -109,9 +109,22 @@ mod tests {
             panic!("expected root");
         };
         match *child {
-            WindowLayoutNode::Split { orientation, split_ratio, .. } => {
+            WindowLayoutNode::Split { orientation, split_ratio, lhs, rhs, .. } => {
                 assert_eq!(orientation, SplitOrientation::Horizontal);
                 assert!((split_ratio - 0.5).abs() < f32::EPSILON);
+                match (*lhs, *rhs) {
+                    (
+                        WindowLayoutNode::Pane { cell_id: lhs_cell, pane_id: lhs_pane },
+                        WindowLayoutNode::Pane { cell_id: rhs_cell, pane_id: rhs_pane },
+                    ) => {
+                        // Side::After puts the new pane on the right.
+                        assert_eq!(lhs_cell, pane_a_cell);
+                        assert_eq!(lhs_pane, pane_a);
+                        assert_eq!(rhs_cell, pane_b_cell);
+                        assert_eq!(rhs_pane, pane_b);
+                    }
+                    other => panic!("expected two pane children, got {other:?}"),
+                }
             }
             other => panic!("expected split, got {other:?}"),
         }
