@@ -52,12 +52,14 @@ pub async fn rename(
 pub async fn delete(
     State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<StatusCode> {
     let activities = ms.lock().await.close_window(&window_id)?;
     for aid in activities {
         let _ = terminal.kill(&aid).await;
     }
+    broadcaster.close(&window_id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -539,6 +541,33 @@ mod tests {
         assert_eq!(split["orientation"].as_str(), Some("horizontal"));
         assert!(split["lhs"].is_object());
         assert!(split["rhs"].is_object());
+    }
+
+    #[tokio::test]
+    async fn delete_window_kicks_subscribers_with_recv_closed() {
+        use tokio::sync::broadcast::error::RecvError;
+        let mut ms = MultiplexerService::default();
+        let wid = ms.new_window_in(None, None).unwrap();
+        let (router, state) = router_with(ms);
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/windows/{}", wid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let err = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect_err("expected RecvError::Closed");
+        assert!(matches!(err, RecvError::Closed));
     }
 
     #[tokio::test]
