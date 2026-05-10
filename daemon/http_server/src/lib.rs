@@ -116,6 +116,10 @@ pub fn daemon_router(state: AppState) -> Router {
             "/activities/{activity_id}/terminal/ws",
             get(handlers::activities::terminal_ws),
         )
+        .route(
+            "/activities/{activity_id}/iframe/{*path}",
+            get(handlers::activities::iframe_serve),
+        )
         .with_state(state)
 }
 

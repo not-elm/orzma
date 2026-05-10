@@ -3,7 +3,8 @@ use axum::{
         Path, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
     },
-    response::IntoResponse,
+    http::header::CONTENT_TYPE,
+    response::{IntoResponse, Response},
 };
 use futures_util::{
     SinkExt, StreamExt,
@@ -196,6 +197,48 @@ pub async fn create(
         axum::http::StatusCode::CREATED,
         axum::Json(serde_json::json!({ "activity_id": activity_id })),
     ))
+}
+
+pub async fn iframe_serve(
+    State(ms): State<MultiplexerState>,
+    Path((activity_id, path)): Path<(ActivityId, String)>,
+) -> Result<Response, HttpError> {
+    let html_root = {
+        let ms = ms.lock().await;
+        let activity = ms.activities().get(&activity_id).ok_or_else(|| {
+            HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
+                activity_id.clone(),
+            ))
+        })?;
+        match &activity.kind {
+            ActivityKind::Extension { html_root } => html_root.clone(),
+            ActivityKind::Terminal => {
+                return Err(HttpError::IframeFileNotFound(path));
+            }
+        }
+    };
+    let html_root_canon = html_root
+        .canonicalize()
+        .map_err(|_| HttpError::IframeFileNotFound(path.clone()))?;
+    let resolved = html_root_canon
+        .join(&path)
+        .canonicalize()
+        .map_err(|_| HttpError::IframeFileNotFound(path.clone()))?;
+    if !resolved.starts_with(&html_root_canon) {
+        return Err(HttpError::InvalidHtmlPath(path));
+    }
+    let resolved_clone = resolved.clone();
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(&resolved_clone))
+        .await
+        .map_err(|_| HttpError::IframeFileNotFound(path.clone()))?
+        .map_err(|_| HttpError::IframeFileNotFound(path.clone()))?;
+    let mime = mime_guess::from_path(&resolved).first_or_octet_stream();
+    Ok((
+        axum::http::StatusCode::OK,
+        [(CONTENT_TYPE, mime.as_ref().to_string())],
+        bytes,
+    )
+        .into_response())
 }
 
 #[cfg(test)]
@@ -420,5 +463,116 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    async fn setup_extension_with_html(
+        ext_name: &str,
+    ) -> (
+        axum::Router,
+        AppState,
+        ozmux_multiplexer::activity::ActivityId,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("index.html"),
+            b"<html><body>memo</body></html>",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("style.css"), b"body { color: red; }").unwrap();
+        let (router, state) = router_with_extension(ext_name, tmp.path().to_path_buf());
+        let activity_id = {
+            let mut ms = state.multiplexer.lock().await;
+            ms.new_activity(Activity {
+                name: "ext".to_string(),
+                kind: ActivityKind::Extension {
+                    html_root: tmp.path().to_path_buf(),
+                },
+            })
+        };
+        state.extensions.record_activity_owner(&activity_id, ext_name);
+        (router, state, activity_id, tmp)
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_html_with_correct_content_type() {
+        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/index.html"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/html"));
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_css_with_correct_content_type() {
+        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/style.css"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/css"));
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_404_for_missing_file() {
+        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/missing.html"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_blocks_path_traversal() {
+        let (router, _state, activity_id, tmp) = setup_extension_with_html("memo").await;
+        let outside = tmp.path().parent().unwrap().join("outside.txt");
+        std::fs::write(&outside, b"secret").ok();
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/activities/{activity_id}/iframe/../outside.txt"
+                    ))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            resp.status(),
+            axum::http::StatusCode::BAD_REQUEST | axum::http::StatusCode::NOT_FOUND
+        ));
+        let _ = std::fs::remove_file(outside);
     }
 }
