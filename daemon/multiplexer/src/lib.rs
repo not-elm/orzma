@@ -216,6 +216,34 @@ impl MultiplexerService {
         Ok((new_pane_id, new_activity_id))
     }
 
+    pub fn split_with_pane(
+        &mut self,
+        src: PaneId,
+        new_pane: PaneId,
+        side: crate::cells::Side,
+        orientation: crate::cells::SplitOrientation,
+    ) -> SessionResult<()> {
+        if !self.panes.contains_key(&new_pane) {
+            return Err(SessionError::PaneNotFound(new_pane));
+        }
+        if self.pane_to_cell.contains_key(&new_pane) {
+            return Err(SessionError::PaneAlreadyPlaced(new_pane));
+        }
+        let target_cell_id = self.cell_id_for_pane(&src)?.clone();
+        let new_cell_id = self.cells.new_pane(new_pane.clone(), None);
+        if let Err(e) = self
+            .cells
+            .split_cell(target_cell_id, new_cell_id.clone(), side, orientation)
+        {
+            // rollback: orphan の new_cell を消す
+            let _ = self.cells.remove_subtree(&new_cell_id);
+            return Err(e);
+        }
+        self.pane_to_cell.insert(new_pane.clone(), new_cell_id);
+        self.windows.replace_active_pane(&src, &new_pane);
+        Ok(())
+    }
+
     pub fn close_pane(&mut self, pane_id: &PaneId) -> SessionResult {
         let cell_id = self.cell_id_for_pane(pane_id)?.clone();
         let outcome = self.cells.close_cell(&cell_id)?;
@@ -608,5 +636,55 @@ mod tests {
         let _ = pane_cell;
         // The activity must be in ActivityState (we exposed `contains` earlier).
         assert!(ms.activities().contains(&aid));
+    }
+
+    #[test]
+    fn split_with_pane_places_limbo_pane_after_target() {
+        use crate::cells::{Side, SplitOrientation};
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
+        let activity_id = ms.new_activity(Activity::default());
+        let limbo = ms.new_pane_with_activity(activity_id).unwrap();
+        ms.split_with_pane(
+            target_pane.clone(),
+            limbo.clone(),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        assert!(ms.cell_id_for_pane(&limbo).is_ok());
+    }
+
+    #[test]
+    fn split_with_pane_rejects_already_placed_pane() {
+        use crate::cells::{Side, SplitOrientation};
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
+        let err = ms
+            .split_with_pane(
+                target_pane.clone(),
+                target_pane.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, SessionError::PaneAlreadyPlaced(id) if id == target_pane));
+    }
+
+    #[test]
+    fn split_with_pane_rejects_unknown_new_pane() {
+        use crate::cells::{Side, SplitOrientation};
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
+        let phantom = PaneId::new();
+        let err = ms
+            .split_with_pane(
+                target_pane,
+                phantom.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, SessionError::PaneNotFound(id) if id == phantom));
     }
 }
