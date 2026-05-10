@@ -1,7 +1,7 @@
 import babel from '@rolldown/plugin-babel';
 import tailwindcss from '@tailwindcss/vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
 // https://vite.dev/config/
@@ -19,5 +19,10 @@ export default defineConfig({
       '/activities': { target: 'http://127.0.0.1:3200', ws: true },
       '/health': 'http://127.0.0.1:3200',
     },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test-setup.ts'],
   },
 });

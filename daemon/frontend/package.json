@@ -20,14 +20,20 @@
   "devDependencies": {
     "@babel/core": "^7.29.0",
     "@rolldown/plugin-babel": "^0.2.3",
+    "@testing-library/jest-dom": "catalog:",
+    "@testing-library/react": "catalog:",
     "@types/babel__core": "^7.20.5",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "@vitest/ui": "catalog:",
     "babel-plugin-react-compiler": "^1.0.0",
+    "jsdom": "catalog:",
+    "mock-socket": "catalog:",
     "typescript": "~6.0.2",
     "vite": "^8.0.10",
-    "vite-plugin-singlefile": "^2.3.3"
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "catalog:"
   }
 }
