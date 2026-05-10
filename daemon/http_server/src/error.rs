@@ -14,6 +14,24 @@ pub enum HttpError {
 
     #[error(transparent)]
     Terminal(#[from] TerminalError),
+
+    #[error("X-Ozmux-Extension header missing")]
+    MissingExtensionHeader,
+
+    #[error("unknown extension: {0}")]
+    UnknownExtension(String),
+
+    #[error("activity not owned by caller")]
+    ActivityNotOwned,
+
+    #[error("pane not owned by caller")]
+    PaneNotOwned,
+
+    #[error("invalid html path: {0}")]
+    InvalidHtmlPath(String),
+
+    #[error("iframe file not found: {0}")]
+    IframeFileNotFound(String),
 }
 
 pub type HttpResult<T = ()> = Result<T, HttpError>;
@@ -51,6 +69,20 @@ impl axum::response::IntoResponse for HttpError {
             }
             HttpError::Terminal(TerminalError::ActivityNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
+            }
+            HttpError::MissingExtensionHeader => {
+                (StatusCode::UNAUTHORIZED, "MISSING_EXTENSION_HEADER")
+            }
+            HttpError::UnknownExtension(_) => (StatusCode::FORBIDDEN, "UNKNOWN_EXTENSION"),
+            HttpError::ActivityNotOwned => (StatusCode::FORBIDDEN, "ACTIVITY_NOT_OWNED"),
+            HttpError::PaneNotOwned => (StatusCode::FORBIDDEN, "PANE_NOT_OWNED"),
+            HttpError::InvalidHtmlPath(_) => (StatusCode::BAD_REQUEST, "INVALID_HTML_PATH"),
+            HttpError::IframeFileNotFound(_) => (StatusCode::NOT_FOUND, "IFRAME_FILE_NOT_FOUND"),
+            HttpError::Session(SessionError::ActivityNotFound(_)) => {
+                (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
+            }
+            HttpError::Session(SessionError::PaneAlreadyPlaced(_)) => {
+                (StatusCode::CONFLICT, "PANE_ALREADY_PLACED")
             }
             // MissingParentCell, SplitTargetEqualsNewCell, ActivePaneMustBelongToWindow,
             // Terminal::Pty, FailedLaunch fall through → 500
@@ -137,6 +169,54 @@ mod tests {
     #[test]
     fn activity_not_found_maps_to_404() {
         let err = HttpError::Terminal(TerminalError::ActivityNotFound(ActivityId::new()));
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn missing_extension_header_maps_to_401() {
+        let err = HttpError::MissingExtensionHeader;
+        assert_eq!(err.into_response().status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn unknown_extension_maps_to_403() {
+        let err = HttpError::UnknownExtension("ghost".into());
+        assert_eq!(err.into_response().status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn activity_not_owned_maps_to_403() {
+        let err = HttpError::ActivityNotOwned;
+        assert_eq!(err.into_response().status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn pane_not_owned_maps_to_403() {
+        let err = HttpError::PaneNotOwned;
+        assert_eq!(err.into_response().status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn invalid_html_path_maps_to_400() {
+        let err = HttpError::InvalidHtmlPath("../etc/passwd".into());
+        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn iframe_file_not_found_maps_to_404() {
+        let err = HttpError::IframeFileNotFound("missing.html".into());
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn pane_already_placed_maps_to_409() {
+        let err = HttpError::Session(SessionError::PaneAlreadyPlaced(PaneId::new()));
+        assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn activity_not_found_session_maps_to_404() {
+        let err = HttpError::Session(SessionError::ActivityNotFound(ActivityId::new()));
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
     }
 }
