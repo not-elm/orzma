@@ -14,7 +14,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/sessions': 'http://127.0.0.1:3200',
-      '/windows': 'http://127.0.0.1:3200',
+      '/windows': { target: 'http://127.0.0.1:3200', ws: true },
       '/panes': 'http://127.0.0.1:3200',
       '/activities': { target: 'http://127.0.0.1:3200', ws: true },
       '/health': 'http://127.0.0.1:3200',
