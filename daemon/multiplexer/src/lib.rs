@@ -170,6 +170,18 @@ impl MultiplexerService {
         Ok(activity_ids)
     }
 
+    pub fn new_pane_with_activity(
+        &mut self,
+        activity_id: ActivityId,
+    ) -> SessionResult<PaneId> {
+        if !self.activities.contains(&activity_id) {
+            return Err(SessionError::ActivityNotFound(activity_id));
+        }
+        let id = PaneId::new();
+        self.panes.insert(id.clone(), Pane::new(activity_id));
+        Ok(id)
+    }
+
     pub fn new_pane(
         &mut self,
         activity_id: ActivityId,
@@ -564,6 +576,23 @@ mod tests {
             ms.sessions().get(&sid).unwrap().active_window.as_ref(),
             Some(&wid_b)
         );
+    }
+
+    #[test]
+    fn new_pane_with_activity_creates_limbo_pane() {
+        let mut ms = MultiplexerService::default();
+        let activity_id = ms.new_activity(Activity::default());
+        let pane_id = ms.new_pane_with_activity(activity_id.clone()).unwrap();
+        assert!(ms.panes().contains_key(&pane_id));
+        assert!(ms.cell_id_for_pane(&pane_id).is_err());
+    }
+
+    #[test]
+    fn new_pane_with_activity_rejects_unknown_activity() {
+        let mut ms = MultiplexerService::default();
+        let phantom = ActivityId::new();
+        let err = ms.new_pane_with_activity(phantom.clone()).unwrap_err();
+        assert!(matches!(err, SessionError::ActivityNotFound(id) if id == phantom));
     }
 
     #[test]
