@@ -1,5 +1,5 @@
-import { Terminal } from './terminal/Terminal';
+import { LayoutView } from './layout/LayoutView';
 
 export function App() {
-  return <Terminal />;
+  return <LayoutView />;
 }
