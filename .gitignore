@@ -22,6 +22,8 @@ docs/
 .vscode/
 !.vscode/extensions.json
 .worktrees
+# Playwright verification harness PID file
+.ozmux/
 .DS_Store
 *.suo
 *.ntvs*
