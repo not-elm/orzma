@@ -32,7 +32,50 @@ cmd_start() {
   handle_existing_pid_file
   require_free_port "${VITE_PORT}"
   require_free_port "${DAEMON_PORT}"
-  echo "start: pre-flight ok (servers not yet implemented)" >&2
+
+  mkdir -p "$(dirname "${PID_FILE}")"
+
+  local log_dir="${REPO_ROOT}/.ozmux/logs"
+  mkdir -p "${log_dir}"
+  local vite_log="${log_dir}/vite.log"
+  local daemon_log="${log_dir}/daemon.log"
+  : > "${vite_log}"
+  : > "${daemon_log}"
+
+  echo "start: launching vite (logs: ${vite_log})" >&2
+  (cd "${REPO_ROOT}/daemon/frontend" && pnpm dev) \
+    >"${vite_log}" 2>&1 &
+  local vite_pid=$!
+
+  echo "start: launching daemon (logs: ${daemon_log})" >&2
+  (cd "${REPO_ROOT}" && OZMUX_EXTENSION_ROOT="${REPO_ROOT}/extensions" \
+    cargo run -p daemon_bootstrap) \
+    >"${daemon_log}" 2>&1 &
+  local daemon_pid=$!
+
+  printf '%s\n%s\n' "${vite_pid}" "${daemon_pid}" > "${PID_FILE}"
+
+  echo "start: waiting for /health (max ${READY_TIMEOUT_SECONDS}s)" >&2
+  local deadline=$(( $(date +%s) + READY_TIMEOUT_SECONDS ))
+  while (( $(date +%s) < deadline )); do
+    if curl -fsS "http://localhost:${VITE_PORT}/health" >/dev/null 2>&1; then
+      echo "ready"
+      return 0
+    fi
+    if ! pid_alive "${vite_pid}" || ! pid_alive "${daemon_pid}"; then
+      echo "error: a child process exited before readiness." >&2
+      echo "---- vite (last 20 lines) ----" >&2; tail -n 20 "${vite_log}" >&2 || true
+      echo "---- daemon (last 20 lines) --" >&2; tail -n 20 "${daemon_log}" >&2 || true
+      cmd_stop || true
+      exit 1
+    fi
+    sleep 0.5
+  done
+
+  echo "error: readiness timeout after ${READY_TIMEOUT_SECONDS}s." >&2
+  echo "---- vite (last 20 lines) ----" >&2; tail -n 20 "${vite_log}" >&2 || true
+  echo "---- daemon (last 20 lines) --" >&2; tail -n 20 "${daemon_log}" >&2 || true
+  cmd_stop || true
   exit 1
 }
 cmd_stop()  { echo "stop: not yet implemented" >&2;  return 1; }
