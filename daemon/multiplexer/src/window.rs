@@ -68,6 +68,11 @@ impl WindowState {
         self.0.len()
     }
 
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// Replace `active_pane` with `new` on every window currently active on
     /// `old`. Used after `split_pane` to mirror tmux's default behavior of
     /// promoting the freshly-created pane to active.
