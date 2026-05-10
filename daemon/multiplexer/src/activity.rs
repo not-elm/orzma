@@ -35,7 +35,7 @@ pub struct ActivityId(String);
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ActivityKind {
     Terminal,
-    Extension { iframe_path: String },
+    Extension { html_root: std::path::PathBuf },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
