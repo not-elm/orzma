@@ -31,19 +31,20 @@ pub async fn split(
     Path(pane_id): Path<PaneId>,
     Json(req): Json<SplitRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    let (new_pane_id, new_activity_id) = {
+    let (new_pane_id, new_activity_id, wid) = {
         let mut ms = ms.lock().await;
         let (new_pane_id, new_activity_id) = ms.split_pane(pane_id, req.side, req.orientation)?;
         // Publish the new layout snapshot while still holding the lock.
-        if let Ok(wid) = ms.window_id_of_pane(&new_pane_id) {
-            if let Some(window) = ms.windows().get(&wid) {
-                match crate::handlers::windows::window_view_for(&ms, &wid, window) {
-                    Ok(view) => broadcaster.publish(&wid, view),
+        let wid = ms.window_id_of_pane(&new_pane_id).ok();
+        if let Some(wid) = wid.as_ref() {
+            if let Some(window) = ms.windows().get(wid) {
+                match crate::handlers::windows::window_view_for(&ms, wid, window) {
+                    Ok(view) => broadcaster.publish(wid, view),
                     Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split"),
                 }
             }
         }
-        (new_pane_id, new_activity_id)
+        (new_pane_id, new_activity_id, wid)
     };
 
     if let Err(spawn_err) = terminal
@@ -59,13 +60,29 @@ pub async fn split(
         )
         .await
     {
-        if let Err(rollback_err) = ms.lock().await.close_pane(&new_pane_id) {
+        // Rollback: close the new pane and publish a corrective snapshot so
+        // subscribers don't see the phantom split that just got reverted.
+        let mut ms = ms.lock().await;
+        let close_ok = ms.close_pane(&new_pane_id).is_ok();
+        if !close_ok {
             tracing::warn!(
-                error = %rollback_err,
                 new_pane_id = %new_pane_id,
                 "split rollback failed to close pane after spawn failure"
             );
         }
+        if close_ok {
+            if let Some(wid) = wid.as_ref() {
+                if let Some(window) = ms.windows().get(wid) {
+                    match crate::handlers::windows::window_view_for(&ms, wid, window) {
+                        Ok(view) => broadcaster.publish(wid, view),
+                        Err(e) => {
+                            tracing::warn!(error = %e, %wid, "skipped corrective publish on split rollback")
+                        }
+                    }
+                }
+            }
+        }
+        drop(ms);
         return Err(spawn_err.into());
     }
 
