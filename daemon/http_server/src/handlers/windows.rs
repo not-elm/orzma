@@ -83,7 +83,7 @@ fn window_view(
     let pane_ids = ms.cells_ref().pane_ids_in_subtree(&window.root_cell)?;
     let panes: Vec<serde_json::Value> = pane_ids
         .iter()
-        .filter_map(|pid| ms.panes().get(pid).map(|pane| pane_view(pid, pane)))
+        .filter_map(|pid| ms.panes().get(pid).map(|pane| pane_view(ms, pid, pane)))
         .collect();
     Ok(serde_json::json!({
         "id": id,
@@ -95,12 +95,29 @@ fn window_view(
 }
 
 fn pane_view(
+    ms: &MultiplexerService,
     id: &ozmux_multiplexer::pane::PaneId,
     pane: &ozmux_multiplexer::pane::Pane,
 ) -> serde_json::Value {
+    let activities: Vec<serde_json::Value> = pane
+        .activities
+        .iter()
+        .map(|aid| match ms.activities().get(aid).map(|a| &a.kind) {
+            Some(ozmux_multiplexer::activity::ActivityKind::Extension { .. }) => {
+                serde_json::json!({
+                    "id": aid,
+                    "kind": "extension",
+                    "iframe_url": format!("/activities/{aid}/iframe/index.html"),
+                })
+            }
+            Some(ozmux_multiplexer::activity::ActivityKind::Terminal) | None => {
+                serde_json::json!({ "id": aid, "kind": "terminal" })
+            }
+        })
+        .collect();
     serde_json::json!({
         "id": id,
-        "activities": pane.activities,
+        "activities": activities,
         "active_activity": pane.active_activity,
     })
 }
@@ -308,7 +325,7 @@ mod tests {
         let panes = v["panes"].as_array().unwrap();
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0]["id"].as_str(), Some(pid.as_ref()));
-        assert_eq!(panes[0]["activities"][0].as_str(), Some(aid.as_ref()));
+        assert_eq!(panes[0]["activities"][0]["id"].as_str(), Some(aid.as_ref()));
         assert_eq!(panes[0]["active_activity"].as_str(), Some(aid.as_ref()));
     }
 
@@ -394,6 +411,76 @@ mod tests {
         assert_eq!(
             v["panes"][0]["active_activity"].as_str(),
             Some(aid.as_ref())
+        );
+    }
+
+    #[tokio::test]
+    async fn get_window_returns_activities_with_kind_for_terminal() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/windows/{}", wid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let panes = v["panes"].as_array().unwrap();
+        let activities = panes[0]["activities"].as_array().unwrap();
+        assert!(activities[0]["id"].is_string());
+        assert_eq!(activities[0]["kind"].as_str(), Some("terminal"));
+    }
+
+    #[tokio::test]
+    async fn get_window_includes_iframe_url_for_extension_activity() {
+        use ozmux_multiplexer::activity::{Activity, ActivityKind};
+        use ozmux_multiplexer::cells::{Side, SplitOrientation};
+        use std::path::PathBuf;
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, bootstrap_pane, _aid) = ms.bootstrap_default().unwrap();
+        let activity_id = ms.new_activity(Activity {
+            name: "ext".into(),
+            kind: ActivityKind::Extension {
+                html_root: PathBuf::from("/tmp"),
+            },
+        });
+        let pane_id = ms.new_pane_with_activity(activity_id.clone()).unwrap();
+        ms.split_with_pane(
+            bootstrap_pane,
+            pane_id,
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        let (router, _) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/windows/{}", wid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let panes = v["panes"].as_array().unwrap();
+        let ext_pane = panes
+            .iter()
+            .find(|p| p["activities"][0]["kind"].as_str() == Some("extension"))
+            .expect("extension pane not found");
+        let iframe_url = ext_pane["activities"][0]["iframe_url"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            iframe_url,
+            format!("/activities/{activity_id}/iframe/index.html")
         );
     }
 }
