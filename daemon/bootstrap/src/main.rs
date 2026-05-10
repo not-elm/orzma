@@ -29,11 +29,15 @@ async fn main() -> anyhow::Result<()> {
         &longest,
     )?);
 
-    let _ext_handles = ExtensionHandles::load(&runtime, ExtensionRegistry::default())?;
+    let registry = ExtensionRegistry::default();
+    let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
 
     let state = AppState {
-        multiplexer: Arc::new(Mutex::new(MultiplexerService::default())),
+        multiplexer: ozmux_http_server::MultiplexerState(Arc::new(Mutex::new(
+            MultiplexerService::default(),
+        ))),
         terminal: TerminalService::with_runtime_root(Arc::clone(&runtime)),
+        extensions: registry,
     };
 
     let serve = ozmux_http_server::serve(state);

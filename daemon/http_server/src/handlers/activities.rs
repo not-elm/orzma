@@ -168,6 +168,7 @@ mod tests {
         let state = AppState {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
         };
         state
             .terminal

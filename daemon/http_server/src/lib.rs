@@ -9,6 +9,7 @@ use axum::{
     extract::FromRef,
     routing::{delete as method_delete, get, post},
 };
+use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
 use std::{ops::Deref, sync::Arc};
@@ -19,10 +20,11 @@ use tokio::sync::Mutex;
 pub struct AppState {
     pub multiplexer: MultiplexerState,
     pub terminal: TerminalService,
+    pub extensions: ExtensionRegistry,
 }
 
 #[derive(Clone, Default)]
-pub struct MultiplexerState(Arc<Mutex<MultiplexerService>>);
+pub struct MultiplexerState(pub Arc<Mutex<MultiplexerService>>);
 
 impl Deref for MultiplexerState {
     type Target = Arc<Mutex<MultiplexerService>>;
@@ -41,6 +43,12 @@ impl FromRef<AppState> for MultiplexerState {
 impl FromRef<AppState> for TerminalService {
     fn from_ref(input: &AppState) -> Self {
         input.terminal.clone()
+    }
+}
+
+impl FromRef<AppState> for ExtensionRegistry {
+    fn from_ref(input: &AppState) -> Self {
+        input.extensions.clone()
     }
 }
 
@@ -127,6 +135,7 @@ pub(crate) mod test_helpers {
         let state = AppState {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
         };
         (daemon_router(state.clone()), state)
     }
