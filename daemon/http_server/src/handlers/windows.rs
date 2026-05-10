@@ -841,4 +841,79 @@ mod tests {
             format!("/activities/{activity_id}/iframe/index.html")
         );
     }
+
+    #[tokio::test]
+    async fn snapshot_and_subscribe_is_atomic_under_concurrent_mutations() {
+        use futures_util::StreamExt;
+        use ozmux_multiplexer::cells::{Side, SplitOrientation};
+        use tokio_tungstenite::{connect_async, tungstenite::Message as TtMessage};
+
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        let state = crate::AppState {
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
+            terminal: ozmux_terminal::TerminalService::default(),
+            extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: LayoutBroadcaster::default(),
+        };
+        let ms_handle = state.multiplexer.clone();
+        let bc = state.layout_broadcast.clone();
+        let addr = spawn_server(state).await;
+
+        // Spawn N concurrent splits of the bootstrap pane.
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let h = ms_handle.clone();
+            let bc = bc.clone();
+            let wid_ = wid.clone();
+            let pid_ = pid.clone();
+            handles.push(tokio::spawn(async move {
+                let mut ms = h.lock().await;
+                if ms
+                    .split_pane(pid_.clone(), Side::After, SplitOrientation::Horizontal)
+                    .is_ok()
+                {
+                    if let Some(window) = ms.windows().get(&wid_) {
+                        if let Ok(view) = super::window_view_for(&ms, &wid_, window) {
+                            bc.publish(&wid_, view);
+                        }
+                    }
+                }
+            }));
+        }
+
+        // Connect AFTER spawning the mutation tasks. Some mutations may have
+        // landed before our connect; the rest may land during/after. The atomicity
+        // contract: regardless of timing, the *final* observed view must equal
+        // the *final* multiplexer state.
+        let url = format!("ws://{}/windows/{}/events", addr, wid);
+        let (mut ws, _) = connect_async(&url).await.unwrap();
+        let _initial = ws.next().await.unwrap().unwrap();
+
+        for h in handles {
+            let _ = h.await;
+        }
+
+        // Drain any further frames with a short idle window.
+        let mut latest = match _initial {
+            TtMessage::Text(t) => serde_json::from_str::<serde_json::Value>(&t).unwrap(),
+            _ => panic!("expected text frame"),
+        };
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(100), ws.next()).await {
+                Ok(Some(Ok(TtMessage::Text(t)))) => {
+                    latest = serde_json::from_str::<serde_json::Value>(&t).unwrap();
+                }
+                _ => break,
+            }
+        }
+
+        let final_pane_count = ms_handle.lock().await.panes().len();
+        let observed_pane_count = latest["panes"].as_array().map(|a| a.len()).unwrap_or(0);
+        assert_eq!(
+            observed_pane_count, final_pane_count,
+            "client's last observed view does not match multiplexer's final state \
+             (observed={observed_pane_count}, final={final_pane_count})"
+        );
+    }
 }
