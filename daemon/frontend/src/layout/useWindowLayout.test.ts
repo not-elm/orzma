@@ -149,4 +149,29 @@ describe('useWindowLayout', () => {
       Math.random = origRandom;
     }
   });
+
+  it('enters gone state on 1011 "window_not_found"', async () => {
+    server.on('connection', (sock) => {
+      sock.close({ code: 1011, reason: 'window_not_found', wasClean: true });
+    });
+    const { result } = renderHook(() => useWindowLayout(WID));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(result.current.status).toBe('gone');
+    expect((result.current as { reason: string }).reason).toBe('window_not_found');
+  });
+
+  it('enters gone state on 1011 "window_closed"', async () => {
+    server.on('connection', (sock) => {
+      sock.send(JSON.stringify(fakeView()));
+      setTimeout(() => sock.close({ code: 1011, reason: 'window_closed', wasClean: true }), 10);
+    });
+    const { result } = renderHook(() => useWindowLayout(WID));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(result.current.status).toBe('gone');
+    expect((result.current as { reason: string }).reason).toBe('window_closed');
+  });
 });
