@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon verify-out-dir clean help fix-lint
+.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
@@ -10,7 +10,10 @@ help:
 	@echo "  build              - Build frontend to single HTML, then build release binary"
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
 	@echo "  dev-backend        - Run axum server on :3200 (debug build redirects / to :5173)"
-	@echo "  dev-daemon         - Run daemon_bootstrap with OZMUX_EXTENSION_DIR=$(EXTENSIONS_DIR)"
+	@echo "  dev-daemon         - Run daemon_bootstrap with OZMUX_EXTENSION_ROOT=$(EXTENSIONS_DIR)"
+	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
+	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
+	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
 	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
 verify-out-dir:
@@ -44,3 +47,12 @@ fix-lint:
 	cargo clippy --fix --allow-dirty --allow-staged
 	cargo fmt
 	pnpm lint:fix
+
+dev-e2e-setup:
+	./scripts/dev-e2e.sh setup
+
+dev-e2e:
+	./scripts/dev-e2e.sh start
+
+dev-e2e-stop:
+	./scripts/dev-e2e.sh stop
