@@ -1,18 +1,15 @@
-use crate::error::HttpResult;
+use crate::{MultiplexerState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
 use ozmux_multiplexer::{
-    MultiplexerService,
     cells::{Side, SplitOrientation},
     pane::PaneId,
 };
 use ozmux_terminal::{SpawnOptions, TerminalService};
 use serde::Deserialize;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[derive(Deserialize)]
 pub struct SplitRequest {
@@ -22,7 +19,7 @@ pub struct SplitRequest {
 }
 
 pub async fn split(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
     Path(pane_id): Path<PaneId>,
     Json(req): Json<SplitRequest>,
@@ -65,7 +62,7 @@ pub async fn split(
 }
 
 pub async fn close(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
     Path(pane_id): Path<PaneId>,
 ) -> HttpResult<StatusCode> {
@@ -92,6 +89,7 @@ mod tests {
     use crate::test_helpers::router_with;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use ozmux_multiplexer::MultiplexerService;
     use tower::ServiceExt;
 
     #[tokio::test]

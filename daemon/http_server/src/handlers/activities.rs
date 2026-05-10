@@ -166,7 +166,7 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, pid, activity_id) = ms.bootstrap_default().unwrap();
         let state = AppState {
-            multiplexer: Arc::new(Mutex::new(ms)),
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
         };
         state

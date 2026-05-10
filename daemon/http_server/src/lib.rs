@@ -10,17 +10,28 @@ use axum::{
 };
 use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 #[derive(Clone, Default)]
 pub struct AppState {
-    pub multiplexer: Arc<Mutex<MultiplexerService>>,
+    pub multiplexer: MultiplexerState,
     pub terminal: TerminalService,
 }
 
-impl FromRef<AppState> for Arc<Mutex<MultiplexerService>> {
+#[derive(Clone, Default)]
+pub struct MultiplexerState(Arc<Mutex<MultiplexerService>>);
+
+impl Deref for MultiplexerState {
+    type Target = Arc<Mutex<MultiplexerService>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl FromRef<AppState> for MultiplexerState {
     fn from_ref(input: &AppState) -> Self {
         input.multiplexer.clone()
     }
@@ -113,7 +124,7 @@ pub(crate) mod test_helpers {
 
     pub fn router_with(ms: MultiplexerService) -> (Router, AppState) {
         let state = AppState {
-            multiplexer: Arc::new(Mutex::new(ms)),
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
         };
         (daemon_router(state.clone()), state)

@@ -1,14 +1,14 @@
-use crate::error::HttpResult;
+use crate::{MultiplexerState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerService, SessionError, session::SessionId, window::WindowId};
+use ozmux_multiplexer::{
+    MultiplexerService, SessionError, session::SessionId, window::WindowId,
+};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[derive(Deserialize, Default)]
 pub struct CreateRequest {
@@ -19,7 +19,7 @@ pub struct CreateRequest {
 }
 
 pub async fn create(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     Json(body): Json<CreateRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
     let id = ms
@@ -35,7 +35,7 @@ pub struct RenameRequest {
 }
 
 pub async fn rename(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     Path(window_id): Path<WindowId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
@@ -44,7 +44,7 @@ pub async fn rename(
 }
 
 pub async fn delete(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<StatusCode> {
@@ -56,7 +56,7 @@ pub async fn delete(
 }
 
 pub async fn select(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<StatusCode> {
     ms.lock().await.select_active_window(&window_id)?;
@@ -64,7 +64,7 @@ pub async fn select(
 }
 
 pub async fn get(
-    State(ms): State<Arc<Mutex<MultiplexerService>>>,
+    State(ms): State<MultiplexerState>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<Json<serde_json::Value>> {
     let ms = ms.lock().await;
