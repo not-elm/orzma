@@ -67,6 +67,7 @@ fn node_handle(
         .env("EXTENSION_NAME", &package.name)
         .env("OZMUX_BIN_DIR", &bin_dir)
         .env("OZMUX_SOCK_PATH", &sock_path)
+        .env("OZMUX_DAEMON_URL", "http://127.0.0.1:3200")
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;

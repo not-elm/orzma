@@ -1,11 +1,14 @@
 export class DaemonError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly bodyText: string,
-    public readonly path: string,
-  ) {
+  readonly status: number;
+  readonly bodyText: string;
+  readonly path: string;
+
+  constructor(status: number, bodyText: string, path: string) {
     super(`daemon ${path} → ${status}: ${bodyText}`);
     this.name = "DaemonError";
+    this.status = status;
+    this.bodyText = bodyText;
+    this.path = path;
   }
 }
 
