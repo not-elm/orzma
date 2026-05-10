@@ -109,6 +109,7 @@ pub fn daemon_router(state: AppState) -> Router {
             "/windows/{window_id}/select",
             post(handlers::windows::select),
         )
+        .route("/panes", post(handlers::panes::create))
         .route("/panes/{pane_id}/split", post(handlers::panes::split))
         .route("/panes/{pane_id}", method_delete(handlers::panes::close))
         .route("/activities", post(handlers::activities::create))

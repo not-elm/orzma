@@ -1,10 +1,13 @@
-use crate::{MultiplexerState, error::HttpResult};
+use crate::{MultiplexerState, error::{HttpError, HttpResult}};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
+use crate::extractors::ExtensionName;
+use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
+    activity::ActivityId,
     cells::{Side, SplitOrientation},
     pane::PaneId,
 };
@@ -61,6 +64,38 @@ pub async fn split(
     ))
 }
 
+#[derive(Deserialize)]
+pub struct CreatePaneRequest {
+    activity_id: ActivityId,
+}
+
+pub async fn create(
+    ExtensionName(ext_name): ExtensionName,
+    State(ms): State<MultiplexerState>,
+    State(registry): State<ExtensionRegistry>,
+    Json(body): Json<CreatePaneRequest>,
+) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
+    let owner = registry
+        .activity_owner(&body.activity_id)
+        .ok_or_else(|| {
+            HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
+                body.activity_id.clone(),
+            ))
+        })?;
+    if owner != ext_name {
+        return Err(HttpError::ActivityNotOwned);
+    }
+    let pane_id = {
+        let mut ms = ms.lock().await;
+        ms.new_pane_with_activity(body.activity_id)?
+    };
+    registry.record_pane_owner(&pane_id, &ext_name);
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "pane_id": pane_id })),
+    ))
+}
+
 pub async fn close(
     State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
@@ -87,9 +122,13 @@ pub async fn close(
 mod tests {
     use super::*;
     use crate::test_helpers::router_with;
+    use crate::{AppState, TerminalService};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use ozmux_multiplexer::MultiplexerService;
+    use ozmux_extension::ExtensionRegistry;
+    use ozmux_multiplexer::activity::{Activity, ActivityKind};
+    use std::path::PathBuf;
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -208,6 +247,117 @@ mod tests {
                     .method("DELETE")
                     .uri("/panes/missing")
                     .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    fn router_with_owned_activity(
+        ext_name: &str,
+    ) -> (
+        axum::Router,
+        ozmux_multiplexer::activity::ActivityId,
+        AppState,
+    ) {
+        let mut ms = MultiplexerService::default();
+        let _ = ms.bootstrap_default().unwrap();
+        let activity_id = ms.new_activity(Activity {
+            name: "ext".into(),
+            kind: ActivityKind::Extension {
+                html_root: PathBuf::from("/tmp"),
+            },
+        });
+        let registry = ExtensionRegistry::default();
+        registry.register(ext_name, std::path::Path::new("/tmp"));
+        registry.record_activity_owner(&activity_id, ext_name);
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
+            terminal: TerminalService::default(),
+            extensions: registry,
+        };
+        (
+            crate::test_helpers::daemon_router_for_test(state.clone()),
+            activity_id,
+            state,
+        )
+    }
+
+    #[tokio::test]
+    async fn create_pane_returns_201_with_pane_id() {
+        let (router, activity_id, _) = router_with_owned_activity("memo");
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/panes")
+                    .header("X-Ozmux-Extension", "memo")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"activity_id":"{activity_id}"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v["pane_id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn create_pane_rejects_other_extensions_activity() {
+        let mut ms2 = MultiplexerService::default();
+        let _ = ms2.bootstrap_default().unwrap();
+        let aid_other = ms2.new_activity(Activity::default());
+        let registry = ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp"));
+        registry.register("other", std::path::Path::new("/tmp"));
+        registry.record_activity_owner(&aid_other, "other");
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms2))),
+            terminal: TerminalService::default(),
+            extensions: registry,
+        };
+        let router = crate::test_helpers::daemon_router_for_test(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/panes")
+                    .header("X-Ozmux-Extension", "memo")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"activity_id":"{aid_other}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn create_pane_returns_404_for_unknown_activity() {
+        let registry = ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp"));
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(
+                MultiplexerService::default(),
+            ))),
+            terminal: TerminalService::default(),
+            extensions: registry,
+        };
+        let router = crate::test_helpers::daemon_router_for_test(state);
+        let phantom = ozmux_multiplexer::activity::ActivityId::new();
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/panes")
+                    .header("X-Ozmux-Extension", "memo")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"activity_id":"{phantom}"}}"#)))
                     .unwrap(),
             )
             .await
