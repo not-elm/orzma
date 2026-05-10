@@ -27,7 +27,18 @@ main() {
   esac
 }
 
-cmd_setup() { echo "setup: not yet implemented" >&2; return 1; }
+cmd_setup() {
+  echo "setup: pnpm install --frozen-lockfile" >&2
+  (cd "${REPO_ROOT}" && pnpm install --frozen-lockfile)
+
+  echo "setup: cargo build -p daemon_bootstrap" >&2
+  (cd "${REPO_ROOT}" && cargo build -p daemon_bootstrap)
+
+  echo "setup: install Playwright Chromium" >&2
+  (cd "${REPO_ROOT}" && npx -y playwright@1 install chromium)
+
+  echo "setup: complete" >&2
+}
 cmd_start() {
   handle_existing_pid_file
   require_free_port "${VITE_PORT}"
