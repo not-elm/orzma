@@ -1,4 +1,9 @@
-use crate::{error::ExtensionResult, handle::package_json::PackageJson, runtime::RuntimeRoot};
+use crate::{
+    error::ExtensionResult,
+    handle::package_json::PackageJson,
+    registry::ExtensionRegistry,
+    runtime::RuntimeRoot,
+};
 use std::{
     path::Path,
     process::{Child, Command, Stdio},
@@ -11,7 +16,7 @@ pub struct ExtensionHandles {
 }
 
 impl ExtensionHandles {
-    pub fn load(runtime: &RuntimeRoot) -> ExtensionResult<Self> {
+    pub fn load(runtime: &RuntimeRoot, registry: ExtensionRegistry) -> ExtensionResult<Self> {
         const OZMUX_EXTENSION_ROOT: &str = "OZMUX_EXTENSION_ROOT";
         let root = match std::env::var(OZMUX_EXTENSION_ROOT) {
             Ok(s) if !s.is_empty() => s,
@@ -28,9 +33,9 @@ impl ExtensionHandles {
         tracing::info!("extension root dir={root}");
         for entry in std::fs::read_dir(root)?.filter_map(|r| r.ok()) {
             let extension_dir = entry.path();
-            match load_package_json(&extension_dir)
-                .and_then(|package| node_handle(package.clone(), &extension_dir, runtime))
-            {
+            match load_package_json(&extension_dir).and_then(|package| {
+                node_handle(package.clone(), &extension_dir, runtime, &registry)
+            }) {
                 Ok(h) => handles.push(h),
                 Err(e) => tracing::error!("{e}"),
             }
@@ -50,6 +55,7 @@ fn node_handle(
     package: PackageJson,
     extension_dir: &Path,
     runtime: &RuntimeRoot,
+    registry: &ExtensionRegistry,
 ) -> ExtensionResult<Child> {
     let bin_dir = runtime.bin_dir().join(&package.name);
     let sock_path = runtime.sock_dir().join(format!("{}.sock", package.name));
@@ -61,7 +67,9 @@ fn node_handle(
         std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o700))?;
     }
 
-    let child = Command::new("node")
+    registry.register(&package.name, extension_dir);
+
+    let spawn_result = Command::new("node")
         .arg(&package.main)
         .current_dir(extension_dir)
         .env("EXTENSION_NAME", &package.name)
@@ -70,7 +78,16 @@ fn node_handle(
         .env("OZMUX_DAEMON_URL", "http://127.0.0.1:3200")
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
-    tracing::info!("spawn extension process: {}", package.name);
-    Ok(child)
+        .spawn();
+
+    match spawn_result {
+        Ok(child) => {
+            tracing::info!("spawn extension process: {}", package.name);
+            Ok(child)
+        }
+        Err(e) => {
+            registry.unregister(&package.name);
+            Err(e.into())
+        }
+    }
 }
