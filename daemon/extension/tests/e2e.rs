@@ -55,14 +55,13 @@ async fn pane_command_invokes_extension_handler() {
     let needle = b"ARGV=alpha,beta";
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-            Ok(Ok(ozmux_terminal::TerminalEvent::Data { buffer })) => {
-                got.extend_from_slice(&buffer);
-                if got.windows(needle.len()).any(|w| w == needle) {
-                    break;
-                }
+        if let Ok(Ok(ozmux_terminal::TerminalEvent::Data { buffer })) =
+            tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
+        {
+            got.extend_from_slice(&buffer);
+            if got.windows(needle.len()).any(|w| w == needle) {
+                break;
             }
-            _ => {}
         }
     }
     let s = String::from_utf8_lossy(&got);
