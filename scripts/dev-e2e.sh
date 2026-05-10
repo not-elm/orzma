@@ -43,17 +43,17 @@ cmd_start() {
   : > "${daemon_log}"
 
   echo "start: launching vite (logs: ${vite_log})" >&2
-  (cd "${REPO_ROOT}/daemon/frontend" && pnpm dev) \
+  (cd "${REPO_ROOT}/daemon/frontend" && exec pnpm dev) \
     >"${vite_log}" 2>&1 &
   local vite_pid=$!
+  printf '%s\n' "${vite_pid}" > "${PID_FILE}"
 
   echo "start: launching daemon (logs: ${daemon_log})" >&2
-  (cd "${REPO_ROOT}" && OZMUX_EXTENSION_ROOT="${REPO_ROOT}/extensions" \
+  (cd "${REPO_ROOT}" && exec env OZMUX_EXTENSION_ROOT="${REPO_ROOT}/extensions" \
     cargo run -p daemon_bootstrap) \
     >"${daemon_log}" 2>&1 &
   local daemon_pid=$!
-
-  printf '%s\n%s\n' "${vite_pid}" "${daemon_pid}" > "${PID_FILE}"
+  printf '%s\n' "${daemon_pid}" >> "${PID_FILE}"
 
   echo "start: waiting for /health (max ${READY_TIMEOUT_SECONDS}s)" >&2
   local deadline=$(( $(date +%s) + READY_TIMEOUT_SECONDS ))
