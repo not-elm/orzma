@@ -143,6 +143,7 @@ pub async fn close(
     State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
     State(registry): State<ExtensionRegistry>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(pane_id): Path<PaneId>,
 ) -> HttpResult<StatusCode> {
     // 1. owner check（system-owned pane は entry 無しで 403）
@@ -155,12 +156,23 @@ pub async fn close(
     // 2. lock 内で activities 取得 + close
     let activities_to_kill = {
         let mut ms = ms.lock().await;
+        // Capture wid BEFORE the mutation removes the pane index.
+        let wid = ms.window_id_of_pane(&pane_id).ok();
         let activities = ms
             .panes()
             .get(&pane_id)
             .map(|p| p.activities.clone())
             .unwrap_or_default();
         ms.close_pane(&pane_id)?;
+        // After close, publish the new layout while still holding the lock.
+        if let Some(wid) = wid {
+            if let Some(window) = ms.windows().get(&wid) {
+                match crate::handlers::windows::window_view_for(&ms, &wid, window) {
+                    Ok(view) => broadcaster.publish(&wid, view),
+                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on close"),
+                }
+            }
+        }
         activities
     };
     // 3. registry forget
@@ -594,6 +606,51 @@ mod tests {
             Ok(Err(e)) => panic!("recv error: {e:?}"),
             Err(_) => panic!("publish timed out — split handler did not publish"),
         }
+    }
+
+    #[tokio::test]
+    async fn close_publishes_layout_to_subscriber() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid_a, _aid) = ms.bootstrap_default().unwrap();
+        let (pid_b, _) = ms
+            .split_pane(pid_a.clone(), Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+        let registry = ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp"));
+        registry.record_pane_owner(&pid_b, "memo");
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
+            terminal: TerminalService::default(),
+            extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
+        };
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+        let router = crate::test_helpers::daemon_router_for_test(state.clone());
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/panes/{}", pid_b))
+                    .header("X-Ozmux-Extension", "memo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
+        // After collapsing the split, the layout's child should be a single pane (pid_a).
+        assert_eq!(view["layout"]["child"]["type"].as_str(), Some("pane"));
+        assert_eq!(
+            view["layout"]["child"]["pane_id"].as_str(),
+            Some(pid_a.as_ref())
+        );
     }
 
     #[tokio::test]
