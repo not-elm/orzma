@@ -26,9 +26,36 @@ export function useWindowLayout(wid: string | null): LayoutState {
     const myGen = ++generationRef.current;
     attemptRef.current = 0;
 
+    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+    let resumeListener: (() => void) | null = null;
+
+    const scheduleReconnect = (delay: number) => {
+      if (document.hidden) {
+        resumeListener = () => {
+          if (resumeListener) {
+            document.removeEventListener('visibilitychange', resumeListener);
+            resumeListener = null;
+          }
+          if (generationRef.current !== myGen) return;
+          if (document.hidden) return;
+          connect();
+        };
+        document.addEventListener('visibilitychange', resumeListener);
+        return;
+      }
+      if (delay === 0) {
+        connect();
+        return;
+      }
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        if (generationRef.current !== myGen) return;
+        connect();
+      }, delay);
+    };
+
     const connect = () => {
       const ws = new WebSocket(windowEventsWsUrl(wid));
-
       ws.onmessage = (ev) => {
         if (generationRef.current !== myGen) return;
         try {
@@ -37,10 +64,9 @@ export function useWindowLayout(wid: string | null): LayoutState {
           lastViewRef.current = view;
           setState({ status: 'live', view });
         } catch {
-          // malformed JSON — ignore
+          /* ignore */
         }
       };
-
       ws.onclose = (ev) => {
         if (generationRef.current !== myGen) return;
         if (TERMINAL_REASONS.has(ev.reason)) {
@@ -56,9 +82,8 @@ export function useWindowLayout(wid: string | null): LayoutState {
         if (!recoverable) return;
         attemptRef.current++;
         if (attemptRef.current === 1) {
-          // 1st reconnect: immediate (e.g., bursty lagged scenario)
           setState({ status: 'reconnecting', view: lastViewRef.current, retryInSec: 0 });
-          connect();
+          scheduleReconnect(0);
         } else {
           const baseDelay = Math.min(30_000, 500 * Math.pow(2, attemptRef.current - 2));
           const jitter = Math.random() * 500;
@@ -68,10 +93,7 @@ export function useWindowLayout(wid: string | null): LayoutState {
             view: lastViewRef.current,
             retryInSec: delay / 1000,
           });
-          setTimeout(() => {
-            if (generationRef.current !== myGen) return;
-            connect();
-          }, delay);
+          scheduleReconnect(delay);
         }
       };
     };
@@ -80,6 +102,14 @@ export function useWindowLayout(wid: string | null): LayoutState {
 
     return () => {
       generationRef.current++;
+      if (pendingTimer !== null) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+      if (resumeListener) {
+        document.removeEventListener('visibilitychange', resumeListener);
+        resumeListener = null;
+      }
     };
   }, [wid]);
 

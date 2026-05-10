@@ -174,4 +174,44 @@ describe('useWindowLayout', () => {
     expect(result.current.status).toBe('gone');
     expect((result.current as { reason: string }).reason).toBe('window_closed');
   });
+
+  it('pauses reconnect when document.hidden is true', async () => {
+    let connectionCount = 0;
+    server.on('connection', (sock) => {
+      connectionCount++;
+      sock.close({ code: 1011, reason: 'internal_error', wasClean: true });
+    });
+    // Hide the document.
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    Object.defineProperty(document, 'hidden', {
+      configurable: true,
+      get: () => true,
+    });
+
+    renderHook(() => useWindowLayout(WID));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    // First connect happens, closes immediately, no further reconnects while hidden.
+    const hiddenCount = connectionCount;
+
+    // Restore visibility, dispatch the event.
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    Object.defineProperty(document, 'hidden', {
+      configurable: true,
+      get: () => false,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    expect(connectionCount).toBeGreaterThan(hiddenCount);
+  });
 });
