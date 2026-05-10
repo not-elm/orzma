@@ -111,6 +111,7 @@ pub fn daemon_router(state: AppState) -> Router {
         )
         .route("/panes/{pane_id}/split", post(handlers::panes::split))
         .route("/panes/{pane_id}", method_delete(handlers::panes::close))
+        .route("/activities", post(handlers::activities::create))
         .route(
             "/activities/{activity_id}/terminal/ws",
             get(handlers::activities::terminal_ws),
