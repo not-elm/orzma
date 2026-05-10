@@ -20,17 +20,56 @@ const baseView: WindowView = {
 };
 
 describe('<CellNode>', () => {
-  it('renders pane placeholder for non-active pane', () => {
+  it('renders an empty placeholder for a pane whose active activity is not in panes[]', () => {
     const node: WindowLayoutNode = { type: 'pane', cell_id: 'cid-x', pane_id: 'pid-other' };
     const view: WindowView = {
       ...baseView,
       panes: [
         ...baseView.panes,
-        { id: 'pid-other', active_activity: 'aid-2', activities: [] },
+        // active_activity points to an unknown id, simulating a transient state
+        { id: 'pid-other', active_activity: 'aid-missing', activities: [] },
       ],
     };
     const { getByText } = render(<CellNode node={node} view={view} />);
     expect(getByText(/pid-other/)).toBeInTheDocument();
+  });
+
+  it('marks the active pane wrapper with data-active=true', () => {
+    const node: WindowLayoutNode = { type: 'pane', cell_id: 'cid-ext', pane_id: 'pid-ext' };
+    const view: WindowView = {
+      ...baseView,
+      active_pane: 'pid-ext',
+      panes: [
+        {
+          id: 'pid-ext',
+          active_activity: 'aid-ext',
+          activities: [
+            { id: 'aid-ext', kind: 'extension', iframe_url: '/x' },
+          ],
+        },
+      ],
+    };
+    const { container } = render(<CellNode node={node} view={view} />);
+    const wrapper = container.firstChild as HTMLElement;
+    expect(wrapper.getAttribute('data-active')).toBe('true');
+  });
+
+  it('marks a non-active pane wrapper with data-active=false', () => {
+    const node: WindowLayoutNode = { type: 'pane', cell_id: 'cid-x', pane_id: 'pid-other' };
+    const view: WindowView = {
+      ...baseView,
+      panes: [
+        ...baseView.panes,
+        {
+          id: 'pid-other',
+          active_activity: 'aid-other',
+          activities: [{ id: 'aid-other', kind: 'extension', iframe_url: '/x' }],
+        },
+      ],
+    };
+    const { container } = render(<CellNode node={node} view={view} />);
+    const wrapper = container.firstChild as HTMLElement;
+    expect(wrapper.getAttribute('data-active')).toBe('false');
   });
 
   it('renders flex row for horizontal split', () => {

@@ -29,23 +29,54 @@ export function CellNode({ node, view }: Props) {
     );
   }
   if (node.type === 'pane') {
-    if (node.pane_id !== view.active_pane) {
-      return <PanePlaceholder paneId={node.pane_id} />;
-    }
     const pane = view.panes.find((p) => p.id === node.pane_id);
     const activity = pane?.activities.find((a) => a.id === pane.active_activity);
-    if (!activity) return <PanePlaceholder paneId={node.pane_id} />;
-    if (activity.kind === 'extension') {
-      if (!activity.iframe_url) return <PanePlaceholder paneId={node.pane_id} />;
+    const isActive = node.pane_id === view.active_pane;
+    const borderClass = isActive
+      ? 'border-2 border-tmux-pane-active'
+      : 'border border-tmux-pane-border';
+    if (!activity) {
       return (
-        <iframe
-          src={activity.iframe_url}
-          title={`extension-${activity.id}`}
-          style={{ width: '100%', height: '100%', border: 0 }}
-        />
+        <div
+          data-active={isActive}
+          className={`relative h-full w-full ${borderClass}`}
+        >
+          <PanePlaceholder paneId={node.pane_id} />
+        </div>
       );
     }
-    return <Terminal activityId={activity.id} />;
+    if (activity.kind === 'extension') {
+      if (!activity.iframe_url) {
+        return (
+          <div
+            data-active={isActive}
+            className={`relative h-full w-full ${borderClass}`}
+          >
+            <PanePlaceholder paneId={node.pane_id} />
+          </div>
+        );
+      }
+      return (
+        <div
+          data-active={isActive}
+          className={`relative h-full w-full ${borderClass}`}
+        >
+          <iframe
+            src={activity.iframe_url}
+            title={`extension-${activity.id}`}
+            style={{ width: '100%', height: '100%', border: 0 }}
+          />
+        </div>
+      );
+    }
+    return (
+      <div
+        data-active={isActive}
+        className={`relative h-full w-full ${borderClass}`}
+      >
+        <Terminal key={activity.id} activityId={activity.id} />
+      </div>
+    );
   }
   return <UnknownLayoutNode type={(node as { type: string }).type} />;
 }
