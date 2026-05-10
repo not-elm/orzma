@@ -13,8 +13,8 @@ bootstrap({
         activityId,
       });
       await splitPane({
-        source: ctx.pane.paneId,
-        newPane: pane,
+        target: ctx.pane.paneId,
+        paneToPlace: pane,
         orientation: "horizontal",
         side: "after",
       });

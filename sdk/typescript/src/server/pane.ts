@@ -15,15 +15,15 @@ export async function createPane(args: CreatePaneArgs): Promise<PaneId> {
 }
 
 export interface SplitPaneArgs {
-  source: PaneId;
-  newPane: PaneId;
+  target: PaneId;
+  paneToPlace: PaneId;
   orientation: "horizontal" | "vertical";
   side: "before" | "after";
 }
 
 export async function splitPane(args: SplitPaneArgs): Promise<void> {
-  await postNoContent(`/panes/${args.source}/split-with`, {
-    pane_id: args.newPane,
+  await postNoContent(`/panes/${args.target}/split-with`, {
+    pane_id: args.paneToPlace,
     side: args.side,
     orientation: args.orientation,
   });
