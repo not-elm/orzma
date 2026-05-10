@@ -2,18 +2,18 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDefaultWindow } from './useDefaultWindow';
 
-const origFetch = global.fetch;
+const origFetch = globalThis.fetch;
 
 beforeEach(() => {
-  global.fetch = vi.fn() as typeof global.fetch;
+  globalThis.fetch = vi.fn() as typeof globalThis.fetch;
 });
 afterEach(() => {
-  global.fetch = origFetch;
+  globalThis.fetch = origFetch;
 });
 
 describe('useDefaultWindow', () => {
   it('returns ready with active_window of first session', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url === '/sessions') {
         return Promise.resolve({
           ok: true,
@@ -35,7 +35,7 @@ describe('useDefaultWindow', () => {
   });
 
   it('falls back to first window when active_window is null', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url === '/sessions')
         return Promise.resolve({
           ok: true,
@@ -55,7 +55,7 @@ describe('useDefaultWindow', () => {
   });
 
   it('returns error when no sessions exist', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url === '/sessions')
         return Promise.resolve({
           ok: true,
