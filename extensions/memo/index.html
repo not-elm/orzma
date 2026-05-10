@@ -2,13 +2,17 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
-    <title>タイトル</title>
+    <title>Memo</title>
+    <style>
+      body { margin: 0; padding: 1rem; font-family: ui-sans-serif, system-ui, sans-serif;
+             background: #1a1b26; color: #c0caf5; }
+      h1 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+      p  { margin: 0; opacity: 0.8; font-size: 0.9rem; }
+      code { font-family: ui-monospace, monospace; opacity: 0.9; }
+    </style>
   </head>
   <body>
-    <p id="memo-text"></p>
-    <script>
-      const text = window.initialData;
-      document.getElementById("memo-text").text = text;
-    </script>
+    <h1>Memo</h1>
+    <p>This pane is rendered from <code>extensions/memo/index.html</code> via the iframe activity.</p>
   </body>
 </html>
