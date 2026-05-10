@@ -119,6 +119,7 @@ pub async fn split_with(
     ExtensionName(ext_name): ExtensionName,
     State(ms): State<MultiplexerState>,
     State(registry): State<ExtensionRegistry>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(src): Path<PaneId>,
     Json(body): Json<SplitWithRequest>,
 ) -> HttpResult<StatusCode> {
@@ -133,7 +134,15 @@ pub async fn split_with(
     }
     {
         let mut ms = ms.lock().await;
-        ms.split_with_pane(src, body.pane_id, body.side, body.orientation)?;
+        ms.split_with_pane(src.clone(), body.pane_id, body.side, body.orientation)?;
+        if let Ok(wid) = ms.window_id_of_pane(&src) {
+            if let Some(window) = ms.windows().get(&wid) {
+                match crate::handlers::windows::window_view_for(&ms, &wid, window) {
+                    Ok(view) => broadcaster.publish(&wid, view),
+                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split_with"),
+                }
+            }
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -651,6 +660,54 @@ mod tests {
             view["layout"]["child"]["pane_id"].as_str(),
             Some(pid_a.as_ref())
         );
+    }
+
+    #[tokio::test]
+    async fn split_with_publishes_layout_to_subscriber() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, src_pid, _aid) = ms.bootstrap_default().unwrap();
+        // Create a limbo pane (in panes, not in cells) — split_with places it.
+        let aid_new = ms.new_activity(Activity {
+            name: "ext".into(),
+            kind: ActivityKind::Extension { html_root: PathBuf::from("/tmp") },
+        });
+        let new_pid = ms.new_pane_with_activity(aid_new).unwrap();
+        let registry = ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp"));
+        registry.record_pane_owner(&new_pid, "memo");
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
+            terminal: TerminalService::default(),
+            extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
+        };
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+        let router = crate::test_helpers::daemon_router_for_test(state.clone());
+
+        let body = format!(
+            r#"{{"pane_id":"{}","side":"after","orientation":"horizontal"}}"#,
+            new_pid
+        );
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/panes/{}/split-with", src_pid))
+                    .header("X-Ozmux-Extension", "memo")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
+        assert_eq!(view["layout"]["child"]["type"].as_str(), Some("split"));
     }
 
     #[tokio::test]
