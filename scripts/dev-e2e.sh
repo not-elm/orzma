@@ -84,7 +84,47 @@ cmd_start() {
   cmd_stop || true
   exit 1
 }
-cmd_stop()  { echo "stop: not yet implemented" >&2;  return 1; }
+cmd_stop() {
+  if [[ ! -f "${PID_FILE}" ]]; then
+    echo "stop: nothing to do (no ${PID_FILE})" >&2
+    return 0
+  fi
+
+  local -a pids=()
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] && pids+=("${pid}")
+  done < "${PID_FILE}"
+
+  # Each pid is a process-group leader (cmd_start ran with `set -m`).
+  # `kill -TERM -- -<pid>` signals the whole group, including grandchildren that
+  # the spawned process forked (e.g. pnpm's vite child).
+  for pid in "${pids[@]}"; do
+    if pid_alive "${pid}"; then
+      echo "stop: SIGTERM group ${pid}" >&2
+      kill -TERM -- "-${pid}" 2>/dev/null || true
+    fi
+  done
+
+  # Give them up to 5 seconds to exit cleanly.
+  local deadline=$(( $(date +%s) + 5 ))
+  while (( $(date +%s) < deadline )); do
+    local any_alive=0
+    for pid in "${pids[@]}"; do
+      if pid_alive "${pid}"; then any_alive=1; fi
+    done
+    [[ "${any_alive}" -eq 0 ]] && break
+    sleep 0.2
+  done
+
+  for pid in "${pids[@]}"; do
+    if pid_alive "${pid}"; then
+      echo "stop: SIGKILL group ${pid}" >&2
+      kill -KILL -- "-${pid}" 2>/dev/null || true
+    fi
+  done
+
+  rm -f "${PID_FILE}"
+}
 
 port_in_use() {
   # Returns 0 (success) when the TCP port is being listened on.
