@@ -58,4 +58,43 @@ describe('useWindowLayout', () => {
     expect(result.current.status).toBe('connecting');
     expect((result.current as { view: WindowView | null }).view).toBeNull();
   });
+
+  it('ignores stale frames after wid change', async () => {
+    const WID2 = 'wid-second';
+    const URL2 = `ws://${location.host}/windows/${WID2}/events`;
+    const server2 = new Server(URL2);
+
+    let firstSocket: WebSocket | null = null;
+    server.on('connection', (sock) => {
+      firstSocket = sock as unknown as WebSocket;
+    });
+    server2.on('connection', (sock) => {
+      sock.send(JSON.stringify(fakeView({ id: WID2, name: 'second' })));
+    });
+
+    const { result, rerender } = renderHook(({ id }: { id: string | null }) => useWindowLayout(id), {
+      initialProps: { id: WID as string | null },
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    rerender({ id: WID2 });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    // Now have firstSocket from the old wid send a stale frame.
+    if (firstSocket) {
+      (firstSocket as unknown as { send: (data: string) => void }).send(
+        JSON.stringify(fakeView({ id: WID, name: 'STALE' })),
+      );
+    }
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(result.current.status).toBe('live');
+    expect((result.current as { view: { id: string; name: string } }).view.id).toBe(WID2);
+    expect((result.current as { view: { id: string; name: string } }).view.name).toBe('second');
+    server2.stop();
+  });
 });
