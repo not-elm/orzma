@@ -1,6 +1,7 @@
 pub mod error;
 pub mod extractors;
 pub mod handlers;
+pub mod layout_dto;
 
 pub use error::{HttpError, HttpResult};
 
