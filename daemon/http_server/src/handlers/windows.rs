@@ -70,10 +70,10 @@ pub async fn get(
         .windows()
         .get(&window_id)
         .ok_or_else(|| SessionError::WindowNotFound(window_id.clone()))?;
-    Ok(Json(window_view(&ms, &window_id, window)?))
+    Ok(Json(window_view_for(&ms, &window_id, window)?))
 }
 
-fn window_view(
+pub(crate) fn window_view_for(
     ms: &MultiplexerService,
     id: &WindowId,
     window: &ozmux_multiplexer::window::Window,

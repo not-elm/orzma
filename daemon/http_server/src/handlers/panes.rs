@@ -27,12 +27,23 @@ pub struct SplitRequest {
 pub async fn split(
     State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(pane_id): Path<PaneId>,
     Json(req): Json<SplitRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
     let (new_pane_id, new_activity_id) = {
         let mut ms = ms.lock().await;
-        ms.split_pane(pane_id, req.side, req.orientation)?
+        let (new_pane_id, new_activity_id) = ms.split_pane(pane_id, req.side, req.orientation)?;
+        // Publish the new layout snapshot while still holding the lock.
+        if let Ok(wid) = ms.window_id_of_pane(&new_pane_id) {
+            if let Some(window) = ms.windows().get(&wid) {
+                match crate::handlers::windows::window_view_for(&ms, &wid, window) {
+                    Ok(view) => broadcaster.publish(&wid, view),
+                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split"),
+                }
+            }
+        }
+        (new_pane_id, new_activity_id)
     };
 
     if let Err(spawn_err) = terminal
@@ -544,6 +555,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn split_publishes_layout_to_subscriber() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, state) = router_with(ms);
+
+        // Subscribe BEFORE the mutation.
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+
+        // Note: split also tries to spawn a PTY; in unit-test env this will
+        // typically fail and the handler rolls back. The publish is wired to
+        // happen *after* the multiplexer mutation but *before* the spawn, so
+        // a frame is published even when the spawn later fails. We assert
+        // that frame.
+        let _ = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/panes/{}/split", pid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"orientation":"horizontal"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Whether or not the HTTP request succeeded (PTY may have failed),
+        // we should observe the post-mutation snapshot frame.
+        match tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await {
+            Ok(Ok(view)) => {
+                assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
+                let layout_child = &view["layout"]["child"];
+                assert_eq!(layout_child["type"].as_str(), Some("split"));
+            }
+            Ok(Err(e)) => panic!("recv error: {e:?}"),
+            Err(_) => panic!("publish timed out — split handler did not publish"),
+        }
     }
 
     #[tokio::test]
