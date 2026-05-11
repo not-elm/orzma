@@ -71,7 +71,6 @@ export async function materializeShims(
   await fs.mkdir(args.binDir, { recursive: true, mode: 0o700 });
   await fs.chmod(args.binDir, 0o700);
   for (const name of args.commandNames) {
-    console.log("command name", name);
     await writeShim({
       filePath: path.join(args.binDir, name),
       execPath: args.execPath,
