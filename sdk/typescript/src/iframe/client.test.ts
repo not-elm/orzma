@@ -92,3 +92,104 @@ describe("createClient.call", () => {
     await expect(p).rejects.toThrow();
   });
 });
+
+describe("createClient.subscribe", () => {
+  it("yields data frames in order and ends on sub.complete", async () => {
+    const { createClient } = await import("./client.ts");
+    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const iter = client.subscribe<{ n: number }, { v: number }>("count", {
+      n: 3,
+    });
+    const ws = MockWebSocket.instances[0]!;
+    await new Promise<void>((r) => queueMicrotask(() => r()));
+    const open = JSON.parse(ws.sent[0]!);
+    expect(open.kind).toBe("sub.open");
+    expect(open.params).toEqual({ n: 3 });
+    const id = open.id;
+    ws.pushFrame({ kind: "sub.data", id, payload: { v: 0 } });
+    ws.pushFrame({ kind: "sub.data", id, payload: { v: 1 } });
+    ws.pushFrame({ kind: "sub.complete", id });
+    const collected: { v: number }[] = [];
+    for await (const ev of iter) collected.push(ev);
+    expect(collected).toEqual([{ v: 0 }, { v: 1 }]);
+  });
+
+  it("throws inside for-await when a sub.error arrives", async () => {
+    const { createClient } = await import("./client.ts");
+    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const iter = client.subscribe("x", {});
+    const ws = MockWebSocket.instances[0]!;
+    await new Promise<void>((r) => queueMicrotask(() => r()));
+    const id = JSON.parse(ws.sent[0]!).id;
+    ws.pushFrame({ kind: "sub.data", id, payload: 1 });
+    ws.pushFrame({
+      kind: "sub.error",
+      id,
+      code: "HANDLER_ERROR",
+      message: "boom",
+    });
+    let threw: Error | null = null;
+    try {
+      for await (const ev of iter) void ev;
+    } catch (e) {
+      threw = e as Error;
+    }
+    expect(threw?.message).toBe("boom");
+  });
+
+  it("sends sub.cancel and stops iteration on AbortSignal.abort()", async () => {
+    const { createClient } = await import("./client.ts");
+    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const ac = new AbortController();
+    const iter = client.subscribe("x", {}, { signal: ac.signal });
+    const ws = MockWebSocket.instances[0]!;
+    await new Promise<void>((r) => queueMicrotask(() => r()));
+    const id = JSON.parse(ws.sent[0]!).id;
+    ws.pushFrame({ kind: "sub.data", id, payload: 1 });
+
+    const it = iter[Symbol.asyncIterator]();
+    const first = await it.next();
+    expect(first.value).toBe(1);
+    ac.abort();
+    const after = await it.next();
+    expect(after.done).toBe(true);
+
+    const cancelFrame = JSON.parse(ws.sent[1]!);
+    expect(cancelFrame).toEqual({ kind: "sub.cancel", id });
+  });
+
+  it("returns done:true immediately if signal.aborted before subscribe", async () => {
+    const { createClient } = await import("./client.ts");
+    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const ac = new AbortController();
+    ac.abort();
+    const iter = client.subscribe("x", {}, { signal: ac.signal });
+    const ws = MockWebSocket.instances[0]!;
+    await new Promise<void>((r) => queueMicrotask(() => r()));
+    expect(ws.sent).toHaveLength(0);
+    const it = iter[Symbol.asyncIterator]();
+    const r = await it.next();
+    expect(r.done).toBe(true);
+  });
+
+  it("multiplexes call() and subscribe() without id collision", async () => {
+    const { createClient } = await import("./client.ts");
+    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const ws = MockWebSocket.instances[0]!;
+    await new Promise<void>((r) => queueMicrotask(() => r()));
+
+    const callP = client.call("hi", {});
+    const subIter = client.subscribe("s", {});
+    await new Promise<void>((r) => queueMicrotask(() => r()));
+    const frames = ws.sent.map((s) => JSON.parse(s));
+    expect(frames[0].kind).toBe("call");
+    expect(frames[1].kind).toBe("sub.open");
+    expect(frames[0].id).not.toBe(frames[1].id);
+
+    ws.pushFrame({ kind: "result", id: frames[0].id, payload: "ok" });
+    ws.pushFrame({ kind: "sub.complete", id: frames[1].id });
+    await expect(callP).resolves.toBe("ok");
+    const it = subIter[Symbol.asyncIterator]();
+    expect((await it.next()).done).toBe(true);
+  });
+});
