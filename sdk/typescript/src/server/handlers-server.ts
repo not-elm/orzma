@@ -2,9 +2,10 @@ import type * as net from "node:net";
 import { bindServer } from "./bootstrap.ts";
 import type { HandlerServerFrame, HandlerUdsEnvelope } from "./protocol.ts";
 import {
-  handleSubOpen,
-  handleSubCancel,
   abortAllForConnection,
+  handleSubCancel,
+  handleSubOpen,
+  writeServerFrame,
 } from "./channels-server.ts";
 
 export type HandlerMap = Record<string, (req: never) => Promise<unknown>>;
@@ -43,6 +44,7 @@ function onConnection(conn: net.Socket): void {
     }
   });
   conn.on("close", () => abortAllForConnection(conn));
+  // EPIPE / ECONNRESET on peer-close are delivered here; `close` handles cleanup.
   conn.on("error", () => {});
 }
 
@@ -65,29 +67,28 @@ async function handleLine(conn: net.Socket, line: string): Promise<void> {
   if (f.kind !== "call") {
     return;
   }
-  const call = f;
   const handlers = activityHandlers.get(env.aid) ?? {};
-  const fn = handlers[call.name];
-  let resp: HandlerServerFrame;
-  if (!fn) {
-    resp = {
+  const fn = handlers[f.name];
+  const resp: HandlerServerFrame = !fn
+    ? { kind: "error", id: f.id, code: "UNKNOWN_HANDLER", message: f.name }
+    : await invokeHandler(fn, f.id, f.payload);
+  writeServerFrame(conn, env.aid, resp);
+}
+
+async function invokeHandler(
+  fn: (req: never) => Promise<unknown>,
+  id: string,
+  payload: unknown,
+): Promise<HandlerServerFrame> {
+  try {
+    const result = await fn(payload as never);
+    return { kind: "result", id, payload: result };
+  } catch (e) {
+    return {
       kind: "error",
-      id: call.id,
-      code: "UNKNOWN_HANDLER",
-      message: call.name,
+      id,
+      code: "HANDLER_ERROR",
+      message: e instanceof Error ? e.message : String(e),
     };
-  } else {
-    try {
-      const result = await fn(call.payload as never);
-      resp = { kind: "result", id: call.id, payload: result };
-    } catch (e) {
-      resp = {
-        kind: "error",
-        id: call.id,
-        code: "HANDLER_ERROR",
-        message: e instanceof Error ? e.message : String(e),
-      };
-    }
   }
-  conn.write(JSON.stringify({ aid: env.aid, frame: resp }) + "\n");
 }

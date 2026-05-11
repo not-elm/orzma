@@ -13,6 +13,7 @@ import type {
 // package itself does not depend on `lib: ["DOM"]` (server code shares the
 // tsconfig). Declare the small surface we use.
 interface MinimalWebSocket {
+  readonly readyState: 0 | 1 | 2 | 3;
   send(data: string): void;
   close(): void;
   onopen: (() => void) | null;
@@ -30,11 +31,19 @@ interface MinimalLocation {
 }
 interface MinimalAbortSignal {
   readonly aborted: boolean;
-  addEventListener(type: "abort", listener: () => void): void;
+  addEventListener(
+    type: "abort",
+    listener: () => void,
+    options?: { once?: boolean },
+  ): void;
+  removeEventListener(type: "abort", listener: () => void): void;
 }
 
 declare const WebSocket: MinimalWebSocketCtor;
 declare const window: { location: MinimalLocation };
+
+const WS_OPEN = 1;
+const WS_CLOSED = 3;
 
 export interface CreateClientOptions {
   activityId?: string;
@@ -62,6 +71,7 @@ interface SubState {
   done: boolean;
   error: Error | null;
   waker: { resolve: () => void } | null;
+  detach: () => void;
   cancel: () => void;
 }
 
@@ -90,6 +100,12 @@ function inferUrl(aid: string): string {
   return `${proto}//${window.location.host}/activities/${aid}/handlers/ws`;
 }
 
+function toRpcError(frame: HandlerErrorFrame | SubErrorFrame): Error {
+  const err = new Error(frame.message) as Error & { code?: string };
+  err.code = frame.code;
+  return err;
+}
+
 export function createClient(opts: CreateClientOptions = {}): Client {
   const aid = opts.activityId ?? inferActivityId();
   const url = opts.url ?? inferUrl(aid);
@@ -98,19 +114,14 @@ export function createClient(opts: CreateClientOptions = {}): Client {
   const pendingCalls = new Map<string, PendingCall>();
   const subs = new Map<string, SubState>();
   const outbox: string[] = [];
-  let open = false;
-  let closed = false;
   let seq = 0;
   const nextId = () => `c${seq++}`;
-
-  const flush = () => {
-    if (!open) return;
-    for (const line of outbox.splice(0)) ws.send(line);
-  };
+  const isOpen = () => ws.readyState === WS_OPEN;
+  const isClosed = () => ws.readyState === WS_CLOSED;
 
   const send = (frame: HandlerCallFrame | SubOpenFrame | SubCancelFrame) => {
     const line = JSON.stringify(frame);
-    if (open) ws.send(line);
+    if (isOpen()) ws.send(line);
     else outbox.push(line);
   };
 
@@ -119,6 +130,7 @@ export function createClient(opts: CreateClientOptions = {}): Client {
     for (const p of pendingCalls.values()) p.reject(err);
     pendingCalls.clear();
     for (const s of subs.values()) {
+      s.detach();
       s.error = err;
       s.done = true;
       s.waker?.resolve();
@@ -126,20 +138,25 @@ export function createClient(opts: CreateClientOptions = {}): Client {
     subs.clear();
   };
 
+  const finishSub = (id: string, error: Error | null) => {
+    const s = subs.get(id);
+    if (!s) return;
+    s.detach();
+    s.error = error;
+    s.done = true;
+    s.waker?.resolve();
+    subs.delete(id);
+  };
+
   ws.onopen = () => {
-    open = true;
-    flush();
+    for (const line of outbox.splice(0)) ws.send(line);
   };
-  ws.onclose = () => {
-    if (closed) return;
-    closed = true;
-    open = false;
-    failAll();
-  };
+  ws.onclose = () => failAll();
   ws.onerror = () => {
-    if (closed) return;
+    // Errors precede `close`; cleanup happens there.
   };
   ws.onmessage = (ev) => {
+    if (typeof ev.data !== "string") return;
     let f:
       | HandlerResultFrame
       | HandlerErrorFrame
@@ -147,59 +164,44 @@ export function createClient(opts: CreateClientOptions = {}): Client {
       | SubCompleteFrame
       | SubErrorFrame;
     try {
-      f = JSON.parse(typeof ev.data === "string" ? ev.data : "");
+      f = JSON.parse(ev.data);
     } catch {
       return;
     }
-    if (f.kind === "result") {
-      const p = pendingCalls.get(f.id);
-      if (p) {
+    switch (f.kind) {
+      case "result": {
+        const p = pendingCalls.get(f.id);
+        if (!p) return;
         pendingCalls.delete(f.id);
         p.resolve(f.payload);
+        return;
       }
-      return;
-    }
-    if (f.kind === "error") {
-      const p = pendingCalls.get(f.id);
-      if (p) {
+      case "error": {
+        const p = pendingCalls.get(f.id);
+        if (!p) return;
         pendingCalls.delete(f.id);
-        const err = new Error(f.message);
-        (err as Error & { code?: string }).code = f.code;
-        p.reject(err);
+        p.reject(toRpcError(f));
+        return;
       }
-      return;
-    }
-    if (f.kind === "sub.data") {
-      const s = subs.get(f.id);
-      if (!s || s.done) return;
-      s.queue.push(f.payload);
-      s.waker?.resolve();
-      return;
-    }
-    if (f.kind === "sub.complete") {
-      const s = subs.get(f.id);
-      if (!s) return;
-      s.done = true;
-      s.waker?.resolve();
-      subs.delete(f.id);
-      return;
-    }
-    if (f.kind === "sub.error") {
-      const s = subs.get(f.id);
-      if (!s) return;
-      const err = new Error(f.message);
-      (err as Error & { code?: string }).code = f.code;
-      s.error = err;
-      s.done = true;
-      s.waker?.resolve();
-      subs.delete(f.id);
-      return;
+      case "sub.data": {
+        const s = subs.get(f.id);
+        if (!s || s.done) return;
+        s.queue.push(f.payload);
+        s.waker?.resolve();
+        return;
+      }
+      case "sub.complete":
+        finishSub(f.id, null);
+        return;
+      case "sub.error":
+        finishSub(f.id, toRpcError(f));
+        return;
     }
   };
 
   return {
     call<Req, Resp>(name: string, payload: Req): Promise<Resp> {
-      if (closed) return Promise.reject(new ConnectionClosedError());
+      if (isClosed()) return Promise.reject(new ConnectionClosedError());
       const id = nextId();
       return new Promise<Resp>((resolve, reject) => {
         pendingCalls.set(id, {
@@ -217,29 +219,39 @@ export function createClient(opts: CreateClientOptions = {}): Client {
     ): AsyncIterable<Event> {
       const id = nextId();
       const signal = opts.signal;
+      let onAbort: (() => void) | null = null;
       const state: SubState = {
         queue: [],
         done: false,
         error: null,
         waker: null,
+        detach: () => {
+          if (onAbort && signal) {
+            signal.removeEventListener("abort", onAbort);
+            onAbort = null;
+          }
+        },
         cancel: () => {
           if (state.done) return;
           state.done = true;
+          state.detach();
           subs.delete(id);
           send({ kind: "sub.cancel", id });
         },
       };
 
-      const startAborted = signal?.aborted === true;
-      if (startAborted) {
+      if (signal?.aborted) {
         state.done = true;
       } else {
         subs.set(id, state);
         send({ kind: "sub.open", id, name, params });
-        signal?.addEventListener("abort", () => {
-          state.cancel();
-          state.waker?.resolve();
-        });
+        if (signal) {
+          onAbort = () => {
+            state.cancel();
+            state.waker?.resolve();
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
       }
 
       return {
@@ -269,9 +281,7 @@ export function createClient(opts: CreateClientOptions = {}): Client {
     },
 
     close() {
-      if (closed) return;
-      closed = true;
-      open = false;
+      if (isClosed()) return;
       ws.close();
       failAll();
     },

@@ -47,7 +47,8 @@ function getSubs(conn: net.Socket): Map<SubId, AbortController> {
   return m;
 }
 
-function writeFrame(
+/** Write a server frame wrapped in the {aid, frame} NDJSON envelope. */
+export function writeServerFrame(
   conn: net.Socket,
   aid: ActivityId,
   frame: HandlerServerFrame,
@@ -64,7 +65,7 @@ export function handleSubOpen(
   const channels = activityChannels.get(aid) ?? {};
   const gen = channels[open.name];
   if (!gen) {
-    writeFrame(conn, aid, {
+    writeServerFrame(conn, aid, {
       kind: "sub.error",
       id: open.id,
       code: "UNKNOWN_CHANNEL",
@@ -81,29 +82,39 @@ export function handleSubOpen(
       const iter = gen(open.params as never, { signal: ac.signal });
       for await (const value of iter) {
         if (ac.signal.aborted) break;
-        writeFrame(conn, aid, {
+        writeServerFrame(conn, aid, {
           kind: "sub.data",
           id: open.id,
           payload: value,
         });
       }
-      writeFrame(conn, aid, { kind: "sub.complete", id: open.id });
+      writeServerFrame(conn, aid, { kind: "sub.complete", id: open.id });
     } catch (e) {
-      if (!ac.signal.aborted) {
-        writeFrame(conn, aid, {
+      // An abort-driven throw is a normal cancel; emit `sub.complete`. Other
+      // throws are reported as `sub.error` so the iframe sees the failure.
+      if (ac.signal.aborted && isAbortError(e)) {
+        writeServerFrame(conn, aid, { kind: "sub.complete", id: open.id });
+      } else {
+        writeServerFrame(conn, aid, {
           kind: "sub.error",
           id: open.id,
           code: "HANDLER_ERROR",
           message: e instanceof Error ? e.message : String(e),
         });
-      } else {
-        // Cancelled-then-threw is a normal cancel; emit complete.
-        writeFrame(conn, aid, { kind: "sub.complete", id: open.id });
       }
     } finally {
       subs.delete(open.id);
     }
   })();
+}
+
+function isAbortError(e: unknown): boolean {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    "name" in e &&
+    (e as { name?: unknown }).name === "AbortError"
+  );
 }
 
 export function handleSubCancel(

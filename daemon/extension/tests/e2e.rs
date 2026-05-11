@@ -143,8 +143,7 @@ async fn extension_streams_channel_events() {
         std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
     }
     let registry = ExtensionRegistry::default();
-    let _handles =
-        ExtensionHandles::load(&runtime, registry.clone()).expect("spawn extensions");
+    let _handles = ExtensionHandles::load(&runtime, registry.clone()).expect("spawn extensions");
 
     // Wait for clock-ext's handlers UDS to appear in the registry.
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -169,10 +168,17 @@ async fn extension_streams_channel_events() {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
 
-    let open = format!(
-        "{{\"aid\":\"{}\",\"frame\":{{\"kind\":\"sub.open\",\"id\":\"s1\",\"name\":\"ticks\",\"params\":{{\"n\":3}}}}}}\n",
-        aid
-    );
+    let open = serde_json::json!({
+        "aid": aid,
+        "frame": {
+            "kind": "sub.open",
+            "id": "s1",
+            "name": "ticks",
+            "params": { "n": 3 },
+        },
+    })
+    .to_string()
+        + "\n";
     write_half.write_all(open.as_bytes()).await.unwrap();
 
     let mut received = Vec::new();

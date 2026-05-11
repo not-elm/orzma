@@ -913,40 +913,35 @@ mod tests {
                 let env: Env = serde_json::from_str(&line).unwrap();
                 let raw: serde_json::Value = serde_json::from_str(env.frame.get()).unwrap();
                 let kind = raw["kind"].as_str().unwrap_or("");
-                let id = raw["id"].as_str().unwrap_or("").to_string();
-                match kind {
-                    "call" => {
-                        let payload = raw["payload"].clone();
-                        let resp = format!(
-                            r#"{{"aid":"{}","frame":{{"kind":"result","id":"{}","payload":{}}}}}"#,
-                            env.aid, id, payload
-                        );
-                        write_half
-                            .write_all((resp + "\n").as_bytes())
-                            .await
-                            .unwrap();
-                    }
+                let id = raw["id"].as_str().unwrap_or("");
+                let frames: Vec<serde_json::Value> = match kind {
+                    "call" => vec![serde_json::json!({
+                        "kind": "result",
+                        "id": id,
+                        "payload": raw["payload"],
+                    })],
                     "sub.open" => {
-                        for i in 0..2 {
-                            let frame = format!(
-                                r#"{{"aid":"{}","frame":{{"kind":"sub.data","id":"{}","payload":{{"i":{}}}}}}}"#,
-                                env.aid, id, i
-                            );
-                            write_half
-                                .write_all((frame + "\n").as_bytes())
-                                .await
-                                .unwrap();
-                        }
-                        let done = format!(
-                            r#"{{"aid":"{}","frame":{{"kind":"sub.complete","id":"{}"}}}}"#,
-                            env.aid, id
-                        );
-                        write_half
-                            .write_all((done + "\n").as_bytes())
-                            .await
-                            .unwrap();
+                        let mut out = (0..2)
+                            .map(|i| {
+                                serde_json::json!({
+                                    "kind": "sub.data",
+                                    "id": id,
+                                    "payload": { "i": i },
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        out.push(serde_json::json!({
+                            "kind": "sub.complete",
+                            "id": id,
+                        }));
+                        out
                     }
-                    _ => { /* ignore other kinds in this test */ }
+                    _ => continue,
+                };
+                for frame in frames {
+                    let envelope = serde_json::json!({ "aid": env.aid, "frame": frame });
+                    let line = envelope.to_string() + "\n";
+                    write_half.write_all(line.as_bytes()).await.unwrap();
                 }
             }
         });

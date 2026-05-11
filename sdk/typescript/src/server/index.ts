@@ -6,5 +6,6 @@ export {
   type ChannelMap,
   registerActivityChannels,
 } from "./channels-server.ts";
+export { abortableSleep } from "./timing.ts";
 export * from "./pane.ts";
 export { bootstrap, type CommandContext, type CommandHandler } from "./bootstrap.ts";

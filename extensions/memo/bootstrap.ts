@@ -1,10 +1,11 @@
 import {
+  abortableSleep,
   bootstrap,
   createActivity,
   createPane,
   splitPane,
-  type ChannelMap,
   type ChannelCtx,
+  type ChannelMap,
   type HandlerMap,
 } from "@ozmux/sdk/server";
 import { fileURLToPath } from "node:url";
@@ -20,20 +21,6 @@ interface MemoChannels extends ChannelMap {
   ) => AsyncGenerator<{ time: string }>;
 }
 
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const onAbort = () => {
-      clearTimeout(t);
-      resolve();
-    };
-    const t = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 bootstrap({
   commands: {
     memo: async (ctx) => {
@@ -47,7 +34,7 @@ bootstrap({
           clock: async function* ({ intervalMs }, { signal }) {
             yield { time: new Date().toISOString() };
             while (!signal.aborted) {
-              await sleep(intervalMs, signal);
+              await abortableSleep(intervalMs, signal);
               if (signal.aborted) return;
               yield { time: new Date().toISOString() };
             }

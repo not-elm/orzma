@@ -3,12 +3,9 @@ import { createActivity } from "./activity.ts";
 import * as channelsServer from "./channels-server.ts";
 import { __resetActivityChannelsForTests } from "./channels-server.ts";
 import * as daemonClient from "./daemon-client.ts";
-import {
-  __resetActivityHandlersForTests,
-  registerActivityHandlers,
-} from "./handlers-server.ts";
+import * as handlersServer from "./handlers-server.ts";
+import { __resetActivityHandlersForTests } from "./handlers-server.ts";
 
-// Replace postJson with a spy that returns a stable aid
 let postJsonSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
@@ -30,6 +27,7 @@ describe("createActivity", () => {
   });
 
   it("registers handlers under the returned aid when provided", async () => {
+    const registerSpy = vi.spyOn(handlersServer, "registerActivityHandlers");
     const greet = vi.fn(async ({ name }: { name: string }) => ({
       message: `Hello, ${name}!`,
     }));
@@ -38,12 +36,25 @@ describe("createActivity", () => {
       handlers: { greet },
     });
     expect(aid).toBe("aid-42");
-    expect(greet).not.toHaveBeenCalled();
+    expect(registerSpy).toHaveBeenCalledWith("aid-42", { greet });
+    registerSpy.mockRestore();
   });
 
-  it("works without handlers (backward compatible)", async () => {
+  it("works without handlers or channels", async () => {
+    const registerHandlersSpy = vi.spyOn(
+      handlersServer,
+      "registerActivityHandlers",
+    );
+    const registerChannelsSpy = vi.spyOn(
+      channelsServer,
+      "registerActivityChannels",
+    );
     const aid = await createActivity({ html: "/tmp/x" });
     expect(aid).toBe("aid-42");
+    expect(registerHandlersSpy).not.toHaveBeenCalled();
+    expect(registerChannelsSpy).not.toHaveBeenCalled();
+    registerHandlersSpy.mockRestore();
+    registerChannelsSpy.mockRestore();
   });
 
   it("registers channels under the returned aid when provided", async () => {
@@ -58,13 +69,5 @@ describe("createActivity", () => {
     expect(aid).toBe("aid-42");
     expect(registerSpy).toHaveBeenCalledWith("aid-42", { tick });
     registerSpy.mockRestore();
-  });
-});
-
-describe("createActivity ⇄ handlers-server", () => {
-  it("activity handlers are visible to the dispatcher", async () => {
-    const fn = vi.fn(async () => ({ ok: true }));
-    await createActivity({ html: "/tmp/x", handlers: { ping: fn } });
-    expect(typeof registerActivityHandlers).toBe("function");
   });
 });
