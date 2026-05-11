@@ -131,3 +131,63 @@ async fn extension_crash_does_not_break_other_extensions() {
         "echo bin disappeared after crash extension died"
     );
 }
+
+#[tokio::test]
+async fn extension_streams_channel_events() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+
+    let parent = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
+    unsafe {
+        std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
+    }
+    let registry = ExtensionRegistry::default();
+    let _handles =
+        ExtensionHandles::load(&runtime, registry.clone()).expect("spawn extensions");
+
+    // Wait for clock-ext's handlers UDS to appear in the registry.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let sock = loop {
+        if let Some(p) = registry.handlers_sock_path("clock-ext")
+            && p.exists()
+        {
+            break p;
+        }
+        if Instant::now() > deadline {
+            panic!("clock-ext handlers sock never appeared");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    // The fixture pre-registers channels against the hardcoded aid
+    // "fixture-aid-1" before calling bootstrap(), so no daemon HTTP server
+    // is needed for this test.
+    let aid = "fixture-aid-1";
+
+    let stream = UnixStream::connect(&sock).await.unwrap();
+    let (read_half, mut write_half) = stream.into_split();
+    let mut lines = BufReader::new(read_half).lines();
+
+    let open = format!(
+        "{{\"aid\":\"{}\",\"frame\":{{\"kind\":\"sub.open\",\"id\":\"s1\",\"name\":\"ticks\",\"params\":{{\"n\":3}}}}}}\n",
+        aid
+    );
+    write_half.write_all(open.as_bytes()).await.unwrap();
+
+    let mut received = Vec::new();
+    for _ in 0..4 {
+        let line = tokio::time::timeout(Duration::from_secs(2), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        received.push(v);
+    }
+    assert_eq!(received[0]["frame"]["kind"], "sub.data");
+    assert_eq!(received[0]["frame"]["payload"], serde_json::json!({"i": 0}));
+    assert_eq!(received[1]["frame"]["payload"], serde_json::json!({"i": 1}));
+    assert_eq!(received[2]["frame"]["payload"], serde_json::json!({"i": 2}));
+    assert_eq!(received[3]["frame"]["kind"], "sub.complete");
+}
