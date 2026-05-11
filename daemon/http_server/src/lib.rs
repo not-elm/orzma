@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_pane_without_extension_header_returns_401() {
+    async fn delete_pane_without_extension_header_returns_404() {
         let (router, _) = test_helpers::router_with(MultiplexerService::default());
         let resp = router
             .oneshot(
@@ -214,6 +214,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

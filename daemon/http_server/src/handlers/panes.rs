@@ -165,24 +165,15 @@ pub async fn split_with(
 }
 
 pub async fn close(
-    ExtensionName(ext_name): ExtensionName,
     State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
     State(registry): State<ExtensionRegistry>,
     State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(pane_id): Path<PaneId>,
 ) -> HttpResult<StatusCode> {
-    // 1. owner check（system-owned pane は entry 無しで 403）
-    let owner = registry
-        .pane_owner(&pane_id)
-        .ok_or(HttpError::PaneNotOwned)?;
-    if owner != ext_name {
-        return Err(HttpError::PaneNotOwned);
-    }
-    // 2. lock 内で activities 取得 + close
+    // Capture activities and window id under the lock, then close.
     let activities_to_kill = {
         let mut ms = ms.lock().await;
-        // Capture wid BEFORE the mutation removes the pane index.
         let wid = ms.window_id_of_pane(&pane_id).ok();
         let activities = ms
             .panes()
@@ -190,7 +181,6 @@ pub async fn close(
             .map(|p| p.activities.clone())
             .unwrap_or_default();
         ms.close_pane(&pane_id)?;
-        // After close, publish the new layout while still holding the lock.
         if let Some(wid) = wid
             && let Some(window) = ms.windows().get(&wid)
         {
@@ -201,12 +191,11 @@ pub async fn close(
         }
         activities
     };
-    // 3. registry forget
+    // Best-effort registry cleanup for panes that happened to be extension-owned.
     registry.forget_pane(&pane_id);
     for aid in &activities_to_kill {
         registry.forget_activity(aid);
     }
-    // 4. terminal kill (best-effort)
     for aid in activities_to_kill {
         let _ = terminal.kill(&aid).await;
     }
