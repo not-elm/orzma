@@ -11,6 +11,10 @@
     "./cmd-shim": {
       "types": "./src/server/cmd-shim.ts",
       "default": "./src/server/cmd-shim.ts"
+    },
+    "./iframe": {
+      "types": "./src/iframe/index.ts",
+      "default": "./src/iframe/index.ts"
     }
   },
   "scripts": {
