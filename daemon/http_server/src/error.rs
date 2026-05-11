@@ -32,6 +32,15 @@ pub enum HttpError {
 
     #[error("iframe file not found: {0}")]
     IframeFileNotFound(String),
+
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 pub type HttpResult<T = ()> = Result<T, HttpError>;
@@ -81,6 +90,11 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::PaneNotOwned => (StatusCode::FORBIDDEN, "PANE_NOT_OWNED"),
             HttpError::InvalidHtmlPath(_) => (StatusCode::BAD_REQUEST, "INVALID_HTML_PATH"),
             HttpError::IframeFileNotFound(_) => (StatusCode::NOT_FOUND, "IFRAME_FILE_NOT_FOUND"),
+            HttpError::Forbidden(_) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
+            HttpError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            HttpError::ServiceUnavailable(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+            }
             HttpError::Session(MultiplexerError::ActivityNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
             }

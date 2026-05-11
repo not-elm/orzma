@@ -137,6 +137,10 @@ pub fn daemon_router(state: AppState) -> Router {
             get(handlers::activities::terminal_ws),
         )
         .route(
+            "/activities/{activity_id}/handlers/ws",
+            get(handlers::activities::handlers_ws),
+        )
+        .route(
             "/activities/{activity_id}/iframe/{*path}",
             get(handlers::activities::iframe_serve),
         )
@@ -161,6 +165,19 @@ pub(crate) mod test_helpers {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
+        };
+        (daemon_router(state.clone()), state)
+    }
+
+    pub fn router_with_registry(
+        ms: MultiplexerService,
+        registry: ozmux_extension::ExtensionRegistry,
+    ) -> (Router, AppState) {
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
+            terminal: TerminalService::default(),
+            extensions: registry,
             layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         (daemon_router(state.clone()), state)

@@ -3,7 +3,7 @@ use crate::error::HttpError;
 use crate::extractors::ExtensionName;
 use axum::{
     extract::{
-        Path, State, WebSocketUpgrade,
+        FromRequest, Path, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
     },
     http::header::CONTENT_TYPE,
@@ -179,6 +179,52 @@ async fn close_with_reason(ws_tx: &mut WsSink, reason: &'static str, lagged: u64
         .await;
 }
 
+fn is_allowed_origin(origin: &str) -> bool {
+    matches!(
+        origin,
+        "http://127.0.0.1:3200"
+            | "http://localhost:3200"
+            | "http://127.0.0.1:5173"
+            | "http://localhost:5173"
+    )
+}
+
+pub async fn handlers_ws(
+    State(registry): State<ExtensionRegistry>,
+    Path(activity_id): Path<ActivityId>,
+    req: axum::extract::Request,
+) -> Result<Response, HttpError> {
+    let origin = req
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !is_allowed_origin(origin) {
+        return Err(HttpError::Forbidden("origin not allowed".into()));
+    }
+    let ext_name = registry
+        .activity_owner(&activity_id)
+        .ok_or_else(|| HttpError::NotFound("unknown activity".into()))?;
+    let sock_path = registry
+        .handlers_sock_path(&ext_name)
+        .ok_or_else(|| HttpError::ServiceUnavailable("extension not running".into()))?;
+    let _ = sock_path; // used in Task 8 (bridge); silence unused warn for now
+
+    let ws = WebSocketUpgrade::from_request(req, &())
+        .await
+        .map_err(|e| HttpError::Forbidden(e.to_string()))?;
+    let ws = ws
+        .max_message_size(1 << 20)
+        .max_frame_size(1 << 20)
+        .max_write_buffer_size(256 << 10)
+        .write_buffer_size(64 << 10);
+
+    Ok(ws.on_upgrade(move |_socket| async move {
+        // bridge implementation lands in Task 8
+        tracing::debug!(%activity_id, "handlers_ws upgraded (bridge wiring pending)");
+    }))
+}
+
 #[derive(Deserialize)]
 pub struct CreateActivityRequest {
     html: String,
@@ -269,6 +315,9 @@ pub async fn iframe_serve(
 mod tests {
     use super::*;
     use crate::AppState;
+    use crate::test_helpers;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
     use futures_util::{SinkExt, StreamExt};
     use ozmux_extension::ExtensionRegistry;
     use ozmux_multiplexer::MultiplexerService;
@@ -702,5 +751,75 @@ mod tests {
         }
 
         state.terminal.kill(&activity_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn handlers_ws_returns_404_for_unknown_activity() {
+        let ms = MultiplexerService::default();
+        let (router, _state) = test_helpers::router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/activities/00000000-0000-0000-0000-000000000000/handlers/ws")
+                    .header("origin", "http://127.0.0.1:3200")
+                    .header("upgrade", "websocket")
+                    .header("connection", "upgrade")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("sec-websocket-version", "13")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handlers_ws_returns_403_for_disallowed_origin() {
+        let ms = MultiplexerService::default();
+        let (router, _state) = test_helpers::router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/activities/00000000-0000-0000-0000-000000000000/handlers/ws")
+                    .header("origin", "http://evil.example")
+                    .header("upgrade", "websocket")
+                    .header("connection", "upgrade")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("sec-websocket-version", "13")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn handlers_ws_returns_503_when_extension_not_running() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, _pid, aid) = ms.bootstrap_default().unwrap();
+        let registry = ozmux_extension::ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp/memo"));
+        registry.record_activity_owner(&aid, "memo");
+        let (router, _state) = test_helpers::router_with_registry(ms, registry);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/activities/{}/handlers/ws", aid))
+                    .header("origin", "http://127.0.0.1:3200")
+                    .header("upgrade", "websocket")
+                    .header("connection", "upgrade")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("sec-websocket-version", "13")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
