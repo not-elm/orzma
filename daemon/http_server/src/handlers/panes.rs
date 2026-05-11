@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_owned_non_last_pane_returns_204_and_removes_it() {
+    async fn close_pane_without_header_returns_204_and_removes_it() {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, original_pid, _aid) = ms.bootstrap_default().unwrap();
         let (new_pid, _new_aid) = ms
@@ -295,8 +295,6 @@ mod tests {
             .unwrap();
         let panes_before = ms.panes().len();
         let registry = ExtensionRegistry::default();
-        registry.register("memo", std::path::Path::new("/tmp"));
-        registry.record_pane_owner(&new_pid, "memo");
         let state = AppState {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
@@ -309,7 +307,6 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/panes/{}", new_pid))
-                    .header("X-Ozmux-Extension", "memo")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -339,12 +336,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_owned_last_pane_returns_409() {
+    async fn close_last_pane_returns_409() {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, pid, _aid) = ms.bootstrap_default().unwrap();
         let registry = ExtensionRegistry::default();
-        registry.register("memo", std::path::Path::new("/tmp"));
-        registry.record_pane_owner(&pid, "memo");
         let state = AppState {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
@@ -357,7 +352,6 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/panes/{}", pid))
-                    .header("X-Ozmux-Extension", "memo")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -367,9 +361,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_unknown_pane_returns_403_owner_not_found() {
+    async fn close_missing_pane_returns_404() {
         let registry = ExtensionRegistry::default();
-        registry.register("memo", std::path::Path::new("/tmp"));
         let state = AppState {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(
                 MultiplexerService::default(),
@@ -384,17 +377,16 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri("/panes/missing")
-                    .header("X-Ozmux-Extension", "memo")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
-    async fn close_pane_owned_by_other_extension_returns_403() {
+    async fn close_owned_pane_without_header_forgets_owner() {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, original_pid, _aid) = ms.bootstrap_default().unwrap();
         let (new_pid, _) = ms
@@ -406,27 +398,27 @@ mod tests {
             .unwrap();
         let registry = ExtensionRegistry::default();
         registry.register("memo", std::path::Path::new("/tmp"));
-        registry.register("other", std::path::Path::new("/tmp"));
-        registry.record_pane_owner(&new_pid, "other");
+        registry.record_pane_owner(&new_pid, "memo");
         let state = AppState {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
             layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
-        let router = crate::test_helpers::daemon_router_for_test(state);
+        let router = crate::test_helpers::daemon_router_for_test(state.clone());
         let resp = router
             .oneshot(
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/panes/{}", new_pid))
-                    .header("X-Ozmux-Extension", "memo")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        assert!(state.extensions.pane_owner(&new_pid).is_none(),
+            "pane owner registry entry must be cleared after close");
     }
 
     fn router_with_owned_activity(
@@ -661,8 +653,6 @@ mod tests {
             .split_pane(pid_a.clone(), Side::After, SplitOrientation::Horizontal)
             .unwrap();
         let registry = ExtensionRegistry::default();
-        registry.register("memo", std::path::Path::new("/tmp"));
-        registry.record_pane_owner(&pid_b, "memo");
         let state = AppState {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
@@ -677,7 +667,6 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/panes/{}", pid_b))
-                    .header("X-Ozmux-Extension", "memo")
                     .body(Body::empty())
                     .unwrap(),
             )
