@@ -46,17 +46,41 @@ export interface HandlerErrorFrame {
   code: string;
   message: string;
 }
-export interface HandlerPushFrame {
-  kind: "push";
-  topic: string;
+
+// Channel frames (one-way: extension → iframe; iframe sends open/cancel only in v1)
+export interface SubOpenFrame {
+  kind: "sub.open";
+  id: string;
+  name: string;
+  params: unknown;
+}
+export interface SubDataFrame {
+  kind: "sub.data";
+  id: string;
   payload: unknown;
 }
+export interface SubCompleteFrame {
+  kind: "sub.complete";
+  id: string;
+}
+export interface SubErrorFrame {
+  kind: "sub.error";
+  id: string;
+  code: string;
+  message: string;
+}
+export interface SubCancelFrame {
+  kind: "sub.cancel";
+  id: string;
+}
 
-export type HandlerClientFrame = HandlerCallFrame;
+export type HandlerClientFrame = HandlerCallFrame | SubOpenFrame | SubCancelFrame;
 export type HandlerServerFrame =
   | HandlerResultFrame
   | HandlerErrorFrame
-  | HandlerPushFrame;
+  | SubDataFrame
+  | SubCompleteFrame
+  | SubErrorFrame;
 
 /** NDJSON envelope written by the daemon onto the handlers UDS. */
 export interface HandlerUdsEnvelope {
