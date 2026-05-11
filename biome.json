@@ -43,5 +43,11 @@
     "actions": {
       "source": { "organizeImports": "on" }
     }
-  }
+  },
+  "plugins": [
+    "./biome-plugins/no-inline-style.grit",
+    "./biome-plugins/no-arbitrary-class.grit",
+    "./biome-plugins/no-raw-tn-var.grit",
+    "./biome-plugins/no-raw-tn-var.css.grit"
+  ]
 }
