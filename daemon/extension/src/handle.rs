@@ -57,6 +57,9 @@ fn node_handle(
 ) -> ExtensionResult<Child> {
     let bin_dir = runtime.bin_dir().join(&package.name);
     let sock_path = runtime.sock_dir().join(format!("{}.sock", package.name));
+    let handlers_sock_path = runtime
+        .sock_dir()
+        .join(format!("{}.handlers.sock", package.name));
 
     std::fs::create_dir_all(&bin_dir)?;
     #[cfg(unix)]
@@ -66,6 +69,7 @@ fn node_handle(
     }
 
     registry.register(&package.name, extension_dir);
+    registry.set_handlers_sock_path(&package.name, &handlers_sock_path);
 
     let spawn_result = Command::new("node")
         .arg(&package.main)
@@ -73,6 +77,7 @@ fn node_handle(
         .env("EXTENSION_NAME", &package.name)
         .env("OZMUX_BIN_DIR", &bin_dir)
         .env("OZMUX_SOCK_PATH", &sock_path)
+        .env("OZMUX_HANDLERS_SOCK_PATH", &handlers_sock_path)
         .env("OZMUX_DAEMON_URL", "http://127.0.0.1:3200")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
