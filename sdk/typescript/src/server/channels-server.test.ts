@@ -304,3 +304,49 @@ describe("channels-server: cancellation", () => {
     s.destroy();
   });
 });
+
+describe("channels-server: connection lifecycle", () => {
+  it("aborts all subscriptions on the connection when the socket closes", async () => {
+    server = await bindHandlersServer(sockPath);
+    const aborted: string[] = [];
+    registerActivityChannels("aid-1", {
+      hang: async function* (
+        params: { tag: string },
+        { signal }: { signal: AbortSignal },
+      ) {
+        try {
+          yield { tag: params.tag };
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          });
+        } catch {
+          aborted.push(params.tag);
+        }
+      },
+    });
+    const s = await connect();
+    const next = lineReader(s);
+    s.write(
+      JSON.stringify({
+        aid: "aid-1",
+        frame: { kind: "sub.open", id: "1", name: "hang", params: { tag: "A" } },
+      }) + "\n",
+    );
+    s.write(
+      JSON.stringify({
+        aid: "aid-1",
+        frame: { kind: "sub.open", id: "2", name: "hang", params: { tag: "B" } },
+      }) + "\n",
+    );
+    // Read both initial sub.data frames (any order).
+    JSON.parse(await next());
+    JSON.parse(await next());
+
+    s.destroy();
+    await vi.waitFor(() => expect(aborted.sort()).toEqual(["A", "B"]), {
+      timeout: 1000,
+    });
+  });
+});
