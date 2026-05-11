@@ -54,10 +54,6 @@ impl MultiplexerService {
         &self.cells
     }
 
-    // ── Mutating operations ───────────────────────────────────────────────────
-
-    /// Create an empty session (no windows). Returns the new id so callers can
-    /// attach windows or echo it back to clients.
     pub fn new_session(&mut self, name: Option<String>) -> SessionId {
         let session_id = SessionId::new();
         let session_name = name.unwrap_or_else(|| format!("Session{}", self.sessions.len() + 1));
