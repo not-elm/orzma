@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
 };
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
-use ozmux_multiplexer::{MultiplexerService, SessionError, session::SessionId, window::WindowId};
+use ozmux_multiplexer::{MultiplexerService, MultiplexerError, session::SessionId, window::WindowId};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
 
@@ -83,7 +83,7 @@ pub async fn get(
     let window = ms
         .windows()
         .get(&window_id)
-        .ok_or_else(|| SessionError::WindowNotFound(window_id.clone()))?;
+        .ok_or_else(|| MultiplexerError::WindowNotFound(window_id.clone()))?;
     Ok(Json(window_view_for(&ms, &window_id, window)?))
 }
 
@@ -91,7 +91,7 @@ pub(crate) fn window_view_for(
     ms: &MultiplexerService,
     id: &WindowId,
     window: &ozmux_multiplexer::window::Window,
-) -> ozmux_multiplexer::SessionResult<serde_json::Value> {
+) -> ozmux_multiplexer::MultiplexerResult<serde_json::Value> {
     let pane_ids = ms.cells_ref().pane_ids_in_subtree(&window.root_cell)?;
     let panes: Vec<serde_json::Value> = pane_ids
         .iter()

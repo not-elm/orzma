@@ -1,5 +1,5 @@
 use crate::{
-    error::{SessionError, SessionResult},
+    error::{MultiplexerError, MultiplexerResult},
     pane::PaneId,
 };
 use ozmux_macros::NewType;
@@ -54,9 +54,9 @@ impl LayoutCellState {
         new_cell: CellId,
         new_cell_side: Side,
         orientation: SplitOrientation,
-    ) -> SessionResult<CellId> {
+    ) -> MultiplexerResult<CellId> {
         if target == new_cell {
-            return Err(SessionError::SplitTargetEqualsNewCell(target));
+            return Err(MultiplexerError::SplitTargetEqualsNewCell(target));
         }
         let target_parent = self.cell(&target)?.require_parent()?;
         self.cell(&new_cell)?;
@@ -90,38 +90,38 @@ impl LayoutCellState {
     /// flow encodes pre-validate-then-commit atomicity in the type signature: the
     /// planning phase cannot mutate, so any `Err` it returns leaves the store
     /// logically unchanged.
-    pub fn close_cell(&mut self, id: &CellId) -> SessionResult<CloseOutcome> {
+    pub fn close_cell(&mut self, id: &CellId) -> MultiplexerResult<CloseOutcome> {
         let parent_id = self.target_pane_parent(id)?;
         let plan = self.plan_collapse(id, parent_id)?;
         Ok(self.apply_collapse(id, plan))
     }
 
-    fn target_pane_parent(&self, id: &CellId) -> SessionResult<CellId> {
+    fn target_pane_parent(&self, id: &CellId) -> MultiplexerResult<CellId> {
         match self.cell(id)? {
-            Cell::Pane(p) => p.parent.clone().ok_or(SessionError::MissingParentCell),
-            _ => Err(SessionError::InvalidCellType(id.clone())),
+            Cell::Pane(p) => p.parent.clone().ok_or(MultiplexerError::MissingParentCell),
+            _ => Err(MultiplexerError::InvalidCellType(id.clone())),
         }
     }
 
     /// Read-only validation: gather everything `apply_collapse` needs, without
     /// mutating. Taking `&self` makes it a compile-time guarantee that this
     /// phase performs no writes.
-    fn plan_collapse(&self, target_id: &CellId, parent_id: CellId) -> SessionResult<CollapsePlan> {
+    fn plan_collapse(&self, target_id: &CellId, parent_id: CellId) -> MultiplexerResult<CollapsePlan> {
         let parent_split = match self.cell(&parent_id)? {
             Cell::Split(s) => s,
             // Pane is the only child of Root — closing it would empty the
             // window's layout, which the model forbids.
-            Cell::Root(_) => return Err(SessionError::CannotCloseLastPane(target_id.clone())),
-            Cell::Pane(_) => return Err(SessionError::InvalidCellType(parent_id)),
+            Cell::Root(_) => return Err(MultiplexerError::CannotCloseLastPane(target_id.clone())),
+            Cell::Pane(_) => return Err(MultiplexerError::InvalidCellType(parent_id)),
         };
         let sibling_id = parent_split.sibling_cell_id(target_id).clone();
         let grandparent_id = parent_split
             .parent
             .clone()
-            .ok_or(SessionError::MissingParentCell)?;
+            .ok_or(MultiplexerError::MissingParentCell)?;
         match self.cell(&grandparent_id)? {
             Cell::Root(_) | Cell::Split(_) => {}
-            Cell::Pane(_) => return Err(SessionError::InvalidCellType(grandparent_id)),
+            Cell::Pane(_) => return Err(MultiplexerError::InvalidCellType(grandparent_id)),
         }
         Ok(CollapsePlan {
             parent_id,
@@ -158,7 +158,7 @@ impl LayoutCellState {
         }
     }
 
-    fn reparent(&mut self, child: &CellId, new_parent: Option<CellId>) -> SessionResult {
+    fn reparent(&mut self, child: &CellId, new_parent: Option<CellId>) -> MultiplexerResult {
         self.cell_mut(child)?.set_parent(new_parent);
         Ok(())
     }
@@ -166,7 +166,7 @@ impl LayoutCellState {
     /// Walk down `start`'s subtree along the lhs/child branch and return the
     /// first `Cell::Pane` reached. Used to pick a representative pane id when
     /// promoting a survivor subtree to be active.
-    pub fn leftmost_pane(&self, start: &CellId) -> SessionResult<&PaneId> {
+    pub fn leftmost_pane(&self, start: &CellId) -> MultiplexerResult<&PaneId> {
         let mut current: &CellId = start;
         loop {
             match self.cell(current)? {
@@ -179,13 +179,13 @@ impl LayoutCellState {
 
     /// Collect every `PaneId` reachable from `start`'s subtree (Root or Split
     /// roots are descended; Pane leaves contribute their `PaneId`).
-    pub fn pane_ids_in_subtree(&self, start: &CellId) -> SessionResult<Vec<PaneId>> {
+    pub fn pane_ids_in_subtree(&self, start: &CellId) -> MultiplexerResult<Vec<PaneId>> {
         let mut out = Vec::new();
         self.collect_panes(start, &mut out)?;
         Ok(out)
     }
 
-    fn collect_panes(&self, id: &CellId, out: &mut Vec<PaneId>) -> SessionResult {
+    fn collect_panes(&self, id: &CellId, out: &mut Vec<PaneId>) -> MultiplexerResult {
         match self.cell(id)? {
             Cell::Root(r) => {
                 let child = r.child.clone();
@@ -204,7 +204,7 @@ impl LayoutCellState {
 
     /// Drop every cell in `start`'s subtree (including `start` itself).
     /// Used during window close to vacate the cell store atomically.
-    pub fn remove_subtree(&mut self, start: &CellId) -> SessionResult {
+    pub fn remove_subtree(&mut self, start: &CellId) -> MultiplexerResult {
         let mut ids = Vec::new();
         self.collect_cell_ids(start, &mut ids)?;
         for id in ids {
@@ -213,7 +213,7 @@ impl LayoutCellState {
         Ok(())
     }
 
-    fn collect_cell_ids(&self, id: &CellId, out: &mut Vec<CellId>) -> SessionResult {
+    fn collect_cell_ids(&self, id: &CellId, out: &mut Vec<CellId>) -> MultiplexerResult {
         out.push(id.clone());
         match self.cell(id)? {
             Cell::Root(r) => {
@@ -232,17 +232,17 @@ impl LayoutCellState {
     }
 
     #[inline]
-    pub fn cell(&self, id: &CellId) -> SessionResult<&Cell> {
+    pub fn cell(&self, id: &CellId) -> MultiplexerResult<&Cell> {
         self.0
             .get(id)
-            .ok_or_else(|| SessionError::CellNotFound(id.clone()))
+            .ok_or_else(|| MultiplexerError::CellNotFound(id.clone()))
     }
 
     #[inline]
-    fn cell_mut(&mut self, id: &CellId) -> SessionResult<&mut Cell> {
+    fn cell_mut(&mut self, id: &CellId) -> MultiplexerResult<&mut Cell> {
         self.0
             .get_mut(id)
-            .ok_or_else(|| SessionError::CellNotFound(id.clone()))
+            .ok_or_else(|| MultiplexerError::CellNotFound(id.clone()))
     }
 }
 
@@ -276,10 +276,10 @@ impl Cell {
         }
     }
 
-    pub fn require_parent(&self) -> SessionResult<CellId> {
+    pub fn require_parent(&self) -> MultiplexerResult<CellId> {
         self.parent()
             .cloned()
-            .ok_or(SessionError::MissingParentCell)
+            .ok_or(MultiplexerError::MissingParentCell)
     }
 
     fn set_parent(&mut self, parent: Option<CellId>) {
@@ -504,7 +504,7 @@ mod tests {
         let (_, pane_cell) = state.new_window_layout(pid());
 
         let result = state.close_cell(&pane_cell);
-        assert!(matches!(result, Err(SessionError::CannotCloseLastPane(_))));
+        assert!(matches!(result, Err(MultiplexerError::CannotCloseLastPane(_))));
     }
 
     #[test]

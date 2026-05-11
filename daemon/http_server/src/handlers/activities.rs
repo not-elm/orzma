@@ -230,7 +230,7 @@ pub async fn iframe_serve(
     let html_root = {
         let ms = ms.lock().await;
         let activity = ms.activities().get(&activity_id).ok_or_else(|| {
-            HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
+            HttpError::Session(ozmux_multiplexer::MultiplexerError::ActivityNotFound(
                 activity_id.clone(),
             ))
         })?;

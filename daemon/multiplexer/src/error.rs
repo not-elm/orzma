@@ -4,7 +4,7 @@ use crate::{cells::CellId, pane::PaneId, session::SessionId, window::WindowId};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
-pub enum SessionError {
+pub enum MultiplexerError {
     #[error("session not found session-id={0}")]
     SessionNotFound(SessionId),
 
@@ -63,7 +63,7 @@ pub enum SessionError {
     WindowNotFoundForPane(PaneId),
 }
 
-pub type SessionResult<T = ()> = Result<T, SessionError>;
+pub type MultiplexerResult<T = ()> = Result<T, MultiplexerError>;
 
 #[cfg(test)]
 mod tests {
@@ -72,35 +72,35 @@ mod tests {
     #[test]
     fn session_not_found_carries_id_in_message() {
         let id = SessionId::new();
-        let err = SessionError::SessionNotFound(id.clone());
+        let err = MultiplexerError::SessionNotFound(id.clone());
         assert!(err.to_string().contains(id.as_ref()));
     }
 
     #[test]
     fn window_not_found_carries_id_in_message() {
         let id = WindowId::new();
-        let err = SessionError::WindowNotFound(id.clone());
+        let err = MultiplexerError::WindowNotFound(id.clone());
         assert!(err.to_string().contains(id.as_ref()));
     }
 
     #[test]
     fn cannot_close_last_window_carries_session_id() {
         let sid = SessionId::new();
-        let err = SessionError::CannotCloseLastWindow(sid.clone());
+        let err = MultiplexerError::CannotCloseLastWindow(sid.clone());
         assert!(err.to_string().contains(sid.as_ref()));
     }
 
     #[test]
     fn cannot_close_last_pane_in_window_carries_window_id() {
         let wid = WindowId::new();
-        let err = SessionError::CannotCloseLastPaneInWindow(wid.clone());
+        let err = MultiplexerError::CannotCloseLastPaneInWindow(wid.clone());
         assert!(err.to_string().contains(wid.as_ref()));
     }
 
     #[test]
     fn window_not_attached_carries_window_id() {
         let wid = WindowId::new();
-        let err = SessionError::WindowNotAttachedToSession(wid.clone());
+        let err = MultiplexerError::WindowNotAttachedToSession(wid.clone());
         assert!(err.to_string().contains(wid.as_ref()));
     }
 }

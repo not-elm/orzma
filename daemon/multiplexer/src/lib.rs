@@ -7,7 +7,7 @@ pub mod pane;
 pub mod session;
 pub mod window;
 
-pub use error::{SessionError, SessionResult};
+pub use error::{MultiplexerError, MultiplexerResult};
 pub use window::*;
 
 use crate::{
@@ -62,11 +62,11 @@ impl MultiplexerService {
         session_id
     }
 
-    pub fn rename_session(&mut self, session_id: &SessionId, name: String) -> SessionResult {
+    pub fn rename_session(&mut self, session_id: &SessionId, name: String) -> MultiplexerResult {
         let session = self
             .sessions
             .get_mut(session_id)
-            .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+            .ok_or_else(|| MultiplexerError::SessionNotFound(session_id.clone()))?;
         session.rename(name);
         Ok(())
     }
@@ -74,7 +74,7 @@ impl MultiplexerService {
     /// Remove the session and cascade-close every window it owns.
     /// Returns every `ActivityId` that was destroyed so the caller can tear
     /// down the corresponding PTYs.
-    pub fn delete_session(&mut self, session_id: &SessionId) -> SessionResult<Vec<ActivityId>> {
+    pub fn delete_session(&mut self, session_id: &SessionId) -> MultiplexerResult<Vec<ActivityId>> {
         let session = self.sessions.remove(session_id)?;
         let mut activities = Vec::new();
         for wid in session.windows {
@@ -104,11 +104,11 @@ impl MultiplexerService {
         &mut self,
         session_id: Option<&SessionId>,
         name: Option<String>,
-    ) -> SessionResult<WindowId> {
+    ) -> MultiplexerResult<WindowId> {
         if let Some(sid) = session_id
             && self.sessions.get(sid).is_none()
         {
-            return Err(SessionError::SessionNotFound(sid.clone()));
+            return Err(MultiplexerError::SessionNotFound(sid.clone()));
         }
         let window_id = self.new_window_internal(name);
         if let Some(sid) = session_id {
@@ -121,11 +121,11 @@ impl MultiplexerService {
         Ok(window_id)
     }
 
-    pub fn rename_window(&mut self, window_id: &WindowId, name: String) -> SessionResult {
+    pub fn rename_window(&mut self, window_id: &WindowId, name: String) -> MultiplexerResult {
         let window = self
             .windows
             .get_mut(window_id)
-            .ok_or_else(|| SessionError::WindowNotFound(window_id.clone()))?;
+            .ok_or_else(|| MultiplexerError::WindowNotFound(window_id.clone()))?;
         window.rename(name);
         Ok(())
     }
@@ -133,11 +133,11 @@ impl MultiplexerService {
     /// Close a window: remove every pane it contains, drop the cell tree
     /// rooted at `Window.root_cell`, detach from any owning session, and
     /// return the `ActivityId`s destroyed so the caller can kill PTYs.
-    pub fn close_window(&mut self, window_id: &WindowId) -> SessionResult<Vec<ActivityId>> {
+    pub fn close_window(&mut self, window_id: &WindowId) -> MultiplexerResult<Vec<ActivityId>> {
         let root_cell = self
             .windows
             .get(window_id)
-            .ok_or_else(|| SessionError::WindowNotFound(window_id.clone()))?
+            .ok_or_else(|| MultiplexerError::WindowNotFound(window_id.clone()))?
             .root_cell
             .clone();
 
@@ -166,9 +166,9 @@ impl MultiplexerService {
         Ok(activity_ids)
     }
 
-    pub fn new_pane_with_activity(&mut self, activity_id: ActivityId) -> SessionResult<PaneId> {
+    pub fn new_pane_with_activity(&mut self, activity_id: ActivityId) -> MultiplexerResult<PaneId> {
         if !self.activities.contains(&activity_id) {
-            return Err(SessionError::ActivityNotFound(activity_id));
+            return Err(MultiplexerError::ActivityNotFound(activity_id));
         }
         let id = PaneId::new();
         self.panes.insert(id.clone(), Pane::new(activity_id));
@@ -198,7 +198,7 @@ impl MultiplexerService {
         target_pane_id: PaneId,
         side: Side,
         orientation: SplitOrientation,
-    ) -> SessionResult<(PaneId, ActivityId)> {
+    ) -> MultiplexerResult<(PaneId, ActivityId)> {
         let target_cell_id = self.cell_id_for_pane(&target_pane_id)?.clone();
         let new_activity_id = self.new_activity(Activity::default());
         let (new_pane_id, new_cell_id) = self.new_pane(new_activity_id.clone(), None);
@@ -215,12 +215,12 @@ impl MultiplexerService {
         new_pane: PaneId,
         side: crate::cells::Side,
         orientation: crate::cells::SplitOrientation,
-    ) -> SessionResult<()> {
+    ) -> MultiplexerResult<()> {
         if !self.panes.contains_key(&new_pane) {
-            return Err(SessionError::PaneNotFound(new_pane));
+            return Err(MultiplexerError::PaneNotFound(new_pane));
         }
         if self.pane_to_cell.contains_key(&new_pane) {
-            return Err(SessionError::PaneAlreadyPlaced(new_pane));
+            return Err(MultiplexerError::PaneAlreadyPlaced(new_pane));
         }
         let target_cell_id = self.cell_id_for_pane(&src)?.clone();
         let new_cell_id = self.cells.new_pane(new_pane.clone(), None);
@@ -237,9 +237,9 @@ impl MultiplexerService {
         Ok(())
     }
 
-    pub fn close_pane(&mut self, pane_id: &PaneId) -> SessionResult {
+    pub fn close_pane(&mut self, pane_id: &PaneId) -> MultiplexerResult {
         if !self.panes.contains_key(pane_id) {
-            return Err(SessionError::PaneNotFound(pane_id.clone()));
+            return Err(MultiplexerError::PaneNotFound(pane_id.clone()));
         }
         if let Some(cell_id) = self.pane_to_cell.get(pane_id).cloned() {
             let outcome = self.cells.close_cell(&cell_id)?;
@@ -264,15 +264,15 @@ impl MultiplexerService {
         }
     }
 
-    pub fn cell_id_for_pane(&self, pane_id: &PaneId) -> SessionResult<&CellId> {
+    pub fn cell_id_for_pane(&self, pane_id: &PaneId) -> MultiplexerResult<&CellId> {
         self.pane_to_cell
             .get(pane_id)
-            .ok_or_else(|| SessionError::CellForPaneNotFound(pane_id.clone()))
+            .ok_or_else(|| MultiplexerError::CellForPaneNotFound(pane_id.clone()))
     }
 
     /// Return the `WindowId` whose layout subtree currently contains `pane_id`.
     /// Walks pane → cell → ... → root, then matches the root cell against `WindowState`.
-    pub fn window_id_of_pane(&self, pane_id: &PaneId) -> SessionResult<WindowId> {
+    pub fn window_id_of_pane(&self, pane_id: &PaneId) -> MultiplexerResult<WindowId> {
         let start_cell = self.cell_id_for_pane(pane_id)?.clone();
         let mut current = start_cell;
         loop {
@@ -287,15 +287,15 @@ impl MultiplexerService {
                 return Ok(wid.clone());
             }
         }
-        Err(SessionError::WindowNotFoundForPane(pane_id.clone()))
+        Err(MultiplexerError::WindowNotFoundForPane(pane_id.clone()))
     }
 
     /// Find the session that owns `window_id` and set its `active_window`.
     /// Returns `WindowNotFound` for a window that doesn't exist at all, and
     /// `WindowNotAttachedToSession` for orphan windows.
-    pub fn select_active_window(&mut self, window_id: &WindowId) -> SessionResult {
+    pub fn select_active_window(&mut self, window_id: &WindowId) -> MultiplexerResult {
         if !self.windows.contains_key(window_id) {
-            return Err(SessionError::WindowNotFound(window_id.clone()));
+            return Err(MultiplexerError::WindowNotFound(window_id.clone()));
         }
         for (_, session) in self.sessions.iter_mut() {
             if session.windows.contains(window_id) {
@@ -303,14 +303,14 @@ impl MultiplexerService {
                 return Ok(());
             }
         }
-        Err(SessionError::WindowNotAttachedToSession(window_id.clone()))
+        Err(MultiplexerError::WindowNotAttachedToSession(window_id.clone()))
     }
 
     /// Bootstrap the multiplexer with one session, one window inside it, and
     /// thus one initial pane + activity. Returns the four IDs.
     pub fn bootstrap_default(
         &mut self,
-    ) -> SessionResult<(SessionId, WindowId, PaneId, ActivityId)> {
+    ) -> MultiplexerResult<(SessionId, WindowId, PaneId, ActivityId)> {
         let session_id = self.new_session(None);
         let window_id = self.new_window_in(Some(&session_id), None)?;
         let window = self.windows.get(&window_id).expect("just created");
@@ -411,7 +411,7 @@ mod tests {
 
         let result = ms.close_pane(&pane_id);
 
-        assert!(matches!(result, Err(SessionError::CannotCloseLastPane(_))));
+        assert!(matches!(result, Err(MultiplexerError::CannotCloseLastPane(_))));
         // No store was mutated.
         assert_eq!(ms.panes().len(), panes_before);
         assert_eq!(ms.cell_id_for_pane(&pane_id).unwrap(), &pane_cell);
@@ -426,7 +426,7 @@ mod tests {
         let unknown = PaneId::new();
         assert!(matches!(
             ms.close_pane(&unknown),
-            Err(SessionError::PaneNotFound(_))
+            Err(MultiplexerError::PaneNotFound(_))
         ));
     }
 
@@ -480,7 +480,7 @@ mod tests {
         let sid = SessionId::new();
         assert!(matches!(
             ms.rename_session(&sid, "x".into()),
-            Err(SessionError::SessionNotFound(_))
+            Err(MultiplexerError::SessionNotFound(_))
         ));
     }
 
@@ -511,7 +511,7 @@ mod tests {
         let bogus = SessionId::new();
         assert!(matches!(
             ms.new_window_in(Some(&bogus), None),
-            Err(SessionError::SessionNotFound(_))
+            Err(MultiplexerError::SessionNotFound(_))
         ));
     }
 
@@ -529,7 +529,7 @@ mod tests {
         let bogus = WindowId::new();
         assert!(matches!(
             ms.rename_window(&bogus, "x".into()),
-            Err(SessionError::WindowNotFound(_))
+            Err(MultiplexerError::WindowNotFound(_))
         ));
     }
 
@@ -567,7 +567,7 @@ mod tests {
         let bogus = WindowId::new();
         assert!(matches!(
             ms.close_window(&bogus),
-            Err(SessionError::WindowNotFound(_))
+            Err(MultiplexerError::WindowNotFound(_))
         ));
     }
 
@@ -591,7 +591,7 @@ mod tests {
         let wid = ms.new_window_in(None, None).unwrap();
         assert!(matches!(
             ms.select_active_window(&wid),
-            Err(SessionError::WindowNotAttachedToSession(_))
+            Err(MultiplexerError::WindowNotAttachedToSession(_))
         ));
     }
 
@@ -601,7 +601,7 @@ mod tests {
         let bogus = WindowId::new();
         assert!(matches!(
             ms.select_active_window(&bogus),
-            Err(SessionError::WindowNotFound(_))
+            Err(MultiplexerError::WindowNotFound(_))
         ));
     }
 
@@ -637,7 +637,7 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let phantom = ActivityId::new();
         let err = ms.new_pane_with_activity(phantom.clone()).unwrap_err();
-        assert!(matches!(err, SessionError::ActivityNotFound(id) if id == phantom));
+        assert!(matches!(err, MultiplexerError::ActivityNotFound(id) if id == phantom));
     }
 
     #[test]
@@ -685,7 +685,7 @@ mod tests {
                 SplitOrientation::Horizontal,
             )
             .unwrap_err();
-        assert!(matches!(err, SessionError::PaneAlreadyPlaced(id) if id == target_pane));
+        assert!(matches!(err, MultiplexerError::PaneAlreadyPlaced(id) if id == target_pane));
     }
 
     #[test]
@@ -702,7 +702,7 @@ mod tests {
                 SplitOrientation::Horizontal,
             )
             .unwrap_err();
-        assert!(matches!(err, SessionError::PaneNotFound(id) if id == phantom));
+        assert!(matches!(err, MultiplexerError::PaneNotFound(id) if id == phantom));
     }
 
     #[test]
@@ -734,7 +734,7 @@ mod tests {
         let pid = crate::pane::PaneId::new();
         assert!(matches!(
             ms.window_id_of_pane(&pid),
-            Err(SessionError::CellForPaneNotFound(_))
+            Err(MultiplexerError::CellForPaneNotFound(_))
         ));
     }
 
@@ -746,7 +746,7 @@ mod tests {
         // limbo_pane is in `panes` but has no cell mapping yet.
         assert!(matches!(
             ms.window_id_of_pane(&limbo_pane),
-            Err(SessionError::CellForPaneNotFound(_))
+            Err(MultiplexerError::CellForPaneNotFound(_))
         ));
     }
 

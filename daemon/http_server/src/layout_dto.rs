@@ -1,4 +1,4 @@
-use ozmux_multiplexer::SessionResult;
+use ozmux_multiplexer::MultiplexerResult;
 use ozmux_multiplexer::cells::{Cell, CellId, LayoutCellState, SplitOrientation};
 use ozmux_multiplexer::pane::PaneId;
 use serde::Serialize;
@@ -26,11 +26,11 @@ pub enum WindowLayoutNode {
 pub fn build_layout(
     root_cell_id: &CellId,
     cells: &LayoutCellState,
-) -> SessionResult<WindowLayoutNode> {
+) -> MultiplexerResult<WindowLayoutNode> {
     build_node(root_cell_id, cells)
 }
 
-fn build_node(cell_id: &CellId, cells: &LayoutCellState) -> SessionResult<WindowLayoutNode> {
+fn build_node(cell_id: &CellId, cells: &LayoutCellState) -> MultiplexerResult<WindowLayoutNode> {
     match cells.cell(cell_id)? {
         Cell::Root(r) => {
             let child = build_node(&r.child, cells)?;

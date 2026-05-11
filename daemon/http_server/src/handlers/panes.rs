@@ -106,7 +106,7 @@ pub async fn create(
     Json(body): Json<CreatePaneRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
     let owner = registry.activity_owner(&body.activity_id).ok_or_else(|| {
-        HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
+        HttpError::Session(ozmux_multiplexer::MultiplexerError::ActivityNotFound(
             body.activity_id.clone(),
         ))
     })?;
@@ -141,7 +141,7 @@ pub async fn split_with(
 ) -> HttpResult<StatusCode> {
     // src は owner check しない (D11)
     let owner = registry.pane_owner(&body.pane_id).ok_or_else(|| {
-        HttpError::Session(ozmux_multiplexer::SessionError::PaneNotFound(
+        HttpError::Session(ozmux_multiplexer::MultiplexerError::PaneNotFound(
             body.pane_id.clone(),
         ))
     })?;
