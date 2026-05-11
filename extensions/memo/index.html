@@ -20,54 +20,72 @@
         border: 1px solid #414868;
       }
       button[disabled] { opacity: 0.5; }
-      #result { margin-top: 1rem; }
+      #result, #clock { margin-top: 1rem; }
     </style>
   </head>
   <body>
     <h1>Memo</h1>
-    <p>handler RPC demo</p>
-    <input id="name" type="text" placeholder="Your name" />
-    <button id="send" disabled>Send</button>
-    <p id="result"></p>
+    <section>
+      <p>handler RPC demo</p>
+      <input id="name" type="text" placeholder="Your name" />
+      <button id="send">Send</button>
+      <p id="result"></p>
+    </section>
+    <section>
+      <p>channel demo</p>
+      <button id="start-clock">Start clock</button>
+      <button id="stop-clock" disabled>Stop clock</button>
+      <p id="clock">(idle)</p>
+    </section>
 
     <script type="module">
-      const aid = location.pathname.split('/')[2];
-      const ws = new WebSocket(`ws://${location.host}/activities/${aid}/handlers/ws`);
-      const pending = new Map();
-      let seq = 0;
-      const sendBtn = document.getElementById('send');
-      const result = document.getElementById('result');
+      import { createClient } from "./dist/sdk.js";
 
-      ws.onopen = () => { sendBtn.disabled = false; };
-      ws.onclose = () => {
-        sendBtn.disabled = true;
-        setTimeout(() => location.reload(), 1000);
-      };
-      ws.onmessage = (ev) => {
-        const f = JSON.parse(ev.data);
-        const p = pending.get(f.id);
-        if (!p) return;
-        pending.delete(f.id);
-        if (f.kind === 'result') p.resolve(f.payload);
-        else if (f.kind === 'error') p.reject(new Error(`${f.code}: ${f.message}`));
-      };
+      const client = createClient();
+      const sendBtn = document.getElementById("send");
+      const result = document.getElementById("result");
+      const startBtn = document.getElementById("start-clock");
+      const stopBtn = document.getElementById("stop-clock");
+      const clockEl = document.getElementById("clock");
 
-      function call(name, payload) {
-        const id = String(++seq);
-        return new Promise((resolve, reject) => {
-          pending.set(id, { resolve, reject });
-          ws.send(JSON.stringify({ kind: 'call', id, name, payload }));
-        });
-      }
-
-      sendBtn.addEventListener('click', async () => {
-        const name = document.getElementById('name').value;
+      sendBtn.addEventListener("click", async () => {
+        const name = document.getElementById("name").value;
         try {
-          const resp = await call('greet', { name });
+          const resp = await client.call("greet", { name });
           result.textContent = resp.message;
         } catch (e) {
           result.textContent = `error: ${e.message}`;
         }
+      });
+
+      let activeAbort = null;
+
+      startBtn.addEventListener("click", async () => {
+        if (activeAbort) return;
+        const ac = new AbortController();
+        activeAbort = ac;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        try {
+          for await (const ev of client.subscribe(
+            "clock",
+            { intervalMs: 1000 },
+            { signal: ac.signal },
+          )) {
+            clockEl.textContent = ev.time;
+          }
+          clockEl.textContent = "(stopped)";
+        } catch (e) {
+          clockEl.textContent = `error: ${e.message}`;
+        } finally {
+          if (activeAbort === ac) activeAbort = null;
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
+        }
+      });
+
+      stopBtn.addEventListener("click", () => {
+        activeAbort?.abort();
       });
     </script>
   </body>
