@@ -10,6 +10,7 @@ use axum::{
 };
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
+    SetActivePaneOutcome,
     activity::ActivityId,
     cells::{Side, SplitOrientation},
     pane::PaneId,
@@ -208,6 +209,28 @@ pub async fn close(
     // 4. terminal kill (best-effort)
     for aid in activities_to_kill {
         let _ = terminal.kill(&aid).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn activate(
+    State(ms): State<MultiplexerState>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
+    Path((window_id, pane_id)): Path<(
+        ozmux_multiplexer::window::WindowId,
+        PaneId,
+    )>,
+) -> HttpResult<StatusCode> {
+    let mut ms = ms.lock().await;
+    match ms.set_active_pane(&window_id, &pane_id)? {
+        SetActivePaneOutcome::Unchanged => return Ok(StatusCode::NO_CONTENT),
+        SetActivePaneOutcome::Changed => {}
+    }
+    if let Some(window) = ms.windows().get(&window_id) {
+        match crate::handlers::windows::window_view_for(&ms, &window_id, window) {
+            Ok(view) => broadcaster.publish(&window_id, view),
+            Err(e) => tracing::warn!(error = %e, %window_id, "skipped layout publish on activate"),
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -757,5 +780,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn activate_returns_204_when_pane_becomes_active() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, original, _aid) = ms.bootstrap_default().unwrap();
+        let (new_pane, _) = ms
+            .split_pane(
+                original.clone(),
+                ozmux_multiplexer::cells::Side::After,
+                ozmux_multiplexer::cells::SplitOrientation::Horizontal,
+            )
+            .unwrap();
+        // After split, `new_pane` is active. Switch back to `original`.
+        let (router, _state) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/activate", wid, original))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let _ = new_pane;
+    }
+
+    #[tokio::test]
+    async fn activate_already_active_pane_returns_204() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, _state) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/activate", wid, pid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn activate_unknown_window_returns_404() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, _state) = router_with(ms);
+        let bogus_wid = ozmux_multiplexer::window::WindowId::new();
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/activate", bogus_wid, pid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn activate_pane_in_other_window_returns_409() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid_a, pid_a, _aid) = ms.bootstrap_default().unwrap();
+        let wid_b = ms.new_window_in(None, None).unwrap();
+        let (router, _state) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/activate", wid_b, pid_a))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let _ = wid_a;
     }
 }

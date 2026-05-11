@@ -127,6 +127,10 @@ pub fn daemon_router(state: AppState) -> Router {
         .route("/panes/{pane_id}/split", post(handlers::panes::split))
         .route("/panes/{src}/split-with", post(handlers::panes::split_with))
         .route("/panes/{pane_id}", method_delete(handlers::panes::close))
+        .route(
+            "/windows/{window_id}/panes/{pane_id}/activate",
+            post(handlers::panes::activate),
+        )
         .route("/activities", post(handlers::activities::create))
         .route(
             "/activities/{activity_id}/terminal/ws",
