@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend
+.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend memo-build-sdk
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
@@ -25,6 +25,9 @@ verify-out-dir:
 		exit 1; \
 	fi
 
+memo-build-sdk:
+	pnpm --filter memo run build:sdk
+
 build:
 	pnpm --dir $(FRONTEND_DIR) install --frozen-lockfile
 	pnpm --dir $(FRONTEND_DIR) build
@@ -37,7 +40,7 @@ dev-frontend:
 dev-backend:
 	cargo run -p ozmux_core
 
-dev-daemon:
+dev-daemon: memo-build-sdk
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) cargo run -p daemon_bootstrap
 
 clean:
@@ -51,7 +54,7 @@ fix-lint:
 dev-e2e-setup:
 	./scripts/dev-e2e.sh setup
 
-dev-e2e:
+dev-e2e: memo-build-sdk
 	./scripts/dev-e2e.sh start
 
 dev-e2e-stop:
