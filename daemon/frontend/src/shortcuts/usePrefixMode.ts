@@ -1,6 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createKeyDispatcher, type KeyDispatcher } from './globalKeyDispatcher';
 
+/**
+ * **INVARIANT: at most one `usePrefixMode` may be mounted at a time.**
+ *
+ * The hook owns module-level `shared` state and a singleton dispatcher
+ * attached to `document`. A second concurrent caller would clobber
+ * `shared` (silently breaking the first caller's `setArmed` callback)
+ * and unmounting either would `detachFrom(document)`, killing keyboard
+ * handling for the surviving caller. The intended owner is `App.tsx`.
+ */
 export type PrefixBindings = ReadonlyMap<string, () => void>;
 
 export interface PrefixModeOptions {
@@ -95,15 +104,13 @@ export function usePrefixMode(
 ): PrefixModeState {
   const [isArmed, setIsArmed] = useState(false);
 
-  const bindingsRef = useRef(bindings);
-  bindingsRef.current = bindings;
-
   // Use primitive deps so a default object literal does not cause re-subscribe
   // on every render.
   const prefixCtrl = options?.prefix?.ctrl ?? true;
   const prefixKey = options?.prefix?.key ?? 'b';
   const timeoutMs = options?.timeoutMs ?? 2000;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bindings is kept fresh via the render-time write below; adding it would re-run the effect on every identity change and clobber shared state.
   useEffect(() => {
     const setArmed = (next: boolean) => {
       if (shared) {
@@ -125,7 +132,7 @@ export function usePrefixMode(
       }
     };
     shared = {
-      bindings: bindingsRef.current,
+      bindings,
       prefix: { ctrl: prefixCtrl, key: prefixKey },
       timeoutMs,
       armed: false,
@@ -134,7 +141,7 @@ export function usePrefixMode(
     };
     ensureDispatcher().attachTo(document);
     return () => {
-      if (shared?.timer !== null && shared) {
+      if (shared && shared.timer !== null) {
         clearTimeout(shared.timer);
       }
       if (dispatcher) dispatcher.detachFrom(document);
