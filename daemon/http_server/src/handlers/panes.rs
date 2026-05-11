@@ -216,10 +216,7 @@ pub async fn close(
 pub async fn activate(
     State(ms): State<MultiplexerState>,
     State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
-    Path((window_id, pane_id)): Path<(
-        ozmux_multiplexer::window::WindowId,
-        PaneId,
-    )>,
+    Path((window_id, pane_id)): Path<(ozmux_multiplexer::window::WindowId, PaneId)>,
 ) -> HttpResult<StatusCode> {
     let mut ms = ms.lock().await;
     match ms.set_active_pane(&window_id, &pane_id)? {
