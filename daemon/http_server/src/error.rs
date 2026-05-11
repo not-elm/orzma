@@ -51,6 +51,9 @@ impl axum::response::IntoResponse for HttpError {
             | HttpError::Session(MultiplexerError::CellForPaneNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "PANE_NOT_FOUND")
             }
+            HttpError::Session(MultiplexerError::PaneNotInWindow { .. }) => {
+                (StatusCode::CONFLICT, "PANE_NOT_IN_WINDOW")
+            }
             HttpError::Session(MultiplexerError::CellNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "CELL_NOT_FOUND")
             }
@@ -218,5 +221,15 @@ mod tests {
     fn activity_not_found_session_maps_to_404() {
         let err = HttpError::Session(MultiplexerError::ActivityNotFound(ActivityId::new()));
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn pane_not_in_window_maps_to_409() {
+        let err = HttpError::Session(MultiplexerError::PaneNotInWindow {
+            window: WindowId::new(),
+            pane: PaneId::new(),
+        });
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 }

@@ -11,6 +11,9 @@ pub enum MultiplexerError {
     #[error("window not found window-id={0}")]
     WindowNotFound(WindowId),
 
+    #[error("pane {pane} does not belong to window {window}")]
+    PaneNotInWindow { window: WindowId, pane: PaneId },
+
     #[error("window {window_id} does not belong to session {session_id}")]
     WindowDoesNotBelongToSession {
         session_id: SessionId,
