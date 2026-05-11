@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActivity } from "./activity.ts";
+import * as channelsServer from "./channels-server.ts";
+import { __resetActivityChannelsForTests } from "./channels-server.ts";
 import * as daemonClient from "./daemon-client.ts";
 import {
   __resetActivityHandlersForTests,
@@ -11,6 +13,7 @@ let postJsonSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   __resetActivityHandlersForTests();
+  __resetActivityChannelsForTests();
   postJsonSpy = vi
     .spyOn(daemonClient, "postJson")
     .mockResolvedValue({ activity_id: "aid-42" });
@@ -41,6 +44,20 @@ describe("createActivity", () => {
   it("works without handlers (backward compatible)", async () => {
     const aid = await createActivity({ html: "/tmp/x" });
     expect(aid).toBe("aid-42");
+  });
+
+  it("registers channels under the returned aid when provided", async () => {
+    const registerSpy = vi.spyOn(channelsServer, "registerActivityChannels");
+    const tick = async function* (): AsyncGenerator<{ t: number }> {
+      yield { t: 1 };
+    };
+    const aid = await createActivity({
+      html: "/tmp/x",
+      channels: { tick },
+    });
+    expect(aid).toBe("aid-42");
+    expect(registerSpy).toHaveBeenCalledWith("aid-42", { tick });
+    registerSpy.mockRestore();
   });
 });
 
