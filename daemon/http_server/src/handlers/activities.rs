@@ -654,4 +654,53 @@ mod tests {
             "expected memo HTML to contain visible 'Memo' heading, got: {body_str}"
         );
     }
+
+    #[tokio::test]
+    async fn terminal_ws_outbound_stops_after_client_close() {
+        let (addr, state, activity_id) = boot_server().await;
+
+        // Baseline before any client subscribes. The PTY bridge task holds a
+        // Sender (not a Receiver), so receiver_count starts at 0. We capture
+        // the actual baseline defensively in case future internals change it.
+        let baseline = state.terminal.subscriber_count(&activity_id).await.unwrap();
+
+        // Open a terminal WS via tokio_tungstenite (same pattern as
+        // ws_input_is_echoed_back_in_output).
+        let url = format!("ws://{addr}/activities/{activity_id}/terminal/ws");
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+
+        // Drain initial snapshot frame so the server-side outbound task is
+        // demonstrably alive holding a Receiver.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await;
+
+        // Confirm the outbound task is subscribed.
+        let with_client = state.terminal.subscriber_count(&activity_id).await.unwrap();
+        assert!(
+            with_client > baseline,
+            "expected subscriber count to increase after client connect; baseline={baseline}, with_client={with_client}"
+        );
+
+        // Client closes the WS.
+        ws.send(TtMessage::Close(None)).await.unwrap();
+        drop(ws);
+
+        // Wait up to 500ms for the daemon's abort path to drop the Receiver.
+        // Without the abort fix (Task 2), the outbound task stays detached
+        // and receiver_count never returns to baseline.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            let n = state.terminal.subscriber_count(&activity_id).await.unwrap();
+            if n <= baseline {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "outbound task still subscribed 500ms after close; baseline={baseline}, current={n}"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        state.terminal.kill(&activity_id).await.unwrap();
+    }
 }
