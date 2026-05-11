@@ -1,18 +1,74 @@
-<!doctype html>
-<html lang="ja">
+<!DOCTYPE html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Memo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>memo</title>
     <style>
-      body { margin: 0; padding: 1rem; font-family: ui-sans-serif, system-ui, sans-serif;
-             background: #1a1b26; color: #c0caf5; }
-      h1 { margin: 0 0 0.5rem; font-size: 1.1rem; }
-      p  { margin: 0; opacity: 0.8; font-size: 0.9rem; }
-      code { font-family: ui-monospace, monospace; opacity: 0.9; }
+      body {
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        margin: 0;
+        padding: 1rem;
+        background: #1a1b26;
+        color: #c0caf5;
+      }
+      input, button {
+        font: inherit;
+        padding: 0.25rem 0.5rem;
+        background: #292e42;
+        color: #c0caf5;
+        border: 1px solid #414868;
+      }
+      button[disabled] { opacity: 0.5; }
+      #result { margin-top: 1rem; }
     </style>
   </head>
   <body>
     <h1>Memo</h1>
-    <p>This pane is rendered from <code>extensions/memo/index.html</code> via the iframe activity.</p>
+    <p>handler RPC demo</p>
+    <input id="name" type="text" placeholder="Your name" />
+    <button id="send" disabled>Send</button>
+    <p id="result"></p>
+
+    <script type="module">
+      const aid = location.pathname.split('/')[2];
+      const ws = new WebSocket(`ws://${location.host}/activities/${aid}/handlers/ws`);
+      const pending = new Map();
+      let seq = 0;
+      const sendBtn = document.getElementById('send');
+      const result = document.getElementById('result');
+
+      ws.onopen = () => { sendBtn.disabled = false; };
+      ws.onclose = () => {
+        sendBtn.disabled = true;
+        setTimeout(() => location.reload(), 1000);
+      };
+      ws.onmessage = (ev) => {
+        const f = JSON.parse(ev.data);
+        const p = pending.get(f.id);
+        if (!p) return;
+        pending.delete(f.id);
+        if (f.kind === 'result') p.resolve(f.payload);
+        else if (f.kind === 'error') p.reject(new Error(`${f.code}: ${f.message}`));
+      };
+
+      function call(name, payload) {
+        const id = String(++seq);
+        return new Promise((resolve, reject) => {
+          pending.set(id, { resolve, reject });
+          ws.send(JSON.stringify({ kind: 'call', id, name, payload }));
+        });
+      }
+
+      sendBtn.addEventListener('click', async () => {
+        const name = document.getElementById('name').value;
+        try {
+          const resp = await call('greet', { name });
+          result.textContent = resp.message;
+        } catch (e) {
+          result.textContent = `error: ${e.message}`;
+        }
+      });
+    </script>
   </body>
 </html>
