@@ -150,7 +150,7 @@ describe('<LayoutView>', () => {
     );
     const iframe = container.querySelector('iframe');
     expect(iframe).not.toBeNull();
-    expect(iframe!.getAttribute('src')).toBe('/activities/aid-ext/iframe/index.html');
+    expect(iframe?.getAttribute('src')).toBe('/activities/aid-ext/iframe/index.html');
   });
 
   it('falls back to PanePlaceholder for an extension activity without iframe_url', async () => {

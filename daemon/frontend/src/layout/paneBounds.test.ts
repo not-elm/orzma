@@ -90,8 +90,8 @@ describe('computePaneLayout', () => {
       },
     };
     const result = computePaneLayout(tooBig);
-    expect(result.panes.get('pa')!.w).toBeCloseTo(100);
-    expect(result.panes.get('pb')!.w).toBeCloseTo(0);
+    expect(result.panes.get('pa')?.w).toBeCloseTo(100);
+    expect(result.panes.get('pb')?.w).toBeCloseTo(0);
   });
 
   it('clamps split_ratio below 0', () => {
@@ -108,8 +108,8 @@ describe('computePaneLayout', () => {
       },
     };
     const result = computePaneLayout(negative);
-    expect(result.panes.get('pa')!.w).toBeCloseTo(0);
-    expect(result.panes.get('pb')!.w).toBeCloseTo(100);
+    expect(result.panes.get('pa')?.w).toBeCloseTo(0);
+    expect(result.panes.get('pb')?.w).toBeCloseTo(100);
   });
 
   it('falls back to 0.5 when split_ratio is NaN', () => {
@@ -126,8 +126,8 @@ describe('computePaneLayout', () => {
       },
     };
     const { panes } = computePaneLayout(node);
-    expect(panes.get('pa')!.w).toBeCloseTo(50);
-    expect(panes.get('pb')!.w).toBeCloseTo(50);
+    expect(panes.get('pa')?.w).toBeCloseTo(50);
+    expect(panes.get('pb')?.w).toBeCloseTo(50);
   });
 
   it('collects unknown node types into the unknown list', () => {
