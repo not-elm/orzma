@@ -15,6 +15,7 @@ export interface BootstrapEnv {
   sockPath: string;
   extensionName: string;
   daemonUrl: string;
+  handlersSockPath: string;
 }
 
 export function resolveBootstrapEnv(
@@ -24,11 +25,13 @@ export function resolveBootstrapEnv(
   const sockPath = env.OZMUX_SOCK_PATH;
   const extensionName = env.EXTENSION_NAME;
   const daemonUrl = env.OZMUX_DAEMON_URL;
+  const handlersSockPath = env.OZMUX_HANDLERS_SOCK_PATH;
   for (const [k, v] of Object.entries({
     OZMUX_BIN_DIR: binDir,
     OZMUX_SOCK_PATH: sockPath,
     EXTENSION_NAME: extensionName,
     OZMUX_DAEMON_URL: daemonUrl,
+    OZMUX_HANDLERS_SOCK_PATH: handlersSockPath,
   })) {
     if (!v) throw new Error(`missing required env: ${k}`);
   }
@@ -37,6 +40,7 @@ export function resolveBootstrapEnv(
     sockPath: sockPath!,
     extensionName: extensionName!,
     daemonUrl: daemonUrl!,
+    handlersSockPath: handlersSockPath!,
   };
 }
 

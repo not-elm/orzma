@@ -15,16 +15,46 @@ describe("resolveBootstrapEnv", () => {
       OZMUX_SOCK_PATH: "/s.sock",
       EXTENSION_NAME: "memo",
       OZMUX_DAEMON_URL: "http://127.0.0.1:3200",
+      OZMUX_HANDLERS_SOCK_PATH: "/h",
     })).toEqual({
       binDir: "/b",
       sockPath: "/s.sock",
       extensionName: "memo",
       daemonUrl: "http://127.0.0.1:3200",
+      handlersSockPath: "/h",
     });
   });
   it("throws when any required key is missing", () => {
     expect(() => resolveBootstrapEnv({ OZMUX_BIN_DIR: "/b", OZMUX_SOCK_PATH: "/s.sock" }))
       .toThrow(/EXTENSION_NAME/);
+  });
+  it("requires OZMUX_HANDLERS_SOCK_PATH", () => {
+    const env = {
+      OZMUX_BIN_DIR: "/b",
+      OZMUX_SOCK_PATH: "/s",
+      EXTENSION_NAME: "memo",
+      OZMUX_DAEMON_URL: "http://x",
+      // OZMUX_HANDLERS_SOCK_PATH intentionally missing
+    };
+    expect(() => resolveBootstrapEnv(env)).toThrow(
+      /OZMUX_HANDLERS_SOCK_PATH/,
+    );
+  });
+  it("returns handlersSockPath when env is complete", () => {
+    const env = {
+      OZMUX_BIN_DIR: "/b",
+      OZMUX_SOCK_PATH: "/s",
+      EXTENSION_NAME: "memo",
+      OZMUX_DAEMON_URL: "http://x",
+      OZMUX_HANDLERS_SOCK_PATH: "/h",
+    };
+    expect(resolveBootstrapEnv(env)).toEqual({
+      binDir: "/b",
+      sockPath: "/s",
+      extensionName: "memo",
+      daemonUrl: "http://x",
+      handlersSockPath: "/h",
+    });
   });
 });
 
@@ -120,6 +150,7 @@ describe("bootstrap()", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ozmux-bs-"));
     const binDir = path.join(dir, "bin");
     const sockPath = path.join(dir, "x.sock");
+    const handlersSockPath = path.join(dir, "h.sock");
 
     const harness = `
       import { bootstrap } from ${JSON.stringify(fileURLToPath(new URL("./bootstrap.ts", import.meta.url)))};
@@ -134,6 +165,7 @@ describe("bootstrap()", () => {
         OZMUX_SOCK_PATH: sockPath,
         EXTENSION_NAME: "memo",
         OZMUX_DAEMON_URL: "http://127.0.0.1:3200",
+        OZMUX_HANDLERS_SOCK_PATH: handlersSockPath,
       },
       stdio: "inherit",
     });
