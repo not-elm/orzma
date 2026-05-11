@@ -1,3 +1,4 @@
+import { clsx } from 'clsx';
 import { computePaneLayout } from './paneBounds';
 import { PaneContent } from './PaneContent';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
@@ -51,17 +52,12 @@ export function LayoutView() {
           <div
             key={pane.id}
             data-active={isActive}
-            style={{
-              position: 'absolute',
-              left: `${b.x}%`,
-              top: `${b.y}%`,
-              width: `${b.w}%`,
-              height: `${b.h}%`,
-              outline: isActive
-                ? '2px solid var(--color-tmux-pane-active)'
-                : '1px solid var(--color-tmux-pane-border)',
-              outlineOffset: '-2px',
-            }}
+            className={clsx(
+              'absolute outline -outline-offset-2',
+              isActive ? 'outline-2 outline-tmux-pane-active' : 'outline-1 outline-tmux-pane-border',
+            )}
+            // biome-ignore lint/plugin: pane bounds are computed at runtime as percentages of the window
+            style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%` }}
           >
             <PaneContent pane={pane} />
           </div>
@@ -70,8 +66,9 @@ export function LayoutView() {
       {unknown.map((u) => (
         <div
           key={u.cell_id}
+          className="absolute"
+          // biome-ignore lint/plugin: unknown-node bounds are computed at runtime as percentages of the window
           style={{
-            position: 'absolute',
             left: `${u.bounds.x}%`,
             top: `${u.bounds.y}%`,
             width: `${u.bounds.w}%`,

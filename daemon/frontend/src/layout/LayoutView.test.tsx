@@ -223,7 +223,7 @@ describe('<LayoutView>', () => {
     const wrappers = Array.from(container.querySelectorAll('[data-active]')) as HTMLElement[];
     expect(wrappers).toHaveLength(2);
     for (const w of wrappers) {
-      expect(w.style.position).toBe('absolute');
+      expect(w.classList.contains('absolute')).toBe(true);
       expect(w.style.left.endsWith('%')).toBe(true);
       expect(w.style.width.endsWith('%')).toBe(true);
     }
