@@ -65,6 +65,13 @@ Logs go through `tracing-subscriber`. Default filter is `info,hyper=warn,tower=w
 
 Biome (`biome.json`) only scans `daemon/frontend/**` — it is the JS/TS/CSS lint+format tool for this repo, configured for 2-space indent, single quotes, 100-col width, and Tailwind directives in CSS.
 
+## Styling
+
+Frontend styling (utility-first Tailwind v4, semantic tokens, no inline
+styles, no arbitrary values, no raw palette references) is governed by
+[`.claude/rules/styling.md`](.claude/rules/styling.md) and enforced by
+Biome GritQL plugins in `biome-plugins/`.
+
 ## UI verification workflow
 
 Use this when you have changed anything under `daemon/frontend/src/**`, the showcase, theme tokens, pane layout, or daemon-side endpoints that the UI consumes. Skip it for purely backend-internal changes that the UI does not exercise.
