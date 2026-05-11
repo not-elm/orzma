@@ -77,8 +77,7 @@ export function useWindowLayout(wid: string | null): LayoutState {
           return;
         }
         const recoverable =
-          RECONNECT_RECOVERABLE_CODES.has(ev.code) ||
-          RECONNECT_RECOVERABLE_REASONS.has(ev.reason);
+          RECONNECT_RECOVERABLE_CODES.has(ev.code) || RECONNECT_RECOVERABLE_REASONS.has(ev.reason);
         if (!recoverable) return;
         attemptRef.current++;
         const logFn: (...args: unknown[]) => void =
@@ -92,7 +91,7 @@ export function useWindowLayout(wid: string | null): LayoutState {
           setState({ status: 'reconnecting', view: lastViewRef.current, retryInSec: 0 });
           scheduleReconnect(0);
         } else {
-          const baseDelay = Math.min(30_000, 500 * Math.pow(2, attemptRef.current - 2));
+          const baseDelay = Math.min(30_000, 500 * 2 ** (attemptRef.current - 2));
           const jitter = Math.random() * 500;
           const delay = baseDelay + jitter;
           setState({

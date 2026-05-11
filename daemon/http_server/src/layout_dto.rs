@@ -1,6 +1,6 @@
+use ozmux_multiplexer::SessionResult;
 use ozmux_multiplexer::cells::{Cell, CellId, LayoutCellState, SplitOrientation};
 use ozmux_multiplexer::pane::PaneId;
-use ozmux_multiplexer::SessionResult;
 use serde::Serialize;
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -60,7 +60,11 @@ fn build_node(cell_id: &CellId, cells: &LayoutCellState) -> SessionResult<Window
 
 fn compute_split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
     let total = lhs_weight + rhs_weight;
-    if total == 0.0 { 0.5 } else { lhs_weight / total }
+    if total == 0.0 {
+        0.5
+    } else {
+        lhs_weight / total
+    }
 }
 
 #[cfg(test)]
@@ -78,7 +82,10 @@ mod tests {
             WindowLayoutNode::Root { cell_id, child } => {
                 assert_eq!(cell_id, root_id);
                 match *child {
-                    WindowLayoutNode::Pane { cell_id: c, pane_id } => {
+                    WindowLayoutNode::Pane {
+                        cell_id: c,
+                        pane_id,
+                    } => {
                         assert_eq!(c, pane_cell_id);
                         assert_eq!(pane_id, pane);
                     }
@@ -101,7 +108,12 @@ mod tests {
             _ => unreachable!(),
         };
         cells
-            .split_cell(target_cell, pane_b_cell.clone(), Side::After, SplitOrientation::Horizontal)
+            .split_cell(
+                target_cell,
+                pane_b_cell.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .unwrap();
 
         let layout = build_layout(&root_id, &cells).unwrap();
@@ -109,13 +121,25 @@ mod tests {
             panic!("expected root");
         };
         match *child {
-            WindowLayoutNode::Split { orientation, split_ratio, lhs, rhs, .. } => {
+            WindowLayoutNode::Split {
+                orientation,
+                split_ratio,
+                lhs,
+                rhs,
+                ..
+            } => {
                 assert_eq!(orientation, SplitOrientation::Horizontal);
                 assert!((split_ratio - 0.5).abs() < f32::EPSILON);
                 match (*lhs, *rhs) {
                     (
-                        WindowLayoutNode::Pane { cell_id: lhs_cell, pane_id: lhs_pane },
-                        WindowLayoutNode::Pane { cell_id: rhs_cell, pane_id: rhs_pane },
+                        WindowLayoutNode::Pane {
+                            cell_id: lhs_cell,
+                            pane_id: lhs_pane,
+                        },
+                        WindowLayoutNode::Pane {
+                            cell_id: rhs_cell,
+                            pane_id: rhs_pane,
+                        },
                     ) => {
                         // Side::After puts the new pane on the right.
                         assert_eq!(lhs_cell, pane_a_cell);

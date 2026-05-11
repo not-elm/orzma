@@ -173,7 +173,11 @@ async fn handle_events_socket(
         (snapshot, receiver)
     };
 
-    if tx.send(Message::Text(snapshot.to_string().into())).await.is_err() {
+    if tx
+        .send(Message::Text(snapshot.to_string().into()))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -181,7 +185,11 @@ async fn handle_events_socket(
     loop {
         match receiver.recv().await {
             Ok(view) => {
-                if tx.send(Message::Text(view.to_string().into())).await.is_err() {
+                if tx
+                    .send(Message::Text(view.to_string().into()))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -197,11 +205,7 @@ async fn handle_events_socket(
     }
 }
 
-async fn close_with(
-    tx: &mut SplitSink<WebSocket, Message>,
-    code: u16,
-    reason: &'static str,
-) {
+async fn close_with(tx: &mut SplitSink<WebSocket, Message>, code: u16, reason: &'static str) {
     let _ = tx
         .send(Message::Close(Some(CloseFrame {
             code,
@@ -657,7 +661,9 @@ mod tests {
         let listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            axum::serve(listener, crate::daemon_router(state)).await.unwrap();
+            axum::serve(listener, crate::daemon_router(state))
+                .await
+                .unwrap();
         });
         addr
     }
@@ -724,7 +730,10 @@ mod tests {
         let (mut ws, _) = connect_async(&url).await.unwrap();
         let _initial = ws.next().await.unwrap().unwrap();
 
-        bc.publish(&wid, serde_json::json!({ "id": wid.as_ref(), "marker": "second" }));
+        bc.publish(
+            &wid,
+            serde_json::json!({ "id": wid.as_ref(), "marker": "second" }),
+        );
 
         match ws.next().await.unwrap().unwrap() {
             TtMessage::Text(t) => {

@@ -36,7 +36,10 @@ impl LayoutBroadcaster {
 
     /// Look up an existing sender or create one. Returns a fresh receiver.
     pub fn subscribe_or_create(&self, wid: &WindowId) -> broadcast::Receiver<Value> {
-        let mut map = self.inner.lock().expect("layout broadcaster mutex poisoned");
+        let mut map = self
+            .inner
+            .lock()
+            .expect("layout broadcaster mutex poisoned");
         let sender = map
             .entry(wid.clone())
             .or_insert_with(|| broadcast::channel(self.capacity).0);
@@ -46,7 +49,10 @@ impl LayoutBroadcaster {
     /// Best-effort publish. If no sender exists (no subscribers yet) the call is a no-op.
     /// Errors from `Sender::send` (no receivers) are intentionally swallowed.
     pub fn publish(&self, wid: &WindowId, view: Value) {
-        let map = self.inner.lock().expect("layout broadcaster mutex poisoned");
+        let map = self
+            .inner
+            .lock()
+            .expect("layout broadcaster mutex poisoned");
         if let Some(sender) = map.get(wid) {
             let _ = sender.send(view);
         }
@@ -54,7 +60,10 @@ impl LayoutBroadcaster {
 
     /// Drop the sender for `wid`, causing existing receivers to observe `RecvError::Closed`.
     pub fn close(&self, wid: &WindowId) {
-        let mut map = self.inner.lock().expect("layout broadcaster mutex poisoned");
+        let mut map = self
+            .inner
+            .lock()
+            .expect("layout broadcaster mutex poisoned");
         map.remove(wid);
     }
 }

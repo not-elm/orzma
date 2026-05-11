@@ -36,12 +36,12 @@ pub async fn split(
         let (new_pane_id, new_activity_id) = ms.split_pane(pane_id, req.side, req.orientation)?;
         // Publish the new layout snapshot while still holding the lock.
         let wid = ms.window_id_of_pane(&new_pane_id).ok();
-        if let Some(wid) = wid.as_ref() {
-            if let Some(window) = ms.windows().get(wid) {
-                match crate::handlers::windows::window_view_for(&ms, wid, window) {
-                    Ok(view) => broadcaster.publish(wid, view),
-                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split"),
-                }
+        if let Some(wid) = wid.as_ref()
+            && let Some(window) = ms.windows().get(wid)
+        {
+            match crate::handlers::windows::window_view_for(&ms, wid, window) {
+                Ok(view) => broadcaster.publish(wid, view),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split"),
             }
         }
         (new_pane_id, new_activity_id, wid)
@@ -70,15 +70,14 @@ pub async fn split(
                 "split rollback failed to close pane after spawn failure"
             );
         }
-        if close_ok {
-            if let Some(wid) = wid.as_ref() {
-                if let Some(window) = ms.windows().get(wid) {
-                    match crate::handlers::windows::window_view_for(&ms, wid, window) {
-                        Ok(view) => broadcaster.publish(wid, view),
-                        Err(e) => {
-                            tracing::warn!(error = %e, %wid, "skipped corrective publish on split rollback")
-                        }
-                    }
+        if close_ok
+            && let Some(wid) = wid.as_ref()
+            && let Some(window) = ms.windows().get(wid)
+        {
+            match crate::handlers::windows::window_view_for(&ms, wid, window) {
+                Ok(view) => broadcaster.publish(wid, view),
+                Err(e) => {
+                    tracing::warn!(error = %e, %wid, "skipped corrective publish on split rollback")
                 }
             }
         }
@@ -152,12 +151,12 @@ pub async fn split_with(
     {
         let mut ms = ms.lock().await;
         ms.split_with_pane(src.clone(), body.pane_id, body.side, body.orientation)?;
-        if let Ok(wid) = ms.window_id_of_pane(&src) {
-            if let Some(window) = ms.windows().get(&wid) {
-                match crate::handlers::windows::window_view_for(&ms, &wid, window) {
-                    Ok(view) => broadcaster.publish(&wid, view),
-                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split_with"),
-                }
+        if let Ok(wid) = ms.window_id_of_pane(&src)
+            && let Some(window) = ms.windows().get(&wid)
+        {
+            match crate::handlers::windows::window_view_for(&ms, &wid, window) {
+                Ok(view) => broadcaster.publish(&wid, view),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split_with"),
             }
         }
     }
@@ -191,12 +190,12 @@ pub async fn close(
             .unwrap_or_default();
         ms.close_pane(&pane_id)?;
         // After close, publish the new layout while still holding the lock.
-        if let Some(wid) = wid {
-            if let Some(window) = ms.windows().get(&wid) {
-                match crate::handlers::windows::window_view_for(&ms, &wid, window) {
-                    Ok(view) => broadcaster.publish(&wid, view),
-                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on close"),
-                }
+        if let Some(wid) = wid
+            && let Some(window) = ms.windows().get(&wid)
+        {
+            match crate::handlers::windows::window_view_for(&ms, &wid, window) {
+                Ok(view) => broadcaster.publish(&wid, view),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on close"),
             }
         }
         activities
@@ -686,7 +685,9 @@ mod tests {
         // Create a limbo pane (in panes, not in cells) — split_with places it.
         let aid_new = ms.new_activity(Activity {
             name: "ext".into(),
-            kind: ActivityKind::Extension { html_root: PathBuf::from("/tmp") },
+            kind: ActivityKind::Extension {
+                html_root: PathBuf::from("/tmp"),
+            },
         });
         let new_pid = ms.new_pane_with_activity(aid_new).unwrap();
         let registry = ExtensionRegistry::default();

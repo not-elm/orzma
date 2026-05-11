@@ -1,5 +1,10 @@
 // extensions/memo/bootstrap.ts
-import { bootstrap, createActivity, createPane, splitPane } from "@ozmux/sdk/server";
+import {
+  bootstrap,
+  createActivity,
+  createPane,
+  splitPane,
+} from "@ozmux/sdk/server";
 import { fileURLToPath } from "node:url";
 
 bootstrap({
@@ -15,7 +20,7 @@ bootstrap({
       await splitPane({
         target: ctx.pane.paneId,
         paneToPlace: pane,
-        orientation: "horizontal",
+        orientation: "vertical",
         side: "after",
       });
       return 0;

@@ -1,6 +1,6 @@
 import { clsx } from 'clsx';
-import { computePaneLayout } from './paneBounds';
 import { PaneContent } from './PaneContent';
+import { computePaneLayout } from './paneBounds';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
 import { useDefaultWindow } from './useDefaultWindow';
 import { useWindowLayout } from './useWindowLayout';
@@ -54,7 +54,9 @@ export function LayoutView() {
             data-active={isActive}
             className={clsx(
               'absolute outline -outline-offset-2',
-              isActive ? 'outline-2 outline-tmux-pane-active' : 'outline-1 outline-tmux-pane-border',
+              isActive
+                ? 'outline-2 outline-tmux-pane-active'
+                : 'outline-1 outline-tmux-pane-border',
             )}
             // biome-ignore lint/plugin: pane bounds are computed at runtime as percentages of the window
             style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%` }}

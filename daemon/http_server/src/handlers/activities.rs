@@ -61,20 +61,18 @@ async fn handle_terminal_socket(
         res = &mut outbound => {
             log_join_error(res, "outbound");
             inbound.abort();
-            if let Err(e) = inbound.await {
-                if !e.is_cancelled() {
+            if let Err(e) = inbound.await
+                && !e.is_cancelled() {
                     tracing::warn!(error = %e, side = "inbound", "task ended with error after abort");
                 }
-            }
         }
         res = &mut inbound => {
             log_join_error(res, "inbound");
             outbound.abort();
-            if let Err(e) = outbound.await {
-                if !e.is_cancelled() {
+            if let Err(e) = outbound.await
+                && !e.is_cancelled() {
                     tracing::warn!(error = %e, side = "outbound", "task ended with error after abort");
                 }
-            }
         }
     }
 }
@@ -647,7 +645,9 @@ mod tests {
             .unwrap();
         assert!(ct.starts_with("text/html"), "expected text/html, got {ct}");
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body_str = std::str::from_utf8(&body).unwrap();
         assert!(
             body_str.contains("Memo"),

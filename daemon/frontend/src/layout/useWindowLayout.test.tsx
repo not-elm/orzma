@@ -72,9 +72,12 @@ describe('useWindowLayout', () => {
       sock.send(JSON.stringify(fakeView({ id: WID2, name: 'second' })));
     });
 
-    const { result, rerender } = renderHook(({ id }: { id: string | null }) => useWindowLayout(id), {
-      initialProps: { id: WID as string | null },
-    });
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string | null }) => useWindowLayout(id),
+      {
+        initialProps: { id: WID as string | null },
+      },
+    );
     await act(async () => {
       await new Promise((r) => setTimeout(r, 10));
     });
@@ -113,9 +116,7 @@ describe('useWindowLayout', () => {
     });
     expect(connectionCount).toBeGreaterThanOrEqual(2);
     expect(result.current.status).toBe('live');
-    expect((result.current as { view: { name: string } }).view.name).toBe(
-      `n${connectionCount}`,
-    );
+    expect((result.current as { view: { name: string } }).view.name).toBe(`n${connectionCount}`);
   });
 
   it('uses backoff for non-first reconnect attempts', async () => {

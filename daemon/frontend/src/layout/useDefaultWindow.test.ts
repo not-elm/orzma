@@ -23,8 +23,7 @@ describe('useDefaultWindow', () => {
       if (url === '/sessions/sid-1') {
         return Promise.resolve({
           ok: true,
-          json: () =>
-            Promise.resolve({ windows: ['wid-a', 'wid-b'], active_window: 'wid-a' }),
+          json: () => Promise.resolve({ windows: ['wid-a', 'wid-b'], active_window: 'wid-a' }),
         } as Response);
       }
       return Promise.reject(new Error(`unexpected ${url}`));
@@ -44,8 +43,7 @@ describe('useDefaultWindow', () => {
       if (url === '/sessions/sid-1')
         return Promise.resolve({
           ok: true,
-          json: () =>
-            Promise.resolve({ windows: ['wid-a', 'wid-b'], active_window: null }),
+          json: () => Promise.resolve({ windows: ['wid-a', 'wid-b'], active_window: null }),
         } as Response);
       return Promise.reject(new Error('unexpected'));
     });

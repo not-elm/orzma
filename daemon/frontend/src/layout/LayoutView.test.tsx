@@ -94,8 +94,16 @@ describe('<LayoutView>', () => {
       active_pane: 'pid-a',
       layout_schema_version: 1,
       panes: [
-        { id: 'pid-a', active_activity: 'aid-a', activities: [{ id: 'aid-a', kind: 'extension', iframe_url: '/a' }] },
-        { id: 'pid-b', active_activity: 'aid-b', activities: [{ id: 'aid-b', kind: 'extension', iframe_url: '/b' }] },
+        {
+          id: 'pid-a',
+          active_activity: 'aid-a',
+          activities: [{ id: 'aid-a', kind: 'extension', iframe_url: '/a' }],
+        },
+        {
+          id: 'pid-b',
+          active_activity: 'aid-b',
+          activities: [{ id: 'aid-b', kind: 'extension', iframe_url: '/b' }],
+        },
       ],
       layout: {
         type: 'root',
@@ -125,7 +133,11 @@ describe('<LayoutView>', () => {
             id: 'pid-ext',
             active_activity: 'aid-ext',
             activities: [
-              { id: 'aid-ext', kind: 'extension', iframe_url: '/activities/aid-ext/iframe/index.html' },
+              {
+                id: 'aid-ext',
+                kind: 'extension',
+                iframe_url: '/activities/aid-ext/iframe/index.html',
+              },
             ],
           },
         ],
@@ -203,8 +215,16 @@ describe('<LayoutView>', () => {
       active_pane: 'pid-a',
       layout_schema_version: 1,
       panes: [
-        { id: 'pid-a', active_activity: 'aid-a', activities: [{ id: 'aid-a', kind: 'extension', iframe_url: '/a' }] },
-        { id: 'pid-b', active_activity: 'aid-b', activities: [{ id: 'aid-b', kind: 'extension', iframe_url: '/b' }] },
+        {
+          id: 'pid-a',
+          active_activity: 'aid-a',
+          activities: [{ id: 'aid-a', kind: 'extension', iframe_url: '/a' }],
+        },
+        {
+          id: 'pid-b',
+          active_activity: 'aid-b',
+          activities: [{ id: 'aid-b', kind: 'extension', iframe_url: '/b' }],
+        },
       ],
       layout: {
         type: 'root',
