@@ -15,7 +15,9 @@ axum = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+anyhow = { workspace = true }
 thiserror = { workspace = true }
 futures-util = { workspace = true }
 mime_guess = { workspace = true }
