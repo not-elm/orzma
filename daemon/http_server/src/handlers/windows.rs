@@ -881,12 +881,10 @@ mod tests {
                 if ms
                     .split_pane(pid_.clone(), Side::After, SplitOrientation::Horizontal)
                     .is_ok()
+                    && let Some(window) = ms.windows().get(&wid_)
+                    && let Ok(view) = super::window_view_for(&ms, &wid_, window)
                 {
-                    if let Some(window) = ms.windows().get(&wid_) {
-                        if let Ok(view) = super::window_view_for(&ms, &wid_, window) {
-                            bc.publish(&wid_, view);
-                        }
-                    }
+                    bc.publish(&wid_, view);
                 }
             }));
         }
@@ -908,13 +906,10 @@ mod tests {
             TtMessage::Text(t) => serde_json::from_str::<serde_json::Value>(&t).unwrap(),
             _ => panic!("expected text frame"),
         };
-        loop {
-            match tokio::time::timeout(std::time::Duration::from_millis(100), ws.next()).await {
-                Ok(Some(Ok(TtMessage::Text(t)))) => {
-                    latest = serde_json::from_str::<serde_json::Value>(&t).unwrap();
-                }
-                _ => break,
-            }
+        while let Ok(Some(Ok(TtMessage::Text(t)))) =
+            tokio::time::timeout(std::time::Duration::from_millis(100), ws.next()).await
+        {
+            latest = serde_json::from_str::<serde_json::Value>(&t).unwrap();
         }
 
         let final_pane_count = ms_handle.lock().await.panes().len();
