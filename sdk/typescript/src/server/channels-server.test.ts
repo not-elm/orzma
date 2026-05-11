@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   bindHandlersServer,
   registerActivityHandlers,
@@ -204,6 +204,103 @@ describe("channels-server: happy path", () => {
     expect(byId["1"]?.[2].kind).toBe("sub.complete");
     expect(byId["2"]?.[0].payload).toEqual({ from: "b", v: 1 });
     expect(byId["2"]?.[1].kind).toBe("sub.complete");
+    s.destroy();
+  });
+});
+
+describe("channels-server: cancellation", () => {
+  it("aborts the generator's signal and runs finally on sub.cancel", async () => {
+    server = await bindHandlersServer(sockPath);
+    let finallyRan = false;
+    let signalSeen: AbortSignal | undefined;
+    registerActivityChannels("aid-1", {
+      slow: async function* (_p: unknown, { signal }: { signal: AbortSignal }) {
+        signalSeen = signal;
+        try {
+          for (;;) {
+            if (signal.aborted) return;
+            yield { tick: Date.now() };
+            await new Promise<void>((resolve) => {
+              const t = setTimeout(resolve, 10);
+              signal.addEventListener("abort", () => {
+                clearTimeout(t);
+                resolve();
+              });
+            });
+          }
+        } finally {
+          finallyRan = true;
+        }
+      },
+    });
+    const s = await connect();
+    const next = lineReader(s);
+    s.write(
+      JSON.stringify({
+        aid: "aid-1",
+        frame: { kind: "sub.open", id: "s1", name: "slow", params: {} },
+      }) + "\n",
+    );
+    // Read at least one data frame, then cancel.
+    const first = JSON.parse(await next()).frame;
+    expect(first.kind).toBe("sub.data");
+    s.write(
+      JSON.stringify({
+        aid: "aid-1",
+        frame: { kind: "sub.cancel", id: "s1" },
+      }) + "\n",
+    );
+    // Drain until we see sub.complete.
+    let saw: unknown;
+    for (let i = 0; i < 20; i++) {
+      const env = JSON.parse(await next()).frame;
+      if (env.kind === "sub.complete") {
+        saw = env;
+        break;
+      }
+    }
+    expect((saw as { kind: string }).kind).toBe("sub.complete");
+    await vi.waitFor(() => expect(finallyRan).toBe(true));
+    expect(signalSeen?.aborted).toBe(true);
+    s.destroy();
+  });
+
+  it("drops sub.data emitted after cancel", async () => {
+    server = await bindHandlersServer(sockPath);
+    let resumeYield: () => void = () => {};
+    registerActivityChannels("aid-1", {
+      gated: async function* () {
+        yield { first: true };
+        await new Promise<void>((resolve) => {
+          resumeYield = resolve;
+        });
+        yield { afterCancel: true };
+      },
+    });
+    const s = await connect();
+    const next = lineReader(s);
+    s.write(
+      JSON.stringify({
+        aid: "aid-1",
+        frame: { kind: "sub.open", id: "s1", name: "gated", params: {} },
+      }) + "\n",
+    );
+    const first = JSON.parse(await next()).frame;
+    expect(first).toEqual({ kind: "sub.data", id: "s1", payload: { first: true } });
+    s.write(
+      JSON.stringify({
+        aid: "aid-1",
+        frame: { kind: "sub.cancel", id: "s1" },
+      }) + "\n",
+    );
+    // Wait for the cancel frame to be read and dispatched on the server
+    // side before letting the generator resume; without this, the
+    // generator's next yield wins the microtask vs macrotask race.
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    resumeYield();
+    // Next frame must be sub.complete, not the dropped afterCancel data.
+    const after = JSON.parse(await next()).frame;
+    expect(after.kind).toBe("sub.complete");
     s.destroy();
   });
 });
