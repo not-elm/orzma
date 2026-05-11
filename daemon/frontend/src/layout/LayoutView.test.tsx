@@ -207,6 +207,64 @@ describe('<LayoutView>', () => {
     expect(container.textContent).toMatch(/Unknown layout node type/);
   });
 
+  it('POSTs activate when pointerdown fires on an inactive pane wrapper', async () => {
+    // Two panes: pid-1 (active terminal), pid-2 (inactive terminal).
+    // Test fires pointerdown on the inactive wrapper and asserts the fetch.
+    const view = fakeView({
+      panes: [
+        { id: 'pid-1', active_activity: 'aid-1', activities: [{ id: 'aid-1', kind: 'terminal' }] },
+        { id: 'pid-2', active_activity: 'aid-2', activities: [{ id: 'aid-2', kind: 'terminal' }] },
+      ],
+      layout: {
+        type: 'root',
+        cell_id: 'cid-root',
+        child: {
+          type: 'split',
+          cell_id: 'cid-split',
+          orientation: 'horizontal',
+          split_ratio: 0.5,
+          lhs: { type: 'pane', cell_id: 'cid-pane-1', pane_id: 'pid-1' },
+          rhs: { type: 'pane', cell_id: 'cid-pane-2', pane_id: 'pid-2' },
+        },
+      },
+    });
+    const container = await withView(view);
+
+    // Track activate POSTs separately by intercepting fetch.
+    const activateUrl = `/windows/${WID}/panes/pid-2/activate`;
+    let activateCalls = 0;
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      (url: string, init?: RequestInit) => {
+        if (url === activateUrl && init?.method === 'POST') {
+          activateCalls += 1;
+          return Promise.resolve({ ok: true, status: 204 } as Response);
+        }
+        return Promise.reject(new Error(`unexpected fetch ${url}`));
+      },
+    );
+
+    const inactiveWrapper = container.querySelector('[data-active="false"]') as HTMLElement;
+    expect(inactiveWrapper).not.toBeNull();
+    inactiveWrapper.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    await waitFor(() => expect(activateCalls).toBe(1));
+  });
+
+  it('does NOT POST activate when pointerdown fires on the already-active wrapper', async () => {
+    const container = await withView(fakeView());
+    const activeWrapper = container.querySelector('[data-active="true"]') as HTMLElement;
+    expect(activeWrapper).not.toBeNull();
+
+    const fetchSpy = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchSpy.mockClear();
+    activeWrapper.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    // Yield a microtask so any pending promise rejections do not leak.
+    await Promise.resolve();
+    // No `/activate` URL should have been hit.
+    for (const call of fetchSpy.mock.calls) {
+      expect(String(call[0])).not.toContain('/activate');
+    }
+  });
+
   it('renders absolute-positioned wrappers with percentage sizes', async () => {
     const view: WindowView = {
       id: WID,

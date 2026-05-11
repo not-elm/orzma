@@ -1,7 +1,8 @@
 import { clsx } from 'clsx';
-import type { ReactNode } from 'react';
+import type { PointerEventHandler, ReactNode } from 'react';
 import { PaneContent } from './PaneContent';
 import { type Bounds, computePaneLayout } from './paneBounds';
+import type { PaneId } from './types';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
 import { useDefaultWindow } from './useDefaultWindow';
 import { useWindowLayout } from './useWindowLayout';
@@ -10,14 +11,16 @@ interface AbsoluteBoxProps {
   bounds: Bounds;
   className?: string;
   active?: boolean;
+  onPointerDown?: PointerEventHandler<HTMLDivElement>;
   children: ReactNode;
 }
 
-function AbsoluteBox({ bounds, className, active, children }: AbsoluteBoxProps) {
+function AbsoluteBox({ bounds, className, active, onPointerDown, children }: AbsoluteBoxProps) {
   return (
     <div
       data-active={active}
       className={clsx('absolute', className)}
+      onPointerDown={onPointerDown}
       // biome-ignore lint/plugin: bounds are computed at runtime as percentages of the window
       style={{
         left: `${bounds.x}%`,
@@ -68,17 +71,25 @@ export function LayoutView() {
   const view = layout.view;
   const { panes: bounds, unknown } = computePaneLayout(view.layout);
 
+  const activate = (paneId: PaneId) => {
+    if (paneId === view.active_pane) return;
+    fetch(`/windows/${view.id}/panes/${paneId}/activate`, { method: 'POST' }).catch((err) => {
+      console.warn('failed to activate pane', err);
+    });
+  };
+
   return (
     <div className="relative h-dvh w-dvw bg-background">
       {view.panes.map((pane) => {
         const b = bounds.get(pane.id);
-        if (!b) return null; // pane not represented in layout; skip silently
+        if (!b) return null;
         const isActive = pane.id === view.active_pane;
         return (
           <AbsoluteBox
             key={pane.id}
             bounds={b}
             active={isActive}
+            onPointerDown={() => activate(pane.id)}
             className={clsx(
               'outline -outline-offset-2',
               isActive
@@ -86,7 +97,7 @@ export function LayoutView() {
                 : 'outline-1 outline-tmux-pane-border',
             )}
           >
-            <PaneContent pane={pane} />
+            <PaneContent pane={pane} isActive={isActive} onActivate={() => activate(pane.id)} />
           </AbsoluteBox>
         );
       })}
