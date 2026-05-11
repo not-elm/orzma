@@ -1,3 +1,4 @@
+/* biome-ignore-all lint/plugin: this file defines Layer 1 raw palette and Layer 2 semantic tokens; var(--tn-*) usage is intentional */
 @import "tailwindcss";
 
 /* ============================================================

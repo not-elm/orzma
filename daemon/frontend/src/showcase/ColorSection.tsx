@@ -1,3 +1,4 @@
+/* biome-ignore-all lint/plugin: showcase metadata reflects raw palette by design — this file visualizes the token system */
 import { useEffect, useState } from 'react';
 
 type TokenRow = {
