@@ -5,6 +5,6 @@ jsx_attribute($name, $value) as $attr where {
   $value <: includes "-[",
   register_diagnostic(
     span = $attr,
-    message = "Tailwind arbitrary values (e.g. `bg-[#abc]`, `min-h-[200px]`) are forbidden. Extend `daemon/frontend/src/styles/theme.css` instead. If unavoidable, suppress with `// biome-ignore plugin/no-arbitrary-class: <reason>`."
+    message = "Tailwind arbitrary values (e.g. `bg-[#abc]`, `min-h-[200px]`) are forbidden. Extend `daemon/frontend/src/styles/theme.css` instead. If unavoidable, suppress with `// biome-ignore lint/plugin: <reason>`."
   )
 }
