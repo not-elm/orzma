@@ -417,8 +417,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        assert!(state.extensions.pane_owner(&new_pid).is_none(),
-            "pane owner registry entry must be cleared after close");
+        assert!(
+            state.extensions.pane_owner(&new_pid).is_none(),
+            "pane owner registry entry must be cleared after close"
+        );
     }
 
     fn router_with_owned_activity(
