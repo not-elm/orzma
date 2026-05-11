@@ -74,14 +74,17 @@ export function usePrefixMode(
       // armed
       if (MODIFIER_KEYS.has(e.key)) {
         e.preventDefault();
+        e.stopPropagation();
         return;
       }
       if (e.repeat) {
         e.preventDefault();
+        e.stopPropagation();
         return;
       }
 
       e.preventDefault();
+      e.stopPropagation();
 
       // cancel via Escape or repeated prefix
       if (e.key === 'Escape' || (key === prefixKey && e.ctrlKey === prefixCtrl)) {

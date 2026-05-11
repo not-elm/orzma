@@ -82,7 +82,7 @@ describe('usePrefixMode', () => {
       (e) => {
         if (e.defaultPrevented) preventedDuringArmed = true;
       },
-      { once: true },
+      { capture: true, once: true },
     );
     act(() => {
       press({ key: 'q' });
@@ -90,6 +90,24 @@ describe('usePrefixMode', () => {
     expect(result.current.isArmed).toBe(false);
     expect(fire).not.toHaveBeenCalled();
     expect(preventedDuringArmed).toBe(true);
+  });
+
+  it('armed + key press calls both preventDefault and stopPropagation', () => {
+    const fire = vi.fn();
+    const bindings: PrefixBindings = new Map([['x', fire]]);
+    renderHook(() => usePrefixMode(bindings));
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+    });
+
+    const ev = new KeyboardEvent('keydown', { key: 'q', bubbles: true, cancelable: true });
+    const preventSpy = vi.spyOn(ev, 'preventDefault');
+    const stopSpy = vi.spyOn(ev, 'stopPropagation');
+    act(() => {
+      document.dispatchEvent(ev);
+    });
+    expect(preventSpy).toHaveBeenCalled();
+    expect(stopSpy).toHaveBeenCalled();
   });
 
   it('event.repeat does not arm', () => {
