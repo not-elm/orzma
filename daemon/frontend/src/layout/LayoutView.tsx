@@ -1,9 +1,35 @@
 import { clsx } from 'clsx';
+import type { ReactNode } from 'react';
 import { PaneContent } from './PaneContent';
-import { computePaneLayout } from './paneBounds';
+import { type Bounds, computePaneLayout } from './paneBounds';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
 import { useDefaultWindow } from './useDefaultWindow';
 import { useWindowLayout } from './useWindowLayout';
+
+interface AbsoluteBoxProps {
+  bounds: Bounds;
+  className?: string;
+  active?: boolean;
+  children: ReactNode;
+}
+
+function AbsoluteBox({ bounds, className, active, children }: AbsoluteBoxProps) {
+  return (
+    <div
+      data-active={active}
+      className={clsx('absolute', className)}
+      // biome-ignore lint/plugin: bounds are computed at runtime as percentages of the window
+      style={{
+        left: `${bounds.x}%`,
+        top: `${bounds.y}%`,
+        width: `${bounds.w}%`,
+        height: `${bounds.h}%`,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 export function LayoutView() {
   const def = useDefaultWindow();
@@ -49,36 +75,25 @@ export function LayoutView() {
         if (!b) return null; // pane not represented in layout; skip silently
         const isActive = pane.id === view.active_pane;
         return (
-          <div
+          <AbsoluteBox
             key={pane.id}
-            data-active={isActive}
+            bounds={b}
+            active={isActive}
             className={clsx(
-              'absolute outline -outline-offset-2',
+              'outline -outline-offset-2',
               isActive
                 ? 'outline-2 outline-tmux-pane-active'
                 : 'outline-1 outline-tmux-pane-border',
             )}
-            // biome-ignore lint/plugin: pane bounds are computed at runtime as percentages of the window
-            style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%` }}
           >
             <PaneContent pane={pane} />
-          </div>
+          </AbsoluteBox>
         );
       })}
       {unknown.map((u) => (
-        <div
-          key={u.cell_id}
-          className="absolute"
-          // biome-ignore lint/plugin: unknown-node bounds are computed at runtime as percentages of the window
-          style={{
-            left: `${u.bounds.x}%`,
-            top: `${u.bounds.y}%`,
-            width: `${u.bounds.w}%`,
-            height: `${u.bounds.h}%`,
-          }}
-        >
+        <AbsoluteBox key={u.cell_id} bounds={u.bounds}>
           <UnknownLayoutNode type={u.type} />
-        </div>
+        </AbsoluteBox>
       ))}
       {layout.status === 'reconnecting' && (
         <div className="absolute right-2 top-2 rounded bg-warning px-2 py-1 text-xs text-warning-foreground">
