@@ -10,6 +10,13 @@ pub mod window;
 pub use error::{MultiplexerError, MultiplexerResult};
 pub use window::*;
 
+#[must_use]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum SetActivePaneOutcome {
+    Unchanged,
+    Changed,
+}
+
 use crate::{
     activity::{Activity, ActivityId, ActivityState},
     cells::{CellId, LayoutCellState, Side, SplitOrientation},
@@ -303,7 +310,41 @@ impl MultiplexerService {
                 return Ok(());
             }
         }
-        Err(MultiplexerError::WindowNotAttachedToSession(window_id.clone()))
+        Err(MultiplexerError::WindowNotAttachedToSession(
+            window_id.clone(),
+        ))
+    }
+
+    /// Set `window.active_pane` to `pane_id`. Validates that the pane exists
+    /// and actually belongs to `window_id`. Returns `Unchanged` when the pane
+    /// is already active so the caller can suppress redundant broadcasts.
+    pub fn set_active_pane(
+        &mut self,
+        window_id: &WindowId,
+        pane_id: &PaneId,
+    ) -> MultiplexerResult<SetActivePaneOutcome> {
+        if !self.windows.contains_key(window_id) {
+            return Err(MultiplexerError::WindowNotFound(window_id.clone()));
+        }
+        if !self.panes.contains_key(pane_id) {
+            return Err(MultiplexerError::PaneNotFound(pane_id.clone()));
+        }
+        let actual_window = self.window_id_of_pane(pane_id)?;
+        if &actual_window != window_id {
+            return Err(MultiplexerError::PaneNotInWindow {
+                window: window_id.clone(),
+                pane: pane_id.clone(),
+            });
+        }
+        let window = self
+            .windows
+            .get_mut(window_id)
+            .expect("contains_key check above");
+        if &window.active_pane == pane_id {
+            return Ok(SetActivePaneOutcome::Unchanged);
+        }
+        window.active_pane = pane_id.clone();
+        Ok(SetActivePaneOutcome::Changed)
     }
 
     /// Bootstrap the multiplexer with one session, one window inside it, and
@@ -411,7 +452,10 @@ mod tests {
 
         let result = ms.close_pane(&pane_id);
 
-        assert!(matches!(result, Err(MultiplexerError::CannotCloseLastPane(_))));
+        assert!(matches!(
+            result,
+            Err(MultiplexerError::CannotCloseLastPane(_))
+        ));
         // No store was mutated.
         assert_eq!(ms.panes().len(), panes_before);
         assert_eq!(ms.cell_id_for_pane(&pane_id).unwrap(), &pane_cell);
@@ -762,5 +806,84 @@ mod tests {
         let serialized_before = serde_json::to_string(&cells_before).unwrap();
         let serialized_after = serde_json::to_string(ms.cells_ref()).unwrap();
         assert_eq!(serialized_before, serialized_after);
+    }
+
+    #[test]
+    fn set_active_pane_changes_active_for_non_active_pane() {
+        let WindowFixture {
+            mut ms,
+            window_id,
+            pane_id: original_pane,
+            ..
+        } = fresh_window();
+        let (new_pane, _) = ms
+            .split_pane(
+                original_pane.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap();
+        // split_pane promoted `new_pane` to active. Switch back.
+        let outcome = ms.set_active_pane(&window_id, &original_pane).unwrap();
+
+        assert!(matches!(outcome, SetActivePaneOutcome::Changed));
+        assert_eq!(
+            ms.windows().get(&window_id).unwrap().active_pane,
+            original_pane
+        );
+        let _ = new_pane;
+    }
+
+    #[test]
+    fn set_active_pane_returns_unchanged_when_already_active() {
+        let WindowFixture {
+            mut ms,
+            window_id,
+            pane_id,
+            ..
+        } = fresh_window();
+        let outcome = ms.set_active_pane(&window_id, &pane_id).unwrap();
+        assert!(matches!(outcome, SetActivePaneOutcome::Unchanged));
+        assert_eq!(ms.windows().get(&window_id).unwrap().active_pane, pane_id);
+    }
+
+    #[test]
+    fn set_active_pane_unknown_window_returns_window_not_found() {
+        let WindowFixture {
+            mut ms, pane_id, ..
+        } = fresh_window();
+        let bogus = WindowId::new();
+        let err = ms.set_active_pane(&bogus, &pane_id).unwrap_err();
+        assert!(matches!(err, MultiplexerError::WindowNotFound(_)));
+    }
+
+    #[test]
+    fn set_active_pane_unknown_pane_returns_pane_not_found() {
+        let WindowFixture {
+            mut ms, window_id, ..
+        } = fresh_window();
+        let bogus = PaneId::new();
+        let err = ms.set_active_pane(&window_id, &bogus).unwrap_err();
+        assert!(matches!(err, MultiplexerError::PaneNotFound(_)));
+    }
+
+    #[test]
+    fn set_active_pane_pane_in_other_window_returns_pane_not_in_window() {
+        let WindowFixture {
+            mut ms,
+            window_id: w_a,
+            pane_id: pane_a,
+            ..
+        } = fresh_window();
+        let w_b = ms.new_window_in(None, None).unwrap();
+        // Try to set pane_a active on window_b.
+        let err = ms.set_active_pane(&w_b, &pane_a).unwrap_err();
+        assert!(matches!(
+            err,
+            MultiplexerError::PaneNotInWindow { ref window, ref pane }
+                if window == &w_b && pane == &pane_a
+        ));
+        // Original window's active_pane is untouched.
+        assert_eq!(ms.windows().get(&w_a).unwrap().active_pane, pane_a);
     }
 }

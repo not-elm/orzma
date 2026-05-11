@@ -8,7 +8,9 @@ use axum::{
     http::StatusCode,
 };
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
-use ozmux_multiplexer::{MultiplexerService, MultiplexerError, session::SessionId, window::WindowId};
+use ozmux_multiplexer::{
+    MultiplexerError, MultiplexerService, session::SessionId, window::WindowId,
+};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
 

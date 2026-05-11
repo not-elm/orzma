@@ -106,7 +106,11 @@ impl LayoutCellState {
     /// Read-only validation: gather everything `apply_collapse` needs, without
     /// mutating. Taking `&self` makes it a compile-time guarantee that this
     /// phase performs no writes.
-    fn plan_collapse(&self, target_id: &CellId, parent_id: CellId) -> MultiplexerResult<CollapsePlan> {
+    fn plan_collapse(
+        &self,
+        target_id: &CellId,
+        parent_id: CellId,
+    ) -> MultiplexerResult<CollapsePlan> {
         let parent_split = match self.cell(&parent_id)? {
             Cell::Split(s) => s,
             // Pane is the only child of Root — closing it would empty the
@@ -504,7 +508,10 @@ mod tests {
         let (_, pane_cell) = state.new_window_layout(pid());
 
         let result = state.close_cell(&pane_cell);
-        assert!(matches!(result, Err(MultiplexerError::CannotCloseLastPane(_))));
+        assert!(matches!(
+            result,
+            Err(MultiplexerError::CannotCloseLastPane(_))
+        ));
     }
 
     #[test]
