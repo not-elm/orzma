@@ -106,5 +106,6 @@ export function useXtermTerminal(
   }, [socket.status, socket.sendBinary, socket.sendControl, socket.setBinaryHandler]);
 
   const focus = () => termRef.current?.focus();
-  return { focus };
+  const blur = () => termRef.current?.blur();
+  return { focus, blur };
 }

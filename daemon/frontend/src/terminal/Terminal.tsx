@@ -12,12 +12,13 @@ export function Terminal({ activityId, isActive }: TerminalProps) {
   const [reconnectKey, setReconnectKey] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const socket = useTerminalSocket(activityId, reconnectKey);
-  const { focus } = useXtermTerminal(containerRef, socket);
+  const { focus, blur } = useXtermTerminal(containerRef, socket);
 
   const prevActiveRef = useRef(isActive);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: focus is stabilized by React Compiler; adding it would re-run on every render and defeat transition-only semantics
+  // biome-ignore lint/correctness/useExhaustiveDependencies: focus/blur are stabilized by React Compiler; adding them would re-run on every render and defeat transition-only semantics
   useEffect(() => {
     if (isActive && !prevActiveRef.current) focus();
+    else if (!isActive && prevActiveRef.current) blur();
     prevActiveRef.current = isActive;
   }, [isActive]);
 
