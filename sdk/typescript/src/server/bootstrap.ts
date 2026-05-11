@@ -45,12 +45,20 @@ export function resolveBootstrapEnv(
   };
 }
 
+export interface BindServerOptions {
+  maxConnections?: number;
+}
+
 export async function bindServer(
   sockPath: string,
   onConnection: (conn: net.Socket) => void,
+  options: BindServerOptions = {},
 ): Promise<net.Server> {
   await fs.unlink(sockPath).catch(() => {});
   const server = net.createServer(onConnection);
+  if (options.maxConnections !== undefined) {
+    server.maxConnections = options.maxConnections;
+  }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(sockPath, () => {
@@ -230,9 +238,11 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
       new Promise<void>((res) => server.close(() => res())),
       new Promise<void>((res) => handlersServer.close(() => res())),
     ]);
-    await fs.rm(env.binDir, { recursive: true, force: true });
-    await fs.unlink(env.sockPath).catch(() => {});
-    await fs.unlink(env.handlersSockPath).catch(() => {});
+    await Promise.all([
+      fs.rm(env.binDir, { recursive: true, force: true }),
+      fs.unlink(env.sockPath).catch(() => {}),
+      fs.unlink(env.handlersSockPath).catch(() => {}),
+    ]);
   };
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.on(sig, () => {

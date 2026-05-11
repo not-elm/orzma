@@ -1,15 +1,10 @@
-import * as fs from "node:fs/promises";
-import * as net from "node:net";
-import type { HandlerUdsEnvelope, HandlerServerFrame } from "./protocol.ts";
+import type * as net from "node:net";
+import { bindServer } from "./bootstrap.ts";
+import type { HandlerServerFrame, HandlerUdsEnvelope } from "./protocol.ts";
 
-export type HandlerMap = Record<
-  string,
-  (req: never) => Promise<unknown>
->;
+export type HandlerMap = Record<string, (req: never) => Promise<unknown>>;
 type ActivityId = string;
 
-// Per-process singleton. Populated by createActivity, consumed by the
-// connection handler below. Cleared in tests via __resetActivityHandlersForTests.
 const activityHandlers = new Map<ActivityId, HandlerMap>();
 
 export function registerActivityHandlers(
@@ -24,21 +19,8 @@ export function __resetActivityHandlersForTests(): void {
   activityHandlers.clear();
 }
 
-export async function bindHandlersServer(
-  sockPath: string,
-): Promise<net.Server> {
-  await fs.unlink(sockPath).catch(() => {});
-  const server = net.createServer(onConnection);
-  server.maxConnections = 64;
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(sockPath, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  await fs.chmod(sockPath, 0o600);
-  return server;
+export function bindHandlersServer(sockPath: string): Promise<net.Server> {
+  return bindServer(sockPath, onConnection, { maxConnections: 64 });
 }
 
 function onConnection(conn: net.Socket): void {
@@ -51,16 +33,14 @@ function onConnection(conn: net.Socket): void {
       const line = buf.slice(0, idx);
       buf = buf.slice(idx + 1);
       handleLine(conn, line).catch((err) => {
-        // structured failure: log and keep the connection
-        // (a malformed frame should not kill the channel)
-        // eslint-disable-next-line no-console
+        // A malformed frame should not tear down the channel.
         console.error("handlers-server: handleLine threw", err);
       });
     }
   });
-  conn.on("error", () => {
-    // suppress; .end()/destroy are triggered by EOF on the daemon side
-  });
+  // Node's default error handler would crash the process; the daemon closing
+  // the UDS triggers EOF here, not a fatal error.
+  conn.on("error", () => {});
 }
 
 async function handleLine(conn: net.Socket, line: string): Promise<void> {
