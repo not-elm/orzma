@@ -54,7 +54,9 @@ impl ExtensionRegistry {
 
     pub fn handlers_sock_path(&self, name: &str) -> Option<PathBuf> {
         let g = self.inner.read().expect("registry poisoned");
-        g.by_name.get(name).and_then(|i| i.handlers_sock_path.clone())
+        g.by_name
+            .get(name)
+            .and_then(|i| i.handlers_sock_path.clone())
     }
 
     pub fn get(&self, name: &str) -> Option<ExtensionInfo> {

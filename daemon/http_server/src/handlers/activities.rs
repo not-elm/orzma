@@ -889,10 +889,10 @@ mod tests {
 
     #[tokio::test]
     async fn handlers_ws_round_trip_through_uds_mock() {
+        use futures_util::{SinkExt, StreamExt};
+        use std::time::Duration;
         use tokio::io::AsyncWriteExt;
         use tokio::net::UnixListener;
-        use std::time::Duration;
-        use futures_util::{SinkExt, StreamExt};
 
         // 1. Spin up a mock UDS listener that echoes a result frame for every line.
         let tmp = tempfile::tempdir().unwrap();
@@ -901,10 +901,8 @@ mod tests {
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let (read_half, mut write_half) = stream.split();
-            let mut framed = tokio_util::codec::FramedRead::new(
-                read_half,
-                tokio_util::codec::LinesCodec::new(),
-            );
+            let mut framed =
+                tokio_util::codec::FramedRead::new(read_half, tokio_util::codec::LinesCodec::new());
             while let Some(Ok(line)) = framed.next().await {
                 #[derive(serde::Deserialize)]
                 struct Env<'a> {
@@ -942,7 +940,9 @@ mod tests {
         // 3. Bind an axum server on an ephemeral port and connect via tokio_tungstenite.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
 
         let url = format!("ws://{}/activities/{}/handlers/ws", addr, aid);
         let req = tokio_tungstenite::tungstenite::http::Request::builder()
@@ -968,7 +968,9 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        let TMessage::Text(text) = msg else { panic!("expected text frame, got {:?}", msg) };
+        let TMessage::Text(text) = msg else {
+            panic!("expected text frame, got {:?}", msg)
+        };
         let resp: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(resp["kind"], "result");
         assert_eq!(resp["id"], "1");
