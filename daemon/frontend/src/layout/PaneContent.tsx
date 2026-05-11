@@ -11,7 +11,7 @@ export function PaneContent({ pane }: { pane: PaneView }) {
       <iframe
         src={activity.iframe_url}
         title={`extension-${activity.id}`}
-        style={{ width: '100%', height: '100%', border: 0 }}
+        className="h-full w-full border-0"
       />
     );
   }
