@@ -1,0 +1,8 @@
+language js
+
+`style={$value}` as $attr where {
+  register_diagnostic(
+    span = $attr,
+    message = "Inline `style={{...}}` is forbidden. Use Tailwind utilities. If unavoidable, suppress with `// biome-ignore lint/plugin: <reason>`."
+  )
+}

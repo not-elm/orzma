@@ -7,6 +7,7 @@ export function PaneMockup() {
         semantic tokens.
       </p>
       <div className="border border-border rounded-md overflow-hidden font-mono text-sm">
+        {/* biome-ignore lint/plugin: showcase mockup needs literal pane proportions */}
         <div className="grid grid-cols-[1.4fr_1fr] min-h-[200px]">
           <div className="bg-background text-foreground p-3 border-2 border-tmux-pane-active">
             <div>

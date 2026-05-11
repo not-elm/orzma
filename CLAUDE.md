@@ -1,6 +1,76 @@
 # CLAUDE.md
 
-Operational notes for Claude Code (the assistant) working in this repo.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Architecture
+
+ozmux is a terminal multiplexer with a web UI. It is a hybrid Rust + TypeScript codebase organized as one Cargo workspace and one pnpm workspace sharing the same tree.
+
+### Rust workspace (`Cargo.toml`)
+
+Members live under `cli/` and `daemon/*`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
+
+- `cli` (`ozmux`) — placeholder binary; no subcommands yet.
+- `daemon/bootstrap` (`daemon_bootstrap` binary) — process entry point. Sets up tracing, creates a per-PID runtime root under `$TMPDIR/ozmux/<pid>/{bin,sock}` (0700), loads extensions, wires `AppState`, and runs `ozmux_http_server::serve` until SIGINT.
+- `daemon/http_server` (`ozmux_http_server`) — axum router on `127.0.0.1:3200`. `AppState` aggregates `MultiplexerState` (`Arc<Mutex<MultiplexerService>>`), `TerminalService`, and `ExtensionRegistry`, each wired in via `FromRef`. Routes are REST under `/sessions`, `/windows`, `/panes`, `/activities`, plus a terminal WebSocket (`/activities/{id}/terminal/ws`) and an iframe passthrough (`/activities/{id}/iframe/{*path}`). `serve` bootstraps one session/window/pane/activity and spawns its PTY before the listener binds.
+- `daemon/multiplexer` (`ozmux_multiplexer`) — pure in-memory domain model. `MultiplexerService` owns five stores (`SessionState`, `WindowState`, `PaneState`, `LayoutCellState`, `ActivityState`) plus a `pane_to_cell` index. The Session → Window → Pane → Activity hierarchy is layered with a separate cell tree (`Cell::Root` / `Cell::Pane` / split nodes) that drives layout; mutations like `split_pane` and `close_pane` keep the indices and `active_pane` consistent transactionally. No I/O — terminal lifecycle is delegated.
+- `daemon/terminal` (`ozmux_terminal`) — PTY service. `TerminalService::spawn(pane, activity, SpawnOptions)` launches a `portable-pty` child and exposes a stream of `TerminalEvent`s the WS handler bridges to the browser.
+- `daemon/extension` (`ozmux_extension`) — extension host. `RuntimeRoot::resolve_in` picks a parent directory whose resulting UDS sun_path fits the platform limit (104 macOS / 108 Linux), falling back to `/tmp`. `ExtensionHandles::load` discovers Node extensions under `$OZMUX_EXTENSION_ROOT` and registers them in `ExtensionRegistry`. `bootstrap::longest_extension_name` is used to size the sock_dir conservatively at startup.
+- `daemon/macros` (`ozmux_macros`) — proc-macro crate (syn/quote/darling); compile-fail tests use `trybuild`.
+
+Note: this crate is included as a path dep from `daemon/bootstrap` but is **not** listed in `Cargo.toml`'s `[workspace] members`. Adding new members requires editing both places.
+
+### TypeScript workspace (`pnpm-workspace.yaml`)
+
+`packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — versions for `@types/node`, `typescript`, `vitest`, `zod` come from the workspace catalog. Members:
+
+- `daemon/frontend` (`ozmux-ui`) — Vite 8 + React 19 + Tailwind v4 + xterm.js. Built with `vite-plugin-singlefile` so `vite build` produces one self-contained `index.html` that is later embedded into the Rust binary. The Makefile's `verify-out-dir` target fails the build if anything other than `*.rs` and `index.html` shows up in the HTTP server's static dir — the inliner is supposed to leave no sidecars.
+- `sdk/typescript` (`@ozmux/sdk`) — server-side SDK for extensions (`./server`, `./cmd-shim` exports). Tests via `vitest`.
+- `extensions/memo` — example Node extension consuming `@ozmux/sdk` via `workspace:*`. Extensions are discovered at daemon startup via `OZMUX_EXTENSION_ROOT`.
+- `daemon/extension/tests/fixtures/*` — fixture packages for the Rust extension host's integration tests.
+
+### How the pieces connect at runtime
+
+1. `daemon_bootstrap` reads `OZMUX_EXTENSION_ROOT`, creates the runtime root, spawns extension Node processes (UDS in `sock/`), and starts the axum server.
+2. The browser loads the embedded `index.html` from `GET /`. In debug builds, `/` redirects to `http://localhost:5173` so Vite HMR can be used.
+3. The frontend opens a WebSocket to `/activities/{aid}/terminal/ws` for the bootstrap activity; xterm.js reads/writes raw PTY bytes.
+4. Extensions are reachable via `/activities/{aid}/iframe/*` (proxied to the extension's HTTP server over its UDS).
+
+## Commands
+
+### Rust
+
+| Action | Command |
+| --- | --- |
+| Build everything | `cargo build` |
+| Build the daemon binary | `cargo build -p daemon_bootstrap` |
+| Run the daemon (with extensions) | `make dev-daemon` (sets `OZMUX_EXTENSION_ROOT=$PWD/extensions`) |
+| Run a single test | `cargo test -p ozmux_multiplexer close_pane_after_split_fully_reverts_state` |
+| Run one crate's tests | `cargo test -p ozmux_http_server` |
+| Lint + format (Rust) | `cargo clippy --fix --allow-dirty --allow-staged && cargo fmt` |
+| Fix everything | `make fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`) |
+
+Logs go through `tracing-subscriber`. Default filter is `info,hyper=warn,tower=warn,tokio_tungstenite=warn,tungstenite=warn`; override with `RUST_LOG`.
+
+### TypeScript / frontend
+
+| Action | Command |
+| --- | --- |
+| Install workspace deps | `pnpm install --frozen-lockfile` |
+| Vite dev server on `:5173` (HMR) | `pnpm dev` or `make dev-frontend` |
+| Typecheck every package | `pnpm check-types` |
+| Run all vitest suites | `pnpm test` |
+| Run one SDK test file | `pnpm --filter @ozmux/sdk exec vitest run path/to/file.test.ts` |
+| Lint (biome) | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci` |
+
+Biome (`biome.json`) only scans `daemon/frontend/**` — it is the JS/TS/CSS lint+format tool for this repo, configured for 2-space indent, single quotes, 100-col width, and Tailwind directives in CSS.
+
+## Styling
+
+Frontend styling (utility-first Tailwind v4, semantic tokens, no inline
+styles, no arbitrary values, no raw palette references) is governed by
+[`.claude/rules/styling.md`](.claude/rules/styling.md) and enforced by
+Biome GritQL plugins in `biome-plugins/`.
 
 ## UI verification workflow
 

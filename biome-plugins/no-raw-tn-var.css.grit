@@ -1,0 +1,9 @@
+language css
+
+`var($name)` as $call where {
+  $name <: includes "--tn-",
+  register_diagnostic(
+    span = $call,
+    message = "Raw palette vars (`--tn-*`) are private to Layer 1 of `daemon/frontend/src/styles/theme.css`. Components and other CSS must consume Layer 2 (`--color-*`). Suppress only if you are working on the token-system file itself."
+  )
+}
