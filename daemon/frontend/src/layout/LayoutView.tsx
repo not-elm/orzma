@@ -9,9 +9,6 @@ export function LayoutView() {
   const wid = def.status === 'ready' ? def.windowId : null;
   const layout = useWindowLayout(wid);
 
-  // All hooks above are called unconditionally. The branches below are
-  // pure return statements — no hooks — so Rules of Hooks is satisfied.
-
   if (def.status === 'loading') {
     return (
       <div className="flex h-dvh w-dvw items-center justify-center text-muted-foreground">
