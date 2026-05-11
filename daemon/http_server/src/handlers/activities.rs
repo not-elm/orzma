@@ -911,20 +911,43 @@ mod tests {
                     frame: &'a serde_json::value::RawValue,
                 }
                 let env: Env = serde_json::from_str(&line).unwrap();
-                #[derive(serde::Deserialize)]
-                struct Call {
-                    id: String,
-                    payload: serde_json::Value,
+                let raw: serde_json::Value = serde_json::from_str(env.frame.get()).unwrap();
+                let kind = raw["kind"].as_str().unwrap_or("");
+                let id = raw["id"].as_str().unwrap_or("").to_string();
+                match kind {
+                    "call" => {
+                        let payload = raw["payload"].clone();
+                        let resp = format!(
+                            r#"{{"aid":"{}","frame":{{"kind":"result","id":"{}","payload":{}}}}}"#,
+                            env.aid, id, payload
+                        );
+                        write_half
+                            .write_all((resp + "\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    "sub.open" => {
+                        for i in 0..2 {
+                            let frame = format!(
+                                r#"{{"aid":"{}","frame":{{"kind":"sub.data","id":"{}","payload":{{"i":{}}}}}}}"#,
+                                env.aid, id, i
+                            );
+                            write_half
+                                .write_all((frame + "\n").as_bytes())
+                                .await
+                                .unwrap();
+                        }
+                        let done = format!(
+                            r#"{{"aid":"{}","frame":{{"kind":"sub.complete","id":"{}"}}}}"#,
+                            env.aid, id
+                        );
+                        write_half
+                            .write_all((done + "\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                    _ => { /* ignore other kinds in this test */ }
                 }
-                let call: Call = serde_json::from_str(env.frame.get()).unwrap();
-                let resp = format!(
-                    r#"{{"aid":"{}","frame":{{"kind":"result","id":"{}","payload":{}}}}}"#,
-                    env.aid, call.id, call.payload
-                );
-                write_half
-                    .write_all((resp + "\n").as_bytes())
-                    .await
-                    .unwrap();
             }
         });
 
@@ -975,6 +998,32 @@ mod tests {
         assert_eq!(resp["kind"], "result");
         assert_eq!(resp["id"], "1");
         assert_eq!(resp["payload"], serde_json::json!({"v": 1}));
+
+        // sub.open → expect two sub.data then sub.complete, transparently relayed.
+        ws.send(TMessage::Text(
+            r#"{"kind":"sub.open","id":"s1","name":"counter","params":{}}"#.into(),
+        ))
+        .await
+        .unwrap();
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let TMessage::Text(text) = msg else {
+                panic!("expected text")
+            };
+            got.push(serde_json::from_str::<serde_json::Value>(&text).unwrap());
+        }
+        assert_eq!(got[0]["kind"], "sub.data");
+        assert_eq!(got[0]["id"], "s1");
+        assert_eq!(got[0]["payload"], serde_json::json!({"i": 0}));
+        assert_eq!(got[1]["kind"], "sub.data");
+        assert_eq!(got[1]["payload"], serde_json::json!({"i": 1}));
+        assert_eq!(got[2]["kind"], "sub.complete");
+        assert_eq!(got[2]["id"], "s1");
 
         ws.close(None).await.ok();
         server.abort();
