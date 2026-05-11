@@ -55,11 +55,37 @@ async fn handle_terminal_socket(
     if send_snapshot(&mut ws_tx, snapshot).await.is_err() {
         return;
     }
-    let outbound = tokio::spawn(forward_pty_to_ws(ws_tx, rx));
-    let inbound = tokio::spawn(forward_ws_to_pty(ws_rx, terminal, activity_id));
+    let mut outbound = tokio::spawn(forward_pty_to_ws(ws_tx, rx));
+    let mut inbound = tokio::spawn(forward_ws_to_pty(ws_rx, terminal, activity_id));
     tokio::select! {
-        _ = outbound => {},
-        _ = inbound => {},
+        res = &mut outbound => {
+            log_join_error(res, "outbound");
+            inbound.abort();
+            if let Err(e) = inbound.await {
+                if !e.is_cancelled() {
+                    tracing::warn!(error = %e, side = "inbound", "task ended with error after abort");
+                }
+            }
+        }
+        res = &mut inbound => {
+            log_join_error(res, "inbound");
+            outbound.abort();
+            if let Err(e) = outbound.await {
+                if !e.is_cancelled() {
+                    tracing::warn!(error = %e, side = "outbound", "task ended with error after abort");
+                }
+            }
+        }
+    }
+}
+
+fn log_join_error<T>(res: Result<T, tokio::task::JoinError>, side: &'static str) {
+    if let Err(e) = res {
+        if e.is_panic() {
+            tracing::error!(side, "task panicked");
+        } else if !e.is_cancelled() {
+            tracing::warn!(side, error = %e, "task ended with JoinError");
+        }
     }
 }
 
