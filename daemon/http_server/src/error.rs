@@ -1,6 +1,6 @@
 //! HTTP-layer error type and axum IntoResponse mapping.
 
-use ozmux_multiplexer::SessionError;
+use ozmux_multiplexer::MultiplexerError;
 use ozmux_terminal::TerminalError;
 use thiserror::Error;
 
@@ -10,7 +10,7 @@ pub enum HttpError {
     FailedLaunch(String),
 
     #[error(transparent)]
-    Session(#[from] SessionError),
+    Session(#[from] MultiplexerError),
 
     #[error(transparent)]
     Terminal(#[from] TerminalError),
@@ -32,6 +32,15 @@ pub enum HttpError {
 
     #[error("iframe file not found: {0}")]
     IframeFileNotFound(String),
+
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 pub type HttpResult<T = ()> = Result<T, HttpError>;
@@ -40,31 +49,34 @@ impl axum::response::IntoResponse for HttpError {
     fn into_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
         let (status, code) = match &self {
-            HttpError::Session(SessionError::SessionNotFound(_)) => {
+            HttpError::Session(MultiplexerError::SessionNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "SESSION_NOT_FOUND")
             }
-            HttpError::Session(SessionError::WindowNotFound(_))
-            | HttpError::Session(SessionError::WindowDoesNotBelongToSession { .. }) => {
+            HttpError::Session(MultiplexerError::WindowNotFound(_))
+            | HttpError::Session(MultiplexerError::WindowDoesNotBelongToSession { .. }) => {
                 (StatusCode::NOT_FOUND, "WINDOW_NOT_FOUND")
             }
-            HttpError::Session(SessionError::PaneNotFound(_))
-            | HttpError::Session(SessionError::CellForPaneNotFound(_)) => {
+            HttpError::Session(MultiplexerError::PaneNotFound(_))
+            | HttpError::Session(MultiplexerError::CellForPaneNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "PANE_NOT_FOUND")
             }
-            HttpError::Session(SessionError::CellNotFound(_)) => {
+            HttpError::Session(MultiplexerError::PaneNotInWindow { .. }) => {
+                (StatusCode::CONFLICT, "PANE_NOT_IN_WINDOW")
+            }
+            HttpError::Session(MultiplexerError::CellNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "CELL_NOT_FOUND")
             }
-            HttpError::Session(SessionError::InvalidCellType(_)) => {
+            HttpError::Session(MultiplexerError::InvalidCellType(_)) => {
                 (StatusCode::BAD_REQUEST, "INVALID_CELL_TYPE")
             }
-            HttpError::Session(SessionError::CannotCloseLastWindow(_)) => {
+            HttpError::Session(MultiplexerError::CannotCloseLastWindow(_)) => {
                 (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_WINDOW")
             }
-            HttpError::Session(SessionError::CannotCloseLastPane(_))
-            | HttpError::Session(SessionError::CannotCloseLastPaneInWindow(_)) => {
+            HttpError::Session(MultiplexerError::CannotCloseLastPane(_))
+            | HttpError::Session(MultiplexerError::CannotCloseLastPaneInWindow(_)) => {
                 (StatusCode::CONFLICT, "CANNOT_CLOSE_LAST_PANE")
             }
-            HttpError::Session(SessionError::WindowNotAttachedToSession(_)) => {
+            HttpError::Session(MultiplexerError::WindowNotAttachedToSession(_)) => {
                 (StatusCode::CONFLICT, "WINDOW_NOT_ATTACHED")
             }
             HttpError::Terminal(TerminalError::ActivityNotFound(_)) => {
@@ -78,10 +90,15 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::PaneNotOwned => (StatusCode::FORBIDDEN, "PANE_NOT_OWNED"),
             HttpError::InvalidHtmlPath(_) => (StatusCode::BAD_REQUEST, "INVALID_HTML_PATH"),
             HttpError::IframeFileNotFound(_) => (StatusCode::NOT_FOUND, "IFRAME_FILE_NOT_FOUND"),
-            HttpError::Session(SessionError::ActivityNotFound(_)) => {
+            HttpError::Forbidden(_) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
+            HttpError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            HttpError::ServiceUnavailable(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+            }
+            HttpError::Session(MultiplexerError::ActivityNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
             }
-            HttpError::Session(SessionError::PaneAlreadyPlaced(_)) => {
+            HttpError::Session(MultiplexerError::PaneAlreadyPlaced(_)) => {
                 (StatusCode::CONFLICT, "PANE_ALREADY_PLACED")
             }
             // MissingParentCell, SplitTargetEqualsNewCell, ActivePaneMustBelongToWindow,
@@ -101,7 +118,7 @@ mod tests {
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use ozmux_multiplexer::SessionError;
+    use ozmux_multiplexer::MultiplexerError;
     use ozmux_multiplexer::activity::ActivityId;
     use ozmux_multiplexer::cells::CellId;
     use ozmux_multiplexer::pane::PaneId;
@@ -111,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_not_found_maps_to_404_with_code() {
-        let err = HttpError::Session(SessionError::SessionNotFound(SessionId::new()));
+        let err = HttpError::Session(MultiplexerError::SessionNotFound(SessionId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -121,45 +138,45 @@ mod tests {
 
     #[test]
     fn window_not_found_maps_to_404() {
-        let err = HttpError::Session(SessionError::WindowNotFound(WindowId::new()));
+        let err = HttpError::Session(MultiplexerError::WindowNotFound(WindowId::new()));
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
     fn pane_not_found_maps_to_404() {
-        let err = HttpError::Session(SessionError::PaneNotFound(PaneId::new()));
+        let err = HttpError::Session(MultiplexerError::PaneNotFound(PaneId::new()));
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
     fn cell_for_pane_not_found_maps_to_404_pane_not_found() {
-        let err = HttpError::Session(SessionError::CellForPaneNotFound(PaneId::new()));
+        let err = HttpError::Session(MultiplexerError::CellForPaneNotFound(PaneId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
     fn cannot_close_last_pane_maps_to_409() {
-        let err = HttpError::Session(SessionError::CannotCloseLastPane(CellId::new()));
+        let err = HttpError::Session(MultiplexerError::CannotCloseLastPane(CellId::new()));
         assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
     }
 
     #[test]
     fn window_not_attached_maps_to_409_window_not_attached() {
-        let err = HttpError::Session(SessionError::WindowNotAttachedToSession(WindowId::new()));
+        let err = HttpError::Session(MultiplexerError::WindowNotAttachedToSession(WindowId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[test]
     fn invalid_cell_type_maps_to_400() {
-        let err = HttpError::Session(SessionError::InvalidCellType(CellId::new()));
+        let err = HttpError::Session(MultiplexerError::InvalidCellType(CellId::new()));
         assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
     fn split_target_equals_new_cell_falls_through_to_500() {
-        let err = HttpError::Session(SessionError::SplitTargetEqualsNewCell(CellId::new()));
+        let err = HttpError::Session(MultiplexerError::SplitTargetEqualsNewCell(CellId::new()));
         assert_eq!(
             err.into_response().status(),
             StatusCode::INTERNAL_SERVER_ERROR
@@ -210,13 +227,23 @@ mod tests {
 
     #[test]
     fn pane_already_placed_maps_to_409() {
-        let err = HttpError::Session(SessionError::PaneAlreadyPlaced(PaneId::new()));
+        let err = HttpError::Session(MultiplexerError::PaneAlreadyPlaced(PaneId::new()));
         assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
     }
 
     #[test]
     fn activity_not_found_session_maps_to_404() {
-        let err = HttpError::Session(SessionError::ActivityNotFound(ActivityId::new()));
+        let err = HttpError::Session(MultiplexerError::ActivityNotFound(ActivityId::new()));
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn pane_not_in_window_maps_to_409() {
+        let err = HttpError::Session(MultiplexerError::PaneNotInWindow {
+            window: WindowId::new(),
+            pane: PaneId::new(),
+        });
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 }

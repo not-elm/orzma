@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint
+.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
@@ -56,3 +56,6 @@ dev-e2e:
 
 dev-e2e-stop:
 	./scripts/dev-e2e.sh stop
+
+test-frontend:
+	pnpm --dir $(FRONTEND_DIR) exec vitest run

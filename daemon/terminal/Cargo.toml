@@ -7,6 +7,9 @@ readme.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+test-helpers = []
+
 [dependencies]
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_extension = { path = "../extension" }

@@ -1,4 +1,4 @@
-use crate::{WindowId, error::SessionResult};
+use crate::{WindowId, error::MultiplexerResult};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,10 +27,10 @@ impl SessionState {
     }
 
     #[inline]
-    pub fn remove(&mut self, id: &SessionId) -> SessionResult<Session> {
+    pub fn remove(&mut self, id: &SessionId) -> MultiplexerResult<Session> {
         self.0
             .remove(id)
-            .ok_or_else(|| crate::error::SessionError::SessionNotFound(id.clone()))
+            .ok_or_else(|| crate::error::MultiplexerError::SessionNotFound(id.clone()))
     }
 
     #[inline]

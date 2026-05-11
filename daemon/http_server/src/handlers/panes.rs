@@ -10,6 +10,7 @@ use axum::{
 };
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
+    SetActivePaneOutcome,
     activity::ActivityId,
     cells::{Side, SplitOrientation},
     pane::PaneId,
@@ -27,12 +28,24 @@ pub struct SplitRequest {
 pub async fn split(
     State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(pane_id): Path<PaneId>,
     Json(req): Json<SplitRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    let (new_pane_id, new_activity_id) = {
+    let (new_pane_id, new_activity_id, wid) = {
         let mut ms = ms.lock().await;
-        ms.split_pane(pane_id, req.side, req.orientation)?
+        let (new_pane_id, new_activity_id) = ms.split_pane(pane_id, req.side, req.orientation)?;
+        // Publish the new layout snapshot while still holding the lock.
+        let wid = ms.window_id_of_pane(&new_pane_id).ok();
+        if let Some(wid) = wid.as_ref()
+            && let Some(window) = ms.windows().get(wid)
+        {
+            match crate::handlers::windows::window_view_for(&ms, wid, window) {
+                Ok(view) => broadcaster.publish(wid, view),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split"),
+            }
+        }
+        (new_pane_id, new_activity_id, wid)
     };
 
     if let Err(spawn_err) = terminal
@@ -48,13 +61,28 @@ pub async fn split(
         )
         .await
     {
-        if let Err(rollback_err) = ms.lock().await.close_pane(&new_pane_id) {
+        // Rollback: close the new pane and publish a corrective snapshot so
+        // subscribers don't see the phantom split that just got reverted.
+        let mut ms = ms.lock().await;
+        let close_ok = ms.close_pane(&new_pane_id).is_ok();
+        if !close_ok {
             tracing::warn!(
-                error = %rollback_err,
                 new_pane_id = %new_pane_id,
                 "split rollback failed to close pane after spawn failure"
             );
         }
+        if close_ok
+            && let Some(wid) = wid.as_ref()
+            && let Some(window) = ms.windows().get(wid)
+        {
+            match crate::handlers::windows::window_view_for(&ms, wid, window) {
+                Ok(view) => broadcaster.publish(wid, view),
+                Err(e) => {
+                    tracing::warn!(error = %e, %wid, "skipped corrective publish on split rollback")
+                }
+            }
+        }
+        drop(ms);
         return Err(spawn_err.into());
     }
 
@@ -79,7 +107,7 @@ pub async fn create(
     Json(body): Json<CreatePaneRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
     let owner = registry.activity_owner(&body.activity_id).ok_or_else(|| {
-        HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
+        HttpError::Session(ozmux_multiplexer::MultiplexerError::ActivityNotFound(
             body.activity_id.clone(),
         ))
     })?;
@@ -108,12 +136,13 @@ pub async fn split_with(
     ExtensionName(ext_name): ExtensionName,
     State(ms): State<MultiplexerState>,
     State(registry): State<ExtensionRegistry>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(src): Path<PaneId>,
     Json(body): Json<SplitWithRequest>,
 ) -> HttpResult<StatusCode> {
     // src は owner check しない (D11)
     let owner = registry.pane_owner(&body.pane_id).ok_or_else(|| {
-        HttpError::Session(ozmux_multiplexer::SessionError::PaneNotFound(
+        HttpError::Session(ozmux_multiplexer::MultiplexerError::PaneNotFound(
             body.pane_id.clone(),
         ))
     })?;
@@ -122,7 +151,15 @@ pub async fn split_with(
     }
     {
         let mut ms = ms.lock().await;
-        ms.split_with_pane(src, body.pane_id, body.side, body.orientation)?;
+        ms.split_with_pane(src.clone(), body.pane_id, body.side, body.orientation)?;
+        if let Ok(wid) = ms.window_id_of_pane(&src)
+            && let Some(window) = ms.windows().get(&wid)
+        {
+            match crate::handlers::windows::window_view_for(&ms, &wid, window) {
+                Ok(view) => broadcaster.publish(&wid, view),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on split_with"),
+            }
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -132,6 +169,7 @@ pub async fn close(
     State(ms): State<MultiplexerState>,
     State(terminal): State<TerminalService>,
     State(registry): State<ExtensionRegistry>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(pane_id): Path<PaneId>,
 ) -> HttpResult<StatusCode> {
     // 1. owner check（system-owned pane は entry 無しで 403）
@@ -144,12 +182,23 @@ pub async fn close(
     // 2. lock 内で activities 取得 + close
     let activities_to_kill = {
         let mut ms = ms.lock().await;
+        // Capture wid BEFORE the mutation removes the pane index.
+        let wid = ms.window_id_of_pane(&pane_id).ok();
         let activities = ms
             .panes()
             .get(&pane_id)
             .map(|p| p.activities.clone())
             .unwrap_or_default();
         ms.close_pane(&pane_id)?;
+        // After close, publish the new layout while still holding the lock.
+        if let Some(wid) = wid
+            && let Some(window) = ms.windows().get(&wid)
+        {
+            match crate::handlers::windows::window_view_for(&ms, &wid, window) {
+                Ok(view) => broadcaster.publish(&wid, view),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish on close"),
+            }
+        }
         activities
     };
     // 3. registry forget
@@ -160,6 +209,25 @@ pub async fn close(
     // 4. terminal kill (best-effort)
     for aid in activities_to_kill {
         let _ = terminal.kill(&aid).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn activate(
+    State(ms): State<MultiplexerState>,
+    State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
+    Path((window_id, pane_id)): Path<(ozmux_multiplexer::window::WindowId, PaneId)>,
+) -> HttpResult<StatusCode> {
+    let mut ms = ms.lock().await;
+    match ms.set_active_pane(&window_id, &pane_id)? {
+        SetActivePaneOutcome::Unchanged => return Ok(StatusCode::NO_CONTENT),
+        SetActivePaneOutcome::Changed => {}
+    }
+    if let Some(window) = ms.windows().get(&window_id) {
+        match crate::handlers::windows::window_view_for(&ms, &window_id, window) {
+            Ok(view) => broadcaster.publish(&window_id, view),
+            Err(e) => tracing::warn!(error = %e, %window_id, "skipped layout publish on activate"),
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -233,6 +301,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state.clone());
         let resp = router
@@ -280,6 +349,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -306,6 +376,7 @@ mod tests {
             ))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -341,6 +412,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -379,6 +451,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         (
             crate::test_helpers::daemon_router_for_test(state.clone()),
@@ -421,6 +494,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms2))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -448,6 +522,7 @@ mod tests {
             ))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let phantom = ozmux_multiplexer::activity::ActivityId::new();
@@ -485,6 +560,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -518,6 +594,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -538,6 +615,140 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn split_publishes_layout_to_subscriber() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, state) = router_with(ms);
+
+        // Subscribe BEFORE the mutation.
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+
+        // Note: split also tries to spawn a PTY; in unit-test env this will
+        // typically fail and the handler rolls back. The publish is wired to
+        // happen *after* the multiplexer mutation but *before* the spawn, so
+        // a frame is published even when the spawn later fails. We assert
+        // that frame.
+        let _ = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/panes/{}/split", pid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"orientation":"horizontal"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Whether or not the HTTP request succeeded (PTY may have failed),
+        // we should observe the post-mutation snapshot frame.
+        match tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await {
+            Ok(Ok(view)) => {
+                assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
+                let layout_child = &view["layout"]["child"];
+                assert_eq!(layout_child["type"].as_str(), Some("split"));
+            }
+            Ok(Err(e)) => panic!("recv error: {e:?}"),
+            Err(_) => panic!("publish timed out — split handler did not publish"),
+        }
+    }
+
+    #[tokio::test]
+    async fn close_publishes_layout_to_subscriber() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid_a, _aid) = ms.bootstrap_default().unwrap();
+        let (pid_b, _) = ms
+            .split_pane(pid_a.clone(), Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+        let registry = ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp"));
+        registry.record_pane_owner(&pid_b, "memo");
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
+            terminal: TerminalService::default(),
+            extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
+        };
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+        let router = crate::test_helpers::daemon_router_for_test(state.clone());
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/panes/{}", pid_b))
+                    .header("X-Ozmux-Extension", "memo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
+        // After collapsing the split, the layout's child should be a single pane (pid_a).
+        assert_eq!(view["layout"]["child"]["type"].as_str(), Some("pane"));
+        assert_eq!(
+            view["layout"]["child"]["pane_id"].as_str(),
+            Some(pid_a.as_ref())
+        );
+    }
+
+    #[tokio::test]
+    async fn split_with_publishes_layout_to_subscriber() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, src_pid, _aid) = ms.bootstrap_default().unwrap();
+        // Create a limbo pane (in panes, not in cells) — split_with places it.
+        let aid_new = ms.new_activity(Activity {
+            name: "ext".into(),
+            kind: ActivityKind::Extension {
+                html_root: PathBuf::from("/tmp"),
+            },
+        });
+        let new_pid = ms.new_pane_with_activity(aid_new).unwrap();
+        let registry = ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp"));
+        registry.record_pane_owner(&new_pid, "memo");
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
+            terminal: TerminalService::default(),
+            extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
+        };
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+        let router = crate::test_helpers::daemon_router_for_test(state.clone());
+
+        let body = format!(
+            r#"{{"pane_id":"{}","side":"after","orientation":"horizontal"}}"#,
+            new_pid
+        );
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/panes/{}/split-with", src_pid))
+                    .header("X-Ozmux-Extension", "memo")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
+        assert_eq!(view["layout"]["child"]["type"].as_str(), Some("split"));
+    }
+
+    #[tokio::test]
     async fn split_with_returns_409_for_already_placed_pane() {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
@@ -548,6 +759,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
         let resp = router
@@ -565,5 +777,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn activate_returns_204_when_pane_becomes_active() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, original, _aid) = ms.bootstrap_default().unwrap();
+        let (new_pane, _) = ms
+            .split_pane(
+                original.clone(),
+                ozmux_multiplexer::cells::Side::After,
+                ozmux_multiplexer::cells::SplitOrientation::Horizontal,
+            )
+            .unwrap();
+        // After split, `new_pane` is active. Switch back to `original`.
+        let (router, _state) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/activate", wid, original))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let _ = new_pane;
+    }
+
+    #[tokio::test]
+    async fn activate_already_active_pane_returns_204() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, _state) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/activate", wid, pid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn activate_unknown_window_returns_404() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, pid, _aid) = ms.bootstrap_default().unwrap();
+        let (router, _state) = router_with(ms);
+        let bogus_wid = ozmux_multiplexer::window::WindowId::new();
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/activate", bogus_wid, pid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn activate_pane_in_other_window_returns_409() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, wid_a, pid_a, _aid) = ms.bootstrap_default().unwrap();
+        let wid_b = ms.new_window_in(None, None).unwrap();
+        let (router, _state) = router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/activate", wid_b, pid_a))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let _ = wid_a;
     }
 }

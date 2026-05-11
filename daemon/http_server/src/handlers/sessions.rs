@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{SessionError, session::SessionId};
+use ozmux_multiplexer::{MultiplexerError, session::SessionId};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
 
@@ -80,7 +80,7 @@ pub async fn get(
     let session = ms
         .sessions()
         .get(&session_id)
-        .ok_or_else(|| SessionError::SessionNotFound(session_id.clone()))?;
+        .ok_or_else(|| MultiplexerError::SessionNotFound(session_id.clone()))?;
     Ok(Json(session_view(&session_id, session)))
 }
 

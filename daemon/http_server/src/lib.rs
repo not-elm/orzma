@@ -1,6 +1,8 @@
 pub mod error;
 pub mod extractors;
 pub mod handlers;
+pub mod layout_broadcast;
+pub mod layout_dto;
 
 pub use error::{HttpError, HttpResult};
 
@@ -9,6 +11,7 @@ use axum::{
     extract::FromRef,
     routing::{delete as method_delete, get, post},
 };
+use layout_broadcast::LayoutBroadcaster;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
@@ -21,6 +24,7 @@ pub struct AppState {
     pub multiplexer: MultiplexerState,
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
+    pub layout_broadcast: LayoutBroadcaster,
 }
 
 #[derive(Clone, Default)]
@@ -49,6 +53,12 @@ impl FromRef<AppState> for TerminalService {
 impl FromRef<AppState> for ExtensionRegistry {
     fn from_ref(input: &AppState) -> Self {
         input.extensions.clone()
+    }
+}
+
+impl FromRef<AppState> for LayoutBroadcaster {
+    fn from_ref(input: &AppState) -> Self {
+        input.layout_broadcast.clone()
     }
 }
 
@@ -109,14 +119,26 @@ pub fn daemon_router(state: AppState) -> Router {
             "/windows/{window_id}/select",
             post(handlers::windows::select),
         )
+        .route(
+            "/windows/{window_id}/events",
+            get(handlers::windows::events),
+        )
         .route("/panes", post(handlers::panes::create))
         .route("/panes/{pane_id}/split", post(handlers::panes::split))
         .route("/panes/{src}/split-with", post(handlers::panes::split_with))
         .route("/panes/{pane_id}", method_delete(handlers::panes::close))
+        .route(
+            "/windows/{window_id}/panes/{pane_id}/activate",
+            post(handlers::panes::activate),
+        )
         .route("/activities", post(handlers::activities::create))
         .route(
             "/activities/{activity_id}/terminal/ws",
             get(handlers::activities::terminal_ws),
+        )
+        .route(
+            "/activities/{activity_id}/handlers/ws",
+            get(handlers::activities::handlers_ws),
         )
         .route(
             "/activities/{activity_id}/iframe/{*path}",
@@ -143,6 +165,20 @@ pub(crate) mod test_helpers {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
+        };
+        (daemon_router(state.clone()), state)
+    }
+
+    pub fn router_with_registry(
+        ms: MultiplexerService,
+        registry: ozmux_extension::ExtensionRegistry,
+    ) -> (Router, AppState) {
+        let state = AppState {
+            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
+            terminal: TerminalService::default(),
+            extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         (daemon_router(state.clone()), state)
     }
@@ -155,6 +191,15 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use ozmux_multiplexer::MultiplexerService;
     use tower::ServiceExt;
+
+    #[test]
+    fn app_state_default_includes_layout_broadcaster() {
+        let state = AppState::default();
+        // Ability to subscribe shows the broadcaster is wired and constructable.
+        let _ = state
+            .layout_broadcast
+            .subscribe_or_create(&ozmux_multiplexer::window::WindowId::new());
+    }
 
     #[tokio::test]
     async fn delete_pane_without_extension_header_returns_401() {

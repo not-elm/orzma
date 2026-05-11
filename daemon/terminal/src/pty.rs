@@ -140,6 +140,14 @@ impl TerminalService {
         Ok(handle.snapshot_and_subscribe().await)
     }
 
+    /// Return the current broadcast subscriber count for an activity, or `None`
+    /// if the activity has no PTY. Used in tests to verify task lifecycle.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn subscriber_count(&self, activity: &ActivityId) -> Option<usize> {
+        let guard = self.read(activity).await.ok()?;
+        Some(guard.event_sender.receiver_count())
+    }
+
     #[inline]
     async fn read(
         &self,

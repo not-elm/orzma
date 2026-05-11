@@ -58,7 +58,7 @@ impl RuntimeRoot {
         let needed = |base: &Path| -> usize {
             base.join(pid.to_string())
                 .join("sock")
-                .join(format!("{longest_extension_name}.sock"))
+                .join(format!("{longest_extension_name}.handlers.sock"))
                 .as_os_str()
                 .len()
         };

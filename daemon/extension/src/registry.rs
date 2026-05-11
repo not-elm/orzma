@@ -24,6 +24,7 @@ struct RegistryInner {
 pub struct ExtensionInfo {
     pub name: String,
     pub launch_dir: PathBuf,
+    pub handlers_sock_path: Option<PathBuf>,
 }
 
 impl ExtensionRegistry {
@@ -34,6 +35,7 @@ impl ExtensionRegistry {
             ExtensionInfo {
                 name: name.to_string(),
                 launch_dir: launch_dir.to_path_buf(),
+                handlers_sock_path: None,
             },
         );
     }
@@ -41,6 +43,20 @@ impl ExtensionRegistry {
     pub fn unregister(&self, name: &str) {
         let mut g = self.inner.write().expect("registry poisoned");
         g.by_name.remove(name);
+    }
+
+    pub fn set_handlers_sock_path(&self, name: &str, sock_path: &Path) {
+        let mut g = self.inner.write().expect("registry poisoned");
+        if let Some(info) = g.by_name.get_mut(name) {
+            info.handlers_sock_path = Some(sock_path.to_path_buf());
+        }
+    }
+
+    pub fn handlers_sock_path(&self, name: &str) -> Option<PathBuf> {
+        let g = self.inner.read().expect("registry poisoned");
+        g.by_name
+            .get(name)
+            .and_then(|i| i.handlers_sock_path.clone())
     }
 
     pub fn get(&self, name: &str) -> Option<ExtensionInfo> {
@@ -127,5 +143,19 @@ mod tests {
         let cloned = reg.clone();
         reg.register("memo", Path::new("/tmp/memo"));
         assert!(cloned.get("memo").is_some());
+    }
+
+    #[test]
+    fn handlers_sock_path_round_trip() {
+        let reg = ExtensionRegistry::default();
+        reg.register("memo", Path::new("/tmp/memo"));
+        assert!(reg.handlers_sock_path("memo").is_none());
+        reg.set_handlers_sock_path("memo", Path::new("/tmp/sock/memo.handlers.sock"));
+        assert_eq!(
+            reg.handlers_sock_path("memo"),
+            Some(PathBuf::from("/tmp/sock/memo.handlers.sock"))
+        );
+        reg.unregister("memo");
+        assert!(reg.handlers_sock_path("memo").is_none());
     }
 }

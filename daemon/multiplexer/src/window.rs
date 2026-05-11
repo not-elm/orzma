@@ -73,6 +73,11 @@ impl WindowState {
         self.0.is_empty()
     }
 
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (&WindowId, &Window)> {
+        self.0.iter()
+    }
+
     /// Replace `active_pane` with `new` on every window currently active on
     /// `old`. Used after `split_pane` to mirror tmux's default behavior of
     /// promoting the freshly-created pane to active.

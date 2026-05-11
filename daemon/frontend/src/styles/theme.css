@@ -83,3 +83,30 @@
   --radius-lg: 0.375rem;
   --radius-xl: 0.5rem;
 }
+
+/* ============================================================
+ * Scrollbar — terminal pane only (.xterm-viewport)
+ * xterm.js exposes a native browser scrollbar on .xterm-viewport;
+ * align it with the Tokyo Night palette via Layer 2 tokens.
+ * ============================================================ */
+.xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted-foreground);
+}

@@ -1,6 +1,6 @@
 use crate::{
     activity::ActivityId,
-    error::{SessionError, SessionResult},
+    error::{MultiplexerError, MultiplexerResult},
 };
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
@@ -20,10 +20,10 @@ impl PaneState {
     }
 
     #[inline]
-    pub fn remove(&mut self, id: &PaneId) -> SessionResult<Pane> {
+    pub fn remove(&mut self, id: &PaneId) -> MultiplexerResult<Pane> {
         self.0
             .remove(id)
-            .ok_or_else(|| SessionError::PaneNotFound(id.clone()))
+            .ok_or_else(|| MultiplexerError::PaneNotFound(id.clone()))
     }
 
     #[inline]

@@ -9,12 +9,14 @@ import {
   type ClientFrame,
 } from "./protocol.ts";
 import { assertCommandName, writeShim } from "./shim-writer.ts";
+import { bindHandlersServer } from "./handlers-server.ts";
 
 export interface BootstrapEnv {
   binDir: string;
   sockPath: string;
   extensionName: string;
   daemonUrl: string;
+  handlersSockPath: string;
 }
 
 export function resolveBootstrapEnv(
@@ -24,11 +26,13 @@ export function resolveBootstrapEnv(
   const sockPath = env.OZMUX_SOCK_PATH;
   const extensionName = env.EXTENSION_NAME;
   const daemonUrl = env.OZMUX_DAEMON_URL;
+  const handlersSockPath = env.OZMUX_HANDLERS_SOCK_PATH;
   for (const [k, v] of Object.entries({
     OZMUX_BIN_DIR: binDir,
     OZMUX_SOCK_PATH: sockPath,
     EXTENSION_NAME: extensionName,
     OZMUX_DAEMON_URL: daemonUrl,
+    OZMUX_HANDLERS_SOCK_PATH: handlersSockPath,
   })) {
     if (!v) throw new Error(`missing required env: ${k}`);
   }
@@ -37,15 +41,24 @@ export function resolveBootstrapEnv(
     sockPath: sockPath!,
     extensionName: extensionName!,
     daemonUrl: daemonUrl!,
+    handlersSockPath: handlersSockPath!,
   };
+}
+
+export interface BindServerOptions {
+  maxConnections?: number;
 }
 
 export async function bindServer(
   sockPath: string,
   onConnection: (conn: net.Socket) => void,
+  options: BindServerOptions = {},
 ): Promise<net.Server> {
   await fs.unlink(sockPath).catch(() => {});
   const server = net.createServer(onConnection);
+  if (options.maxConnections !== undefined) {
+    server.maxConnections = options.maxConnections;
+  }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(sockPath, () => {
@@ -71,7 +84,6 @@ export async function materializeShims(
   await fs.mkdir(args.binDir, { recursive: true, mode: 0o700 });
   await fs.chmod(args.binDir, 0o700);
   for (const name of args.commandNames) {
-    console.log("command name", name);
     await writeShim({
       filePath: path.join(args.binDir, name),
       execPath: args.execPath,
@@ -216,13 +228,21 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
     });
   });
 
+  const handlersServer = await bindHandlersServer(env.handlersSockPath);
+
   let cleaningUp = false;
   const cleanup = async () => {
     if (cleaningUp) return;
     cleaningUp = true;
-    await new Promise<void>((res) => server.close(() => res()));
-    await fs.rm(env.binDir, { recursive: true, force: true });
-    await fs.unlink(env.sockPath).catch(() => {});
+    await Promise.all([
+      new Promise<void>((res) => server.close(() => res())),
+      new Promise<void>((res) => handlersServer.close(() => res())),
+    ]);
+    await Promise.all([
+      fs.rm(env.binDir, { recursive: true, force: true }),
+      fs.unlink(env.sockPath).catch(() => {}),
+      fs.unlink(env.handlersSockPath).catch(() => {}),
+    ]);
   };
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.on(sig, () => {

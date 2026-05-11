@@ -3,7 +3,7 @@ use crate::error::HttpError;
 use crate::extractors::ExtensionName;
 use axum::{
     extract::{
-        Path, State, WebSocketUpgrade,
+        FromRequest, Path, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
     },
     http::header::CONTENT_TYPE,
@@ -17,8 +17,11 @@ use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::activity::{Activity, ActivityId, ActivityKind};
 use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use std::path::PathBuf;
+use tokio::net::UnixStream;
 use tokio::sync::broadcast;
+use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 
 type WsSink = SplitSink<WebSocket, Message>;
 type WsStream = SplitStream<WebSocket>;
@@ -55,11 +58,35 @@ async fn handle_terminal_socket(
     if send_snapshot(&mut ws_tx, snapshot).await.is_err() {
         return;
     }
-    let outbound = tokio::spawn(forward_pty_to_ws(ws_tx, rx));
-    let inbound = tokio::spawn(forward_ws_to_pty(ws_rx, terminal, activity_id));
+    let mut outbound = tokio::spawn(forward_pty_to_ws(ws_tx, rx));
+    let mut inbound = tokio::spawn(forward_ws_to_pty(ws_rx, terminal, activity_id));
     tokio::select! {
-        _ = outbound => {},
-        _ = inbound => {},
+        res = &mut outbound => {
+            log_join_error(res, "outbound");
+            inbound.abort();
+            if let Err(e) = inbound.await
+                && !e.is_cancelled() {
+                    tracing::warn!(error = %e, side = "inbound", "task ended with error after abort");
+                }
+        }
+        res = &mut inbound => {
+            log_join_error(res, "inbound");
+            outbound.abort();
+            if let Err(e) = outbound.await
+                && !e.is_cancelled() {
+                    tracing::warn!(error = %e, side = "outbound", "task ended with error after abort");
+                }
+        }
+    }
+}
+
+fn log_join_error<T>(res: Result<T, tokio::task::JoinError>, side: &'static str) {
+    if let Err(e) = res {
+        if e.is_panic() {
+            tracing::error!(side, "task panicked");
+        } else if !e.is_cancelled() {
+            tracing::warn!(side, error = %e, "task ended with JoinError");
+        }
     }
 }
 
@@ -155,6 +182,113 @@ async fn close_with_reason(ws_tx: &mut WsSink, reason: &'static str, lagged: u64
         .await;
 }
 
+fn is_allowed_origin(origin: &str) -> bool {
+    matches!(
+        origin,
+        "http://127.0.0.1:3200"
+            | "http://localhost:3200"
+            | "http://127.0.0.1:5173"
+            | "http://localhost:5173"
+    )
+}
+
+#[derive(Deserialize)]
+struct UdsEnvelope<'a> {
+    #[serde(borrow)]
+    frame: &'a RawValue,
+}
+
+async fn bridge(ws: WebSocket, aid: ActivityId, sock_path: std::path::PathBuf) {
+    let uds = match UnixStream::connect(&sock_path).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, %aid, "handlers ws: uds connect failed");
+            return;
+        }
+    };
+    let (uds_r, uds_w) = uds.into_split();
+    let (ws_tx, ws_rx) = ws.split();
+    let uds_w = FramedWrite::new(uds_w, LinesCodec::new());
+    let uds_r = FramedRead::new(uds_r, LinesCodec::new_with_max_length(1 << 20));
+
+    tokio::select! {
+        r = forward_ws_to_uds(ws_rx, uds_w, aid.clone()) => {
+            if let Err(e) = r {
+                tracing::warn!(error = %e, %aid, "handlers ws: ws→uds ended with error");
+            }
+        }
+        r = forward_uds_to_ws(uds_r, ws_tx) => {
+            if let Err(e) = r {
+                tracing::warn!(error = %e, %aid, "handlers ws: uds→ws ended with error");
+            }
+        }
+    }
+}
+
+async fn forward_ws_to_uds(
+    mut ws_rx: WsStream,
+    mut uds_w: FramedWrite<tokio::net::unix::OwnedWriteHalf, LinesCodec>,
+    aid: ActivityId,
+) -> anyhow::Result<()> {
+    while let Some(msg) = ws_rx.next().await {
+        match msg? {
+            Message::Text(raw) => {
+                if raw.contains('\n') {
+                    anyhow::bail!("newline in WS text payload");
+                }
+                let envelope = format!(r#"{{"aid":"{}","frame":{}}}"#, aid, raw);
+                uds_w.send(envelope).await?;
+            }
+            Message::Close(_) => return Ok(()),
+            _ => continue,
+        }
+    }
+    Ok(())
+}
+
+async fn forward_uds_to_ws(
+    mut uds_r: FramedRead<tokio::net::unix::OwnedReadHalf, LinesCodec>,
+    mut ws_tx: WsSink,
+) -> anyhow::Result<()> {
+    while let Some(line) = uds_r.next().await {
+        let line = line?;
+        let env: UdsEnvelope = serde_json::from_str(&line)?;
+        ws_tx.send(Message::Text(env.frame.get().into())).await?;
+    }
+    Ok(())
+}
+
+pub async fn handlers_ws(
+    State(registry): State<ExtensionRegistry>,
+    Path(activity_id): Path<ActivityId>,
+    req: axum::extract::Request,
+) -> Result<Response, HttpError> {
+    let origin = req
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !is_allowed_origin(origin) {
+        return Err(HttpError::Forbidden("origin not allowed".into()));
+    }
+    let ext_name = registry
+        .activity_owner(&activity_id)
+        .ok_or_else(|| HttpError::NotFound("unknown activity".into()))?;
+    let sock_path = registry
+        .handlers_sock_path(&ext_name)
+        .ok_or_else(|| HttpError::ServiceUnavailable("extension not running".into()))?;
+    let ws = WebSocketUpgrade::from_request(req, &())
+        .await
+        .map_err(|e| HttpError::Forbidden(e.to_string()))?;
+    let ws = ws
+        .max_message_size(1 << 20)
+        .max_frame_size(1 << 20)
+        .max_write_buffer_size(256 << 10)
+        .write_buffer_size(64 << 10);
+
+    Ok(ws.on_upgrade(move |socket| bridge(socket, activity_id, sock_path)))
+}
+
 #[derive(Deserialize)]
 pub struct CreateActivityRequest {
     html: String,
@@ -206,7 +340,7 @@ pub async fn iframe_serve(
     let html_root = {
         let ms = ms.lock().await;
         let activity = ms.activities().get(&activity_id).ok_or_else(|| {
-            HttpError::Session(ozmux_multiplexer::SessionError::ActivityNotFound(
+            HttpError::Session(ozmux_multiplexer::MultiplexerError::ActivityNotFound(
                 activity_id.clone(),
             ))
         })?;
@@ -245,6 +379,9 @@ pub async fn iframe_serve(
 mod tests {
     use super::*;
     use crate::AppState;
+    use crate::test_helpers;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
     use futures_util::{SinkExt, StreamExt};
     use ozmux_extension::ExtensionRegistry;
     use ozmux_multiplexer::MultiplexerService;
@@ -264,6 +401,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: TerminalService::default(),
             extensions: ozmux_extension::ExtensionRegistry::default(),
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         state
             .terminal
@@ -365,6 +503,7 @@ mod tests {
             multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
             terminal: ozmux_terminal::TerminalService::default(),
             extensions: registry,
+            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         (
             crate::test_helpers::daemon_router_for_test(state.clone()),
@@ -577,5 +716,267 @@ mod tests {
             axum::http::StatusCode::BAD_REQUEST | axum::http::StatusCode::NOT_FOUND
         ));
         let _ = std::fs::remove_file(outside);
+    }
+
+    #[tokio::test]
+    async fn iframe_for_memo_extension_returns_visible_content() {
+        // Resolve the real extensions/memo/ path so this test verifies the
+        // file shipped in the repo (not a tempdir copy). CARGO_MANIFEST_DIR
+        // is daemon/http_server, so ../.. lands at the workspace root and
+        // extensions/memo is just below it.
+        let memo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../extensions/memo")
+            .canonicalize()
+            .expect("extensions/memo must exist relative to daemon/http_server");
+
+        let (router, state) = router_with_extension("memo", memo_root.clone());
+        let activity_id = {
+            let mut ms = state.multiplexer.lock().await;
+            ms.new_activity(Activity {
+                name: "ext".to_string(),
+                kind: ActivityKind::Extension {
+                    html_root: memo_root.clone(),
+                },
+            })
+        };
+
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/activities/{activity_id}/iframe/index.html"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/html"), "expected text/html, got {ct}");
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+        assert!(
+            body_str.contains("Memo"),
+            "expected memo HTML to contain visible 'Memo' heading, got: {body_str}"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_ws_outbound_stops_after_client_close() {
+        let (addr, state, activity_id) = boot_server().await;
+
+        // Baseline before any client subscribes. The PTY bridge task holds a
+        // Sender (not a Receiver), so receiver_count starts at 0. We capture
+        // the actual baseline defensively in case future internals change it.
+        let baseline = state.terminal.subscriber_count(&activity_id).await.unwrap();
+
+        // Open a terminal WS via tokio_tungstenite (same pattern as
+        // ws_input_is_echoed_back_in_output).
+        let url = format!("ws://{addr}/activities/{activity_id}/terminal/ws");
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+
+        // Drain initial snapshot frame so the server-side outbound task is
+        // demonstrably alive holding a Receiver.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await;
+
+        // Confirm the outbound task is subscribed.
+        let with_client = state.terminal.subscriber_count(&activity_id).await.unwrap();
+        assert!(
+            with_client > baseline,
+            "expected subscriber count to increase after client connect; baseline={baseline}, with_client={with_client}"
+        );
+
+        // Client closes the WS.
+        ws.send(TtMessage::Close(None)).await.unwrap();
+        drop(ws);
+
+        // Wait up to 500ms for the daemon's abort path to drop the Receiver.
+        // Without the abort fix (Task 2), the outbound task stays detached
+        // and receiver_count never returns to baseline.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            let n = state.terminal.subscriber_count(&activity_id).await.unwrap();
+            if n <= baseline {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "outbound task still subscribed 500ms after close; baseline={baseline}, current={n}"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        state.terminal.kill(&activity_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn handlers_ws_returns_404_for_unknown_activity() {
+        let ms = MultiplexerService::default();
+        let (router, _state) = test_helpers::router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/activities/00000000-0000-0000-0000-000000000000/handlers/ws")
+                    .header("origin", "http://127.0.0.1:3200")
+                    .header("upgrade", "websocket")
+                    .header("connection", "upgrade")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("sec-websocket-version", "13")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handlers_ws_returns_403_for_disallowed_origin() {
+        let ms = MultiplexerService::default();
+        let (router, _state) = test_helpers::router_with(ms);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/activities/00000000-0000-0000-0000-000000000000/handlers/ws")
+                    .header("origin", "http://evil.example")
+                    .header("upgrade", "websocket")
+                    .header("connection", "upgrade")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("sec-websocket-version", "13")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn handlers_ws_returns_503_when_extension_not_running() {
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, _pid, aid) = ms.bootstrap_default().unwrap();
+        let registry = ozmux_extension::ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp/memo"));
+        registry.record_activity_owner(&aid, "memo");
+        let (router, _state) = test_helpers::router_with_registry(ms, registry);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/activities/{}/handlers/ws", aid))
+                    .header("origin", "http://127.0.0.1:3200")
+                    .header("upgrade", "websocket")
+                    .header("connection", "upgrade")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("sec-websocket-version", "13")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn handlers_ws_round_trip_through_uds_mock() {
+        use futures_util::{SinkExt, StreamExt};
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::UnixListener;
+
+        // 1. Spin up a mock UDS listener that echoes a result frame for every line.
+        let tmp = tempfile::tempdir().unwrap();
+        let sock_path = tmp.path().join("memo.handlers.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (read_half, mut write_half) = stream.split();
+            let mut framed =
+                tokio_util::codec::FramedRead::new(read_half, tokio_util::codec::LinesCodec::new());
+            while let Some(Ok(line)) = framed.next().await {
+                #[derive(serde::Deserialize)]
+                struct Env<'a> {
+                    aid: String,
+                    #[serde(borrow)]
+                    frame: &'a serde_json::value::RawValue,
+                }
+                let env: Env = serde_json::from_str(&line).unwrap();
+                #[derive(serde::Deserialize)]
+                struct Call {
+                    id: String,
+                    payload: serde_json::Value,
+                }
+                let call: Call = serde_json::from_str(env.frame.get()).unwrap();
+                let resp = format!(
+                    r#"{{"aid":"{}","frame":{{"kind":"result","id":"{}","payload":{}}}}}"#,
+                    env.aid, call.id, call.payload
+                );
+                write_half
+                    .write_all((resp + "\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+
+        // 2. Build a router with a registry pointing at the mock sock.
+        let mut ms = MultiplexerService::default();
+        let (_sid, _wid, _pid, aid) = ms.bootstrap_default().unwrap();
+        let registry = ozmux_extension::ExtensionRegistry::default();
+        registry.register("memo", std::path::Path::new("/tmp/memo"));
+        registry.record_activity_owner(&aid, "memo");
+        registry.set_handlers_sock_path("memo", &sock_path);
+        let (router, _state) = test_helpers::router_with_registry(ms, registry);
+
+        // 3. Bind an axum server on an ephemeral port and connect via tokio_tungstenite.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let url = format!("ws://{}/activities/{}/handlers/ws", addr, aid);
+        let req = tokio_tungstenite::tungstenite::http::Request::builder()
+            .uri(&url)
+            .header("host", addr.to_string())
+            .header("origin", "http://127.0.0.1:3200")
+            .header("upgrade", "websocket")
+            .header("connection", "upgrade")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .body(())
+            .unwrap();
+        let (mut ws, _resp) = tokio_tungstenite::connect_async(req).await.unwrap();
+
+        use tokio_tungstenite::tungstenite::Message as TMessage;
+        ws.send(TMessage::Text(
+            r#"{"kind":"call","id":"1","name":"x","payload":{"v":1}}"#.into(),
+        ))
+        .await
+        .unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let TMessage::Text(text) = msg else {
+            panic!("expected text frame, got {:?}", msg)
+        };
+        let resp: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(resp["kind"], "result");
+        assert_eq!(resp["id"], "1");
+        assert_eq!(resp["payload"], serde_json::json!({"v": 1}));
+
+        ws.close(None).await.ok();
+        server.abort();
     }
 }

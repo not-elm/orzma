@@ -12,9 +12,8 @@ export function useXtermTerminal(
 ) {
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const observerRef = useRef<ResizeObserver | null>(null);
 
-  // Effect 1: mount xterm exactly once via a ref guard.
+  // Effect: mount xterm exactly once via a ref guard.
   //
   // We deliberately do NOT dispose in cleanup. xterm.js (5.x) schedules an
   // internal setTimeout from Viewport's constructor inside `term.open()`; if
@@ -38,9 +37,24 @@ export function useXtermTerminal(
     fit.fit();
     termRef.current = term;
     fitRef.current = fit;
+  }, [containerRef]);
+
+  // Effect: observe the container for size changes and re-fit xterm.
+  //
+  // Lives in a separate effect from the mount above so it can be re-attached
+  // safely after StrictMode's mount-cleanup-mount cycle. The mount effect
+  // short-circuits on re-run (ref guard), which would otherwise leave the
+  // container without an observer and prevent xterm from shrinking when its
+  // pane is resized (e.g. after a split).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
     let resizeTimer: number | null = null;
     const observer = new ResizeObserver(() => {
+      const fit = fitRef.current;
+      const term = termRef.current;
+      if (!fit || !term) return;
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
         fit.fit();
@@ -52,14 +66,10 @@ export function useXtermTerminal(
       }, 150);
     });
     observer.observe(container);
-    observerRef.current = observer;
 
-    // Cleanup the observer (but not the xterm instance) if the effect ever
-    // re-runs. The xterm itself is intentionally leaked — see comment above.
     return () => {
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       observer.disconnect();
-      observerRef.current = null;
     };
   }, [containerRef, socket.sendControl]);
 
@@ -94,4 +104,8 @@ export function useXtermTerminal(
       socket.setBinaryHandler(null);
     };
   }, [socket.status, socket.sendBinary, socket.sendControl, socket.setBinaryHandler]);
+
+  const focus = () => termRef.current?.focus();
+  const blur = () => termRef.current?.blur();
+  return { focus, blur };
 }
