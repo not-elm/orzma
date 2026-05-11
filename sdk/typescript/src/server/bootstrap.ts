@@ -9,6 +9,7 @@ import {
   type ClientFrame,
 } from "./protocol.ts";
 import { assertCommandName, writeShim } from "./shim-writer.ts";
+import { bindHandlersServer } from "./handlers-server.ts";
 
 export interface BootstrapEnv {
   binDir: string;
@@ -219,13 +220,19 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
     });
   });
 
+  const handlersServer = await bindHandlersServer(env.handlersSockPath);
+
   let cleaningUp = false;
   const cleanup = async () => {
     if (cleaningUp) return;
     cleaningUp = true;
-    await new Promise<void>((res) => server.close(() => res()));
+    await Promise.all([
+      new Promise<void>((res) => server.close(() => res())),
+      new Promise<void>((res) => handlersServer.close(() => res())),
+    ]);
     await fs.rm(env.binDir, { recursive: true, force: true });
     await fs.unlink(env.sockPath).catch(() => {});
+    await fs.unlink(env.handlersSockPath).catch(() => {});
   };
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.on(sig, () => {

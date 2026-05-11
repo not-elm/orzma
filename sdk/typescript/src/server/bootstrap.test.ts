@@ -176,17 +176,20 @@ describe("bootstrap()", () => {
         try {
           await fs.stat(path.join(binDir, "memo"));
           await fs.stat(sockPath);
+          await fs.stat(handlersSockPath);  // NEW
           break;
         } catch { await new Promise((r) => setTimeout(r, 50)); }
       }
       await fs.stat(path.join(binDir, "memo"));
       await fs.stat(sockPath);
+      await fs.stat(handlersSockPath);  // NEW
 
       child.kill("SIGTERM");
       await new Promise<void>((res) => child.once("exit", () => res()));
 
       await expect(fs.stat(path.join(binDir, "memo"))).rejects.toBeTruthy();
       await expect(fs.stat(sockPath)).rejects.toBeTruthy();
+      await expect(fs.stat(handlersSockPath)).rejects.toBeTruthy();  // NEW
     } finally {
       try { child.kill("SIGKILL"); } catch {}
       await fs.rm(dir, { recursive: true, force: true });
