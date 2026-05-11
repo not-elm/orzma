@@ -1,6 +1,11 @@
 import type * as net from "node:net";
 import { bindServer } from "./bootstrap.ts";
 import type { HandlerServerFrame, HandlerUdsEnvelope } from "./protocol.ts";
+import {
+  handleSubOpen,
+  handleSubCancel,
+  abortAllForConnection,
+} from "./channels-server.ts";
 
 export type HandlerMap = Record<string, (req: never) => Promise<unknown>>;
 type ActivityId = string;
@@ -33,13 +38,11 @@ function onConnection(conn: net.Socket): void {
       const line = buf.slice(0, idx);
       buf = buf.slice(idx + 1);
       handleLine(conn, line).catch((err) => {
-        // A malformed frame should not tear down the channel.
         console.error("handlers-server: handleLine threw", err);
       });
     }
   });
-  // Node's default error handler would crash the process; the daemon closing
-  // the UDS triggers EOF here, not a fatal error.
+  conn.on("close", () => abortAllForConnection(conn));
   conn.on("error", () => {});
 }
 
@@ -48,12 +51,21 @@ async function handleLine(conn: net.Socket, line: string): Promise<void> {
   try {
     env = JSON.parse(line) as HandlerUdsEnvelope;
   } catch {
-    return; // ignore non-JSON noise
+    return;
   }
-  if (env.frame.kind !== "call") {
-    return; // only "call" is expected inbound on this side
+  const f = env.frame;
+  if (f.kind === "sub.open") {
+    handleSubOpen(conn, env.aid, f);
+    return;
   }
-  const call = env.frame;
+  if (f.kind === "sub.cancel") {
+    handleSubCancel(conn, env.aid, f);
+    return;
+  }
+  if (f.kind !== "call") {
+    return;
+  }
+  const call = f;
   const handlers = activityHandlers.get(env.aid) ?? {};
   const fn = handlers[call.name];
   let resp: HandlerServerFrame;
