@@ -10,6 +10,9 @@ import {
 } from "./protocol.ts";
 import { assertCommandName, writeShim } from "./shim-writer.ts";
 import { bindHandlersServer } from "./handlers-server.ts";
+import { Pane } from "./pane.ts";
+import { Window } from "./window.ts";
+import { Session } from "./session.ts";
 
 export interface BootstrapEnv {
   binDir: string;
@@ -96,16 +99,16 @@ export async function materializeShims(
 
 export interface CommandContext {
   argv: string[];
-  pane: {
-    sessionId: string;
-    windowId: string;
-    paneId: string;
-    activityId: string;
-  };
   cwd: string;
   stdout: Writable;
   stderr: Writable;
   signal: AbortSignal;
+  /** The Pane this command was invoked from. */
+  pane: Pane;
+  /** The Window containing the invoking Pane. */
+  window: Window;
+  /** Owning Session, or `null` for orphan Windows. */
+  session: Session | null;
 }
 
 export type CommandHandler = (ctx: CommandContext) => Promise<number | void>;
@@ -154,18 +157,34 @@ export async function handleConnection(
   const stdout = chunkWriter("stdout", socket);
   const stderr = chunkWriter("stderr", socket);
   const ac = new AbortController();
+
+  // The PTY env carries the addressing tuple; bail early if anything required
+  // is missing rather than letting the handler hit broken Pane methods.
+  const paneId = frame.env.OZMUX_PANE_ID ?? "";
+  const windowId = frame.env.OZMUX_WINDOW_ID ?? "";
+  const sessionId = frame.env.OZMUX_SESSION_ID ?? null;
+  if (!paneId || !windowId) {
+    stderr.write(
+      Buffer.from("ozmux: missing OZMUX_PANE_ID / OZMUX_WINDOW_ID\n"),
+    );
+    socket.write(encodeFrame({ type: "exit", code: 2 }));
+    return;
+  }
+  const pane = new Pane({ id: paneId, windowId, sessionId });
+  const window = new Window({ id: windowId, name: "", sessionId });
+  const session = sessionId
+    ? new Session({ id: sessionId, name: "" })
+    : null;
+
   const ctx: CommandContext = {
     argv: frame.argv,
-    pane: {
-      sessionId: frame.env.OZMUX_SESSION_ID ?? "",
-      windowId: frame.env.OZMUX_WINDOW_ID ?? "",
-      paneId: frame.env.OZMUX_PANE_ID ?? "",
-      activityId: frame.env.OZMUX_ACTIVITY_ID ?? "",
-    },
     cwd: frame.cwd,
     stdout,
     stderr,
     signal: ac.signal,
+    pane,
+    window,
+    session,
   };
   let exitCode = 0;
   try {

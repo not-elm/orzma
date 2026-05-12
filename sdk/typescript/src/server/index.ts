@@ -1,4 +1,20 @@
-export * from "./activity.ts";
+export { Session, type SessionId } from "./session.ts";
+export { Window, type WindowId } from "./window.ts";
+export {
+  Pane,
+  type PaneId,
+  type Side,
+  type Orientation,
+  type ActivitySpecInput,
+  type SplitArgs,
+} from "./pane.ts";
+export { Activity, type ActivityId, type ActivityKind } from "./activity.ts";
+export {
+  bootstrap,
+  type CommandContext,
+  type CommandHandler,
+} from "./bootstrap.ts";
+export { abortableSleep } from "./timing.ts";
 export type { HandlerMap } from "./handlers-server.ts";
 export {
   type ChannelCtx,
@@ -6,6 +22,3 @@ export {
   type ChannelMap,
   registerActivityChannels,
 } from "./channels-server.ts";
-export { abortableSleep } from "./timing.ts";
-export * from "./pane.ts";
-export { bootstrap, type CommandContext, type CommandHandler } from "./bootstrap.ts";

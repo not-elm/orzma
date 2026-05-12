@@ -1,11 +1,10 @@
-use crate::{MultiplexerState, error::HttpResult};
+use crate::{AppState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerError, session::SessionId};
-use ozmux_terminal::TerminalService;
+use ozmux_multiplexer::{MultiplexerError, SessionId};
 use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
@@ -15,10 +14,10 @@ pub struct CreateRequest {
 }
 
 pub async fn create(
-    State(ms): State<MultiplexerState>,
+    State(state): State<AppState>,
     Json(body): Json<CreateRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let id = ms.lock().await.new_session(body.name);
+    let id = state.create_session(body.name).await;
     (StatusCode::CREATED, Json(serde_json::json!({ "id": id })))
 }
 
@@ -28,30 +27,25 @@ pub struct RenameRequest {
 }
 
 pub async fn rename(
-    State(ms): State<MultiplexerState>,
+    State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
-    ms.lock().await.rename_session(&session_id, body.name)?;
+    state.rename_session(&session_id, body.name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn delete(
-    State(ms): State<MultiplexerState>,
-    State(terminal): State<TerminalService>,
+    State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
 ) -> HttpResult<StatusCode> {
-    let activities = ms.lock().await.delete_session(&session_id)?;
-    for aid in activities {
-        let _ = terminal.kill(&aid).await;
-    }
+    state.delete_session(&session_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn list(State(ms): State<MultiplexerState>) -> Json<serde_json::Value> {
-    let ms = ms.lock().await;
-    let mut entries: Vec<(&SessionId, &ozmux_multiplexer::session::Session)> =
-        ms.sessions().iter().collect();
+pub async fn list(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let sess = state.sessions.lock().await;
+    let mut entries: Vec<(&SessionId, &ozmux_multiplexer::Session)> = sess.iter().collect();
     entries.sort_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
     let sessions: Vec<serde_json::Value> = entries
         .iter()
@@ -60,25 +54,21 @@ pub async fn list(State(ms): State<MultiplexerState>) -> Json<serde_json::Value>
     Json(serde_json::json!({ "sessions": sessions }))
 }
 
-fn session_view(
-    id: &SessionId,
-    session: &ozmux_multiplexer::session::Session,
-) -> serde_json::Value {
+fn session_view(id: &SessionId, session: &ozmux_multiplexer::Session) -> serde_json::Value {
     serde_json::json!({
         "id": id,
         "name": session.name,
-        "windows": session.windows,
+        "windows": session.linked_windows,
         "active_window": session.active_window,
     })
 }
 
 pub async fn get(
-    State(ms): State<MultiplexerState>,
+    State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
 ) -> HttpResult<Json<serde_json::Value>> {
-    let ms = ms.lock().await;
-    let session = ms
-        .sessions()
+    let sess = state.sessions.lock().await;
+    let session = sess
         .get(&session_id)
         .ok_or_else(|| MultiplexerError::SessionNotFound(session_id.clone()))?;
     Ok(Json(session_view(&session_id, session)))
@@ -86,15 +76,14 @@ pub async fn get(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_helpers::router_with;
+    use crate::test_helpers::{fresh_state, router_with};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
-    use ozmux_multiplexer::MultiplexerService;
     use tower::ServiceExt;
 
     #[tokio::test]
     async fn create_returns_201_with_id() {
-        let (router, _) = router_with(MultiplexerService::default());
+        let (router, _) = router_with(fresh_state());
         let resp = router
             .oneshot(
                 Request::builder()
@@ -114,7 +103,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_without_name_still_returns_201_with_id() {
-        let (router, _) = router_with(MultiplexerService::default());
+        let (router, _) = router_with(fresh_state());
         let resp = router
             .oneshot(
                 Request::builder()
@@ -131,9 +120,9 @@ mod tests {
 
     #[tokio::test]
     async fn rename_returns_204_and_updates_name() {
-        let mut ms = MultiplexerService::default();
-        let sid = ms.new_session(None);
-        let (router, state) = router_with(ms);
+        let state = fresh_state();
+        let sid = state.create_session(None).await;
+        let (router, state) = router_with(state);
         let resp = router
             .oneshot(
                 Request::builder()
@@ -146,13 +135,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let ms = state.multiplexer.lock().await;
-        assert_eq!(ms.sessions().get(&sid).unwrap().name, "renamed");
+        let sess = state.sessions.lock().await;
+        assert_eq!(sess.get(&sid).unwrap().name, "renamed");
     }
 
     #[tokio::test]
     async fn rename_unknown_session_returns_404() {
-        let (router, _) = router_with(MultiplexerService::default());
+        let (router, _) = router_with(fresh_state());
         let resp = router
             .oneshot(
                 Request::builder()
@@ -172,10 +161,10 @@ mod tests {
 
     #[tokio::test]
     async fn delete_returns_204_and_removes_session() {
-        let mut ms = MultiplexerService::default();
-        let sid = ms.new_session(None);
-        let _wid = ms.new_window_in(Some(&sid), None).unwrap();
-        let (router, state) = router_with(ms);
+        let state = fresh_state();
+        let sid = state.create_session(None).await;
+        let _ = state.create_window(Some(&sid), None).await.unwrap();
+        let (router, state) = router_with(state);
         let resp = router
             .oneshot(
                 Request::builder()
@@ -187,13 +176,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let ms = state.multiplexer.lock().await;
-        assert!(ms.sessions().get(&sid).is_none());
+        let sess = state.sessions.lock().await;
+        assert!(sess.get(&sid).is_none());
     }
 
     #[tokio::test]
     async fn delete_unknown_session_returns_404() {
-        let (router, _) = router_with(MultiplexerService::default());
+        let (router, _) = router_with(fresh_state());
         let resp = router
             .oneshot(
                 Request::builder()
@@ -209,7 +198,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_empty_when_no_sessions() {
-        let (router, _) = router_with(MultiplexerService::default());
+        let (router, _) = router_with(fresh_state());
         let resp = router
             .oneshot(
                 Request::builder()
@@ -227,13 +216,13 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_sessions_sorted_by_id() {
-        let mut ms = MultiplexerService::default();
-        let sid_a = ms.new_session(Some("a".into()));
-        let sid_b = ms.new_session(Some("b".into()));
+        let state = fresh_state();
+        let sid_a = state.create_session(Some("a".into())).await;
+        let sid_b = state.create_session(Some("b".into())).await;
         let mut expected = [sid_a.to_string(), sid_b.to_string()];
         expected.sort();
 
-        let (router, _) = router_with(ms);
+        let (router, _) = router_with(state);
         let resp = router
             .oneshot(
                 Request::builder()
@@ -257,10 +246,10 @@ mod tests {
 
     #[tokio::test]
     async fn list_includes_full_session_view() {
-        let mut ms = MultiplexerService::default();
-        let sid = ms.new_session(Some("test".into()));
-        let wid = ms.new_window_in(Some(&sid), None).unwrap();
-        let (router, _) = router_with(ms);
+        let state = fresh_state();
+        let sid = state.create_session(Some("test".into())).await;
+        let (wid, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let (router, _) = router_with(state);
         let resp = router
             .oneshot(
                 Request::builder()
@@ -281,10 +270,10 @@ mod tests {
 
     #[tokio::test]
     async fn get_returns_session_view() {
-        let mut ms = MultiplexerService::default();
-        let sid = ms.new_session(Some("named".into()));
-        let wid = ms.new_window_in(Some(&sid), None).unwrap();
-        let (router, _) = router_with(ms);
+        let state = fresh_state();
+        let sid = state.create_session(Some("named".into())).await;
+        let (wid, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let (router, _) = router_with(state);
         let resp = router
             .oneshot(
                 Request::builder()
@@ -305,7 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_unknown_session_returns_404() {
-        let (router, _) = router_with(MultiplexerService::default());
+        let (router, _) = router_with(fresh_state());
         let resp = router
             .oneshot(
                 Request::builder()
@@ -323,9 +312,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_session_with_no_windows_serializes_active_window_null() {
-        let mut ms = MultiplexerService::default();
-        let sid = ms.new_session(None);
-        let (router, _) = router_with(ms);
+        let state = fresh_state();
+        let sid = state.create_session(None).await;
+        let (router, _) = router_with(state);
         let resp = router
             .oneshot(
                 Request::builder()

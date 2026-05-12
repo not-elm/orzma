@@ -39,14 +39,47 @@ interface MinimalAbortSignal {
   removeEventListener(type: "abort", listener: () => void): void;
 }
 
+// The daemon injects this script tag into the iframe HTML before serving:
+//   <script>window.__OZMUX__ = {sessionId, windowId, paneId, activityId};</script>
+// so the SDK can know its position in the hierarchy without parsing the URL.
 declare const WebSocket: MinimalWebSocketCtor;
-declare const window: { location: MinimalLocation };
+declare const window: {
+  location: MinimalLocation;
+  __OZMUX__?: OzmuxContext;
+};
+
+export interface OzmuxContext {
+  sessionId: string | null;
+  windowId: string;
+  paneId: string;
+  activityId: string;
+}
+
+/**
+ * Read the daemon-injected `(sessionId, windowId, paneId, activityId)` tuple
+ * from `window.__OZMUX__`. Throws if the global is absent — that means the
+ * iframe was loaded outside the ozmux hierarchical route and the SDK has no
+ * way to discover its identity.
+ */
+export function getOzmuxContext(): OzmuxContext {
+  const ctx = window.__OZMUX__;
+  if (!ctx) {
+    throw new Error(
+      "ozmux iframe SDK: window.__OZMUX__ not found. The iframe must be served via /windows/{wid}/panes/{pid}/activities/{aid}/iframe/...",
+    );
+  }
+  return ctx;
+}
 
 const WS_OPEN = 1;
 const WS_CLOSED = 3;
 
 export interface CreateClientOptions {
-  activityId?: string;
+  /**
+   * Override the handlers WS URL. Useful for tests; production callers should
+   * omit this and let the SDK build the hierarchical URL from
+   * `window.__OZMUX__`.
+   */
   url?: string;
 }
 
@@ -85,19 +118,9 @@ export interface Client {
   close(): void;
 }
 
-function inferActivityId(): string {
-  const m = window.location.pathname.match(/^\/activities\/([^/]+)\/iframe\//);
-  if (!m) {
-    throw new Error(
-      "ozmux iframe SDK: cannot infer activityId from pathname; pass activityId explicitly",
-    );
-  }
-  return m[1]!;
-}
-
-function inferUrl(aid: string): string {
+function handlersWsUrl(ctx: OzmuxContext): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/activities/${aid}/handlers/ws`;
+  return `${proto}//${window.location.host}/windows/${ctx.windowId}/panes/${ctx.paneId}/activities/${ctx.activityId}/handlers/ws`;
 }
 
 function toRpcError(frame: HandlerErrorFrame | SubErrorFrame): Error {
@@ -107,8 +130,10 @@ function toRpcError(frame: HandlerErrorFrame | SubErrorFrame): Error {
 }
 
 export function createClient(opts: CreateClientOptions = {}): Client {
-  const aid = opts.activityId ?? inferActivityId();
-  const url = opts.url ?? inferUrl(aid);
+  // Production callers omit `opts.url` and let the SDK build a hierarchical
+  // URL from the daemon-injected `window.__OZMUX__`. Tests override `url` to
+  // point at a mock WebSocket.
+  const url = opts.url ?? handlersWsUrl(getOzmuxContext());
   const ws = new WebSocket(url);
 
   const pendingCalls = new Map<string, PendingCall>();

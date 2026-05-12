@@ -24,6 +24,15 @@ export function registerActivityChannels(
   activityChannels.set(aid, channels);
 }
 
+/**
+ * Remove channels for an Activity. Counterpart to `unregisterActivityHandlers`;
+ * used to roll back when an atomic `Pane.split()` POST fails after the local
+ * registry was already primed.
+ */
+export function unregisterActivityChannels(aid: ActivityId): void {
+  activityChannels.delete(aid);
+}
+
 /** Test-only escape hatch; not exported from the package barrel. */
 export function __resetActivityChannelsForTests(): void {
   activityChannels.clear();

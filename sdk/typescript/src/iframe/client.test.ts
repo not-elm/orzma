@@ -42,16 +42,68 @@ class MockWebSocket {
 beforeEach(() => {
   MockWebSocket.instances = [];
   (globalThis as any).WebSocket = MockWebSocket;
+  (globalThis as any).window = {
+    location: { protocol: "http:", host: "localhost:3200", pathname: "/" },
+  };
 });
 
 afterEach(() => {
   delete (globalThis as any).WebSocket;
+  delete (globalThis as any).window;
+});
+
+describe("getOzmuxContext", () => {
+  it("reads ids from window.__OZMUX__", async () => {
+    const { getOzmuxContext } = await import("./client.ts");
+    (globalThis as any).window.__OZMUX__ = {
+      sessionId: "s1",
+      windowId: "w1",
+      paneId: "p1",
+      activityId: "a1",
+    };
+    const ctx = getOzmuxContext();
+    expect(ctx).toEqual({
+      sessionId: "s1",
+      windowId: "w1",
+      paneId: "p1",
+      activityId: "a1",
+    });
+  });
+
+  it("throws when window.__OZMUX__ is missing", async () => {
+    const { getOzmuxContext } = await import("./client.ts");
+    expect(() => getOzmuxContext()).toThrow(/__OZMUX__/);
+  });
+});
+
+describe("createClient hierarchical URL", () => {
+  it("builds the hierarchical handlers WS URL from window.__OZMUX__", async () => {
+    const { createClient } = await import("./client.ts");
+    (globalThis as any).window.__OZMUX__ = {
+      sessionId: null,
+      windowId: "w1",
+      paneId: "p1",
+      activityId: "a1",
+    };
+    createClient();
+    const ws = MockWebSocket.instances[0]!;
+    expect(ws.url).toBe(
+      "ws://localhost:3200/windows/w1/panes/p1/activities/a1/handlers/ws",
+    );
+  });
+
+  it("uses the explicit url override when provided", async () => {
+    const { createClient } = await import("./client.ts");
+    createClient({ url: "ws://example.test/x" });
+    const ws = MockWebSocket.instances[0]!;
+    expect(ws.url).toBe("ws://example.test/x");
+  });
 });
 
 describe("createClient.call", () => {
   it("sends a call frame and resolves with the result payload", async () => {
     const { createClient } = await import("./client.ts");
-    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const client = createClient({ url: "ws://t/x" });
     const p = client.call<{ name: string }, { hi: string }>("greet", {
       name: "x",
     });
@@ -68,7 +120,7 @@ describe("createClient.call", () => {
 
   it("rejects the call promise on an error frame", async () => {
     const { createClient } = await import("./client.ts");
-    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const client = createClient({ url: "ws://t/x" });
     const p = client.call("boom", {});
     const ws = MockWebSocket.instances[0]!;
     await new Promise<void>((r) => queueMicrotask(() => r()));
@@ -84,7 +136,7 @@ describe("createClient.call", () => {
 
   it("rejects pending calls when the WS closes", async () => {
     const { createClient } = await import("./client.ts");
-    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const client = createClient({ url: "ws://t/x" });
     const p = client.call("greet", {});
     const ws = MockWebSocket.instances[0]!;
     await new Promise<void>((r) => queueMicrotask(() => r()));
@@ -96,7 +148,7 @@ describe("createClient.call", () => {
 describe("createClient.subscribe", () => {
   it("yields data frames in order and ends on sub.complete", async () => {
     const { createClient } = await import("./client.ts");
-    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const client = createClient({ url: "ws://t/x" });
     const iter = client.subscribe<{ n: number }, { v: number }>("count", {
       n: 3,
     });
@@ -116,7 +168,7 @@ describe("createClient.subscribe", () => {
 
   it("throws inside for-await when a sub.error arrives", async () => {
     const { createClient } = await import("./client.ts");
-    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const client = createClient({ url: "ws://t/x" });
     const iter = client.subscribe("x", {});
     const ws = MockWebSocket.instances[0]!;
     await new Promise<void>((r) => queueMicrotask(() => r()));
@@ -139,7 +191,7 @@ describe("createClient.subscribe", () => {
 
   it("sends sub.cancel and stops iteration on AbortSignal.abort()", async () => {
     const { createClient } = await import("./client.ts");
-    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const client = createClient({ url: "ws://t/x" });
     const ac = new AbortController();
     const iter = client.subscribe("x", {}, { signal: ac.signal });
     const ws = MockWebSocket.instances[0]!;
@@ -160,7 +212,7 @@ describe("createClient.subscribe", () => {
 
   it("returns done:true immediately if signal.aborted before subscribe", async () => {
     const { createClient } = await import("./client.ts");
-    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const client = createClient({ url: "ws://t/x" });
     const ac = new AbortController();
     ac.abort();
     const iter = client.subscribe("x", {}, { signal: ac.signal });
@@ -174,7 +226,7 @@ describe("createClient.subscribe", () => {
 
   it("multiplexes call() and subscribe() without id collision", async () => {
     const { createClient } = await import("./client.ts");
-    const client = createClient({ activityId: "aid-1", url: "ws://t/x" });
+    const client = createClient({ url: "ws://t/x" });
     const ws = MockWebSocket.instances[0]!;
     await new Promise<void>((r) => queueMicrotask(() => r()));
 

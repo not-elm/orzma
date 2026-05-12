@@ -20,6 +20,14 @@ export function registerActivityHandlers(
   activityHandlers.set(aid, handlers);
 }
 
+/**
+ * Remove handlers for an Activity. Used by `Pane.split()` to roll back when
+ * the server POST fails after handlers were registered.
+ */
+export function unregisterActivityHandlers(aid: ActivityId): void {
+  activityHandlers.delete(aid);
+}
+
 /** Test-only escape hatch; not exported from the package barrel. */
 export function __resetActivityHandlersForTests(): void {
   activityHandlers.clear();

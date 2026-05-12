@@ -1,12 +1,12 @@
 use crate::{
     error::{MultiplexerError, MultiplexerResult},
-    pane::PaneId,
+    window::pane::PaneId,
 };
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Default, Debug, Clone, Serialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutCellState(HashMap<CellId, Cell>);
 
 impl LayoutCellState {
