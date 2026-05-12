@@ -7,15 +7,26 @@ import { __resetActivityHandlersForTests } from "./handlers-server.ts";
 import { Pane } from "./pane.ts";
 
 let postJsonSpy: ReturnType<typeof vi.spyOn>;
+let savedExtensionName: string | undefined;
 
 beforeEach(() => {
   __resetActivityHandlersForTests();
   __resetActivityChannelsForTests();
   postJsonSpy = vi.spyOn(daemonClient, "postJson").mockResolvedValue({});
+  // Extension-kind splits/adds depend on EXTENSION_NAME being set, since the
+  // SDK forwards it to the daemon as `extension_name` in the activity payload.
+  // Each test that exercises that path can rely on this default.
+  savedExtensionName = process.env.EXTENSION_NAME;
+  process.env.EXTENSION_NAME = "memo";
 });
 
 afterEach(() => {
   postJsonSpy.mockRestore();
+  if (savedExtensionName === undefined) {
+    delete process.env.EXTENSION_NAME;
+  } else {
+    process.env.EXTENSION_NAME = savedExtensionName;
+  }
 });
 
 describe("Pane.split", () => {
@@ -140,11 +151,56 @@ describe("Pane.split", () => {
       string,
       Record<string, unknown>,
     ];
-    const activity = body.activity as { kind: { type: string; html_root: string } };
+    const activity = body.activity as {
+      kind: { type: string; html_root: string; extension_name: string };
+    };
     expect(activity.kind).toEqual({
       type: "extension",
       html_root: "/opt/memo",
+      extension_name: "memo",
     });
+  });
+
+  it("forwards EXTENSION_NAME from env as `extension_name` on the activity kind", async () => {
+    process.env.EXTENSION_NAME = "diary";
+    const pane = new Pane({ id: "p1", windowId: "w1" });
+    await pane.split({
+      side: "after",
+      orientation: "horizontal",
+      activity: { kind: "extension", html: "/opt/diary/index.html" },
+    });
+    const [, body] = postJsonSpy.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    const activity = body.activity as {
+      kind: { extension_name: string };
+    };
+    expect(activity.kind.extension_name).toBe("diary");
+  });
+
+  it("throws when EXTENSION_NAME is unset and the activity is extension-kind", async () => {
+    delete process.env.EXTENSION_NAME;
+    const pane = new Pane({ id: "p1", windowId: "w1" });
+    await expect(
+      pane.split({
+        side: "after",
+        orientation: "horizontal",
+        activity: { kind: "extension", html: "/opt/memo/index.html" },
+      }),
+    ).rejects.toThrow(/EXTENSION_NAME/);
+  });
+
+  it("does not require EXTENSION_NAME for terminal-kind activities", async () => {
+    delete process.env.EXTENSION_NAME;
+    const pane = new Pane({ id: "p1", windowId: "w1" });
+    await expect(
+      pane.split({
+        side: "after",
+        orientation: "horizontal",
+        activity: { kind: "terminal" },
+      }),
+    ).resolves.toBeDefined();
   });
 });
 
@@ -159,5 +215,25 @@ describe("Pane.addActivity", () => {
     expect(activity.windowId).toBe("w1");
     expect(activity.sessionId).toBe("s1");
     expect(activity.kind).toEqual({ type: "terminal" });
+  });
+
+  it("forwards EXTENSION_NAME on extension-kind activities", async () => {
+    const pane = new Pane({ id: "p1", windowId: "w1" });
+    await pane.addActivity({
+      kind: "extension",
+      html: "/opt/memo/index.html",
+    });
+    const [, body] = postJsonSpy.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    const activity = body.activity as {
+      kind: { type: string; html_root: string; extension_name: string };
+    };
+    expect(activity.kind).toEqual({
+      type: "extension",
+      html_root: "/opt/memo",
+      extension_name: "memo",
+    });
   });
 });

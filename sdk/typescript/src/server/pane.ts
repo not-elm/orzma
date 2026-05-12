@@ -165,7 +165,26 @@ function buildActivityPayload(
   if (spec.kind === "terminal") {
     base.kind = { type: "terminal" };
   } else {
-    base.kind = { type: "extension", html_root: path.dirname(spec.html) };
+    // `extension_name` lets the daemon populate its ExtensionRegistry so the
+    // iframe's handlers-WS upgrade can resolve the owning extension's UDS.
+    // Resolved lazily from the env to match `daemon-client.ts`'s pattern; the
+    // SDK is only ever used from inside a bootstrap()-driven extension process
+    // where this is guaranteed to be set.
+    base.kind = {
+      type: "extension",
+      html_root: path.dirname(spec.html),
+      extension_name: requireExtensionName(),
+    };
   }
   return base;
+}
+
+function requireExtensionName(): string {
+  const name = process.env.EXTENSION_NAME;
+  if (!name) {
+    throw new Error(
+      "missing required env: EXTENSION_NAME (must be set by the SDK bootstrap before splitting / adding an extension activity)",
+    );
+  }
+  return name;
 }

@@ -10,7 +10,7 @@ use axum::{
     http::StatusCode,
 };
 use ozmux_multiplexer::{
-    Activity, ActivityId, MultiplexerError, MultiplexerResult, PaneId, SessionId,
+    Activity, ActivityId, ActivityKind, MultiplexerError, MultiplexerResult, PaneId, SessionId,
     SetActivePaneOutcome, Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::SpawnOptions;
@@ -48,11 +48,14 @@ async fn split_in_window(
     // Caller IDs win when present; otherwise we fall back to server-generated
     // ids so simple internal callers don't have to mint UUIDs themselves.
     let new_pane_id = req.new_pane_id.unwrap_or_default();
-    let new_activity = match req.activity {
+    let (new_activity, ext_name) = match req.activity {
         Some(spec) => spec.into_activity(),
-        None => Activity::terminal(ActivityId::new()),
+        None => (Activity::terminal(ActivityId::new()), None),
     };
     let new_activity_id = new_activity.id.clone();
+    // Snapshot the kind before move so we can branch on it post-split without
+    // re-reading the activity off the window.
+    let activity_kind = new_activity.kind.clone();
 
     state
         .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
@@ -70,9 +73,21 @@ async fn split_in_window(
         .pane_owner_window
         .insert(new_pane_id.clone(), wid.clone());
 
+    // Extension activities own their pane and need the registry populated
+    // before the iframe / handlers-WS routes are exercised by the browser.
+    if let Some(name) = ext_name.as_deref() {
+        state.extensions.record_activity_owner(&new_activity_id, name);
+        state.extensions.record_pane_owner(&new_pane_id, name);
+    }
+
     publish_window_layout(state, wid).await;
 
-    spawn_pty_with_rollback(state, wid, &new_pane_id, &new_activity_id).await?;
+    // Only Terminal activities are backed by a PTY. Extension activities live
+    // in an iframe, so spawning a shell for them creates an orphan child
+    // process whose output nothing ever reads.
+    if matches!(activity_kind, ActivityKind::Terminal) {
+        spawn_pty_with_rollback(state, wid, &new_pane_id, &new_activity_id).await?;
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -617,6 +632,79 @@ mod tests {
             assert_eq!(v["new_pane_id"].as_str(), Some(new_pid.as_ref()));
             assert_eq!(v["new_activity_id"].as_str(), Some(new_aid.as_ref()));
         }
+    }
+
+    #[tokio::test]
+    async fn split_with_extension_activity_records_owner_in_registry() {
+        // PR7 regression guard: the daemon must populate the extension registry
+        // when a split lands an Extension-kind activity, otherwise the iframe's
+        // handlers-WS upgrade gets a 404 (handlers_ws calls activity_owner).
+        let state = fresh_state();
+        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
+        state
+            .extensions
+            .register("memo", std::path::Path::new("/tmp"));
+        let registry = state.extensions.clone();
+        let (router, _state) = router_with(state);
+        let new_pid = PaneId::new();
+        let new_aid = ActivityId::new();
+        let body = format!(
+            r#"{{"side":"after","orientation":"horizontal","new_pane_id":"{}","activity":{{"activity_id":"{}","name":"memo","kind":{{"type":"extension","html_root":"/tmp","extension_name":"memo"}}}}}}"#,
+            new_pid, new_aid,
+        );
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/split", wid, pid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(registry.activity_owner(&new_aid).as_deref(), Some("memo"));
+        assert_eq!(registry.pane_owner(&new_pid).as_deref(), Some("memo"));
+    }
+
+    #[tokio::test]
+    async fn split_with_extension_activity_does_not_spawn_pty() {
+        // Extension activities live in an iframe, not a PTY. Spawning a shell
+        // for them leaks an orphan child whose output nothing reads. The
+        // TerminalService refuses duplicate spawns, so the simplest assertion
+        // is "subscriber_count returns NotFound for the new aid".
+        let state = fresh_state();
+        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
+        state
+            .extensions
+            .register("memo", std::path::Path::new("/tmp"));
+        let terminal = state.terminal.clone();
+        let (router, _state) = router_with(state);
+        let new_pid = PaneId::new();
+        let new_aid = ActivityId::new();
+        let body = format!(
+            r#"{{"side":"after","orientation":"horizontal","new_pane_id":"{}","activity":{{"activity_id":"{}","name":"memo","kind":{{"type":"extension","html_root":"/tmp","extension_name":"memo"}}}}}}"#,
+            new_pid, new_aid,
+        );
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/split", wid, pid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        // No PTY for an Extension activity — `subscriber_count` returns `None`
+        // for an aid the terminal service has never seen.
+        assert!(
+            terminal.subscriber_count(&new_aid).await.is_none(),
+            "Extension activity must not have a backing PTY"
+        );
     }
 
     #[tokio::test]

@@ -477,20 +477,37 @@ pub struct ActivityInput {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ActivityKindInput {
     Terminal,
-    Extension { html_root: PathBuf },
+    Extension {
+        html_root: PathBuf,
+        /// Owning extension's name. The daemon uses this to populate the
+        /// `ExtensionRegistry` so subsequent iframe / handlers-WS requests
+        /// can route to the right extension UDS. Required for the Extension
+        /// variant; the SDK fills it from the bootstrap-time `EXTENSION_NAME`
+        /// env var.
+        extension_name: String,
+    },
 }
 
 impl ActivityInput {
-    pub(crate) fn into_activity(self) -> Activity {
-        let kind = match self.kind {
-            ActivityKindInput::Terminal => ActivityKind::Terminal,
-            ActivityKindInput::Extension { html_root } => ActivityKind::Extension { html_root },
+    /// Convert the wire payload into a domain `Activity`, also surfacing the
+    /// owning extension's name for Extension-kind activities. The name is
+    /// consumed by the handler (to register ownership in `ExtensionRegistry`)
+    /// and not stored on `Activity` itself, since the multiplexer model has no
+    /// notion of an "owner".
+    pub(crate) fn into_activity(self) -> (Activity, Option<String>) {
+        let (kind, ext_name) = match self.kind {
+            ActivityKindInput::Terminal => (ActivityKind::Terminal, None),
+            ActivityKindInput::Extension {
+                html_root,
+                extension_name,
+            } => (ActivityKind::Extension { html_root }, Some(extension_name)),
         };
-        Activity {
+        let activity = Activity {
             id: self.activity_id,
             name: self.name.unwrap_or_else(|| "Activity".into()),
             kind,
-        }
+        };
+        (activity, ext_name)
     }
 }
 
@@ -499,11 +516,14 @@ pub async fn add_to_pane(
     Path((wid, pid)): Path<(WindowId, PaneId)>,
     axum::Json(body): axum::Json<AddActivityRequest>,
 ) -> Result<(StatusCode, axum::Json<serde_json::Value>), HttpError> {
-    let activity = body.activity.into_activity();
+    let (activity, ext_name) = body.activity.into_activity();
     let aid = activity.id.clone();
     state
         .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(activity))
         .await?;
+    if let Some(name) = ext_name.as_deref() {
+        state.extensions.record_activity_owner(&aid, name);
+    }
     publish_window_layout(&state, &wid).await;
     Ok((
         StatusCode::CREATED,
@@ -523,7 +543,6 @@ pub async fn activate(
     }
     Ok(StatusCode::NO_CONTENT)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1113,8 +1132,11 @@ mod tests {
         let aid = ActivityId::new();
         state
             .with_window_or_404(&wid, |w| {
-                w.pane_mut(&pid)?
-                    .add_activity(Activity::extension(aid.clone(), "ext", "/tmp/memo".into()))
+                w.pane_mut(&pid)?.add_activity(Activity::extension(
+                    aid.clone(),
+                    "ext",
+                    "/tmp/memo".into(),
+                ))
             })
             .await
             .unwrap();
@@ -1129,9 +1151,7 @@ mod tests {
             axum::serve(listener, router).await.unwrap();
         });
 
-        let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/handlers/ws"
-        );
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/handlers/ws");
         let req = tokio_tungstenite::tungstenite::http::Request::builder()
             .uri(&url)
             .header("host", addr.to_string())
@@ -1239,7 +1259,11 @@ mod tests {
             "activity": {
                 "activity_id": new_aid,
                 "name": "memo",
-                "kind": { "type": "extension", "html_root": "/tmp" }
+                "kind": {
+                    "type": "extension",
+                    "html_root": "/tmp",
+                    "extension_name": "memo"
+                }
             }
         });
         let resp = router
@@ -1254,6 +1278,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn add_to_pane_extension_kind_records_activity_owner_in_registry() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
+        // The handler reads ownership info off `state.extensions`, so register
+        // the extension up-front. The wire `extension_name` is what drives
+        // `record_activity_owner` — the registration we're verifying.
+        state
+            .extensions
+            .register("memo", std::path::Path::new("/tmp"));
+        let registry = state.extensions.clone();
+        let (router, _state) = test_helpers::router_with(state);
+        let new_aid = ActivityId::new();
+        let body = serde_json::json!({
+            "activity": {
+                "activity_id": new_aid,
+                "name": "memo",
+                "kind": {
+                    "type": "extension",
+                    "html_root": "/tmp",
+                    "extension_name": "memo"
+                }
+            }
+        });
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{wid}/panes/{pid}/activities"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(registry.activity_owner(&new_aid).as_deref(), Some("memo"));
     }
 
     #[tokio::test]
