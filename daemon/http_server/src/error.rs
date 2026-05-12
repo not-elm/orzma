@@ -102,6 +102,9 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::Session(MultiplexerError::ActivityIdConflict(_)) => {
                 (StatusCode::CONFLICT, "ACTIVITY_ID_CONFLICT")
             }
+            HttpError::Session(MultiplexerError::PaneIdConflict(_)) => {
+                (StatusCode::CONFLICT, "PANE_ID_CONFLICT")
+            }
             HttpError::Session(MultiplexerError::PaneAlreadyPlaced(_)) => {
                 (StatusCode::CONFLICT, "PANE_ALREADY_PLACED")
             }
@@ -229,6 +232,20 @@ mod tests {
     fn pane_already_placed_maps_to_409() {
         let err = HttpError::Session(MultiplexerError::PaneAlreadyPlaced(PaneId::new()));
         assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn pane_id_conflict_maps_to_409() {
+        let err = HttpError::Session(MultiplexerError::PaneIdConflict(PaneId::new()));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn activity_id_conflict_maps_to_409() {
+        let err = HttpError::Session(MultiplexerError::ActivityIdConflict(ActivityId::new()));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[test]

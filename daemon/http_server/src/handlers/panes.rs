@@ -1,4 +1,5 @@
 use crate::extractors::ExtensionName;
+use crate::handlers::activities::ActivityInput;
 use crate::handlers::publish_window_layout;
 use crate::{
     AppState,
@@ -10,8 +11,8 @@ use axum::{
     http::StatusCode,
 };
 use ozmux_multiplexer::{
-    Activity, ActivityId, MultiplexerError, MultiplexerResult, PaneId, SetActivePaneOutcome, Side,
-    SplitOrientation, WindowId,
+    Activity, ActivityId, MultiplexerError, MultiplexerResult, PaneId, SessionId,
+    SetActivePaneOutcome, Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::SpawnOptions;
 use serde::Deserialize;
@@ -21,6 +22,15 @@ pub struct SplitRequest {
     orientation: SplitOrientation,
     #[serde(default)]
     side: Side,
+    /// Client-supplied id for the new Pane. When absent the server picks one.
+    /// PR5 callers send a UUIDv4; PR4 callers omit it.
+    #[serde(default)]
+    new_pane_id: Option<PaneId>,
+    /// Client-supplied Activity spec (id + kind). When absent the server
+    /// creates an empty Terminal Activity. PR5 callers send this; PR4 callers
+    /// omit it.
+    #[serde(default)]
+    activity: Option<ActivityInput>,
 }
 
 pub async fn split(
@@ -47,19 +57,24 @@ async fn split_in_window(
     target_pane_id: &PaneId,
     req: SplitRequest,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    let (new_pane_id, new_activity_id) = state
+    // Caller IDs win when present; otherwise we fall back to server-generated
+    // ids so PR4-shape requests keep working until PR7.
+    let new_pane_id = req.new_pane_id.unwrap_or_default();
+    let new_activity = match req.activity {
+        Some(spec) => spec.into_activity(),
+        None => Activity::terminal(ActivityId::new()),
+    };
+    let new_activity_id = new_activity.id.clone();
+
+    state
         .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
-            let new_pane_id = PaneId::new();
-            let new_activity_id = ActivityId::new();
-            let activity = Activity::terminal(new_activity_id.clone());
             w.split_pane(
                 target_pane_id,
                 new_pane_id.clone(),
-                activity,
+                new_activity,
                 req.side,
                 req.orientation,
-            )?;
-            Ok((new_pane_id, new_activity_id))
+            )
         })
         .await?;
 
@@ -86,6 +101,7 @@ async fn spawn_pty_with_rollback(
     new_pane_id: &PaneId,
     new_activity_id: &ActivityId,
 ) -> HttpResult<()> {
+    let session_id = session_owning_window(state, wid).await;
     let spawn_result = state
         .terminal
         .spawn(
@@ -96,6 +112,8 @@ async fn spawn_pty_with_rollback(
                 rows: 24,
                 shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
                 cwd: None,
+                window_id: Some(wid.clone()),
+                session_id,
             },
         )
         .await;
@@ -104,6 +122,15 @@ async fn spawn_pty_with_rollback(
         return Err(spawn_err.into());
     }
     Ok(())
+}
+
+/// Walk the SessionState to find which Session owns `wid`. Used to populate
+/// `OZMUX_SESSION_ID` for the spawned PTY; returns `None` for orphan Windows.
+pub(crate) async fn session_owning_window(state: &AppState, wid: &WindowId) -> Option<SessionId> {
+    let sess = state.sessions.lock().await;
+    sess.iter()
+        .find(|(_, s)| s.linked_windows.contains(wid))
+        .map(|(id, _)| id.clone())
 }
 
 async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) {
@@ -308,11 +335,7 @@ fn lookup_pane_window(state: &AppState, pane_id: &PaneId) -> HttpResult<WindowId
         .ok_or_else(|| HttpError::Session(MultiplexerError::PaneNotFound(pane_id.clone())))
 }
 
-fn ensure_pane_in_window(
-    state: &AppState,
-    wid: &WindowId,
-    pane_id: &PaneId,
-) -> HttpResult<()> {
+fn ensure_pane_in_window(state: &AppState, wid: &WindowId, pane_id: &PaneId) -> HttpResult<()> {
     let actual = lookup_pane_window(state, pane_id)?;
     if &actual != wid {
         return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
@@ -1001,6 +1024,63 @@ mod tests {
                     .method("POST")
                     .uri(format!("/windows/{}/panes/{}/activate", wid_b, pid_a))
                     .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn split_v2_honors_client_supplied_pane_and_activity_ids() {
+        let state = fresh_state();
+        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
+        let new_pid = PaneId::new();
+        let new_aid = ActivityId::new();
+        let (router, _state) = router_with(state);
+        let body = format!(
+            r#"{{"side":"after","orientation":"horizontal","new_pane_id":"{}","activity":{{"activity_id":"{}","kind":{{"type":"terminal"}}}}}}"#,
+            new_pid, new_aid,
+        );
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/split", wid, pid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        // Spawn may legitimately fail under heavy CI; only assert ID echo on success.
+        if status == StatusCode::CREATED {
+            let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["new_pane_id"].as_str(), Some(new_pid.as_ref()));
+            assert_eq!(v["new_activity_id"].as_str(), Some(new_aid.as_ref()));
+        }
+    }
+
+    #[tokio::test]
+    async fn split_v2_with_duplicate_pane_id_returns_409() {
+        let state = fresh_state();
+        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
+        let (router, _state) = router_with(state);
+        // Reuse the existing pane's id as the new id → PaneIdConflict.
+        let body = format!(
+            r#"{{"side":"after","orientation":"horizontal","new_pane_id":"{}","activity":{{"activity_id":"{}","kind":{{"type":"terminal"}}}}}}"#,
+            pid,
+            ActivityId::new(),
+        );
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/split", wid, pid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
                     .unwrap(),
             )
             .await

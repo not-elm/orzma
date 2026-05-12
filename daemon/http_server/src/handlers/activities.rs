@@ -15,9 +15,7 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
 };
 use ozmux_extension::ExtensionRegistry;
-use ozmux_multiplexer::{
-    Activity, ActivityId, ActivityKind, PaneId, SetActiveOutcome, WindowId,
-};
+use ozmux_multiplexer::{Activity, ActivityId, ActivityKind, PaneId, SetActiveOutcome, WindowId};
 use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -398,7 +396,7 @@ pub enum ActivityKindInput {
 }
 
 impl ActivityInput {
-    fn into_activity(self) -> Activity {
+    pub(crate) fn into_activity(self) -> Activity {
         let kind = match self.kind {
             ActivityKindInput::Terminal => ActivityKind::Terminal,
             ActivityKindInput::Extension { html_root } => ActivityKind::Extension { html_root },
@@ -469,6 +467,8 @@ mod tests {
                     rows: 24,
                     shell: "/bin/sh".to_string(),
                     cwd: None,
+                    window_id: None,
+                    session_id: None,
                 },
             )
             .await
