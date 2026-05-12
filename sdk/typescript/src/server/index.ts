@@ -22,14 +22,3 @@ export {
   type ChannelMap,
   registerActivityChannels,
 } from "./channels-server.ts";
-
-// Deprecated legacy API — removed in PR7. Kept here so existing extensions
-// keep building while they migrate to the class-based surface.
-export {
-  createActivity,
-  type CreateActivityArgs,
-  createPane,
-  type CreatePaneArgs,
-  splitPane,
-  type SplitPaneArgs,
-} from "./deprecated.ts";
