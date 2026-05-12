@@ -1,9 +1,6 @@
 use crate::handlers::activities::ActivityInput;
-use crate::handlers::publish_window_layout;
-use crate::{
-    AppState,
-    error::{HttpError, HttpResult},
-};
+use crate::handlers::{ensure_pane_in_window, publish_window_layout};
+use crate::{AppState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
@@ -186,50 +183,30 @@ pub async fn activate(
     State(state): State<AppState>,
     Path((window_id, pane_id)): Path<(WindowId, PaneId)>,
 ) -> HttpResult<StatusCode> {
+    // `with_window_or_404` resolves the Window-exists arm: unknown wid → 404.
+    // Inside the lock we then distinguish "pane lives in this window"
+    // (Window::set_active_pane) from "pane lives somewhere else" (409) and
+    // "pane is unknown to the multiplexer" (404). See tests
+    // `activate_unknown_window_returns_404` and
+    // `activate_pane_in_other_window_returns_409`.
     let outcome = state
-        .with_window_or_404(&window_id, |w| activate_pane_in_window(w, &pane_id, &state))
+        .with_window_or_404(&window_id, |w| {
+            if w.panes.contains_key(&pane_id) {
+                w.set_active_pane(&pane_id)
+            } else if state.pane_owner_window.contains_key(&pane_id) {
+                Err(MultiplexerError::PaneNotInWindow {
+                    window: w.id.clone(),
+                    pane: pane_id.clone(),
+                })
+            } else {
+                Err(MultiplexerError::PaneNotFound(pane_id.clone()))
+            }
+        })
         .await?;
     if matches!(outcome, SetActivePaneOutcome::Changed) {
         publish_window_layout(&state, &window_id).await;
     }
     Ok(StatusCode::NO_CONTENT)
-}
-
-fn activate_pane_in_window(
-    window: &mut ozmux_multiplexer::Window,
-    pane_id: &PaneId,
-    state: &AppState,
-) -> MultiplexerResult<SetActivePaneOutcome> {
-    if window.panes.contains_key(pane_id) {
-        return window.set_active_pane(pane_id);
-    }
-    let exists_elsewhere = state.pane_owner_window.contains_key(pane_id);
-    if exists_elsewhere {
-        return Err(MultiplexerError::PaneNotInWindow {
-            window: window.id.clone(),
-            pane: pane_id.clone(),
-        });
-    }
-    Err(MultiplexerError::PaneNotFound(pane_id.clone()))
-}
-
-fn lookup_pane_window(state: &AppState, pane_id: &PaneId) -> HttpResult<WindowId> {
-    state
-        .pane_owner_window
-        .get(pane_id)
-        .map(|e| e.clone())
-        .ok_or_else(|| HttpError::Session(MultiplexerError::PaneNotFound(pane_id.clone())))
-}
-
-fn ensure_pane_in_window(state: &AppState, wid: &WindowId, pane_id: &PaneId) -> HttpResult<()> {
-    let actual = lookup_pane_window(state, pane_id)?;
-    if &actual != wid {
-        return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
-            window: wid.clone(),
-            pane: pane_id.clone(),
-        }));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

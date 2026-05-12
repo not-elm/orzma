@@ -212,6 +212,17 @@ impl AppState {
         Err(MultiplexerError::WindowNotAttachedToSession(wid.clone()))
     }
 
+    /// Resolve which Window currently owns `pid`. Returns `PaneNotFound`
+    /// when the pane has no recorded owner. Used by handlers that receive a
+    /// `(wid, pid)` tuple off the URL and need to validate membership before
+    /// touching the Window mutex.
+    pub fn lookup_pane_window(&self, pid: &PaneId) -> MultiplexerResult<WindowId> {
+        self.pane_owner_window
+            .get(pid)
+            .map(|e| e.clone())
+            .ok_or_else(|| MultiplexerError::PaneNotFound(pid.clone()))
+    }
+
     /// Look up an Activity's metadata regardless of which Window owns it. Walks
     /// every Window. Used by `iframe_serve`.
     pub async fn activity_metadata(&self, aid: &ActivityId) -> Option<Activity> {

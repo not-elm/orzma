@@ -1,6 +1,9 @@
 use crate::AppState;
 use crate::error::HttpError;
-use crate::handlers::publish_window_layout;
+use crate::handlers::{
+    ensure_activity_in_pane_in_window, ensure_activity_in_pane_in_window_and_fetch,
+    publish_window_layout,
+};
 use axum::{
     extract::{
         FromRequest, Path, State, WebSocketUpgrade,
@@ -306,8 +309,12 @@ pub async fn iframe_serve(
     State(state): State<AppState>,
     Path((wid, pid, aid, path)): Path<(WindowId, PaneId, ActivityId, String)>,
 ) -> Result<Response, HttpError> {
-    ensure_activity_in_pane_in_window(&state, &wid, &pid, &aid).await?;
-    let activity = activity_for_iframe(&state, &aid, &path).await?;
+    // One pass: validate the (wid, pid, aid) tuple and also fetch the Activity
+    // so we don't lock the Window twice (membership check + metadata read).
+    let activity = ensure_activity_in_pane_in_window_and_fetch(&state, &wid, &pid, &aid).await?;
+    if !matches!(activity.kind, ActivityKind::Extension { .. }) {
+        return Err(HttpError::IframeFileNotFound(path));
+    }
     let session_id = crate::handlers::panes::session_owning_window(&state, &wid).await;
     let ids = OzmuxIds {
         session_id: session_id.map(|s| s.to_string()),
@@ -316,22 +323,6 @@ pub async fn iframe_serve(
         activity_id: aid.to_string(),
     };
     serve_iframe_asset(&activity, &path, Some(&ids)).await
-}
-
-async fn activity_for_iframe(
-    state: &AppState,
-    aid: &ActivityId,
-    path: &str,
-) -> Result<Activity, HttpError> {
-    let activity = state.activity_metadata(aid).await.ok_or_else(|| {
-        HttpError::Session(ozmux_multiplexer::MultiplexerError::ActivityNotFound(
-            aid.clone(),
-        ))
-    })?;
-    if !matches!(activity.kind, ActivityKind::Extension { .. }) {
-        return Err(HttpError::IframeFileNotFound(path.to_string()));
-    }
-    Ok(activity)
 }
 
 async fn serve_iframe_asset(
@@ -380,50 +371,6 @@ async fn serve_iframe_asset(
         bytes,
     )
         .into_response())
-}
-
-async fn ensure_activity_in_pane_in_window(
-    state: &AppState,
-    wid: &WindowId,
-    pid: &PaneId,
-    aid: &ActivityId,
-) -> Result<(), HttpError> {
-    let owner = state
-        .pane_owner_window
-        .get(pid)
-        .map(|e| e.clone())
-        .ok_or_else(|| {
-            HttpError::Session(ozmux_multiplexer::MultiplexerError::PaneNotFound(
-                pid.clone(),
-            ))
-        })?;
-    if &owner != wid {
-        return Err(HttpError::Session(
-            ozmux_multiplexer::MultiplexerError::PaneNotInWindow {
-                window: wid.clone(),
-                pane: pid.clone(),
-            },
-        ));
-    }
-    let has_activity = state
-        .with_window(wid, |w| {
-            w.pane(pid).map(|p| p.has_activity(aid)).unwrap_or(false)
-        })
-        .await
-        .ok_or_else(|| {
-            HttpError::Session(ozmux_multiplexer::MultiplexerError::WindowNotFound(
-                wid.clone(),
-            ))
-        })?;
-    if !has_activity {
-        return Err(HttpError::Session(
-            ozmux_multiplexer::MultiplexerError::ActivityNotInPane {
-                pane: pid.clone(),
-                activity: aid.clone(),
-            },
-        ));
-    }
-    Ok(())
 }
 
 #[derive(Serialize)]
