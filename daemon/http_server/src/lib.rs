@@ -111,7 +111,7 @@ impl AppState {
     /// Create a Window optionally attached to a Session. IDs are generated
     /// server-side here (PR5 makes them caller-supplied).
     ///
-    /// Lock order: sessions → windows[wid].
+    /// Lock order: sessions → windows\[wid\].
     pub async fn create_window(
         &self,
         session_id: Option<&SessionId>,
@@ -168,7 +168,7 @@ impl AppState {
     /// owning Sessions, clean up runtime resources (PTYs, extension
     /// registry, layout broadcast).
     ///
-    /// Lock order: sessions → windows[wid] → drop in reverse.
+    /// Lock order: sessions → windows\[wid\] → drop in reverse.
     pub async fn close_window(&self, wid: &WindowId) -> MultiplexerResult<Vec<ActivityId>> {
         let mut sess = self.sessions.lock().await;
 
