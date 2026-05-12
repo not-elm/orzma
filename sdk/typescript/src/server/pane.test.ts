@@ -4,7 +4,7 @@ import { __resetActivityChannelsForTests } from "./channels-server.ts";
 import * as daemonClient from "./daemon-client.ts";
 import * as handlersServer from "./handlers-server.ts";
 import { __resetActivityHandlersForTests } from "./handlers-server.ts";
-import { Pane } from "./pane.ts";
+import { __resetExtensionNameCacheForTests, Pane } from "./pane.ts";
 
 let postJsonSpy: ReturnType<typeof vi.spyOn>;
 let savedExtensionName: string | undefined;
@@ -18,6 +18,9 @@ beforeEach(() => {
   // Each test that exercises that path can rely on this default.
   savedExtensionName = process.env.EXTENSION_NAME;
   process.env.EXTENSION_NAME = "memo";
+  // The module-level cache memoizes the first read; reset it before every
+  // test so cases that mutate EXTENSION_NAME mid-suite see the new value.
+  __resetExtensionNameCacheForTests();
 });
 
 afterEach(() => {
@@ -27,6 +30,7 @@ afterEach(() => {
   } else {
     process.env.EXTENSION_NAME = savedExtensionName;
   }
+  __resetExtensionNameCacheForTests();
 });
 
 describe("Pane.split", () => {

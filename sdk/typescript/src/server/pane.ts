@@ -179,12 +179,29 @@ function buildActivityPayload(
   return base;
 }
 
+// `EXTENSION_NAME` is set once by the bootstrap before any user code runs
+// and never changes for the lifetime of the process. Cache the resolved value
+// so we don't reach for `process.env` on every split / addActivity — the env
+// object can be surprisingly slow under Node when accessed frequently.
+let extensionNameCache: string | null = null;
+
 function requireExtensionName(): string {
+  if (extensionNameCache !== null) return extensionNameCache;
   const name = process.env.EXTENSION_NAME;
   if (!name) {
     throw new Error(
       "missing required env: EXTENSION_NAME (must be set by the SDK bootstrap before splitting / adding an extension activity)",
     );
   }
+  extensionNameCache = name;
   return name;
+}
+
+/**
+ * Test-only: drop the cached `EXTENSION_NAME`. Production code never calls
+ * this — the env var is fixed at boot — but tests that mutate `process.env`
+ * between assertions need a way to invalidate the cache.
+ */
+export function __resetExtensionNameCacheForTests(): void {
+  extensionNameCache = null;
 }
