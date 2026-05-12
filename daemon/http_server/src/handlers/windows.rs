@@ -8,6 +8,7 @@ use ozmux_multiplexer::{MultiplexerResult, Window, WindowId};
 pub mod create;
 pub mod delete;
 pub mod events;
+pub mod panes;
 pub mod rename;
 pub mod select;
 

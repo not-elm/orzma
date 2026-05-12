@@ -324,35 +324,35 @@ pub fn daemon_router(state: AppState) -> Router {
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activate",
-            post(handlers::panes::activate),
+            post(handlers::windows::panes::activate::activate),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/split",
-            post(handlers::panes::split),
+            post(handlers::windows::panes::split::split),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}",
-            method_delete(handlers::panes::close),
+            method_delete(handlers::windows::panes::close::close),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activities",
-            post(handlers::activities::add_to_pane),
+            post(handlers::windows::panes::activities::add_to_pane::add_to_pane),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/activate",
-            post(handlers::activities::activate),
+            post(handlers::windows::panes::activities::activate::activate),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/terminal/ws",
-            get(handlers::activities::terminal_ws),
+            get(handlers::windows::panes::activities::terminal_ws::terminal_ws),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/handlers/ws",
-            get(handlers::activities::handlers_ws),
+            get(handlers::windows::panes::activities::handlers_ws::handlers_ws),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/iframe/{*path}",
-            get(handlers::activities::iframe_serve),
+            get(handlers::windows::panes::activities::iframe_serve::iframe_serve),
         )
         .with_state(state)
 }
