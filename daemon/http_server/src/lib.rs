@@ -299,13 +299,13 @@ pub fn daemon_router(state: AppState) -> Router {
         .route("/health", get(handlers::health::check))
         .route(
             "/sessions",
-            get(handlers::sessions::list).post(handlers::sessions::create),
+            get(handlers::sessions::list::list).post(handlers::sessions::create::create),
         )
         .route(
             "/sessions/{session_id}",
-            get(handlers::sessions::get)
-                .patch(handlers::sessions::rename)
-                .delete(handlers::sessions::delete),
+            get(handlers::sessions::get::get)
+                .patch(handlers::sessions::rename::rename)
+                .delete(handlers::sessions::delete::delete),
         )
         .route("/windows", post(handlers::windows::create::create))
         .route(
