@@ -42,10 +42,64 @@ class MockWebSocket {
 beforeEach(() => {
   MockWebSocket.instances = [];
   (globalThis as any).WebSocket = MockWebSocket;
+  (globalThis as any).window = {
+    location: { protocol: "http:", host: "localhost:3200", pathname: "/" },
+  };
 });
 
 afterEach(() => {
   delete (globalThis as any).WebSocket;
+  delete (globalThis as any).window;
+});
+
+describe("getOzmuxContext", () => {
+  it("reads ids from window.__OZMUX__", async () => {
+    const { getOzmuxContext } = await import("./client.ts");
+    (globalThis as any).window.__OZMUX__ = {
+      sessionId: "s1",
+      windowId: "w1",
+      paneId: "p1",
+      activityId: "a1",
+    };
+    const ctx = getOzmuxContext();
+    expect(ctx).toEqual({
+      sessionId: "s1",
+      windowId: "w1",
+      paneId: "p1",
+      activityId: "a1",
+    });
+  });
+
+  it("throws when window.__OZMUX__ is missing", async () => {
+    const { getOzmuxContext } = await import("./client.ts");
+    expect(() => getOzmuxContext()).toThrow(/__OZMUX__/);
+  });
+});
+
+describe("createClient hierarchical URL", () => {
+  it("builds the hierarchical handlers WS URL from window.__OZMUX__", async () => {
+    const { createClient } = await import("./client.ts");
+    (globalThis as any).window.__OZMUX__ = {
+      sessionId: null,
+      windowId: "w1",
+      paneId: "p1",
+      activityId: "a1",
+    };
+    createClient();
+    const ws = MockWebSocket.instances[0]!;
+    expect(ws.url).toBe(
+      "ws://localhost:3200/windows/w1/panes/p1/activities/a1/handlers/ws",
+    );
+  });
+
+  it("falls back to legacy flat URL when activityId is passed explicitly", async () => {
+    const { createClient } = await import("./client.ts");
+    createClient({ activityId: "a-legacy" });
+    const ws = MockWebSocket.instances[0]!;
+    expect(ws.url).toBe(
+      "ws://localhost:3200/activities/a-legacy/handlers/ws",
+    );
+  });
 });
 
 describe("createClient.call", () => {
