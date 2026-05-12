@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createActivity } from "./activity.ts";
+import { createActivity } from "./deprecated.ts";
 import * as channelsServer from "./channels-server.ts";
 import { __resetActivityChannelsForTests } from "./channels-server.ts";
 import * as daemonClient from "./daemon-client.ts";
