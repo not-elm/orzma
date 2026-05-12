@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerError, SessionId};
+use ozmux_multiplexer::SessionId;
 use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
@@ -68,9 +68,7 @@ pub async fn get(
     Path(session_id): Path<SessionId>,
 ) -> HttpResult<Json<serde_json::Value>> {
     let sess = state.sessions.lock().await;
-    let session = sess
-        .get(&session_id)
-        .ok_or_else(|| MultiplexerError::SessionNotFound(session_id.clone()))?;
+    let session = sess.get(&session_id)?;
     Ok(Json(session_view(&session_id, session)))
 }
 
@@ -177,7 +175,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
         let sess = state.sessions.lock().await;
-        assert!(sess.get(&sid).is_none());
+        assert!(sess.get(&sid).is_err());
     }
 
     #[tokio::test]

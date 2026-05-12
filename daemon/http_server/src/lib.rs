@@ -118,10 +118,8 @@ impl AppState {
         name: Option<String>,
     ) -> MultiplexerResult<(WindowId, PaneId, ActivityId)> {
         let mut sess = self.sessions.lock().await;
-        if let Some(sid) = session_id
-            && sess.get(sid).is_none()
-        {
-            return Err(MultiplexerError::SessionNotFound(sid.clone()));
+        if let Some(sid) = session_id {
+            sess.get(sid)?;
         }
 
         let window_id = WindowId::new();
@@ -138,7 +136,7 @@ impl AppState {
             .insert(pane_id.clone(), window_id.clone());
 
         if let Some(sid) = session_id {
-            let session = sess.get_mut(sid).expect("validated existence above");
+            let session = sess.get_mut(sid)?;
             session.attach_window(window_id.clone());
         }
 
@@ -157,9 +155,7 @@ impl AppState {
     /// Rename a Session.
     pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
         let mut sess = self.sessions.lock().await;
-        let session = sess
-            .get_mut(sid)
-            .ok_or_else(|| MultiplexerError::SessionNotFound(sid.clone()))?;
+        let session = sess.get_mut(sid)?;
         session.rename(name);
         Ok(())
     }
@@ -311,20 +307,20 @@ pub fn daemon_router(state: AppState) -> Router {
                 .patch(handlers::sessions::rename)
                 .delete(handlers::sessions::delete),
         )
-        .route("/windows", post(handlers::windows::create))
+        .route("/windows", post(handlers::windows::create::create))
         .route(
             "/windows/{window_id}",
             get(handlers::windows::get)
                 .patch(handlers::windows::rename::rename)
-                .delete(handlers::windows::delete),
+                .delete(handlers::windows::delete::delete),
         )
         .route(
             "/windows/{window_id}/select",
-            post(handlers::windows::select),
+            post(handlers::windows::select::select),
         )
         .route(
             "/windows/{window_id}/events",
-            get(handlers::windows::events),
+            get(handlers::windows::events::events),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activate",

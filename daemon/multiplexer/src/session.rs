@@ -1,5 +1,5 @@
-use crate::error::MultiplexerResult;
 use crate::window::WindowId;
+use crate::{MultiplexerError, error::MultiplexerResult};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,13 +18,17 @@ impl SessionState {
     }
 
     #[inline]
-    pub fn get(&self, id: &SessionId) -> Option<&Session> {
-        self.0.get(id)
+    pub fn get(&self, id: &SessionId) -> MultiplexerResult<&Session> {
+        self.0
+            .get(id)
+            .ok_or_else(|| MultiplexerError::SessionNotFound(id.clone()))
     }
 
     #[inline]
-    pub fn get_mut(&mut self, id: &SessionId) -> Option<&mut Session> {
-        self.0.get_mut(id)
+    pub fn get_mut(&mut self, id: &SessionId) -> MultiplexerResult<&mut Session> {
+        self.0
+            .get_mut(id)
+            .ok_or_else(|| MultiplexerError::SessionNotFound(id.clone()))
     }
 
     #[inline]
