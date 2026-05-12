@@ -75,6 +75,23 @@ impl ExtensionRegistry {
         g.pane_owner.insert(pane_id.clone(), name.to_string());
     }
 
+    /// Record both the pane and the activity as owned by `name` under a
+    /// single write lock. Used when a fresh extension Activity is created
+    /// alongside a new Pane (the split path), where forgetting one of the
+    /// two would leave the iframe / handlers-WS routes unable to resolve
+    /// the owning extension.
+    pub fn record_pane_and_activity_owners(
+        &self,
+        pane_id: &PaneId,
+        activity_id: &ActivityId,
+        name: &str,
+    ) {
+        let mut g = self.inner.write().expect("registry poisoned");
+        g.pane_owner.insert(pane_id.clone(), name.to_string());
+        g.activity_owner
+            .insert(activity_id.clone(), name.to_string());
+    }
+
     pub fn activity_owner(&self, activity_id: &ActivityId) -> Option<String> {
         let g = self.inner.read().expect("registry poisoned");
         g.activity_owner.get(activity_id).cloned()
@@ -135,6 +152,16 @@ mod tests {
         assert_eq!(reg.pane_owner(&pid).as_deref(), Some("memo"));
         reg.forget_pane(&pid);
         assert!(reg.pane_owner(&pid).is_none());
+    }
+
+    #[test]
+    fn record_pane_and_activity_owners_sets_both() {
+        let reg = ExtensionRegistry::default();
+        let pid = PaneId::new();
+        let aid = ActivityId::new();
+        reg.record_pane_and_activity_owners(&pid, &aid, "memo");
+        assert_eq!(reg.pane_owner(&pid).as_deref(), Some("memo"));
+        assert_eq!(reg.activity_owner(&aid).as_deref(), Some("memo"));
     }
 
     #[test]

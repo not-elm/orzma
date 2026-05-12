@@ -435,14 +435,20 @@ pub enum ActivityKindInput {
     },
 }
 
+/// Result of parsing the wire `ActivityInput`: the domain `Activity` plus the
+/// owning extension's name when the activity is Extension-kind. The name is
+/// not stored on `Activity` itself (the multiplexer model has no notion of an
+/// "owner"); the handler uses it to populate `ExtensionRegistry`.
+pub(crate) struct ParsedActivity {
+    pub activity: Activity,
+    pub extension_name: Option<String>,
+}
+
 impl ActivityInput {
     /// Convert the wire payload into a domain `Activity`, also surfacing the
-    /// owning extension's name for Extension-kind activities. The name is
-    /// consumed by the handler (to register ownership in `ExtensionRegistry`)
-    /// and not stored on `Activity` itself, since the multiplexer model has no
-    /// notion of an "owner".
-    pub(crate) fn into_activity(self) -> (Activity, Option<String>) {
-        let (kind, ext_name) = match self.kind {
+    /// owning extension's name for Extension-kind activities.
+    pub(crate) fn into_parsed(self) -> ParsedActivity {
+        let (kind, extension_name) = match self.kind {
             ActivityKindInput::Terminal => (ActivityKind::Terminal, None),
             ActivityKindInput::Extension {
                 html_root,
@@ -454,7 +460,10 @@ impl ActivityInput {
             name: self.name.unwrap_or_else(|| "Activity".into()),
             kind,
         };
-        (activity, ext_name)
+        ParsedActivity {
+            activity,
+            extension_name,
+        }
     }
 }
 
@@ -463,12 +472,14 @@ pub async fn add_to_pane(
     Path((wid, pid)): Path<(WindowId, PaneId)>,
     axum::Json(body): axum::Json<AddActivityRequest>,
 ) -> Result<(StatusCode, axum::Json<serde_json::Value>), HttpError> {
-    let (activity, ext_name) = body.activity.into_activity();
-    let aid = activity.id.clone();
+    let parsed = body.activity.into_parsed();
+    let aid = parsed.activity.id.clone();
     state
-        .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(activity))
+        .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(parsed.activity))
         .await?;
-    if let Some(name) = ext_name.as_deref() {
+    if let Some(name) = parsed.extension_name.as_deref() {
+        // `add_to_pane` only mints a new Activity — the Pane already exists —
+        // so we only need the activity-owner row. Pane-owner stays untouched.
         state.extensions.record_activity_owner(&aid, name);
     }
     publish_window_layout(&state, &wid).await;

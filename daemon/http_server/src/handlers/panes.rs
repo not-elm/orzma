@@ -46,7 +46,10 @@ async fn split_in_window(
     // ids so simple internal callers don't have to mint UUIDs themselves.
     let new_pane_id = req.new_pane_id.unwrap_or_default();
     let (new_activity, ext_name) = match req.activity {
-        Some(spec) => spec.into_activity(),
+        Some(spec) => {
+            let parsed = spec.into_parsed();
+            (parsed.activity, parsed.extension_name)
+        }
         None => (Activity::terminal(ActivityId::new()), None),
     };
     let new_activity_id = new_activity.id.clone();
@@ -72,9 +75,12 @@ async fn split_in_window(
 
     // Extension activities own their pane and need the registry populated
     // before the iframe / handlers-WS routes are exercised by the browser.
+    // The combined call keeps the two rows (pane + activity) in lockstep so a
+    // future maintainer can't add one without the other.
     if let Some(name) = ext_name.as_deref() {
-        state.extensions.record_activity_owner(&new_activity_id, name);
-        state.extensions.record_pane_owner(&new_pane_id, name);
+        state
+            .extensions
+            .record_pane_and_activity_owners(&new_pane_id, &new_activity_id, name);
     }
 
     publish_window_layout(state, wid).await;
