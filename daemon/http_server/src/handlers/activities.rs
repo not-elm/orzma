@@ -1,4 +1,4 @@
-use crate::MultiplexerState;
+use crate::AppState;
 use crate::error::HttpError;
 use crate::extractors::ExtensionName;
 use axum::{
@@ -296,11 +296,11 @@ pub struct CreateActivityRequest {
 
 pub async fn create(
     ExtensionName(ext_name): ExtensionName,
-    State(ms): State<MultiplexerState>,
-    State(registry): State<ExtensionRegistry>,
+    State(state): State<AppState>,
     axum::Json(body): axum::Json<CreateActivityRequest>,
 ) -> Result<(axum::http::StatusCode, axum::Json<serde_json::Value>), HttpError> {
-    let info = registry
+    let info = state
+        .extensions
         .get(&ext_name)
         .ok_or_else(|| HttpError::UnknownExtension(ext_name.clone()))?;
     let html_path = PathBuf::from(&body.html)
@@ -318,15 +318,16 @@ pub async fn create(
         .ok_or_else(|| HttpError::InvalidHtmlPath(body.html.clone()))?
         .to_path_buf();
 
-    let activity_id = {
-        let mut ms = ms.lock().await;
-        ms.new_activity(Activity::extension(
-            ActivityId::new(),
-            format!("Extension: {ext_name}"),
-            html_root,
-        ))
-    };
-    registry.record_activity_owner(&activity_id, &ext_name);
+    let activity = Activity::extension(
+        ActivityId::new(),
+        format!("Extension: {ext_name}"),
+        html_root,
+    );
+    let activity_id = activity.id.clone();
+    state.limbo.activities.insert(activity_id.clone(), activity);
+    state
+        .extensions
+        .record_activity_owner(&activity_id, &ext_name);
 
     Ok((
         axum::http::StatusCode::CREATED,
@@ -335,21 +336,18 @@ pub async fn create(
 }
 
 pub async fn iframe_serve(
-    State(ms): State<MultiplexerState>,
+    State(state): State<AppState>,
     Path((activity_id, path)): Path<(ActivityId, String)>,
 ) -> Result<Response, HttpError> {
-    let html_root = {
-        let ms = ms.lock().await;
-        let activity = ms.activity_metadata(&activity_id).ok_or_else(|| {
-            HttpError::Session(ozmux_multiplexer::MultiplexerError::ActivityNotFound(
-                activity_id.clone(),
-            ))
-        })?;
-        match &activity.kind {
-            ActivityKind::Extension { html_root } => html_root.clone(),
-            ActivityKind::Terminal => {
-                return Err(HttpError::IframeFileNotFound(path));
-            }
+    let activity = state.activity_metadata(&activity_id).await.ok_or_else(|| {
+        HttpError::Session(ozmux_multiplexer::MultiplexerError::ActivityNotFound(
+            activity_id.clone(),
+        ))
+    })?;
+    let html_root = match &activity.kind {
+        ActivityKind::Extension { html_root } => html_root.clone(),
+        ActivityKind::Terminal => {
+            return Err(HttpError::IframeFileNotFound(path));
         }
     };
     let html_root_canon = html_root
@@ -384,26 +382,16 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use futures_util::{SinkExt, StreamExt};
-    use ozmux_extension::ExtensionRegistry;
-    use ozmux_multiplexer::MultiplexerService;
     use ozmux_terminal::SpawnOptions;
     use std::path::PathBuf;
-    use std::sync::Arc;
     use std::time::Duration;
     use tokio::net::TcpListener;
-    use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::Message as TtMessage;
     use tower::ServiceExt;
 
     async fn boot_server() -> (std::net::SocketAddr, AppState, ActivityId) {
-        let mut ms = MultiplexerService::default();
-        let (_sid, _wid, pid, activity_id) = ms.bootstrap_default().unwrap();
-        let state = AppState {
-            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
-            terminal: TerminalService::default(),
-            extensions: ozmux_extension::ExtensionRegistry::default(),
-            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
-        };
+        let state = test_helpers::fresh_state();
+        let (_sid, _wid, pid, activity_id) = test_helpers::bootstrap_default(&state).await;
         state
             .terminal
             .spawn(
@@ -495,17 +483,13 @@ mod tests {
         }
     }
 
-    fn router_with_extension(ext_name: &str, launch_dir: PathBuf) -> (axum::Router, AppState) {
-        let mut ms = ozmux_multiplexer::MultiplexerService::default();
-        let _ = ms.bootstrap_default().unwrap();
-        let registry = ExtensionRegistry::default();
-        registry.register(ext_name, &launch_dir);
-        let state = AppState {
-            multiplexer: crate::MultiplexerState(Arc::new(Mutex::new(ms))),
-            terminal: ozmux_terminal::TerminalService::default(),
-            extensions: registry,
-            layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
-        };
+    async fn router_with_extension(
+        ext_name: &str,
+        launch_dir: PathBuf,
+    ) -> (axum::Router, AppState) {
+        let state = test_helpers::fresh_state();
+        let _ = test_helpers::bootstrap_default(&state).await;
+        state.extensions.register(ext_name, &launch_dir);
         (
             crate::test_helpers::daemon_router_for_test(state.clone()),
             state,
@@ -517,7 +501,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let html = tmp.path().join("index.html");
         std::fs::write(&html, "<html></html>").unwrap();
-        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf());
+        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf()).await;
         let resp = router
             .oneshot(
                 axum::http::Request::builder()
@@ -545,7 +529,7 @@ mod tests {
     async fn create_activity_rejects_path_traversal() {
         let tmp = tempfile::tempdir().unwrap();
         let html = "/etc/passwd";
-        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf());
+        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf()).await;
         let resp = router
             .oneshot(
                 axum::http::Request::builder()
@@ -566,7 +550,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let html = tmp.path().join("index.html");
         std::fs::write(&html, "<html></html>").unwrap();
-        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf());
+        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf()).await;
         let resp = router
             .oneshot(
                 axum::http::Request::builder()
@@ -590,7 +574,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let html = tmp.path().join("index.html");
         std::fs::write(&html, "<html></html>").unwrap();
-        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf());
+        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf()).await;
         let resp = router
             .oneshot(
                 axum::http::Request::builder()
@@ -618,15 +602,10 @@ mod tests {
         )
         .unwrap();
         std::fs::write(tmp.path().join("style.css"), b"body { color: red; }").unwrap();
-        let (router, state) = router_with_extension(ext_name, tmp.path().to_path_buf());
-        let activity_id = {
-            let mut ms = state.multiplexer.lock().await;
-            ms.new_activity(Activity::extension(
-                ActivityId::new(),
-                "ext",
-                tmp.path().to_path_buf(),
-            ))
-        };
+        let (router, state) = router_with_extension(ext_name, tmp.path().to_path_buf()).await;
+        let activity = Activity::extension(ActivityId::new(), "ext", tmp.path().to_path_buf());
+        let activity_id = activity.id.clone();
+        state.limbo.activities.insert(activity_id.clone(), activity);
         state
             .extensions
             .record_activity_owner(&activity_id, ext_name);
@@ -724,15 +703,10 @@ mod tests {
             .canonicalize()
             .expect("extensions/memo must exist relative to daemon/http_server");
 
-        let (router, state) = router_with_extension("memo", memo_root.clone());
-        let activity_id = {
-            let mut ms = state.multiplexer.lock().await;
-            ms.new_activity(Activity::extension(
-                ActivityId::new(),
-                "ext",
-                memo_root.clone(),
-            ))
-        };
+        let (router, state) = router_with_extension("memo", memo_root.clone()).await;
+        let activity = Activity::extension(ActivityId::new(), "ext", memo_root.clone());
+        let activity_id = activity.id.clone();
+        state.limbo.activities.insert(activity_id.clone(), activity);
 
         let resp = router
             .oneshot(
@@ -813,8 +787,7 @@ mod tests {
 
     #[tokio::test]
     async fn handlers_ws_returns_404_for_unknown_activity() {
-        let ms = MultiplexerService::default();
-        let (router, _state) = test_helpers::router_with(ms);
+        let (router, _state) = test_helpers::router_with(test_helpers::fresh_state());
         let resp = router
             .oneshot(
                 Request::builder()
@@ -835,8 +808,7 @@ mod tests {
 
     #[tokio::test]
     async fn handlers_ws_returns_403_for_disallowed_origin() {
-        let ms = MultiplexerService::default();
-        let (router, _state) = test_helpers::router_with(ms);
+        let (router, _state) = test_helpers::router_with(test_helpers::fresh_state());
         let resp = router
             .oneshot(
                 Request::builder()
@@ -857,12 +829,12 @@ mod tests {
 
     #[tokio::test]
     async fn handlers_ws_returns_503_when_extension_not_running() {
-        let mut ms = MultiplexerService::default();
-        let (_sid, _wid, _pid, aid) = ms.bootstrap_default().unwrap();
+        let state = test_helpers::fresh_state();
+        let (_sid, _wid, _pid, aid) = test_helpers::bootstrap_default(&state).await;
         let registry = ozmux_extension::ExtensionRegistry::default();
         registry.register("memo", std::path::Path::new("/tmp/memo"));
         registry.record_activity_owner(&aid, "memo");
-        let (router, _state) = test_helpers::router_with_registry(ms, registry);
+        let (router, _state) = test_helpers::router_with_registry(state, registry);
         let resp = router
             .oneshot(
                 Request::builder()
@@ -941,13 +913,13 @@ mod tests {
         });
 
         // 2. Build a router with a registry pointing at the mock sock.
-        let mut ms = MultiplexerService::default();
-        let (_sid, _wid, _pid, aid) = ms.bootstrap_default().unwrap();
+        let state = test_helpers::fresh_state();
+        let (_sid, _wid, _pid, aid) = test_helpers::bootstrap_default(&state).await;
         let registry = ozmux_extension::ExtensionRegistry::default();
         registry.register("memo", std::path::Path::new("/tmp/memo"));
         registry.record_activity_owner(&aid, "memo");
         registry.set_handlers_sock_path("memo", &sock_path);
-        let (router, _state) = test_helpers::router_with_registry(ms, registry);
+        let (router, _state) = test_helpers::router_with_registry(state, registry);
 
         // 3. Bind an axum server on an ephemeral port and connect via tokio_tungstenite.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

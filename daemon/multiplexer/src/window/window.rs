@@ -200,13 +200,6 @@ impl WindowState {
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&WindowId, &mut Window)> {
         self.0.iter_mut()
     }
-
-    /// Find the unique Window whose `panes` contains this PaneId. Used by
-    /// MultiplexerService facade methods that take a PaneId without a wid
-    /// (transitional; PR3 introduces an index that makes this O(1)).
-    pub fn find_window_with_pane_mut(&mut self, pid: &PaneId) -> Option<&mut Window> {
-        self.0.values_mut().find(|w| w.panes.contains_key(pid))
-    }
 }
 
 #[cfg(test)]
