@@ -1,8 +1,9 @@
+import { closePaneEndpoint } from '../terminal/api';
 import type { PaneId } from './types';
 
 export async function closePane(paneId: PaneId): Promise<void> {
   try {
-    const resp = await fetch(`/panes/${paneId}`, { method: 'DELETE' });
+    const resp = await fetch(closePaneEndpoint(paneId), { method: 'DELETE' });
     if (!resp.ok) {
       console.warn('close pane failed', { paneId, status: resp.status });
     }

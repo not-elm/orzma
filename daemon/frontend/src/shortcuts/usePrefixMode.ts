@@ -25,7 +25,8 @@ const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta']);
 
 interface SharedState {
   bindings: PrefixBindings;
-  prefix: { ctrl: boolean; key: string };
+  prefixCtrl: boolean;
+  prefixKeyLower: string;
   timeoutMs: number;
   armed: boolean;
   setArmed: (next: boolean) => void;
@@ -41,12 +42,11 @@ function ensureDispatcher() {
     if (!shared) return;
     if (e.isComposing) return;
     const key = e.key.toLowerCase();
-    const prefixKey = shared.prefix.key.toLowerCase();
-    const prefixCtrl = shared.prefix.ctrl;
+    const { prefixCtrl, prefixKeyLower } = shared;
 
     if (!shared.armed) {
       const isPrefix =
-        key === prefixKey &&
+        key === prefixKeyLower &&
         e.ctrlKey === prefixCtrl &&
         !e.shiftKey &&
         !e.altKey &&
@@ -60,21 +60,13 @@ function ensureDispatcher() {
       return;
     }
 
-    if (MODIFIER_KEYS.has(e.key)) {
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    if (e.repeat) {
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-
+    // Armed mode consumes every event so it cannot leak to xterm.js or iframes.
     e.preventDefault();
     e.stopPropagation();
 
-    if (e.key === 'Escape' || (key === prefixKey && e.ctrlKey === prefixCtrl)) {
+    if (MODIFIER_KEYS.has(e.key) || e.repeat) return;
+
+    if (e.key === 'Escape' || (key === prefixKeyLower && e.ctrlKey === prefixCtrl)) {
       shared.setArmed(false);
       return;
     }
@@ -133,7 +125,8 @@ export function usePrefixMode(
     };
     shared = {
       bindings,
-      prefix: { ctrl: prefixCtrl, key: prefixKey },
+      prefixCtrl,
+      prefixKeyLower: prefixKey.toLowerCase(),
       timeoutMs,
       armed: false,
       setArmed,
@@ -149,8 +142,19 @@ export function usePrefixMode(
     };
   }, [prefixCtrl, prefixKey, timeoutMs]);
 
-  // Keep shared.bindings up to date every render via the ref.
+  // Bindings close over per-render values; sync each render so the listener
+  // always sees the current closure rather than the one captured at mount.
   if (shared) shared.bindings = bindings;
 
   return { isArmed };
+}
+
+if (import.meta.hot) {
+  // Vite HMR replaces this module without re-running consumers' effects;
+  // detach the old listener so we don't accumulate duplicate keydown handlers.
+  import.meta.hot.dispose(() => {
+    if (dispatcher) dispatcher.detachFrom(document);
+    shared = null;
+    dispatcher = null;
+  });
 }

@@ -25,7 +25,8 @@ export function useIframeKeydownBridge(ref: RefObject<HTMLIFrameElement | null>)
     };
 
     iframe.addEventListener('load', attach);
-    // Attach once eagerly in case the iframe has already loaded.
+    // Race guard: the iframe may have finished loading before this effect ran,
+    // in which case the load listener will never fire on its own.
     attach();
 
     return () => {
