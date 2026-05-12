@@ -26,6 +26,8 @@ docs/
 .ozmux/
 # Playwright MCP session artifacts (snapshots, console logs)
 .playwright-mcp/
+# Brainstorming visual companion artifacts
+.superpowers/
 .DS_Store
 *.suo
 *.ntvs*

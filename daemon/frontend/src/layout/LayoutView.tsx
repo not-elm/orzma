@@ -4,8 +4,8 @@ import { PaneContent } from './PaneContent';
 import { type Bounds, computePaneLayout } from './paneBounds';
 import type { PaneId } from './types';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
-import { useDefaultWindow } from './useDefaultWindow';
-import { useWindowLayout } from './useWindowLayout';
+import type { DefaultWindowState } from './useDefaultWindow';
+import type { LayoutState } from './useWindowLayout';
 
 interface AbsoluteBoxProps {
   bounds: Bounds;
@@ -34,11 +34,12 @@ function AbsoluteBox({ bounds, className, active, onPointerDown, children }: Abs
   );
 }
 
-export function LayoutView() {
-  const def = useDefaultWindow();
-  const wid = def.status === 'ready' ? def.windowId : null;
-  const layout = useWindowLayout(wid);
+interface LayoutViewProps {
+  windowState: DefaultWindowState;
+  layoutState: LayoutState;
+}
 
+export function LayoutView({ windowState: def, layoutState: layout }: LayoutViewProps) {
   if (def.status === 'loading') {
     return (
       <div className="flex h-dvh w-dvw items-center justify-center text-muted-foreground">

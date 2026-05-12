@@ -3,6 +3,7 @@ import { Terminal } from '../terminal/Terminal';
 import { ClickShield } from './ClickShield';
 import { PanePlaceholder } from './PanePlaceholder';
 import type { PaneView } from './types';
+import { useIframeKeydownBridge } from './useIframeKeydownBridge';
 
 interface PaneContentProps {
   pane: PaneView;
@@ -44,6 +45,8 @@ function IframePane({ url, title, isActive, onActivate }: IframePaneProps) {
     }
     prevActiveRef.current = isActive;
   }, [isActive]);
+
+  useIframeKeydownBridge(iframeRef);
 
   return (
     <>
