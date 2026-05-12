@@ -28,19 +28,9 @@ pub struct AppState {
     pub sessions: Arc<Mutex<SessionState>>,
     pub windows: Arc<DashMap<WindowId, Arc<Mutex<Window>>>>,
     pub pane_owner_window: Arc<DashMap<PaneId, WindowId>>,
-    pub limbo: LimboStore,
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
     pub layout_broadcast: LayoutBroadcaster,
-}
-
-/// Transitional limbo store for the pre-PR5 SDK flow
-/// (createActivity → createPane → splitPane). Removed in PR7 when the
-/// legacy split-with API disappears.
-#[derive(Clone, Default)]
-pub struct LimboStore {
-    pub activities: Arc<DashMap<ActivityId, Activity>>,
-    pub panes: Arc<DashMap<PaneId, ActivityId>>,
 }
 
 impl FromRef<AppState> for TerminalService {
@@ -223,7 +213,7 @@ impl AppState {
     }
 
     /// Look up an Activity's metadata regardless of which Window owns it. Walks
-    /// every Window then the limbo store. Used by `iframe_serve`.
+    /// every Window. Used by `iframe_serve`.
     pub async fn activity_metadata(&self, aid: &ActivityId) -> Option<Activity> {
         for entry in self.windows.iter() {
             let win_arc = entry.value().clone();
@@ -235,7 +225,7 @@ impl AppState {
                 }
             }
         }
-        self.limbo.activities.get(aid).map(|e| e.clone())
+        None
     }
 }
 
@@ -303,21 +293,17 @@ pub fn daemon_router(state: AppState) -> Router {
             "/windows/{window_id}/events",
             get(handlers::windows::events),
         )
-        .route("/panes", post(handlers::panes::create))
-        .route("/panes/{pane_id}/split", post(handlers::panes::split))
-        .route("/panes/{src}/split-with", post(handlers::panes::split_with))
-        .route("/panes/{pane_id}", method_delete(handlers::panes::close))
         .route(
             "/windows/{window_id}/panes/{pane_id}/activate",
             post(handlers::panes::activate),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/split",
-            post(handlers::panes::split_v2),
+            post(handlers::panes::split),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}",
-            method_delete(handlers::panes::close_v2),
+            method_delete(handlers::panes::close),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activities",
@@ -325,31 +311,18 @@ pub fn daemon_router(state: AppState) -> Router {
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/activate",
-            post(handlers::activities::activate_v2),
+            post(handlers::activities::activate),
         )
         .route(
             "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/terminal/ws",
-            get(handlers::activities::terminal_ws_hierarchical),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/handlers/ws",
-            get(handlers::activities::handlers_ws_hierarchical),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/iframe/{*path}",
-            get(handlers::activities::iframe_serve_hierarchical),
-        )
-        .route("/activities", post(handlers::activities::create))
-        .route(
-            "/activities/{activity_id}/terminal/ws",
             get(handlers::activities::terminal_ws),
         )
         .route(
-            "/activities/{activity_id}/handlers/ws",
+            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/handlers/ws",
             get(handlers::activities::handlers_ws),
         )
         .route(
-            "/activities/{activity_id}/iframe/{*path}",
+            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/iframe/{*path}",
             get(handlers::activities::iframe_serve),
         )
         .with_state(state)
@@ -400,30 +373,11 @@ pub(crate) mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use tower::ServiceExt;
 
     #[test]
     fn app_state_default_includes_layout_broadcaster() {
         let state = AppState::default();
         let _ = state.layout_broadcast.subscribe_or_create(&WindowId::new());
-    }
-
-    #[tokio::test]
-    async fn delete_pane_without_extension_header_returns_404() {
-        let (router, _) = test_helpers::router_with(test_helpers::fresh_state());
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/panes/does-not-exist")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
