@@ -315,7 +315,7 @@ pub fn daemon_router(state: AppState) -> Router {
         .route(
             "/windows/{window_id}",
             get(handlers::windows::get)
-                .patch(handlers::windows::rename)
+                .patch(handlers::windows::rename::rename)
                 .delete(handlers::windows::delete),
         )
         .route(

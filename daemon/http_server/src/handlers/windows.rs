@@ -1,4 +1,3 @@
-use crate::handlers::publish_window_layout;
 use crate::{AppState, error::HttpResult};
 use axum::{
     Json,
@@ -11,6 +10,8 @@ use axum::{
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
 use ozmux_multiplexer::{MultiplexerResult, SessionId, Window, WindowId};
 use serde::Deserialize;
+
+pub mod rename;
 
 #[derive(Deserialize, Default)]
 pub struct CreateRequest {
@@ -28,21 +29,6 @@ pub async fn create(
         .create_window(body.session_id.as_ref(), body.name)
         .await?;
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": wid }))))
-}
-
-#[derive(Deserialize)]
-pub struct RenameRequest {
-    name: String,
-}
-
-pub async fn rename(
-    State(state): State<AppState>,
-    Path(window_id): Path<WindowId>,
-    Json(body): Json<RenameRequest>,
-) -> HttpResult<StatusCode> {
-    state.rename_window(&window_id, body.name).await?;
-    publish_window_layout(&state, &window_id).await;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn delete(
@@ -284,30 +270,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rename_returns_204_and_updates_name() {
-        let state = fresh_state();
-        let (wid, _, _) = state
-            .create_window(None, Some("orig".into()))
-            .await
-            .unwrap();
-        let (router, state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri(format!("/windows/{}", wid))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name":"renamed"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let name = state.with_window(&wid, |w| w.name.clone()).await.unwrap();
-        assert_eq!(name, "renamed");
-    }
-
-    #[tokio::test]
     async fn delete_returns_204_and_removes_window() {
         let state = fresh_state();
         let (wid, _, _) = state.create_window(None, None).await.unwrap();
@@ -462,36 +424,6 @@ mod tests {
         assert_eq!(v["id"].as_str(), Some(wid.as_ref()));
         assert_eq!(v["name"].as_str(), Some("orphan"));
         assert_eq!(v["panes"].as_array().map(|a| a.len()), Some(1));
-    }
-
-    #[tokio::test]
-    async fn rename_publishes_layout_with_new_name() {
-        let state = fresh_state();
-        let (wid, _, _) = state
-            .create_window(None, Some("orig".into()))
-            .await
-            .unwrap();
-        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
-        let (router, _state) = router_with(state);
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri(format!("/windows/{}", wid))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name":"renamed"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
-            .await
-            .expect("publish timed out")
-            .expect("recv error");
-        assert_eq!(view["name"].as_str(), Some("renamed"));
     }
 
     #[tokio::test]
