@@ -3,7 +3,7 @@ use crate::{
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
 };
 use ozmux_extension::runtime::RuntimeRoot;
-use ozmux_multiplexer::{ActivityId, PaneId};
+use ozmux_multiplexer::{ActivityId, PaneId, SessionId, WindowId};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Read, sync::Arc};
@@ -29,6 +29,12 @@ pub struct SpawnOptions {
     pub rows: u16,
     pub shell: String,
     pub cwd: Option<String>,
+    /// Owning Window id, surfaced to the spawned shell as `OZMUX_WINDOW_ID`.
+    /// `None` only for callers that have no Window context (tests/legacy).
+    pub window_id: Option<WindowId>,
+    /// Owning Session id, surfaced to the spawned shell as `OZMUX_SESSION_ID`
+    /// when present. Orphan Windows resolve to `None`.
+    pub session_id: Option<SessionId>,
 }
 
 impl TerminalService {
@@ -65,6 +71,12 @@ impl TerminalService {
         }
         cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
         cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
+        if let Some(wid) = &opts.window_id {
+            cmd.env("OZMUX_WINDOW_ID", wid.as_ref());
+        }
+        if let Some(sid) = &opts.session_id {
+            cmd.env("OZMUX_SESSION_ID", sid.as_ref());
+        }
         if let Some(prefix) = self.extension_path_prefix() {
             let existing = std::env::var("PATH").unwrap_or_default();
             let combined = if existing.is_empty() {
@@ -244,6 +256,8 @@ mod tests {
                 rows: 24,
                 shell: "/bin/sh".to_string(),
                 cwd: None,
+                window_id: None,
+                session_id: None,
             },
         )
         .await
@@ -270,6 +284,8 @@ mod tests {
                 rows: 24,
                 shell: "/bin/sh".to_string(),
                 cwd: None,
+                window_id: None,
+                session_id: None,
             },
         )
         .await
@@ -307,6 +323,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_injects_window_and_session_ids_when_provided() {
+        let svc = TerminalService::default();
+        let activity_id = ActivityId::new();
+        let pane_id = PaneId::new();
+        let window_id = WindowId::new();
+        let session_id = SessionId::new();
+        svc.spawn(
+            pane_id,
+            activity_id.clone(),
+            SpawnOptions {
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
+                window_id: Some(window_id.clone()),
+                session_id: Some(session_id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity_id).await.unwrap();
+
+        svc.write(
+            &activity_id,
+            b"printf 'WIN=%s SES=%s\\n' \"$OZMUX_WINDOW_ID\" \"$OZMUX_SESSION_ID\"\n",
+        )
+        .await
+        .unwrap();
+
+        let needle = format!("WIN={} SES={}", window_id.as_ref(), session_id.as_ref());
+        let mut got = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(TerminalEvent::Data { buffer })) => {
+                    got.extend_from_slice(&buffer);
+                    if got.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                        break;
+                    }
+                }
+                Ok(Ok(TerminalEvent::Exit { .. })) => break,
+                Ok(Err(_)) => break,
+                Err(_) => continue,
+            }
+        }
+        svc.kill(&activity_id).await.unwrap();
+        let s = String::from_utf8_lossy(&got);
+        assert!(s.contains(&needle), "expected {needle}, got: {s}");
+    }
+
+    #[tokio::test]
     async fn pty_output_is_broadcast_to_subscribers() {
         let svc = TerminalService::default();
         let id = ActivityId::new();
@@ -319,6 +387,8 @@ mod tests {
                 rows: 24,
                 shell: "/bin/sh".to_string(),
                 cwd: None,
+                window_id: None,
+                session_id: None,
             },
         )
         .await
@@ -377,6 +447,8 @@ mod tests {
                 rows: 24,
                 shell: "/bin/sh".to_string(),
                 cwd: None,
+                window_id: None,
+                session_id: None,
             },
         )
         .await
@@ -445,6 +517,8 @@ mod tests {
                 rows: 24,
                 shell: "/bin/sh".to_string(),
                 cwd: None,
+                window_id: None,
+                session_id: None,
             },
         )
         .await

@@ -241,7 +241,7 @@ impl AppState {
 
 pub async fn serve(state: AppState) -> HttpResult {
     let sid = state.create_session(None).await;
-    let (_wid, pid, aid) = state
+    let (wid, pid, aid) = state
         .create_window(Some(&sid), None)
         .await
         .expect("bootstrap cannot fail on empty AppState");
@@ -256,6 +256,8 @@ pub async fn serve(state: AppState) -> HttpResult {
                 rows: 24,
                 shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
                 cwd: None,
+                window_id: Some(wid),
+                session_id: Some(sid),
             },
         )
         .await
