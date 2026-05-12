@@ -3,7 +3,7 @@ use crate::{
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
 };
 use ozmux_extension::runtime::RuntimeRoot;
-use ozmux_multiplexer::{activity::ActivityId, pane::PaneId};
+use ozmux_multiplexer::{ActivityId, PaneId};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Read, sync::Arc};

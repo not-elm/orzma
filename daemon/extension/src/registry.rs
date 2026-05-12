@@ -1,7 +1,7 @@
 //! Tracks which extension owns which activity / pane, plus extension launch_dirs
 //! for path-traversal validation in HTTP handlers.
 
-use ozmux_multiplexer::{activity::ActivityId, pane::PaneId};
+use ozmux_multiplexer::{ActivityId, PaneId};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},

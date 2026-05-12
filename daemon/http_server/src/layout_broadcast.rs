@@ -1,4 +1,4 @@
-use ozmux_multiplexer::window::WindowId;
+use ozmux_multiplexer::WindowId;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;

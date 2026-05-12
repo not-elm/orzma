@@ -1,6 +1,10 @@
 //! Domain errors for the session layer.
 
-use crate::{cells::CellId, pane::PaneId, session::SessionId, window::WindowId};
+use crate::session::SessionId;
+use crate::window::WindowId;
+use crate::window::cells::CellId;
+use crate::window::pane::PaneId;
+use crate::window::pane::activity::ActivityId;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -57,13 +61,29 @@ pub enum MultiplexerError {
     WindowNotAttachedToSession(WindowId),
 
     #[error("activity not found: {0}")]
-    ActivityNotFound(crate::activity::ActivityId),
+    ActivityNotFound(ActivityId),
 
     #[error("pane already placed in cell tree: {0}")]
-    PaneAlreadyPlaced(crate::pane::PaneId),
+    PaneAlreadyPlaced(PaneId),
 
     #[error("window not found for pane pane-id={0}")]
     WindowNotFoundForPane(PaneId),
+
+    #[error("pane id conflict: {0}")]
+    PaneIdConflict(PaneId),
+
+    #[error("activity id conflict: {0}")]
+    ActivityIdConflict(ActivityId),
+
+    #[error("activity {activity} is not in pane {pane}")]
+    ActivityNotInPane { pane: PaneId, activity: ActivityId },
+
+    #[error("pane {pane} claimed to be in window {claimed} but is actually in {actual}")]
+    PaneAttachmentMismatch {
+        pane: PaneId,
+        claimed: WindowId,
+        actual: WindowId,
+    },
 }
 
 pub type MultiplexerResult<T = ()> = Result<T, MultiplexerError>;

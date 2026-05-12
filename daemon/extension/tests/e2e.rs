@@ -1,7 +1,7 @@
 use ozmux_extension::{
     handle::ExtensionHandles, registry::ExtensionRegistry, runtime::RuntimeRoot,
 };
-use ozmux_multiplexer::{activity::ActivityId, pane::PaneId};
+use ozmux_multiplexer::{ActivityId, PaneId};
 use ozmux_terminal::{SpawnOptions, TerminalService};
 use std::{
     path::PathBuf,

@@ -198,7 +198,7 @@ mod tests {
         // Ability to subscribe shows the broadcaster is wired and constructable.
         let _ = state
             .layout_broadcast
-            .subscribe_or_create(&ozmux_multiplexer::window::WindowId::new());
+            .subscribe_or_create(&ozmux_multiplexer::WindowId::new());
     }
 
     #[tokio::test]

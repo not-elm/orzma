@@ -1,6 +1,6 @@
-use ozmux_multiplexer::MultiplexerResult;
-use ozmux_multiplexer::cells::{Cell, CellId, LayoutCellState, SplitOrientation};
-use ozmux_multiplexer::pane::PaneId;
+use ozmux_multiplexer::{
+    Cell, CellId, LayoutCellState, MultiplexerResult, PaneId, SplitOrientation,
+};
 use serde::Serialize;
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -70,7 +70,7 @@ fn compute_split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_multiplexer::cells::Side;
+    use ozmux_multiplexer::Side;
 
     #[test]
     fn build_layout_for_single_pane_window() {

@@ -14,7 +14,7 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
 };
 use ozmux_extension::ExtensionRegistry;
-use ozmux_multiplexer::activity::{Activity, ActivityId, ActivityKind};
+use ozmux_multiplexer::{Activity, ActivityId, ActivityKind};
 use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -320,10 +320,11 @@ pub async fn create(
 
     let activity_id = {
         let mut ms = ms.lock().await;
-        ms.new_activity(Activity {
-            name: format!("Extension: {ext_name}"),
-            kind: ActivityKind::Extension { html_root },
-        })
+        ms.new_activity(Activity::extension(
+            ActivityId::new(),
+            format!("Extension: {ext_name}"),
+            html_root,
+        ))
     };
     registry.record_activity_owner(&activity_id, &ext_name);
 
@@ -339,7 +340,7 @@ pub async fn iframe_serve(
 ) -> Result<Response, HttpError> {
     let html_root = {
         let ms = ms.lock().await;
-        let activity = ms.activities().get(&activity_id).ok_or_else(|| {
+        let activity = ms.activity_metadata(&activity_id).ok_or_else(|| {
             HttpError::Session(ozmux_multiplexer::MultiplexerError::ActivityNotFound(
                 activity_id.clone(),
             ))
@@ -609,12 +610,7 @@ mod tests {
 
     async fn setup_extension_with_html(
         ext_name: &str,
-    ) -> (
-        axum::Router,
-        AppState,
-        ozmux_multiplexer::activity::ActivityId,
-        tempfile::TempDir,
-    ) {
+    ) -> (axum::Router, AppState, ActivityId, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("index.html"),
@@ -625,12 +621,11 @@ mod tests {
         let (router, state) = router_with_extension(ext_name, tmp.path().to_path_buf());
         let activity_id = {
             let mut ms = state.multiplexer.lock().await;
-            ms.new_activity(Activity {
-                name: "ext".to_string(),
-                kind: ActivityKind::Extension {
-                    html_root: tmp.path().to_path_buf(),
-                },
-            })
+            ms.new_activity(Activity::extension(
+                ActivityId::new(),
+                "ext",
+                tmp.path().to_path_buf(),
+            ))
         };
         state
             .extensions
@@ -732,12 +727,11 @@ mod tests {
         let (router, state) = router_with_extension("memo", memo_root.clone());
         let activity_id = {
             let mut ms = state.multiplexer.lock().await;
-            ms.new_activity(Activity {
-                name: "ext".to_string(),
-                kind: ActivityKind::Extension {
-                    html_root: memo_root.clone(),
-                },
-            })
+            ms.new_activity(Activity::extension(
+                ActivityId::new(),
+                "ext",
+                memo_root.clone(),
+            ))
         };
 
         let resp = router

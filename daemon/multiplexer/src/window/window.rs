@@ -1,0 +1,289 @@
+use crate::error::{MultiplexerError, MultiplexerResult};
+use crate::window::cells::{CellId, LayoutCellState, Side, SplitOrientation};
+use crate::window::pane::activity::{Activity, ActivityId};
+use crate::window::pane::{Pane, PaneId, PaneState, SetActiveOutcome};
+use ozmux_macros::NewType;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
+#[newtype(as_ref(str), display, new(uuid_v4_string), default)]
+pub struct WindowId(String);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Window {
+    pub id: WindowId,
+    pub name: String,
+    pub cells: LayoutCellState,
+    pub panes: PaneState,
+    pub pane_to_cell: HashMap<PaneId, CellId>,
+    pub root_cell: CellId,
+    pub active_pane: PaneId,
+}
+
+impl Window {
+    /// Construct a Window containing one initial Pane with one initial Activity.
+    /// The caller supplies the ids (typically generated client-side as UUIDv4).
+    pub fn new_with_initial(
+        id: WindowId,
+        name: String,
+        initial_pane_id: PaneId,
+        initial_activity: Activity,
+    ) -> Self {
+        let mut cells = LayoutCellState::default();
+        let (root_cell, pane_cell_id) = cells.new_window_layout(initial_pane_id.clone());
+        let mut panes = PaneState::default();
+        panes.insert(Pane::new(initial_pane_id.clone(), initial_activity));
+        let mut pane_to_cell = HashMap::new();
+        pane_to_cell.insert(initial_pane_id.clone(), pane_cell_id);
+
+        Self {
+            id,
+            name,
+            cells,
+            panes,
+            pane_to_cell,
+            root_cell,
+            active_pane: initial_pane_id,
+        }
+    }
+
+    pub fn rename(&mut self, name: impl Into<String>) {
+        self.name = name.into();
+    }
+
+    /// Split a target Pane, placing a new Pane next to it. The new Pane gets
+    /// exactly one Activity. Both the new pane id and the new activity id are
+    /// supplied by the caller (UUID-validated upstream).
+    pub fn split_pane(
+        &mut self,
+        target_pane_id: &PaneId,
+        new_pane_id: PaneId,
+        new_activity: Activity,
+        side: Side,
+        orientation: SplitOrientation,
+    ) -> MultiplexerResult<()> {
+        if !self.panes.contains_key(target_pane_id) {
+            return Err(MultiplexerError::PaneNotFound(target_pane_id.clone()));
+        }
+        if self.panes.contains_key(&new_pane_id) {
+            return Err(MultiplexerError::PaneIdConflict(new_pane_id));
+        }
+        let target_cell_id = self
+            .pane_to_cell
+            .get(target_pane_id)
+            .ok_or_else(|| MultiplexerError::CellForPaneNotFound(target_pane_id.clone()))?
+            .clone();
+        let new_cell_id = self.cells.new_pane(new_pane_id.clone(), None);
+        if let Err(e) =
+            self.cells
+                .split_cell(target_cell_id, new_cell_id.clone(), side, orientation)
+        {
+            let _ = self.cells.remove_subtree(&new_cell_id);
+            return Err(e);
+        }
+        self.pane_to_cell.insert(new_pane_id.clone(), new_cell_id);
+        let pane = Pane::new(new_pane_id.clone(), new_activity);
+        self.panes.insert(pane);
+        self.active_pane = new_pane_id;
+        Ok(())
+    }
+
+    /// Close a Pane. Returns the ids of the activities that were destroyed,
+    /// so the caller can tear down PTYs and extension registry entries.
+    pub fn close_pane(&mut self, pane_id: &PaneId) -> MultiplexerResult<Vec<ActivityId>> {
+        if !self.panes.contains_key(pane_id) {
+            return Err(MultiplexerError::PaneNotFound(pane_id.clone()));
+        }
+        let cell_id = self
+            .pane_to_cell
+            .get(pane_id)
+            .ok_or_else(|| MultiplexerError::CellForPaneNotFound(pane_id.clone()))?
+            .clone();
+        let outcome = self.cells.close_cell(&cell_id)?;
+        let survivor_pane_id = self.cells.leftmost_pane(outcome.survivor())?.clone();
+        if &self.active_pane == pane_id {
+            self.active_pane = survivor_pane_id;
+        }
+        let pane = self.panes.remove(pane_id)?;
+        self.pane_to_cell.remove(pane_id);
+        Ok(pane.activities.into_iter().map(|a| a.id).collect())
+    }
+
+    /// Set the active pane in this Window. Returns `Unchanged` so the caller
+    /// can skip a redundant broadcast.
+    pub fn set_active_pane(&mut self, pane_id: &PaneId) -> MultiplexerResult<SetActiveOutcome> {
+        if !self.panes.contains_key(pane_id) {
+            return Err(MultiplexerError::PaneNotFound(pane_id.clone()));
+        }
+        if &self.active_pane == pane_id {
+            return Ok(SetActiveOutcome::Unchanged);
+        }
+        self.active_pane = pane_id.clone();
+        Ok(SetActiveOutcome::Changed)
+    }
+
+    /// Collect every ActivityId across every Pane. Used at window-close time
+    /// to enumerate runtime resources that need cleanup.
+    pub fn collect_activities_for_cleanup(&self) -> Vec<ActivityId> {
+        self.panes
+            .iter()
+            .flat_map(|(_, p)| p.activity_ids().cloned())
+            .collect()
+    }
+
+    /// Read-only Pane accessor.
+    pub fn pane(&self, pid: &PaneId) -> MultiplexerResult<&Pane> {
+        self.panes
+            .get(pid)
+            .ok_or_else(|| MultiplexerError::PaneNotFound(pid.clone()))
+    }
+
+    /// Mutable Pane accessor used to chain into Pane methods (add_activity,
+    /// set_active_activity).
+    pub fn pane_mut(&mut self, pid: &PaneId) -> MultiplexerResult<&mut Pane> {
+        self.panes
+            .get_mut(pid)
+            .ok_or_else(|| MultiplexerError::PaneNotFound(pid.clone()))
+    }
+
+    pub fn pane_ids(&self) -> impl Iterator<Item = &PaneId> {
+        self.panes.ids()
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct WindowState(HashMap<WindowId, Window>);
+
+impl WindowState {
+    #[inline]
+    pub fn insert(&mut self, window: Window) {
+        self.0.insert(window.id.clone(), window);
+    }
+
+    #[inline]
+    pub fn get(&self, id: &WindowId) -> Option<&Window> {
+        self.0.get(id)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, id: &WindowId) -> Option<&mut Window> {
+        self.0.get_mut(id)
+    }
+
+    #[inline]
+    pub fn remove(&mut self, id: &WindowId) -> Option<Window> {
+        self.0.remove(id)
+    }
+
+    #[inline]
+    pub fn contains_key(&self, id: &WindowId) -> bool {
+        self.0.contains_key(id)
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (&WindowId, &Window)> {
+        self.0.iter()
+    }
+
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&WindowId, &mut Window)> {
+        self.0.iter_mut()
+    }
+
+    /// Find the unique Window whose `panes` contains this PaneId. Used by
+    /// MultiplexerService facade methods that take a PaneId without a wid
+    /// (transitional; PR3 introduces an index that makes this O(1)).
+    pub fn find_window_with_pane_mut(&mut self, pid: &PaneId) -> Option<&mut Window> {
+        self.0.values_mut().find(|w| w.panes.contains_key(pid))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::window::cells::{Side, SplitOrientation};
+    use crate::window::pane::activity::{Activity, ActivityId};
+
+    fn fresh_window() -> (Window, PaneId, ActivityId) {
+        let wid = WindowId::new();
+        let pid = PaneId::new();
+        let aid = ActivityId::new();
+        let activity = Activity::terminal(aid.clone());
+        let win = Window::new_with_initial(wid, "w".into(), pid.clone(), activity);
+        (win, pid, aid)
+    }
+
+    #[test]
+    fn split_pane_inserts_new_pane_and_promotes_active() {
+        let (mut win, original_pid, _) = fresh_window();
+        let new_pid = PaneId::new();
+        let new_aid = ActivityId::new();
+        let activity = Activity::terminal(new_aid.clone());
+        win.split_pane(
+            &original_pid,
+            new_pid.clone(),
+            activity,
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        assert_eq!(win.panes.len(), 2);
+        assert_eq!(win.active_pane, new_pid);
+        let new_pane = win.panes.get(&new_pid).unwrap();
+        assert_eq!(new_pane.activities.len(), 1);
+        assert_eq!(new_pane.active_activity, new_aid);
+    }
+
+    #[test]
+    fn split_pane_with_duplicate_id_returns_pane_id_conflict() {
+        let (mut win, original_pid, _) = fresh_window();
+        let activity = Activity::terminal(ActivityId::new());
+        let err = win
+            .split_pane(
+                &original_pid,
+                original_pid.clone(),
+                activity,
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::PaneIdConflict(_)));
+    }
+
+    #[test]
+    fn close_pane_returns_destroyed_activity_ids() {
+        let (mut win, original_pid, _) = fresh_window();
+        let new_pid = PaneId::new();
+        let new_aid = ActivityId::new();
+        win.split_pane(
+            &original_pid,
+            new_pid.clone(),
+            Activity::terminal(new_aid.clone()),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        let destroyed = win.close_pane(&new_pid).unwrap();
+        assert_eq!(destroyed, vec![new_aid]);
+        assert_eq!(win.panes.len(), 1);
+        assert_eq!(win.active_pane, original_pid);
+    }
+
+    #[test]
+    fn close_last_pane_returns_cannot_close_last_pane() {
+        let (mut win, pid, _) = fresh_window();
+        let err = win.close_pane(&pid).unwrap_err();
+        assert!(matches!(err, MultiplexerError::CannotCloseLastPane(_)));
+    }
+}

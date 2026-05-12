@@ -1,64 +1,39 @@
 use std::collections::HashMap;
 
-pub mod activity;
-pub mod cells;
 pub mod error;
-pub mod pane;
 pub mod session;
 pub mod window;
 
 pub use error::{MultiplexerError, MultiplexerResult};
-pub use window::*;
-
-#[must_use]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum SetActivePaneOutcome {
-    Unchanged,
-    Changed,
-}
-
-use crate::{
-    activity::{Activity, ActivityId, ActivityState},
-    cells::{CellId, LayoutCellState, Side, SplitOrientation},
-    pane::{Pane, PaneId, PaneState},
-    session::{Session, SessionId, SessionState},
+pub use session::{Session, SessionId, SessionState};
+pub use window::{
+    Activity, ActivityId, ActivityKind, Cell, CellId, CloseOutcome, LayoutCellState, Pane,
+    PaneCell, PaneId, PaneState, RootCell, SetActiveOutcome, Side, SplitCell, SplitOrientation,
+    Window, WindowId, WindowState,
 };
+
+/// Backwards-compatible alias for the active-pane outcome. Use
+/// `SetActiveOutcome` directly in new code.
+pub type SetActivePaneOutcome = SetActiveOutcome;
 
 #[derive(Default)]
 pub struct MultiplexerService {
     sessions: SessionState,
     windows: WindowState,
-    panes: PaneState,
-    cells: LayoutCellState,
-    // どのセルが指定のセルを描画しているかを参照するためのマップ
-    pane_to_cell: HashMap<PaneId, CellId>,
-    activities: ActivityState,
+    // Transitional: limbo activities / panes used by the pre-PR5 SDK flow
+    // (createActivity → createPane → splitPane). Removed in PR7 when the
+    // legacy split-with API disappears.
+    limbo_activities: HashMap<ActivityId, Activity>,
+    limbo_panes: HashMap<PaneId, ActivityId>,
 }
 
 impl MultiplexerService {
-    // ── Narrow read-only accessors ────────────────────────────────────────────
-
     pub fn sessions(&self) -> &SessionState {
         &self.sessions
     }
+
     pub fn windows(&self) -> &WindowState {
         &self.windows
-    }
-    pub fn panes(&self) -> &PaneState {
-        &self.panes
-    }
-    pub fn activities(&self) -> &ActivityState {
-        &self.activities
-    }
-
-    /// Internal index exposed for assertions in tests and bookkeeping in callers.
-    pub fn pane_to_cell_index(&self) -> &HashMap<PaneId, CellId> {
-        &self.pane_to_cell
-    }
-
-    /// Read-only view of the cell tree, e.g. for serialization or test assertions.
-    pub fn cells_ref(&self) -> &LayoutCellState {
-        &self.cells
     }
 
     pub fn new_session(&mut self, name: Option<String>) -> SessionId {
@@ -78,35 +53,20 @@ impl MultiplexerService {
         Ok(())
     }
 
-    /// Remove the session and cascade-close every window it owns.
-    /// Returns every `ActivityId` that was destroyed so the caller can tear
-    /// down the corresponding PTYs.
+    /// Delete a Session. Cascades by closing every Window it owns.
+    /// Returns every ActivityId destroyed so the caller can tear down PTYs.
     pub fn delete_session(&mut self, session_id: &SessionId) -> MultiplexerResult<Vec<ActivityId>> {
         let session = self.sessions.remove(session_id)?;
         let mut activities = Vec::new();
-        for wid in session.windows {
+        for wid in session.linked_windows {
             activities.extend(self.close_window(&wid)?);
         }
         Ok(activities)
     }
 
-    fn new_window_internal(&mut self, name: Option<String>) -> WindowId {
-        let id = WindowId::new();
-        let activity_id = self.new_activity(Activity::default());
-        let pane_id = PaneId::new();
-        self.panes.insert(pane_id.clone(), Pane::new(activity_id));
-        let (root_cell, pane_cell_id) = self.cells.new_window_layout(pane_id.clone());
-        self.pane_to_cell.insert(pane_id.clone(), pane_cell_id);
-        let window_name = name.unwrap_or_else(|| format!("Window{}", self.windows.len() + 1));
-        self.windows
-            .insert(id.clone(), Window::new(window_name, root_cell, pane_id));
-        id
-    }
-
-    /// Create a new window with one initial pane + activity. If `session_id`
-    /// is `Some`, the window is appended to that session and (if no other
-    /// window was active) becomes the session's `active_window`. If `None`,
-    /// the window is left unattached (orphan).
+    /// Create a new Window, optionally linked to a Session.
+    /// The Window's initial pane and activity get server-generated ids
+    /// (transitional — PR5 makes these caller-supplied).
     pub fn new_window_in(
         &mut self,
         session_id: Option<&SessionId>,
@@ -117,7 +77,12 @@ impl MultiplexerService {
         {
             return Err(MultiplexerError::SessionNotFound(sid.clone()));
         }
-        let window_id = self.new_window_internal(name);
+        let window_id = WindowId::new();
+        let pane_id = PaneId::new();
+        let activity = Activity::terminal(ActivityId::new());
+        let window_name = name.unwrap_or_else(|| format!("Window{}", self.windows.len() + 1));
+        let window = Window::new_with_initial(window_id.clone(), window_name, pane_id, activity);
+        self.windows.insert(window);
         if let Some(sid) = session_id {
             let session = self
                 .sessions
@@ -137,175 +102,101 @@ impl MultiplexerService {
         Ok(())
     }
 
-    /// Close a window: remove every pane it contains, drop the cell tree
-    /// rooted at `Window.root_cell`, detach from any owning session, and
-    /// return the `ActivityId`s destroyed so the caller can kill PTYs.
+    /// Close a Window: remove its Pane / Activity tree and detach from any
+    /// owning Session. Returns every ActivityId destroyed so the caller can
+    /// kill PTYs.
     pub fn close_window(&mut self, window_id: &WindowId) -> MultiplexerResult<Vec<ActivityId>> {
-        let root_cell = self
-            .windows
-            .get(window_id)
-            .ok_or_else(|| MultiplexerError::WindowNotFound(window_id.clone()))?
-            .root_cell
-            .clone();
-
-        let pane_ids = self.cells.pane_ids_in_subtree(&root_cell)?;
-
-        let mut activity_ids = Vec::new();
-        for pid in &pane_ids {
-            let pane = self
-                .panes
-                .remove(pid)
-                .expect("pane referenced by window must exist");
-            self.pane_to_cell.remove(pid);
-            for aid in pane.activities {
-                self.activities.remove(&aid);
-                activity_ids.push(aid);
-            }
-        }
-
-        self.cells.remove_subtree(&root_cell)?;
+        let activities = {
+            let window = self
+                .windows
+                .get(window_id)
+                .ok_or_else(|| MultiplexerError::WindowNotFound(window_id.clone()))?;
+            window.collect_activities_for_cleanup()
+        };
         self.windows.remove(window_id);
-
         for (_, session) in self.sessions.iter_mut() {
             session.detach_window(window_id);
         }
-
-        Ok(activity_ids)
+        Ok(activities)
     }
 
-    pub fn new_pane_with_activity(&mut self, activity_id: ActivityId) -> MultiplexerResult<PaneId> {
-        if !self.activities.contains(&activity_id) {
-            return Err(MultiplexerError::ActivityNotFound(activity_id));
-        }
-        let id = PaneId::new();
-        self.panes.insert(id.clone(), Pane::new(activity_id));
-        Ok(id)
-    }
-
-    pub fn new_pane(
-        &mut self,
-        activity_id: ActivityId,
-        parent_cell: Option<CellId>,
-    ) -> (PaneId, CellId) {
-        let id = PaneId::new();
-        self.panes.insert(id.clone(), Pane::new(activity_id));
-        let cell_id = self.cells.new_pane(id.clone(), parent_cell);
-        self.pane_to_cell.insert(id.clone(), cell_id.clone());
-        (id, cell_id)
-    }
-
-    pub fn new_activity(&mut self, activity: Activity) -> ActivityId {
-        let id = ActivityId::new();
-        self.activities.insert(id.clone(), activity);
-        id
-    }
-
+    /// Backwards-compatible: split a pane by PaneId only (no WindowId).
+    /// Internally finds the owning window via a linear scan; PR3 makes this
+    /// O(1) via the pane_owner_window index in AppState.
     pub fn split_pane(
         &mut self,
         target_pane_id: PaneId,
         side: Side,
         orientation: SplitOrientation,
     ) -> MultiplexerResult<(PaneId, ActivityId)> {
-        let target_cell_id = self.cell_id_for_pane(&target_pane_id)?.clone();
-        let new_activity_id = self.new_activity(Activity::default());
-        let (new_pane_id, new_cell_id) = self.new_pane(new_activity_id.clone(), None);
-        self.cells
-            .split_cell(target_cell_id, new_cell_id, side, orientation)?;
-        self.windows
-            .replace_active_pane(&target_pane_id, &new_pane_id);
+        let window = self
+            .windows
+            .find_window_with_pane_mut(&target_pane_id)
+            .ok_or_else(|| MultiplexerError::PaneNotFound(target_pane_id.clone()))?;
+        let new_pane_id = PaneId::new();
+        let new_activity_id = ActivityId::new();
+        let activity = Activity::terminal(new_activity_id.clone());
+        window.split_pane(
+            &target_pane_id,
+            new_pane_id.clone(),
+            activity,
+            side,
+            orientation,
+        )?;
         Ok((new_pane_id, new_activity_id))
     }
 
-    pub fn split_with_pane(
-        &mut self,
-        src: PaneId,
-        new_pane: PaneId,
-        side: crate::cells::Side,
-        orientation: crate::cells::SplitOrientation,
-    ) -> MultiplexerResult<()> {
-        if !self.panes.contains_key(&new_pane) {
-            return Err(MultiplexerError::PaneNotFound(new_pane));
+    /// Backwards-compatible close_pane by PaneId only. Closing a limbo pane
+    /// (created via `new_pane_with_activity` but not yet placed via
+    /// `split_with_pane`) tears down the limbo entry without touching any
+    /// cell tree.
+    pub fn close_pane(&mut self, pane_id: &PaneId) -> MultiplexerResult<Vec<ActivityId>> {
+        if let Some(activity_id) = self.limbo_panes.remove(pane_id) {
+            self.limbo_activities.remove(&activity_id);
+            return Ok(vec![activity_id]);
         }
-        if self.pane_to_cell.contains_key(&new_pane) {
-            return Err(MultiplexerError::PaneAlreadyPlaced(new_pane));
-        }
-        let target_cell_id = self.cell_id_for_pane(&src)?.clone();
-        let new_cell_id = self.cells.new_pane(new_pane.clone(), None);
-        if let Err(e) =
-            self.cells
-                .split_cell(target_cell_id, new_cell_id.clone(), side, orientation)
-        {
-            // rollback: orphan の new_cell を消す
-            let _ = self.cells.remove_subtree(&new_cell_id);
-            return Err(e);
-        }
-        self.pane_to_cell.insert(new_pane.clone(), new_cell_id);
-        self.windows.replace_active_pane(&src, &new_pane);
-        Ok(())
+        let window = self
+            .windows
+            .find_window_with_pane_mut(pane_id)
+            .ok_or_else(|| MultiplexerError::PaneNotFound(pane_id.clone()))?;
+        window.close_pane(pane_id)
     }
 
-    pub fn close_pane(&mut self, pane_id: &PaneId) -> MultiplexerResult {
-        if !self.panes.contains_key(pane_id) {
+    /// Backwards-compatible: set active pane by (window_id, pane_id).
+    pub fn set_active_pane(
+        &mut self,
+        window_id: &WindowId,
+        pane_id: &PaneId,
+    ) -> MultiplexerResult<SetActiveOutcome> {
+        let window = self
+            .windows
+            .get_mut(window_id)
+            .ok_or_else(|| MultiplexerError::WindowNotFound(window_id.clone()))?;
+        if !window.panes.contains_key(pane_id) {
+            // Distinguish "the pane exists in some other window" from "doesn't
+            // exist anywhere at all" so callers see the right HTTP status.
+            let pane_exists_elsewhere = self
+                .windows
+                .iter()
+                .any(|(_, w)| w.panes.contains_key(pane_id));
+            if pane_exists_elsewhere {
+                return Err(MultiplexerError::PaneNotInWindow {
+                    window: window_id.clone(),
+                    pane: pane_id.clone(),
+                });
+            }
             return Err(MultiplexerError::PaneNotFound(pane_id.clone()));
         }
-        if let Some(cell_id) = self.pane_to_cell.get(pane_id).cloned() {
-            let outcome = self.cells.close_cell(&cell_id)?;
-            let survivor_pane_id = self.cells.leftmost_pane(outcome.survivor())?.clone();
-            self.windows.replace_active_pane(pane_id, &survivor_pane_id);
-        }
-        self.forget_pane(pane_id);
-        Ok(())
+        window.set_active_pane(pane_id)
     }
 
-    /// Drop the pane's index entries and its owned activities. Caller is
-    /// responsible for already having collapsed the cell tree and rerouted
-    /// `active_pane`; this is the final commit step of `close_pane`.
-    fn forget_pane(&mut self, pane_id: &PaneId) {
-        let pane = self
-            .panes
-            .remove(pane_id)
-            .expect("close_pane validated pane existed before forget_pane");
-        self.pane_to_cell.remove(pane_id);
-        for activity_id in pane.activities {
-            self.activities.remove(&activity_id);
-        }
-    }
-
-    pub fn cell_id_for_pane(&self, pane_id: &PaneId) -> MultiplexerResult<&CellId> {
-        self.pane_to_cell
-            .get(pane_id)
-            .ok_or_else(|| MultiplexerError::CellForPaneNotFound(pane_id.clone()))
-    }
-
-    /// Return the `WindowId` whose layout subtree currently contains `pane_id`.
-    /// Walks pane → cell → ... → root, then matches the root cell against `WindowState`.
-    pub fn window_id_of_pane(&self, pane_id: &PaneId) -> MultiplexerResult<WindowId> {
-        let start_cell = self.cell_id_for_pane(pane_id)?.clone();
-        let mut current = start_cell;
-        loop {
-            let cell = self.cells.cell(&current)?;
-            match cell.parent() {
-                Some(parent) => current = parent.clone(),
-                None => break, // current is the Root
-            }
-        }
-        for (wid, window) in self.windows.iter() {
-            if window.root_cell == current {
-                return Ok(wid.clone());
-            }
-        }
-        Err(MultiplexerError::WindowNotFoundForPane(pane_id.clone()))
-    }
-
-    /// Find the session that owns `window_id` and set its `active_window`.
-    /// Returns `WindowNotFound` for a window that doesn't exist at all, and
-    /// `WindowNotAttachedToSession` for orphan windows.
+    /// Backwards-compatible: select active window for the owning session.
     pub fn select_active_window(&mut self, window_id: &WindowId) -> MultiplexerResult {
         if !self.windows.contains_key(window_id) {
             return Err(MultiplexerError::WindowNotFound(window_id.clone()));
         }
         for (_, session) in self.sessions.iter_mut() {
-            if session.windows.contains(window_id) {
+            if session.linked_windows.contains(window_id) {
                 session.active_window = Some(window_id.clone());
                 return Ok(());
             }
@@ -315,40 +206,17 @@ impl MultiplexerService {
         ))
     }
 
-    /// Set `window.active_pane` to `pane_id`. Validates that the pane exists
-    /// and actually belongs to `window_id`. Returns `Unchanged` when the pane
-    /// is already active so the caller can suppress redundant broadcasts.
-    pub fn set_active_pane(
-        &mut self,
-        window_id: &WindowId,
-        pane_id: &PaneId,
-    ) -> MultiplexerResult<SetActivePaneOutcome> {
-        if !self.windows.contains_key(window_id) {
-            return Err(MultiplexerError::WindowNotFound(window_id.clone()));
+    /// Find which Window a Pane lives in.
+    pub fn window_id_of_pane(&self, pane_id: &PaneId) -> MultiplexerResult<WindowId> {
+        for (wid, window) in self.windows.iter() {
+            if window.panes.contains_key(pane_id) {
+                return Ok(wid.clone());
+            }
         }
-        if !self.panes.contains_key(pane_id) {
-            return Err(MultiplexerError::PaneNotFound(pane_id.clone()));
-        }
-        let actual_window = self.window_id_of_pane(pane_id)?;
-        if &actual_window != window_id {
-            return Err(MultiplexerError::PaneNotInWindow {
-                window: window_id.clone(),
-                pane: pane_id.clone(),
-            });
-        }
-        let window = self
-            .windows
-            .get_mut(window_id)
-            .expect("contains_key check above");
-        if &window.active_pane == pane_id {
-            return Ok(SetActivePaneOutcome::Unchanged);
-        }
-        window.active_pane = pane_id.clone();
-        Ok(SetActivePaneOutcome::Changed)
+        Err(MultiplexerError::WindowNotFoundForPane(pane_id.clone()))
     }
 
-    /// Bootstrap the multiplexer with one session, one window inside it, and
-    /// thus one initial pane + activity. Returns the four IDs.
+    /// Bootstrap: one session, one window, one pane, one activity.
     pub fn bootstrap_default(
         &mut self,
     ) -> MultiplexerResult<(SessionId, WindowId, PaneId, ActivityId)> {
@@ -356,20 +224,85 @@ impl MultiplexerService {
         let window_id = self.new_window_in(Some(&session_id), None)?;
         let window = self.windows.get(&window_id).expect("just created");
         let pane_id = window.active_pane.clone();
-        let activity_id = self
+        let activity_id = window
             .panes
             .get(&pane_id)
-            .expect("just created pane has activities")
-            .activities[0]
+            .expect("just created pane")
+            .active_activity
             .clone();
         Ok((session_id, window_id, pane_id, activity_id))
+    }
+
+    // ── Transitional limbo API (PR2 - PR6) ────────────────────────────────
+    // These keep the pre-PR5 SDK flow working: extensions still call
+    // `createActivity → createPane → splitPane`. Removed in PR7.
+
+    /// Transitional. Create an Activity that's not yet attached to any Pane.
+    pub fn new_activity(&mut self, activity: Activity) -> ActivityId {
+        let id = activity.id.clone();
+        self.limbo_activities.insert(id.clone(), activity);
+        id
+    }
+
+    /// Transitional. Create a Pane that's not yet placed in a layout. The
+    /// Activity must have been created via `new_activity` first.
+    pub fn new_pane_with_activity(&mut self, activity_id: ActivityId) -> MultiplexerResult<PaneId> {
+        if !self.limbo_activities.contains_key(&activity_id) {
+            return Err(MultiplexerError::ActivityNotFound(activity_id));
+        }
+        let pane_id = PaneId::new();
+        self.limbo_panes.insert(pane_id.clone(), activity_id);
+        Ok(pane_id)
+    }
+
+    /// Transitional. Place a limbo Pane next to a target via cell split.
+    pub fn split_with_pane(
+        &mut self,
+        src: PaneId,
+        new_pane: PaneId,
+        side: Side,
+        orientation: SplitOrientation,
+    ) -> MultiplexerResult<()> {
+        let already_placed = self
+            .windows
+            .iter()
+            .any(|(_, w)| w.panes.contains_key(&new_pane));
+        if already_placed {
+            return Err(MultiplexerError::PaneAlreadyPlaced(new_pane));
+        }
+        let activity_id = self
+            .limbo_panes
+            .remove(&new_pane)
+            .ok_or_else(|| MultiplexerError::PaneNotFound(new_pane.clone()))?;
+        let activity = self
+            .limbo_activities
+            .remove(&activity_id)
+            .ok_or(MultiplexerError::ActivityNotFound(activity_id))?;
+        let window = self
+            .windows
+            .find_window_with_pane_mut(&src)
+            .ok_or_else(|| MultiplexerError::PaneNotFound(src.clone()))?;
+        window.split_pane(&src, new_pane, activity, side, orientation)
+    }
+
+    /// Transitional accessor used by `handlers/activities.rs::iframe_serve`.
+    /// Walks all windows then limbo to find the Activity metadata.
+    pub fn activity_metadata(&self, aid: &ActivityId) -> Option<&Activity> {
+        for (_, w) in self.windows.iter() {
+            for (_, p) in w.panes.iter() {
+                if let Some(a) = p.activity(aid) {
+                    return Some(a);
+                }
+            }
+        }
+        self.limbo_activities.get(aid)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cells::Cell;
+    use crate::window::cells::Cell;
 
     struct WindowFixture {
         ms: MultiplexerService,
@@ -382,16 +315,27 @@ mod tests {
     fn fresh_window() -> WindowFixture {
         let mut ms = MultiplexerService::default();
         let window_id = ms.new_window_in(None, None).unwrap();
-        let window = ms.windows().get(&window_id).expect("window exists").clone();
-        let pane_id = window.active_pane.clone();
-        let pane_cell = ms.cell_id_for_pane(&pane_id).unwrap().clone();
+        let win = ms.windows().get(&window_id).unwrap();
+        let pane_id = win.active_pane.clone();
+        let pane_cell = win.pane_to_cell.get(&pane_id).unwrap().clone();
+        let root_cell = win.root_cell.clone();
         WindowFixture {
             ms,
             window_id,
             pane_id,
             pane_cell,
-            root_cell: window.root_cell,
+            root_cell,
         }
+    }
+
+    fn pane_count(ms: &MultiplexerService) -> usize {
+        ms.windows().iter().map(|(_, w)| w.panes.len()).sum()
+    }
+
+    fn activity_exists_in_window(ms: &MultiplexerService, aid: &ActivityId) -> bool {
+        ms.windows()
+            .iter()
+            .any(|(_, w)| w.panes.iter().any(|(_, p)| p.has_activity(aid)))
     }
 
     #[test]
@@ -403,7 +347,7 @@ mod tests {
             pane_cell: original_cell,
             root_cell,
         } = fresh_window();
-        let panes_before = ms.panes().len();
+        let panes_before = pane_count(&ms);
 
         let (new_pane, new_activity) = ms
             .split_pane(
@@ -416,23 +360,18 @@ mod tests {
 
         ms.close_pane(&new_pane).unwrap();
 
-        // pane/index/activity for the closed pane are gone.
-        assert_eq!(ms.panes().len(), panes_before);
-        assert!(!ms.pane_to_cell_index().contains_key(&new_pane));
-        assert!(!ms.activities().contains(&new_activity));
+        assert_eq!(pane_count(&ms), panes_before);
+        let win = ms.windows().get(&window_id).unwrap();
+        assert!(!win.pane_to_cell.contains_key(&new_pane));
+        assert!(!activity_exists_in_window(&ms, &new_activity));
 
-        // active_pane is rerouted back to the surviving original.
-        assert_eq!(
-            ms.windows().get(&window_id).unwrap().active_pane,
-            original_pane
-        );
+        assert_eq!(win.active_pane, original_pane);
 
-        // The cell tree is collapsed: root.child points at the original pane cell.
-        let Cell::Root(root) = ms.cells_ref().cell(&root_cell).unwrap() else {
+        let Cell::Root(root) = win.cells.cell(&root_cell).unwrap() else {
             panic!("root cell missing");
         };
         assert_eq!(root.child, original_cell);
-        let Cell::Pane(pane_cell) = ms.cells_ref().cell(&original_cell).unwrap() else {
+        let Cell::Pane(pane_cell) = win.cells.cell(&original_cell).unwrap() else {
             panic!("original pane cell missing");
         };
         assert_eq!(pane_cell.parent.as_ref(), Some(&root_cell));
@@ -448,7 +387,7 @@ mod tests {
             pane_cell,
             root_cell,
         } = fresh_window();
-        let panes_before = ms.panes().len();
+        let panes_before = pane_count(&ms);
 
         let result = ms.close_pane(&pane_id);
 
@@ -456,12 +395,12 @@ mod tests {
             result,
             Err(MultiplexerError::CannotCloseLastPane(_))
         ));
-        // No store was mutated.
-        assert_eq!(ms.panes().len(), panes_before);
-        assert_eq!(ms.cell_id_for_pane(&pane_id).unwrap(), &pane_cell);
-        assert!(ms.cells_ref().cell(&pane_cell).is_ok());
-        assert!(ms.cells_ref().cell(&root_cell).is_ok());
-        assert_eq!(ms.windows().get(&window_id).unwrap().active_pane, pane_id);
+        assert_eq!(pane_count(&ms), panes_before);
+        let win = ms.windows().get(&window_id).unwrap();
+        assert_eq!(win.pane_to_cell.get(&pane_id).unwrap(), &pane_cell);
+        assert!(win.cells.cell(&pane_cell).is_ok());
+        assert!(win.cells.cell(&root_cell).is_ok());
+        assert_eq!(win.active_pane, pane_id);
     }
 
     #[test]
@@ -490,8 +429,7 @@ mod tests {
                 SplitOrientation::Horizontal,
             )
             .unwrap();
-        // Make the original pane active again before closing the new one.
-        ms.windows.replace_active_pane(&new_pane, &original_pane);
+        let _ = ms.set_active_pane(&window_id, &original_pane).unwrap();
 
         ms.close_pane(&new_pane).unwrap();
 
@@ -506,7 +444,7 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let sid = ms.new_session(None);
         let session = ms.sessions().get(&sid).unwrap();
-        assert!(session.windows.is_empty());
+        assert!(session.linked_windows.is_empty());
         assert!(session.active_window.is_none());
     }
 
@@ -534,7 +472,7 @@ mod tests {
         let sid = ms.new_session(None);
         let wid = ms.new_window_in(Some(&sid), None).unwrap();
         let session = ms.sessions().get(&sid).unwrap();
-        assert_eq!(session.windows, vec![wid.clone()]);
+        assert_eq!(session.linked_windows, vec![wid.clone()]);
         assert_eq!(session.active_window.as_ref(), Some(&wid));
     }
 
@@ -543,9 +481,8 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let wid = ms.new_window_in(None, None).unwrap();
         assert!(ms.windows().get(&wid).is_some());
-        // No session should reference it.
         for (_, s) in ms.sessions().iter() {
-            assert!(!s.windows.contains(&wid));
+            assert!(!s.linked_windows.contains(&wid));
         }
     }
 
@@ -582,27 +519,20 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let sid = ms.new_session(None);
         let wid = ms.new_window_in(Some(&sid), None).unwrap();
-        let root_cell = ms.windows().get(&wid).unwrap().root_cell.clone();
         let pane_id = ms.windows().get(&wid).unwrap().active_pane.clone();
-        let pane_count_before = ms.panes().len();
+        let pane_count_before = pane_count(&ms);
 
         let activities = ms.close_window(&wid).unwrap();
         assert_eq!(activities.len(), 1);
         let activity_id = &activities[0];
 
-        // Window gone from WindowState
         assert!(ms.windows().get(&wid).is_none());
-        // Pane gone from PaneState
-        assert_eq!(ms.panes().len(), pane_count_before - 1);
-        // pane_to_cell index cleared for that pane
-        assert!(!ms.pane_to_cell_index().contains_key(&pane_id));
-        // Activity gone from ActivityState
-        assert!(!ms.activities().contains(activity_id));
-        // Cell tree (root + pane cell) is dropped
-        assert!(ms.cells_ref().cell(&root_cell).is_err());
-        // Session detached
-        assert!(ms.sessions().get(&sid).unwrap().windows.is_empty());
+        assert_eq!(pane_count(&ms), pane_count_before - 1);
+        assert!(!activity_exists_in_window(&ms, activity_id));
+        // Session is detached.
+        assert!(ms.sessions().get(&sid).unwrap().linked_windows.is_empty());
         assert!(ms.sessions().get(&sid).unwrap().active_window.is_none());
+        let _ = pane_id;
     }
 
     #[test]
@@ -655,7 +585,6 @@ mod tests {
         let sid = ms.new_session(None);
         let wid_a = ms.new_window_in(Some(&sid), None).unwrap();
         let wid_b = ms.new_window_in(Some(&sid), None).unwrap();
-        // active is whatever attached first (wid_a).
         assert_eq!(
             ms.sessions().get(&sid).unwrap().active_window.as_ref(),
             Some(&wid_a)
@@ -670,10 +599,14 @@ mod tests {
     #[test]
     fn new_pane_with_activity_creates_limbo_pane() {
         let mut ms = MultiplexerService::default();
-        let activity_id = ms.new_activity(Activity::default());
+        let aid = ActivityId::new();
+        let activity_id = ms.new_activity(Activity::terminal(aid.clone()));
         let pane_id = ms.new_pane_with_activity(activity_id.clone()).unwrap();
-        assert!(ms.panes().contains_key(&pane_id));
-        assert!(ms.cell_id_for_pane(&pane_id).is_err());
+        // limbo pane is NOT in any window's panes yet.
+        assert!(!activity_exists_in_window(&ms, &aid));
+        // But the limbo store knows about it.
+        assert!(ms.activity_metadata(&aid).is_some());
+        let _ = pane_id;
     }
 
     #[test]
@@ -689,22 +622,18 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let (sid, wid, pid, aid) = ms.bootstrap_default().unwrap();
         let session = ms.sessions().get(&sid).unwrap();
-        assert_eq!(session.windows, vec![wid.clone()]);
+        assert_eq!(session.linked_windows, vec![wid.clone()]);
         assert_eq!(session.active_window.as_ref(), Some(&wid));
         let window = ms.windows().get(&wid).unwrap();
         assert_eq!(window.active_pane, pid);
-        let pane_cell = ms.cell_id_for_pane(&pid).unwrap();
-        let _ = pane_cell;
-        // The activity must be in ActivityState (we exposed `contains` earlier).
-        assert!(ms.activities().contains(&aid));
+        assert!(activity_exists_in_window(&ms, &aid));
     }
 
     #[test]
     fn split_with_pane_places_limbo_pane_after_target() {
-        use crate::cells::{Side, SplitOrientation};
         let mut ms = MultiplexerService::default();
-        let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
-        let activity_id = ms.new_activity(Activity::default());
+        let (_sid, wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
+        let activity_id = ms.new_activity(Activity::terminal(ActivityId::new()));
         let limbo = ms.new_pane_with_activity(activity_id).unwrap();
         ms.split_with_pane(
             target_pane.clone(),
@@ -713,12 +642,17 @@ mod tests {
             SplitOrientation::Horizontal,
         )
         .unwrap();
-        assert!(ms.cell_id_for_pane(&limbo).is_ok());
+        assert!(
+            ms.windows()
+                .get(&wid)
+                .unwrap()
+                .pane_to_cell
+                .contains_key(&limbo)
+        );
     }
 
     #[test]
     fn split_with_pane_rejects_already_placed_pane() {
-        use crate::cells::{Side, SplitOrientation};
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
         let err = ms
@@ -734,7 +668,6 @@ mod tests {
 
     #[test]
     fn split_with_pane_rejects_unknown_new_pane() {
-        use crate::cells::{Side, SplitOrientation};
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
         let phantom = PaneId::new();
@@ -754,18 +687,10 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let (sid, wid_a, pane_a, _aid_a) = ms.bootstrap_default().unwrap();
         let (pane_a2, _) = ms
-            .split_pane(
-                pane_a.clone(),
-                crate::cells::Side::After,
-                crate::cells::SplitOrientation::Horizontal,
-            )
+            .split_pane(pane_a.clone(), Side::After, SplitOrientation::Horizontal)
             .unwrap();
-        // Create a second window with its own pane in the same session.
         let wid_b = ms.new_window_in(Some(&sid), Some("second".into())).unwrap();
-        let pane_b = {
-            let win = ms.windows().get(&wid_b).unwrap();
-            win.active_pane.clone()
-        };
+        let pane_b = ms.windows().get(&wid_b).unwrap().active_pane.clone();
 
         assert_eq!(ms.window_id_of_pane(&pane_a).unwrap(), wid_a);
         assert_eq!(ms.window_id_of_pane(&pane_a2).unwrap(), wid_a);
@@ -773,38 +698,26 @@ mod tests {
     }
 
     #[test]
-    fn window_id_of_pane_unknown_returns_cell_for_pane_not_found() {
+    fn window_id_of_pane_unknown_returns_window_not_found_for_pane() {
         let ms = MultiplexerService::default();
-        let pid = crate::pane::PaneId::new();
+        let pid = PaneId::new();
         assert!(matches!(
             ms.window_id_of_pane(&pid),
-            Err(MultiplexerError::CellForPaneNotFound(_))
-        ));
-    }
-
-    #[test]
-    fn window_id_of_pane_for_limbo_pane_returns_cell_for_pane_not_found() {
-        let mut ms = MultiplexerService::default();
-        let aid = ms.new_activity(crate::activity::Activity::default());
-        let limbo_pane = ms.new_pane_with_activity(aid).unwrap();
-        // limbo_pane is in `panes` but has no cell mapping yet.
-        assert!(matches!(
-            ms.window_id_of_pane(&limbo_pane),
-            Err(MultiplexerError::CellForPaneNotFound(_))
+            Err(MultiplexerError::WindowNotFoundForPane(_))
         ));
     }
 
     #[test]
     fn close_pane_handles_limbo_pane_without_touching_cell_tree() {
         let mut ms = MultiplexerService::default();
-        let (_sid, _wid, _pid, _aid) = ms.bootstrap_default().unwrap();
-        let cells_before = ms.cells_ref().clone();
-        let activity_id = ms.new_activity(Activity::default());
+        let (_sid, wid, _pid, _aid) = ms.bootstrap_default().unwrap();
+        let cells_before = ms.windows().get(&wid).unwrap().cells.clone();
+        let activity_id = ms.new_activity(Activity::terminal(ActivityId::new()));
         let limbo = ms.new_pane_with_activity(activity_id).unwrap();
         ms.close_pane(&limbo).unwrap();
-        assert!(!ms.panes().contains_key(&limbo));
+        let cells_after = ms.windows().get(&wid).unwrap().cells.clone();
         let serialized_before = serde_json::to_string(&cells_before).unwrap();
-        let serialized_after = serde_json::to_string(ms.cells_ref()).unwrap();
+        let serialized_after = serde_json::to_string(&cells_after).unwrap();
         assert_eq!(serialized_before, serialized_after);
     }
 
@@ -823,10 +736,9 @@ mod tests {
                 SplitOrientation::Horizontal,
             )
             .unwrap();
-        // split_pane promoted `new_pane` to active. Switch back.
         let outcome = ms.set_active_pane(&window_id, &original_pane).unwrap();
 
-        assert!(matches!(outcome, SetActivePaneOutcome::Changed));
+        assert!(matches!(outcome, SetActiveOutcome::Changed));
         assert_eq!(
             ms.windows().get(&window_id).unwrap().active_pane,
             original_pane
@@ -843,7 +755,7 @@ mod tests {
             ..
         } = fresh_window();
         let outcome = ms.set_active_pane(&window_id, &pane_id).unwrap();
-        assert!(matches!(outcome, SetActivePaneOutcome::Unchanged));
+        assert!(matches!(outcome, SetActiveOutcome::Unchanged));
         assert_eq!(ms.windows().get(&window_id).unwrap().active_pane, pane_id);
     }
 
@@ -876,14 +788,12 @@ mod tests {
             ..
         } = fresh_window();
         let w_b = ms.new_window_in(None, None).unwrap();
-        // Try to set pane_a active on window_b.
         let err = ms.set_active_pane(&w_b, &pane_a).unwrap_err();
         assert!(matches!(
             err,
             MultiplexerError::PaneNotInWindow { ref window, ref pane }
                 if window == &w_b && pane == &pane_a
         ));
-        // Original window's active_pane is untouched.
         assert_eq!(ms.windows().get(&w_a).unwrap().active_pane, pane_a);
     }
 }

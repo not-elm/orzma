@@ -9,12 +9,7 @@ use axum::{
     http::StatusCode,
 };
 use ozmux_extension::ExtensionRegistry;
-use ozmux_multiplexer::{
-    SetActivePaneOutcome,
-    activity::ActivityId,
-    cells::{Side, SplitOrientation},
-    pane::PaneId,
-};
+use ozmux_multiplexer::{ActivityId, PaneId, SetActivePaneOutcome, Side, SplitOrientation};
 use ozmux_terminal::{SpawnOptions, TerminalService};
 use serde::Deserialize;
 
@@ -171,16 +166,12 @@ pub async fn close(
     State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
     Path(pane_id): Path<PaneId>,
 ) -> HttpResult<StatusCode> {
-    // Capture activities and window id under the lock, then close.
+    // Capture window id under the lock, then close the pane (returning the
+    // activities it destroyed).
     let activities_to_kill = {
         let mut ms = ms.lock().await;
         let wid = ms.window_id_of_pane(&pane_id).ok();
-        let activities = ms
-            .panes()
-            .get(&pane_id)
-            .map(|p| p.activities.clone())
-            .unwrap_or_default();
-        ms.close_pane(&pane_id)?;
+        let activities = ms.close_pane(&pane_id)?;
         if let Some(wid) = wid
             && let Some(window) = ms.windows().get(&wid)
         {
@@ -205,7 +196,7 @@ pub async fn close(
 pub async fn activate(
     State(ms): State<MultiplexerState>,
     State(broadcaster): State<crate::layout_broadcast::LayoutBroadcaster>,
-    Path((window_id, pane_id)): Path<(ozmux_multiplexer::window::WindowId, PaneId)>,
+    Path((window_id, pane_id)): Path<(ozmux_multiplexer::WindowId, PaneId)>,
 ) -> HttpResult<StatusCode> {
     let mut ms = ms.lock().await;
     match ms.set_active_pane(&window_id, &pane_id)? {
@@ -229,16 +220,26 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use ozmux_extension::ExtensionRegistry;
+    use ozmux_multiplexer::Activity;
     use ozmux_multiplexer::MultiplexerService;
-    use ozmux_multiplexer::activity::{Activity, ActivityKind};
     use std::path::PathBuf;
     use tower::ServiceExt;
+
+    fn total_panes(ms: &MultiplexerService) -> usize {
+        ms.windows().iter().map(|(_, w)| w.panes.len()).sum()
+    }
+
+    fn pane_to_cell_contains(ms: &MultiplexerService, pid: &PaneId) -> bool {
+        ms.windows()
+            .iter()
+            .any(|(_, w)| w.pane_to_cell.contains_key(pid))
+    }
 
     #[tokio::test]
     async fn split_either_succeeds_or_rolls_back() {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, pid, _aid) = ms.bootstrap_default().unwrap();
-        let panes_before = ms.panes().len();
+        let panes_before = total_panes(&ms);
         let (router, state) = router_with(ms);
         let resp = router
             .oneshot(
@@ -254,7 +255,7 @@ mod tests {
         let status = resp.status();
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-        let panes_after = state.multiplexer.lock().await.panes().len();
+        let panes_after = total_panes(&*state.multiplexer.lock().await);
         if status == StatusCode::CREATED {
             assert!(v["new_pane_id"].is_string());
             assert!(v["new_activity_id"].is_string());
@@ -282,7 +283,7 @@ mod tests {
                 SplitOrientation::Horizontal,
             )
             .unwrap();
-        let panes_before = ms.panes().len();
+        let panes_before = total_panes(&ms);
         let registry = ExtensionRegistry::default();
         let state = AppState {
             multiplexer: crate::MultiplexerState(std::sync::Arc::new(tokio::sync::Mutex::new(ms))),
@@ -303,8 +304,8 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
         let ms = state.multiplexer.lock().await;
-        assert_eq!(ms.panes().len(), panes_before - 1);
-        assert!(!ms.pane_to_cell_index().contains_key(&new_pid));
+        assert_eq!(total_panes(&ms), panes_before - 1);
+        assert!(!pane_to_cell_contains(&ms, &new_pid));
     }
 
     #[tokio::test]
@@ -414,19 +415,14 @@ mod tests {
 
     fn router_with_owned_activity(
         ext_name: &str,
-    ) -> (
-        axum::Router,
-        ozmux_multiplexer::activity::ActivityId,
-        AppState,
-    ) {
+    ) -> (axum::Router, ozmux_multiplexer::ActivityId, AppState) {
         let mut ms = MultiplexerService::default();
         let _ = ms.bootstrap_default().unwrap();
-        let activity_id = ms.new_activity(Activity {
-            name: "ext".into(),
-            kind: ActivityKind::Extension {
-                html_root: PathBuf::from("/tmp"),
-            },
-        });
+        let activity_id = ms.new_activity(Activity::extension(
+            ActivityId::new(),
+            "ext",
+            PathBuf::from("/tmp"),
+        ));
         let registry = ExtensionRegistry::default();
         registry.register(ext_name, std::path::Path::new("/tmp"));
         registry.record_activity_owner(&activity_id, ext_name);
@@ -468,7 +464,7 @@ mod tests {
     async fn create_pane_rejects_other_extensions_activity() {
         let mut ms2 = MultiplexerService::default();
         let _ = ms2.bootstrap_default().unwrap();
-        let aid_other = ms2.new_activity(Activity::default());
+        let aid_other = ms2.new_activity(Activity::terminal(ActivityId::new()));
         let registry = ExtensionRegistry::default();
         registry.register("memo", std::path::Path::new("/tmp"));
         registry.register("other", std::path::Path::new("/tmp"));
@@ -508,7 +504,7 @@ mod tests {
             layout_broadcast: crate::layout_broadcast::LayoutBroadcaster::default(),
         };
         let router = crate::test_helpers::daemon_router_for_test(state);
-        let phantom = ozmux_multiplexer::activity::ActivityId::new();
+        let phantom = ActivityId::new();
         let resp = router
             .oneshot(
                 Request::builder()
@@ -528,12 +524,11 @@ mod tests {
     async fn split_with_places_limbo_pane_after_target() {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
-        let activity_id = ms.new_activity(Activity {
-            name: "ext".into(),
-            kind: ActivityKind::Extension {
-                html_root: PathBuf::from("/tmp"),
-            },
-        });
+        let activity_id = ms.new_activity(Activity::extension(
+            ActivityId::new(),
+            "ext",
+            PathBuf::from("/tmp"),
+        ));
         let limbo = ms.new_pane_with_activity(activity_id.clone()).unwrap();
         let registry = ExtensionRegistry::default();
         registry.register("memo", std::path::Path::new("/tmp"));
@@ -567,7 +562,7 @@ mod tests {
     async fn split_with_rejects_pane_owned_by_other_extension() {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, target_pane, _aid) = ms.bootstrap_default().unwrap();
-        let activity_id = ms.new_activity(Activity::default());
+        let activity_id = ms.new_activity(Activity::terminal(ActivityId::new()));
         let limbo = ms.new_pane_with_activity(activity_id.clone()).unwrap();
         let registry = ExtensionRegistry::default();
         registry.register("memo", std::path::Path::new("/tmp"));
@@ -683,12 +678,11 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let (_sid, wid, src_pid, _aid) = ms.bootstrap_default().unwrap();
         // Create a limbo pane (in panes, not in cells) — split_with places it.
-        let aid_new = ms.new_activity(Activity {
-            name: "ext".into(),
-            kind: ActivityKind::Extension {
-                html_root: PathBuf::from("/tmp"),
-            },
-        });
+        let aid_new = ms.new_activity(Activity::extension(
+            ActivityId::new(),
+            "ext",
+            PathBuf::from("/tmp"),
+        ));
         let new_pid = ms.new_pane_with_activity(aid_new).unwrap();
         let registry = ExtensionRegistry::default();
         registry.register("memo", std::path::Path::new("/tmp"));
@@ -764,11 +758,7 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let (_sid, wid, original, _aid) = ms.bootstrap_default().unwrap();
         let (new_pane, _) = ms
-            .split_pane(
-                original.clone(),
-                ozmux_multiplexer::cells::Side::After,
-                ozmux_multiplexer::cells::SplitOrientation::Horizontal,
-            )
+            .split_pane(original.clone(), Side::After, SplitOrientation::Horizontal)
             .unwrap();
         // After split, `new_pane` is active. Switch back to `original`.
         let (router, _state) = router_with(ms);
@@ -809,7 +799,7 @@ mod tests {
         let mut ms = MultiplexerService::default();
         let (_sid, _wid, pid, _aid) = ms.bootstrap_default().unwrap();
         let (router, _state) = router_with(ms);
-        let bogus_wid = ozmux_multiplexer::window::WindowId::new();
+        let bogus_wid = ozmux_multiplexer::WindowId::new();
         let resp = router
             .oneshot(
                 Request::builder()

@@ -1,4 +1,5 @@
-use crate::{WindowId, error::MultiplexerResult};
+use crate::error::MultiplexerResult;
+use crate::window::WindowId;
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -57,7 +58,7 @@ impl SessionState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub name: String,
-    pub windows: Vec<WindowId>,
+    pub linked_windows: Vec<WindowId>,
     pub active_window: Option<WindowId>,
 }
 
@@ -67,7 +68,7 @@ impl Session {
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            windows: Vec::new(),
+            linked_windows: Vec::new(),
             active_window: None,
         }
     }
@@ -81,15 +82,15 @@ impl Session {
         if self.active_window.is_none() {
             self.active_window = Some(window_id.clone());
         }
-        self.windows.push(window_id);
+        self.linked_windows.push(window_id);
     }
 
-    /// Remove `window_id` from `windows`; if it was active, fall back to the
+    /// Remove `window_id` from `linked_windows`; if it was active, fall back to the
     /// first remaining window (or `None` if empty).
     pub fn detach_window(&mut self, window_id: &WindowId) {
-        self.windows.retain(|w| w != window_id);
+        self.linked_windows.retain(|w| w != window_id);
         if self.active_window.as_ref() == Some(window_id) {
-            self.active_window = self.windows.first().cloned();
+            self.active_window = self.linked_windows.first().cloned();
         }
     }
 }

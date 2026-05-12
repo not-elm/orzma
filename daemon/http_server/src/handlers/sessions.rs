@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerError, session::SessionId};
+use ozmux_multiplexer::{MultiplexerError, SessionId};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
 
@@ -50,7 +50,7 @@ pub async fn delete(
 
 pub async fn list(State(ms): State<MultiplexerState>) -> Json<serde_json::Value> {
     let ms = ms.lock().await;
-    let mut entries: Vec<(&SessionId, &ozmux_multiplexer::session::Session)> =
+    let mut entries: Vec<(&SessionId, &ozmux_multiplexer::Session)> =
         ms.sessions().iter().collect();
     entries.sort_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
     let sessions: Vec<serde_json::Value> = entries
@@ -60,14 +60,11 @@ pub async fn list(State(ms): State<MultiplexerState>) -> Json<serde_json::Value>
     Json(serde_json::json!({ "sessions": sessions }))
 }
 
-fn session_view(
-    id: &SessionId,
-    session: &ozmux_multiplexer::session::Session,
-) -> serde_json::Value {
+fn session_view(id: &SessionId, session: &ozmux_multiplexer::Session) -> serde_json::Value {
     serde_json::json!({
         "id": id,
         "name": session.name,
-        "windows": session.windows,
+        "windows": session.linked_windows,
         "active_window": session.active_window,
     })
 }

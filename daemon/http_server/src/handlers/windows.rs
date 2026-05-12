@@ -8,9 +8,7 @@ use axum::{
     http::StatusCode,
 };
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
-use ozmux_multiplexer::{
-    MultiplexerError, MultiplexerService, session::SessionId, window::WindowId,
-};
+use ozmux_multiplexer::{MultiplexerError, MultiplexerService, SessionId, WindowId};
 use ozmux_terminal::TerminalService;
 use serde::Deserialize;
 
@@ -90,16 +88,16 @@ pub async fn get(
 }
 
 pub(crate) fn window_view_for(
-    ms: &MultiplexerService,
+    _ms: &MultiplexerService,
     id: &WindowId,
-    window: &ozmux_multiplexer::window::Window,
+    window: &ozmux_multiplexer::Window,
 ) -> ozmux_multiplexer::MultiplexerResult<serde_json::Value> {
-    let pane_ids = ms.cells_ref().pane_ids_in_subtree(&window.root_cell)?;
+    let pane_ids = window.cells.pane_ids_in_subtree(&window.root_cell)?;
     let panes: Vec<serde_json::Value> = pane_ids
         .iter()
-        .filter_map(|pid| ms.panes().get(pid).map(|pane| pane_view(ms, pid, pane)))
+        .filter_map(|pid| window.panes.get(pid).map(pane_view))
         .collect();
-    let layout = crate::layout_dto::build_layout(&window.root_cell, ms.cells_ref())?;
+    let layout = crate::layout_dto::build_layout(&window.root_cell, &window.cells)?;
     Ok(serde_json::json!({
         "id": id,
         "name": window.name,
@@ -111,29 +109,25 @@ pub(crate) fn window_view_for(
     }))
 }
 
-fn pane_view(
-    ms: &MultiplexerService,
-    id: &ozmux_multiplexer::pane::PaneId,
-    pane: &ozmux_multiplexer::pane::Pane,
-) -> serde_json::Value {
+fn pane_view(pane: &ozmux_multiplexer::Pane) -> serde_json::Value {
     let activities: Vec<serde_json::Value> = pane
         .activities
         .iter()
-        .map(|aid| match ms.activities().get(aid).map(|a| &a.kind) {
-            Some(ozmux_multiplexer::activity::ActivityKind::Extension { .. }) => {
+        .map(|a| match &a.kind {
+            ozmux_multiplexer::ActivityKind::Extension { .. } => {
                 serde_json::json!({
-                    "id": aid,
+                    "id": a.id,
                     "kind": "extension",
-                    "iframe_url": format!("/activities/{aid}/iframe/index.html"),
+                    "iframe_url": format!("/activities/{}/iframe/index.html", a.id),
                 })
             }
-            Some(ozmux_multiplexer::activity::ActivityKind::Terminal) | None => {
-                serde_json::json!({ "id": aid, "kind": "terminal" })
+            ozmux_multiplexer::ActivityKind::Terminal => {
+                serde_json::json!({ "id": a.id, "kind": "terminal" })
             }
         })
         .collect();
     serde_json::json!({
-        "id": id,
+        "id": pane.id,
         "activities": activities,
         "active_activity": pane.active_activity,
     })
@@ -245,7 +239,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(v["id"].is_string());
         let ms = state.multiplexer.lock().await;
-        assert_eq!(ms.sessions().get(&sid).unwrap().windows.len(), 1);
+        assert_eq!(ms.sessions().get(&sid).unwrap().linked_windows.len(), 1);
     }
 
     #[tokio::test]
@@ -425,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_after_split_returns_two_panes() {
-        use ozmux_multiplexer::cells::{Side, SplitOrientation};
+        use ozmux_multiplexer::{Side, SplitOrientation};
         let mut ms = MultiplexerService::default();
         let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
         ms.split_pane(pid, Side::After, SplitOrientation::Horizontal)
@@ -602,7 +596,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_window_layout_after_split_has_split_node() {
-        use ozmux_multiplexer::cells::{Side, SplitOrientation};
+        use ozmux_multiplexer::{Side, SplitOrientation};
         let mut ms = MultiplexerService::default();
         let (_sid, wid, pid, _aid) = ms.bootstrap_default().unwrap();
         ms.split_pane(pid, Side::After, SplitOrientation::Horizontal)
@@ -810,17 +804,15 @@ mod tests {
 
     #[tokio::test]
     async fn get_window_includes_iframe_url_for_extension_activity() {
-        use ozmux_multiplexer::activity::{Activity, ActivityKind};
-        use ozmux_multiplexer::cells::{Side, SplitOrientation};
+        use ozmux_multiplexer::{Activity, Side, SplitOrientation};
         use std::path::PathBuf;
         let mut ms = MultiplexerService::default();
         let (_sid, wid, bootstrap_pane, _aid) = ms.bootstrap_default().unwrap();
-        let activity_id = ms.new_activity(Activity {
-            name: "ext".into(),
-            kind: ActivityKind::Extension {
-                html_root: PathBuf::from("/tmp"),
-            },
-        });
+        let activity_id = ms.new_activity(Activity::extension(
+            ozmux_multiplexer::ActivityId::new(),
+            "ext",
+            PathBuf::from("/tmp"),
+        ));
         let pane_id = ms.new_pane_with_activity(activity_id.clone()).unwrap();
         ms.split_with_pane(
             bootstrap_pane,
@@ -856,7 +848,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_and_subscribe_is_atomic_under_concurrent_mutations() {
         use futures_util::StreamExt;
-        use ozmux_multiplexer::cells::{Side, SplitOrientation};
+        use ozmux_multiplexer::{Side, SplitOrientation};
         use tokio_tungstenite::{connect_async, tungstenite::Message as TtMessage};
 
         let mut ms = MultiplexerService::default();
@@ -914,7 +906,13 @@ mod tests {
             latest = serde_json::from_str::<serde_json::Value>(&t).unwrap();
         }
 
-        let final_pane_count = ms_handle.lock().await.panes().len();
+        let final_pane_count: usize = ms_handle
+            .lock()
+            .await
+            .windows()
+            .iter()
+            .map(|(_, w)| w.panes.len())
+            .sum();
         let observed_pane_count = latest["panes"].as_array().map(|a| a.len()).unwrap_or(0);
         assert_eq!(
             observed_pane_count, final_pane_count,

@@ -119,11 +119,7 @@ mod tests {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use ozmux_multiplexer::MultiplexerError;
-    use ozmux_multiplexer::activity::ActivityId;
-    use ozmux_multiplexer::cells::CellId;
-    use ozmux_multiplexer::pane::PaneId;
-    use ozmux_multiplexer::session::SessionId;
-    use ozmux_multiplexer::window::WindowId;
+    use ozmux_multiplexer::{ActivityId, CellId, PaneId, SessionId, WindowId};
     use ozmux_terminal::TerminalError;
 
     #[tokio::test]
