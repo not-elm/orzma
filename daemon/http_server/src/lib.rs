@@ -327,6 +327,18 @@ pub fn daemon_router(state: AppState) -> Router {
             "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/activate",
             post(handlers::activities::activate_v2),
         )
+        .route(
+            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/terminal/ws",
+            get(handlers::activities::terminal_ws_hierarchical),
+        )
+        .route(
+            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/handlers/ws",
+            get(handlers::activities::handlers_ws_hierarchical),
+        )
+        .route(
+            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/iframe/{*path}",
+            get(handlers::activities::iframe_serve_hierarchical),
+        )
         .route("/activities", post(handlers::activities::create))
         .route(
             "/activities/{activity_id}/terminal/ws",
