@@ -30,7 +30,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[tokio::test]
     async fn debug_build_redirects_to_vite_dev() {
-        let response = daemon_router(crate::AppState::default())
+        let response = daemon_router(crate::test_helpers::fresh_state())
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -50,7 +50,7 @@ mod tests {
     async fn release_build_returns_html() {
         use http_body_util::BodyExt;
 
-        let response = daemon_router(crate::AppState::default())
+        let response = daemon_router(crate::test_helpers::fresh_state())
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();

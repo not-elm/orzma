@@ -688,7 +688,7 @@ mod tests {
     async fn events_ws_closes_with_window_not_found_for_unknown_wid() {
         use futures_util::StreamExt;
         use tokio_tungstenite::{connect_async, tungstenite::Message as TtMessage};
-        let state = crate::AppState::default();
+        let state = fresh_state();
         let addr = spawn_server(state).await;
         let url = format!("ws://{}/windows/does-not-exist/events", addr);
         let (mut ws, _) = connect_async(&url).await.unwrap();

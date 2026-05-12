@@ -23,7 +23,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AppState {
     pub sessions: Arc<Mutex<SessionState>>,
     pub windows: Arc<DashMap<WindowId, Arc<Mutex<Window>>>>,
@@ -31,6 +31,28 @@ pub struct AppState {
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
     pub layout_broadcast: LayoutBroadcaster,
+}
+
+impl AppState {
+    /// Build an `AppState` wired to the supplied runtime services. This is the
+    /// only sanctioned construction path outside tests — `Default` is
+    /// intentionally not derived so callers cannot silently produce a state
+    /// whose `TerminalService`, `ExtensionRegistry`, or `LayoutBroadcaster`
+    /// are detached from the daemon's runtime root.
+    pub fn new(
+        terminal: TerminalService,
+        extensions: ExtensionRegistry,
+        layout_broadcast: LayoutBroadcaster,
+    ) -> Self {
+        Self {
+            sessions: Arc::default(),
+            windows: Arc::default(),
+            pane_owner_window: Arc::default(),
+            terminal,
+            extensions,
+            layout_broadcast,
+        }
+    }
 }
 
 impl FromRef<AppState> for TerminalService {
@@ -345,7 +367,11 @@ pub(crate) mod test_helpers {
     use axum::Router;
 
     pub fn fresh_state() -> AppState {
-        AppState::default()
+        AppState::new(
+            ozmux_terminal::TerminalService::default(),
+            ozmux_extension::ExtensionRegistry::default(),
+            crate::layout_broadcast::LayoutBroadcaster::default(),
+        )
     }
 
     pub fn daemon_router_for_test(state: AppState) -> Router {
@@ -387,7 +413,7 @@ mod tests {
 
     #[test]
     fn app_state_default_includes_layout_broadcaster() {
-        let state = AppState::default();
+        let state = test_helpers::fresh_state();
         let _ = state.layout_broadcast.subscribe_or_create(&WindowId::new());
     }
 

@@ -30,12 +30,11 @@ async fn main() -> anyhow::Result<()> {
     let registry = ExtensionRegistry::default();
     let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
 
-    let state = AppState {
-        terminal: TerminalService::with_runtime_root(Arc::clone(&runtime)),
-        extensions: registry,
-        layout_broadcast: ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
-        ..AppState::default()
-    };
+    let state = AppState::new(
+        TerminalService::with_runtime_root(Arc::clone(&runtime)),
+        registry,
+        ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
+    );
 
     let serve = ozmux_http_server::serve(state);
     tokio::select! {
