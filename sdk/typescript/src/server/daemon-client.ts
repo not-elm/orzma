@@ -50,3 +50,48 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
 export async function postNoContent(path: string, body: unknown): Promise<void> {
   await send(path, body);
 }
+
+export async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(buildUrl(path), {
+    method: "GET",
+    headers: buildHeaders(),
+  });
+  if (!response.ok) {
+    const bodyText = await response.text();
+    throw new DaemonError(response.status, bodyText, path);
+  }
+  return (await response.json()) as T;
+}
+
+export async function deleteNoContent(path: string): Promise<void> {
+  const response = await fetch(buildUrl(path), {
+    method: "DELETE",
+    headers: buildHeaders(),
+  });
+  if (!response.ok) {
+    const bodyText = await response.text();
+    throw new DaemonError(response.status, bodyText, path);
+  }
+}
+
+/**
+ * Centralized URL builders for the hierarchical control plane introduced in
+ * PR4/PR5. Keeping them here avoids per-call string interpolation drift across
+ * the SDK class layer.
+ */
+export const paths = {
+  session: (sid: string) => `/sessions/${sid}`,
+  window: (wid: string) => `/windows/${wid}`,
+  windowSelect: (wid: string) => `/windows/${wid}/select`,
+  pane: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}`,
+  paneSplit: (wid: string, pid: string) =>
+    `/windows/${wid}/panes/${pid}/split`,
+  paneActivate: (wid: string, pid: string) =>
+    `/windows/${wid}/panes/${pid}/activate`,
+  paneActivities: (wid: string, pid: string) =>
+    `/windows/${wid}/panes/${pid}/activities`,
+  activity: (wid: string, pid: string, aid: string) =>
+    `/windows/${wid}/panes/${pid}/activities/${aid}`,
+  activityActivate: (wid: string, pid: string, aid: string) =>
+    `/windows/${wid}/panes/${pid}/activities/${aid}/activate`,
+};

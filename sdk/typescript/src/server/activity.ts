@@ -1,39 +1,42 @@
-import * as path from "node:path";
-import {
-  type ChannelMap,
-  registerActivityChannels,
-} from "./channels-server.ts";
-import { postJson } from "./daemon-client.ts";
-import {
-  type HandlerMap,
-  registerActivityHandlers,
-} from "./handlers-server.ts";
+import { paths, postNoContent } from "./daemon-client.ts";
 
 export type ActivityId = string;
 
-export interface CreateActivityArgs<
-  H extends HandlerMap = HandlerMap,
-  C extends ChannelMap = ChannelMap,
-> {
-  html: string;
-  handlers?: H;
-  channels?: C;
-}
+export type ActivityKind =
+  | { type: "terminal" }
+  | { type: "extension"; html_root: string };
 
-export async function createActivity<
-  H extends HandlerMap = HandlerMap,
-  C extends ChannelMap = ChannelMap,
->(args: CreateActivityArgs<H, C>): Promise<ActivityId> {
-  const html = path.resolve(args.html);
-  const { activity_id } = await postJson<{ activity_id: ActivityId }>(
-    "/activities",
-    { html },
-  );
-  if (args.handlers) {
-    registerActivityHandlers(activity_id, args.handlers);
+/**
+ * Lightweight client-side handle to an Activity. Carries the addressing tuple
+ * needed to call hierarchical endpoints (`window → pane → activity`).
+ * Construction is cheap — there is no server round-trip until a method is
+ * invoked.
+ */
+export class Activity {
+  readonly id: ActivityId;
+  readonly paneId: string;
+  readonly windowId: string;
+  readonly sessionId: string | null;
+  readonly kind: ActivityKind;
+
+  constructor(args: {
+    id: ActivityId;
+    paneId: string;
+    windowId: string;
+    sessionId?: string | null;
+    kind: ActivityKind;
+  }) {
+    this.id = args.id;
+    this.paneId = args.paneId;
+    this.windowId = args.windowId;
+    this.sessionId = args.sessionId ?? null;
+    this.kind = args.kind;
   }
-  if (args.channels) {
-    registerActivityChannels(activity_id, args.channels);
+
+  async activate(): Promise<void> {
+    await postNoContent(
+      paths.activityActivate(this.windowId, this.paneId, this.id),
+      {},
+    );
   }
-  return activity_id;
 }
