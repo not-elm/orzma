@@ -6,12 +6,13 @@ import type { PaneView } from './types';
 import { useIframeKeydownBridge } from './useIframeKeydownBridge';
 
 interface PaneContentProps {
+  windowId: string;
   pane: PaneView;
   isActive: boolean;
   onActivate: () => void;
 }
 
-export function PaneContent({ pane, isActive, onActivate }: PaneContentProps) {
+export function PaneContent({ windowId, pane, isActive, onActivate }: PaneContentProps) {
   const activity = pane.activities.find((a) => a.id === pane.active_activity);
   if (!activity) return <PanePlaceholder paneId={pane.id} />;
 
@@ -26,7 +27,15 @@ export function PaneContent({ pane, isActive, onActivate }: PaneContentProps) {
       />
     );
   }
-  return <Terminal key={activity.id} activityId={activity.id} isActive={isActive} />;
+  return (
+    <Terminal
+      key={activity.id}
+      windowId={windowId}
+      paneId={pane.id}
+      activityId={activity.id}
+      isActive={isActive}
+    />
+  );
 }
 
 interface IframePaneProps {

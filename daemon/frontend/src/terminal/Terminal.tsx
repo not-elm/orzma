@@ -4,14 +4,16 @@ import { useTerminalSocket } from './useTerminalSocket';
 import { useXtermTerminal } from './useXtermTerminal';
 
 interface TerminalProps {
+  windowId: string;
+  paneId: string;
   activityId: string;
   isActive: boolean;
 }
 
-export function Terminal({ activityId, isActive }: TerminalProps) {
+export function Terminal({ windowId, paneId, activityId, isActive }: TerminalProps) {
   const [reconnectKey, setReconnectKey] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const socket = useTerminalSocket(activityId, reconnectKey);
+  const socket = useTerminalSocket(windowId, paneId, activityId, reconnectKey);
   const { focus, blur } = useXtermTerminal(containerRef, socket);
 
   const prevActiveRef = useRef(isActive);

@@ -23,7 +23,12 @@ export interface TerminalSocket {
   setBinaryHandler: (handler: BinaryHandler | null) => void;
 }
 
-export function useTerminalSocket(activityId: string | null, reconnectKey: number): TerminalSocket {
+export function useTerminalSocket(
+  windowId: string,
+  paneId: string,
+  activityId: string | null,
+  reconnectKey: number,
+): TerminalSocket {
   const wsRef = useRef<WebSocket | null>(null);
   const handlerRef = useRef<BinaryHandler | null>(null);
   const pendingRef = useRef<Uint8Array[]>([]);
@@ -34,7 +39,7 @@ export function useTerminalSocket(activityId: string | null, reconnectKey: numbe
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnectKey is a re-run trigger
   useEffect(() => {
     if (!activityId) return;
-    const ws = new WebSocket(terminalWsUrl(activityId));
+    const ws = new WebSocket(terminalWsUrl(windowId, paneId, activityId));
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
     pendingRef.current = [];
@@ -70,7 +75,7 @@ export function useTerminalSocket(activityId: string | null, reconnectKey: numbe
       pendingRef.current = [];
       ws.close();
     };
-  }, [activityId, reconnectKey]);
+  }, [windowId, paneId, activityId, reconnectKey]);
 
   const setBinaryHandler = useCallback((handler: BinaryHandler | null) => {
     handlerRef.current = handler;

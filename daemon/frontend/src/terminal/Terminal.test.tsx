@@ -23,7 +23,7 @@ describe('<Terminal>', () => {
   it('does NOT call focus or blur on initial mount when isActive=true', () => {
     focusSpy.mockClear();
     blurSpy.mockClear();
-    render(<Terminal activityId="aid" isActive={true} />);
+    render(<Terminal windowId="wid" paneId="pid" activityId="aid" isActive={true} />);
     expect(focusSpy).not.toHaveBeenCalled();
     expect(blurSpy).not.toHaveBeenCalled();
   });
@@ -31,7 +31,7 @@ describe('<Terminal>', () => {
   it('does NOT call focus or blur on initial mount when isActive=false', () => {
     focusSpy.mockClear();
     blurSpy.mockClear();
-    render(<Terminal activityId="aid" isActive={false} />);
+    render(<Terminal windowId="wid" paneId="pid" activityId="aid" isActive={false} />);
     expect(focusSpy).not.toHaveBeenCalled();
     expect(blurSpy).not.toHaveBeenCalled();
   });
@@ -39,9 +39,11 @@ describe('<Terminal>', () => {
   it('calls focus (not blur) when isActive transitions false → true', () => {
     focusSpy.mockClear();
     blurSpy.mockClear();
-    const { rerender } = render(<Terminal activityId="aid" isActive={false} />);
+    const { rerender } = render(
+      <Terminal windowId="wid" paneId="pid" activityId="aid" isActive={false} />,
+    );
     expect(focusSpy).not.toHaveBeenCalled();
-    rerender(<Terminal activityId="aid" isActive={true} />);
+    rerender(<Terminal windowId="wid" paneId="pid" activityId="aid" isActive={true} />);
     expect(focusSpy).toHaveBeenCalledTimes(1);
     expect(blurSpy).not.toHaveBeenCalled();
   });
@@ -49,10 +51,12 @@ describe('<Terminal>', () => {
   it('calls blur (not focus) when isActive transitions true → false', () => {
     focusSpy.mockClear();
     blurSpy.mockClear();
-    const { rerender } = render(<Terminal activityId="aid" isActive={true} />);
+    const { rerender } = render(
+      <Terminal windowId="wid" paneId="pid" activityId="aid" isActive={true} />,
+    );
     focusSpy.mockClear();
     blurSpy.mockClear();
-    rerender(<Terminal activityId="aid" isActive={false} />);
+    rerender(<Terminal windowId="wid" paneId="pid" activityId="aid" isActive={false} />);
     expect(blurSpy).toHaveBeenCalledTimes(1);
     expect(focusSpy).not.toHaveBeenCalled();
   });

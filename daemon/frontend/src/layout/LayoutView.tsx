@@ -98,7 +98,12 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
                 : 'outline-1 outline-tmux-pane-border',
             )}
           >
-            <PaneContent pane={pane} isActive={isActive} onActivate={() => activate(pane.id)} />
+            <PaneContent
+              windowId={view.id}
+              pane={pane}
+              isActive={isActive}
+              onActivate={() => activate(pane.id)}
+            />
           </AbsoluteBox>
         );
       })}
