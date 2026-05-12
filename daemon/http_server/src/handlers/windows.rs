@@ -75,7 +75,7 @@ pub(crate) fn window_view_for(window: &Window) -> MultiplexerResult<serde_json::
     let pane_ids = window.cells.pane_ids_in_subtree(&window.root_cell)?;
     let panes: Vec<serde_json::Value> = pane_ids
         .iter()
-        .filter_map(|pid| window.panes.get(pid).map(pane_view))
+        .filter_map(|pid| window.panes.get(pid).map(|p| pane_view(p, &window.id)))
         .collect();
     let layout = crate::layout_dto::build_layout(&window.root_cell, &window.cells)?;
     Ok(serde_json::json!({
@@ -89,16 +89,21 @@ pub(crate) fn window_view_for(window: &Window) -> MultiplexerResult<serde_json::
     }))
 }
 
-fn pane_view(pane: &ozmux_multiplexer::Pane) -> serde_json::Value {
+fn pane_view(pane: &ozmux_multiplexer::Pane, wid: &WindowId) -> serde_json::Value {
     let activities: Vec<serde_json::Value> = pane
         .activities
         .iter()
         .map(|a| match &a.kind {
             ozmux_multiplexer::ActivityKind::Extension { .. } => {
+                // Hierarchical iframe URL — the daemon reads (wid, pid, aid)
+                // off the path to inject `window.__OZMUX__` for the SDK.
                 serde_json::json!({
                     "id": a.id,
                     "kind": "extension",
-                    "iframe_url": format!("/activities/{}/iframe/index.html", a.id),
+                    "iframe_url": format!(
+                        "/windows/{}/panes/{}/activities/{}/iframe/index.html",
+                        wid, pane.id, a.id
+                    ),
                 })
             }
             ozmux_multiplexer::ActivityKind::Terminal => {
@@ -832,7 +837,7 @@ mod tests {
         let iframe_url = ext_pane["activities"][0]["iframe_url"].as_str().unwrap();
         assert_eq!(
             iframe_url,
-            format!("/activities/{activity_id}/iframe/index.html")
+            format!("/windows/{wid}/panes/{new_pane}/activities/{activity_id}/iframe/index.html")
         );
     }
 
