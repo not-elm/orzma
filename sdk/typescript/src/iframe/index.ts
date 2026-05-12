@@ -2,7 +2,6 @@ export {
   createClient,
   ConnectionClosedError,
   getOzmuxContext,
-  inferActivityId,
   type Client,
   type CreateClientOptions,
   type OzmuxContext,

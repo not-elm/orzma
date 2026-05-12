@@ -47,7 +47,6 @@ declare const window: {
   location: MinimalLocation;
   __OZMUX__?: OzmuxContext;
 };
-declare const console: { warn(...args: unknown[]): void };
 
 export interface OzmuxContext {
   sessionId: string | null;
@@ -76,7 +75,11 @@ const WS_OPEN = 1;
 const WS_CLOSED = 3;
 
 export interface CreateClientOptions {
-  activityId?: string;
+  /**
+   * Override the handlers WS URL. Useful for tests; production callers should
+   * omit this and let the SDK build the hierarchical URL from
+   * `window.__OZMUX__`.
+   */
   url?: string;
 }
 
@@ -115,35 +118,9 @@ export interface Client {
   close(): void;
 }
 
-/**
- * @deprecated Use `getOzmuxContext()` instead. The SDK now reads its identity
- * from the daemon-injected `window.__OZMUX__` global rather than parsing the
- * pathname. This function is preserved for one release for back-compat with
- * extensions running against the flat URL alias; it will be removed in PR7.
- */
-export function inferActivityId(): string {
-  console.warn(
-    "ozmux iframe SDK: inferActivityId() is deprecated; use getOzmuxContext().activityId instead",
-  );
-  const m = window.location.pathname.match(/^\/activities\/([^/]+)\/iframe\//);
-  if (!m) {
-    throw new Error(
-      "ozmux iframe SDK: cannot infer activityId from pathname; pass activityId explicitly",
-    );
-  }
-  return m[1]!;
-}
-
 function handlersWsUrl(ctx: OzmuxContext): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/windows/${ctx.windowId}/panes/${ctx.paneId}/activities/${ctx.activityId}/handlers/ws`;
-}
-
-// Back-compat URL for callers that pass `activityId` explicitly. Targets the
-// flat alias route that PR7 will delete.
-function legacyUrlFor(aid: string): string {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/activities/${aid}/handlers/ws`;
 }
 
 function toRpcError(frame: HandlerErrorFrame | SubErrorFrame): Error {
@@ -153,10 +130,10 @@ function toRpcError(frame: HandlerErrorFrame | SubErrorFrame): Error {
 }
 
 export function createClient(opts: CreateClientOptions = {}): Client {
-  // `opts.activityId` is still honored as an escape hatch for tests and any
-  // host that wants to override the daemon-injected globals. Otherwise read
-  // the full hierarchy and build a hierarchical handlers WS URL.
-  const url = opts.url ?? (opts.activityId ? legacyUrlFor(opts.activityId) : handlersWsUrl(getOzmuxContext()));
+  // Production callers omit `opts.url` and let the SDK build a hierarchical
+  // URL from the daemon-injected `window.__OZMUX__`. Tests override `url` to
+  // point at a mock WebSocket.
+  const url = opts.url ?? handlersWsUrl(getOzmuxContext());
   const ws = new WebSocket(url);
 
   const pendingCalls = new Map<string, PendingCall>();
