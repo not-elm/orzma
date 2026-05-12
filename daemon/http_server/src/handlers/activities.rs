@@ -1,6 +1,5 @@
 use crate::AppState;
 use crate::error::HttpError;
-use crate::extractors::ExtensionName;
 use crate::handlers::publish_window_layout;
 use axum::{
     extract::{
@@ -14,7 +13,6 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{Activity, ActivityId, ActivityKind, PaneId, SetActiveOutcome, WindowId};
 use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
@@ -39,18 +37,11 @@ enum ServerControl {
     Exit { code: Option<i32> },
 }
 
+/// Terminal WebSocket: validates (window, pane, activity) membership, then
+/// upgrades and bridges PTY bytes both ways. Internal routing is keyed by
+/// ActivityId; the path includes (wid, pid) so URLs are self-describing for
+/// the SDK and pre-upgrade authorization is straightforward.
 pub async fn terminal_ws(
-    State(terminal): State<TerminalService>,
-    Path(activity_id): Path<ActivityId>,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_terminal_socket(socket, terminal, activity_id))
-}
-
-/// Hierarchical alias of `terminal_ws` that validates (window, pane, activity)
-/// membership before upgrading. Runtime routing still keys by ActivityId; the
-/// added path arms exist so URLs are self-describing for the SDK.
-pub async fn terminal_ws_hierarchical(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
     ws: WebSocketUpgrade,
@@ -272,41 +263,10 @@ async fn forward_uds_to_ws(
     Ok(())
 }
 
+/// Extension handlers WebSocket: validates (window, pane, activity) membership,
+/// then bridges JSON-line frames to the owning extension's UDS. Internal routing
+/// is keyed by ActivityId.
 pub async fn handlers_ws(
-    State(registry): State<ExtensionRegistry>,
-    Path(activity_id): Path<ActivityId>,
-    req: axum::extract::Request,
-) -> Result<Response, HttpError> {
-    let origin = req
-        .headers()
-        .get(axum::http::header::ORIGIN)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if !is_allowed_origin(origin) {
-        return Err(HttpError::Forbidden("origin not allowed".into()));
-    }
-    let ext_name = registry
-        .activity_owner(&activity_id)
-        .ok_or_else(|| HttpError::NotFound("unknown activity".into()))?;
-    let sock_path = registry
-        .handlers_sock_path(&ext_name)
-        .ok_or_else(|| HttpError::ServiceUnavailable("extension not running".into()))?;
-    let ws = WebSocketUpgrade::from_request(req, &())
-        .await
-        .map_err(|e| HttpError::Forbidden(e.to_string()))?;
-    let ws = ws
-        .max_message_size(1 << 20)
-        .max_frame_size(1 << 20)
-        .max_write_buffer_size(256 << 10)
-        .write_buffer_size(64 << 10);
-
-    Ok(ws.on_upgrade(move |socket| bridge(socket, activity_id, sock_path)))
-}
-
-/// Hierarchical alias of `handlers_ws` that validates (window, pane, activity)
-/// membership before bridging to the extension UDS. Internal routing is still
-/// keyed by ActivityId.
-pub async fn handlers_ws_hierarchical(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
     req: axum::extract::Request,
@@ -339,64 +299,10 @@ pub async fn handlers_ws_hierarchical(
     Ok(ws.on_upgrade(move |socket| bridge(socket, aid, sock_path)))
 }
 
-#[derive(Deserialize)]
-pub struct CreateActivityRequest {
-    html: String,
-}
-
-pub async fn create(
-    ExtensionName(ext_name): ExtensionName,
-    State(state): State<AppState>,
-    axum::Json(body): axum::Json<CreateActivityRequest>,
-) -> Result<(axum::http::StatusCode, axum::Json<serde_json::Value>), HttpError> {
-    let info = state
-        .extensions
-        .get(&ext_name)
-        .ok_or_else(|| HttpError::UnknownExtension(ext_name.clone()))?;
-    let html_path = PathBuf::from(&body.html)
-        .canonicalize()
-        .map_err(|_| HttpError::InvalidHtmlPath(body.html.clone()))?;
-    let launch_dir_canon = info
-        .launch_dir
-        .canonicalize()
-        .map_err(|_| HttpError::InvalidHtmlPath(body.html.clone()))?;
-    if !html_path.starts_with(&launch_dir_canon) {
-        return Err(HttpError::InvalidHtmlPath(body.html));
-    }
-    let html_root = html_path
-        .parent()
-        .ok_or_else(|| HttpError::InvalidHtmlPath(body.html.clone()))?
-        .to_path_buf();
-
-    let activity = Activity::extension(
-        ActivityId::new(),
-        format!("Extension: {ext_name}"),
-        html_root,
-    );
-    let activity_id = activity.id.clone();
-    state.limbo.activities.insert(activity_id.clone(), activity);
-    state
-        .extensions
-        .record_activity_owner(&activity_id, &ext_name);
-
-    Ok((
-        axum::http::StatusCode::CREATED,
-        axum::Json(serde_json::json!({ "activity_id": activity_id })),
-    ))
-}
-
+/// Validates (window, pane, activity) membership and injects
+/// `window.__OZMUX__` globals into HTML responses so the iframe SDK can
+/// discover its position in the hierarchy without parsing the URL.
 pub async fn iframe_serve(
-    State(state): State<AppState>,
-    Path((activity_id, path)): Path<(ActivityId, String)>,
-) -> Result<Response, HttpError> {
-    let activity = activity_for_iframe(&state, &activity_id, &path).await?;
-    serve_iframe_asset(&activity, &path, None).await
-}
-
-/// Hierarchical alias of `iframe_serve` that validates (window, pane, activity)
-/// membership and injects `window.__OZMUX__` globals into HTML responses so the
-/// iframe SDK can discover its position in the hierarchy without parsing the URL.
-pub async fn iframe_serve_hierarchical(
     State(state): State<AppState>,
     Path((wid, pid, aid, path)): Path<(WindowId, PaneId, ActivityId, String)>,
 ) -> Result<Response, HttpError> {
@@ -605,7 +511,7 @@ pub async fn add_to_pane(
     ))
 }
 
-pub async fn activate_v2(
+pub async fn activate(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
 ) -> Result<StatusCode, HttpError> {
@@ -618,6 +524,7 @@ pub async fn activate_v2(
     Ok(StatusCode::NO_CONTENT)
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,17 +534,14 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use futures_util::{SinkExt, StreamExt};
     use ozmux_terminal::SpawnOptions;
-    use std::path::PathBuf;
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::Message as TtMessage;
     use tower::ServiceExt;
 
-    async fn boot_server() -> (std::net::SocketAddr, AppState, ActivityId) {
-        let (addr, state, _wid, _pid, aid) = boot_server_full().await;
-        (addr, state, aid)
-    }
-
+    /// Boot a full daemon router with the bootstrap session and a PTY spawned
+    /// for the initial activity. Returns the listen address plus the IDs of the
+    /// bootstrap (window, pane, activity).
     async fn boot_server_full() -> (std::net::SocketAddr, AppState, WindowId, PaneId, ActivityId) {
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, activity_id) = test_helpers::bootstrap_default(&state).await;
@@ -666,330 +570,9 @@ mod tests {
         (addr, state, wid, pid, activity_id)
     }
 
-    #[tokio::test]
-    async fn ws_input_is_echoed_back_in_output() {
-        let (addr, state, activity_id) = boot_server().await;
-        let url = format!("ws://{addr}/activities/{activity_id}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-        ws.send(TtMessage::Binary(b"echo ws_marker_test\n".to_vec().into()))
-            .await
-            .unwrap();
-
-        let mut got = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-        while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(Duration::from_millis(300), ws.next()).await {
-                Ok(Some(Ok(TtMessage::Binary(bytes)))) => {
-                    got.extend_from_slice(&bytes);
-                    if got
-                        .windows(b"ws_marker_test".len())
-                        .any(|w| w == b"ws_marker_test")
-                    {
-                        break;
-                    }
-                }
-                Ok(Some(Ok(_))) => continue,
-                Ok(None) | Ok(Some(Err(_))) => break,
-                Err(_) => continue,
-            }
-        }
-        state.terminal.kill(&activity_id).await.unwrap();
-        let s = String::from_utf8_lossy(&got);
-        assert!(s.contains("ws_marker_test"), "expected marker, got: {s}");
-    }
-
-    #[tokio::test]
-    async fn ws_resize_message_does_not_close_connection() {
-        let (addr, state, activity_id) = boot_server().await;
-        let url = format!("ws://{addr}/activities/{activity_id}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-        ws.send(TtMessage::Text(
-            r#"{"type":"resize","cols":120,"rows":40}"#.into(),
-        ))
-        .await
-        .unwrap();
-        let result = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
-        match result {
-            Err(_) => {}
-            Ok(Some(Ok(TtMessage::Binary(_)))) => {}
-            Ok(Some(Ok(TtMessage::Close(_)))) => panic!("connection closed unexpectedly"),
-            other => panic!("unexpected: {other:?}"),
-        }
-        state.terminal.kill(&activity_id).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn ws_to_unknown_activity_closes_with_close_frame() {
-        let (addr, _state, _) = boot_server().await;
-        let bogus = ActivityId::new();
-        let url = format!("ws://{addr}/activities/{bogus}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(2), ws.next()).await;
-        match result {
-            Ok(Some(Ok(TtMessage::Close(Some(frame))))) => {
-                assert!(frame.reason.contains("activity not found"));
-            }
-            Ok(Some(Ok(TtMessage::Close(None)))) => {}
-            other => panic!("expected Close frame, got: {other:?}"),
-        }
-    }
-
-    async fn router_with_extension(
-        ext_name: &str,
-        launch_dir: PathBuf,
-    ) -> (axum::Router, AppState) {
-        let state = test_helpers::fresh_state();
-        let _ = test_helpers::bootstrap_default(&state).await;
-        state.extensions.register(ext_name, &launch_dir);
-        (
-            crate::test_helpers::daemon_router_for_test(state.clone()),
-            state,
-        )
-    }
-
-    #[tokio::test]
-    async fn create_activity_returns_201_with_activity_id() {
-        let tmp = tempfile::tempdir().unwrap();
-        let html = tmp.path().join("index.html");
-        std::fs::write(&html, "<html></html>").unwrap();
-        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf()).await;
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/activities")
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from(format!(
-                        r#"{{"html":"{}"}}"#,
-                        html.display()
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(v["activity_id"].is_string());
-    }
-
-    #[tokio::test]
-    async fn create_activity_rejects_path_traversal() {
-        let tmp = tempfile::tempdir().unwrap();
-        let html = "/etc/passwd";
-        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf()).await;
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/activities")
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from(format!(r#"{{"html":"{html}"}}"#)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn create_activity_rejects_unknown_extension() {
-        let tmp = tempfile::tempdir().unwrap();
-        let html = tmp.path().join("index.html");
-        std::fs::write(&html, "<html></html>").unwrap();
-        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf()).await;
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/activities")
-                    .header("X-Ozmux-Extension", "ghost")
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from(format!(
-                        r#"{{"html":"{}"}}"#,
-                        html.display()
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn create_activity_requires_extension_header() {
-        let tmp = tempfile::tempdir().unwrap();
-        let html = tmp.path().join("index.html");
-        std::fs::write(&html, "<html></html>").unwrap();
-        let (router, _) = router_with_extension("memo", tmp.path().to_path_buf()).await;
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/activities")
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from(format!(
-                        r#"{{"html":"{}"}}"#,
-                        html.display()
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
-    }
-
-    async fn setup_extension_with_html(
-        ext_name: &str,
-    ) -> (axum::Router, AppState, ActivityId, tempfile::TempDir) {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("index.html"),
-            b"<html><body>memo</body></html>",
-        )
-        .unwrap();
-        std::fs::write(tmp.path().join("style.css"), b"body { color: red; }").unwrap();
-        let (router, state) = router_with_extension(ext_name, tmp.path().to_path_buf()).await;
-        let activity = Activity::extension(ActivityId::new(), "ext", tmp.path().to_path_buf());
-        let activity_id = activity.id.clone();
-        state.limbo.activities.insert(activity_id.clone(), activity);
-        state
-            .extensions
-            .record_activity_owner(&activity_id, ext_name);
-        (router, state, activity_id, tmp)
-    }
-
-    #[tokio::test]
-    async fn iframe_serve_returns_html_with_correct_content_type() {
-        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!("/activities/{activity_id}/iframe/index.html"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let ct = resp
-            .headers()
-            .get("content-type")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert!(ct.starts_with("text/html"));
-    }
-
-    #[tokio::test]
-    async fn iframe_serve_returns_css_with_correct_content_type() {
-        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!("/activities/{activity_id}/iframe/style.css"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let ct = resp
-            .headers()
-            .get("content-type")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert!(ct.starts_with("text/css"));
-    }
-
-    #[tokio::test]
-    async fn iframe_serve_returns_404_for_missing_file() {
-        let (router, _state, activity_id, _tmp) = setup_extension_with_html("memo").await;
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!("/activities/{activity_id}/iframe/missing.html"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn iframe_serve_blocks_path_traversal() {
-        let (router, _state, activity_id, tmp) = setup_extension_with_html("memo").await;
-        let outside = tmp.path().parent().unwrap().join("outside.txt");
-        std::fs::write(&outside, b"secret").ok();
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!("/activities/{activity_id}/iframe/../outside.txt"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(
-            resp.status(),
-            axum::http::StatusCode::BAD_REQUEST | axum::http::StatusCode::NOT_FOUND
-        ));
-        let _ = std::fs::remove_file(outside);
-    }
-
-    #[tokio::test]
-    async fn iframe_for_memo_extension_returns_visible_content() {
-        // Resolve the real extensions/memo/ path so this test verifies the
-        // file shipped in the repo (not a tempdir copy). CARGO_MANIFEST_DIR
-        // is daemon/http_server, so ../.. lands at the workspace root and
-        // extensions/memo is just below it.
-        let memo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../extensions/memo")
-            .canonicalize()
-            .expect("extensions/memo must exist relative to daemon/http_server");
-
-        let (router, state) = router_with_extension("memo", memo_root.clone()).await;
-        let activity = Activity::extension(ActivityId::new(), "ext", memo_root.clone());
-        let activity_id = activity.id.clone();
-        state.limbo.activities.insert(activity_id.clone(), activity);
-
-        let resp = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!("/activities/{activity_id}/iframe/index.html"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let ct = resp
-            .headers()
-            .get("content-type")
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert!(ct.starts_with("text/html"), "expected text/html, got {ct}");
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body_str = std::str::from_utf8(&body).unwrap();
-        assert!(
-            body_str.contains("Memo"),
-            "expected memo HTML to contain visible 'Memo' heading, got: {body_str}"
-        );
-    }
-
-    /// Bootstrap a real extension Activity hosted inside the default Window's
-    /// initial Pane so the hierarchical iframe route can validate (wid, pid,
-    /// aid) and serve files from `html_root`.
+    /// Build a router with the bootstrap session plus an extension Activity
+    /// hosted inside the initial Pane so the hierarchical iframe / WS routes
+    /// can validate (wid, pid, aid) and serve files from `html_root`.
     async fn setup_hierarchical_extension(
         html_body: &[u8],
     ) -> (
@@ -1015,6 +598,261 @@ mod tests {
         state.extensions.record_activity_owner(&aid, "memo");
         let (router, _) = test_helpers::router_with(state.clone());
         (router, state, wid, pid, aid, tmp)
+    }
+
+    #[tokio::test]
+    async fn terminal_ws_round_trip_echoes_input() {
+        let (addr, state, wid, pid, aid) = boot_server_full().await;
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        ws.send(TtMessage::Binary(b"echo ws_hier_marker\n".to_vec().into()))
+            .await
+            .unwrap();
+        let mut got = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(300), ws.next()).await {
+                Ok(Some(Ok(TtMessage::Binary(bytes)))) => {
+                    got.extend_from_slice(&bytes);
+                    if got
+                        .windows(b"ws_hier_marker".len())
+                        .any(|w| w == b"ws_hier_marker")
+                    {
+                        break;
+                    }
+                }
+                Ok(Some(Ok(_))) => continue,
+                Ok(None) | Ok(Some(Err(_))) => break,
+                Err(_) => continue,
+            }
+        }
+        state.terminal.kill(&aid).await.unwrap();
+        let s = String::from_utf8_lossy(&got);
+        assert!(s.contains("ws_hier_marker"), "expected marker, got: {s}");
+    }
+
+    #[tokio::test]
+    async fn terminal_ws_resize_message_does_not_close_connection() {
+        let (addr, state, wid, pid, aid) = boot_server_full().await;
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        ws.send(TtMessage::Text(
+            r#"{"type":"resize","cols":120,"rows":40}"#.into(),
+        ))
+        .await
+        .unwrap();
+        let result = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
+        match result {
+            Err(_) => {}
+            Ok(Some(Ok(TtMessage::Binary(_)))) => {}
+            Ok(Some(Ok(TtMessage::Close(_)))) => panic!("connection closed unexpectedly"),
+            other => panic!("unexpected: {other:?}"),
+        }
+        state.terminal.kill(&aid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn terminal_ws_rejects_unknown_activity_in_pane() {
+        let (router, _state, wid, pid, _aid, _tmp) =
+            setup_hierarchical_extension(b"<html></html>").await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let phantom_aid = ActivityId::new();
+        let url =
+            format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{phantom_aid}/terminal/ws");
+        let res = tokio_tungstenite::connect_async(url).await;
+        // The upgrade should fail because the activity is not in the pane.
+        assert!(res.is_err(), "expected upgrade failure, got Ok");
+    }
+
+    #[tokio::test]
+    async fn terminal_ws_outbound_stops_after_client_close() {
+        let (addr, state, wid, pid, aid) = boot_server_full().await;
+
+        // Baseline before any client subscribes. The PTY bridge task holds a
+        // Sender (not a Receiver), so receiver_count starts at 0.
+        let baseline = state.terminal.subscriber_count(&aid).await.unwrap();
+
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+
+        // Drain initial snapshot so the server-side outbound task is
+        // demonstrably alive holding a Receiver.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await;
+
+        let with_client = state.terminal.subscriber_count(&aid).await.unwrap();
+        assert!(
+            with_client > baseline,
+            "expected subscriber count to increase after client connect; baseline={baseline}, with_client={with_client}"
+        );
+
+        ws.send(TtMessage::Close(None)).await.unwrap();
+        drop(ws);
+
+        // Wait up to 500ms for the daemon's abort path to drop the Receiver.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            let n = state.terminal.subscriber_count(&aid).await.unwrap();
+            if n <= baseline {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "outbound task still subscribed 500ms after close; baseline={baseline}, current={n}"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        state.terminal.kill(&aid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_html_with_correct_content_type() {
+        let (router, _state, wid, pid, aid, _tmp) =
+            setup_hierarchical_extension(b"<html><body>memo</body></html>").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/iframe/index.html"
+                    ))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/html"));
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_css_with_correct_content_type() {
+        let (router, _state, wid, pid, aid, _tmp) =
+            setup_hierarchical_extension(b"<html><body>memo</body></html>").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/iframe/style.css"
+                    ))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/css"));
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_returns_404_for_missing_file() {
+        let (router, _state, wid, pid, aid, _tmp) =
+            setup_hierarchical_extension(b"<html></html>").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/iframe/missing.html"
+                    ))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn iframe_serve_blocks_path_traversal() {
+        let (router, _state, wid, pid, aid, tmp) =
+            setup_hierarchical_extension(b"<html></html>").await;
+        let outside = tmp.path().parent().unwrap().join("outside.txt");
+        std::fs::write(&outside, b"secret").ok();
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/iframe/../outside.txt"
+                    ))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            resp.status(),
+            axum::http::StatusCode::BAD_REQUEST | axum::http::StatusCode::NOT_FOUND
+        ));
+        let _ = std::fs::remove_file(outside);
+    }
+
+    #[tokio::test]
+    async fn iframe_for_memo_extension_returns_visible_content() {
+        // Resolve the real extensions/memo/ path so this test verifies the
+        // file shipped in the repo (not a tempdir copy). CARGO_MANIFEST_DIR
+        // is daemon/http_server, so ../.. lands at the workspace root and
+        // extensions/memo is just below it.
+        let memo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../extensions/memo")
+            .canonicalize()
+            .expect("extensions/memo must exist relative to daemon/http_server");
+
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _initial_aid) = test_helpers::bootstrap_default(&state).await;
+        state.extensions.register("memo", &memo_root);
+        let activity = Activity::extension(ActivityId::new(), "ext", memo_root.clone());
+        let aid = activity.id.clone();
+        state
+            .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(activity))
+            .await
+            .unwrap();
+        state.extensions.record_activity_owner(&aid, "memo");
+        let (router, _) = test_helpers::router_with(state.clone());
+
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/iframe/index.html"
+                    ))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.starts_with("text/html"), "expected text/html, got {ct}");
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+        assert!(
+            body_str.contains("Memo"),
+            "expected memo HTML to contain visible 'Memo' heading, got: {body_str}"
+        );
     }
 
     #[tokio::test]
@@ -1085,7 +923,6 @@ mod tests {
         assert!(body_str.contains("window.__OZMUX__"));
         let html_open_end = body_str.find('>').unwrap();
         let script_pos = body_str.find("window.__OZMUX__").unwrap();
-        // Must come right after the <html …> opening tag.
         assert!(html_open_end < script_pos);
     }
 
@@ -1112,7 +949,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iframe_hierarchical_rejects_mismatched_window() {
+    async fn iframe_rejects_mismatched_window() {
         let (router, _state, _wid, pid, aid, _tmp) =
             setup_hierarchical_extension(b"<html><head></head></html>").await;
         let phantom_wid = WindowId::new();
@@ -1132,110 +969,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_ws_hierarchical_round_trip_echoes_input() {
-        let (addr, state, wid, pid, aid) = boot_server_full().await;
-        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-        ws.send(TtMessage::Binary(b"echo ws_hier_marker\n".to_vec().into()))
-            .await
-            .unwrap();
-        let mut got = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-        while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(Duration::from_millis(300), ws.next()).await {
-                Ok(Some(Ok(TtMessage::Binary(bytes)))) => {
-                    got.extend_from_slice(&bytes);
-                    if got
-                        .windows(b"ws_hier_marker".len())
-                        .any(|w| w == b"ws_hier_marker")
-                    {
-                        break;
-                    }
-                }
-                Ok(Some(Ok(_))) => continue,
-                Ok(None) | Ok(Some(Err(_))) => break,
-                Err(_) => continue,
-            }
-        }
-        state.terminal.kill(&aid).await.unwrap();
-        let s = String::from_utf8_lossy(&got);
-        assert!(s.contains("ws_hier_marker"), "expected marker, got: {s}");
-    }
-
-    #[tokio::test]
-    async fn terminal_ws_hierarchical_rejects_unknown_activity_in_pane() {
-        let (router, _state, wid, pid, _aid, _tmp) =
-            setup_hierarchical_extension(b"<html></html>").await;
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-        let phantom_aid = ActivityId::new();
-        let url =
-            format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{phantom_aid}/terminal/ws");
-        let res = tokio_tungstenite::connect_async(url).await;
-        // The upgrade should fail because the activity is not in the pane.
-        assert!(res.is_err(), "expected upgrade failure, got Ok");
-    }
-
-    #[tokio::test]
-    async fn terminal_ws_outbound_stops_after_client_close() {
-        let (addr, state, activity_id) = boot_server().await;
-
-        // Baseline before any client subscribes. The PTY bridge task holds a
-        // Sender (not a Receiver), so receiver_count starts at 0. We capture
-        // the actual baseline defensively in case future internals change it.
-        let baseline = state.terminal.subscriber_count(&activity_id).await.unwrap();
-
-        // Open a terminal WS via tokio_tungstenite (same pattern as
-        // ws_input_is_echoed_back_in_output).
-        let url = format!("ws://{addr}/activities/{activity_id}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-
-        // Drain initial snapshot frame so the server-side outbound task is
-        // demonstrably alive holding a Receiver.
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await;
-
-        // Confirm the outbound task is subscribed.
-        let with_client = state.terminal.subscriber_count(&activity_id).await.unwrap();
-        assert!(
-            with_client > baseline,
-            "expected subscriber count to increase after client connect; baseline={baseline}, with_client={with_client}"
-        );
-
-        // Client closes the WS.
-        ws.send(TtMessage::Close(None)).await.unwrap();
-        drop(ws);
-
-        // Wait up to 500ms for the daemon's abort path to drop the Receiver.
-        // Without the abort fix (Task 2), the outbound task stays detached
-        // and receiver_count never returns to baseline.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
-        loop {
-            let n = state.terminal.subscriber_count(&activity_id).await.unwrap();
-            if n <= baseline {
-                break;
-            }
-            if tokio::time::Instant::now() >= deadline {
-                panic!(
-                    "outbound task still subscribed 500ms after close; baseline={baseline}, current={n}"
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-
-        state.terminal.kill(&activity_id).await.unwrap();
-    }
-
-    #[tokio::test]
     async fn handlers_ws_returns_404_for_unknown_activity() {
-        let (router, _state) = test_helpers::router_with(test_helpers::fresh_state());
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
+        let (router, _state) = test_helpers::router_with(state);
+        let phantom_aid = ActivityId::new();
         let resp = router
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/activities/00000000-0000-0000-0000-000000000000/handlers/ws")
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{phantom_aid}/handlers/ws"
+                    ))
                     .header("origin", "http://127.0.0.1:3200")
                     .header("upgrade", "websocket")
                     .header("connection", "upgrade")
@@ -1251,12 +996,15 @@ mod tests {
 
     #[tokio::test]
     async fn handlers_ws_returns_403_for_disallowed_origin() {
-        let (router, _state) = test_helpers::router_with(test_helpers::fresh_state());
+        let (router, _state, wid, pid, aid, _tmp) =
+            setup_hierarchical_extension(b"<html></html>").await;
         let resp = router
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/activities/00000000-0000-0000-0000-000000000000/handlers/ws")
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/handlers/ws"
+                    ))
                     .header("origin", "http://evil.example")
                     .header("upgrade", "websocket")
                     .header("connection", "upgrade")
@@ -1272,17 +1020,17 @@ mod tests {
 
     #[tokio::test]
     async fn handlers_ws_returns_503_when_extension_not_running() {
-        let state = test_helpers::fresh_state();
-        let (_sid, _wid, _pid, aid) = test_helpers::bootstrap_default(&state).await;
-        let registry = ozmux_extension::ExtensionRegistry::default();
-        registry.register("memo", std::path::Path::new("/tmp/memo"));
-        registry.record_activity_owner(&aid, "memo");
-        let (router, _state) = test_helpers::router_with_registry(state, registry);
+        // setup_hierarchical_extension registers an extension but never sets a
+        // handlers sock path, so the route should fail with 503.
+        let (router, _state, wid, pid, aid, _tmp) =
+            setup_hierarchical_extension(b"<html></html>").await;
         let resp = router
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!("/activities/{}/handlers/ws", aid))
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/handlers/ws"
+                    ))
                     .header("origin", "http://127.0.0.1:3200")
                     .header("upgrade", "websocket")
                     .header("connection", "upgrade")
@@ -1355,11 +1103,21 @@ mod tests {
             }
         });
 
-        // 2. Build a router with a registry pointing at the mock sock.
+        // 2. Build a router with a registry pointing at the mock sock, and
+        //    seat an extension Activity inside the bootstrap Pane so the
+        //    hierarchical path validation passes.
         let state = test_helpers::fresh_state();
-        let (_sid, _wid, _pid, aid) = test_helpers::bootstrap_default(&state).await;
+        let (_sid, wid, pid, _initial_aid) = test_helpers::bootstrap_default(&state).await;
         let registry = ozmux_extension::ExtensionRegistry::default();
         registry.register("memo", std::path::Path::new("/tmp/memo"));
+        let aid = ActivityId::new();
+        state
+            .with_window_or_404(&wid, |w| {
+                w.pane_mut(&pid)?
+                    .add_activity(Activity::extension(aid.clone(), "ext", "/tmp/memo".into()))
+            })
+            .await
+            .unwrap();
         registry.record_activity_owner(&aid, "memo");
         registry.set_handlers_sock_path("memo", &sock_path);
         let (router, _state) = test_helpers::router_with_registry(state, registry);
@@ -1371,7 +1129,9 @@ mod tests {
             axum::serve(listener, router).await.unwrap();
         });
 
-        let url = format!("ws://{}/activities/{}/handlers/ws", addr, aid);
+        let url = format!(
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/handlers/ws"
+        );
         let req = tokio_tungstenite::tungstenite::http::Request::builder()
             .uri(&url)
             .header("host", addr.to_string())
@@ -1523,7 +1283,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn activate_v2_switches_active_activity_and_publishes() {
+    async fn activate_switches_active_activity_and_publishes() {
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, _aid_initial) = test_helpers::bootstrap_default(&state).await;
         let new_aid = ActivityId::new();
@@ -1556,7 +1316,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn activate_v2_already_active_does_not_publish() {
+    async fn activate_already_active_does_not_publish() {
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, aid) = test_helpers::bootstrap_default(&state).await;
         let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
@@ -1579,7 +1339,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn activate_v2_unknown_activity_returns_404() {
+    async fn activate_unknown_activity_returns_404() {
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
         let (router, _state) = test_helpers::router_with(state);

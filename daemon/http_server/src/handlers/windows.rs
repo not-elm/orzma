@@ -785,28 +785,13 @@ mod tests {
         let (_sid, wid, bootstrap_pane, _aid) = bootstrap_default(&state).await;
         let activity = Activity::extension(ActivityId::new(), "ext", PathBuf::from("/tmp"));
         let activity_id = activity.id.clone();
-        state.limbo.activities.insert(activity_id.clone(), activity);
-        let pane_id = PaneId::new();
-        state
-            .limbo
-            .panes
-            .insert(pane_id.clone(), activity_id.clone());
-
-        // Place the limbo pane via the same path the SDK uses internally.
-        let new_pane = pane_id.clone();
-        let activity_value = state
-            .limbo
-            .activities
-            .remove(&activity_id)
-            .map(|(_, v)| v)
-            .unwrap();
-        state.limbo.panes.remove(&new_pane);
+        let new_pane = PaneId::new();
         state
             .with_window_or_404(&wid, |w| {
                 w.split_pane(
                     &bootstrap_pane,
                     new_pane.clone(),
-                    activity_value,
+                    activity,
                     Side::After,
                     SplitOrientation::Horizontal,
                 )

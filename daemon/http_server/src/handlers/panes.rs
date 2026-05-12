@@ -1,4 +1,3 @@
-use crate::extractors::ExtensionName;
 use crate::handlers::activities::ActivityInput;
 use crate::handlers::publish_window_layout;
 use crate::{
@@ -23,26 +22,15 @@ pub struct SplitRequest {
     #[serde(default)]
     side: Side,
     /// Client-supplied id for the new Pane. When absent the server picks one.
-    /// PR5 callers send a UUIDv4; PR4 callers omit it.
     #[serde(default)]
     new_pane_id: Option<PaneId>,
     /// Client-supplied Activity spec (id + kind). When absent the server
-    /// creates an empty Terminal Activity. PR5 callers send this; PR4 callers
-    /// omit it.
+    /// creates an empty Terminal Activity.
     #[serde(default)]
     activity: Option<ActivityInput>,
 }
 
 pub async fn split(
-    State(state): State<AppState>,
-    Path(target_pane_id): Path<PaneId>,
-    Json(req): Json<SplitRequest>,
-) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    let wid = lookup_pane_window(&state, &target_pane_id)?;
-    split_in_window(&state, &wid, &target_pane_id, req).await
-}
-
-pub async fn split_v2(
     State(state): State<AppState>,
     Path((wid, target_pane_id)): Path<(WindowId, PaneId)>,
     Json(req): Json<SplitRequest>,
@@ -58,7 +46,7 @@ async fn split_in_window(
     req: SplitRequest,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
     // Caller IDs win when present; otherwise we fall back to server-generated
-    // ids so PR4-shape requests keep working until PR7.
+    // ids so simple internal callers don't have to mint UUIDs themselves.
     let new_pane_id = req.new_pane_id.unwrap_or_default();
     let new_activity = match req.activity {
         Some(spec) => spec.into_activity(),
@@ -149,129 +137,12 @@ async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) 
     publish_window_layout(state, wid).await;
 }
 
-#[derive(Deserialize)]
-pub struct CreatePaneRequest {
-    activity_id: ActivityId,
-}
-
-pub async fn create(
-    ExtensionName(ext_name): ExtensionName,
-    State(state): State<AppState>,
-    Json(body): Json<CreatePaneRequest>,
-) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    let owner = state
-        .extensions
-        .activity_owner(&body.activity_id)
-        .ok_or(HttpError::Session(MultiplexerError::ActivityNotFound(
-            body.activity_id.clone(),
-        )))?;
-    if owner != ext_name {
-        return Err(HttpError::ActivityNotOwned);
-    }
-    if !state.limbo.activities.contains_key(&body.activity_id) {
-        return Err(HttpError::Session(MultiplexerError::ActivityNotFound(
-            body.activity_id,
-        )));
-    }
-    let pane_id = PaneId::new();
-    state.limbo.panes.insert(pane_id.clone(), body.activity_id);
-    state.extensions.record_pane_owner(&pane_id, &ext_name);
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "pane_id": pane_id })),
-    ))
-}
-
-#[derive(Deserialize)]
-pub struct SplitWithRequest {
-    pane_id: PaneId,
-    side: Side,
-    orientation: SplitOrientation,
-}
-
-pub async fn split_with(
-    ExtensionName(ext_name): ExtensionName,
-    State(state): State<AppState>,
-    Path(src): Path<PaneId>,
-    Json(body): Json<SplitWithRequest>,
-) -> HttpResult<StatusCode> {
-    let owner = state
-        .extensions
-        .pane_owner(&body.pane_id)
-        .ok_or_else(|| HttpError::Session(MultiplexerError::PaneNotFound(body.pane_id.clone())))?;
-    if owner != ext_name {
-        return Err(HttpError::PaneNotOwned);
-    }
-
-    // The plan requires the limbo lookup to happen *before* the window
-    // lock, so we move the Activity out of the limbo store eagerly.
-    let already_placed = state.pane_owner_window.contains_key(&body.pane_id);
-    if already_placed {
-        return Err(HttpError::Session(MultiplexerError::PaneAlreadyPlaced(
-            body.pane_id,
-        )));
-    }
-    let activity = take_limbo_pane(&state, &body.pane_id)?;
-    let wid = lookup_pane_window(&state, &src)?;
-    let new_pane_id = body.pane_id.clone();
-
-    state
-        .with_window_or_404(&wid, |w| {
-            w.split_pane(&src, new_pane_id, activity, body.side, body.orientation)
-        })
-        .await?;
-
-    state
-        .pane_owner_window
-        .insert(body.pane_id.clone(), wid.clone());
-
-    publish_window_layout(&state, &wid).await;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-fn take_limbo_pane(state: &AppState, pane_id: &PaneId) -> HttpResult<Activity> {
-    let activity_id = state
-        .limbo
-        .panes
-        .remove(pane_id)
-        .map(|(_, v)| v)
-        .ok_or_else(|| HttpError::Session(MultiplexerError::PaneNotFound(pane_id.clone())))?;
-    state
-        .limbo
-        .activities
-        .remove(&activity_id)
-        .map(|(_, v)| v)
-        .ok_or(HttpError::Session(MultiplexerError::ActivityNotFound(
-            activity_id,
-        )))
-}
-
 pub async fn close(
-    State(state): State<AppState>,
-    Path(pane_id): Path<PaneId>,
-) -> HttpResult<StatusCode> {
-    if let Some(status) = try_close_limbo_pane(&state, &pane_id).await {
-        return Ok(status);
-    }
-    let wid = lookup_pane_window(&state, &pane_id)?;
-    close_in_window(&state, &wid, &pane_id).await
-}
-
-pub async fn close_v2(
     State(state): State<AppState>,
     Path((wid, pane_id)): Path<(WindowId, PaneId)>,
 ) -> HttpResult<StatusCode> {
     ensure_pane_in_window(&state, &wid, &pane_id)?;
     close_in_window(&state, &wid, &pane_id).await
-}
-
-async fn try_close_limbo_pane(state: &AppState, pane_id: &PaneId) -> Option<StatusCode> {
-    let (_, activity_id) = state.limbo.panes.remove(pane_id)?;
-    state.limbo.activities.remove(&activity_id);
-    state.extensions.forget_pane(pane_id);
-    state.extensions.forget_activity(&activity_id);
-    let _ = state.terminal.kill(&activity_id).await;
-    Some(StatusCode::NO_CONTENT)
 }
 
 async fn close_in_window(
@@ -353,7 +224,6 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use ozmux_multiplexer::Activity;
-    use std::path::PathBuf;
     use tower::ServiceExt;
 
     async fn total_panes(state: &AppState) -> usize {
@@ -398,430 +268,6 @@ mod tests {
             .pane_owner_window
             .insert(new_pane_id.clone(), wid.clone());
         new_pane_id
-    }
-
-    #[tokio::test]
-    async fn split_either_succeeds_or_rolls_back() {
-        let state = fresh_state();
-        let (_sid, _wid, pid, _aid) = bootstrap_default(&state).await;
-        let panes_before = total_panes(&state).await;
-        let (router, state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/panes/{}/split", pid))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"orientation":"horizontal"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = resp.status();
-        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-        let panes_after = total_panes(&state).await;
-        if status == StatusCode::CREATED {
-            assert!(v["new_pane_id"].is_string());
-            assert!(v["new_activity_id"].is_string());
-            assert_eq!(
-                panes_after,
-                panes_before + 1,
-                "split must add a pane on success"
-            );
-        } else {
-            assert_eq!(
-                panes_after, panes_before,
-                "split rollback must restore pane count on spawn failure"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn close_pane_without_header_returns_204_and_removes_it() {
-        let state = fresh_state();
-        let (_sid, wid, original_pid, _aid) = bootstrap_default(&state).await;
-        let new_pid = split_via_window(&state, &wid, &original_pid).await;
-        let panes_before = total_panes(&state).await;
-        let (router, state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/panes/{}", new_pid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        assert_eq!(total_panes(&state).await, panes_before - 1);
-        assert!(!pane_to_cell_contains(&state, &new_pid).await);
-    }
-
-    #[tokio::test]
-    async fn split_unknown_pane_returns_404() {
-        let (router, _) = router_with(fresh_state());
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/panes/missing/split")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"orientation":"horizontal"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn close_last_pane_returns_409() {
-        let state = fresh_state();
-        let (_sid, _wid, pid, _aid) = bootstrap_default(&state).await;
-        let (router, _state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/panes/{}", pid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
-    async fn close_missing_pane_returns_404() {
-        let (router, _) = router_with(fresh_state());
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/panes/missing")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn close_owned_pane_without_header_forgets_owner() {
-        let state = fresh_state();
-        let (_sid, wid, original_pid, _aid) = bootstrap_default(&state).await;
-        let new_pid = split_via_window(&state, &wid, &original_pid).await;
-        state
-            .extensions
-            .register("memo", std::path::Path::new("/tmp"));
-        state.extensions.record_pane_owner(&new_pid, "memo");
-        let (router, state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/panes/{}", new_pid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        assert!(
-            state.extensions.pane_owner(&new_pid).is_none(),
-            "pane owner registry entry must be cleared after close"
-        );
-    }
-
-    async fn router_with_owned_activity(ext_name: &str) -> (axum::Router, ActivityId, AppState) {
-        let state = fresh_state();
-        let _ = bootstrap_default(&state).await;
-        let activity = Activity::extension(ActivityId::new(), "ext", PathBuf::from("/tmp"));
-        let activity_id = activity.id.clone();
-        state.limbo.activities.insert(activity_id.clone(), activity);
-        state
-            .extensions
-            .register(ext_name, std::path::Path::new("/tmp"));
-        state
-            .extensions
-            .record_activity_owner(&activity_id, ext_name);
-        let (router, state) = router_with(state);
-        (router, activity_id, state)
-    }
-
-    #[tokio::test]
-    async fn create_pane_returns_201_with_pane_id() {
-        let (router, activity_id, _) = router_with_owned_activity("memo").await;
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/panes")
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(Body::from(format!(r#"{{"activity_id":"{activity_id}"}}"#)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(v["pane_id"].is_string());
-    }
-
-    #[tokio::test]
-    async fn create_pane_rejects_other_extensions_activity() {
-        let state = fresh_state();
-        let _ = bootstrap_default(&state).await;
-        let activity = Activity::terminal(ActivityId::new());
-        let aid_other = activity.id.clone();
-        state.limbo.activities.insert(aid_other.clone(), activity);
-        state
-            .extensions
-            .register("memo", std::path::Path::new("/tmp"));
-        state
-            .extensions
-            .register("other", std::path::Path::new("/tmp"));
-        state.extensions.record_activity_owner(&aid_other, "other");
-        let (router, _) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/panes")
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(Body::from(format!(r#"{{"activity_id":"{aid_other}"}}"#)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn create_pane_returns_404_for_unknown_activity() {
-        let state = fresh_state();
-        state
-            .extensions
-            .register("memo", std::path::Path::new("/tmp"));
-        let (router, _) = router_with(state);
-        let phantom = ActivityId::new();
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/panes")
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(Body::from(format!(r#"{{"activity_id":"{phantom}"}}"#)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn split_with_places_limbo_pane_after_target() {
-        let state = fresh_state();
-        let (_sid, _wid, target_pane, _aid) = bootstrap_default(&state).await;
-        let activity = Activity::extension(ActivityId::new(), "ext", PathBuf::from("/tmp"));
-        let activity_id = activity.id.clone();
-        state.limbo.activities.insert(activity_id.clone(), activity);
-        let limbo = PaneId::new();
-        state.limbo.panes.insert(limbo.clone(), activity_id.clone());
-        state
-            .extensions
-            .register("memo", std::path::Path::new("/tmp"));
-        state.extensions.record_activity_owner(&activity_id, "memo");
-        state.extensions.record_pane_owner(&limbo, "memo");
-        let (router, _) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/panes/{target_pane}/split-with"))
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"pane_id":"{limbo}","side":"after","orientation":"horizontal"}}"#
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn split_with_rejects_pane_owned_by_other_extension() {
-        let state = fresh_state();
-        let (_sid, _wid, target_pane, _aid) = bootstrap_default(&state).await;
-        let activity = Activity::terminal(ActivityId::new());
-        let activity_id = activity.id.clone();
-        state.limbo.activities.insert(activity_id.clone(), activity);
-        let limbo = PaneId::new();
-        state.limbo.panes.insert(limbo.clone(), activity_id);
-        state
-            .extensions
-            .register("memo", std::path::Path::new("/tmp"));
-        state
-            .extensions
-            .register("other", std::path::Path::new("/tmp"));
-        state.extensions.record_pane_owner(&limbo, "other");
-        let (router, _) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/panes/{target_pane}/split-with"))
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"pane_id":"{limbo}","side":"after","orientation":"horizontal"}}"#
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn split_publishes_layout_to_subscriber() {
-        let state = fresh_state();
-        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
-        let (router, state) = router_with(state);
-
-        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
-
-        let _ = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/panes/{}/split", pid))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"orientation":"horizontal"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        match tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await {
-            Ok(Ok(view)) => {
-                assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
-                let layout_child = &view["layout"]["child"];
-                assert_eq!(layout_child["type"].as_str(), Some("split"));
-            }
-            Ok(Err(e)) => panic!("recv error: {e:?}"),
-            Err(_) => panic!("publish timed out — split handler did not publish"),
-        }
-    }
-
-    #[tokio::test]
-    async fn close_publishes_layout_to_subscriber() {
-        let state = fresh_state();
-        let (_sid, wid, pid_a, _aid) = bootstrap_default(&state).await;
-        let pid_b = split_via_window(&state, &wid, &pid_a).await;
-        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
-        let (router, _state) = router_with(state);
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/panes/{}", pid_b))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
-            .await
-            .expect("publish timed out")
-            .expect("recv error");
-        assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
-        assert_eq!(view["layout"]["child"]["type"].as_str(), Some("pane"));
-        assert_eq!(
-            view["layout"]["child"]["pane_id"].as_str(),
-            Some(pid_a.as_ref())
-        );
-    }
-
-    #[tokio::test]
-    async fn split_with_publishes_layout_to_subscriber() {
-        let state = fresh_state();
-        let (_sid, wid, src_pid, _aid) = bootstrap_default(&state).await;
-        let activity = Activity::extension(ActivityId::new(), "ext", PathBuf::from("/tmp"));
-        let aid_new = activity.id.clone();
-        state.limbo.activities.insert(aid_new.clone(), activity);
-        let new_pid = PaneId::new();
-        state.limbo.panes.insert(new_pid.clone(), aid_new);
-        state
-            .extensions
-            .register("memo", std::path::Path::new("/tmp"));
-        state.extensions.record_pane_owner(&new_pid, "memo");
-        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
-        let (router, _state) = router_with(state);
-
-        let body = format!(
-            r#"{{"pane_id":"{}","side":"after","orientation":"horizontal"}}"#,
-            new_pid
-        );
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/panes/{}/split-with", src_pid))
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
-            .await
-            .expect("publish timed out")
-            .expect("recv error");
-        assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
-        assert_eq!(view["layout"]["child"]["type"].as_str(), Some("split"));
-    }
-
-    #[tokio::test]
-    async fn split_with_returns_409_for_already_placed_pane() {
-        let state = fresh_state();
-        let (_sid, _wid, target_pane, _aid) = bootstrap_default(&state).await;
-        state
-            .extensions
-            .register("memo", std::path::Path::new("/tmp"));
-        state.extensions.record_pane_owner(&target_pane, "memo");
-        let (router, _) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/panes/{target_pane}/split-with"))
-                    .header("X-Ozmux-Extension", "memo")
-                    .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"pane_id":"{target_pane}","side":"after","orientation":"horizontal"}}"#
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -881,7 +327,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn split_v2_with_wid_returns_new_pane_and_publishes() {
+    async fn split_returns_new_pane_and_publishes() {
         let state = fresh_state();
         let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
         let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
@@ -915,7 +361,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn split_v2_with_wrong_wid_returns_409() {
+    async fn split_with_wrong_wid_returns_409() {
         let state = fresh_state();
         let (sid, _wid_a, pid_a, _aid) = bootstrap_default(&state).await;
         let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
@@ -935,7 +381,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn split_v2_with_unknown_pane_returns_404() {
+    async fn split_with_unknown_pane_returns_404() {
         let state = fresh_state();
         let (_sid, wid, _pid, _aid) = bootstrap_default(&state).await;
         let (router, _state) = router_with(state);
@@ -954,7 +400,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_v2_with_wid_returns_204() {
+    async fn split_either_succeeds_or_rolls_back() {
+        let state = fresh_state();
+        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
+        let panes_before = total_panes(&state).await;
+        let (router, state) = router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/panes/{}/split", wid, pid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"orientation":"horizontal"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let panes_after = total_panes(&state).await;
+        if status == StatusCode::CREATED {
+            assert_eq!(
+                panes_after,
+                panes_before + 1,
+                "split must add a pane on success"
+            );
+        } else {
+            assert_eq!(
+                panes_after, panes_before,
+                "split rollback must restore pane count on spawn failure"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn close_returns_204_and_removes_pane() {
         let state = fresh_state();
         let (_sid, wid, original_pid, _aid) = bootstrap_default(&state).await;
         let new_pid = split_via_window(&state, &wid, &original_pid).await;
@@ -976,7 +455,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_v2_with_wrong_wid_returns_409() {
+    async fn close_with_wrong_wid_returns_409() {
         let state = fresh_state();
         let (sid, _wid_a, pid_a, _aid) = bootstrap_default(&state).await;
         let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
@@ -995,7 +474,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_v2_unknown_pane_returns_404() {
+    async fn close_unknown_pane_returns_404() {
         let state = fresh_state();
         let (_sid, wid, _pid, _aid) = bootstrap_default(&state).await;
         let (router, _state) = router_with(state);
@@ -1010,6 +489,83 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn close_last_pane_returns_409() {
+        let state = fresh_state();
+        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
+        let (router, _state) = router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/windows/{}/panes/{}", wid, pid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn close_owned_pane_forgets_owner() {
+        let state = fresh_state();
+        let (_sid, wid, original_pid, _aid) = bootstrap_default(&state).await;
+        let new_pid = split_via_window(&state, &wid, &original_pid).await;
+        state
+            .extensions
+            .register("memo", std::path::Path::new("/tmp"));
+        state.extensions.record_pane_owner(&new_pid, "memo");
+        let (router, state) = router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/windows/{}/panes/{}", wid, new_pid))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        assert!(
+            state.extensions.pane_owner(&new_pid).is_none(),
+            "pane owner registry entry must be cleared after close"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_publishes_layout_to_subscriber() {
+        let state = fresh_state();
+        let (_sid, wid, pid_a, _aid) = bootstrap_default(&state).await;
+        let pid_b = split_via_window(&state, &wid, &pid_a).await;
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+        let (router, _state) = router_with(state);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/windows/{}/panes/{}", wid, pid_b))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
+        assert_eq!(view["layout"]["child"]["type"].as_str(), Some("pane"));
+        assert_eq!(
+            view["layout"]["child"]["pane_id"].as_str(),
+            Some(pid_a.as_ref())
+        );
     }
 
     #[tokio::test]
@@ -1032,7 +588,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn split_v2_honors_client_supplied_pane_and_activity_ids() {
+    async fn split_honors_client_supplied_pane_and_activity_ids() {
         let state = fresh_state();
         let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
         let new_pid = PaneId::new();
@@ -1064,7 +620,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn split_v2_with_duplicate_pane_id_returns_409() {
+    async fn split_with_duplicate_pane_id_returns_409() {
         let state = fresh_state();
         let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
         let (router, _state) = router_with(state);
