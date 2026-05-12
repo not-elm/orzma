@@ -95,8 +95,12 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::ServiceUnavailable(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
             }
-            HttpError::Session(MultiplexerError::ActivityNotFound(_)) => {
+            HttpError::Session(MultiplexerError::ActivityNotFound(_))
+            | HttpError::Session(MultiplexerError::ActivityNotInPane { .. }) => {
                 (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
+            }
+            HttpError::Session(MultiplexerError::ActivityIdConflict(_)) => {
+                (StatusCode::CONFLICT, "ACTIVITY_ID_CONFLICT")
             }
             HttpError::Session(MultiplexerError::PaneAlreadyPlaced(_)) => {
                 (StatusCode::CONFLICT, "PANE_ALREADY_PLACED")

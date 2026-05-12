@@ -309,6 +309,22 @@ pub fn daemon_router(state: AppState) -> Router {
             "/windows/{window_id}/panes/{pane_id}/activate",
             post(handlers::panes::activate),
         )
+        .route(
+            "/windows/{window_id}/panes/{pane_id}/split",
+            post(handlers::panes::split_v2),
+        )
+        .route(
+            "/windows/{window_id}/panes/{pane_id}",
+            method_delete(handlers::panes::close_v2),
+        )
+        .route(
+            "/windows/{window_id}/panes/{pane_id}/activities",
+            post(handlers::activities::add_to_pane),
+        )
+        .route(
+            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/activate",
+            post(handlers::activities::activate_v2),
+        )
         .route("/activities", post(handlers::activities::create))
         .route(
             "/activities/{activity_id}/terminal/ws",

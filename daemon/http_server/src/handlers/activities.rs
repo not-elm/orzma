@@ -1,12 +1,13 @@
 use crate::AppState;
 use crate::error::HttpError;
 use crate::extractors::ExtensionName;
+use crate::handlers::publish_window_layout;
 use axum::{
     extract::{
         FromRequest, Path, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
     },
-    http::header::CONTENT_TYPE,
+    http::{StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
 use futures_util::{
@@ -14,7 +15,9 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
 };
 use ozmux_extension::ExtensionRegistry;
-use ozmux_multiplexer::{Activity, ActivityId, ActivityKind};
+use ozmux_multiplexer::{
+    Activity, ActivityId, ActivityKind, PaneId, SetActiveOutcome, WindowId,
+};
 use ozmux_terminal::{TerminalEvent, TerminalService};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -372,6 +375,70 @@ pub async fn iframe_serve(
         bytes,
     )
         .into_response())
+}
+
+#[derive(Deserialize)]
+pub struct AddActivityRequest {
+    activity: ActivityInput,
+}
+
+#[derive(Deserialize)]
+pub struct ActivityInput {
+    activity_id: ActivityId,
+    #[serde(default)]
+    name: Option<String>,
+    kind: ActivityKindInput,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ActivityKindInput {
+    Terminal,
+    Extension { html_root: PathBuf },
+}
+
+impl ActivityInput {
+    fn into_activity(self) -> Activity {
+        let kind = match self.kind {
+            ActivityKindInput::Terminal => ActivityKind::Terminal,
+            ActivityKindInput::Extension { html_root } => ActivityKind::Extension { html_root },
+        };
+        Activity {
+            id: self.activity_id,
+            name: self.name.unwrap_or_else(|| "Activity".into()),
+            kind,
+        }
+    }
+}
+
+pub async fn add_to_pane(
+    State(state): State<AppState>,
+    Path((wid, pid)): Path<(WindowId, PaneId)>,
+    axum::Json(body): axum::Json<AddActivityRequest>,
+) -> Result<(StatusCode, axum::Json<serde_json::Value>), HttpError> {
+    let activity = body.activity.into_activity();
+    let aid = activity.id.clone();
+    state
+        .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(activity))
+        .await?;
+    publish_window_layout(&state, &wid).await;
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(serde_json::json!({ "activity_id": aid })),
+    ))
+}
+
+pub async fn activate_v2(
+    State(state): State<AppState>,
+    Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
+) -> Result<StatusCode, HttpError> {
+    let outcome = state
+        .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.set_active_activity(&aid))
+        .await?;
+    if matches!(outcome, SetActiveOutcome::Changed) {
+        publish_window_layout(&state, &wid).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -988,5 +1055,171 @@ mod tests {
 
         ws.close(None).await.ok();
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn add_to_pane_creates_tab_and_publishes() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+        let (router, _state) = test_helpers::router_with(state);
+        let new_aid = ActivityId::new();
+        let body = serde_json::json!({
+            "activity": {
+                "activity_id": new_aid,
+                "kind": { "type": "terminal" }
+            }
+        });
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{wid}/panes/{pid}/activities"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["activity_id"].as_str(), Some(new_aid.as_ref()));
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+    }
+
+    #[tokio::test]
+    async fn add_to_pane_with_extension_kind_accepts_html_root() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
+        let (router, _state) = test_helpers::router_with(state);
+        let new_aid = ActivityId::new();
+        let body = serde_json::json!({
+            "activity": {
+                "activity_id": new_aid,
+                "name": "memo",
+                "kind": { "type": "extension", "html_root": "/tmp" }
+            }
+        });
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{wid}/panes/{pid}/activities"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn add_to_pane_unknown_window_returns_404() {
+        let state = test_helpers::fresh_state();
+        let (_sid, _wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
+        let (router, _state) = test_helpers::router_with(state);
+        let bogus_wid = ozmux_multiplexer::WindowId::new();
+        let body = serde_json::json!({
+            "activity": {
+                "activity_id": ActivityId::new(),
+                "kind": { "type": "terminal" }
+            }
+        });
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{bogus_wid}/panes/{pid}/activities"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn activate_v2_switches_active_activity_and_publishes() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _aid_initial) = test_helpers::bootstrap_default(&state).await;
+        let new_aid = ActivityId::new();
+        state
+            .with_window_or_404(&wid, |w| {
+                w.pane_mut(&pid)?
+                    .add_activity(Activity::terminal(new_aid.clone()))
+            })
+            .await
+            .unwrap();
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+        let (router, _state) = test_helpers::router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{new_aid}/activate"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+    }
+
+    #[tokio::test]
+    async fn activate_v2_already_active_does_not_publish() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, aid) = test_helpers::bootstrap_default(&state).await;
+        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
+        let (router, _state) = test_helpers::router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/activate"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let res = tokio::time::timeout(std::time::Duration::from_millis(80), rx.recv()).await;
+        assert!(res.is_err(), "Unchanged outcome must not publish");
+    }
+
+    #[tokio::test]
+    async fn activate_v2_unknown_activity_returns_404() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
+        let (router, _state) = test_helpers::router_with(state);
+        let phantom = ActivityId::new();
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{phantom}/activate"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
