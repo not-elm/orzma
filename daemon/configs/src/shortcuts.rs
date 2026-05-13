@@ -373,4 +373,13 @@ mod tests {
         let b: Binding = toml::from_str(toml).unwrap();
         assert!(matches!(b.action, Action::FocusWindowNumber { index: 0 }));
     }
+
+    #[test]
+    fn default_shortcuts_serializes_to_stable_json() {
+        let json = serde_json::to_string(&Shortcuts::default()).unwrap();
+        assert_eq!(
+            json,
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}}]}"#
+        );
+    }
 }
