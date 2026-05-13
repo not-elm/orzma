@@ -11,6 +11,7 @@ publish.workspace = true
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_terminal = { path = "../terminal" }
 ozmux_extension = { path = "../extension" }
+ozmux_configs = { path = "../configs" }
 axum = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing = { workspace = true }

@@ -4,16 +4,15 @@
 
 #![warn(missing_docs)]
 
-mod defaults;
+use crate::shortcuts::Shortcuts;
+use crate::theme::Theme;
+pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
+
 pub mod error;
 pub(crate) mod path;
 pub(crate) mod raw;
 pub mod shortcuts;
 pub mod theme;
-
-use crate::shortcuts::Shortcuts;
-use crate::theme::Theme;
-pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 
 /// Fully-resolved ozmux configuration.
 #[derive(Clone, Debug, Default)]

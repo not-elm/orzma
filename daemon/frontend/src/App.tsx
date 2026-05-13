@@ -1,10 +1,10 @@
 import { useRef } from 'react';
-import { closePane } from './layout/closePane';
 import { LayoutView } from './layout/LayoutView';
 import { useDefaultWindow } from './layout/useDefaultWindow';
 import { useWindowLayout } from './layout/useWindowLayout';
+import type { ShortcutContext } from './shortcuts/actionDispatch';
 import { PrefixIndicator } from './shortcuts/PrefixIndicator';
-import { type PrefixBindings, usePrefixMode } from './shortcuts/usePrefixMode';
+import { usePrefixMode } from './shortcuts/usePrefixMode';
 
 export function App() {
   const def = useDefaultWindow();
@@ -17,23 +17,17 @@ export function App() {
   activePaneRef.current = view?.active_pane ?? null;
   activeWindowRef.current = wid;
 
-  const bindings: PrefixBindings = new Map([
-    [
-      'x',
-      () => {
-        const pid = activePaneRef.current;
-        const w = activeWindowRef.current;
-        if (pid && w) closePane(w, pid);
-      },
-    ],
-  ]);
+  const ctx: ShortcutContext = {
+    activeWindow: () => activeWindowRef.current,
+    activePane: () => activePaneRef.current,
+  };
 
-  const { isArmed } = usePrefixMode(bindings);
+  const { isArmed, prefix } = usePrefixMode(ctx);
 
   return (
     <>
       <LayoutView windowState={def} layoutState={layout} />
-      <PrefixIndicator armed={isArmed} />
+      <PrefixIndicator armed={isArmed} prefix={prefix} />
     </>
   );
 }

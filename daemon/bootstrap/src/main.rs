@@ -25,15 +25,13 @@ async fn main() -> anyhow::Result<()> {
                 bindings = c.shortcuts.bindings.len(),
                 "loaded ozmux config"
             );
-            c
+            Arc::new(c)
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to load ozmux config; aborting");
             return Err(e.into());
         }
     };
-    // TODO: wire configs into AppState (subsequent PR).
-    let _ = configs;
 
     let parent = std::env::temp_dir().join("ozmux");
     std::fs::create_dir_all(&parent)?;
@@ -52,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         TerminalService::with_runtime_root(Arc::clone(&runtime)),
         registry,
         ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
+        Arc::clone(&configs),
     );
 
     let serve = ozmux_http_server::serve(state);
