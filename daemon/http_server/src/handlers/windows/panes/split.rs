@@ -1,4 +1,4 @@
-use crate::handlers::activities::ActivityInput;
+use crate::handlers::windows::panes::activities::ActivityInput;
 use crate::handlers::{ensure_pane_in_window, publish_window_layout};
 use crate::{AppState, error::HttpResult};
 use axum::{
@@ -7,8 +7,7 @@ use axum::{
     http::StatusCode,
 };
 use ozmux_multiplexer::{
-    Activity, ActivityId, ActivityKind, MultiplexerError, MultiplexerResult, PaneId, SessionId,
-    SetActivePaneOutcome, Side, SplitOrientation, WindowId,
+    Activity, ActivityId, ActivityKind, MultiplexerResult, PaneId, Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::SpawnOptions;
 use serde::Deserialize;
@@ -58,6 +57,7 @@ async fn split_in_window(
     let activity_kind = new_activity.kind.clone();
 
     state
+        .multiplexer
         .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
             w.split_pane(
                 target_pane_id,
@@ -70,6 +70,7 @@ async fn split_in_window(
         .await?;
 
     state
+        .multiplexer
         .pane_owner_window
         .insert(new_pane_id.clone(), wid.clone());
 
@@ -107,7 +108,7 @@ async fn spawn_pty_with_rollback(
     new_pane_id: &PaneId,
     new_activity_id: &ActivityId,
 ) -> HttpResult<()> {
-    let session_id = session_owning_window(state, wid).await;
+    let session_id = super::session_owning_window(state, wid).await;
     let spawn_result = state
         .terminal
         .spawn(
@@ -130,17 +131,9 @@ async fn spawn_pty_with_rollback(
     Ok(())
 }
 
-/// Walk the SessionState to find which Session owns `wid`. Used to populate
-/// `OZMUX_SESSION_ID` for the spawned PTY; returns `None` for orphan Windows.
-pub(crate) async fn session_owning_window(state: &AppState, wid: &WindowId) -> Option<SessionId> {
-    let sess = state.sessions.lock().await;
-    sess.iter()
-        .find(|(_, s)| s.linked_windows.contains(wid))
-        .map(|(id, _)| id.clone())
-}
-
 async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) {
     let closed = state
+        .multiplexer
         .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
         .await
         .is_ok();
@@ -151,177 +144,28 @@ async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) 
         );
         return;
     }
-    state.pane_owner_window.remove(new_pane_id);
+    state.multiplexer.pane_owner_window.remove(new_pane_id);
     publish_window_layout(state, wid).await;
-}
-
-pub async fn close(
-    State(state): State<AppState>,
-    Path((wid, pane_id)): Path<(WindowId, PaneId)>,
-) -> HttpResult<StatusCode> {
-    ensure_pane_in_window(&state, &wid, &pane_id)?;
-    close_in_window(&state, &wid, &pane_id).await
-}
-
-async fn close_in_window(
-    state: &AppState,
-    wid: &WindowId,
-    pane_id: &PaneId,
-) -> HttpResult<StatusCode> {
-    let activities = state
-        .with_window_or_404(wid, |w| w.close_pane(pane_id))
-        .await?;
-
-    state.pane_owner_window.remove(pane_id);
-    state.extensions.forget_pane(pane_id);
-    for aid in &activities {
-        state.extensions.forget_activity(aid);
-    }
-    for aid in &activities {
-        let _ = state.terminal.kill(aid).await;
-    }
-
-    publish_window_layout(state, wid).await;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn activate(
-    State(state): State<AppState>,
-    Path((window_id, pane_id)): Path<(WindowId, PaneId)>,
-) -> HttpResult<StatusCode> {
-    // `with_window_or_404` resolves the Window-exists arm: unknown wid → 404.
-    // Inside the lock we then distinguish "pane lives in this window"
-    // (Window::set_active_pane) from "pane lives somewhere else" (409) and
-    // "pane is unknown to the multiplexer" (404). See tests
-    // `activate_unknown_window_returns_404` and
-    // `activate_pane_in_other_window_returns_409`.
-    let outcome = state
-        .with_window_or_404(&window_id, |w| {
-            if w.panes.contains_key(&pane_id) {
-                w.set_active_pane(&pane_id)
-            } else if state.pane_owner_window.contains_key(&pane_id) {
-                Err(MultiplexerError::PaneNotInWindow {
-                    window: w.id.clone(),
-                    pane: pane_id.clone(),
-                })
-            } else {
-                Err(MultiplexerError::PaneNotFound(pane_id.clone()))
-            }
-        })
-        .await?;
-    if matches!(outcome, SetActivePaneOutcome::Changed) {
-        publish_window_layout(&state, &window_id).await;
-    }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::AppState;
     use crate::test_helpers::{bootstrap_default, fresh_state, router_with};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
-    use ozmux_multiplexer::Activity;
+    use ozmux_multiplexer::{ActivityId, PaneId};
     use tower::ServiceExt;
 
     async fn total_panes(state: &AppState) -> usize {
         let mut total = 0;
-        for entry in state.windows.iter() {
+        for entry in state.multiplexer.windows.iter() {
             let arc = entry.value().clone();
             drop(entry);
             let win = arc.lock().await;
             total += win.panes.len();
         }
         total
-    }
-
-    async fn pane_to_cell_contains(state: &AppState, pid: &PaneId) -> bool {
-        for entry in state.windows.iter() {
-            let arc = entry.value().clone();
-            drop(entry);
-            let win = arc.lock().await;
-            if win.pane_to_cell.contains_key(pid) {
-                return true;
-            }
-        }
-        false
-    }
-
-    async fn split_via_window(state: &AppState, wid: &WindowId, target: &PaneId) -> PaneId {
-        let new_pane_id = PaneId::new();
-        let new_activity_id = ActivityId::new();
-        state
-            .with_window_or_404(wid, |w| {
-                w.split_pane(
-                    target,
-                    new_pane_id.clone(),
-                    Activity::terminal(new_activity_id.clone()),
-                    Side::After,
-                    SplitOrientation::Horizontal,
-                )
-            })
-            .await
-            .unwrap();
-        state
-            .pane_owner_window
-            .insert(new_pane_id.clone(), wid.clone());
-        new_pane_id
-    }
-
-    #[tokio::test]
-    async fn activate_returns_204_when_pane_becomes_active() {
-        let state = fresh_state();
-        let (_sid, wid, original, _aid) = bootstrap_default(&state).await;
-        let _new_pane = split_via_window(&state, &wid, &original).await;
-        let (router, _state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/windows/{}/panes/{}/activate", wid, original))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn activate_already_active_pane_returns_204() {
-        let state = fresh_state();
-        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
-        let (router, _state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/windows/{}/panes/{}/activate", wid, pid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn activate_unknown_window_returns_404() {
-        let state = fresh_state();
-        let (_sid, _wid, pid, _aid) = bootstrap_default(&state).await;
-        let (router, _state) = router_with(state);
-        let bogus_wid = WindowId::new();
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/windows/{}/panes/{}/activate", bogus_wid, pid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -362,7 +206,11 @@ mod tests {
     async fn split_with_wrong_wid_returns_409() {
         let state = fresh_state();
         let (sid, _wid_a, pid_a, _aid) = bootstrap_default(&state).await;
-        let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let (wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
         let (router, _state) = router_with(state);
         let resp = router
             .oneshot(
@@ -428,161 +276,6 @@ mod tests {
                 "split rollback must restore pane count on spawn failure"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn close_returns_204_and_removes_pane() {
-        let state = fresh_state();
-        let (_sid, wid, original_pid, _aid) = bootstrap_default(&state).await;
-        let new_pid = split_via_window(&state, &wid, &original_pid).await;
-        let panes_before = total_panes(&state).await;
-        let (router, state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/windows/{}/panes/{}", wid, new_pid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        assert_eq!(total_panes(&state).await, panes_before - 1);
-        assert!(!pane_to_cell_contains(&state, &new_pid).await);
-    }
-
-    #[tokio::test]
-    async fn close_with_wrong_wid_returns_409() {
-        let state = fresh_state();
-        let (sid, _wid_a, pid_a, _aid) = bootstrap_default(&state).await;
-        let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
-        let (router, _state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/windows/{}/panes/{}", wid_b, pid_a))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
-    async fn close_unknown_pane_returns_404() {
-        let state = fresh_state();
-        let (_sid, wid, _pid, _aid) = bootstrap_default(&state).await;
-        let (router, _state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/windows/{}/panes/{}", wid, PaneId::new()))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn close_last_pane_returns_409() {
-        let state = fresh_state();
-        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
-        let (router, _state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/windows/{}/panes/{}", wid, pid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
-    async fn close_owned_pane_forgets_owner() {
-        let state = fresh_state();
-        let (_sid, wid, original_pid, _aid) = bootstrap_default(&state).await;
-        let new_pid = split_via_window(&state, &wid, &original_pid).await;
-        state
-            .extensions
-            .register("memo", std::path::Path::new("/tmp"));
-        state.extensions.record_pane_owner(&new_pid, "memo");
-        let (router, state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/windows/{}/panes/{}", wid, new_pid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        assert!(
-            state.extensions.pane_owner(&new_pid).is_none(),
-            "pane owner registry entry must be cleared after close"
-        );
-    }
-
-    #[tokio::test]
-    async fn close_publishes_layout_to_subscriber() {
-        let state = fresh_state();
-        let (_sid, wid, pid_a, _aid) = bootstrap_default(&state).await;
-        let pid_b = split_via_window(&state, &wid, &pid_a).await;
-        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
-        let (router, _state) = router_with(state);
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri(format!("/windows/{}/panes/{}", wid, pid_b))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        let view = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
-            .await
-            .expect("publish timed out")
-            .expect("recv error");
-        assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
-        assert_eq!(view["layout"]["child"]["type"].as_str(), Some("pane"));
-        assert_eq!(
-            view["layout"]["child"]["pane_id"].as_str(),
-            Some(pid_a.as_ref())
-        );
-    }
-
-    #[tokio::test]
-    async fn activate_pane_in_other_window_returns_409() {
-        let state = fresh_state();
-        let (sid, _wid_a, pid_a, _aid) = bootstrap_default(&state).await;
-        let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
-        let (router, _state) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/windows/{}/panes/{}/activate", wid_b, pid_a))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

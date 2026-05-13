@@ -1,5 +1,5 @@
-use crate::error::MultiplexerResult;
 use crate::window::WindowId;
+use crate::{MultiplexerError, error::MultiplexerResult};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,13 +18,17 @@ impl SessionState {
     }
 
     #[inline]
-    pub fn get(&self, id: &SessionId) -> Option<&Session> {
-        self.0.get(id)
+    pub fn get(&self, id: &SessionId) -> MultiplexerResult<&Session> {
+        self.0
+            .get(id)
+            .ok_or_else(|| MultiplexerError::SessionNotFound(id.clone()))
     }
 
     #[inline]
-    pub fn get_mut(&mut self, id: &SessionId) -> Option<&mut Session> {
-        self.0.get_mut(id)
+    pub fn get_mut(&mut self, id: &SessionId) -> MultiplexerResult<&mut Session> {
+        self.0
+            .get_mut(id)
+            .ok_or_else(|| MultiplexerError::SessionNotFound(id.clone()))
     }
 
     #[inline]
@@ -57,7 +61,9 @@ impl SessionState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    pub id: SessionId,
     pub name: String,
+    #[serde(rename = "linkedWindows")]
     pub linked_windows: Vec<WindowId>,
     pub active_window: Option<WindowId>,
 }
@@ -65,14 +71,16 @@ pub struct Session {
 impl Session {
     /// Construct a session with no windows. `active_window` becomes `Some` the
     /// first time a window is attached.
-    pub fn empty(name: impl Into<String>) -> Self {
+    pub fn empty(id: SessionId, name: impl Into<String>) -> Self {
         Self {
+            id,
             name: name.into(),
             linked_windows: Vec::new(),
             active_window: None,
         }
     }
 
+    #[inline]
     pub fn rename(&mut self, name: impl Into<String>) {
         self.name = name.into();
     }

@@ -17,7 +17,6 @@ const fakeView = (overrides: Partial<WindowView> = {}): WindowView => ({
   panes: [
     { id: 'pid-1', active_activity: 'aid-1', activities: [{ id: 'aid-1', kind: 'terminal' }] },
   ],
-  layout_schema_version: 1,
   layout: {
     type: 'root',
     cell_id: 'cid-root',

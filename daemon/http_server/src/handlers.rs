@@ -1,10 +1,9 @@
-pub mod activities;
 pub mod health;
 pub mod index;
-pub mod panes;
 pub mod sessions;
 pub mod windows;
 
+use crate::window_view::WindowView;
 use crate::{AppState, HttpError, HttpResult};
 use ozmux_multiplexer::{Activity, ActivityId, MultiplexerError, PaneId, WindowId};
 
@@ -12,8 +11,12 @@ use ozmux_multiplexer::{Activity, ActivityId, MultiplexerError, PaneId, WindowId
 /// broadcast it. Used by every handler that mutates a Window.
 pub(crate) async fn publish_window_layout(state: &AppState, wid: &WindowId) {
     let _ = state
-        .with_window(wid, |w| match windows::window_view_for(w) {
-            Ok(view) => state.layout_broadcast.publish(wid, view),
+        .multiplexer
+        .with_window(wid, |w| match WindowView::from_window(w) {
+            Ok(view) => match serde_json::to_value(&view) {
+                Ok(value) => state.layout_broadcast.publish(wid, value),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+            },
             Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
         })
         .await;
@@ -27,7 +30,7 @@ pub(crate) fn ensure_pane_in_window(
     wid: &WindowId,
     pid: &PaneId,
 ) -> HttpResult<()> {
-    let actual = state.lookup_pane_window(pid)?;
+    let actual = state.multiplexer.lookup_pane_window(pid)?;
     if &actual != wid {
         return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
             window: wid.clone(),
@@ -49,6 +52,7 @@ pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
 ) -> HttpResult<Activity> {
     ensure_pane_in_window(state, wid, pid)?;
     let activity = state
+        .multiplexer
         .with_window(wid, |w| w.pane(pid).map(|p| p.activity(aid).cloned()))
         .await
         .ok_or_else(|| HttpError::Session(MultiplexerError::WindowNotFound(wid.clone())))??
