@@ -40,9 +40,7 @@ describe('newTerminalActivity', () => {
   });
 
   it('does not POST activate when add fails with non-ok status', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, status: 500 } as Response);
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, status: 500 } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
     await newTerminalActivity('wid-1', 'pid-1');
     expect(fetchMock).toHaveBeenCalledTimes(1);

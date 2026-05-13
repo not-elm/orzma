@@ -1,10 +1,7 @@
 import { activateActivityEndpoint, addActivityEndpoint } from '../terminal/api';
 import type { PaneId, WindowId } from './types';
 
-export async function newTerminalActivity(
-  windowId: WindowId,
-  paneId: PaneId,
-): Promise<void> {
+export async function newTerminalActivity(windowId: WindowId, paneId: PaneId): Promise<void> {
   const activityId = crypto.randomUUID();
   try {
     const resp = await fetch(addActivityEndpoint(windowId, paneId), {
