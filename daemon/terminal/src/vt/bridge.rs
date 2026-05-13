@@ -10,10 +10,10 @@ use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config;
 use bytes::Bytes;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::vt::frame_ring::FrameRing;
+use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 
 /// All state mutated by the VT bridge task, wrapped by `PtyHandle` in
@@ -51,11 +51,23 @@ pub struct VtState {
         expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 10+)")
     )]
     pub first_emit: bool,
+    /// Broadcast of wire messages (Binary deltas + Text sidecars). All emit
+    /// paths go through this sender; subscribers attach via subscribe_frames.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 10+)")
+    )]
+    pub wire_broadcast: broadcast::Sender<WireMessage>,
 }
 
 impl VtState {
     /// Constructs a fresh `VtState` with the given terminal dimensions.
-    pub fn new(cols: u16, rows: u16, listener: TermListener) -> Self {
+    pub fn new(
+        cols: u16,
+        rows: u16,
+        listener: TermListener,
+        wire_broadcast: broadcast::Sender<WireMessage>,
+    ) -> Self {
         let size = LocalDim {
             cols: cols.into(),
             rows: rows.into(),
@@ -68,6 +80,7 @@ impl VtState {
             last_input_at: None,
             frame_seq: 0,
             first_emit: true,
+            wire_broadcast,
         }
     }
 
@@ -142,7 +155,7 @@ mod tests {
     use super::*;
     use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame};
     use std::sync::Arc;
-    use tokio::sync::mpsc;
+    use tokio::sync::{broadcast, mpsc};
 
     fn make_listener() -> TermListener {
         let (reply_tx, _) = mpsc::unbounded_channel::<ReplyFrame>();
@@ -154,9 +167,14 @@ mod tests {
         }
     }
 
+    fn make_state(cols: u16, rows: u16) -> VtState {
+        let (wire_broadcast, _rx) = broadcast::channel::<WireMessage>(256);
+        VtState::new(cols, rows, make_listener(), wire_broadcast)
+    }
+
     #[test]
     fn vt_state_constructs_with_dimensions() {
-        let state = VtState::new(80, 24, make_listener());
+        let state = make_state(80, 24);
         assert!(state.frame_ring.is_empty());
         assert!(state.last_input_at.is_none());
         assert_eq!(state.frame_seq, 0);
@@ -178,7 +196,13 @@ mod tests {
             control_tx,
             drop_counter: drop_counter.clone(),
         };
-        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(10, 3, listener)));
+        let (wire_broadcast, _rx) = broadcast::channel::<WireMessage>(8);
+        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(
+            10,
+            3,
+            listener,
+            wire_broadcast,
+        )));
 
         let (pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
         let cancel = CancellationToken::new();
@@ -207,5 +231,16 @@ mod tests {
 
         cancel.cancel();
         let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn wire_broadcast_is_subscribable() {
+        let (wire_broadcast, mut rx) = broadcast::channel::<WireMessage>(8);
+        let state = VtState::new(10, 3, make_listener(), wire_broadcast.clone());
+        let _ = state.wire_broadcast.send(WireMessage::Text("hello".into()));
+        match rx.recv().await.unwrap() {
+            WireMessage::Text(s) => assert_eq!(s, "hello"),
+            _ => panic!("wrong variant"),
+        }
     }
 }

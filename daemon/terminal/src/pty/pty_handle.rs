@@ -1,6 +1,6 @@
 use crate::pty::{TerminalEvent, ring_buffer::RingBuffer};
 use crate::vt::bridge::{VtState, run_bridge_task};
-use crate::vt::frame_ring::EncodedDelta;
+use crate::vt::frame_ring::WireMessage;
 use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 use bytes::Bytes;
 use portable_pty::{ChildKiller, MasterPty};
@@ -91,9 +91,9 @@ pub(crate) struct PtyHandle {
     #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) control_tx: mpsc::Sender<ControlFrame>,
 
-    /// Broadcast of MessagePack-encoded delta frames.
-    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
-    pub(crate) frame_broadcast: broadcast::Sender<EncodedDelta>,
+    /// Broadcast of wire messages (Binary deltas + Text sidecars).
+    #[expect(dead_code, reason = "consumed by Phase 2A subscribe_frames (Task 13+)")]
+    pub(crate) frame_broadcast: broadcast::Sender<WireMessage>,
 
     /// Aggregated drop counter for bounded channel `try_send` failures.
     #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
@@ -132,7 +132,7 @@ impl PtyHandle {
     ) -> Self {
         let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
         let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
-        let (frame_broadcast, _frame_rx) = broadcast::channel::<EncodedDelta>(256);
+        let (frame_broadcast, _frame_rx) = broadcast::channel::<WireMessage>(256);
         let drop_counter = Arc::new(DropCounter::new());
 
         let listener = TermListener {
@@ -141,7 +141,12 @@ impl PtyHandle {
             drop_counter: drop_counter.clone(),
         };
 
-        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(cols, rows, listener)));
+        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(
+            cols,
+            rows,
+            listener,
+            frame_broadcast.clone(),
+        )));
         let vt_cancel = CancellationToken::new();
 
         // NOTE: the JoinHandle is intentionally discarded; cancellation via
