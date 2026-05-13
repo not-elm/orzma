@@ -176,6 +176,15 @@ impl TerminalService {
 
     pub async fn resize(&self, activity: &ActivityId, cols: u16, rows: u16) -> TerminalResult {
         let handle = self.read(activity).await?;
+
+        // 1) Resize the alacritty Term first so the next bridge cycle sees Full damage.
+        {
+            let dim = crate::vt::bridge::dim_for(cols, rows);
+            let mut state = handle.vt_state.lock().expect("vt_state poisoned");
+            state.term.resize(dim);
+        }
+
+        // 2) Resize the PTY master (existing behavior).
         handle
             .master
             .lock()
@@ -187,6 +196,10 @@ impl TerminalService {
                 pixel_height: 0,
             })
             .to_terminal_result()?;
+
+        // 3) Wake the bridge so it observes Full damage and emits a snapshot.
+        let _ = handle.vt_chunk_tx.try_send(bytes::Bytes::new());
+
         Ok(())
     }
 

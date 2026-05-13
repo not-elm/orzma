@@ -163,6 +163,56 @@ async fn collect_binary(
 }
 
 use ozmux_terminal::FrameSubscription;
+use ozmux_terminal::vt::SnapshotReason;
+
+#[tokio::test]
+async fn resize_emits_snapshot_with_resize_reason() {
+    let svc = TerminalService::default();
+    let pane = PaneId::new();
+    let aid = ActivityId::new();
+    svc.spawn(
+        pane,
+        aid.clone(),
+        SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+            window_id: None,
+            session_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let sub = svc.subscribe_frames(&aid, None).await.unwrap();
+    let mut rx = match sub {
+        FrameSubscription::FreshSnapshot { rx, .. }
+        | FrameSubscription::ResumeReplay { rx, .. } => rx,
+    };
+
+    svc.resize(&aid, 80, 30).await.unwrap();
+
+    let mut saw_resize = false;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        if let Some(b) = collect_binary(&mut rx, std::time::Duration::from_millis(200)).await {
+            let f: RenderFrame = rmp_serde::from_slice(&b).unwrap();
+            if let RenderFrame::Snapshot(s) = f
+                && matches!(s.reason, SnapshotReason::Resize)
+            {
+                saw_resize = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        saw_resize,
+        "resize must trigger Snapshot {{ reason: Resize }}"
+    );
+    svc.kill(&aid).await.unwrap();
+}
 
 #[tokio::test]
 async fn subscribe_frames_fresh_returns_snapshot_then_continues() {

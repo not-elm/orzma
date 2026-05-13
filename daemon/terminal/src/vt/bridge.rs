@@ -150,14 +150,20 @@ pub async fn run_bridge_task(
             () = cancel.cancelled() => break,
             chunk = pty_rx.recv() => {
                 let Some(chunk) = chunk else { break };
-                if chunk.is_empty() {
-                    continue;
-                }
                 let mut state = vt_state.lock().expect("vt_state poisoned");
                 let prev_mode = *state.term.mode();
-                state.advance(&chunk);
+                if !chunk.is_empty() {
+                    state.advance(&chunk);
+                }
                 let dirty = collect_dirty_rows(&mut state.term);
                 let curr_mode = *state.term.mode();
+                // Skip emit entirely when there is nothing to report: dirty is
+                // an empty Rows set, mode is unchanged, and this is not the
+                // bootstrap frame.
+                let dirty_is_empty = matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
+                if dirty_is_empty && prev_mode == curr_mode && !state.first_emit {
+                    continue;
+                }
                 let kind = decide_frame_kind(&state, dirty);
                 state.first_emit = false;
                 let frame = match kind {
@@ -224,12 +230,20 @@ impl Dimensions for LocalDim {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_dim(cols: u16, rows: u16) -> LocalDim {
+/// Constructs a [`LocalDim`] from terminal column/row counts.
+///
+/// Used by [`crate::pty::pty.rs`] `TerminalService::resize` to resize the
+/// alacritty `Term` before resizing the PTY master.
+pub(crate) fn dim_for(cols: u16, rows: u16) -> LocalDim {
     LocalDim {
         cols: cols.into(),
         rows: rows.into(),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_dim(cols: u16, rows: u16) -> LocalDim {
+    dim_for(cols, rows)
 }
 
 #[cfg(test)]

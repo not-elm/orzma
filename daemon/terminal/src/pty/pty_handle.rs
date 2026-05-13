@@ -99,14 +99,9 @@ pub(crate) struct PtyHandle {
     #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) drop_counter: Arc<DropCounter>,
 
-    /// Handle-side keepalive for the VT fan-out channel. The actual fan-out
-    /// sender lives in `spawn_pty_reader`'s bridge task; holding a clone here
-    /// keeps the channel alive for the lifetime of `PtyHandle` and reserves
-    /// the slot for future direct injection (e.g., synthetic VT input).
-    #[expect(
-        dead_code,
-        reason = "channel keepalive; direct producer added in Phase 2"
-    )]
+    /// Handle-side sender for the VT fan-out channel. Used by
+    /// `TerminalService::resize` to send a synthetic empty chunk that wakes
+    /// the bridge task after `term.resize` sets `Full` damage.
     pub(crate) vt_chunk_tx: mpsc::Sender<Bytes>,
 
     /// Cancellation for the VT bridge task; cancelled on `PtyHandle::drop`.
