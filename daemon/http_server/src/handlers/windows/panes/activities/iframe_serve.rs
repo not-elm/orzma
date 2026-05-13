@@ -16,8 +16,6 @@ pub async fn iframe_serve(
     State(state): State<AppState>,
     Path((wid, pid, aid, path)): Path<(WindowId, PaneId, ActivityId, String)>,
 ) -> Result<Response, HttpError> {
-    // One pass: validate the (wid, pid, aid) tuple and also fetch the Activity
-    // so we don't lock the Window twice (membership check + metadata read).
     let activity = ensure_activity_in_pane_in_window_and_fetch(&state, &wid, &pid, &aid).await?;
     if !matches!(activity.kind, ActivityKind::Extension { .. }) {
         return Err(HttpError::IframeFileNotFound(path));
