@@ -126,13 +126,33 @@ impl Default for Shortcuts {
                 },
                 timeout_ms: 2000,
             },
-            bindings: vec![Binding {
-                chord: KeyChord {
-                    key: Key::Char('x'),
-                    modifiers: Modifiers::default(),
+            bindings: vec![
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('x'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::ClosePane,
                 },
-                action: Action::ClosePane,
-            }],
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('s'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::SplitPane {
+                        direction: SplitDirection::Horizontal,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('v'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::SplitPane {
+                        direction: SplitDirection::Vertical,
+                    },
+                },
+            ],
         }
     }
 }
@@ -379,7 +399,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         assert_eq!(
             json,
-            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}}]}"#
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}}]}"#
         );
     }
 }

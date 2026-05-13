@@ -15,11 +15,22 @@ const DEFAULT_PAYLOAD = {
       modifiers: { ctrl: false, shift: false, alt: false, meta: false },
       action: { type: 'close-pane' },
     },
+    {
+      key: 's',
+      modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+      action: { type: 'split-pane', direction: 'horizontal' },
+    },
+    {
+      key: 'v',
+      modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+      action: { type: 'split-pane', direction: 'vertical' },
+    },
   ],
 };
 
 const origFetch = globalThis.fetch;
 let closeFetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+let splitFetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 let configFetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 function press(opts: KeyboardEventInit & { key: string }) {
@@ -39,6 +50,7 @@ beforeEach(() => {
   // shouldAdvanceTime lets waitFor's polling interval fire under fake timers.
   vi.useFakeTimers({ shouldAdvanceTime: true });
   closeFetchMock = vi.fn<typeof fetch>().mockResolvedValue({ ok: true, status: 204 } as Response);
+  splitFetchMock = vi.fn<typeof fetch>().mockResolvedValue({ ok: true, status: 201 } as Response);
   configFetchMock = vi.fn<typeof fetch>().mockResolvedValue({
     ok: true,
     status: 200,
@@ -47,6 +59,7 @@ beforeEach(() => {
   globalThis.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
     const path = typeof url === 'string' ? url : url.toString();
     if (path === '/configs/shortcuts') return configFetchMock(url, init);
+    if (path.endsWith('/split')) return splitFetchMock(url, init);
     return closeFetchMock(url, init);
   }) as typeof globalThis.fetch;
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -198,6 +211,37 @@ describe('usePrefixMode', () => {
     await Promise.resolve();
     expect(closeFetchMock).not.toHaveBeenCalled();
 
+    expect(result.current.isArmed).toBe(false);
+  });
+
+  it.each([
+    ['s', 'horizontal'],
+    ['v', 'vertical'],
+  ] as const)('Ctrl+B → %s fires the split-pane %s binding', async (key, orientation) => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+      press({ key });
+    });
+    await waitFor(() =>
+      expect(splitFetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/split', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ orientation }),
+      }),
+    );
+  });
+
+  it('Shift+S with modifier mismatch does NOT fire the unmodified "s" binding', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+      press({ key: 'S', shiftKey: true });
+    });
+    await Promise.resolve();
+    expect(splitFetchMock).not.toHaveBeenCalled();
     expect(result.current.isArmed).toBe(false);
   });
 

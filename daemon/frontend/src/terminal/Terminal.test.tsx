@@ -20,11 +20,11 @@ vi.mock('./useXtermTerminal', () => ({
 import { Terminal } from './Terminal';
 
 describe('<Terminal>', () => {
-  it('does NOT call focus or blur on initial mount when isActive=true', () => {
+  it('calls focus (not blur) on initial mount when isActive=true', () => {
     focusSpy.mockClear();
     blurSpy.mockClear();
     render(<Terminal windowId="wid" paneId="pid" activityId="aid" isActive={true} />);
-    expect(focusSpy).not.toHaveBeenCalled();
+    expect(focusSpy).toHaveBeenCalledTimes(1);
     expect(blurSpy).not.toHaveBeenCalled();
   });
 
