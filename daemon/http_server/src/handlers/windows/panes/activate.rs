@@ -1,39 +1,15 @@
-use crate::handlers::publish_window_layout;
 use crate::{AppState, error::HttpResult};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerError, PaneId, SetActivePaneOutcome, WindowId};
+use ozmux_multiplexer::{PaneId, WindowId};
 
 pub async fn activate(
     State(state): State<AppState>,
     Path((window_id, pane_id)): Path<(WindowId, PaneId)>,
 ) -> HttpResult<StatusCode> {
-    // `with_window_or_404` resolves the Window-exists arm: unknown wid → 404.
-    // Inside the lock we then distinguish "pane lives in this window"
-    // (Window::set_active_pane) from "pane lives somewhere else" (409) and
-    // "pane is unknown to the multiplexer" (404). See tests
-    // `activate_unknown_window_returns_404` and
-    // `activate_pane_in_other_window_returns_409`.
-    let outcome = state
-        .multiplexer
-        .with_window_or_404(&window_id, |w| {
-            if w.panes.contains_key(&pane_id) {
-                w.set_active_pane(&pane_id)
-            } else if state.multiplexer.pane_owner_window.contains_key(&pane_id) {
-                Err(MultiplexerError::PaneNotInWindow {
-                    window: w.id.clone(),
-                    pane: pane_id.clone(),
-                })
-            } else {
-                Err(MultiplexerError::PaneNotFound(pane_id.clone()))
-            }
-        })
-        .await?;
-    if matches!(outcome, SetActivePaneOutcome::Changed) {
-        publish_window_layout(&state, &window_id).await;
-    }
+    state.activate_pane(&window_id, &pane_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
