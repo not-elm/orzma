@@ -2,9 +2,6 @@
 //! behind a trait so tests can substitute a deterministic implementation
 //! without mutating process-wide environment variables.
 
-// `SystemEnv` and `resolve_config_path` are intentionally unused until
-// `OzmuxConfigs::load` is wired up in a subsequent task. The `#[expect]`
-// will start failing at that point, signalling that the attribute can be removed.
 #![cfg_attr(not(test), expect(dead_code, reason = "consumed by OzmuxConfigs::load in a subsequent task"))]
 
 use crate::OzmuxConfigsError;
