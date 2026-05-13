@@ -50,27 +50,26 @@ impl Key {
             }
         }
     }
-
-    fn to_token(&self) -> String {
-        match self {
-            Key::Char(c) => c.to_string(),
-            Key::Escape => "Escape".into(),
-            Key::Space => "Space".into(),
-            Key::Enter => "Enter".into(),
-            Key::Tab => "Tab".into(),
-            Key::Backspace => "Backspace".into(),
-            Key::ArrowUp => "ArrowUp".into(),
-            Key::ArrowDown => "ArrowDown".into(),
-            Key::ArrowLeft => "ArrowLeft".into(),
-            Key::ArrowRight => "ArrowRight".into(),
-            Key::Other(s) => s.clone(),
-        }
-    }
 }
 
 impl serde::Serialize for Key {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        ser.serialize_str(&self.to_token())
+        match self {
+            Key::Char(c) => {
+                let mut buf = [0u8; 4];
+                ser.serialize_str(c.encode_utf8(&mut buf))
+            }
+            Key::Escape => ser.serialize_str("Escape"),
+            Key::Space => ser.serialize_str("Space"),
+            Key::Enter => ser.serialize_str("Enter"),
+            Key::Tab => ser.serialize_str("Tab"),
+            Key::Backspace => ser.serialize_str("Backspace"),
+            Key::ArrowUp => ser.serialize_str("ArrowUp"),
+            Key::ArrowDown => ser.serialize_str("ArrowDown"),
+            Key::ArrowLeft => ser.serialize_str("ArrowLeft"),
+            Key::ArrowRight => ser.serialize_str("ArrowRight"),
+            Key::Other(s) => ser.serialize_str(s),
+        }
     }
 }
 

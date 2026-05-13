@@ -6,6 +6,11 @@ use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
 use std::path::PathBuf;
 
+pub(crate) const ENV_OZMUX_CONFIG: &str = "OZMUX_CONFIG";
+pub(crate) const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
+const CONFIG_REL_PATH: &str = "ozmux/config.toml";
+const HOME_CONFIG_DIR: &str = ".config";
+
 /// Abstraction over the environment lookups `resolve_config_path` performs.
 pub(crate) trait Env {
     /// Returns the value of `key`, treating an empty string as unset.
@@ -32,14 +37,14 @@ impl Env for SystemEnv {
 /// `<home_dir>/.config/ozmux/config.toml`. Returns `HomeDirNotFound` only
 /// when all three lookups fail.
 pub(crate) fn resolve_config_path(env: &dyn Env) -> OzmuxConfigsResult<PathBuf> {
-    if let Some(p) = env.var("OZMUX_CONFIG") {
+    if let Some(p) = env.var(ENV_OZMUX_CONFIG) {
         return Ok(PathBuf::from(p));
     }
-    if let Some(xdg) = env.var("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(xdg).join("ozmux/config.toml"));
+    if let Some(xdg) = env.var(ENV_XDG_CONFIG_HOME) {
+        return Ok(PathBuf::from(xdg).join(CONFIG_REL_PATH));
     }
     if let Some(home) = env.home_dir() {
-        return Ok(home.join(".config/ozmux/config.toml"));
+        return Ok(home.join(HOME_CONFIG_DIR).join(CONFIG_REL_PATH));
     }
     Err(OzmuxConfigsError::HomeDirNotFound)
 }

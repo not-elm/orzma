@@ -34,23 +34,14 @@ pub struct ThemePatch {
 
 impl ThemePatch {
     /// Applies any `Some` fields onto `base` and returns the merged `Theme`.
-    pub fn apply_to(self, mut base: Theme) -> Theme {
-        if let Some(v) = self.background {
-            base.background = v;
+    pub fn apply_to(self, base: Theme) -> Theme {
+        Theme {
+            background: self.background.unwrap_or(base.background),
+            foreground: self.foreground.unwrap_or(base.foreground),
+            accent: self.accent.unwrap_or(base.accent),
+            border: self.border.unwrap_or(base.border),
+            destructive: self.destructive.unwrap_or(base.destructive),
         }
-        if let Some(v) = self.foreground {
-            base.foreground = v;
-        }
-        if let Some(v) = self.accent {
-            base.accent = v;
-        }
-        if let Some(v) = self.border {
-            base.border = v;
-        }
-        if let Some(v) = self.destructive {
-            base.destructive = v;
-        }
-        base
     }
 }
 

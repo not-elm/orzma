@@ -57,8 +57,8 @@ impl OzmuxConfigs {
         };
 
         let raw: raw::RawConfigs =
-            toml::from_str(&text).map_err(|source| OzmuxConfigsError::ParseToml {
-                path: configured_path.clone(),
+            toml::from_str(&text).map_err(move |source| OzmuxConfigsError::ParseToml {
+                path: configured_path,
                 source,
             })?;
 
@@ -77,8 +77,8 @@ pub mod test_support {
     use crate::path;
     use std::path::PathBuf;
 
-    /// Loads `OzmuxConfigs` while honoring a caller-provided env, used by
-    /// integration tests to avoid mutating process-wide env vars.
+    /// Loads [`OzmuxConfigs`] against a caller-controlled environment instead
+    /// of the process-wide one.
     pub async fn load_with_overrides(
         ozmux_config: Option<PathBuf>,
         xdg_config_home: Option<PathBuf>,
@@ -92,8 +92,8 @@ pub mod test_support {
         impl path::Env for FixedEnv {
             fn var(&self, key: &str) -> Option<String> {
                 match key {
-                    "OZMUX_CONFIG" => self.ozmux.clone(),
-                    "XDG_CONFIG_HOME" => self.xdg.clone(),
+                    path::ENV_OZMUX_CONFIG => self.ozmux.clone(),
+                    path::ENV_XDG_CONFIG_HOME => self.xdg.clone(),
                     _ => None,
                 }
             }

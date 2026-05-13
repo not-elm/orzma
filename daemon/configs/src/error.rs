@@ -28,13 +28,6 @@ pub enum OzmuxConfigsError {
         source: toml::de::Error,
     },
 
-    /// A semantic constraint was violated.
-    #[error("invalid config: {message}")]
-    InvalidConfig {
-        /// Human-readable explanation.
-        message: String,
-    },
-
     /// The same key chord appears more than once.
     #[error("duplicate binding for chord {chord:?}")]
     DuplicateBinding {
