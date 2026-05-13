@@ -1,6 +1,5 @@
 use crate::AppState;
 use crate::error::HttpError;
-use crate::handlers::publish_window_layout;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -19,17 +18,9 @@ pub async fn add_to_pane(
     axum::Json(body): axum::Json<AddActivityRequest>,
 ) -> Result<(StatusCode, axum::Json<serde_json::Value>), HttpError> {
     let parsed = body.activity.into_parsed();
-    let aid = parsed.activity.id.clone();
-    state
-        .multiplexer
-        .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(parsed.activity))
+    let aid = state
+        .add_activity_to_pane(&wid, &pid, parsed.activity, parsed.extension_name.as_deref())
         .await?;
-    if let Some(name) = parsed.extension_name.as_deref() {
-        // `add_to_pane` only mints a new Activity — the Pane already exists —
-        // so we only need the activity-owner row. Pane-owner stays untouched.
-        state.extensions.record_activity_owner(&aid, name);
-    }
-    publish_window_layout(&state, &wid).await;
     Ok((
         StatusCode::CREATED,
         axum::Json(serde_json::json!({ "activity_id": aid })),

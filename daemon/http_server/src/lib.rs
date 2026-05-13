@@ -14,8 +14,8 @@ use axum::{
 use layout_broadcast::LayoutBroadcaster;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
-    ActivityId, MultiplexerResult, MultiplexerService, PaneId, SessionId, SetActiveOutcome,
-    WindowId,
+    Activity, ActivityId, MultiplexerResult, MultiplexerService, PaneId, SessionId,
+    SetActiveOutcome, WindowId,
 };
 use ozmux_terminal::TerminalService;
 use tokio::net::TcpListener;
@@ -63,6 +63,26 @@ impl AppState {
             self.publish_window_layout(wid).await;
         }
         Ok(())
+    }
+
+    pub async fn add_activity_to_pane(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        activity: Activity,
+        extension_name: Option<&str>,
+    ) -> HttpResult<ActivityId> {
+        let aid = activity.id.clone();
+        self.multiplexer
+            .with_window_or_404(wid, |w| w.pane_mut(pid)?.add_activity(activity))
+            .await?;
+        if let Some(name) = extension_name {
+            // `add_to_pane` only mints a new Activity — the Pane already exists —
+            // so we only need the activity-owner row. Pane-owner stays untouched.
+            self.extensions.record_activity_owner(&aid, name);
+        }
+        self.publish_window_layout(wid).await;
+        Ok(aid)
     }
 
     /// Build the current Window layout snapshot under the Window lock and
