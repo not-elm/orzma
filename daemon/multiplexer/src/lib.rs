@@ -35,24 +35,24 @@ impl MultiplexerService {
     /// DASHMAP-GUARD invariant: never hold a Ref across an `.await`.
     pub async fn with_window<R>(
         &self,
-        wid: &WindowId,
+        id: &WindowId,
         f: impl FnOnce(&mut Window) -> R,
     ) -> Option<R> {
-        let arc = self.windows.get(wid).map(|e| e.value().clone())?;
-        let mut win = arc.lock().await;
-        Some(f(&mut win))
+        let arc = self.windows.get(id).map(|e| e.value().clone())?;
+        let mut window = arc.lock().await;
+        Some(f(&mut window))
     }
 
     /// Same as `with_window` but propagates `WindowNotFound` for handler
     /// ergonomics.
     pub async fn with_window_or_404<R>(
         &self,
-        wid: &WindowId,
+        id: &WindowId,
         f: impl FnOnce(&mut Window) -> MultiplexerResult<R>,
     ) -> MultiplexerResult<R> {
-        self.with_window(wid, f)
+        self.with_window(id, f)
             .await
-            .ok_or_else(|| MultiplexerError::WindowNotFound(wid.clone()))?
+            .ok_or_else(|| MultiplexerError::WindowNotFound(id.clone()))?
     }
 
     /// Create a Session and register it.
@@ -72,9 +72,9 @@ impl MultiplexerService {
         session_id: Option<&SessionId>,
         name: Option<String>,
     ) -> MultiplexerResult<(WindowId, PaneId, ActivityId)> {
-        let mut sess = self.sessions.lock().await;
+        let mut session_state = self.sessions.lock().await;
         if let Some(sid) = session_id {
-            sess.get(sid)?;
+            session_state.get(sid)?;
         }
 
         let window_id = WindowId::new();
@@ -91,7 +91,7 @@ impl MultiplexerService {
             .insert(pane_id.clone(), window_id.clone());
 
         if let Some(sid) = session_id {
-            let session = sess.get_mut(sid)?;
+            let session = session_state.get_mut(sid)?;
             session.attach_window(window_id.clone());
         }
 
@@ -120,8 +120,8 @@ impl MultiplexerService {
         if !self.windows.contains_key(wid) {
             return Err(MultiplexerError::WindowNotFound(wid.clone()));
         }
-        let mut sess = self.sessions.lock().await;
-        for (_, session) in sess.iter_mut() {
+        let mut session_state = self.sessions.lock().await;
+        for (_, session) in session_state.iter_mut() {
             if session.linked_windows.contains(wid) {
                 session.active_window = Some(wid.clone());
                 return Ok(());
@@ -149,7 +149,7 @@ impl MultiplexerService {
         &self,
         wid: &WindowId,
     ) -> MultiplexerResult<(Vec<ActivityId>, Vec<PaneId>)> {
-        let mut sess = self.sessions.lock().await;
+        let mut session_state = self.sessions.lock().await;
 
         // Atomically remove the Window from the DashMap so no later caller
         // observes a half-torn-down Window. Holding `sess` here keeps any
@@ -164,12 +164,12 @@ impl MultiplexerService {
         let activities = win.collect_activities_for_cleanup();
         let pane_ids: Vec<PaneId> = win.pane_ids().cloned().collect();
 
-        for (_, session) in sess.iter_mut() {
+        for (_, session) in session_state.iter_mut() {
             session.detach_window(wid);
         }
         drop(win);
         drop(arc);
-        drop(sess);
+        drop(session_state);
 
         for pid in &pane_ids {
             self.pane_owner_window.remove(pid);
@@ -180,8 +180,8 @@ impl MultiplexerService {
     /// Remove a Session and return the WindowIds that were attached to it.
     /// The caller drives `close_window_data` for each returned wid.
     pub async fn take_session_windows(&self, sid: &SessionId) -> MultiplexerResult<Vec<WindowId>> {
-        let mut sess = self.sessions.lock().await;
-        let session = sess.remove(sid)?;
+        let mut session_state = self.sessions.lock().await;
+        let session = session_state.remove(sid)?;
         Ok(session.linked_windows)
     }
 }

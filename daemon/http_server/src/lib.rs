@@ -13,9 +13,14 @@ use axum::{
 };
 use layout_broadcast::LayoutBroadcaster;
 use ozmux_extension::ExtensionRegistry;
-use ozmux_multiplexer::{ActivityId, MultiplexerResult, MultiplexerService, SessionId, WindowId};
+use ozmux_multiplexer::{
+    ActivityId, MultiplexerResult, MultiplexerService, PaneId, SessionId, SetActiveOutcome,
+    WindowId,
+};
 use ozmux_terminal::TerminalService;
 use tokio::net::TcpListener;
+
+use crate::handlers::windows;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -42,6 +47,34 @@ impl AppState {
             extensions,
             layout_broadcast,
         }
+    }
+
+    pub async fn activate_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> HttpResult {
+        let outcome = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.pane_mut(pid)?.set_active_activity(aid))
+            .await?;
+        if matches!(outcome, SetActiveOutcome::Changed) {
+            self.publish_window_layout(wid).await;
+        }
+        Ok(())
+    }
+
+    /// Build the current Window layout snapshot under the Window lock and
+    /// broadcast it. Used by every handler that mutates a Window.
+    async fn publish_window_layout(&self, wid: &WindowId) {
+        let _ = self
+            .multiplexer
+            .with_window(wid, |w| match windows::window_view_for(w) {
+                Ok(view) => self.layout_broadcast.publish(wid, view),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+            })
+            .await;
     }
 }
 

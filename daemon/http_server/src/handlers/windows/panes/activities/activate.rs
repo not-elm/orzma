@@ -1,23 +1,16 @@
 use crate::AppState;
 use crate::error::HttpError;
-use crate::handlers::publish_window_layout;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{ActivityId, PaneId, SetActiveOutcome, WindowId};
+use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 
 pub async fn activate(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
 ) -> Result<StatusCode, HttpError> {
-    let outcome = state
-        .multiplexer
-        .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.set_active_activity(&aid))
-        .await?;
-    if matches!(outcome, SetActiveOutcome::Changed) {
-        publish_window_layout(&state, &wid).await;
-    }
+    state.activate_activity(&wid, &pid, &aid).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
