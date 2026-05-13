@@ -1,7 +1,11 @@
 use crate::{
     error::{PtyErrorBridge, TerminalError, TerminalResult},
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
+    vt::frame::{RenderFrame, SnapshotReason, encode},
+    vt::frame_builder::build_snapshot,
+    vt::frame_ring::WireMessage,
 };
+use bytes::Bytes;
 use ozmux_extension::runtime::RuntimeRoot;
 use ozmux_multiplexer::{ActivityId, PaneId, SessionId, WindowId};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
@@ -50,6 +54,30 @@ pub struct SpawnOptions {
     /// Owning Session id, surfaced to the spawned shell as `OZMUX_SESSION_ID`
     /// when present. Orphan Windows resolve to `None`.
     pub session_id: Option<SessionId>,
+}
+
+/// Outcome of subscribing to an activity's wire stream.
+///
+/// Callers render the snapshot or apply the replayed deltas, then consume
+/// `rx` for all subsequent emissions without gaps.
+pub enum FrameSubscription {
+    /// Server emitted a fresh snapshot atomically with the subscription.
+    /// Client should render the snapshot then consume `rx` for deltas.
+    FreshSnapshot {
+        /// Encoded MessagePack of the snapshot.
+        snapshot: Bytes,
+        /// Receiver for subsequent wire messages.
+        rx: broadcast::Receiver<WireMessage>,
+    },
+    /// Server replayed buffered deltas covering `[last_seq+1, latest]`.
+    /// Client applies each delta in order then consumes `rx` for further
+    /// deltas.
+    ResumeReplay {
+        /// Buffered deltas in seq order.
+        deltas: Vec<Bytes>,
+        /// Receiver for subsequent wire messages.
+        rx: broadcast::Receiver<WireMessage>,
+    },
 }
 
 impl TerminalService {
@@ -183,6 +211,64 @@ impl TerminalService {
     ) -> TerminalResult<(Vec<u8>, broadcast::Receiver<TerminalEvent>)> {
         let handle = self.read(activity).await?;
         Ok(handle.snapshot_and_subscribe().await)
+    }
+
+    /// Subscribes to wire frames for the given activity, atomically with respect
+    /// to the bridge task's emissions — no frame is dropped or duplicated between
+    /// the snapshot/replay capture and the broadcast receiver attaching.
+    ///
+    /// Both the snapshot read and `wire_broadcast.subscribe()` happen under the
+    /// same `vt_state.lock()` that the bridge holds during emission, ensuring the
+    /// critical section is either entirely before or entirely after any given emit.
+    ///
+    /// # Return value
+    ///
+    /// - `ResumeReplay` when `last_seq` is `Some` and the ring covers the range
+    ///   `[last_seq+1, latest]` without gaps.
+    /// - `FreshSnapshot { reason: Lagged }` when `last_seq` is `Some` but the
+    ///   ring has evicted past that point.
+    /// - `FreshSnapshot { reason: Reconnect }` when `last_seq` is `None`
+    ///   (cold start or initial connect).
+    pub async fn subscribe_frames(
+        &self,
+        activity: &ActivityId,
+        last_seq: Option<u32>,
+    ) -> TerminalResult<FrameSubscription> {
+        let handle = self.read(activity).await?;
+        let vt_state = handle.vt_state.clone();
+        drop(handle);
+
+        // Single critical section: snapshot (or replay) AND subscribe.
+        let state = vt_state.lock().expect("vt_state poisoned");
+
+        // Resume path: ring has the requested seq range available.
+        if let Some(last) = last_seq
+            && let Some(deltas) = state.frame_ring.replay(last)
+        {
+            let rx = state.wire_broadcast.subscribe();
+            return Ok(FrameSubscription::ResumeReplay { deltas, rx });
+        }
+
+        // Fresh snapshot path. The snapshot is not a sequenced emission, so we
+        // do not bump frame_seq. The snapshot carries the seq of the last emitted
+        // frame (frame_seq - 1) so that clients know the broadcast rx continues
+        // from frame_seq onward (i.e., next_broadcast_seq > snapshot_seq).
+        // When no frame has been emitted yet (frame_seq == 0), we use 0 as a
+        // sentinel — the client will accept the first broadcast regardless.
+        let reason = if last_seq.is_some() {
+            SnapshotReason::Lagged
+        } else {
+            SnapshotReason::Reconnect
+        };
+        let snap_seq = state.frame_seq.saturating_sub(1);
+        let snap = build_snapshot(&state.term, snap_seq, reason);
+        let encoded_vec =
+            encode(&RenderFrame::Snapshot(snap)).expect("encode infallible for valid frame");
+        let rx = state.wire_broadcast.subscribe();
+        Ok(FrameSubscription::FreshSnapshot {
+            snapshot: Bytes::from(encoded_vec),
+            rx,
+        })
     }
 
     /// Return the current broadcast subscriber count for an activity, or `None`

@@ -161,3 +161,100 @@ async fn collect_binary(
     }
     None
 }
+
+use ozmux_terminal::FrameSubscription;
+
+#[tokio::test]
+async fn subscribe_frames_fresh_returns_snapshot_then_continues() {
+    let svc = TerminalService::default();
+    let pane = PaneId::new();
+    let aid = ActivityId::new();
+    svc.spawn(
+        pane,
+        aid.clone(),
+        SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+            window_id: None,
+            session_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Let initial snapshot/delta accumulate from shell prompt.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let sub = svc.subscribe_frames(&aid, None).await.unwrap();
+    let (snapshot_bytes, mut rx) = match sub {
+        FrameSubscription::FreshSnapshot { snapshot, rx } => (snapshot, rx),
+        FrameSubscription::ResumeReplay { .. } => panic!("expected fresh"),
+    };
+    let snap: RenderFrame = rmp_serde::from_slice(&snapshot_bytes).unwrap();
+    let snap_seq = match snap {
+        RenderFrame::Snapshot(s) => s.seq,
+        RenderFrame::Delta(_) => panic!("expected snapshot"),
+    };
+
+    // Trigger another emit.
+    svc.write(&aid, b"echo gap_check\n").await.unwrap();
+    let next_bytes = collect_binary(&mut rx, std::time::Duration::from_secs(3))
+        .await
+        .expect("next Binary after subscribe");
+    let next: RenderFrame = rmp_serde::from_slice(&next_bytes).unwrap();
+    let next_seq = match next {
+        RenderFrame::Snapshot(ozmux_terminal::vt::FrameSnapshot { seq, .. })
+        | RenderFrame::Delta(ozmux_terminal::vt::FrameDelta { seq, .. }) => seq,
+    };
+    assert!(
+        next_seq > snap_seq,
+        "next seq must be greater than snapshot seq; got {snap_seq} -> {next_seq}"
+    );
+    svc.kill(&aid).await.unwrap();
+}
+
+#[tokio::test]
+async fn subscribe_frames_resume_with_last_seq() {
+    let svc = TerminalService::default();
+    let pane = PaneId::new();
+    let aid = ActivityId::new();
+    svc.spawn(
+        pane,
+        aid.clone(),
+        SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+            window_id: None,
+            session_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Drive several emits so the ring has content.
+    for cmd in [b"echo a\n".as_slice(), b"echo b\n", b"echo c\n"] {
+        svc.write(&aid, cmd).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+
+    // Resume from seq=0. Either ResumeReplay with deltas (if ring still has them)
+    // or FreshSnapshot (if evicted) is acceptable.
+    let sub = svc.subscribe_frames(&aid, Some(0)).await.unwrap();
+    match sub {
+        FrameSubscription::ResumeReplay { deltas, .. } => {
+            assert!(
+                !deltas.is_empty(),
+                "expected at least one buffered delta when resuming from 0"
+            );
+        }
+        FrameSubscription::FreshSnapshot { snapshot, .. } => {
+            // Acceptable: confirm it's a valid snapshot.
+            let _: ozmux_terminal::vt::RenderFrame = rmp_serde::from_slice(&snapshot).unwrap();
+        }
+    }
+    svc.kill(&aid).await.unwrap();
+}
