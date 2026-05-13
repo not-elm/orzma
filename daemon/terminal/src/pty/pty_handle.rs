@@ -72,8 +72,13 @@ pub(crate) struct PtyHandle {
     // === VT path (Phase 1+) ===
     /// Bundled VT state (Term + Parser + FrameRing + last_input_at).
     /// Wrapped in std::sync::Mutex for short-held locks per PTY chunk
-    /// in vt_bridge_task (Task 13).
-    #[expect(dead_code, reason = "wired in Task 13/14")]
+    /// in vt_bridge_task (Task 13). Read by `TerminalService::inspect_row`
+    /// under the `test-helpers` feature; otherwise dead until Phase 1
+    /// frame emission lands.
+    #[cfg_attr(
+        not(any(test, feature = "test-helpers")),
+        expect(dead_code, reason = "wired in Task 13/14, read in Task 15+")
+    )]
     pub(crate) vt_state: Arc<std::sync::Mutex<VtState>>,
 
     /// reply-required events from TermListener (unbounded; must-not-drop

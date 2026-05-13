@@ -10,6 +10,11 @@ publish.workspace = true
 [features]
 test-helpers = []
 
+[[test]]
+name = "vt_integration"
+path = "tests/vt_integration.rs"
+required-features = ["test-helpers"]
+
 [dependencies]
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_extension = { path = "../extension" }

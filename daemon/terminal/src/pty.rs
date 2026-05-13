@@ -180,6 +180,30 @@ impl TerminalService {
         Some(guard.event_sender.receiver_count())
     }
 
+    /// Test-only read of the VT Term grid: returns the first `cols` characters
+    /// of the given `row` as a `String`. Returns `None` if the activity has no
+    /// PTY. The VtState lock is short-held and dropped before returning.
+    ///
+    /// Intended exclusively for integration tests that need to assert the
+    /// bridge task has applied PTY output to the in-memory `Term`. Production
+    /// code should not depend on this surface.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn inspect_row(
+        &self,
+        activity: &ActivityId,
+        row: i32,
+        cols: usize,
+    ) -> Option<String> {
+        use alacritty_terminal::index::{Column, Line};
+        let guard = self.read(activity).await.ok()?;
+        let vt_state = guard.vt_state.clone();
+        drop(guard);
+        let state = vt_state.lock().expect("vt_state lock poisoned");
+        let term_row = &state.term.grid()[Line(row)];
+        let slice = &term_row[Column(0)..Column(cols)];
+        Some(slice.iter().map(|cell| cell.c).collect())
+    }
+
     #[inline]
     async fn read(
         &self,
