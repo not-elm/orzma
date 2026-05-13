@@ -14,7 +14,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::vt::frame::{RenderFrame, SnapshotReason, encode};
-use crate::vt::frame_builder::{DirtyRows, build_delta, build_snapshot, collect_dirty_rows};
+use crate::vt::frame_builder::{
+    DirtyRows, build_delta, build_mode, build_snapshot, collect_dirty_rows,
+};
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 
@@ -115,6 +117,21 @@ fn decide_frame_kind(state: &VtState, dirty: DirtyRows) -> FrameKind {
     }
 }
 
+/// Maximum encoded frame size in bytes. Frames that exceed this are dropped and
+/// replaced with an error text frame so the client can handle the anomaly.
+const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+/// Broadcasts an error text frame indicating the encoded frame exceeded
+/// [`MAX_FRAME_BYTES`]. Increments the sequence number via the caller.
+fn emit_frame_size_error(wb: &broadcast::Sender<WireMessage>, seq: u32) {
+    let json = serde_json::json!({
+        "kind": "error",
+        "seq": seq,
+        "category": "frame_size_exceeded",
+    });
+    let _ = wb.send(WireMessage::Text(json.to_string()));
+}
+
 /// Drives the VT bridge: drains PTY chunks into `Term` via `vte::Parser`.
 ///
 /// Phase 1 does not emit any frames; `reply_rx` / `control_rx` are drained
@@ -137,8 +154,10 @@ pub async fn run_bridge_task(
                     continue;
                 }
                 let mut state = vt_state.lock().expect("vt_state poisoned");
+                let prev_mode = *state.term.mode();
                 state.advance(&chunk);
                 let dirty = collect_dirty_rows(&mut state.term);
+                let curr_mode = *state.term.mode();
                 let kind = decide_frame_kind(&state, dirty);
                 state.first_emit = false;
                 let frame = match kind {
@@ -151,11 +170,26 @@ pub async fn run_bridge_task(
                 };
                 state.term.reset_damage();
                 let encoded_vec = encode(&frame).expect("encode infallible");
-                let seq = state.frame_seq;
-                state.frame_seq = state.frame_seq.wrapping_add(1);
-                let encoded = Bytes::from(encoded_vec);
-                state.frame_ring.push(seq, encoded.clone());
-                let _ = state.wire_broadcast.send(WireMessage::Binary { seq, encoded });
+
+                if encoded_vec.len() > MAX_FRAME_BYTES {
+                    emit_frame_size_error(&state.wire_broadcast, state.frame_seq);
+                    state.frame_seq = state.frame_seq.wrapping_add(1);
+                    // NOTE: offending frame is dropped here; no ring push, no Binary broadcast.
+                } else {
+                    let seq = state.frame_seq;
+                    state.frame_seq = state.frame_seq.wrapping_add(1);
+                    let encoded = Bytes::from(encoded_vec);
+                    state.frame_ring.push(seq, encoded.clone());
+
+                    // NOTE: mode is announced BEFORE the binary so the client
+                    // applies mode-related side-effects before re-rendering.
+                    if let Some(m) = build_mode(prev_mode, curr_mode, state.frame_seq) {
+                        state.frame_seq = state.frame_seq.wrapping_add(1);
+                        let json = serde_json::to_string(&m).expect("mode json infallible");
+                        let _ = state.wire_broadcast.send(WireMessage::Text(json));
+                    }
+                    let _ = state.wire_broadcast.send(WireMessage::Binary { seq, encoded });
+                }
             }
             reply = reply_rx.recv() => {
                 if reply.is_none() {
@@ -289,6 +323,21 @@ mod tests {
         match rx.recv().await.unwrap() {
             WireMessage::Text(s) => assert_eq!(s, "hello"),
             _ => panic!("wrong variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_frame_size_error_sends_text_with_category() {
+        let (wb, mut rx) = broadcast::channel::<WireMessage>(16);
+        super::emit_frame_size_error(&wb, 42);
+        let msg = rx.recv().await.unwrap();
+        match msg {
+            WireMessage::Text(s) => {
+                assert!(s.contains("\"kind\":\"error\""));
+                assert!(s.contains("\"category\":\"frame_size_exceeded\""));
+                assert!(s.contains("\"seq\":42"));
+            }
+            _ => panic!("expected Text(error)"),
         }
     }
 }

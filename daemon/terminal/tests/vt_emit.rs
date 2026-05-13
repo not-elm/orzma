@@ -94,6 +94,58 @@ async fn second_chunk_emits_a_delta() {
     svc.kill(&aid).await.unwrap();
 }
 
+#[tokio::test]
+async fn mode_change_text_frame_emitted_before_binary() {
+    let svc = TerminalService::default();
+    let pane = PaneId::new();
+    let aid = ActivityId::new();
+    svc.spawn(
+        pane,
+        aid.clone(),
+        SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+            window_id: None,
+            session_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
+    // Skim past the initial snapshot.
+    let _ = collect_binary(&mut rx, std::time::Duration::from_secs(2)).await;
+
+    // Send ?1049 enter alt-screen escape via printf so the shell echoes the bytes.
+    svc.write(&aid, b"printf '\\033[?1049h'\n").await.unwrap();
+
+    // The bridge should emit a Text(mode) BEFORE the Binary(delta) caused by the same chunk.
+    let mut saw_text_first = false;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+            Ok(Ok(WireMessage::Text(s))) if s.contains("\"alt-screen\"") => {
+                saw_text_first = true;
+                // Next message must be Binary.
+                match tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv()).await {
+                    Ok(Ok(WireMessage::Binary { .. })) => break,
+                    other => panic!("expected Binary after Text(mode); got {other:?}"),
+                }
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) => break,
+            Err(_) => continue,
+        }
+    }
+    assert!(
+        saw_text_first,
+        "Text(mode) with alt-screen must appear before Binary delta"
+    );
+    svc.kill(&aid).await.unwrap();
+}
+
 async fn collect_binary(
     rx: &mut tokio::sync::broadcast::Receiver<WireMessage>,
     timeout: std::time::Duration,

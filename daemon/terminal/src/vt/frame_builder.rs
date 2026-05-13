@@ -39,10 +39,6 @@ pub fn collect_dirty_rows<T>(term: &mut Term<T>) -> DirtyRows {
 
 /// Computes a `ModeFrame` from a `TermMode` transition. Returns `None` when
 /// no tracked flag changed.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by Phase 2A frame emit path (Task 12)")
-)]
 pub fn build_mode(prev: TermMode, curr: TermMode, seq: u32) -> Option<ModeFrame> {
     let change = diff_mode(prev, curr);
     if change.is_empty() {
