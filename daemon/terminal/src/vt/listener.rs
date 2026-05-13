@@ -1,8 +1,13 @@
 //! TermListener: alacritty_terminal::event::EventListener implementation,
 //! plus channel envelopes (ReplyFrame, ControlFrame) and DropCounter.
 
-// DropCounter is wired up by TermListener in Task 8-9; allow dead_code until then.
-#![allow(dead_code)]
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "DropCounter is wired up by TermListener in Task 8-9"
+    )
+)]
 
 use std::collections::HashMap;
 use std::sync::Mutex;
