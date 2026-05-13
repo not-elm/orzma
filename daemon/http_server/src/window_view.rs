@@ -24,13 +24,8 @@ pub struct PaneView {
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ActivityView {
-    Terminal {
-        id: ActivityId,
-    },
-    Extension {
-        id: ActivityId,
-        iframe_url: String,
-    },
+    Terminal { id: ActivityId },
+    Extension { id: ActivityId, iframe_url: String },
 }
 
 impl WindowView {
