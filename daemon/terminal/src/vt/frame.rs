@@ -124,6 +124,9 @@ pub struct FrameSnapshot {
     pub rows_data: Vec<Row>,
     /// Why the snapshot was sent.
     pub reason: SnapshotReason,
+    /// Currently-set wire mode names (subset of TRACKED_MODES). Authoritative
+    /// for clients that missed a `mode` text sidecar.
+    pub modes: Vec<String>,
 }
 
 /// Differential update relative to the prior frame.
@@ -226,6 +229,7 @@ mod tests {
                 Row { runs: vec![] },
             ],
             reason: SnapshotReason::Initial,
+            modes: vec![],
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
@@ -292,9 +296,31 @@ mod tests {
             },
             rows_data: vec![],
             reason: SnapshotReason::Initial,
+            modes: vec![],
         });
         let bytes = encode(&snap).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded, snap);
+    }
+
+    #[test]
+    fn snapshot_modes_field_round_trips() {
+        let snap = FrameSnapshot {
+            seq: 0,
+            cols: 80,
+            rows: 24,
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                visible: true,
+            },
+            rows_data: vec![],
+            reason: SnapshotReason::Initial,
+            modes: vec!["alt-screen".to_string(), "bracketed-paste".to_string()],
+        };
+        let bytes = encode(&snap).unwrap();
+        let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.modes, ["alt-screen", "bracketed-paste"]);
     }
 }

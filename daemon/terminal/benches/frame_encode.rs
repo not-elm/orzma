@@ -36,6 +36,7 @@ fn make_snapshot_80x24() -> FrameSnapshot {
         },
         rows_data: vec![row; 24],
         reason: SnapshotReason::Initial,
+        modes: vec![],
     }
 }
 

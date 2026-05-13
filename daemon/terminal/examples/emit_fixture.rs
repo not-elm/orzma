@@ -27,6 +27,7 @@ fn main() {
             }],
         }],
         reason: SnapshotReason::Initial,
+        modes: vec![],
     };
     let bytes = ozmux_terminal::vt::encode(&snap).expect("encode");
     let path = Path::new("daemon/terminal/tests/fixtures/wire_msgpack/snapshot_minimal.bin");
