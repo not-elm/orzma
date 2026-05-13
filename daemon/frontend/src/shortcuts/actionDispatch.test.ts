@@ -10,6 +10,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = origFetch;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -125,7 +126,6 @@ describe('actionToHandler', () => {
       '/windows/wid-1/panes/pid-1/activities/aid-stub/activate',
       { method: 'POST' },
     );
-    vi.unstubAllGlobals();
   });
 
   it('new-terminal-activity handler is a no-op when active pane is null', async () => {
