@@ -13,6 +13,8 @@ use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
+use crate::vt::frame::{RenderFrame, SnapshotReason, encode};
+use crate::vt::frame_builder::{build_snapshot, collect_dirty_rows};
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 
@@ -26,10 +28,6 @@ pub struct VtState {
     pub parser: alacritty_terminal::vte::ansi::Processor,
     /// Bounded ring of encoded delta frames available for replay on
     /// reconnect.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by Phase 2 frame coalescer")
-    )]
     pub frame_ring: FrameRing,
     /// Most recent client → server input timestamp, used by the Phase 2
     /// coalescer to allow interactive-echo immediate flush.
@@ -40,23 +38,15 @@ pub struct VtState {
     pub last_input_at: Option<Instant>,
     /// Monotonic per-activity frame sequence number. Single-producer
     /// (bridge task) under the VtState lock.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 10+)")
-    )]
     pub frame_seq: u32,
     /// Set false after the first frame emit so subsequent ones become deltas.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 10+)")
+        expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 11+)")
     )]
     pub first_emit: bool,
     /// Broadcast of wire messages (Binary deltas + Text sidecars). All emit
     /// paths go through this sender; subscribers attach via subscribe_frames.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 10+)")
-    )]
     pub wire_broadcast: broadcast::Sender<WireMessage>,
 }
 
@@ -116,6 +106,19 @@ pub async fn run_bridge_task(
                 }
                 let mut state = vt_state.lock().expect("vt_state poisoned");
                 state.advance(&chunk);
+                let _ = collect_dirty_rows(&mut state.term);
+                let frame = RenderFrame::Snapshot(build_snapshot(
+                    &state.term,
+                    state.frame_seq,
+                    SnapshotReason::Initial,
+                ));
+                state.term.reset_damage();
+                let encoded_vec = encode(&frame).expect("encode infallible");
+                let seq = state.frame_seq;
+                state.frame_seq = state.frame_seq.wrapping_add(1);
+                let encoded = Bytes::from(encoded_vec);
+                state.frame_ring.push(seq, encoded.clone());
+                let _ = state.wire_broadcast.send(WireMessage::Binary { seq, encoded });
             }
             reply = reply_rx.recv() => {
                 if reply.is_none() {

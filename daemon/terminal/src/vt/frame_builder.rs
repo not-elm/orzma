@@ -30,10 +30,6 @@ pub enum DirtyRows {
 /// Reads the damage tracker and returns row indices that changed.
 ///
 /// `&mut Term` is required because `Term::damage()` takes `&mut self`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by Phase 2A frame emit path (Tasks 7-9)")
-)]
 pub fn collect_dirty_rows<T>(term: &mut Term<T>) -> DirtyRows {
     match term.damage() {
         TermDamage::Full => DirtyRows::Full,
@@ -64,13 +60,6 @@ pub fn build_mode(prev: TermMode, curr: TermMode, seq: u32) -> Option<ModeFrame>
 /// Reads the current terminal grid via shared reference, coalescing each row
 /// into runs of cells with identical attributes. Wide-char spacer cells are
 /// skipped so the wide character itself accounts for its full column width.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by Phase 2A frame emit path (Tasks 10-12)"
-    )
-)]
 pub fn build_snapshot<T>(term: &Term<T>, seq: u32, reason: SnapshotReason) -> FrameSnapshot {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;

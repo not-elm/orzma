@@ -243,6 +243,20 @@ impl TerminalService {
         Some(snapshot)
     }
 
+    /// Test-only: raw subscription to the wire broadcast (no atomicity guarantee).
+    /// Production paths use `subscribe_frames` (Task 13).
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn subscribe_wire_broadcast(
+        &self,
+        activity: &ActivityId,
+    ) -> Option<tokio::sync::broadcast::Receiver<crate::vt::frame_ring::WireMessage>> {
+        let guard = self.read(activity).await.ok()?;
+        let vt_state = guard.vt_state.clone();
+        drop(guard);
+        let state = vt_state.lock().expect("vt_state poisoned");
+        Some(state.wire_broadcast.subscribe())
+    }
+
     /// Test-only probe of `TermMode::ALT_SCREEN`. Returns `Some(true)`
     /// when the terminal is currently on the alternate screen buffer,
     /// `Some(false)` when on the primary buffer, and `None` if the

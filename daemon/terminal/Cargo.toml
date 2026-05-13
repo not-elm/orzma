@@ -15,6 +15,11 @@ name = "vt_integration"
 path = "tests/vt_integration.rs"
 required-features = ["test-helpers"]
 
+[[test]]
+name = "vt_emit"
+path = "tests/vt_emit.rs"
+required-features = ["test-helpers"]
+
 [[bench]]
 name = "frame_encode"
 harness = false
