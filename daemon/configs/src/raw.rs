@@ -1,6 +1,11 @@
 //! TOML-deserialization layer for `OzmuxConfigs`. Holds optional sections
 //! and merges them onto a baseline `OzmuxConfigs::default()`.
 
+// These items are intentionally unused until `OzmuxConfigs::load` is wired
+// up in a subsequent task. The `#[expect]` will start failing at that point,
+// signalling that the attribute can be removed.
+#![cfg_attr(not(test), expect(dead_code, reason = "consumed by OzmuxConfigs::load in a subsequent task"))]
+
 use crate::OzmuxConfigs;
 use crate::shortcuts::{Binding, Prefix};
 use crate::theme::ThemePatch;
