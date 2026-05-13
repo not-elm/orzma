@@ -10,7 +10,12 @@ fn main() {
         seq: 0,
         cols: 3,
         rows: 1,
-        cursor: Cursor { x: 0, y: 0, shape: CursorShape::Block, visible: true },
+        cursor: Cursor {
+            x: 0,
+            y: 0,
+            shape: CursorShape::Block,
+            visible: true,
+        },
         rows_data: vec![Row {
             runs: vec![Run {
                 cols: 3,
@@ -23,7 +28,7 @@ fn main() {
         }],
         reason: SnapshotReason::Initial,
     };
-    let bytes = rmp_serde::to_vec(&snap).expect("encode");
+    let bytes = ozmux_terminal::vt::encode(&snap).expect("encode");
     let path = Path::new("daemon/terminal/tests/fixtures/wire_msgpack/snapshot_minimal.bin");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, &bytes).unwrap();

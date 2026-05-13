@@ -12,5 +12,5 @@ pub(crate) mod mode_diff;
 
 pub use frame::{
     Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, RenderFrame, Row, Run,
-    SnapshotReason,
+    SnapshotReason, encode,
 };

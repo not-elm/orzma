@@ -110,6 +110,16 @@ pub enum RenderFrame {
     Delta(FrameDelta),
 }
 
+/// Encode a wire frame as map-keyed MessagePack (field names preserved on the wire).
+///
+/// Use this for any value that crosses the wire to the frontend; the frontend's
+/// msgpackr decoder expects map-keyed objects (e.g., `frame.kind === "snapshot"`).
+/// `rmp_serde::to_vec` defaults to array-encoded (positional) which is more compact
+/// but breaks cross-language interop.
+pub fn encode<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    rmp_serde::to_vec_named(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +223,29 @@ mod tests {
         let bytes = rmp_serde::to_vec(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded, delta);
+    }
+
+    #[test]
+    fn encode_produces_map_keyed_output() {
+        let run = Run {
+            cols: 1,
+            fg: Color::Default,
+            bg: Color::Default,
+            style: 0,
+            text: "x".into(),
+            hyperlink_id: None,
+        };
+        let bytes = encode(&run).expect("encode");
+        // map-keyed MessagePack of a 6-field struct begins with 0x86 (fixmap with 6 entries).
+        // array-keyed would start with 0x96 (fixarray with 6 entries).
+        assert_eq!(
+            bytes[0], 0x86,
+            "expected fixmap (0x86), got 0x{:02x}",
+            bytes[0]
+        );
+        // round-trip
+        let decoded: Run = rmp_serde::from_slice(&bytes).expect("decode");
+        assert_eq!(decoded, run);
     }
 
     #[test]
