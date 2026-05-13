@@ -82,6 +82,47 @@ describe('parseShortcuts', () => {
     expect(console.warn).toHaveBeenCalledTimes(1);
   });
 
+  it('parses a split-pane binding with horizontal direction', () => {
+    const withSplit = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: 's',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'split-pane', direction: 'horizontal' },
+        },
+        {
+          key: 'v',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'split-pane', direction: 'vertical' },
+        },
+      ],
+    };
+    const out = parseShortcuts(withSplit);
+    expect(out?.bindings).toHaveLength(3);
+    expect(out?.bindings[1].action).toEqual({ type: 'split-pane', direction: 'horizontal' });
+    expect(out?.bindings[2].action).toEqual({ type: 'split-pane', direction: 'vertical' });
+  });
+
+  it('drops a split-pane binding with an invalid direction', () => {
+    const withBadDir = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: 's',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'split-pane', direction: 'diagonal' },
+        },
+      ],
+    };
+    const out = parseShortcuts(withBadDir);
+    expect(out?.bindings).toHaveLength(1);
+    expect(out?.bindings[0].action.type).toBe('close-pane');
+    expect(console.warn).toHaveBeenCalled();
+  });
+
   it('drops bindings whose key is not a known token', () => {
     const withWeirdKey = {
       ...DEFAULT_JSON,

@@ -28,7 +28,13 @@ const KeyChordFieldsSchema = z.object({
   modifiers: ModifiersSchema,
 });
 
-const ActionSchema = z.discriminatedUnion('type', [z.object({ type: z.literal('close-pane') })]);
+const ActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('close-pane') }),
+  z.object({
+    type: z.literal('split-pane'),
+    direction: z.enum(['horizontal', 'vertical']),
+  }),
+]);
 
 const PrefixSchema = KeyChordFieldsSchema.extend({
   timeout_ms: z.number().int().nonnegative(),
