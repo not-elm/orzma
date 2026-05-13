@@ -202,7 +202,7 @@ pub fn daemon_router(state: AppState) -> Router {
 pub(crate) mod test_helpers {
     use super::{ActivityId, AppState, SessionId, WindowId, daemon_router};
     use axum::Router;
-    use ozmux_multiplexer::{PaneId, Session};
+    use ozmux_multiplexer::PaneId;
 
     pub fn fresh_state() -> AppState {
         AppState::new(
@@ -234,12 +234,10 @@ pub(crate) mod test_helpers {
     /// Bootstrap test fixture: registers one Session with one Window
     /// (one Pane, one Activity). Returns the four ids.
     pub async fn bootstrap_default(state: &AppState) -> (SessionId, WindowId, PaneId, ActivityId) {
-        let sid = {
-            let mut sess = state.multiplexer.sessions.lock().await;
-            let sid = SessionId::new();
-            sess.register(sid.clone(), Session::empty("Session1"));
-            sid
-        };
+        let sid = state
+            .multiplexer
+            .create_session(Some("Session1".into()))
+            .await;
         let (wid, pid, aid) = state
             .multiplexer
             .create_window(Some(&sid), None)

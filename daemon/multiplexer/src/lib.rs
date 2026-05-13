@@ -38,7 +38,7 @@ impl MultiplexerService {
         wid: &WindowId,
         f: impl FnOnce(&mut Window) -> R,
     ) -> Option<R> {
-        let arc = self.windows.get(wid).map(|e| e.clone())?;
+        let arc = self.windows.get(wid).map(|e| e.value().clone())?;
         let mut win = arc.lock().await;
         Some(f(&mut win))
     }
@@ -135,24 +135,8 @@ impl MultiplexerService {
     pub fn lookup_pane_window(&self, pid: &PaneId) -> MultiplexerResult<WindowId> {
         self.pane_owner_window
             .get(pid)
-            .map(|e| e.clone())
+            .map(|e| e.value().clone())
             .ok_or_else(|| MultiplexerError::PaneNotFound(pid.clone()))
-    }
-
-    /// Look up an Activity's metadata regardless of which Window owns it. Walks
-    /// every Window. Used by iframe-serve.
-    pub async fn activity_metadata(&self, aid: &ActivityId) -> Option<Activity> {
-        for entry in self.windows.iter() {
-            let win_arc = entry.value().clone();
-            drop(entry);
-            let win = win_arc.lock().await;
-            for (_, p) in win.panes.iter() {
-                if let Some(a) = p.activity(aid) {
-                    return Some(a.clone());
-                }
-            }
-        }
-        None
     }
 
     /// Remove a Window from the store, detach it from any Session that
