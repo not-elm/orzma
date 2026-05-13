@@ -1,9 +1,14 @@
 use crate::pty::{TerminalEvent, ring_buffer::RingBuffer};
+use crate::vt::bridge::VtState;
+use crate::vt::frame_ring::EncodedDelta;
+use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 use portable_pty::{ChildKiller, MasterPty};
+use std::sync::atomic::AtomicU32;
 use std::{io::Write, num::NonZero, sync::Arc};
 use tokio::sync::{
-    Mutex,
+    Mutex, broadcast,
     broadcast::{Receiver, Sender},
+    mpsc,
 };
 
 #[derive(Clone, Debug)]
@@ -61,6 +66,37 @@ pub(crate) struct PtyHandle {
     pub scrollback: ScrollbackBuffer,
     pub event_sender: Sender<TerminalEvent>,
     _child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+
+    // === VT path (Phase 1+) ===
+    /// Bundled VT state (Term + Parser + FrameRing + last_input_at).
+    /// Wrapped in std::sync::Mutex for short-held locks per PTY chunk
+    /// in vt_bridge_task (Task 13).
+    #[expect(dead_code, reason = "wired in Task 13/14")]
+    pub(crate) vt_state: Arc<std::sync::Mutex<VtState>>,
+
+    /// reply-required events from TermListener (unbounded; must-not-drop
+    /// to avoid capability-query backflow regression).
+    #[expect(dead_code, reason = "wired in Task 13/14")]
+    pub(crate) reply_tx: mpsc::UnboundedSender<ReplyFrame>,
+
+    /// best-effort control events (bounded cap=64); try_send drops are
+    /// rate-limited via DropCounter.
+    #[expect(dead_code, reason = "wired in Task 13/14")]
+    pub(crate) control_tx: mpsc::Sender<ControlFrame>,
+
+    /// broadcast of MessagePack-encoded delta frames. Phase 1: no
+    /// emissions; Phase 2 wires the bridge task to push here.
+    #[expect(dead_code, reason = "wired in Task 13/14")]
+    pub(crate) frame_broadcast: broadcast::Sender<EncodedDelta>,
+
+    /// Monotonic frame sequence number across reconnects.
+    /// Activity-scoped, resets when the daemon process restarts.
+    #[expect(dead_code, reason = "wired in Task 13/14")]
+    pub(crate) frame_seq: AtomicU32,
+
+    /// Aggregated drop counter for bounded channel try_send failures.
+    #[expect(dead_code, reason = "wired in Task 13/14")]
+    pub(crate) drop_counter: Arc<DropCounter>,
 }
 
 impl PtyHandle {
@@ -70,13 +106,38 @@ impl PtyHandle {
         event_sender: Sender<TerminalEvent>,
         child_killer: Box<dyn ChildKiller + Send + Sync>,
         scrollback: ScrollbackBuffer,
+        cols: u16,
+        rows: u16,
     ) -> Self {
+        // ===== VT path setup (Phase 1) =====
+        // Receivers are intentionally dropped here — there is no consumer yet.
+        // Task 13 will refactor this constructor to keep the receivers and
+        // spawn `vt_bridge_task` to consume them.
+        let (reply_tx, _reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
+        let (control_tx, _control_rx) = mpsc::channel::<ControlFrame>(64);
+        let (frame_broadcast, _frame_rx) = broadcast::channel::<EncodedDelta>(256);
+        let drop_counter = Arc::new(DropCounter::new());
+
+        let listener = TermListener {
+            reply_tx: reply_tx.clone(),
+            control_tx: control_tx.clone(),
+            drop_counter: drop_counter.clone(),
+        };
+
+        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(cols, rows, listener)));
+
         Self {
             scrollback,
             event_sender,
             writer: Mutex::new(writer),
             master: Mutex::new(master),
             _child_killer: child_killer,
+            vt_state,
+            reply_tx,
+            control_tx,
+            frame_broadcast,
+            frame_seq: AtomicU32::new(0),
+            drop_counter,
         }
     }
 

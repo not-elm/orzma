@@ -97,7 +97,15 @@ impl TerminalService {
 
         spawn_pty_reader(reader, child, scrollback.clone(), event_sender.clone());
 
-        let handle = PtyHandle::new(pty_pair.master, writer, event_sender, killer, scrollback);
+        let handle = PtyHandle::new(
+            pty_pair.master,
+            writer,
+            event_sender,
+            killer,
+            scrollback,
+            opts.cols,
+            opts.rows,
+        );
         ptys.insert(activity_id, handle);
         Ok(())
     }
