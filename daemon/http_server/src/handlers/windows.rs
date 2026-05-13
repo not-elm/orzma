@@ -1,9 +1,10 @@
+use crate::window_view::WindowView;
 use crate::{AppState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
 };
-use ozmux_multiplexer::{MultiplexerResult, Window, WindowId};
+use ozmux_multiplexer::WindowId;
 
 pub mod create;
 pub mod delete;
@@ -15,59 +16,12 @@ pub mod select;
 pub async fn get(
     State(state): State<AppState>,
     Path(window_id): Path<WindowId>,
-) -> HttpResult<Json<serde_json::Value>> {
+) -> HttpResult<Json<WindowView>> {
     let view = state
         .multiplexer
-        .with_window_or_404(&window_id, |w| window_view_for(w))
+        .with_window_or_404(&window_id, |w| WindowView::from_window(w))
         .await?;
     Ok(Json(view))
-}
-
-pub(crate) fn window_view_for(window: &Window) -> MultiplexerResult<serde_json::Value> {
-    let pane_ids = window.cells.pane_ids_in_subtree(&window.root_cell)?;
-    let panes: Vec<serde_json::Value> = pane_ids
-        .iter()
-        .filter_map(|pid| window.panes.get(pid).map(|p| pane_view(p, &window.id)))
-        .collect();
-    let layout = crate::layout_dto::build_layout(&window.root_cell, &window.cells)?;
-    Ok(serde_json::json!({
-        "id": window.id,
-        "name": window.name,
-        "root_cell": window.root_cell,
-        "active_pane": window.active_pane,
-        "panes": panes,
-        "layout_schema_version": 1,
-        "layout": layout,
-    }))
-}
-
-fn pane_view(pane: &ozmux_multiplexer::Pane, wid: &WindowId) -> serde_json::Value {
-    let activities: Vec<serde_json::Value> = pane
-        .activities
-        .iter()
-        .map(|a| match &a.kind {
-            ozmux_multiplexer::ActivityKind::Extension { .. } => {
-                // Hierarchical iframe URL — the daemon reads (wid, pid, aid)
-                // off the path to inject `window.__OZMUX__` for the SDK.
-                serde_json::json!({
-                    "id": a.id,
-                    "kind": "extension",
-                    "iframe_url": format!(
-                        "/windows/{}/panes/{}/activities/{}/iframe/index.html",
-                        wid, pane.id, a.id
-                    ),
-                })
-            }
-            ozmux_multiplexer::ActivityKind::Terminal => {
-                serde_json::json!({ "id": a.id, "kind": "terminal" })
-            }
-        })
-        .collect();
-    serde_json::json!({
-        "id": pane.id,
-        "activities": activities,
-        "active_activity": pane.active_activity,
-    })
 }
 
 #[cfg(test)]
@@ -245,25 +199,6 @@ mod tests {
         let activities = panes[0]["activities"].as_array().unwrap();
         assert!(activities[0]["id"].is_string());
         assert_eq!(activities[0]["kind"].as_str(), Some("terminal"));
-    }
-
-    #[tokio::test]
-    async fn get_window_includes_layout_schema_version_1() {
-        let state = fresh_state();
-        let (_sid, wid, _pid, _aid) = bootstrap_default(&state).await;
-        let (router, _) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/windows/{}", wid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["layout_schema_version"].as_u64(), Some(1));
     }
 
     #[tokio::test]

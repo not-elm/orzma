@@ -4,6 +4,7 @@ pub mod handlers;
 pub mod layout_broadcast;
 pub mod layout_dto;
 pub mod state;
+pub mod window_view;
 
 pub use error::{HttpError, HttpResult};
 pub use state::AppState;

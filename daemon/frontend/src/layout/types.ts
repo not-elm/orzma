@@ -33,6 +33,5 @@ export interface WindowView {
   root_cell: CellId;
   active_pane: PaneId;
   panes: PaneView[];
-  layout_schema_version: 1;
   layout: WindowLayoutNode;
 }

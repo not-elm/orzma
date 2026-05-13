@@ -1,6 +1,6 @@
 use crate::HttpResult;
-use crate::handlers::windows;
 use crate::layout_broadcast::LayoutBroadcaster;
+use crate::window_view::WindowView;
 use axum::extract::FromRef;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
@@ -97,8 +97,11 @@ impl AppState {
     async fn publish_window_layout(&self, wid: &WindowId) {
         let _ = self
             .multiplexer
-            .with_window(wid, |w| match windows::window_view_for(w) {
-                Ok(view) => self.layout_broadcast.publish(wid, view),
+            .with_window(wid, |w| match WindowView::from_window(w) {
+                Ok(view) => match serde_json::to_value(&view) {
+                    Ok(value) => self.layout_broadcast.publish(wid, value),
+                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+                },
                 Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
             })
             .await;

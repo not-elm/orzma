@@ -1,4 +1,5 @@
 use crate::AppState;
+use crate::window_view::WindowView;
 use axum::extract::{
     Path, State, WebSocketUpgrade,
     ws::{CloseFrame, Message, WebSocket},
@@ -18,7 +19,7 @@ async fn handle_events_socket(socket: WebSocket, state: AppState, window_id: Win
     let (mut tx, _rx) = socket.split();
     let snapshot_and_rx = state
         .multiplexer
-        .with_window(&window_id, |w| super::window_view_for(w))
+        .with_window(&window_id, |w| WindowView::from_window(w))
         .await;
     let Some(snapshot_result) = snapshot_and_rx else {
         close_with(&mut tx, 1011, "window_not_found").await;
@@ -32,13 +33,17 @@ async fn handle_events_socket(socket: WebSocket, state: AppState, window_id: Win
             return;
         }
     };
+    let snapshot_json = match serde_json::to_string(&snapshot) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, %window_id, "snapshot serialize failed");
+            close_with(&mut tx, 1011, "internal_error").await;
+            return;
+        }
+    };
     let mut receiver = state.layout_broadcast.subscribe_or_create(&window_id);
 
-    if tx
-        .send(Message::Text(snapshot.to_string().into()))
-        .await
-        .is_err()
-    {
+    if tx.send(Message::Text(snapshot_json.into())).await.is_err() {
         return;
     }
 
@@ -78,6 +83,7 @@ async fn close_with(tx: &mut SplitSink<WebSocket, Message>, code: u16, reason: &
 #[cfg(test)]
 mod tests {
     use crate::test_helpers::{bootstrap_default, fresh_state};
+    use crate::window_view::WindowView;
     use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation};
     use std::net::SocketAddr;
     use tokio::net::TcpListener as TokioTcpListener;
@@ -246,11 +252,12 @@ mod tests {
                         .insert(new_pane_id.clone(), wid_.clone());
                     if let Some(view) = s
                         .multiplexer
-                        .with_window(&wid_, |w| crate::handlers::windows::window_view_for(w))
+                        .with_window(&wid_, |w| WindowView::from_window(w))
                         .await
                         && let Ok(view) = view
+                        && let Ok(value) = serde_json::to_value(&view)
                     {
-                        bc.publish(&wid_, view);
+                        bc.publish(&wid_, value);
                     }
                 }
             }));

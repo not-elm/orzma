@@ -3,6 +3,7 @@ pub mod index;
 pub mod sessions;
 pub mod windows;
 
+use crate::window_view::WindowView;
 use crate::{AppState, HttpError, HttpResult};
 use ozmux_multiplexer::{Activity, ActivityId, MultiplexerError, PaneId, WindowId};
 
@@ -11,8 +12,11 @@ use ozmux_multiplexer::{Activity, ActivityId, MultiplexerError, PaneId, WindowId
 pub(crate) async fn publish_window_layout(state: &AppState, wid: &WindowId) {
     let _ = state
         .multiplexer
-        .with_window(wid, |w| match windows::window_view_for(w) {
-            Ok(view) => state.layout_broadcast.publish(wid, view),
+        .with_window(wid, |w| match WindowView::from_window(w) {
+            Ok(view) => match serde_json::to_value(&view) {
+                Ok(value) => state.layout_broadcast.publish(wid, value),
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+            },
             Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
         })
         .await;
