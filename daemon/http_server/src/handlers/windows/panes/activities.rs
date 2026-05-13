@@ -1,3 +1,8 @@
+use crate::AppState;
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use ozmux_multiplexer::{Activity, ActivityId, ActivityKind};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -7,6 +12,18 @@ pub mod add_to_pane;
 pub mod handlers_ws;
 pub mod iframe_serve;
 pub mod terminal_ws;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/", post(add_to_pane::add_to_pane))
+        .route("/{activity_id}/activate", post(activate::activate))
+        .route("/{activity_id}/terminal/ws", get(terminal_ws::terminal_ws))
+        .route("/{activity_id}/handlers/ws", get(handlers_ws::handlers_ws))
+        .route(
+            "/{activity_id}/iframe/{*path}",
+            get(iframe_serve::iframe_serve),
+        )
+}
 
 #[derive(Deserialize)]
 pub struct ActivityInput {

@@ -9,7 +9,7 @@ pub use error::{HttpError, HttpResult};
 use axum::{
     Router,
     extract::FromRef,
-    routing::{delete as method_delete, get, post},
+    routing::{get, post},
 };
 use layout_broadcast::LayoutBroadcaster;
 use ozmux_extension::ExtensionRegistry;
@@ -138,64 +138,43 @@ pub fn daemon_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(handlers::index::handler))
         .route("/health", get(handlers::health::check))
+        .nest("/sessions", sessions_router())
+        .nest("/windows", windows_router())
+        .with_state(state)
+}
+
+pub fn sessions_router() -> Router<AppState> {
+    Router::new()
         .route(
-            "/sessions",
+            "/",
             get(handlers::sessions::list::list).post(handlers::sessions::create::create),
         )
         .route(
-            "/sessions/{session_id}",
+            "/{session_id}",
             get(handlers::sessions::get::get)
                 .patch(handlers::sessions::rename::rename)
                 .delete(handlers::sessions::delete::delete),
         )
-        .route("/windows", post(handlers::windows::create::create))
+}
+
+pub fn windows_router() -> Router<AppState> {
+    Router::new()
+        .route("/", post(handlers::windows::create::create))
         .route(
-            "/windows/{window_id}",
+            "/{window_id}",
             get(handlers::windows::get)
                 .patch(handlers::windows::rename::rename)
                 .delete(handlers::windows::delete::delete),
         )
         .route(
-            "/windows/{window_id}/select",
+            "/{window_id}/select",
             post(handlers::windows::select::select),
         )
         .route(
-            "/windows/{window_id}/events",
+            "/{window_id}/events",
             get(handlers::windows::events::events),
         )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/activate",
-            post(handlers::windows::panes::activate::activate),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/split",
-            post(handlers::windows::panes::split::split),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}",
-            method_delete(handlers::windows::panes::close::close),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/activities",
-            post(handlers::windows::panes::activities::add_to_pane::add_to_pane),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/activate",
-            post(handlers::windows::panes::activities::activate::activate),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/terminal/ws",
-            get(handlers::windows::panes::activities::terminal_ws::terminal_ws),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/handlers/ws",
-            get(handlers::windows::panes::activities::handlers_ws::handlers_ws),
-        )
-        .route(
-            "/windows/{window_id}/panes/{pane_id}/activities/{activity_id}/iframe/{*path}",
-            get(handlers::windows::panes::activities::iframe_serve::iframe_serve),
-        )
-        .with_state(state)
+        .nest("/{window_id}/panes", handlers::windows::panes::router())
 }
 
 #[cfg(test)]

@@ -1,10 +1,22 @@
 use crate::AppState;
+use axum::{
+    Router,
+    routing::{delete as method_delete, post},
+};
 use ozmux_multiplexer::{SessionId, WindowId};
 
 pub mod activate;
 pub mod activities;
 pub mod close;
 pub mod split;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/{pane_id}/activate", post(activate::activate))
+        .route("/{pane_id}/split", post(split::split))
+        .route("/{pane_id}", method_delete(close::close))
+        .nest("/{pane_id}/activities", activities::router())
+}
 
 /// Walk the SessionState to find which Session owns `wid`. Used to populate
 /// `OZMUX_SESSION_ID` for the spawned PTY; returns `None` for orphan Windows.
