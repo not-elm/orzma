@@ -12,6 +12,7 @@ pub mod add_to_pane;
 pub mod handlers_ws;
 pub mod iframe_serve;
 pub mod terminal_ws;
+pub(crate) mod vt_ws;
 
 pub fn router() -> Router<AppState> {
     Router::new()
