@@ -32,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
             return Err(e.into());
         }
     };
+    // TODO: wire configs into AppState (subsequent PR).
     let _ = configs;
 
     let parent = std::env::temp_dir().join("ozmux");
