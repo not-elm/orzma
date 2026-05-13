@@ -72,7 +72,10 @@ mod tests {
             ]),
             home: Some(PathBuf::from("/should/be/ignored/home")),
         };
-        assert_eq!(resolve_config_path(&env).unwrap(), PathBuf::from("/tmp/x.toml"));
+        assert_eq!(
+            resolve_config_path(&env).unwrap(),
+            PathBuf::from("/tmp/x.toml")
+        );
     }
 
     #[test]

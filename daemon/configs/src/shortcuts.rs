@@ -335,7 +335,9 @@ mod tests {
         let b: Binding = toml::from_str(toml).unwrap();
         assert!(matches!(
             b.action,
-            Action::SplitPane { direction: SplitDirection::Horizontal }
+            Action::SplitPane {
+                direction: SplitDirection::Horizontal
+            }
         ));
     }
 
@@ -346,9 +348,6 @@ mod tests {
             action = { type = "focus-window-number", index = 0 }
         "#;
         let b: Binding = toml::from_str(toml).unwrap();
-        assert!(matches!(
-            b.action,
-            Action::FocusWindowNumber { index: 0 }
-        ));
+        assert!(matches!(b.action, Action::FocusWindowNumber { index: 0 }));
     }
 }

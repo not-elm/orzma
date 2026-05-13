@@ -4,17 +4,16 @@
 
 #![warn(missing_docs)]
 
-pub mod error;
-pub mod shortcuts;
-pub mod theme;
 mod defaults;
+pub mod error;
 pub(crate) mod path;
 pub(crate) mod raw;
-
-pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
+pub mod shortcuts;
+pub mod theme;
 
 use crate::shortcuts::Shortcuts;
 use crate::theme::Theme;
+pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 
 /// Fully-resolved ozmux configuration.
 #[derive(Clone, Debug, Default)]
@@ -57,12 +56,11 @@ impl OzmuxConfigs {
             }
         };
 
-        let raw: raw::RawConfigs = toml::from_str(&text).map_err(|source| {
-            OzmuxConfigsError::ParseToml {
+        let raw: raw::RawConfigs =
+            toml::from_str(&text).map_err(|source| OzmuxConfigsError::ParseToml {
                 path: configured_path.clone(),
                 source,
-            }
-        })?;
+            })?;
 
         let merged = raw.apply_to(Self::default());
         raw::validate(&merged)?;

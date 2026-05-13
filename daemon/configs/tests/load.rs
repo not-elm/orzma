@@ -4,13 +4,17 @@ use ozmux_configs::{OzmuxConfigs, OzmuxConfigsError};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 #[tokio::test]
 async fn missing_file_yields_defaults() {
     let nonexistent = fixture("does_not_exist.toml");
-    let configs = load_with_overrides(Some(nonexistent), None, None).await.unwrap();
+    let configs = load_with_overrides(Some(nonexistent), None, None)
+        .await
+        .unwrap();
     let defaults = OzmuxConfigs::default();
     assert_eq!(
         configs.shortcuts.bindings.len(),
@@ -24,7 +28,10 @@ async fn empty_file_yields_defaults() {
         .await
         .unwrap();
     assert_eq!(configs.shortcuts.bindings.len(), 1);
-    assert!(matches!(configs.shortcuts.bindings[0].action, Action::ClosePane));
+    assert!(matches!(
+        configs.shortcuts.bindings[0].action,
+        Action::ClosePane
+    ));
 }
 
 #[tokio::test]
@@ -35,7 +42,10 @@ async fn prefix_override_keeps_default_bindings() {
     assert_eq!(configs.shortcuts.prefix.chord.key, Key::Char('a'));
     assert_eq!(configs.shortcuts.prefix.timeout_ms, 3000);
     assert_eq!(configs.shortcuts.bindings.len(), 1);
-    assert!(matches!(configs.shortcuts.bindings[0].action, Action::ClosePane));
+    assert!(matches!(
+        configs.shortcuts.bindings[0].action,
+        Action::ClosePane
+    ));
 }
 
 #[tokio::test]
@@ -45,7 +55,10 @@ async fn bindings_section_fully_replaces_defaults() {
         .unwrap();
     assert_eq!(configs.shortcuts.bindings.len(), 1);
     assert_eq!(configs.shortcuts.bindings[0].chord.key, Key::Char('y'));
-    assert!(matches!(configs.shortcuts.bindings[0].action, Action::CloseWindow));
+    assert!(matches!(
+        configs.shortcuts.bindings[0].action,
+        Action::CloseWindow
+    ));
 }
 
 #[tokio::test]

@@ -73,15 +73,21 @@ mod tests {
         let raw = RawConfigs::default();
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(merged.shortcuts.bindings.len(), 1);
-        assert!(matches!(merged.shortcuts.bindings[0].action, Action::ClosePane));
+        assert!(matches!(
+            merged.shortcuts.bindings[0].action,
+            Action::ClosePane
+        ));
     }
 
     #[test]
     fn theme_patch_preserves_unset_fields() {
-        let raw: RawConfigs = toml::from_str(r##"
+        let raw: RawConfigs = toml::from_str(
+            r##"
             [theme]
             accent = "#deadbe"
-        "##).unwrap();
+        "##,
+        )
+        .unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(merged.theme.accent, "#deadbe");
         assert_eq!(merged.theme.background, "#1a1b26");
@@ -89,19 +95,26 @@ mod tests {
 
     #[test]
     fn bindings_fully_replace_defaults() {
-        let raw: RawConfigs = toml::from_str(r#"
+        let raw: RawConfigs = toml::from_str(
+            r#"
             [[shortcuts.bindings]]
             key = "y"
             action = { type = "close-window" }
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(merged.shortcuts.bindings.len(), 1);
-        assert!(matches!(merged.shortcuts.bindings[0].action, Action::CloseWindow));
+        assert!(matches!(
+            merged.shortcuts.bindings[0].action,
+            Action::CloseWindow
+        ));
     }
 
     #[test]
     fn validate_rejects_duplicate_binding() {
-        let raw: RawConfigs = toml::from_str(r#"
+        let raw: RawConfigs = toml::from_str(
+            r#"
             [[shortcuts.bindings]]
             key = "x"
             action = { type = "close-pane" }
@@ -109,23 +122,34 @@ mod tests {
             [[shortcuts.bindings]]
             key = "x"
             action = { type = "close-window" }
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         let err = validate(&merged).unwrap_err();
-        assert!(matches!(err, crate::OzmuxConfigsError::DuplicateBinding { .. }));
+        assert!(matches!(
+            err,
+            crate::OzmuxConfigsError::DuplicateBinding { .. }
+        ));
     }
 
     #[test]
     fn validate_rejects_modifier_in_binding() {
-        let raw: RawConfigs = toml::from_str(r#"
+        let raw: RawConfigs = toml::from_str(
+            r#"
             [[shortcuts.bindings]]
             key = "x"
             modifiers = { shift = true }
             action = { type = "close-pane" }
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         let err = validate(&merged).unwrap_err();
-        assert!(matches!(err, crate::OzmuxConfigsError::UnsupportedModifier { .. }));
+        assert!(matches!(
+            err,
+            crate::OzmuxConfigsError::UnsupportedModifier { .. }
+        ));
     }
 
     #[test]
