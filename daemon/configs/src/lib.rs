@@ -10,6 +10,7 @@ use crate::theme::Theme;
 pub mod error;
 pub mod shortcuts;
 pub mod theme;
+pub(crate) mod path;
 pub(crate) mod raw;
 
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
