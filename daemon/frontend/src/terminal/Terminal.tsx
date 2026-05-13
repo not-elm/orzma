@@ -16,7 +16,9 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
   const socket = useTerminalSocket(windowId, paneId, activityId, reconnectKey);
   const { focus, blur } = useXtermTerminal(containerRef, socket);
 
-  const prevActiveRef = useRef(isActive);
+  // Seed with `false` so that mounting with `isActive=true` (e.g. a freshly
+  // split pane promoted to active by the daemon) triggers focus.
+  const prevActiveRef = useRef(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: focus/blur are stabilized by React Compiler; adding them would re-run on every render and defeat transition-only semantics
   useEffect(() => {
     if (isActive && !prevActiveRef.current) focus();
