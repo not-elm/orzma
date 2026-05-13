@@ -2,12 +2,14 @@ use crate::HttpResult;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::window_view::WindowView;
 use axum::extract::FromRef;
+use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
     Activity, ActivityId, MultiplexerError, MultiplexerResult, MultiplexerService, PaneId,
     SessionId, SetActiveOutcome, SetActivePaneOutcome, WindowId,
 };
 use ozmux_terminal::TerminalService;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -15,6 +17,8 @@ pub struct AppState {
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
     pub layout_broadcast: LayoutBroadcaster,
+    /// Daemon-wide configuration loaded at startup (shortcuts, etc.).
+    pub configs: Arc<OzmuxConfigs>,
 }
 
 impl AppState {
@@ -27,12 +31,14 @@ impl AppState {
         terminal: TerminalService,
         extensions: ExtensionRegistry,
         layout_broadcast: LayoutBroadcaster,
+        configs: Arc<OzmuxConfigs>,
     ) -> Self {
         Self {
             multiplexer: MultiplexerService::default(),
             terminal,
             extensions,
             layout_broadcast,
+            configs,
         }
     }
 
@@ -156,5 +162,11 @@ impl FromRef<AppState> for LayoutBroadcaster {
 impl FromRef<AppState> for MultiplexerService {
     fn from_ref(input: &AppState) -> Self {
         input.multiplexer.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<OzmuxConfigs> {
+    fn from_ref(input: &AppState) -> Self {
+        Arc::clone(&input.configs)
     }
 }
