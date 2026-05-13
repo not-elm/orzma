@@ -51,6 +51,18 @@ describe('parseShortcuts', () => {
     ).toBeNull();
   });
 
+  it('returns null when bindings field is absent', () => {
+    expect(
+      parseShortcuts({
+        prefix: {
+          key: 'b',
+          modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+          timeout_ms: 2000,
+        },
+      }),
+    ).toBeNull();
+  });
+
   it('drops bindings with unknown action type but keeps the rest', () => {
     const withUnknown = {
       ...DEFAULT_JSON,
@@ -67,7 +79,7 @@ describe('parseShortcuts', () => {
     expect(out).not.toBeNull();
     expect(out?.bindings).toHaveLength(1);
     expect(out?.bindings[0].action.type).toBe('close-pane');
-    expect(console.warn).toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledTimes(1);
   });
 
   it('drops bindings whose key is not a known token', () => {

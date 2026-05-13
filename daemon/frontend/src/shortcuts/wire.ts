@@ -43,14 +43,9 @@ const ShortcutsRawSchema = z.object({
 
 export type KeyToken = z.infer<typeof KeyTokenSchema>;
 export type Modifiers = z.infer<typeof ModifiersSchema>;
-export interface KeyChord {
-  key: KeyToken;
-  modifiers: Modifiers;
-}
+export type KeyChord = z.infer<typeof KeyChordFieldsSchema>;
 export type Action = z.infer<typeof ActionSchema>;
-export interface Prefix extends KeyChord {
-  timeout_ms: number;
-}
+export type Prefix = z.infer<typeof PrefixSchema>;
 export interface Binding {
   chord: KeyChord;
   action: Action;
