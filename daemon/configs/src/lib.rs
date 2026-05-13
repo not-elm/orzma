@@ -6,5 +6,6 @@
 
 pub mod error;
 pub mod shortcuts;
+pub mod theme;
 
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
