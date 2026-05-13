@@ -95,7 +95,17 @@ impl TerminalService {
         let scrollback = ScrollbackBuffer::new();
         let (event_sender, _) = broadcast::channel(1024);
 
-        spawn_pty_reader(reader, child, scrollback.clone(), event_sender.clone());
+        // VT fan-out channel: raw bridge task gets the Sender, the VT bridge
+        // task (spawned inside `PtyHandle::new`) gets the Receiver.
+        let (vt_chunk_tx, vt_chunk_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(128);
+
+        spawn_pty_reader(
+            reader,
+            child,
+            scrollback.clone(),
+            event_sender.clone(),
+            vt_chunk_tx.clone(),
+        );
 
         let handle = PtyHandle::new(
             pty_pair.master,
@@ -105,6 +115,8 @@ impl TerminalService {
             scrollback,
             opts.cols,
             opts.rows,
+            vt_chunk_tx,
+            vt_chunk_rx,
         );
         ptys.insert(activity_id, handle);
         Ok(())
@@ -207,6 +219,7 @@ fn spawn_pty_reader(
     mut child: Box<dyn Child + Send + Sync>,
     scrollback: ScrollbackBuffer,
     event_sender: broadcast::Sender<TerminalEvent>,
+    vt_chunk_tx: tokio::sync::mpsc::Sender<bytes::Bytes>,
 ) {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
     let exit_event_sender = event_sender.clone();
@@ -231,9 +244,16 @@ fn spawn_pty_reader(
         // tx は drop され、bridge task の rx.recv() が None を返して終わる
     });
 
-    // 2) bridge task: mpsc → scrollback + broadcast を「同じロック内」で
+    // 2) bridge task: mpsc → scrollback + broadcast を「同じロック内」で。
+    //    Phase 1+ では同じ chunk を VT bridge にも fan-out する
+    //    (best-effort: 128 cap を超えたら無音 drop。raw path が source of truth)。
     tokio::spawn(async move {
         while let Some(chunk) = rx.recv().await {
+            // Fan-out to VT bridge first (cheap Bytes::from clone of the Vec).
+            // try_send is non-blocking; overflow is dropped silently so the
+            // raw path is never stalled by VT consumption pressure.
+            let _ = vt_chunk_tx.try_send(bytes::Bytes::copy_from_slice(&chunk));
+            // Existing raw path: push to scrollback + broadcast.
             scrollback.push_and_broadcast(&event_sender, chunk).await;
         }
     });

@@ -74,10 +74,6 @@ impl VtState {
 /// minimally to keep channels from filling up.
 ///
 /// Wired up in Phase 2 with frame coalescing + broadcast emission.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by spawn_pty_reader in Task 14")
-)]
 pub async fn run_bridge_task(
     vt_state: Arc<std::sync::Mutex<VtState>>,
     mut pty_rx: mpsc::Receiver<Bytes>,

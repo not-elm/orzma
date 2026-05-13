@@ -1,7 +1,8 @@
 use crate::pty::{TerminalEvent, ring_buffer::RingBuffer};
-use crate::vt::bridge::VtState;
+use crate::vt::bridge::{VtState, run_bridge_task};
 use crate::vt::frame_ring::EncodedDelta;
 use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
+use bytes::Bytes;
 use portable_pty::{ChildKiller, MasterPty};
 use std::sync::atomic::AtomicU32;
 use std::{io::Write, num::NonZero, sync::Arc};
@@ -10,6 +11,7 @@ use tokio::sync::{
     broadcast::{Receiver, Sender},
     mpsc,
 };
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ScrollbackBuffer(Arc<Mutex<RingBuffer>>);
@@ -97,9 +99,26 @@ pub(crate) struct PtyHandle {
     /// Aggregated drop counter for bounded channel try_send failures.
     #[expect(dead_code, reason = "wired in Task 13/14")]
     pub(crate) drop_counter: Arc<DropCounter>,
+
+    /// Sender used by `spawn_pty_reader`'s bridge task to fan-out PTY chunks
+    /// to the VT bridge. Bounded cap=128 — overflow is dropped silently
+    /// (the raw scrollback path is the source of truth). The actual fan-out
+    /// sender lives in the spawned bridge task; this handle-side copy keeps
+    /// the channel open for the lifetime of `PtyHandle` and is available
+    /// for future direct injection (e.g., synthetic VT input in tests).
+    #[expect(dead_code, reason = "channel keepalive; consumer added in Phase 2")]
+    pub(crate) vt_chunk_tx: mpsc::Sender<Bytes>,
+
+    /// Cancellation for the VT bridge task; cancelled on `PtyHandle::drop`.
+    pub(crate) vt_cancel: CancellationToken,
 }
 
 impl PtyHandle {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "constructor wires raw PTY + VT bridge resources; a builder \
+                  would obscure the single call site in TerminalService::spawn"
+    )]
     pub fn new(
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
@@ -108,13 +127,16 @@ impl PtyHandle {
         scrollback: ScrollbackBuffer,
         cols: u16,
         rows: u16,
+        vt_chunk_tx: mpsc::Sender<Bytes>,
+        vt_chunk_rx: mpsc::Receiver<Bytes>,
     ) -> Self {
         // ===== VT path setup (Phase 1) =====
-        // Receivers are intentionally dropped here — there is no consumer yet.
-        // Task 13 will refactor this constructor to keep the receivers and
-        // spawn `vt_bridge_task` to consume them.
-        let (reply_tx, _reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
-        let (control_tx, _control_rx) = mpsc::channel::<ControlFrame>(64);
+        // Phase 1: keep `reply_rx` / `control_rx` and pass them to the bridge
+        // task. The `frame_rx` broadcast receiver is dropped — Phase 2's
+        // `subscribe_frames` API will create fresh receivers via
+        // `frame_broadcast.subscribe()`.
+        let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
+        let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
         let (frame_broadcast, _frame_rx) = broadcast::channel::<EncodedDelta>(256);
         let drop_counter = Arc::new(DropCounter::new());
 
@@ -125,6 +147,22 @@ impl PtyHandle {
         };
 
         let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(cols, rows, listener)));
+
+        // VT chunk channel is created by the caller and split so the raw
+        // bridge task can hold the sender (fan-out) while we pass the receiver
+        // to `run_bridge_task`. Cancellation lives here.
+        let vt_cancel = CancellationToken::new();
+
+        // Phase 1: the JoinHandle is discarded; Task 15 may want to await it
+        // on shutdown. Cancellation via `vt_cancel` on drop is sufficient for
+        // task termination.
+        let _vt_join = tokio::spawn(run_bridge_task(
+            vt_state.clone(),
+            vt_chunk_rx,
+            reply_rx,
+            control_rx,
+            vt_cancel.clone(),
+        ));
 
         Self {
             scrollback,
@@ -138,6 +176,8 @@ impl PtyHandle {
             frame_broadcast,
             frame_seq: AtomicU32::new(0),
             drop_counter,
+            vt_chunk_tx,
+            vt_cancel,
         }
     }
 
@@ -147,6 +187,14 @@ impl PtyHandle {
         self.scrollback
             .snapshot_and_subscribe(&self.event_sender)
             .await
+    }
+}
+
+impl Drop for PtyHandle {
+    fn drop(&mut self) {
+        // Wake the VT bridge task so it exits its `tokio::select!` loop and
+        // releases the cloned `Arc<Mutex<VtState>>`.
+        self.vt_cancel.cancel();
     }
 }
 
