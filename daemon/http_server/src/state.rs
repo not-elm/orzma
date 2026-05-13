@@ -86,7 +86,7 @@ impl AppState {
         pid: &PaneId,
         activity: Activity,
         extension_name: Option<&str>,
-    ) -> HttpResult<ActivityId> {
+    ) -> MultiplexerResult<ActivityId> {
         let aid = activity.id.clone();
         self.multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.add_activity(activity))
@@ -94,7 +94,6 @@ impl AppState {
         if let Some(name) = extension_name {
             self.extensions.record_activity_owner(&aid, name);
         }
-        self.publish_window_layout(wid).await;
         Ok(aid)
     }
 
