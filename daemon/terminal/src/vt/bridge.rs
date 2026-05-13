@@ -1,7 +1,7 @@
 //! VtState + vt_bridge_task: drives Term from PTY chunks.
 //!
-//! Phase 1: bridge は process_bytes を呼ぶところまで実装し、frame emit は
-//! しない。Phase 2 で frame_ring/frame_broadcast/coalescer と統合する。
+//! Phase 1 advances `Term` only; frame emission and PtyWrite/control routing
+//! are wired in Phase 2.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -16,19 +16,23 @@ use tokio_util::sync::CancellationToken;
 use crate::vt::frame_ring::FrameRing;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 
-/// Bundles all state mutated by the VT bridge task. Wrapped in
-/// `std::sync::Mutex` by `PtyHandle` (Task 12) so the bridge can take a
-/// short non-await lock per PTY chunk.
+/// All state mutated by the VT bridge task, wrapped by `PtyHandle` in
+/// `std::sync::Mutex` so the bridge can take a short non-await lock per
+/// PTY chunk.
 pub struct VtState {
+    /// Alacritty terminal model: grid, cursor, modes.
     pub term: Term<TermListener>,
+    /// vte parser that drives `term` via `Processor::advance`.
     pub parser: alacritty_terminal::vte::ansi::Processor,
+    /// Bounded ring of encoded delta frames available for replay on
+    /// reconnect.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "consumed by Phase 2 frame coalescer")
     )]
     pub frame_ring: FrameRing,
-    /// Most recent client → server input timestamp (used by Phase 2
-    /// coalescer to allow interactive-echo immediate flush).
+    /// Most recent client → server input timestamp, used by the Phase 2
+    /// coalescer to allow interactive-echo immediate flush.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "consumed by Phase 2 frame coalescer")
@@ -37,22 +41,13 @@ pub struct VtState {
 }
 
 impl VtState {
-    /// Construct a fresh `VtState` with the given terminal dimensions.
-    ///
-    /// Alacritty 0.26 API actually used:
-    /// - `alacritty_terminal::Term::new<D: Dimensions>(Config, &D, T) -> Term<T>`
-    ///   (`src/term/mod.rs:410`).
-    /// - `Dimensions` trait lives at `alacritty_terminal::grid::Dimensions`
-    ///   (`src/grid/mod.rs:486`) — it is **not** re-exported from
-    ///   `alacritty_terminal::term`.
-    /// - `Config::default()` is sufficient; no feature flags required.
+    /// Constructs a fresh `VtState` with the given terminal dimensions.
     pub fn new(cols: u16, rows: u16, listener: TermListener) -> Self {
         let size = LocalDim {
             cols: cols.into(),
             rows: rows.into(),
         };
-        let config = Config::default();
-        let term = Term::new(config, &size, listener);
+        let term = Term::new(Config::default(), &size, listener);
         Self {
             term,
             parser: alacritty_terminal::vte::ansi::Processor::new(),
@@ -61,19 +56,20 @@ impl VtState {
         }
     }
 
-    /// Feed a chunk of PTY bytes through `vte::Parser` into `Term`.
-    /// Wrapped as a helper so the bridge task can borrow `parser` and `term`
+    /// Feeds a chunk of PTY bytes through `vte::Parser` into `Term`.
+    ///
+    /// Wrapped as a helper so the caller can borrow `parser` and `term`
     /// disjointly without tripping the borrow checker.
     pub fn advance(&mut self, chunk: &[u8]) {
         self.parser.advance(&mut self.term, chunk);
     }
 }
 
-/// Phase 1 bridge task: drains PTY chunks into Term via vte::Parser.
-/// Phase 1 does NOT emit any frames; reply_rx / control_rx are drained
-/// minimally to keep channels from filling up.
+/// Drives the VT bridge: drains PTY chunks into `Term` via `vte::Parser`.
 ///
-/// Wired up in Phase 2 with frame coalescing + broadcast emission.
+/// Phase 1 does not emit any frames; `reply_rx` / `control_rx` are drained
+/// to keep the channels from filling up while the Phase 2 coalescer and
+/// PTY writer are unimplemented.
 pub async fn run_bridge_task(
     vt_state: Arc<std::sync::Mutex<VtState>>,
     mut pty_rx: mpsc::Receiver<Bytes>,
@@ -85,33 +81,30 @@ pub async fn run_bridge_task(
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
-
-            // PTY chunk → Term
             chunk = pty_rx.recv() => {
                 let Some(chunk) = chunk else { break };
+                if chunk.is_empty() {
+                    continue;
+                }
                 let mut state = vt_state.lock().expect("vt_state poisoned");
                 state.advance(&chunk);
             }
-
-            // Reply-required (drain only in Phase 1; Phase 2 wires PTY writer)
             reply = reply_rx.recv() => {
-                let Some(_reply) = reply else { break };
-                // Phase 1: discard. Phase 2 will write PtyWrite bytes back
-                // to the PTY and invoke reply closures for size/color requests.
+                if reply.is_none() {
+                    break;
+                }
             }
-
-            // Best-effort (drain only in Phase 1)
             ctrl = control_rx.recv() => {
-                let Some(_ctrl) = ctrl else { break };
-                // Phase 1: discard. Phase 2 emits these as JSON frames.
+                if ctrl.is_none() {
+                    break;
+                }
             }
         }
     }
 }
 
-/// Minimal local impl of `alacritty_terminal::grid::Dimensions` so we can
-/// construct `Term::new` without depending on internal helpers (`TermSize`
-/// is `pub(crate)` inside alacritty's `term::tests`).
+// NOTE: minimal local `Dimensions` impl since alacritty's `TermSize` is
+// `pub(crate)` inside its own crate.
 struct LocalDim {
     cols: usize,
     rows: usize,
@@ -160,7 +153,6 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_task_consumes_pty_chunks_and_updates_term() {
-        // Setup: VtState を Arc<Mutex<>> で共有し、bridge task に渡す。
         let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
         let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
         let drop_counter = Arc::new(DropCounter::new());
@@ -181,14 +173,9 @@ mod tests {
             cancel.clone(),
         ));
 
-        // Send a "hello" chunk
         pty_tx.send(Bytes::from_static(b"hello")).await.unwrap();
-
-        // Give the bridge task a moment to consume and update Term
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        // Verify Term grid has "hello" on row 0 (lock dropped before any await
-        // to avoid `clippy::await_holding_lock`).
         let line0_text: String = {
             let state = vt_state.lock().unwrap();
             let row = &state.term.grid()[alacritty_terminal::index::Line(0)];
@@ -198,11 +185,9 @@ mod tests {
         };
         assert!(
             line0_text.starts_with("hello"),
-            "expected 'hello' on row 0, got: {:?}",
-            line0_text
+            "expected 'hello' on row 0, got: {line0_text:?}"
         );
 
-        // Cancel and wait
         cancel.cancel();
         let _ = handle.await;
     }

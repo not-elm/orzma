@@ -3,10 +3,12 @@
 use bytes::Bytes;
 use std::collections::VecDeque;
 
-/// MessagePack-encoded delta with its seq for replay/identification.
+/// A MessagePack-encoded delta tagged with its sequence number.
 #[derive(Debug, Clone)]
 pub struct EncodedDelta {
+    /// Monotonic frame sequence number.
     pub seq: u32,
+    /// Encoded MessagePack payload.
     pub encoded: Bytes,
 }
 
@@ -29,7 +31,11 @@ impl FrameRing {
         }
     }
 
-    /// Push a new encoded delta. Evicts oldest entries if budget exceeded.
+    /// Pushes a new encoded delta, evicting oldest entries if the budget
+    /// would be exceeded.
+    ///
+    /// A delta whose own size exceeds the entire byte budget is dropped
+    /// silently; Phase 2's 4 MiB frame size cap prevents this in practice.
     pub fn push(&mut self, seq: u32, encoded: Bytes) {
         let size = encoded.len();
         while !self.deltas.is_empty() && self.current_bytes + size > self.byte_budget {
@@ -41,25 +47,24 @@ impl FrameRing {
             self.current_bytes += size;
             self.deltas.push_back(EncodedDelta { seq, encoded });
         }
-        // else: single entry exceeds the budget; drop it silently
-        // (Phase 2 で frame size cap 4 MiB に引っかかる前提なので発生しないはず)
     }
 
-    /// Attempt to replay from `last_seq + 1` up to the latest seq.
-    /// Returns `Some(deltas)` if the range is fully present (each consecutive
-    /// seq exists in the ring). Returns `None` if there is any gap.
+    /// Replays consecutive deltas from `last_seq + 1` up to the latest seq.
+    ///
+    /// Returns `Some(deltas)` only when every seq in the range is present;
+    /// returns `None` on any gap (caller must fall back to a full snapshot).
     pub fn replay(&self, last_seq: u32) -> Option<Vec<Bytes>> {
         let first_in_ring = self.deltas.front()?.seq;
         let target_first = last_seq.checked_add(1)?;
         if target_first < first_in_ring {
-            return None; // gap: ring's oldest is past target_first
+            return None;
         }
 
         let mut out = Vec::new();
         let mut expected = target_first;
         for d in self.deltas.iter().skip_while(|d| d.seq < target_first) {
             if d.seq != expected {
-                return None; // gap detected mid-range
+                return None;
             }
             out.push(d.encoded.clone());
             expected = expected.checked_add(1)?;
@@ -67,15 +72,17 @@ impl FrameRing {
         Some(out)
     }
 
-    /// Latest seq in the ring (None if empty).
+    /// Returns the latest seq in the ring, or `None` if empty.
     pub fn latest_seq(&self) -> Option<u32> {
         self.deltas.back().map(|d| d.seq)
     }
 
+    /// Returns the number of entries currently in the ring.
     pub fn len(&self) -> usize {
         self.deltas.len()
     }
 
+    /// Returns true when the ring has no entries.
     pub fn is_empty(&self) -> bool {
         self.deltas.is_empty()
     }
@@ -120,14 +127,11 @@ mod tests {
     #[test]
     fn eviction_when_over_budget() {
         let mut r = FrameRing::new(100);
-        // 各 entry 40 bytes、3 件で 120 → 最古 1 件が evicted
         r.push(1, mk_bytes(40));
         r.push(2, mk_bytes(40));
         r.push(3, mk_bytes(40));
         assert_eq!(r.len(), 2);
-        // last_seq=0 で replay 要求 → ring に 2,3 しかないので gap = None
         assert!(r.replay(0).is_none());
-        // last_seq=1 で replay → 2, 3 が並ぶ
         assert_eq!(r.replay(1).unwrap().len(), 2);
     }
 

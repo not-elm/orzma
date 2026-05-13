@@ -3,12 +3,16 @@
 use serde::{Deserialize, Serialize};
 
 /// Foreground/background color.
-/// Wire: Default = nil, Indexed = uint8, Rgb = 3-tuple of uint8.
+///
+/// Wire encoding: `Default` = nil, `Indexed` = uint8, `Rgb` = 3-tuple of uint8.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Color {
+    /// Use the terminal's default foreground/background color.
     Default,
+    /// Indexed palette color (0-255).
     Indexed(u8),
+    /// Direct RGB color.
     Rgb(u8, u8, u8),
 }
 
@@ -30,92 +34,122 @@ pub struct Cursor {
     pub visible: bool,
 }
 
-/// Style bitmask. bold=1, italic=2, underline=4, strike=8, reverse=16, dim=32.
-/// bits 64 / 128 are reserved (no current meaning).
-#[allow(dead_code)] // consumed by encoder (Task 6+) and tests
+/// Style bitmask constants for [`Run::style`].
+///
+/// Bits 64 and 128 are reserved.
+#[expect(dead_code, reason = "consumed by Phase 2 encoder")]
 pub mod style {
+    /// Bold weight.
     pub const BOLD: u8 = 1;
+    /// Italic style.
     pub const ITALIC: u8 = 2;
+    /// Underline decoration.
     pub const UNDERLINE: u8 = 4;
+    /// Strikethrough decoration.
     pub const STRIKE: u8 = 8;
+    /// Reversed foreground/background.
     pub const REVERSE: u8 = 16;
+    /// Dim/faint weight.
     pub const DIM: u8 = 32;
 }
 
 /// A run of cells sharing identical fg/bg/style attributes.
 ///
-/// `cols` = total column span (sum of grapheme cluster widths from `text`).
-/// `text` = UTF-8 string; client uses Unicode East Asian Width to position
-/// each grapheme cluster within the run. wide-char spacers (alacritty
-/// internal) are absorbed server-side and do NOT appear in `text`.
-/// `hyperlink_id` = Phase 1/2 always None; Phase 3 (OSC 8) sets it.
+/// Wide-char spacers (alacritty internal) are absorbed server-side and do
+/// not appear in `text`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
+    /// Total column span (sum of grapheme cluster widths in `text`).
     pub cols: u16,
+    /// Foreground color.
     pub fg: Color,
+    /// Background color.
     pub bg: Color,
+    /// Style bitmask (see [`style`]).
     pub style: u8,
+    /// UTF-8 text; the client uses Unicode East Asian Width to position each
+    /// grapheme cluster within the run.
     pub text: String,
+    /// Hyperlink id (OSC 8); always `None` until Phase 3.
     pub hyperlink_id: Option<u32>,
 }
 
-/// A row of runs (left-to-right).
+/// A row of runs ordered left-to-right.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
+    /// Runs in left-to-right column order.
     pub runs: Vec<Run>,
 }
 
-/// A dirty row entry inside a Delta frame.
+/// A dirty row entry inside a `FrameDelta`.
+///
 /// `runs` represents the entire row (full row replacement, not partial).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirtyRow {
+    /// Row index, zero-based from the top of the screen.
     pub row: u16,
+    /// Full set of runs for the row.
     pub runs: Vec<Run>,
 }
 
-/// Why was a snapshot sent.
+/// Reason a snapshot was sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotReason {
+    /// Initial connect.
     Initial,
+    /// Reconnect with no replay available.
     Reconnect,
+    /// Receiver fell too far behind the broadcast.
     Lagged,
+    /// Terminal was resized.
     Resize,
 }
 
-/// Full screen state snapshot. Sent on connect, reconnect (no replay), lagged,
-/// or resize. `kind` discriminant is serialized via serde `tag` on RenderFrame.
+/// Full screen state snapshot.
+///
+/// Sent on connect, reconnect (no replay), lagged, or resize. The `kind`
+/// discriminant is serialized via the [`RenderFrame`] tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameSnapshot {
+    /// Monotonic frame sequence number.
     pub seq: u32,
+    /// Terminal column count.
     pub cols: u16,
+    /// Terminal row count.
     pub rows: u16,
+    /// Cursor state at snapshot time.
     pub cursor: Cursor,
+    /// Row contents, ordered top-to-bottom.
     pub rows_data: Vec<Row>,
+    /// Why the snapshot was sent.
     pub reason: SnapshotReason,
 }
 
-/// Differential update. `dirty_rows` contains entire rows that changed.
+/// Differential update relative to the prior frame.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameDelta {
+    /// Monotonic frame sequence number.
     pub seq: u32,
+    /// Entire rows that changed.
     pub dirty_rows: Vec<DirtyRow>,
 }
 
-/// Render frame tagged union dispatch shape (wire-level `kind` discriminator).
+/// Wire-level render frame, dispatched by the `kind` tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RenderFrame {
+    /// Full snapshot variant.
     Snapshot(FrameSnapshot),
+    /// Differential update variant.
     Delta(FrameDelta),
 }
 
-/// Encode a wire frame as map-keyed MessagePack (field names preserved on the wire).
+/// Encodes a wire value as map-keyed MessagePack so field names are preserved
+/// for the frontend's msgpackr decoder.
 ///
-/// Use this for any value that crosses the wire to the frontend; the frontend's
-/// msgpackr decoder expects map-keyed objects (e.g., `frame.kind === "snapshot"`).
-/// `rmp_serde::to_vec` defaults to array-encoded (positional) which is more compact
-/// but breaks cross-language interop.
+/// `rmp_serde::to_vec` defaults to array-encoded (positional) — compact but
+/// not interoperable with the JS decoder, which keys by field name.
 pub fn encode<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, rmp_serde::encode::Error> {
     rmp_serde::to_vec_named(value)
 }
@@ -134,7 +168,7 @@ mod tests {
             text: "hello".to_string(),
             hyperlink_id: None,
         };
-        let bytes = rmp_serde::to_vec(&run).expect("encode");
+        let bytes = encode(&run).expect("encode");
         let decoded: Run = rmp_serde::from_slice(&bytes).expect("decode");
         assert_eq!(decoded, run);
     }
@@ -147,7 +181,7 @@ mod tests {
             Color::Indexed(255),
             Color::Rgb(10, 20, 30),
         ] {
-            let bytes = rmp_serde::to_vec(&c).unwrap();
+            let bytes = encode(&c).unwrap();
             let decoded: Color = rmp_serde::from_slice(&bytes).unwrap();
             assert_eq!(decoded, c);
         }
@@ -161,7 +195,7 @@ mod tests {
             shape: CursorShape::Bar,
             visible: false,
         };
-        let bytes = rmp_serde::to_vec(&cur).unwrap();
+        let bytes = encode(&cur).unwrap();
         let decoded: Cursor = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded, cur);
     }
@@ -193,7 +227,7 @@ mod tests {
             ],
             reason: SnapshotReason::Initial,
         };
-        let bytes = rmp_serde::to_vec(&snap).unwrap();
+        let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded, snap);
     }
@@ -220,7 +254,7 @@ mod tests {
                 },
             ],
         };
-        let bytes = rmp_serde::to_vec(&delta).unwrap();
+        let bytes = encode(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded, delta);
     }
@@ -236,14 +270,10 @@ mod tests {
             hyperlink_id: None,
         };
         let bytes = encode(&run).expect("encode");
-        // map-keyed MessagePack of a 6-field struct begins with 0x86 (fixmap with 6 entries).
-        // array-keyed would start with 0x96 (fixarray with 6 entries).
         assert_eq!(
             bytes[0], 0x86,
-            "expected fixmap (0x86), got 0x{:02x}",
-            bytes[0]
+            "expected fixmap (0x86) for 6-field map; array-encoded would be 0x96"
         );
-        // round-trip
         let decoded: Run = rmp_serde::from_slice(&bytes).expect("decode");
         assert_eq!(decoded, run);
     }
@@ -263,7 +293,7 @@ mod tests {
             rows_data: vec![],
             reason: SnapshotReason::Initial,
         });
-        let bytes = rmp_serde::to_vec(&snap).unwrap();
+        let bytes = encode(&snap).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded, snap);
     }

@@ -110,8 +110,6 @@ impl TerminalService {
         let scrollback = ScrollbackBuffer::new();
         let (event_sender, _) = broadcast::channel(1024);
 
-        // VT fan-out channel: raw bridge task gets the Sender, the VT bridge
-        // task (spawned inside `PtyHandle::new`) gets the Receiver.
         let (vt_chunk_tx, vt_chunk_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(128);
 
         spawn_pty_reader(
@@ -305,7 +303,6 @@ fn spawn_pty_reader(
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
     let exit_event_sender = event_sender.clone();
 
-    // 1) blocking read 専用の OS スレッド
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -313,28 +310,23 @@ fn spawn_pty_reader(
                 Ok(0) => break,
                 Ok(n) => {
                     if tx.blocking_send(buf[..n].to_vec()).is_err() {
-                        break; // bridge task が落ちた / drop された
+                        break;
                     }
                 }
                 Err(_) => break,
             }
         }
-        // child.wait() もブロッキング → 同じ OS スレッドで実行
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
         let _ = exit_event_sender.send(TerminalEvent::Exit { code });
-        // tx は drop され、bridge task の rx.recv() が None を返して終わる
     });
 
-    // 2) bridge task: mpsc → scrollback + broadcast を「同じロック内」で。
-    //    Phase 1+ では同じ chunk を VT bridge にも fan-out する
-    //    (best-effort: 128 cap を超えたら無音 drop。raw path が source of truth)。
+    // NOTE: VT fan-out runs before push_and_broadcast so the raw path is
+    // never stalled by VT consumption pressure; try_send drops silently when
+    // the VT bridge can't keep up, and the raw scrollback path remains
+    // source of truth.
     tokio::spawn(async move {
         while let Some(chunk) = rx.recv().await {
-            // Fan-out to VT bridge first (cheap Bytes::from clone of the Vec).
-            // try_send is non-blocking; overflow is dropped silently so the
-            // raw path is never stalled by VT consumption pressure.
             let _ = vt_chunk_tx.try_send(bytes::Bytes::copy_from_slice(&chunk));
-            // Existing raw path: push to scrollback + broadcast.
             scrollback.push_and_broadcast(&event_sender, chunk).await;
         }
     });

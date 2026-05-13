@@ -27,7 +27,10 @@ impl ScrollbackBuffer {
     /// `push_and_broadcast` and `snapshot_and_subscribe` to keep the producer
     /// and consumer sides serialized through a single critical section.
     #[cfg(test)]
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "test-only helper; production goes through push_and_broadcast"
+    )]
     #[inline]
     pub async fn push(&self, data: &[u8]) {
         self.0.lock().await.push(data);
@@ -69,49 +72,47 @@ pub(crate) struct PtyHandle {
     pub event_sender: Sender<TerminalEvent>,
     _child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
 
-    // === VT path (Phase 1+) ===
-    /// Bundled VT state (Term + Parser + FrameRing + last_input_at).
-    /// Wrapped in std::sync::Mutex for short-held locks per PTY chunk
-    /// in vt_bridge_task (Task 13). Read by `TerminalService::inspect_row`
-    /// under the `test-helpers` feature; otherwise dead until Phase 1
-    /// frame emission lands.
+    /// Bundled VT state (Term + Parser + FrameRing + last_input_at), wrapped
+    /// in `std::sync::Mutex` for short-held locks per PTY chunk in the bridge
+    /// task. Read by `TerminalService::inspect_row` under the `test-helpers`
+    /// feature.
     #[cfg_attr(
         not(any(test, feature = "test-helpers")),
-        expect(dead_code, reason = "wired in Task 13/14, read in Task 15+")
+        expect(dead_code, reason = "consumed by Phase 2 frame coalescer")
     )]
     pub(crate) vt_state: Arc<std::sync::Mutex<VtState>>,
 
-    /// reply-required events from TermListener (unbounded; must-not-drop
+    /// Reply-required events from `TermListener` (unbounded; must-not-drop
     /// to avoid capability-query backflow regression).
-    #[expect(dead_code, reason = "wired in Task 13/14")]
+    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) reply_tx: mpsc::UnboundedSender<ReplyFrame>,
 
-    /// best-effort control events (bounded cap=64); try_send drops are
-    /// rate-limited via DropCounter.
-    #[expect(dead_code, reason = "wired in Task 13/14")]
+    /// Best-effort control events (bounded cap=64); try_send drops are
+    /// rate-limited via `DropCounter`.
+    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) control_tx: mpsc::Sender<ControlFrame>,
 
-    /// broadcast of MessagePack-encoded delta frames. Phase 1: no
-    /// emissions; Phase 2 wires the bridge task to push here.
-    #[expect(dead_code, reason = "wired in Task 13/14")]
+    /// Broadcast of MessagePack-encoded delta frames.
+    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) frame_broadcast: broadcast::Sender<EncodedDelta>,
 
-    /// Monotonic frame sequence number across reconnects.
-    /// Activity-scoped, resets when the daemon process restarts.
-    #[expect(dead_code, reason = "wired in Task 13/14")]
+    /// Monotonic frame sequence number across reconnects (activity-scoped,
+    /// resets on daemon restart).
+    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) frame_seq: AtomicU32,
 
-    /// Aggregated drop counter for bounded channel try_send failures.
-    #[expect(dead_code, reason = "wired in Task 13/14")]
+    /// Aggregated drop counter for bounded channel `try_send` failures.
+    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) drop_counter: Arc<DropCounter>,
 
-    /// Sender used by `spawn_pty_reader`'s bridge task to fan-out PTY chunks
-    /// to the VT bridge. Bounded cap=128 — overflow is dropped silently
-    /// (the raw scrollback path is the source of truth). The actual fan-out
-    /// sender lives in the spawned bridge task; this handle-side copy keeps
-    /// the channel open for the lifetime of `PtyHandle` and is available
-    /// for future direct injection (e.g., synthetic VT input in tests).
-    #[expect(dead_code, reason = "channel keepalive; consumer added in Phase 2")]
+    /// Handle-side keepalive for the VT fan-out channel. The actual fan-out
+    /// sender lives in `spawn_pty_reader`'s bridge task; holding a clone here
+    /// keeps the channel alive for the lifetime of `PtyHandle` and reserves
+    /// the slot for future direct injection (e.g., synthetic VT input).
+    #[expect(
+        dead_code,
+        reason = "channel keepalive; direct producer added in Phase 2"
+    )]
     pub(crate) vt_chunk_tx: mpsc::Sender<Bytes>,
 
     /// Cancellation for the VT bridge task; cancelled on `PtyHandle::drop`.
@@ -119,7 +120,7 @@ pub(crate) struct PtyHandle {
 }
 
 impl PtyHandle {
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "constructor wires raw PTY + VT bridge resources; a builder \
                   would obscure the single call site in TerminalService::spawn"
@@ -135,11 +136,6 @@ impl PtyHandle {
         vt_chunk_tx: mpsc::Sender<Bytes>,
         vt_chunk_rx: mpsc::Receiver<Bytes>,
     ) -> Self {
-        // ===== VT path setup (Phase 1) =====
-        // Phase 1: keep `reply_rx` / `control_rx` and pass them to the bridge
-        // task. The `frame_rx` broadcast receiver is dropped — Phase 2's
-        // `subscribe_frames` API will create fresh receivers via
-        // `frame_broadcast.subscribe()`.
         let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
         let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
         let (frame_broadcast, _frame_rx) = broadcast::channel::<EncodedDelta>(256);
@@ -152,16 +148,11 @@ impl PtyHandle {
         };
 
         let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(cols, rows, listener)));
-
-        // VT chunk channel is created by the caller and split so the raw
-        // bridge task can hold the sender (fan-out) while we pass the receiver
-        // to `run_bridge_task`. Cancellation lives here.
         let vt_cancel = CancellationToken::new();
 
-        // Phase 1: the JoinHandle is discarded; Task 15 may want to await it
-        // on shutdown. Cancellation via `vt_cancel` on drop is sufficient for
-        // task termination.
-        let _vt_join = tokio::spawn(run_bridge_task(
+        // NOTE: the JoinHandle is intentionally discarded; cancellation via
+        // vt_cancel on PtyHandle::drop is sufficient to terminate the task.
+        tokio::spawn(run_bridge_task(
             vt_state.clone(),
             vt_chunk_rx,
             reply_rx,
@@ -197,8 +188,6 @@ impl PtyHandle {
 
 impl Drop for PtyHandle {
     fn drop(&mut self) {
-        // Wake the VT bridge task so it exits its `tokio::select!` loop and
-        // releases the cloned `Arc<Mutex<VtState>>`.
         self.vt_cancel.cancel();
     }
 }
@@ -235,12 +224,10 @@ mod tests {
 
         scrollback.push_and_broadcast(&tx, b"new".to_vec()).await;
 
-        // rx receives ONLY the new bytes, not the old ones (which are in snap).
         match rx.recv().await.unwrap() {
             TerminalEvent::Data { buffer } => assert_eq!(buffer, b"new"),
             other => panic!("unexpected event: {other:?}"),
         }
-        // No more pending events.
         assert!(rx.try_recv().is_err());
     }
 }

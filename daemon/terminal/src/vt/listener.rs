@@ -7,16 +7,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::vte::ansi::Rgb;
-
-/// Pane window dimensions, used as the payload for `TextAreaSizeRequest` replies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WindowSize {
-    pub num_lines: u16,
-    pub num_cols: u16,
-    pub cell_width: u16,
-    pub cell_height: u16,
-}
 
 /// Must-not-drop reply-required frames forwarded from `TermListener` into
 /// the bridge task. The channel must be `mpsc::UnboundedSender` so that DA/DSR/
@@ -30,11 +22,6 @@ pub enum ReplyFrame {
     /// reply; bridge fills it with the current pane dimensions.
     TextAreaSizeRequest(Arc<dyn Fn(WindowSize) -> String + Send + Sync>),
     /// `Event::ColorRequest`: closure expects a palette `Rgb`.
-    ///
-    /// Note: alacritty 0.26's `Event::ColorRequest` uses
-    /// `Arc<dyn Fn(Rgb) -> String + Sync + Send + 'static>` (not
-    /// `Option<Rgb>`). The bridge must always have an `Rgb` to provide;
-    /// the absent-color case is handled before invoking the closure.
     ColorRequest(usize, Arc<dyn Fn(Rgb) -> String + Send + Sync>),
 }
 
@@ -77,97 +64,50 @@ pub struct TermListener {
     pub drop_counter: Arc<DropCounter>,
 }
 
+impl TermListener {
+    fn send_control(&self, frame: ControlFrame, category: &'static str) {
+        if self.control_tx.try_send(frame).is_err() && self.drop_counter.record(category) {
+            tracing::warn!(
+                category,
+                total = self.drop_counter.total_count(),
+                "control_tx full, dropped"
+            );
+        }
+    }
+}
+
 impl alacritty_terminal::event::EventListener for TermListener {
-    // Note: send_event is &self (sync, no Send/Sync supertrait).
     fn send_event(&self, event: alacritty_terminal::event::Event) {
         use alacritty_terminal::event::Event;
 
         match event {
-            // ===== reply-required =====
             Event::PtyWrite(s) => {
                 let _ = self.reply_tx.send(ReplyFrame::PtyWrite(s.into_bytes()));
             }
             Event::TextAreaSizeRequest(reply) => {
-                // alacritty's closure takes alacritty's `WindowSize`; our
-                // `ReplyFrame::TextAreaSizeRequest` carries one parameterized
-                // by our local `WindowSize`. Both structs have identical
-                // shape; wrap to bridge the type boundary.
-                let wrapped: Arc<dyn Fn(WindowSize) -> String + Send + Sync> =
-                    Arc::new(move |ours: WindowSize| {
-                        reply(alacritty_terminal::event::WindowSize {
-                            num_lines: ours.num_lines,
-                            num_cols: ours.num_cols,
-                            cell_width: ours.cell_width,
-                            cell_height: ours.cell_height,
-                        })
-                    });
-                let _ = self.reply_tx.send(ReplyFrame::TextAreaSizeRequest(wrapped));
+                let _ = self.reply_tx.send(ReplyFrame::TextAreaSizeRequest(reply));
             }
             Event::ColorRequest(idx, reply) => {
                 let _ = self.reply_tx.send(ReplyFrame::ColorRequest(idx, reply));
             }
 
-            // ===== best-effort =====
-            Event::Title(s) => {
-                if self.control_tx.try_send(ControlFrame::Title(s)).is_err()
-                    && self.drop_counter.record("title")
-                {
-                    tracing::warn!(
-                        category = "title",
-                        total = self.drop_counter.total_count(),
-                        "control_tx full, dropped"
-                    );
-                }
-            }
-            Event::ResetTitle => {
-                if self.control_tx.try_send(ControlFrame::ResetTitle).is_err()
-                    && self.drop_counter.record("reset_title")
-                {
-                    tracing::warn!(
-                        category = "reset_title",
-                        total = self.drop_counter.total_count(),
-                        "control_tx full, dropped"
-                    );
-                }
-            }
-            Event::Bell => {
-                if self.control_tx.try_send(ControlFrame::Bell).is_err()
-                    && self.drop_counter.record("bell")
-                {
-                    tracing::warn!(
-                        category = "bell",
-                        total = self.drop_counter.total_count(),
-                        "control_tx full, dropped"
-                    );
-                }
-            }
-            Event::ClipboardStore(_clip, content) => {
-                let frame = ControlFrame::Clipboard {
+            Event::Title(s) => self.send_control(ControlFrame::Title(s), "title"),
+            Event::ResetTitle => self.send_control(ControlFrame::ResetTitle, "reset_title"),
+            Event::Bell => self.send_control(ControlFrame::Bell, "bell"),
+            Event::ClipboardStore(_clip, content) => self.send_control(
+                ControlFrame::Clipboard {
                     content,
-                    correlation_seq: None, // bridge task fills in latest input seq
-                };
-                if self.control_tx.try_send(frame).is_err()
-                    && self.drop_counter.record("clipboard_store")
-                {
-                    tracing::warn!(
-                        category = "clipboard_store",
-                        total = self.drop_counter.total_count(),
-                        "control_tx full, dropped"
-                    );
-                }
-            }
+                    correlation_seq: None,
+                },
+                "clipboard_store",
+            ),
 
-            // ===== explicit ignores =====
-            Event::ClipboardLoad(_clip, _reply) => {
-                // OSC 52 read: default-ignored (security policy).
-                // Future opt-in: route through reply_tx to ask the client.
-            }
-            Event::ChildExit(_) | Event::Exit => {
-                // bridge task termination is handled via the PTY EOF path.
-            }
-            Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {
-                // Phase 1/2 unused.
-            }
+            // NOTE: OSC 52 read is default-ignored (security policy); future
+            // opt-in would route through reply_tx.
+            Event::ClipboardLoad(_clip, _reply) => {}
+            // NOTE: bridge task termination is handled via the PTY EOF path.
+            Event::ChildExit(_) | Event::Exit => {}
+            Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {}
         }
     }
 }
@@ -270,7 +210,6 @@ mod drop_counter_tests {
     #[test]
     fn token_bucket_rate_limits() {
         let counter = DropCounter::with_tokens(2, Duration::from_millis(50));
-        // 2 個 token があるので 2 回は warn 出力 OK、3 回目はスキップ
         assert!(counter.should_warn("c"));
         assert!(counter.should_warn("c"));
         assert!(!counter.should_warn("c"));
@@ -360,7 +299,6 @@ mod listener_tests {
 
     #[test]
     fn control_drop_records_to_counter() {
-        // cap=1 control_tx, send Title twice, verify 1 drop is recorded.
         let (reply_tx, _reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
         let (control_tx, _control_rx_held) = mpsc::channel::<ControlFrame>(1);
         let drop_counter = std::sync::Arc::new(DropCounter::new());
@@ -368,7 +306,6 @@ mod listener_tests {
 
         listener.send_event(Event::Title("first".into()));
         listener.send_event(Event::Title("second drops".into()));
-        // First fits (cap=1); second fails try_send -> drop_counter increments.
         assert_eq!(drop_counter.total_count(), 1);
     }
 }

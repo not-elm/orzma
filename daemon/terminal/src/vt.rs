@@ -15,5 +15,5 @@ pub use frame::{
     SnapshotReason, encode,
 };
 pub use frame_ring::{EncodedDelta, FrameRing};
-pub use listener::{ControlFrame, DropCounter, ReplyFrame, TermListener, WindowSize};
+pub use listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 pub use mode_diff::{ModeChange, diff_mode};
