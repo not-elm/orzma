@@ -41,6 +41,7 @@ interface SharedState {
 
 let shared: SharedState | null = null;
 let dispatcher: KeyDispatcher | null = null;
+let moduleDisposed = false;
 
 function ensureDispatcher() {
   if (dispatcher) return dispatcher;
@@ -106,15 +107,18 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
         payload = await r.json();
       } catch (e) {
         console.warn('usePrefixMode: fetch failed', e);
-        if (!cancelled) setState({ status: 'error', prefix: null });
+        // NOTE: Network failures and schema failures both map to status:'error';
+        // the root cause is logged at the point of failure (fetch catch / parseShortcuts).
+        if (!cancelled && !moduleDisposed) setState({ status: 'error', prefix: null });
         return;
       }
+      if (cancelled || moduleDisposed) return;
       const parsed = parseShortcuts(payload);
       if (!parsed) {
-        if (!cancelled) setState({ status: 'error', prefix: null });
+        if (!cancelled && !moduleDisposed) setState({ status: 'error', prefix: null });
         return;
       }
-      if (cancelled) return;
+      if (cancelled || moduleDisposed) return;
 
       const bindings: ChordBinding[] = [];
       for (const b of parsed.bindings) {
@@ -169,6 +173,7 @@ if (import.meta.hot) {
   // Vite HMR replaces this module without re-running consumers' effects;
   // detach the old listener so we don't accumulate duplicate keydown handlers.
   import.meta.hot.dispose(() => {
+    moduleDisposed = true;
     if (dispatcher) dispatcher.detachFrom(document);
     shared = null;
     dispatcher = null;

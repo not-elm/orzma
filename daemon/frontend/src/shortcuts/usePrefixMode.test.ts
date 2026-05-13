@@ -36,6 +36,7 @@ function makeCtx(): ShortcutContext {
 }
 
 beforeEach(() => {
+  // shouldAdvanceTime lets waitFor's polling interval fire under fake timers.
   vi.useFakeTimers({ shouldAdvanceTime: true });
   closeFetchMock = vi.fn<typeof fetch>().mockResolvedValue({ ok: true, status: 204 } as Response);
   configFetchMock = vi.fn<typeof fetch>().mockResolvedValue({
@@ -73,9 +74,11 @@ describe('usePrefixMode', () => {
       press({ key: 'b', ctrlKey: true });
       press({ key: 'x' });
     });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(closeFetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1', { method: 'DELETE' });
+    await waitFor(() =>
+      expect(closeFetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1', {
+        method: 'DELETE',
+      }),
+    );
   });
 
   it('Ctrl+B → Escape returns to idle without firing', async () => {
@@ -138,6 +141,24 @@ describe('usePrefixMode', () => {
     expect(closeFetchMock).not.toHaveBeenCalled();
   });
 
+  it('armed + key press calls both preventDefault and stopPropagation', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+    });
+
+    const ev = new KeyboardEvent('keydown', { key: 'q', bubbles: true, cancelable: true });
+    const preventSpy = vi.spyOn(ev, 'preventDefault');
+    const stopSpy = vi.spyOn(ev, 'stopPropagation');
+    act(() => {
+      document.dispatchEvent(ev);
+    });
+    expect(preventSpy).toHaveBeenCalled();
+    expect(stopSpy).toHaveBeenCalled();
+    expect(result.current.isArmed).toBe(false);
+  });
+
   it('event.repeat does not arm', async () => {
     const { result } = renderHook(() => usePrefixMode(makeCtx()));
     await waitFor(() => expect(result.current.status).toBe('ready'));
@@ -176,6 +197,7 @@ describe('usePrefixMode', () => {
     });
     await Promise.resolve();
     expect(closeFetchMock).not.toHaveBeenCalled();
+
     expect(result.current.isArmed).toBe(false);
   });
 
