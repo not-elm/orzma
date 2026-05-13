@@ -37,7 +37,6 @@ pub struct Cursor {
 /// Style bitmask constants for [`Run::style`].
 ///
 /// Bits 64 and 128 are reserved.
-#[expect(dead_code, reason = "consumed by Phase 2 encoder")]
 pub mod style {
     /// Bold weight.
     pub const BOLD: u8 = 1;
