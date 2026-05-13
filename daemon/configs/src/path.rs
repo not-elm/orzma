@@ -2,8 +2,6 @@
 //! behind a trait so tests can substitute a deterministic implementation
 //! without mutating process-wide environment variables.
 
-#![cfg_attr(not(test), expect(dead_code, reason = "consumed by OzmuxConfigs::load in a subsequent task"))]
-
 use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
 use std::path::PathBuf;
@@ -17,7 +15,6 @@ pub(crate) trait Env {
 }
 
 /// Production `Env` implementation that delegates to `std::env` and `dirs`.
-#[cfg_attr(test, expect(dead_code, reason = "consumed by OzmuxConfigs::load in a subsequent task"))]
 pub(crate) struct SystemEnv;
 
 impl Env for SystemEnv {
