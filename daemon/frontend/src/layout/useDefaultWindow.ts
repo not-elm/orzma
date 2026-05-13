@@ -1,15 +1,10 @@
 import { useEffect, useState } from 'react';
+import { fetchJson } from '../fetchJson';
 
 export type DefaultWindowState =
   | { status: 'loading' }
   | { status: 'ready'; windowId: string }
   | { status: 'error'; message: string };
-
-async function fetchJson(url: string): Promise<unknown> {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${url}: ${r.status} ${r.statusText}`);
-  return r.json();
-}
 
 export function useDefaultWindow(): DefaultWindowState {
   const [state, setState] = useState<DefaultWindowState>({ status: 'loading' });

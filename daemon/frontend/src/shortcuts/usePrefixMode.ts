@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { fetchJson } from '../fetchJson';
 import { actionToHandler, type ShortcutContext } from './actionDispatch';
 import { matchesChord } from './chord';
 import { createKeyDispatcher, type KeyDispatcher } from './globalKeyDispatcher';
@@ -99,26 +100,26 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
   // biome-ignore lint/correctness/useExhaustiveDependencies: ctx callbacks are read at fire time; including ctx would re-run the effect and re-fetch on every render.
   useEffect(() => {
     let cancelled = false;
+    // NOTE: Network failures and schema failures both map to status:'error';
+    // the root cause is logged at the point of failure (fetchJson / parseShortcuts).
+    const setIfAlive = (next: { status: 'loading' | 'ready' | 'error'; prefix: Prefix | null }) => {
+      if (!cancelled && !moduleDisposed) setState(next);
+    };
     (async () => {
       let payload: unknown;
       try {
-        const r = await fetch('/configs/shortcuts');
-        if (!r.ok) throw new Error(`/configs/shortcuts: ${r.status} ${r.statusText}`);
-        payload = await r.json();
+        payload = await fetchJson('/configs/shortcuts');
       } catch (e) {
         console.warn('usePrefixMode: fetch failed', e);
-        // NOTE: Network failures and schema failures both map to status:'error';
-        // the root cause is logged at the point of failure (fetch catch / parseShortcuts).
-        if (!cancelled && !moduleDisposed) setState({ status: 'error', prefix: null });
+        setIfAlive({ status: 'error', prefix: null });
         return;
       }
       if (cancelled || moduleDisposed) return;
       const parsed = parseShortcuts(payload);
       if (!parsed) {
-        if (!cancelled && !moduleDisposed) setState({ status: 'error', prefix: null });
+        setIfAlive({ status: 'error', prefix: null });
         return;
       }
-      if (cancelled || moduleDisposed) return;
 
       const bindings: ChordBinding[] = [];
       for (const b of parsed.bindings) {
@@ -153,7 +154,7 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
         timer: null,
       };
       ensureDispatcher().attachTo(document);
-      setState({ status: 'ready', prefix: parsed.prefix });
+      setIfAlive({ status: 'ready', prefix: parsed.prefix });
     })();
 
     return () => {

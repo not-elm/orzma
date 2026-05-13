@@ -1,11 +1,13 @@
-import type { Prefix } from './wire';
+import type { NamedKey, Prefix } from './wire';
 
 interface PrefixIndicatorProps {
   armed: boolean;
   prefix: Prefix | null;
 }
 
-const NAMED_KEY_LABELS: Record<string, string> = {
+// Exhaustive over NAMED_KEYS in wire.ts; adding a new named key there will
+// fail this map's typecheck until a label is added here.
+const NAMED_KEY_LABELS: Record<NamedKey, string> = {
   Escape: 'Esc',
   Space: '␣',
   Enter: '↵',
@@ -18,7 +20,7 @@ const NAMED_KEY_LABELS: Record<string, string> = {
 };
 
 function keyLabel(key: string): string {
-  if (key in NAMED_KEY_LABELS) return NAMED_KEY_LABELS[key];
+  if (key in NAMED_KEY_LABELS) return NAMED_KEY_LABELS[key as NamedKey];
   return key.length === 1 ? key.toUpperCase() : key;
 }
 

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const NAMED_KEYS = [
+export const NAMED_KEYS = [
   'Escape',
   'Space',
   'Enter',
@@ -11,6 +11,8 @@ const NAMED_KEYS = [
   'ArrowLeft',
   'ArrowRight',
 ] as const;
+
+export type NamedKey = (typeof NAMED_KEYS)[number];
 
 const KeyTokenSchema = z.union([z.string().length(1), z.enum(NAMED_KEYS)]);
 
@@ -41,8 +43,6 @@ const ShortcutsRawSchema = z.object({
   bindings: z.array(z.unknown()),
 });
 
-export type KeyToken = z.infer<typeof KeyTokenSchema>;
-export type Modifiers = z.infer<typeof ModifiersSchema>;
 export type KeyChord = z.infer<typeof KeyChordFieldsSchema>;
 export type Action = z.infer<typeof ActionSchema>;
 export type Prefix = z.infer<typeof PrefixSchema>;
@@ -76,17 +76,8 @@ export function parseShortcuts(raw: unknown): Shortcuts | null {
       console.warn('parseShortcuts: dropping binding', { entry, issues: parsed.error.issues });
       continue;
     }
-    bindings.push({
-      chord: { key: parsed.data.key, modifiers: parsed.data.modifiers },
-      action: parsed.data.action,
-    });
+    const { key, modifiers, action } = parsed.data;
+    bindings.push({ chord: { key, modifiers }, action });
   }
-  return {
-    prefix: {
-      key: top.data.prefix.key,
-      modifiers: top.data.prefix.modifiers,
-      timeout_ms: top.data.prefix.timeout_ms,
-    },
-    bindings,
-  };
+  return { prefix: top.data.prefix, bindings };
 }
