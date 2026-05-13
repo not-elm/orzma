@@ -1,0 +1,4 @@
+[[shortcuts.bindings]]
+key = "x"
+modifiers = { shift = true }
+action = { type = "close-pane" }

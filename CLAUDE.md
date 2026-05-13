@@ -72,6 +72,13 @@ styles, no arbitrary values, no raw palette references) is governed by
 [`.claude/rules/styling.md`](.claude/rules/styling.md) and enforced by
 Biome GritQL plugins in `biome-plugins/`.
 
+## Rust Coding Rules
+
+Rust style and conventions (no `mod.rs`, restricted comment taxonomy,
+doc-comment policy, import discipline) are governed by
+[`.claude/rules/rust.md`](.claude/rules/rust.md). Applies to all crates
+under `cli/` and `daemon/*`.
+
 ## UI verification workflow
 
 Use this when you have changed anything under `daemon/frontend/src/**`, the showcase, theme tokens, pane layout, or daemon-side endpoints that the UI consumes. Skip it for purely backend-internal changes that the UI does not exercise.

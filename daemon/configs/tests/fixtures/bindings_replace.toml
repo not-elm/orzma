@@ -1,0 +1,3 @@
+[[shortcuts.bindings]]
+key = "y"
+action = { type = "close-window" }

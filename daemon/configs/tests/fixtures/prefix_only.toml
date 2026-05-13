@@ -1,0 +1,4 @@
+[shortcuts.prefix]
+key = "a"
+modifiers = { ctrl = true }
+timeout_ms = 3000

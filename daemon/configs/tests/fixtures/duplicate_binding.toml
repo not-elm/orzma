@@ -1,0 +1,7 @@
+[[shortcuts.bindings]]
+key = "x"
+action = { type = "close-pane" }
+
+[[shortcuts.bindings]]
+key = "x"
+action = { type = "close-window" }
