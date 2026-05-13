@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend memo-build-sdk
+.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend test-wire-goldens memo-build-sdk
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
@@ -62,3 +62,9 @@ dev-e2e-stop:
 
 test-frontend:
 	pnpm --dir $(FRONTEND_DIR) exec vitest run
+
+test-wire-goldens:
+	@for bin in daemon/terminal/tests/fixtures/wire_msgpack/*.bin; do \
+		echo "verify $$bin"; \
+		tools/msgpack-to-diag.sh "$$bin" | diff -u "$${bin%.bin}.diag.txt" -; \
+	done
