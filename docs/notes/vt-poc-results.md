@@ -77,3 +77,28 @@ work around this by asking the shell to emit the escape itself
 side and the master reader picks it up verbatim. Phase 2's bridge consumes
 real-program output and is not affected — this caveat applies only when a
 test wants to *inject* an escape.
+
+## Task 19: Encode benchmark (alacritty 0.26 + rmp-serde 1 map-keyed)
+
+Hardware: macOS Darwin 25.3.0 arm64 (Apple M4 Pro, Mac16,8)
+Run: `cargo bench -p ozmux_terminal --bench frame_encode -- --warm-up-time 0.5 --measurement-time 2 --sample-size 30`
+
+| Frame                   | Target    | Observed (median) | Pass |
+| ----------------------- | --------- | ----------------- | ---- |
+| `snapshot_80x24_encode` | < 100 µs  | 1.80 µs           | ✅    |
+| `delta_4rows_encode`    | <  20 µs  | 508 ns            | ✅    |
+
+Both targets are met with ~55× and ~40× headroom respectively against the Phase 2
+coalescer budget. The MessagePack map-keyed encoder (`rmp_serde::to_vec_named`) is
+nowhere near the bottleneck on this hardware; the encode path can absorb worst-case
+full-snapshot resync without violating the 100 µs ceiling.
+
+Fallback strategy if a future change regresses these (e.g., wider terminals, heavy
+hyperlink/attr churn, or slower target hardware):
+
+- Sub-snapshot 80x24 path: pre-allocate `BytesMut` with capacity ~4 KiB and reuse it
+  across encodes via `to_writer_named` to avoid per-frame `Vec` growth.
+- Delta path: consider RLE on contiguous identical attrs (Phase 2 opt) — current
+  encoder writes one `Run` per run; truly long identical spans benefit from compact
+  encoding.
+- Last resort: switch to (A) custom binary as documented in Spec § Rust 7.
