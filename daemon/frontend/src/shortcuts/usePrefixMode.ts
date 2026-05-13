@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
+import { actionToHandler, type ShortcutContext } from './actionDispatch';
+import { matchesChord } from './chord';
 import { createKeyDispatcher, type KeyDispatcher } from './globalKeyDispatcher';
+import { type KeyChord, type Prefix, parseShortcuts } from './wire';
 
 /**
  * **INVARIANT: at most one `usePrefixMode` may be mounted at a time.**
@@ -9,25 +12,28 @@ import { createKeyDispatcher, type KeyDispatcher } from './globalKeyDispatcher';
  * `shared` (silently breaking the first caller's `setArmed` callback)
  * and unmounting either would `detachFrom(document)`, killing keyboard
  * handling for the surviving caller. The intended owner is `App.tsx`.
+ *
+ * The hook also owns the fetch lifecycle for `GET /configs/shortcuts`.
+ * Bindings are derived from the parsed `Shortcuts.bindings` and
+ * `actionToHandler`. Until the fetch resolves, `shared` is `null` and
+ * the dispatcher (if attached by `useIframeKeydownBridge`) early-returns.
  */
-export type PrefixBindings = ReadonlyMap<string, () => void>;
-
-export interface PrefixModeOptions {
-  prefix?: { ctrl: boolean; key: string };
-  timeoutMs?: number;
-}
-
 export interface PrefixModeState {
   isArmed: boolean;
+  status: 'loading' | 'ready' | 'error';
+  prefix: Prefix | null;
+}
+
+interface ChordBinding {
+  chord: KeyChord;
+  handler: () => void;
 }
 
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta']);
 
 interface SharedState {
-  bindings: PrefixBindings;
-  prefixCtrl: boolean;
-  prefixKeyLower: string;
-  timeoutMs: number;
+  bindings: ReadonlyArray<ChordBinding>;
+  prefix: Prefix;
   armed: boolean;
   setArmed: (next: boolean) => void;
   timer: ReturnType<typeof setTimeout> | null;
@@ -41,22 +47,13 @@ function ensureDispatcher() {
   const handler = (e: KeyboardEvent) => {
     if (!shared) return;
     if (e.isComposing) return;
-    const key = e.key.toLowerCase();
-    const { prefixCtrl, prefixKeyLower } = shared;
 
     if (!shared.armed) {
-      const isPrefix =
-        key === prefixKeyLower &&
-        e.ctrlKey === prefixCtrl &&
-        !e.shiftKey &&
-        !e.altKey &&
-        !e.metaKey &&
-        !e.repeat;
-      if (isPrefix) {
-        e.preventDefault();
-        e.stopPropagation();
-        shared.setArmed(true);
-      }
+      if (e.repeat) return;
+      if (!matchesChord(e, shared.prefix)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      shared.setArmed(true);
       return;
     }
 
@@ -66,13 +63,13 @@ function ensureDispatcher() {
 
     if (MODIFIER_KEYS.has(e.key) || e.repeat) return;
 
-    if (e.key === 'Escape' || (key === prefixKeyLower && e.ctrlKey === prefixCtrl)) {
+    if (e.key === 'Escape' || matchesChord(e, shared.prefix)) {
       shared.setArmed(false);
       return;
     }
 
-    const action = shared.bindings.get(key);
-    if (action) action();
+    const match = shared.bindings.find((b) => matchesChord(e, b.chord));
+    if (match) match.handler();
     shared.setArmed(false);
   };
   dispatcher = createKeyDispatcher(handler);
@@ -90,22 +87,43 @@ export function detachKeydownTarget(target: EventTarget) {
   dispatcher.detachFrom(target);
 }
 
-export function usePrefixMode(
-  bindings: PrefixBindings,
-  options?: PrefixModeOptions,
-): PrefixModeState {
+export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
   const [isArmed, setIsArmed] = useState(false);
+  const [state, setState] = useState<{
+    status: 'loading' | 'ready' | 'error';
+    prefix: Prefix | null;
+  }>({ status: 'loading', prefix: null });
 
-  // Use primitive deps so a default object literal does not cause re-subscribe
-  // on every render.
-  const prefixCtrl = options?.prefix?.ctrl ?? true;
-  const prefixKey = options?.prefix?.key ?? 'b';
-  const timeoutMs = options?.timeoutMs ?? 2000;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: bindings is kept fresh via the render-time write below; adding it would re-run the effect on every identity change and clobber shared state.
+  // ctx members are read inside handlers at fire-time, not captured here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: ctx callbacks are read at fire time; including ctx would re-run the effect and re-fetch on every render.
   useEffect(() => {
-    const setArmed = (next: boolean) => {
-      if (shared) {
+    let cancelled = false;
+    (async () => {
+      let payload: unknown;
+      try {
+        const r = await fetch('/configs/shortcuts');
+        if (!r.ok) throw new Error(`/configs/shortcuts: ${r.status} ${r.statusText}`);
+        payload = await r.json();
+      } catch (e) {
+        console.warn('usePrefixMode: fetch failed', e);
+        if (!cancelled) setState({ status: 'error', prefix: null });
+        return;
+      }
+      const parsed = parseShortcuts(payload);
+      if (!parsed) {
+        if (!cancelled) setState({ status: 'error', prefix: null });
+        return;
+      }
+      if (cancelled) return;
+
+      const bindings: ChordBinding[] = [];
+      for (const b of parsed.bindings) {
+        const handler = actionToHandler(b.action, ctx);
+        if (handler) bindings.push({ chord: b.chord, handler });
+      }
+
+      const setArmed = (next: boolean) => {
+        if (!shared) return;
         if (shared.timer !== null) {
           clearTimeout(shared.timer);
           shared.timer = null;
@@ -119,34 +137,32 @@ export function usePrefixMode(
               shared.timer = null;
             }
             setIsArmed(false);
-          }, timeoutMs);
+          }, parsed.prefix.timeout_ms);
         }
-      }
-    };
-    shared = {
-      bindings,
-      prefixCtrl,
-      prefixKeyLower: prefixKey.toLowerCase(),
-      timeoutMs,
-      armed: false,
-      setArmed,
-      timer: null,
-    };
-    ensureDispatcher().attachTo(document);
+      };
+
+      shared = {
+        bindings,
+        prefix: parsed.prefix,
+        armed: false,
+        setArmed,
+        timer: null,
+      };
+      ensureDispatcher().attachTo(document);
+      setState({ status: 'ready', prefix: parsed.prefix });
+    })();
+
     return () => {
+      cancelled = true;
       if (shared && shared.timer !== null) {
         clearTimeout(shared.timer);
       }
       if (dispatcher) dispatcher.detachFrom(document);
       shared = null;
     };
-  }, [prefixCtrl, prefixKey, timeoutMs]);
+  }, []);
 
-  // Bindings close over per-render values; sync each render so the listener
-  // always sees the current closure rather than the one captured at mount.
-  if (shared) shared.bindings = bindings;
-
-  return { isArmed };
+  return { isArmed, status: state.status, prefix: state.prefix };
 }
 
 if (import.meta.hot) {

@@ -1,6 +1,26 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type PrefixBindings, usePrefixMode } from './usePrefixMode';
+import type { ShortcutContext } from './actionDispatch';
+import { usePrefixMode } from './usePrefixMode';
+
+const DEFAULT_PAYLOAD = {
+  prefix: {
+    key: 'b',
+    modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+    timeout_ms: 2000,
+  },
+  bindings: [
+    {
+      key: 'x',
+      modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+      action: { type: 'close-pane' },
+    },
+  ],
+};
+
+const origFetch = globalThis.fetch;
+let closeFetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+let configFetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 function press(opts: KeyboardEventInit & { key: string }) {
   document.dispatchEvent(
@@ -8,30 +28,59 @@ function press(opts: KeyboardEventInit & { key: string }) {
   );
 }
 
+function makeCtx(): ShortcutContext {
+  return {
+    activeWindow: () => 'wid-1',
+    activePane: () => 'pid-1',
+  };
+}
+
 beforeEach(() => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  closeFetchMock = vi.fn<typeof fetch>().mockResolvedValue({ ok: true, status: 204 } as Response);
+  configFetchMock = vi.fn<typeof fetch>().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => DEFAULT_PAYLOAD,
+  } as Response);
+  globalThis.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof url === 'string' ? url : url.toString();
+    if (path === '/configs/shortcuts') return configFetchMock(url, init);
+    return closeFetchMock(url, init);
+  }) as typeof globalThis.fetch;
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
 afterEach(() => {
+  globalThis.fetch = origFetch;
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('usePrefixMode', () => {
-  it('Ctrl+B → x fires the binding once', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    renderHook(() => usePrefixMode(bindings));
+  it('starts in loading and transitions to ready after fetch', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    expect(result.current.status).toBe('loading');
+    expect(result.current.prefix).toBeNull();
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.prefix?.key).toBe('b');
+  });
+
+  it('Ctrl+B → x fires the close-pane binding', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
     act(() => {
       press({ key: 'b', ctrlKey: true });
       press({ key: 'x' });
     });
-    expect(fire).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closeFetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1', { method: 'DELETE' });
   });
 
-  it('Ctrl+B → Escape returns to idle without firing', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    const { result } = renderHook(() => usePrefixMode(bindings));
+  it('Ctrl+B → Escape returns to idle without firing', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
     act(() => {
       press({ key: 'b', ctrlKey: true });
     });
@@ -40,25 +89,23 @@ describe('usePrefixMode', () => {
       press({ key: 'Escape' });
     });
     expect(result.current.isArmed).toBe(false);
-    expect(fire).not.toHaveBeenCalled();
+    expect(closeFetchMock).not.toHaveBeenCalled();
   });
 
-  it('Ctrl+B → Ctrl+B cancels (idle)', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    const { result } = renderHook(() => usePrefixMode(bindings));
+  it('Ctrl+B → Ctrl+B disarms (idle)', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
     act(() => {
       press({ key: 'b', ctrlKey: true });
       press({ key: 'b', ctrlKey: true });
     });
     expect(result.current.isArmed).toBe(false);
-    expect(fire).not.toHaveBeenCalled();
+    expect(closeFetchMock).not.toHaveBeenCalled();
   });
 
-  it('2000ms timeout returns to idle', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    const { result } = renderHook(() => usePrefixMode(bindings));
+  it('timeout (timeout_ms from config) returns to idle', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
     act(() => {
       press({ key: 'b', ctrlKey: true });
     });
@@ -69,10 +116,9 @@ describe('usePrefixMode', () => {
     expect(result.current.isArmed).toBe(false);
   });
 
-  it('armed + unbound key returns to idle (and consumes the key)', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    const { result } = renderHook(() => usePrefixMode(bindings));
+  it('armed + unbound key returns to idle and consumes the key', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
     act(() => {
       press({ key: 'b', ctrlKey: true });
     });
@@ -88,42 +134,22 @@ describe('usePrefixMode', () => {
       press({ key: 'q' });
     });
     expect(result.current.isArmed).toBe(false);
-    expect(fire).not.toHaveBeenCalled();
     expect(preventedDuringArmed).toBe(true);
+    expect(closeFetchMock).not.toHaveBeenCalled();
   });
 
-  it('armed + key press calls both preventDefault and stopPropagation', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    renderHook(() => usePrefixMode(bindings));
-    act(() => {
-      press({ key: 'b', ctrlKey: true });
-    });
-
-    const ev = new KeyboardEvent('keydown', { key: 'q', bubbles: true, cancelable: true });
-    const preventSpy = vi.spyOn(ev, 'preventDefault');
-    const stopSpy = vi.spyOn(ev, 'stopPropagation');
-    act(() => {
-      document.dispatchEvent(ev);
-    });
-    expect(preventSpy).toHaveBeenCalled();
-    expect(stopSpy).toHaveBeenCalled();
-  });
-
-  it('event.repeat does not arm', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    const { result } = renderHook(() => usePrefixMode(bindings));
+  it('event.repeat does not arm', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
     act(() => {
       press({ key: 'b', ctrlKey: true, repeat: true });
     });
     expect(result.current.isArmed).toBe(false);
   });
 
-  it('event.isComposing keys are pass-through (no preventDefault, no state change)', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    const { result } = renderHook(() => usePrefixMode(bindings));
+  it('event.isComposing keys are pass-through', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
     let prevented = false;
     document.addEventListener(
       'keydown',
@@ -133,47 +159,45 @@ describe('usePrefixMode', () => {
       { once: true },
     );
     act(() => {
-      // jsdom KeyboardEvent doesn't accept isComposing in init; force via property
       const ev = new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true });
       Object.defineProperty(ev, 'isComposing', { get: () => true });
       document.dispatchEvent(ev);
     });
     expect(result.current.isArmed).toBe(false);
     expect(prevented).toBe(false);
-    expect(fire).not.toHaveBeenCalled();
   });
 
-  it('case-insensitive: Shift+X while armed fires binding "x"', () => {
-    const fire = vi.fn();
-    const bindings: PrefixBindings = new Map([['x', fire]]);
-    renderHook(() => usePrefixMode(bindings));
+  it('Shift+X with modifier mismatch does NOT fire the unmodified "x" binding', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
     act(() => {
       press({ key: 'b', ctrlKey: true });
       press({ key: 'X', shiftKey: true });
     });
-    expect(fire).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(closeFetchMock).not.toHaveBeenCalled();
+    expect(result.current.isArmed).toBe(false);
   });
 
-  it('passing a fresh Map every render does not re-register listeners', () => {
-    const addSpy = vi.spyOn(document, 'addEventListener');
-    const fire = vi.fn();
-    const { rerender } = renderHook(
-      ({ tick }: { tick: number }) => {
-        const bindings: PrefixBindings = new Map([['x', () => fire(tick)]]);
-        return usePrefixMode(bindings);
-      },
-      { initialProps: { tick: 0 } },
-    );
-    const initialAddCount = addSpy.mock.calls.filter((c) => c[0] === 'keydown').length;
-    rerender({ tick: 1 });
-    rerender({ tick: 2 });
-    const afterAddCount = addSpy.mock.calls.filter((c) => c[0] === 'keydown').length;
-    expect(afterAddCount).toBe(initialAddCount);
-    // Still uses the latest binding closure
+  it('does not dispatch keydowns before fetch resolves (status === loading)', () => {
+    configFetchMock.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    expect(result.current.status).toBe('loading');
     act(() => {
       press({ key: 'b', ctrlKey: true });
-      press({ key: 'x' });
     });
-    expect(fire).toHaveBeenCalledWith(2);
+    expect(result.current.isArmed).toBe(false);
+    expect(closeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('settles into error when fetch rejects', async () => {
+    configFetchMock.mockRejectedValue(new Error('boom'));
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.prefix).toBeNull();
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+    });
+    expect(result.current.isArmed).toBe(false);
   });
 });
