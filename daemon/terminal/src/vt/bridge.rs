@@ -38,6 +38,19 @@ pub struct VtState {
         expect(dead_code, reason = "consumed by Phase 2 frame coalescer")
     )]
     pub last_input_at: Option<Instant>,
+    /// Monotonic per-activity frame sequence number. Single-producer
+    /// (bridge task) under the VtState lock.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 10+)")
+    )]
+    pub frame_seq: u32,
+    /// Set false after the first frame emit so subsequent ones become deltas.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 10+)")
+    )]
+    pub first_emit: bool,
 }
 
 impl VtState {
@@ -53,6 +66,8 @@ impl VtState {
             parser: alacritty_terminal::vte::ansi::Processor::new(),
             frame_ring: FrameRing::new(256 * 1024),
             last_input_at: None,
+            frame_seq: 0,
+            first_emit: true,
         }
     }
 
@@ -144,6 +159,8 @@ mod tests {
         let state = VtState::new(80, 24, make_listener());
         assert!(state.frame_ring.is_empty());
         assert!(state.last_input_at.is_none());
+        assert_eq!(state.frame_seq, 0);
+        assert!(state.first_emit);
         assert_eq!(state.term.columns(), 80);
         assert_eq!(state.term.screen_lines(), 24);
     }

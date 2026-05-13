@@ -4,7 +4,6 @@ use crate::vt::frame_ring::EncodedDelta;
 use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 use bytes::Bytes;
 use portable_pty::{ChildKiller, MasterPty};
-use std::sync::atomic::AtomicU32;
 use std::{io::Write, num::NonZero, sync::Arc};
 use tokio::sync::{
     Mutex, broadcast,
@@ -96,11 +95,6 @@ pub(crate) struct PtyHandle {
     #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) frame_broadcast: broadcast::Sender<EncodedDelta>,
 
-    /// Monotonic frame sequence number across reconnects (activity-scoped,
-    /// resets on daemon restart).
-    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
-    pub(crate) frame_seq: AtomicU32,
-
     /// Aggregated drop counter for bounded channel `try_send` failures.
     #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
     pub(crate) drop_counter: Arc<DropCounter>,
@@ -170,7 +164,6 @@ impl PtyHandle {
             reply_tx,
             control_tx,
             frame_broadcast,
-            frame_seq: AtomicU32::new(0),
             drop_counter,
             vt_chunk_tx,
             vt_cancel,
