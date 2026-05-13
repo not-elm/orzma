@@ -128,4 +128,110 @@ mod tests {
         let decoded: Run = rmp_serde::from_slice(&bytes).expect("decode");
         assert_eq!(decoded, run);
     }
+
+    #[test]
+    fn color_variants_round_trip() {
+        for c in [
+            Color::Default,
+            Color::Indexed(0),
+            Color::Indexed(255),
+            Color::Rgb(10, 20, 30),
+        ] {
+            let bytes = rmp_serde::to_vec(&c).unwrap();
+            let decoded: Color = rmp_serde::from_slice(&bytes).unwrap();
+            assert_eq!(decoded, c);
+        }
+    }
+
+    #[test]
+    fn cursor_round_trip() {
+        let cur = Cursor {
+            x: 5,
+            y: 3,
+            shape: CursorShape::Bar,
+            visible: false,
+        };
+        let bytes = rmp_serde::to_vec(&cur).unwrap();
+        let decoded: Cursor = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, cur);
+    }
+
+    #[test]
+    fn snapshot_with_two_rows_round_trip() {
+        let snap = FrameSnapshot {
+            seq: 42,
+            cols: 80,
+            rows: 24,
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                visible: true,
+            },
+            rows_data: vec![
+                Row {
+                    runs: vec![Run {
+                        cols: 3,
+                        fg: Color::Default,
+                        bg: Color::Default,
+                        style: 0,
+                        text: "abc".into(),
+                        hyperlink_id: None,
+                    }],
+                },
+                Row { runs: vec![] },
+            ],
+            reason: SnapshotReason::Initial,
+        };
+        let bytes = rmp_serde::to_vec(&snap).unwrap();
+        let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, snap);
+    }
+
+    #[test]
+    fn delta_with_dirty_rows_round_trip() {
+        let delta = FrameDelta {
+            seq: 100,
+            dirty_rows: vec![
+                DirtyRow {
+                    row: 0,
+                    runs: vec![],
+                },
+                DirtyRow {
+                    row: 5,
+                    runs: vec![Run {
+                        cols: 2,
+                        fg: Color::Rgb(255, 0, 0),
+                        bg: Color::Default,
+                        style: style::BOLD,
+                        text: "あ".into(),
+                        hyperlink_id: None,
+                    }],
+                },
+            ],
+        };
+        let bytes = rmp_serde::to_vec(&delta).unwrap();
+        let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, delta);
+    }
+
+    #[test]
+    fn render_frame_tagged_dispatch() {
+        let snap = RenderFrame::Snapshot(FrameSnapshot {
+            seq: 0,
+            cols: 1,
+            rows: 1,
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                visible: true,
+            },
+            rows_data: vec![],
+            reason: SnapshotReason::Initial,
+        });
+        let bytes = rmp_serde::to_vec(&snap).unwrap();
+        let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, snap);
+    }
 }
