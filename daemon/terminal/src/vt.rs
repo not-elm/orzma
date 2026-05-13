@@ -4,8 +4,13 @@
 //! 構造化された描画 frame に変換する経路を提供する。Phase 1 では
 //! Term を内部更新するだけで wire には何も emit しない。
 
-pub mod bridge;
-pub mod frame;
-pub mod frame_ring;
-pub mod listener;
-pub mod mode_diff;
+pub(crate) mod bridge;
+pub(crate) mod frame;
+pub(crate) mod frame_ring;
+pub(crate) mod listener;
+pub(crate) mod mode_diff;
+
+pub use frame::{
+    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, RenderFrame, Row, Run,
+    SnapshotReason,
+};
