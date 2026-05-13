@@ -17,7 +17,7 @@ use crate::shortcuts::Shortcuts;
 use crate::theme::Theme;
 
 /// Fully-resolved ozmux configuration.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct OzmuxConfigs {
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,

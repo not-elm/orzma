@@ -2,19 +2,8 @@
 //! These are returned when the config file is absent and act as the merge
 //! baseline when it is present.
 
-use crate::OzmuxConfigs;
 use crate::shortcuts::{Action, Binding, Key, KeyChord, Modifiers, Prefix, Shortcuts};
 use crate::theme::Theme;
-
-#[expect(clippy::derivable_impls)]
-impl Default for OzmuxConfigs {
-    fn default() -> Self {
-        Self {
-            shortcuts: Shortcuts::default(),
-            theme: Theme::default(),
-        }
-    }
-}
 
 impl Default for Shortcuts {
     fn default() -> Self {
