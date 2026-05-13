@@ -14,3 +14,4 @@ pub use frame::{
     Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, RenderFrame, Row, Run,
     SnapshotReason, encode,
 };
+pub use mode_diff::{ModeChange, diff_mode};
