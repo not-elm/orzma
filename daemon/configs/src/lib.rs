@@ -69,3 +69,45 @@ impl OzmuxConfigs {
         Ok(merged)
     }
 }
+
+#[cfg(feature = "test_support")]
+pub mod test_support {
+    //! Test-only helpers. Enabled via the `test_support` cargo feature.
+
+    use crate::OzmuxConfigs;
+    use crate::OzmuxConfigsResult;
+    use crate::path;
+    use std::path::PathBuf;
+
+    /// Loads `OzmuxConfigs` while honoring a caller-provided env, used by
+    /// integration tests to avoid mutating process-wide env vars.
+    pub async fn load_with_overrides(
+        ozmux_config: Option<PathBuf>,
+        xdg_config_home: Option<PathBuf>,
+        home_dir: Option<PathBuf>,
+    ) -> OzmuxConfigsResult<OzmuxConfigs> {
+        struct FixedEnv {
+            ozmux: Option<String>,
+            xdg: Option<String>,
+            home: Option<PathBuf>,
+        }
+        impl path::Env for FixedEnv {
+            fn var(&self, key: &str) -> Option<String> {
+                match key {
+                    "OZMUX_CONFIG" => self.ozmux.clone(),
+                    "XDG_CONFIG_HOME" => self.xdg.clone(),
+                    _ => None,
+                }
+            }
+            fn home_dir(&self) -> Option<PathBuf> {
+                self.home.clone()
+            }
+        }
+        let env = FixedEnv {
+            ozmux: ozmux_config.map(|p| p.to_string_lossy().into_owned()),
+            xdg: xdg_config_home.map(|p| p.to_string_lossy().into_owned()),
+            home: home_dir,
+        };
+        OzmuxConfigs::load_with_env(&env).await
+    }
+}
