@@ -48,14 +48,17 @@ describe('actionToHandler', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('returns a handler that POSTs split with horizontal orientation', async () => {
+  it.each([
+    'horizontal',
+    'vertical',
+  ] as const)('returns a handler that POSTs split with %s orientation', async (orientation) => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
     const ctx: ShortcutContext = {
       activeWindow: () => 'wid-1',
       activePane: () => 'pid-1',
     };
-    const handler = actionToHandler({ type: 'split-pane', direction: 'horizontal' }, ctx);
+    const handler = actionToHandler({ type: 'split-pane', direction: orientation }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
     }
@@ -65,28 +68,7 @@ describe('actionToHandler', () => {
     expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/split', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ orientation: 'horizontal' }),
-    });
-  });
-
-  it('returns a handler that POSTs split with vertical orientation', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    const ctx: ShortcutContext = {
-      activeWindow: () => 'wid-1',
-      activePane: () => 'pid-1',
-    };
-    const handler = actionToHandler({ type: 'split-pane', direction: 'vertical' }, ctx);
-    if (handler === null) {
-      throw new Error('handler should not be null');
-    }
-    handler();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/split', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ orientation: 'vertical' }),
+      body: JSON.stringify({ orientation }),
     });
   });
 

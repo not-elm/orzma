@@ -214,34 +214,21 @@ describe('usePrefixMode', () => {
     expect(result.current.isArmed).toBe(false);
   });
 
-  it('Ctrl+B → s fires the split-pane horizontal binding', async () => {
+  it.each([
+    ['s', 'horizontal'],
+    ['v', 'vertical'],
+  ] as const)('Ctrl+B → %s fires the split-pane %s binding', async (key, orientation) => {
     const { result } = renderHook(() => usePrefixMode(makeCtx()));
     await waitFor(() => expect(result.current.status).toBe('ready'));
     act(() => {
       press({ key: 'b', ctrlKey: true });
-      press({ key: 's' });
+      press({ key });
     });
     await waitFor(() =>
       expect(splitFetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/split', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ orientation: 'horizontal' }),
-      }),
-    );
-  });
-
-  it('Ctrl+B → v fires the split-pane vertical binding', async () => {
-    const { result } = renderHook(() => usePrefixMode(makeCtx()));
-    await waitFor(() => expect(result.current.status).toBe('ready'));
-    act(() => {
-      press({ key: 'b', ctrlKey: true });
-      press({ key: 'v' });
-    });
-    await waitFor(() =>
-      expect(splitFetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/split', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ orientation: 'vertical' }),
+        body: JSON.stringify({ orientation }),
       }),
     );
   });

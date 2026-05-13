@@ -13,25 +13,17 @@ afterEach(() => {
 });
 
 describe('splitPane', () => {
-  it('issues POST /windows/{wid}/panes/{pid}/split with horizontal orientation', async () => {
+  it.each([
+    'horizontal',
+    'vertical',
+  ] as const)('issues POST /windows/{wid}/panes/{pid}/split with %s orientation', async (orientation) => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    await splitPane('wid-1', 'pid-42', 'horizontal');
+    await splitPane('wid-1', 'pid-42', orientation);
     expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-42/split', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ orientation: 'horizontal' }),
-    });
-  });
-
-  it('issues POST with vertical orientation', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
-    globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    await splitPane('wid-1', 'pid-42', 'vertical');
-    expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-42/split', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ orientation: 'vertical' }),
+      body: JSON.stringify({ orientation }),
     });
   });
 
