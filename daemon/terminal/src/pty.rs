@@ -68,17 +68,20 @@ impl TerminalService {
         activity_id: ActivityId,
         opts: SpawnOptions,
     ) -> TerminalResult {
-        let mut ptys = self.ptys.write().await;
-        if ptys.contains_key(&activity_id) {
-            return Ok(());
-        }
-
+        // NOTE: check forced_failures BEFORE the ptys lock so the two locks are
+        // never held simultaneously. Consuming the failure here also takes
+        // precedence over the dup-key short-circuit below.
         #[cfg(any(test, feature = "test-helpers"))]
         {
             let mut forced = self.forced_failures.write().await;
             if forced.remove(&activity_id) {
                 return Err(TerminalError::Pty("forced test failure".into()));
             }
+        }
+
+        let mut ptys = self.ptys.write().await;
+        if ptys.contains_key(&activity_id) {
+            return Ok(());
         }
 
         let pty_pair = native_pty_system()
