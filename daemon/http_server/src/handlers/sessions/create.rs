@@ -1,5 +1,5 @@
-use crate::AppState;
 use axum::{Json, extract::State, http::StatusCode};
+use ozmux_multiplexer::MultiplexerService;
 use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
@@ -9,10 +9,10 @@ pub struct CreateRequest {
 }
 
 pub async fn create(
-    State(state): State<AppState>,
+    State(multiplexer): State<MultiplexerService>,
     Json(body): Json<CreateRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let id = state.multiplexer.create_session(body.name).await;
+    let id = multiplexer.create_session(body.name).await;
     (StatusCode::CREATED, Json(serde_json::json!({ "id": id })))
 }
 

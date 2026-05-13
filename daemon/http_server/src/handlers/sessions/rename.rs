@@ -1,10 +1,10 @@
-use crate::{AppState, error::HttpResult};
+use crate::error::HttpResult;
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::SessionId;
+use ozmux_multiplexer::{MultiplexerService, SessionId};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -13,14 +13,11 @@ pub struct RenameRequest {
 }
 
 pub async fn rename(
-    State(state): State<AppState>,
+    State(multiplexer): State<MultiplexerService>,
     Path(session_id): Path<SessionId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
-    state
-        .multiplexer
-        .rename_session(&session_id, body.name)
-        .await?;
+    multiplexer.rename_session(&session_id, body.name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

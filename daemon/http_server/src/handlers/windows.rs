@@ -1,10 +1,10 @@
+use crate::error::HttpResult;
 use crate::window_view::WindowView;
-use crate::{AppState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
 };
-use ozmux_multiplexer::WindowId;
+use ozmux_multiplexer::{MultiplexerService, WindowId};
 
 pub mod create;
 pub mod delete;
@@ -14,11 +14,10 @@ pub mod rename;
 pub mod select;
 
 pub async fn get(
-    State(state): State<AppState>,
+    State(multiplexer): State<MultiplexerService>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<Json<WindowView>> {
-    let view = state
-        .multiplexer
+    let view = multiplexer
         .with_window_or_404(&window_id, |w| WindowView::from_window(w))
         .await?;
     Ok(Json(view))
@@ -27,6 +26,7 @@ pub async fn get(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AppState;
     use crate::test_helpers::{bootstrap_default, fresh_state, router_with};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};

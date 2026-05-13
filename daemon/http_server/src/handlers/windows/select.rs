@@ -1,15 +1,15 @@
-use crate::{AppState, error::HttpResult};
+use crate::error::HttpResult;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::WindowId;
+use ozmux_multiplexer::{MultiplexerService, WindowId};
 
 pub async fn select(
-    State(state): State<AppState>,
+    State(multiplexer): State<MultiplexerService>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<StatusCode> {
-    state.multiplexer.select_active_window(&window_id).await?;
+    multiplexer.select_active_window(&window_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
