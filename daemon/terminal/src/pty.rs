@@ -56,6 +56,17 @@ pub struct SpawnOptions {
     pub session_id: Option<SessionId>,
 }
 
+/// Current geometry and cursor state of an activity's terminal, returned by
+/// [`TerminalService::read_geometry`] for use in the hello frame.
+pub struct TerminalGeometry {
+    /// Terminal column count.
+    pub cols: u16,
+    /// Terminal row count.
+    pub rows: u16,
+    /// Cursor state at read time.
+    pub cursor: crate::vt::frame::Cursor,
+}
+
 /// Outcome of subscribing to an activity's wire stream.
 ///
 /// Callers render the snapshot or apply the replayed deltas, then consume
@@ -281,6 +292,24 @@ impl TerminalService {
         Ok(FrameSubscription::FreshSnapshot {
             snapshot: Bytes::from(encoded_vec),
             rx,
+        })
+    }
+
+    /// Reads the current geometry and cursor state under the vt_state lock.
+    ///
+    /// Returns the column count, row count, and cursor position/shape as of
+    /// the instant the lock is acquired. Intended for emitting the hello frame
+    /// on VT WebSocket connect.
+    pub async fn read_geometry(&self, activity: &ActivityId) -> TerminalResult<TerminalGeometry> {
+        use alacritty_terminal::grid::Dimensions;
+        let handle = self.read(activity).await?;
+        let vt_state = handle.vt_state.clone();
+        drop(handle);
+        let state = vt_state.lock().expect("vt_state poisoned");
+        Ok(TerminalGeometry {
+            cols: state.term.columns() as u16,
+            rows: state.term.screen_lines() as u16,
+            cursor: crate::vt::frame_builder::extract_cursor(&state.term),
         })
     }
 

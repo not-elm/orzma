@@ -90,7 +90,7 @@ pub fn build_delta<T>(term: &Term<T>, seq: u32, rows: &[u16]) -> FrameDelta {
     FrameDelta { seq, dirty_rows }
 }
 
-fn extract_cursor<T>(term: &Term<T>) -> Cursor {
+pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
     let point = term.grid().cursor.point;
     let mut x = point.column.0 as u16;
     let y = point.line.0 as u16;
