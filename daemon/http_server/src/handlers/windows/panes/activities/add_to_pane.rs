@@ -1,6 +1,7 @@
 use crate::AppState;
 use crate::error::{HttpError, HttpResult};
 use crate::handlers::publish_window_layout;
+use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -31,7 +32,7 @@ pub async fn add_to_pane(
 
     if matches!(activity_kind, ActivityKind::Terminal) {
         if let Err(spawn_err) =
-            super::super::spawn_terminal::spawn_terminal_pty(&state, &wid, &pid, &aid).await
+            spawn_terminal_pty(&state, &wid, &pid, &aid).await
         {
             if let Err(rollback_err) = rollback_added_activity(&state, &wid, &pid, &aid).await {
                 tracing::warn!(
@@ -44,6 +45,8 @@ pub async fn add_to_pane(
         }
     }
 
+    // NOTE: publish only after successful spawn so the frontend never sees a pane
+    // with a missing PTY (mirrors split.rs's "spawn must precede publish" invariant).
     publish_window_layout(&state, &wid).await;
 
     Ok((
@@ -265,13 +268,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let pane_activities_len = state
+        let pane_activities_len: usize = state
             .multiplexer
-            .with_window_or_404(&wid, |w| Ok::<_, ozmux_multiplexer::MultiplexerError>(
-                w.pane(&pid)
-                    .map(|p| p.activities.len())
-                    .unwrap_or(0),
-            ))
+            .with_window_or_404(&wid, |w| -> ozmux_multiplexer::MultiplexerResult<usize> {
+                Ok(w.pane(&pid).map(|p| p.activities.len()).unwrap_or(0))
+            })
             .await
             .unwrap();
         assert_eq!(
