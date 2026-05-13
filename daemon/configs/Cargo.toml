@@ -19,3 +19,4 @@ tracing = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread"] }
+toml = { workspace = true }

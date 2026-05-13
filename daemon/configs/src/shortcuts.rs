@@ -105,6 +105,164 @@ pub struct KeyChord {
     pub modifiers: Modifiers,
 }
 
+/// User-facing shortcut configuration.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Shortcuts {
+    /// The "armed" prefix chord.
+    pub prefix: Prefix,
+    /// Bindings dispatched while armed.
+    pub bindings: Vec<Binding>,
+}
+
+/// Prefix chord and timeout used to "arm" the shortcut dispatcher.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Prefix {
+    /// Chord that arms the dispatcher.
+    #[serde(flatten)]
+    pub chord: KeyChord,
+    /// Milliseconds to wait for the follow-up key before disarming.
+    pub timeout_ms: u64,
+}
+
+/// One armed-mode binding: a chord to listen for and the action to dispatch.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Binding {
+    /// Chord pressed while armed.
+    #[serde(flatten)]
+    pub chord: KeyChord,
+    /// Action dispatched when the chord matches.
+    pub action: Action,
+}
+
+/// All shortcut actions supported by ozmux v0.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum Action {
+    /// Close the active pane.
+    ClosePane,
+    /// Close the active window.
+    CloseWindow,
+    /// Close the active session.
+    CloseSession,
+    /// Move pane focus in a direction.
+    FocusPane {
+        /// Direction to move focus.
+        direction: Direction,
+    },
+    /// Move window focus by offset.
+    FocusWindow {
+        /// Window offset to apply.
+        offset: WindowOffset,
+    },
+    /// Jump to a window by index.
+    FocusWindowNumber {
+        /// Target window index (0–9 in practice).
+        index: u8,
+    },
+    /// Move activity focus by offset.
+    FocusActivity {
+        /// Activity offset to apply.
+        offset: ActivityOffset,
+    },
+    /// Split the active pane.
+    SplitPane {
+        /// Split direction.
+        direction: SplitDirection,
+    },
+    /// Create a new window.
+    NewWindow,
+    /// Create a new session.
+    NewSession,
+    /// Add a new terminal activity to the active pane.
+    NewTerminalActivity,
+    /// Add a new extension activity to the active pane.
+    NewExtensionActivity,
+    /// Rename the active session.
+    RenameSession,
+    /// Rename the active window.
+    RenameWindow,
+    /// Rename the active activity.
+    RenameActivity,
+    /// Close the active activity.
+    CloseActivity,
+    /// Show the window list.
+    ListWindows,
+    /// Show the activity list for the active pane.
+    ListActivities,
+    /// Resize the active pane in a direction.
+    ResizePane {
+        /// Resize direction.
+        direction: Direction,
+    },
+    /// Toggle zoom/maximize on the active pane.
+    ZoomPane,
+    /// Swap the active pane with a sibling.
+    SwapPane {
+        /// Swap offset.
+        offset: SwapOffset,
+    },
+    /// Break the active pane into a new window.
+    BreakPaneToWindow,
+}
+
+/// Layout direction shared by `FocusPane` and `ResizePane`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Direction {
+    /// Up.
+    Up,
+    /// Down.
+    Down,
+    /// Left.
+    Left,
+    /// Right.
+    Right,
+}
+
+/// Split orientation for `SplitPane`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SplitDirection {
+    /// New pane to the right of the current one.
+    Horizontal,
+    /// New pane below the current one.
+    Vertical,
+}
+
+/// Window offset selectors for `FocusWindow`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowOffset {
+    /// Next window.
+    Next,
+    /// Previous window.
+    Prev,
+    /// Last-active window.
+    Last,
+}
+
+/// Activity offset selectors for `FocusActivity`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivityOffset {
+    /// Next activity in the active pane.
+    Next,
+    /// Previous activity in the active pane.
+    Prev,
+    /// Last-active activity in the active pane.
+    Last,
+}
+
+/// Swap offset selectors for `SwapPane`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SwapOffset {
+    /// Swap with the previous sibling.
+    Prev,
+    /// Swap with the next sibling.
+    Next,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +298,57 @@ mod tests {
         assert_eq!(s, "\"x\"");
         let back: Key = serde_json::from_str(&s).unwrap();
         assert_eq!(back, key);
+    }
+
+    #[test]
+    fn prefix_deserializes_with_default_modifiers() {
+        let toml = r#"
+            key = "b"
+            modifiers = { ctrl = true }
+            timeout_ms = 2000
+        "#;
+        let p: Prefix = toml::from_str(toml).unwrap();
+        assert_eq!(p.chord.key, Key::Char('b'));
+        assert!(p.chord.modifiers.ctrl);
+        assert!(!p.chord.modifiers.shift);
+        assert_eq!(p.timeout_ms, 2000);
+    }
+
+    #[test]
+    fn binding_deserializes_close_pane() {
+        let toml = r#"
+            key = "x"
+            action = { type = "close-pane" }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert_eq!(b.chord.key, Key::Char('x'));
+        assert_eq!(b.chord.modifiers, Modifiers::default());
+        assert!(matches!(b.action, Action::ClosePane));
+    }
+
+    #[test]
+    fn binding_deserializes_split_pane_with_direction() {
+        let toml = r#"
+            key = "%"
+            action = { type = "split-pane", direction = "horizontal" }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert!(matches!(
+            b.action,
+            Action::SplitPane { direction: SplitDirection::Horizontal }
+        ));
+    }
+
+    #[test]
+    fn binding_deserializes_focus_window_number() {
+        let toml = r#"
+            key = "0"
+            action = { type = "focus-window-number", index = 0 }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert!(matches!(
+            b.action,
+            Action::FocusWindowNumber { index: 0 }
+        ));
     }
 }
