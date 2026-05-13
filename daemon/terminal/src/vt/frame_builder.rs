@@ -94,9 +94,12 @@ pub fn build_snapshot<T>(term: &Term<T>, seq: u32, reason: SnapshotReason) -> Fr
 ///
 /// Each entry is a full-row replacement (not partial). Row ordering follows
 /// the supplied slice.
-#[expect(
-    dead_code,
-    reason = "consumed by Phase 2A frame emit path (Tasks 9-12)"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "consumed by Phase 2A frame emit path (Tasks 9-12)"
+    )
 )]
 pub fn build_delta<T>(term: &Term<T>, seq: u32, rows: &[u16]) -> FrameDelta {
     let dirty_rows: Vec<DirtyRow> = rows
@@ -374,5 +377,39 @@ mod tests {
         assert_eq!(snap.cursor.x, 0);
         assert_eq!(snap.cursor.y, 0);
         assert!(snap.cursor.visible);
+    }
+
+    #[test]
+    fn delta_single_dirty_row_yields_one_dirty_row() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "xyz");
+        let delta = build_delta(&term, 9, &[0u16]);
+        assert_eq!(delta.seq, 9);
+        assert_eq!(delta.dirty_rows.len(), 1);
+        assert_eq!(delta.dirty_rows[0].row, 0);
+        let merged: String = delta.dirty_rows[0]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        assert!(merged.starts_with("xyz"));
+    }
+
+    #[test]
+    fn delta_multiple_dirty_rows_preserve_order() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "aaa\r\nbbb\r\nccc");
+        let delta = build_delta(&term, 0, &[0, 2]);
+        assert_eq!(delta.dirty_rows.len(), 2);
+        assert_eq!(delta.dirty_rows[0].row, 0);
+        assert_eq!(delta.dirty_rows[1].row, 2);
+    }
+
+    #[test]
+    fn delta_empty_rows_slice_yields_empty_dirty_rows() {
+        let term = make_term(10, 3);
+        let delta = build_delta(&term, 100, &[]);
+        assert_eq!(delta.seq, 100);
+        assert!(delta.dirty_rows.is_empty());
     }
 }
