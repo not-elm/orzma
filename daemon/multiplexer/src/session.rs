@@ -80,6 +80,7 @@ impl Session {
         }
     }
 
+    #[inline]
     pub fn rename(&mut self, name: impl Into<String>) {
         self.name = name.into();
     }

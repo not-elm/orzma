@@ -60,7 +60,10 @@ impl MultiplexerService {
         let mut sess = self.sessions.lock().await;
         let session_id = SessionId::new();
         let session_name = name.unwrap_or_else(|| format!("Session{}", sess.len() + 1));
-        sess.register(session_id.clone(), Session::empty(session_id.clone(), session_name));
+        sess.register(
+            session_id.clone(),
+            Session::empty(session_id.clone(), session_name),
+        );
         session_id
     }
 
@@ -109,8 +112,8 @@ impl MultiplexerService {
 
     /// Rename a Session.
     pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
-        let mut sess = self.sessions.lock().await;
-        let session = sess.get_mut(sid)?;
+        let mut state = self.sessions.lock().await;
+        let session = state.get_mut(sid)?;
         session.rename(name);
         Ok(())
     }
@@ -120,8 +123,8 @@ impl MultiplexerService {
         if !self.windows.contains_key(wid) {
             return Err(MultiplexerError::WindowNotFound(wid.clone()));
         }
-        let mut session_state = self.sessions.lock().await;
-        for (_, session) in session_state.iter_mut() {
+        let mut state = self.sessions.lock().await;
+        for (_, session) in state.iter_mut() {
             if session.linked_windows.contains(wid) {
                 session.active_window = Some(wid.clone());
                 return Ok(());

@@ -2,8 +2,8 @@ use axum::{Json, extract::State};
 use ozmux_multiplexer::{MultiplexerService, Session};
 
 pub async fn list(State(multiplexer): State<MultiplexerService>) -> Json<serde_json::Value> {
-    let sess = multiplexer.sessions.lock().await;
-    let mut sessions: Vec<&Session> = sess.iter().map(|(_, s)| s).collect();
+    let session_state = multiplexer.sessions.lock().await;
+    let mut sessions: Vec<&Session> = session_state.iter().map(|(_, s)| s).collect();
     sessions.sort_by(|a, b| a.id.as_ref().cmp(b.id.as_ref()));
     Json(serde_json::json!({ "sessions": sessions }))
 }
