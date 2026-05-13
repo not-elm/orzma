@@ -19,7 +19,12 @@ pub async fn add_to_pane(
 ) -> Result<(StatusCode, axum::Json<serde_json::Value>), HttpError> {
     let parsed = body.activity.into_parsed();
     let aid = state
-        .add_activity_to_pane(&wid, &pid, parsed.activity, parsed.extension_name.as_deref())
+        .add_activity_to_pane(
+            &wid,
+            &pid,
+            parsed.activity,
+            parsed.extension_name.as_deref(),
+        )
         .await?;
     Ok((
         StatusCode::CREATED,

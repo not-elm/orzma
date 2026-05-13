@@ -1,16 +1,16 @@
-use crate::{AppState, error::HttpResult};
+use crate::error::HttpResult;
 use axum::{
     Json,
     extract::{Path, State},
 };
-use ozmux_multiplexer::SessionId;
+use ozmux_multiplexer::{MultiplexerService, SessionId};
 
 pub async fn get(
-    State(state): State<AppState>,
+    State(multiplexer): State<MultiplexerService>,
     Path(session_id): Path<SessionId>,
 ) -> HttpResult<Json<serde_json::Value>> {
-    let sess = state.multiplexer.sessions.lock().await;
-    let session = sess.get(&session_id)?;
+    let session_state = multiplexer.sessions.lock().await;
+    let session = session_state.get(&session_id)?;
     Ok(Json(super::session_view(&session_id, session)))
 }
 
