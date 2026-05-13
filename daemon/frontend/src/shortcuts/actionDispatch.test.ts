@@ -55,10 +55,7 @@ describe('actionToHandler', () => {
       activeWindow: () => 'wid-1',
       activePane: () => 'pid-1',
     };
-    const handler = actionToHandler(
-      { type: 'split-pane', direction: 'horizontal' },
-      ctx,
-    );
+    const handler = actionToHandler({ type: 'split-pane', direction: 'horizontal' }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
     }
@@ -79,10 +76,7 @@ describe('actionToHandler', () => {
       activeWindow: () => 'wid-1',
       activePane: () => 'pid-1',
     };
-    const handler = actionToHandler(
-      { type: 'split-pane', direction: 'vertical' },
-      ctx,
-    );
+    const handler = actionToHandler({ type: 'split-pane', direction: 'vertical' }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
     }
@@ -103,10 +97,7 @@ describe('actionToHandler', () => {
       activeWindow: () => null,
       activePane: () => null,
     };
-    const handler = actionToHandler(
-      { type: 'split-pane', direction: 'horizontal' },
-      ctx,
-    );
+    const handler = actionToHandler({ type: 'split-pane', direction: 'horizontal' }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
     }
