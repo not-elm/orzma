@@ -125,6 +125,7 @@ pub(crate) mod test_support {
         let activity = Activity::extension(ActivityId::new(), "ext", tmp.path().to_path_buf());
         let aid = activity.id.clone();
         state
+            .multiplexer
             .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(activity))
             .await
             .unwrap();

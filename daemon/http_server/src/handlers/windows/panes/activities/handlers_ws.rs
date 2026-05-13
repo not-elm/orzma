@@ -285,6 +285,7 @@ mod tests {
         registry.register("memo", std::path::Path::new("/tmp/memo"));
         let aid = ActivityId::new();
         state
+            .multiplexer
             .with_window_or_404(&wid, |w| {
                 w.pane_mut(&pid)?.add_activity(Activity::extension(
                     aid.clone(),

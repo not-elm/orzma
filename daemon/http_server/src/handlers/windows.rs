@@ -17,6 +17,7 @@ pub async fn get(
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<Json<serde_json::Value>> {
     let view = state
+        .multiplexer
         .with_window_or_404(&window_id, |w| window_view_for(w))
         .await?;
     Ok(Json(view))
@@ -83,6 +84,7 @@ mod tests {
         let new_pane_id = PaneId::new();
         let new_activity_id = ActivityId::new();
         state
+            .multiplexer
             .with_window_or_404(wid, |w| {
                 w.split_pane(
                     target,
@@ -95,6 +97,7 @@ mod tests {
             .await
             .unwrap();
         state
+            .multiplexer
             .pane_owner_window
             .insert(new_pane_id.clone(), wid.clone());
         new_pane_id
@@ -105,6 +108,7 @@ mod tests {
         let state = fresh_state();
         let (_sid, wid, pid, aid) = bootstrap_default(&state).await;
         let root_cell = state
+            .multiplexer
             .with_window(&wid, |w| w.root_cell.clone())
             .await
             .unwrap();
@@ -158,6 +162,7 @@ mod tests {
     async fn get_orphan_window_returns_window_view() {
         let state = fresh_state();
         let (wid, _, _) = state
+            .multiplexer
             .create_window(None, Some("orphan".into()))
             .await
             .unwrap();
@@ -316,6 +321,7 @@ mod tests {
         let activity_id = activity.id.clone();
         let new_pane = PaneId::new();
         state
+            .multiplexer
             .with_window_or_404(&wid, |w| {
                 w.split_pane(
                     &bootstrap_pane,
@@ -328,6 +334,7 @@ mod tests {
             .await
             .unwrap();
         state
+            .multiplexer
             .pane_owner_window
             .insert(new_pane.clone(), wid.clone());
 
@@ -354,5 +361,4 @@ mod tests {
             format!("/windows/{wid}/panes/{new_pane}/activities/{activity_id}/iframe/index.html")
         );
     }
-
 }

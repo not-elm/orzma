@@ -17,7 +17,10 @@ pub async fn rename(
     Path(session_id): Path<SessionId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
-    state.rename_session(&session_id, body.name).await?;
+    state
+        .multiplexer
+        .rename_session(&session_id, body.name)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -31,7 +34,7 @@ mod tests {
     #[tokio::test]
     async fn rename_returns_204_and_updates_name() {
         let state = fresh_state();
-        let sid = state.create_session(None).await;
+        let sid = state.multiplexer.create_session(None).await;
         let (router, state) = router_with(state);
         let resp = router
             .oneshot(
@@ -45,7 +48,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let sess = state.sessions.lock().await;
+        let sess = state.multiplexer.sessions.lock().await;
         assert_eq!(sess.get(&sid).unwrap().name, "renamed");
     }
 

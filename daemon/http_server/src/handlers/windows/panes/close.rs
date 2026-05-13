@@ -20,10 +20,11 @@ async fn close_in_window(
     pane_id: &PaneId,
 ) -> HttpResult<StatusCode> {
     let activities = state
+        .multiplexer
         .with_window_or_404(wid, |w| w.close_pane(pane_id))
         .await?;
 
-    state.pane_owner_window.remove(pane_id);
+    state.multiplexer.pane_owner_window.remove(pane_id);
     state.extensions.forget_pane(pane_id);
     for aid in &activities {
         state.extensions.forget_activity(aid);
@@ -47,7 +48,7 @@ mod tests {
 
     async fn total_panes(state: &AppState) -> usize {
         let mut total = 0;
-        for entry in state.windows.iter() {
+        for entry in state.multiplexer.windows.iter() {
             let arc = entry.value().clone();
             drop(entry);
             let win = arc.lock().await;
@@ -57,7 +58,7 @@ mod tests {
     }
 
     async fn pane_to_cell_contains(state: &AppState, pid: &PaneId) -> bool {
-        for entry in state.windows.iter() {
+        for entry in state.multiplexer.windows.iter() {
             let arc = entry.value().clone();
             drop(entry);
             let win = arc.lock().await;
@@ -72,6 +73,7 @@ mod tests {
         let new_pane_id = PaneId::new();
         let new_activity_id = ActivityId::new();
         state
+            .multiplexer
             .with_window_or_404(wid, |w| {
                 w.split_pane(
                     target,
@@ -84,6 +86,7 @@ mod tests {
             .await
             .unwrap();
         state
+            .multiplexer
             .pane_owner_window
             .insert(new_pane_id.clone(), wid.clone());
         new_pane_id
@@ -115,7 +118,11 @@ mod tests {
     async fn close_with_wrong_wid_returns_409() {
         let state = fresh_state();
         let (sid, _wid_a, pid_a, _aid) = bootstrap_default(&state).await;
-        let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let (wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
         let (router, _state) = router_with(state);
         let resp = router
             .oneshot(

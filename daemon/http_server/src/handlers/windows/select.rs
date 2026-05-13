@@ -9,7 +9,7 @@ pub async fn select(
     State(state): State<AppState>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<StatusCode> {
-    state.select_active_window(&window_id).await?;
+    state.multiplexer.select_active_window(&window_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -23,9 +23,17 @@ mod tests {
     #[tokio::test]
     async fn select_returns_204_and_updates_active_window() {
         let state = fresh_state();
-        let sid = state.create_session(None).await;
-        let (_wid_a, _, _) = state.create_window(Some(&sid), None).await.unwrap();
-        let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let sid = state.multiplexer.create_session(None).await;
+        let (_wid_a, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let (wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
         let (router, state) = router_with(state);
         let resp = router
             .oneshot(
@@ -38,14 +46,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let sess = state.sessions.lock().await;
+        let sess = state.multiplexer.sessions.lock().await;
         assert_eq!(sess.get(&sid).unwrap().active_window.as_ref(), Some(&wid_b));
     }
 
     #[tokio::test]
     async fn select_orphan_window_returns_409_window_not_attached() {
         let state = fresh_state();
-        let (wid, _, _) = state.create_window(None, None).await.unwrap();
+        let (wid, _, _) = state.multiplexer.create_window(None, None).await.unwrap();
         let (router, _) = router_with(state);
         let resp = router
             .oneshot(

@@ -12,6 +12,7 @@ pub async fn activate(
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
 ) -> Result<StatusCode, HttpError> {
     let outcome = state
+        .multiplexer
         .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.set_active_activity(&aid))
         .await?;
     if matches!(outcome, SetActiveOutcome::Changed) {
@@ -34,6 +35,7 @@ mod tests {
         let (_sid, wid, pid, _aid_initial) = test_helpers::bootstrap_default(&state).await;
         let new_aid = ActivityId::new();
         state
+            .multiplexer
             .with_window_or_404(&wid, |w| {
                 w.pane_mut(&pid)?
                     .add_activity(Activity::terminal(new_aid.clone()))

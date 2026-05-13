@@ -23,7 +23,7 @@ mod tests {
     #[tokio::test]
     async fn delete_returns_204_and_removes_window() {
         let state = fresh_state();
-        let (wid, _, _) = state.create_window(None, None).await.unwrap();
+        let (wid, _, _) = state.multiplexer.create_window(None, None).await.unwrap();
         let (router, state) = router_with(state);
         let resp = router
             .oneshot(
@@ -36,7 +36,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        assert!(!state.windows.contains_key(&wid));
+        assert!(!state.multiplexer.windows.contains_key(&wid));
     }
 
     #[tokio::test]
@@ -59,7 +59,7 @@ mod tests {
     async fn delete_window_kicks_subscribers_with_recv_closed() {
         use tokio::sync::broadcast::error::RecvError;
         let state = fresh_state();
-        let (wid, _, _) = state.create_window(None, None).await.unwrap();
+        let (wid, _, _) = state.multiplexer.create_window(None, None).await.unwrap();
         let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
         let (router, _state) = router_with(state);
 

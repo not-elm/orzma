@@ -18,7 +18,10 @@ pub async fn rename(
     Path(window_id): Path<WindowId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
-    state.rename_window(&window_id, body.name).await?;
+    state
+        .multiplexer
+        .rename_window(&window_id, body.name)
+        .await?;
     publish_window_layout(&state, &window_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -34,6 +37,7 @@ mod tests {
     async fn rename_returns_204_and_updates_name() {
         let state = fresh_state();
         let (wid, _, _) = state
+            .multiplexer
             .create_window(None, Some("orig".into()))
             .await
             .unwrap();
@@ -50,7 +54,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let name = state.with_window(&wid, |w| w.name.clone()).await.unwrap();
+        let name = state
+            .multiplexer
+            .with_window(&wid, |w| w.name.clone())
+            .await
+            .unwrap();
         assert_eq!(name, "renamed");
     }
 
@@ -58,6 +66,7 @@ mod tests {
     async fn rename_publishes_layout_with_new_name() {
         let state = fresh_state();
         let (wid, _, _) = state
+            .multiplexer
             .create_window(None, Some("orig".into()))
             .await
             .unwrap();

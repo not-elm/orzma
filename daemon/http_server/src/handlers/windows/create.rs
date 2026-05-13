@@ -16,6 +16,7 @@ pub async fn create(
     Json(body): Json<CreateRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
     let (wid, _pid, _aid) = state
+        .multiplexer
         .create_window(body.session_id.as_ref(), body.name)
         .await?;
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": wid }))))
@@ -31,7 +32,7 @@ mod tests {
     #[tokio::test]
     async fn create_with_session_id_returns_201_and_attaches() {
         let state = fresh_state();
-        let sid = state.create_session(None).await;
+        let sid = state.multiplexer.create_session(None).await;
         let (router, state) = router_with(state);
         let resp = router
             .oneshot(
@@ -48,7 +49,7 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(v["id"].is_string());
-        let sess = state.sessions.lock().await;
+        let sess = state.multiplexer.sessions.lock().await;
         assert_eq!(sess.get(&sid).unwrap().linked_windows.len(), 1);
     }
 
@@ -67,8 +68,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
-        assert_eq!(state.windows.len(), 1);
-        assert_eq!(state.sessions.lock().await.len(), 0);
+        assert_eq!(state.multiplexer.windows.len(), 1);
+        assert_eq!(state.multiplexer.sessions.lock().await.len(), 0);
     }
 
     #[tokio::test]

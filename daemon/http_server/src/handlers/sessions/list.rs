@@ -3,7 +3,7 @@ use axum::{Json, extract::State};
 use ozmux_multiplexer::SessionId;
 
 pub async fn list(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let sess = state.sessions.lock().await;
+    let sess = state.multiplexer.sessions.lock().await;
     let mut entries: Vec<(&SessionId, &ozmux_multiplexer::Session)> = sess.iter().collect();
     entries.sort_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
     let sessions: Vec<serde_json::Value> = entries
@@ -41,8 +41,8 @@ mod tests {
     #[tokio::test]
     async fn list_returns_sessions_sorted_by_id() {
         let state = fresh_state();
-        let sid_a = state.create_session(Some("a".into())).await;
-        let sid_b = state.create_session(Some("b".into())).await;
+        let sid_a = state.multiplexer.create_session(Some("a".into())).await;
+        let sid_b = state.multiplexer.create_session(Some("b".into())).await;
         let mut expected = [sid_a.to_string(), sid_b.to_string()];
         expected.sort();
 
@@ -71,8 +71,12 @@ mod tests {
     #[tokio::test]
     async fn list_includes_full_session_view() {
         let state = fresh_state();
-        let sid = state.create_session(Some("test".into())).await;
-        let (wid, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let sid = state.multiplexer.create_session(Some("test".into())).await;
+        let (wid, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
         let (router, _) = router_with(state);
         let resp = router
             .oneshot(

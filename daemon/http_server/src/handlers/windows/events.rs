@@ -17,6 +17,7 @@ pub async fn events(
 async fn handle_events_socket(socket: WebSocket, state: AppState, window_id: WindowId) {
     let (mut tx, _rx) = socket.split();
     let snapshot_and_rx = state
+        .multiplexer
         .with_window(&window_id, |w| super::window_view_for(w))
         .await;
     let Some(snapshot_result) = snapshot_and_rx else {
@@ -228,6 +229,7 @@ mod tests {
                 let new_pane_id = PaneId::new();
                 let new_activity_id = ActivityId::new();
                 let outcome = s
+                    .multiplexer
                     .with_window_or_404(&wid_, |w| {
                         w.split_pane(
                             &pid_,
@@ -239,9 +241,11 @@ mod tests {
                     })
                     .await;
                 if outcome.is_ok() {
-                    s.pane_owner_window
+                    s.multiplexer
+                        .pane_owner_window
                         .insert(new_pane_id.clone(), wid_.clone());
                     if let Some(view) = s
+                        .multiplexer
                         .with_window(&wid_, |w| crate::handlers::windows::window_view_for(w))
                         .await
                         && let Ok(view) = view
@@ -271,6 +275,7 @@ mod tests {
         }
 
         let final_pane_count = state
+            .multiplexer
             .with_window(&wid, |w| w.panes.len())
             .await
             .unwrap_or(0);

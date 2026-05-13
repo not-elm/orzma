@@ -12,7 +12,7 @@ pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let id = state.create_session(body.name).await;
+    let id = state.multiplexer.create_session(body.name).await;
     (StatusCode::CREATED, Json(serde_json::json!({ "id": id })))
 }
 

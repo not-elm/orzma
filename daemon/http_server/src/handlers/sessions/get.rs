@@ -9,7 +9,7 @@ pub async fn get(
     State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
 ) -> HttpResult<Json<serde_json::Value>> {
-    let sess = state.sessions.lock().await;
+    let sess = state.multiplexer.sessions.lock().await;
     let session = sess.get(&session_id)?;
     Ok(Json(super::session_view(&session_id, session)))
 }
@@ -24,8 +24,12 @@ mod tests {
     #[tokio::test]
     async fn get_returns_session_view() {
         let state = fresh_state();
-        let sid = state.create_session(Some("named".into())).await;
-        let (wid, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let sid = state.multiplexer.create_session(Some("named".into())).await;
+        let (wid, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
         let (router, _) = router_with(state);
         let resp = router
             .oneshot(
@@ -66,7 +70,7 @@ mod tests {
     #[tokio::test]
     async fn get_session_with_no_windows_serializes_active_window_null() {
         let state = fresh_state();
-        let sid = state.create_session(None).await;
+        let sid = state.multiplexer.create_session(None).await;
         let (router, _) = router_with(state);
         let resp = router
             .oneshot(

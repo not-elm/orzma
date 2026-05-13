@@ -10,6 +10,7 @@ use ozmux_multiplexer::{Activity, ActivityId, MultiplexerError, PaneId, WindowId
 /// broadcast it. Used by every handler that mutates a Window.
 pub(crate) async fn publish_window_layout(state: &AppState, wid: &WindowId) {
     let _ = state
+        .multiplexer
         .with_window(wid, |w| match windows::window_view_for(w) {
             Ok(view) => state.layout_broadcast.publish(wid, view),
             Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
@@ -25,7 +26,7 @@ pub(crate) fn ensure_pane_in_window(
     wid: &WindowId,
     pid: &PaneId,
 ) -> HttpResult<()> {
-    let actual = state.lookup_pane_window(pid)?;
+    let actual = state.multiplexer.lookup_pane_window(pid)?;
     if &actual != wid {
         return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
             window: wid.clone(),
@@ -47,6 +48,7 @@ pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
 ) -> HttpResult<Activity> {
     ensure_pane_in_window(state, wid, pid)?;
     let activity = state
+        .multiplexer
         .with_window(wid, |w| w.pane(pid).map(|p| p.activity(aid).cloned()))
         .await
         .ok_or_else(|| HttpError::Session(MultiplexerError::WindowNotFound(wid.clone())))??

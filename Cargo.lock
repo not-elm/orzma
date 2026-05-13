@@ -726,6 +726,7 @@ dependencies = [
 name = "ozmux_multiplexer"
 version = "0.1.0"
 dependencies = [
+ "dashmap",
  "ozmux_macros",
  "serde",
  "serde_json",

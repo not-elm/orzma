@@ -17,10 +17,11 @@ pub async fn activate(
     // `activate_unknown_window_returns_404` and
     // `activate_pane_in_other_window_returns_409`.
     let outcome = state
+        .multiplexer
         .with_window_or_404(&window_id, |w| {
             if w.panes.contains_key(&pane_id) {
                 w.set_active_pane(&pane_id)
-            } else if state.pane_owner_window.contains_key(&pane_id) {
+            } else if state.multiplexer.pane_owner_window.contains_key(&pane_id) {
                 Err(MultiplexerError::PaneNotInWindow {
                     window: w.id.clone(),
                     pane: pane_id.clone(),
@@ -49,6 +50,7 @@ mod tests {
         let new_pane_id = PaneId::new();
         let new_activity_id = ActivityId::new();
         state
+            .multiplexer
             .with_window_or_404(wid, |w| {
                 w.split_pane(
                     target,
@@ -61,6 +63,7 @@ mod tests {
             .await
             .unwrap();
         state
+            .multiplexer
             .pane_owner_window
             .insert(new_pane_id.clone(), wid.clone());
         new_pane_id
@@ -126,7 +129,11 @@ mod tests {
     async fn activate_pane_in_other_window_returns_409() {
         let state = fresh_state();
         let (sid, _wid_a, pid_a, _aid) = bootstrap_default(&state).await;
-        let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let (wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
         let (router, _state) = router_with(state);
         let resp = router
             .oneshot(

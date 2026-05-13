@@ -123,8 +123,10 @@ mod tests {
     #[tokio::test]
     async fn iframe_serve_returns_html_with_correct_content_type() {
         let (router, _state, wid, pid, aid, _tmp) =
-            super::super::test_support::setup_hierarchical_extension(b"<html><body>memo</body></html>")
-                .await;
+            super::super::test_support::setup_hierarchical_extension(
+                b"<html><body>memo</body></html>",
+            )
+            .await;
         let resp = router
             .oneshot(
                 axum::http::Request::builder()
@@ -149,8 +151,10 @@ mod tests {
     #[tokio::test]
     async fn iframe_serve_returns_css_with_correct_content_type() {
         let (router, _state, wid, pid, aid, _tmp) =
-            super::super::test_support::setup_hierarchical_extension(b"<html><body>memo</body></html>")
-                .await;
+            super::super::test_support::setup_hierarchical_extension(
+                b"<html><body>memo</body></html>",
+            )
+            .await;
         let resp = router
             .oneshot(
                 axum::http::Request::builder()
@@ -231,6 +235,7 @@ mod tests {
         let activity = Activity::extension(ActivityId::new(), "ext", memo_root.clone());
         let aid = activity.id.clone();
         state
+            .multiplexer
             .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(activity))
             .await
             .unwrap();

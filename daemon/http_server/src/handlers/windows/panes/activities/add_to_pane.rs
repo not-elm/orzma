@@ -21,6 +21,7 @@ pub async fn add_to_pane(
     let parsed = body.activity.into_parsed();
     let aid = parsed.activity.id.clone();
     state
+        .multiplexer
         .with_window_or_404(&wid, |w| w.pane_mut(&pid)?.add_activity(parsed.activity))
         .await?;
     if let Some(name) = parsed.extension_name.as_deref() {

@@ -23,8 +23,12 @@ mod tests {
     #[tokio::test]
     async fn delete_returns_204_and_removes_session() {
         let state = fresh_state();
-        let sid = state.create_session(None).await;
-        let _ = state.create_window(Some(&sid), None).await.unwrap();
+        let sid = state.multiplexer.create_session(None).await;
+        let _ = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
         let (router, state) = router_with(state);
         let resp = router
             .oneshot(
@@ -37,7 +41,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let sess = state.sessions.lock().await;
+        let sess = state.multiplexer.sessions.lock().await;
         assert!(sess.get(&sid).is_err());
     }
 

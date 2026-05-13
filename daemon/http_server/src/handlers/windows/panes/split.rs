@@ -57,6 +57,7 @@ async fn split_in_window(
     let activity_kind = new_activity.kind.clone();
 
     state
+        .multiplexer
         .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
             w.split_pane(
                 target_pane_id,
@@ -69,6 +70,7 @@ async fn split_in_window(
         .await?;
 
     state
+        .multiplexer
         .pane_owner_window
         .insert(new_pane_id.clone(), wid.clone());
 
@@ -131,6 +133,7 @@ async fn spawn_pty_with_rollback(
 
 async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) {
     let closed = state
+        .multiplexer
         .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
         .await
         .is_ok();
@@ -141,7 +144,7 @@ async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) 
         );
         return;
     }
-    state.pane_owner_window.remove(new_pane_id);
+    state.multiplexer.pane_owner_window.remove(new_pane_id);
     publish_window_layout(state, wid).await;
 }
 
@@ -156,7 +159,7 @@ mod tests {
 
     async fn total_panes(state: &AppState) -> usize {
         let mut total = 0;
-        for entry in state.windows.iter() {
+        for entry in state.multiplexer.windows.iter() {
             let arc = entry.value().clone();
             drop(entry);
             let win = arc.lock().await;
@@ -203,7 +206,11 @@ mod tests {
     async fn split_with_wrong_wid_returns_409() {
         let state = fresh_state();
         let (sid, _wid_a, pid_a, _aid) = bootstrap_default(&state).await;
-        let (wid_b, _, _) = state.create_window(Some(&sid), None).await.unwrap();
+        let (wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
         let (router, _state) = router_with(state);
         let resp = router
             .oneshot(

@@ -195,10 +195,7 @@ impl MultiplexerService {
 
     /// Remove a Session and return the WindowIds that were attached to it.
     /// The caller drives `close_window_data` for each returned wid.
-    pub async fn take_session_windows(
-        &self,
-        sid: &SessionId,
-    ) -> MultiplexerResult<Vec<WindowId>> {
+    pub async fn take_session_windows(&self, sid: &SessionId) -> MultiplexerResult<Vec<WindowId>> {
         let mut sess = self.sessions.lock().await;
         let session = sess.remove(sid)?;
         Ok(session.linked_windows)
