@@ -60,7 +60,7 @@ impl MultiplexerService {
         let mut sess = self.sessions.lock().await;
         let session_id = SessionId::new();
         let session_name = name.unwrap_or_else(|| format!("Session{}", sess.len() + 1));
-        sess.register(session_id.clone(), Session::empty(session_name));
+        sess.register(session_id.clone(), Session::empty(session_id.clone(), session_name));
         session_id
     }
 

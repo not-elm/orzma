@@ -61,7 +61,9 @@ impl SessionState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    pub id: SessionId,
     pub name: String,
+    #[serde(rename = "linkedWindows")]
     pub linked_windows: Vec<WindowId>,
     pub active_window: Option<WindowId>,
 }
@@ -69,8 +71,9 @@ pub struct Session {
 impl Session {
     /// Construct a session with no windows. `active_window` becomes `Some` the
     /// first time a window is attached.
-    pub fn empty(name: impl Into<String>) -> Self {
+    pub fn empty(id: SessionId, name: impl Into<String>) -> Self {
         Self {
+            id,
             name: name.into(),
             linked_windows: Vec::new(),
             active_window: None,

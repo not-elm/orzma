@@ -22,10 +22,10 @@ export function useDefaultWindow(): DefaultWindowState {
         const sessionId = list.sessions[0]?.id;
         if (!sessionId) throw new Error('no default session');
         const session = (await fetchJson(`/sessions/${sessionId}`)) as {
-          windows: string[];
+          linkedWindows: string[];
           active_window: string | null;
         };
-        const windowId = session.active_window ?? session.windows[0];
+        const windowId = session.active_window ?? session.linkedWindows[0];
         if (!windowId) throw new Error('no default window');
         if (!cancelled) setState({ status: 'ready', windowId });
       } catch (e) {

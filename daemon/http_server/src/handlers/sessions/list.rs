@@ -1,15 +1,11 @@
 use crate::AppState;
 use axum::{Json, extract::State};
-use ozmux_multiplexer::SessionId;
+use ozmux_multiplexer::Session;
 
 pub async fn list(State(state): State<AppState>) -> Json<serde_json::Value> {
     let sess = state.multiplexer.sessions.lock().await;
-    let mut entries: Vec<(&SessionId, &ozmux_multiplexer::Session)> = sess.iter().collect();
-    entries.sort_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()));
-    let sessions: Vec<serde_json::Value> = entries
-        .iter()
-        .map(|(id, session)| super::session_view(id, session))
-        .collect();
+    let mut sessions: Vec<&Session> = sess.iter().map(|(_, s)| s).collect();
+    sessions.sort_by(|a, b| a.id.as_ref().cmp(b.id.as_ref()));
     Json(serde_json::json!({ "sessions": sessions }))
 }
 
@@ -92,7 +88,7 @@ mod tests {
         let s = &v["sessions"][0];
         assert_eq!(s["id"].as_str(), Some(sid.as_ref()));
         assert_eq!(s["name"].as_str(), Some("test"));
-        assert_eq!(s["windows"][0].as_str(), Some(wid.as_ref()));
+        assert_eq!(s["linkedWindows"][0].as_str(), Some(wid.as_ref()));
         assert_eq!(s["active_window"].as_str(), Some(wid.as_ref()));
     }
 }

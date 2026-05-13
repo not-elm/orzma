@@ -3,15 +3,15 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use ozmux_multiplexer::{MultiplexerService, SessionId};
+use ozmux_multiplexer::{MultiplexerService, Session, SessionId};
 
 pub async fn get(
     State(multiplexer): State<MultiplexerService>,
     Path(session_id): Path<SessionId>,
-) -> HttpResult<Json<serde_json::Value>> {
+) -> HttpResult<Json<Session>> {
     let session_state = multiplexer.sessions.lock().await;
     let session = session_state.get(&session_id)?;
-    Ok(Json(super::session_view(&session_id, session)))
+    Ok(Json(session.clone()))
 }
 
 #[cfg(test)]
@@ -45,7 +45,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["id"].as_str(), Some(sid.as_ref()));
         assert_eq!(v["name"].as_str(), Some("named"));
-        assert_eq!(v["windows"][0].as_str(), Some(wid.as_ref()));
+        assert_eq!(v["linkedWindows"][0].as_str(), Some(wid.as_ref()));
         assert_eq!(v["active_window"].as_str(), Some(wid.as_ref()));
     }
 
@@ -84,6 +84,6 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(v["active_window"].is_null());
-        assert_eq!(v["windows"].as_array().map(|a| a.len()), Some(0));
+        assert_eq!(v["linkedWindows"].as_array().map(|a| a.len()), Some(0));
     }
 }
