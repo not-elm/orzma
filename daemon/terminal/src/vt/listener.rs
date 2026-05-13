@@ -1,14 +1,6 @@
 //! TermListener: alacritty_terminal::event::EventListener implementation,
 //! plus channel envelopes (ReplyFrame, ControlFrame) and DropCounter.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "DropCounter is wired up by TermListener in Task 8-9"
-    )
-)]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -36,10 +28,6 @@ pub enum ReplyFrame {
     PtyWrite(Vec<u8>),
     /// `Event::TextAreaSizeRequest`: caller closure expects a `WindowSize`
     /// reply; bridge fills it with the current pane dimensions.
-    #[expect(
-        dead_code,
-        reason = "constructed by TermListener in Task 9; only PtyWrite is tested here"
-    )]
     TextAreaSizeRequest(Arc<dyn Fn(WindowSize) -> String + Send + Sync>),
     /// `Event::ColorRequest`: closure expects a palette `Rgb`.
     ///
@@ -47,10 +35,6 @@ pub enum ReplyFrame {
     /// `Arc<dyn Fn(Rgb) -> String + Sync + Send + 'static>` (not
     /// `Option<Rgb>`). The bridge must always have an `Rgb` to provide;
     /// the absent-color case is handled before invoking the closure.
-    #[expect(
-        dead_code,
-        reason = "constructed by TermListener in Task 9; only PtyWrite is tested here"
-    )]
     ColorRequest(usize, Arc<dyn Fn(Rgb) -> String + Send + Sync>),
 }
 
@@ -75,6 +59,117 @@ pub enum ControlFrame {
         content: String,
         correlation_seq: Option<u32>,
     },
+}
+
+/// `alacritty_terminal::event::EventListener` implementation that bridges
+/// Term-emitted events into bounded/unbounded mpsc channels feeding the
+/// bridge task.
+///
+/// Channel split rationale (rust-daemon-design.md § 2.2):
+///  - `reply_tx` (unbounded): reply-required events (`PtyWrite`,
+///    `TextAreaSizeRequest`, `ColorRequest`). Dropping these reproduces
+///    the capability-query backflow bug.
+///  - `control_tx` (bounded): best-effort (`Title`, `ResetTitle`, `Bell`,
+///    `ClipboardStore`). Drops are tracked via `DropCounter`.
+pub struct TermListener {
+    pub reply_tx: tokio::sync::mpsc::UnboundedSender<ReplyFrame>,
+    pub control_tx: tokio::sync::mpsc::Sender<ControlFrame>,
+    pub drop_counter: Arc<DropCounter>,
+}
+
+impl alacritty_terminal::event::EventListener for TermListener {
+    // Note: send_event is &self (sync, no Send/Sync supertrait).
+    fn send_event(&self, event: alacritty_terminal::event::Event) {
+        use alacritty_terminal::event::Event;
+
+        match event {
+            // ===== reply-required =====
+            Event::PtyWrite(s) => {
+                let _ = self.reply_tx.send(ReplyFrame::PtyWrite(s.into_bytes()));
+            }
+            Event::TextAreaSizeRequest(reply) => {
+                // alacritty's closure takes alacritty's `WindowSize`; our
+                // `ReplyFrame::TextAreaSizeRequest` carries one parameterized
+                // by our local `WindowSize`. Both structs have identical
+                // shape; wrap to bridge the type boundary.
+                let wrapped: Arc<dyn Fn(WindowSize) -> String + Send + Sync> =
+                    Arc::new(move |ours: WindowSize| {
+                        reply(alacritty_terminal::event::WindowSize {
+                            num_lines: ours.num_lines,
+                            num_cols: ours.num_cols,
+                            cell_width: ours.cell_width,
+                            cell_height: ours.cell_height,
+                        })
+                    });
+                let _ = self.reply_tx.send(ReplyFrame::TextAreaSizeRequest(wrapped));
+            }
+            Event::ColorRequest(idx, reply) => {
+                let _ = self.reply_tx.send(ReplyFrame::ColorRequest(idx, reply));
+            }
+
+            // ===== best-effort =====
+            Event::Title(s) => {
+                if self.control_tx.try_send(ControlFrame::Title(s)).is_err()
+                    && self.drop_counter.record("title")
+                {
+                    tracing::warn!(
+                        category = "title",
+                        total = self.drop_counter.total_count(),
+                        "control_tx full, dropped"
+                    );
+                }
+            }
+            Event::ResetTitle => {
+                if self.control_tx.try_send(ControlFrame::ResetTitle).is_err()
+                    && self.drop_counter.record("reset_title")
+                {
+                    tracing::warn!(
+                        category = "reset_title",
+                        total = self.drop_counter.total_count(),
+                        "control_tx full, dropped"
+                    );
+                }
+            }
+            Event::Bell => {
+                if self.control_tx.try_send(ControlFrame::Bell).is_err()
+                    && self.drop_counter.record("bell")
+                {
+                    tracing::warn!(
+                        category = "bell",
+                        total = self.drop_counter.total_count(),
+                        "control_tx full, dropped"
+                    );
+                }
+            }
+            Event::ClipboardStore(_clip, content) => {
+                let frame = ControlFrame::Clipboard {
+                    content,
+                    correlation_seq: None, // bridge task fills in latest input seq
+                };
+                if self.control_tx.try_send(frame).is_err()
+                    && self.drop_counter.record("clipboard_store")
+                {
+                    tracing::warn!(
+                        category = "clipboard_store",
+                        total = self.drop_counter.total_count(),
+                        "control_tx full, dropped"
+                    );
+                }
+            }
+
+            // ===== explicit ignores =====
+            Event::ClipboardLoad(_clip, _reply) => {
+                // OSC 52 read: default-ignored (security policy).
+                // Future opt-in: route through reply_tx to ask the client.
+            }
+            Event::ChildExit(_) | Event::Exit => {
+                // bridge task termination is handled via the PTY EOF path.
+            }
+            Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {
+                // Phase 1/2 unused.
+            }
+        }
+    }
 }
 
 /// Token-bucket rate-limited drop counter for bounded-channel `try_send`
@@ -204,5 +299,76 @@ mod frame_envelope_tests {
             ReplyFrame::PtyWrite(bytes) => assert_eq!(bytes.len(), 3),
             _ => panic!("variant mismatch"),
         }
+    }
+}
+
+#[cfg(test)]
+mod listener_tests {
+    use super::*;
+    use alacritty_terminal::event::{Event, EventListener};
+    use tokio::sync::mpsc;
+
+    fn make_listener(
+        reply_tx: mpsc::UnboundedSender<ReplyFrame>,
+        control_tx: mpsc::Sender<ControlFrame>,
+        drop_counter: std::sync::Arc<DropCounter>,
+    ) -> TermListener {
+        TermListener {
+            reply_tx,
+            control_tx,
+            drop_counter,
+        }
+    }
+
+    #[test]
+    fn pty_write_event_is_forwarded() {
+        let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
+        let (control_tx, _control_rx) = mpsc::channel::<ControlFrame>(64);
+        let drop_counter = std::sync::Arc::new(DropCounter::new());
+        let listener = make_listener(reply_tx, control_tx, drop_counter);
+
+        listener.send_event(Event::PtyWrite("\x1b[?6n".into()));
+        let frame = reply_rx.try_recv().expect("PtyWrite forwarded");
+        match frame {
+            ReplyFrame::PtyWrite(bytes) => assert_eq!(bytes, b"\x1b[?6n"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn title_event_is_forwarded() {
+        let (reply_tx, _reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
+        let (control_tx, mut control_rx) = mpsc::channel::<ControlFrame>(64);
+        let drop_counter = std::sync::Arc::new(DropCounter::new());
+        let listener = make_listener(reply_tx, control_tx, drop_counter);
+
+        listener.send_event(Event::Title("alpha".into()));
+        let frame = control_rx.try_recv().expect("Title forwarded");
+        assert_eq!(frame, ControlFrame::Title("alpha".to_string()));
+    }
+
+    #[test]
+    fn bell_event_is_forwarded() {
+        let (reply_tx, _reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
+        let (control_tx, mut control_rx) = mpsc::channel::<ControlFrame>(64);
+        let drop_counter = std::sync::Arc::new(DropCounter::new());
+        let listener = make_listener(reply_tx, control_tx, drop_counter);
+
+        listener.send_event(Event::Bell);
+        assert_eq!(control_rx.try_recv().unwrap(), ControlFrame::Bell);
+    }
+
+    #[test]
+    fn control_drop_records_to_counter() {
+        // cap=1 control_tx, send Title twice, verify 1 drop is recorded.
+        let (reply_tx, _reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
+        let (control_tx, _control_rx_held) = mpsc::channel::<ControlFrame>(1);
+        let drop_counter = std::sync::Arc::new(DropCounter::new());
+        let listener = make_listener(reply_tx, control_tx, drop_counter.clone());
+
+        listener.send_event(Event::Title("first".into()));
+        listener.send_event(Event::Title("second drops".into()));
+        // First fits (cap=1); second fails try_send -> drop_counter increments.
+        assert_eq!(drop_counter.total_count(), 1);
     }
 }
