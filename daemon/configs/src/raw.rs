@@ -7,9 +7,12 @@
 #![cfg_attr(not(test), expect(dead_code, reason = "consumed by OzmuxConfigs::load in a subsequent task"))]
 
 use crate::OzmuxConfigs;
-use crate::shortcuts::{Binding, Prefix};
+use crate::OzmuxConfigsError;
+use crate::OzmuxConfigsResult;
+use crate::shortcuts::{Binding, Modifiers, Prefix};
 use crate::theme::ThemePatch;
 use serde::Deserialize;
+use std::collections::HashSet;
 
 /// Top-level TOML shape: every section is optional.
 #[derive(Deserialize, Default)]
@@ -46,6 +49,25 @@ impl RawConfigs {
     }
 }
 
+/// Walks `configs.shortcuts.bindings` and rejects duplicates or modifier-bearing
+/// chords (the latter is a v0 constraint).
+pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
+    let mut seen: HashSet<&crate::shortcuts::KeyChord> = HashSet::new();
+    for b in &configs.shortcuts.bindings {
+        if b.chord.modifiers != Modifiers::default() {
+            return Err(OzmuxConfigsError::UnsupportedModifier {
+                chord: b.chord.clone(),
+            });
+        }
+        if !seen.insert(&b.chord) {
+            return Err(OzmuxConfigsError::DuplicateBinding {
+                chord: b.chord.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +102,39 @@ mod tests {
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(merged.shortcuts.bindings.len(), 1);
         assert!(matches!(merged.shortcuts.bindings[0].action, Action::CloseWindow));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_binding() {
+        let raw: RawConfigs = toml::from_str(r#"
+            [[shortcuts.bindings]]
+            key = "x"
+            action = { type = "close-pane" }
+
+            [[shortcuts.bindings]]
+            key = "x"
+            action = { type = "close-window" }
+        "#).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        let err = validate(&merged).unwrap_err();
+        assert!(matches!(err, crate::OzmuxConfigsError::DuplicateBinding { .. }));
+    }
+
+    #[test]
+    fn validate_rejects_modifier_in_binding() {
+        let raw: RawConfigs = toml::from_str(r#"
+            [[shortcuts.bindings]]
+            key = "x"
+            modifiers = { shift = true }
+            action = { type = "close-pane" }
+        "#).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        let err = validate(&merged).unwrap_err();
+        assert!(matches!(err, crate::OzmuxConfigsError::UnsupportedModifier { .. }));
+    }
+
+    #[test]
+    fn validate_accepts_default_config() {
+        validate(&OzmuxConfigs::default()).unwrap();
     }
 }
