@@ -41,8 +41,7 @@ mod tests {
             .get(axum::http::header::CONTENT_TYPE)
             .unwrap()
             .to_str()
-            .unwrap()
-            .to_string();
+            .unwrap();
         assert!(
             content_type.starts_with("application/json"),
             "got content-type {content_type}"
