@@ -3,6 +3,8 @@ resolver = "2"
 members = [
   "cli",
   "daemon/bootstrap",
+  "daemon/configs",
+  "daemon/extension",
   "daemon/macros",
   "daemon/terminal",
   "daemon/multiplexer",
@@ -36,3 +38,5 @@ futures-util = { version = "0.3", default-features = false, features = [
 tempfile = "3"
 mime_guess = "2.0"
 libc = "0.2"
+toml = "0.8"
+dirs = "5"
