@@ -1,3 +1,4 @@
+use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::registry::ExtensionRegistry;
 use ozmux_extension::runtime::RuntimeRoot;
@@ -16,6 +17,22 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .init();
+
+    let configs = match OzmuxConfigs::load().await {
+        Ok(c) => {
+            tracing::info!(
+                prefix = ?c.shortcuts.prefix.chord,
+                bindings = c.shortcuts.bindings.len(),
+                "loaded ozmux config"
+            );
+            c
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to load ozmux config; aborting");
+            return Err(e.into());
+        }
+    };
+    let _ = configs;
 
     let parent = std::env::temp_dir().join("ozmux");
     std::fs::create_dir_all(&parent)?;
