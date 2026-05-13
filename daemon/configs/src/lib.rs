@@ -3,3 +3,8 @@
 //! against built-in defaults.
 
 #![warn(missing_docs)]
+
+pub mod error;
+pub mod shortcuts;
+
+pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
