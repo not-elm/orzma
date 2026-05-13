@@ -133,9 +133,9 @@ pub async fn run_bridge_task(
 
 // NOTE: minimal local `Dimensions` impl since alacritty's `TermSize` is
 // `pub(crate)` inside its own crate.
-struct LocalDim {
-    cols: usize,
-    rows: usize,
+pub(crate) struct LocalDim {
+    pub(crate) cols: usize,
+    pub(crate) rows: usize,
 }
 
 impl Dimensions for LocalDim {
@@ -147,6 +147,14 @@ impl Dimensions for LocalDim {
     }
     fn total_lines(&self) -> usize {
         self.rows
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_dim(cols: u16, rows: u16) -> LocalDim {
+    LocalDim {
+        cols: cols.into(),
+        rows: rows.into(),
     }
 }
 
