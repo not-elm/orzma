@@ -18,6 +18,21 @@ pub enum TerminalEvent {
     Exit { code: Option<i32> },
 }
 
+/// Snapshot of the alacritty `TermDamage` state captured by the test-only
+/// [`TerminalService::inspect_damage_and_reset`] helper. Used by Phase 1
+/// PoC integration tests to characterize the damage API's observable
+/// behavior in alacritty 0.26.
+#[cfg(any(test, feature = "test-helpers"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DamageSnapshot {
+    /// `Term::damage()` returned `TermDamage::Full` — the entire viewport
+    /// is considered dirty.
+    Full,
+    /// `Term::damage()` returned `TermDamage::Partial(iter)`; `line_count`
+    /// is the number of damaged lines yielded by the iterator.
+    Partial { line_count: usize },
+}
+
 #[derive(Default, Clone)]
 pub struct TerminalService {
     ptys: Arc<RwLock<HashMap<ActivityId, PtyHandle>>>,
@@ -202,6 +217,48 @@ impl TerminalService {
         let term_row = &state.term.grid()[Line(row)];
         let slice = &term_row[Column(0)..Column(cols)];
         Some(slice.iter().map(|cell| cell.c).collect())
+    }
+
+    /// Test-only probe of the alacritty damage tracker: reads
+    /// `Term::damage()` into a [`DamageSnapshot`] and then calls
+    /// `Term::reset_damage()` under the same VT lock. Returns `None` if
+    /// the activity has no PTY.
+    ///
+    /// Used by Phase 1 PoC tests to characterize the API: whether
+    /// `Full` is sticky across resets, how many lines `Partial` reports
+    /// after typical shell output, etc.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn inspect_damage_and_reset(&self, activity: &ActivityId) -> Option<DamageSnapshot> {
+        use alacritty_terminal::term::TermDamage;
+        let guard = self.read(activity).await.ok()?;
+        let vt_state = guard.vt_state.clone();
+        drop(guard);
+        let mut state = vt_state.lock().expect("vt_state lock poisoned");
+        let snapshot = match state.term.damage() {
+            TermDamage::Full => DamageSnapshot::Full,
+            TermDamage::Partial(iter) => {
+                let line_count = iter.count();
+                DamageSnapshot::Partial { line_count }
+            }
+        };
+        state.term.reset_damage();
+        Some(snapshot)
+    }
+
+    /// Test-only probe of `TermMode::ALT_SCREEN`. Returns `Some(true)`
+    /// when the terminal is currently on the alternate screen buffer,
+    /// `Some(false)` when on the primary buffer, and `None` if the
+    /// activity has no PTY. Used by Phase 1 PoC tests to verify which
+    /// DEC private mode escapes (`?47` / `?1047` / `?1049`) toggle the
+    /// alt-screen flag in alacritty 0.26.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn inspect_alt_screen(&self, activity: &ActivityId) -> Option<bool> {
+        use alacritty_terminal::term::TermMode;
+        let guard = self.read(activity).await.ok()?;
+        let vt_state = guard.vt_state.clone();
+        drop(guard);
+        let state = vt_state.lock().expect("vt_state lock poisoned");
+        Some(state.term.mode().contains(TermMode::ALT_SCREEN))
     }
 
     #[inline]
