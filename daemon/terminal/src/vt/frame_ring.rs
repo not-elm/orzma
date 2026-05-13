@@ -12,6 +12,24 @@ pub struct EncodedDelta {
     pub encoded: Bytes,
 }
 
+/// Wire-level broadcast envelope. Binary variants carry encoded MessagePack
+/// (snapshot or delta) and are stored in [`FrameRing`] for replay. Text
+/// variants carry JSON (hello / mode / error / clipboard) and are not
+/// replayed — clients recover lost text sidecars via the next snapshot's
+/// `modes` field.
+#[derive(Clone, Debug)]
+pub enum WireMessage {
+    /// Encoded `FrameSnapshot` or `FrameDelta` payload with its sequence number.
+    Binary {
+        /// Monotonic frame sequence number.
+        seq: u32,
+        /// Map-keyed MessagePack payload.
+        encoded: Bytes,
+    },
+    /// JSON-encoded text frame (`hello` / `mode` / `error` / `clipboard`).
+    Text(String),
+}
+
 /// FIFO ring with a byte-size budget. Oldest entries are evicted to make
 /// room when `current_bytes + entry.len() > byte_budget`.
 #[derive(Debug)]
@@ -141,5 +159,29 @@ mod tests {
         r.push(1, mk_bytes(10));
         let replay = r.replay(1).unwrap();
         assert!(replay.is_empty());
+    }
+
+    #[test]
+    fn wire_message_binary_carries_seq_and_bytes() {
+        let msg = WireMessage::Binary {
+            seq: 7,
+            encoded: Bytes::from_static(b"abc"),
+        };
+        match msg {
+            WireMessage::Binary { seq, encoded } => {
+                assert_eq!(seq, 7);
+                assert_eq!(&encoded[..], b"abc");
+            }
+            WireMessage::Text(_) => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn wire_message_text_carries_string() {
+        let msg = WireMessage::Text("hello".to_string());
+        match msg {
+            WireMessage::Text(s) => assert_eq!(s, "hello"),
+            WireMessage::Binary { .. } => panic!("wrong variant"),
+        }
     }
 }
