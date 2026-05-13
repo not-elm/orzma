@@ -17,6 +17,19 @@ pub struct Theme {
     pub destructive: String,
 }
 
+impl Default for Theme {
+    fn default() -> Self {
+        // NOTE: values mirror Layer 1 raw tokens in daemon/frontend/src/styles/theme.css.
+        Self {
+            background: "#1a1b26".into(),
+            foreground: "#c0caf5".into(),
+            accent: "#414868".into(),
+            border: "#414868".into(),
+            destructive: "#f7768e".into(),
+        }
+    }
+}
+
 /// Per-field-optional view of `Theme` used for TOML deserialization.
 #[derive(Deserialize, Default, Clone, Debug)]
 pub struct ThemePatch {

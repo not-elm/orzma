@@ -113,6 +113,30 @@ pub struct Shortcuts {
     pub bindings: Vec<Binding>,
 }
 
+impl Default for Shortcuts {
+    fn default() -> Self {
+        Self {
+            prefix: Prefix {
+                chord: KeyChord {
+                    key: Key::Char('b'),
+                    modifiers: Modifiers {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                },
+                timeout_ms: 2000,
+            },
+            bindings: vec![Binding {
+                chord: KeyChord {
+                    key: Key::Char('x'),
+                    modifiers: Modifiers::default(),
+                },
+                action: Action::ClosePane,
+            }],
+        }
+    }
+}
+
 /// Prefix chord and timeout used to "arm" the shortcut dispatcher.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Prefix {
