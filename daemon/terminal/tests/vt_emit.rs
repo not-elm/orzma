@@ -57,3 +57,55 @@ async fn first_chunk_emits_a_snapshot_on_broadcast() {
     }
     svc.kill(&aid).await.unwrap();
 }
+
+#[tokio::test]
+async fn second_chunk_emits_a_delta() {
+    let svc = TerminalService::default();
+    let pane = PaneId::new();
+    let aid = ActivityId::new();
+    svc.spawn(
+        pane,
+        aid.clone(),
+        SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+            window_id: None,
+            session_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
+
+    svc.write(&aid, b"echo first\n").await.unwrap();
+
+    // Skim past the first Binary (snapshot).
+    let _ = collect_binary(&mut rx, std::time::Duration::from_secs(2)).await;
+
+    svc.write(&aid, b"echo second\n").await.unwrap();
+    let bytes = collect_binary(&mut rx, std::time::Duration::from_secs(2))
+        .await
+        .expect("second Binary");
+    let frame: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
+    assert!(matches!(frame, RenderFrame::Delta(_)));
+    svc.kill(&aid).await.unwrap();
+}
+
+async fn collect_binary(
+    rx: &mut tokio::sync::broadcast::Receiver<WireMessage>,
+    timeout: std::time::Duration,
+) -> Option<Bytes> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+            Ok(Ok(WireMessage::Binary { encoded, .. })) => return Some(encoded),
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) => return None,
+            Err(_) => continue,
+        }
+    }
+    None
+}

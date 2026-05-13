@@ -83,13 +83,6 @@ pub fn build_snapshot<T>(term: &Term<T>, seq: u32, reason: SnapshotReason) -> Fr
 ///
 /// Each entry is a full-row replacement (not partial). Row ordering follows
 /// the supplied slice.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by Phase 2A frame emit path (Tasks 9-12)"
-    )
-)]
 pub fn build_delta<T>(term: &Term<T>, seq: u32, rows: &[u16]) -> FrameDelta {
     let dirty_rows: Vec<DirtyRow> = rows
         .iter()

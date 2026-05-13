@@ -14,7 +14,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::vt::frame::{RenderFrame, SnapshotReason, encode};
-use crate::vt::frame_builder::{build_snapshot, collect_dirty_rows};
+use crate::vt::frame_builder::{DirtyRows, build_delta, build_snapshot, collect_dirty_rows};
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 
@@ -40,10 +40,6 @@ pub struct VtState {
     /// (bridge task) under the VtState lock.
     pub frame_seq: u32,
     /// Set false after the first frame emit so subsequent ones become deltas.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by Phase 2A bridge emit path (Task 11+)")
-    )]
     pub first_emit: bool,
     /// Broadcast of wire messages (Binary deltas + Text sidecars). All emit
     /// paths go through this sender; subscribers attach via subscribe_frames.
@@ -83,6 +79,42 @@ impl VtState {
     }
 }
 
+/// Classification used by `decide_frame_kind` to select snapshot vs delta.
+enum FrameKind {
+    Snapshot { reason: SnapshotReason },
+    Delta { rows: Vec<u16> },
+}
+
+/// Selects the appropriate frame type for the current emit based on damage state.
+///
+/// Policy, in priority order:
+/// 1. `state.first_emit` → `Snapshot { reason: Initial }` (bootstrap frame).
+/// 2. `DirtyRows::Full` → `Snapshot { reason: Resize }` (full damage after resize or clear).
+/// 3. Partial damage ≥ 70 % of total rows → `Snapshot { reason: Resize }` (bandwidth crossover).
+/// 4. Otherwise → `Delta { rows }`.
+fn decide_frame_kind(state: &VtState, dirty: DirtyRows) -> FrameKind {
+    let total_rows = state.term.screen_lines() as u16;
+    if state.first_emit {
+        return FrameKind::Snapshot {
+            reason: SnapshotReason::Initial,
+        };
+    }
+    match dirty {
+        DirtyRows::Full => FrameKind::Snapshot {
+            reason: SnapshotReason::Resize,
+        },
+        DirtyRows::Rows(rows) => {
+            if (rows.len() as u32) * 10 >= (total_rows as u32) * 7 {
+                FrameKind::Snapshot {
+                    reason: SnapshotReason::Resize,
+                }
+            } else {
+                FrameKind::Delta { rows }
+            }
+        }
+    }
+}
+
 /// Drives the VT bridge: drains PTY chunks into `Term` via `vte::Parser`.
 ///
 /// Phase 1 does not emit any frames; `reply_rx` / `control_rx` are drained
@@ -106,12 +138,17 @@ pub async fn run_bridge_task(
                 }
                 let mut state = vt_state.lock().expect("vt_state poisoned");
                 state.advance(&chunk);
-                let _ = collect_dirty_rows(&mut state.term);
-                let frame = RenderFrame::Snapshot(build_snapshot(
-                    &state.term,
-                    state.frame_seq,
-                    SnapshotReason::Initial,
-                ));
+                let dirty = collect_dirty_rows(&mut state.term);
+                let kind = decide_frame_kind(&state, dirty);
+                state.first_emit = false;
+                let frame = match kind {
+                    FrameKind::Snapshot { reason } => RenderFrame::Snapshot(
+                        build_snapshot(&state.term, state.frame_seq, reason)
+                    ),
+                    FrameKind::Delta { rows } => RenderFrame::Delta(
+                        build_delta(&state.term, state.frame_seq, &rows)
+                    ),
+                };
                 state.term.reset_damage();
                 let encoded_vec = encode(&frame).expect("encode infallible");
                 let seq = state.frame_seq;
