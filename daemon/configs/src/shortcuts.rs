@@ -106,7 +106,7 @@ pub struct KeyChord {
 }
 
 /// User-facing shortcut configuration.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Shortcuts {
     /// The "armed" prefix chord.
     pub prefix: Prefix,
@@ -115,7 +115,7 @@ pub struct Shortcuts {
 }
 
 /// Prefix chord and timeout used to "arm" the shortcut dispatcher.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Prefix {
     /// Chord that arms the dispatcher.
     #[serde(flatten)]
@@ -125,7 +125,7 @@ pub struct Prefix {
 }
 
 /// One armed-mode binding: a chord to listen for and the action to dispatch.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
     /// Chord pressed while armed.
     #[serde(flatten)]
@@ -135,7 +135,7 @@ pub struct Binding {
 }
 
 /// All shortcut actions supported by ozmux v0.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Action {
     /// Close the active pane.
