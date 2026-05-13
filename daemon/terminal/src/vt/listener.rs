@@ -10,9 +10,72 @@
 )]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+use alacritty_terminal::vte::ansi::Rgb;
+
+/// Pane window dimensions, used as the payload for `TextAreaSizeRequest` replies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowSize {
+    pub num_lines: u16,
+    pub num_cols: u16,
+    pub cell_width: u16,
+    pub cell_height: u16,
+}
+
+/// Must-not-drop reply-required frames forwarded from `TermListener` into
+/// the bridge task. The channel must be `mpsc::UnboundedSender` so that DA/DSR/
+/// cursor-query replies never get dropped (which would silently break TUI
+/// apps waiting for a response).
+pub enum ReplyFrame {
+    /// Bytes the Term emitted via `Event::PtyWrite` that must be written
+    /// back to the PTY stdin (e.g., ANSI device-attribute responses).
+    PtyWrite(Vec<u8>),
+    /// `Event::TextAreaSizeRequest`: caller closure expects a `WindowSize`
+    /// reply; bridge fills it with the current pane dimensions.
+    #[expect(
+        dead_code,
+        reason = "constructed by TermListener in Task 9; only PtyWrite is tested here"
+    )]
+    TextAreaSizeRequest(Arc<dyn Fn(WindowSize) -> String + Send + Sync>),
+    /// `Event::ColorRequest`: closure expects a palette `Rgb`.
+    ///
+    /// Note: alacritty 0.26's `Event::ColorRequest` uses
+    /// `Arc<dyn Fn(Rgb) -> String + Sync + Send + 'static>` (not
+    /// `Option<Rgb>`). The bridge must always have an `Rgb` to provide;
+    /// the absent-color case is handled before invoking the closure.
+    #[expect(
+        dead_code,
+        reason = "constructed by TermListener in Task 9; only PtyWrite is tested here"
+    )]
+    ColorRequest(usize, Arc<dyn Fn(Rgb) -> String + Send + Sync>),
+}
+
+impl std::fmt::Debug for ReplyFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PtyWrite(b) => write!(f, "PtyWrite({} bytes)", b.len()),
+            Self::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest(<fn>)"),
+            Self::ColorRequest(idx, _) => write!(f, "ColorRequest({idx}, <fn>)"),
+        }
+    }
+}
+
+/// Best-effort control frames forwarded from `TermListener`. The channel can
+/// be bounded; `try_send` may drop. `DropCounter` aggregates drop counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlFrame {
+    Title(String),
+    ResetTitle,
+    Bell,
+    Clipboard {
+        content: String,
+        correlation_seq: Option<u32>,
+    },
+}
 
 /// Token-bucket rate-limited drop counter for bounded-channel `try_send`
 /// failures. Prevents log spam while still surfacing aggregate counts.
@@ -116,5 +179,30 @@ mod drop_counter_tests {
         assert!(counter.should_warn("c"));
         assert!(counter.should_warn("c"));
         assert!(!counter.should_warn("c"));
+    }
+}
+
+#[cfg(test)]
+mod frame_envelope_tests {
+    use super::*;
+
+    #[test]
+    fn control_frame_variants_construct() {
+        let _ = ControlFrame::Title("hello".to_string());
+        let _ = ControlFrame::ResetTitle;
+        let _ = ControlFrame::Bell;
+        let _ = ControlFrame::Clipboard {
+            content: "x".to_string(),
+            correlation_seq: Some(42),
+        };
+    }
+
+    #[test]
+    fn reply_frame_pty_write_holds_bytes() {
+        let r = ReplyFrame::PtyWrite(vec![0x1b, b'[', b'?']);
+        match r {
+            ReplyFrame::PtyWrite(bytes) => assert_eq!(bytes.len(), 3),
+            _ => panic!("variant mismatch"),
+        }
     }
 }
