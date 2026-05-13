@@ -20,3 +20,9 @@ anyhow = { workspace = true }
 portable-pty = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
+alacritty_terminal = "0.26"
+vte = "0.15"
+rmp-serde = { workspace = true }
+unicode-width = { workspace = true }
+bytes = { workspace = true }
+tokio-util = { workspace = true }
