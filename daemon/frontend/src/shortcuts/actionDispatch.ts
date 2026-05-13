@@ -1,4 +1,5 @@
 import { closePane } from '../layout/closePane';
+import { splitPane } from '../layout/splitPane';
 import type { PaneId, WindowId } from '../layout/types';
 import type { Action } from './wire';
 
@@ -13,15 +14,24 @@ export interface ShortcutContext {
  * frontend has not implemented yet (`console.warn` once at construction).
  */
 export function actionToHandler(action: Action, ctx: ShortcutContext): (() => void) | null {
-  if (action.type === 'close-pane') {
-    return () => {
-      const w = ctx.activeWindow();
-      const p = ctx.activePane();
-      if (w && p) {
-        void closePane(w, p);
-      }
-    };
+  switch (action.type) {
+    case 'close-pane':
+      return () => withActivePane(ctx, closePane);
+    case 'split-pane': {
+      const orientation = action.direction;
+      return () => withActivePane(ctx, (w, p) => splitPane(w, p, orientation));
+    }
+    default:
+      console.warn('actionToHandler: unsupported action', action);
+      return null;
   }
-  console.warn('actionToHandler: unsupported action', action);
-  return null;
+}
+
+function withActivePane(
+  ctx: ShortcutContext,
+  run: (w: WindowId, p: PaneId) => void | Promise<void>,
+): void {
+  const w = ctx.activeWindow();
+  const p = ctx.activePane();
+  if (w && p) void run(w, p);
 }
