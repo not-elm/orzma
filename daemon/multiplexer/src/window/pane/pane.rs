@@ -61,6 +61,39 @@ impl Pane {
         Ok(SetActiveOutcome::Changed)
     }
 
+    /// Remove an Activity by id and return the removed value.
+    ///
+    /// Refuses to remove the last activity — a pane with zero activities is
+    /// malformed; callers must ensure ≥1 other activity remains.
+    ///
+    /// If the removed activity equals `active_activity`, the active activity
+    /// is reset to the first remaining activity (mirroring the close cascade
+    /// in `close_pane`).
+    pub fn remove_activity(
+        &mut self,
+        aid: &ActivityId,
+    ) -> MultiplexerResult<Activity> {
+        if !self.has_activity(aid) {
+            return Err(MultiplexerError::ActivityNotInPane {
+                pane: self.id.clone(),
+                activity: aid.clone(),
+            });
+        }
+        if self.activities.len() == 1 {
+            return Err(MultiplexerError::CannotRemoveLastActivity(self.id.clone()));
+        }
+        let idx = self
+            .activities
+            .iter()
+            .position(|a| &a.id == aid)
+            .expect("has_activity returned true above");
+        let removed = self.activities.remove(idx);
+        if &self.active_activity == aid {
+            self.active_activity = self.activities[0].id.clone();
+        }
+        Ok(removed)
+    }
+
     pub fn activity(&self, aid: &ActivityId) -> Option<&Activity> {
         self.activities.iter().find(|a| &a.id == aid)
     }
@@ -195,5 +228,45 @@ mod tests {
         let phantom = ActivityId::new();
         let err = pane.set_active_activity(&phantom).unwrap_err();
         assert!(matches!(err, MultiplexerError::ActivityNotInPane { .. }));
+    }
+
+    #[test]
+    fn remove_activity_returns_removed_value() {
+        let (mut pane, _aid) = fresh_pane();
+        let new_aid = ActivityId::new();
+        pane.add_activity(Activity::terminal(new_aid.clone()))
+            .unwrap();
+        let removed = pane.remove_activity(&new_aid).unwrap();
+        assert_eq!(removed.id, new_aid);
+        assert_eq!(pane.activities.len(), 1);
+    }
+
+    #[test]
+    fn remove_activity_rejects_unknown_id() {
+        let (mut pane, _aid) = fresh_pane();
+        let phantom = ActivityId::new();
+        let err = pane.remove_activity(&phantom).unwrap_err();
+        assert!(matches!(err, MultiplexerError::ActivityNotInPane { .. }));
+    }
+
+    #[test]
+    fn remove_activity_rejects_when_only_activity_remains() {
+        let (mut pane, aid) = fresh_pane();
+        let err = pane.remove_activity(&aid).unwrap_err();
+        assert!(matches!(err, MultiplexerError::CannotRemoveLastActivity(_)));
+    }
+
+    #[test]
+    fn remove_activity_resets_active_when_removing_active() {
+        let (mut pane, original_aid) = fresh_pane();
+        let second_aid = ActivityId::new();
+        pane.add_activity(Activity::terminal(second_aid.clone()))
+            .unwrap();
+        let _ = pane.set_active_activity(&second_aid).unwrap();
+        assert_eq!(pane.active_activity, second_aid);
+
+        let _removed = pane.remove_activity(&second_aid).unwrap();
+        assert_eq!(pane.active_activity, original_aid);
+        assert_eq!(pane.activities.len(), 1);
     }
 }
