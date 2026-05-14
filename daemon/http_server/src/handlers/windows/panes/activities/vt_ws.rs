@@ -17,6 +17,12 @@ const ESCAPE_CAPS: &[&str] = &[
     "decrst",
     "alt-screen-1049",
     "bracketed-paste",
+    "mouse-vt200",
+    "mouse-btn-event",
+    "mouse-any-event",
+    "mouse-sgr-1006",
+    "focus-events",
+    "app-cursor-keys",
 ];
 const INPUT_CAPS: &[&str] = &["text-utf8", "key-vt-encoded"];
 
