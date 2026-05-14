@@ -195,6 +195,25 @@ impl AppState {
         self.multiplexer.pane_owner_window.remove(new_pane_id);
     }
 
+    pub async fn close_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
+        let activities = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.close_pane(pid))
+            .await?;
+
+        self.multiplexer.pane_owner_window.remove(pid);
+        self.extensions.forget_pane(pid);
+        for aid in &activities {
+            self.extensions.forget_activity(aid);
+        }
+        for aid in &activities {
+            let _ = self.terminal.kill(aid).await;
+        }
+
+        self.publish_window_layout(wid).await;
+        Ok(())
+    }
+
     /// Build the current Window layout snapshot under the Window lock and
     /// broadcast it. Used by every handler that mutates a Window.
     async fn publish_window_layout(&self, wid: &WindowId) {
