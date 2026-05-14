@@ -5,6 +5,7 @@
 //! Term を内部更新するだけで wire には何も emit しない。
 
 pub(crate) mod bridge;
+pub(crate) mod coalescer;
 pub(crate) mod frame;
 pub(crate) mod frame_builder;
 pub(crate) mod frame_ring;
