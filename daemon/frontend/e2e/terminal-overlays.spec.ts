@@ -31,22 +31,36 @@ test.describe('Phase 3B — visual overlays smoke', () => {
     await page.waitForSelector('canvas');
     await page.locator('textarea').focus();
 
-    // Inject a URL into the shell. The default shell echoes back; we expect
-    // the rendered row to contain `https://example.com`.
+    // Inject a URL into the shell. The default shell echoes the command back
+    // so the rendered row contains `https://example.com`.
     await page.keyboard.type('echo "see https://example.com here"');
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
 
-    const canvas = page.locator('canvas').first();
-    const box = await canvas.boundingBox();
-    if (!box) throw new Error('canvas has no bounding box');
-    // Hover roughly over the URL. Coordinates depend on font; just walk
-    // along the row to maximize the chance of landing on the link cells.
-    for (let dx = 30; dx < 280; dx += 8) {
-      await page.mouse.move(box.x + dx, box.y + 8);
-      const found = await page.locator('[data-uri]').count();
-      if (found > 0) break;
+    // Read the actual canvas cell metrics — they vary by font / DPR.
+    const metrics = await page.evaluate(() => {
+      const canvas = document.querySelector('canvas');
+      if (!canvas) return null;
+      const r = canvas.getBoundingClientRect();
+      return {
+        left: r.left,
+        top: r.top,
+        cellW: parseFloat(canvas.style.width || '0') / 80,
+        cellH: parseFloat(canvas.style.height || '0') / 24,
+      };
+    });
+    if (!metrics) throw new Error('canvas has no metrics');
+
+    // Walk row 0 hovering at one cell at a time. waitForTimeout between moves
+    // gives the RAF-coalesced pointer listener a chance to flush.
+    for (let col = 0; col < 80; col++) {
+      const x = metrics.left + (col + 0.5) * metrics.cellW;
+      const y = metrics.top + 0.5 * metrics.cellH;
+      await page.mouse.move(x, y);
+      await page.waitForTimeout(20);
+      const n = await page.locator('[data-uri]').count();
+      if (n > 0) break;
     }
-    await expect(page.locator('[data-uri]')).toBeVisible({ timeout: 2000 });
+    await expect(page.locator('[data-uri]')).toBeVisible({ timeout: 1000 });
   });
 });
