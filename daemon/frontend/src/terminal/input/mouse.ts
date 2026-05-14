@@ -109,9 +109,8 @@ function buttonName(b: number): MouseEventInput['button'] {
 }
 
 /** Returns whether a pointer event should bypass mouse-mode forwarding and
- *  route to the selection overlay instead. Shared with `setupPointerOverlays`
- *  so the bypass predicate stays consistent between the input dispatcher and
- *  the selection drag handler. */
+ *  let the browser's native text selection handle the gesture instead.
+ *  Shared invariant: a TUI mouse mode is active and Shift is NOT held. */
 export function shouldRouteToSelection(e: PointerEvent, modes: ReadonlySet<string>): boolean {
   const anyMouseMode =
     modes.has('mouse-vt200') || modes.has('mouse-btn-event') || modes.has('mouse-any-event');
