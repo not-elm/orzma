@@ -160,6 +160,34 @@ impl AppState {
             .await
     }
 
+    /// Close a single Activity in a Pane: kill its PTY (terminal kind) or
+    /// forget its extension registry entry (extension kind), then broadcast
+    /// the new layout. Refuses to close the last activity via
+    /// `Pane::remove_activity`'s built-in `CannotRemoveLastActivity` guard.
+    pub async fn close_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> HttpResult<()> {
+        let removed = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
+            .await?;
+
+        match removed.kind {
+            ActivityKind::Terminal => {
+                let _ = self.terminal.kill(aid).await;
+            }
+            ActivityKind::Extension { .. } => {
+                self.extensions.forget_activity(aid);
+            }
+        }
+
+        self.publish_window_layout(wid).await;
+        Ok(())
+    }
+
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
     /// spawn a PTY when the activity is Terminal. Rolls back on spawn failure.
     pub async fn split_pane(
