@@ -180,7 +180,10 @@ test.describe('Phase 3.5 — DOM renderer smoke', () => {
         }
       });
       obs.observe(grid, { childList: true, subtree: true });
-      const w = window as unknown as { __flickerObs: MutationObserver; __flickerCounts: Map<Element, number> };
+      const w = window as unknown as {
+        __flickerObs: MutationObserver;
+        __flickerCounts: Map<Element, number>;
+      };
       w.__flickerObs = obs;
       w.__flickerCounts = counts;
     });
