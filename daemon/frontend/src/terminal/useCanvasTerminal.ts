@@ -7,6 +7,12 @@ import { setupFocusEvents } from './input/focus';
 import { handleKeyDown } from './input/keymap';
 import { setupMouse } from './input/mouse';
 import { setupPaste } from './input/paste';
+import {
+  type LinkHover,
+  type SelectionRange,
+  setupPointerOverlays,
+} from './input/pointer-overlays';
+import { setOverlayState } from './overlay-store';
 import { decodeFrame } from './protocol/frame';
 import { createCanvasRenderer, DEFAULT_BG } from './renderer/canvas';
 import { measureFont } from './renderer/font';
@@ -23,6 +29,9 @@ export interface CanvasTerminal {
   blur: () => void;
   socket: TerminalSocket;
   preedit: string;
+  selection: SelectionRange | null;
+  linkHover: LinkHover | null;
+  hyperlinks: ReadonlyMap<number, string>;
 }
 
 const DEFAULT_FONT = '14px "JetBrains Mono", monospace';
@@ -43,6 +52,11 @@ export function useCanvasTerminal(
   const isActiveRef = useRef(isActive);
   const scheduleRedrawRef = useRef<(() => void) | null>(null);
   const [preedit, setPreedit] = useState('');
+  const [selection, setSelection] = useState<SelectionRange | null>(null);
+  const [linkHover, setLinkHover] = useState<LinkHover | null>(null);
+  const [hyperlinks, setHyperlinks] = useState<ReadonlyMap<number, string>>(new Map());
+  const hyperlinksRef = useRef<ReadonlyMap<number, string>>(hyperlinks);
+  hyperlinksRef.current = hyperlinks;
   const modesRef = useRef<ReadonlySet<string>>(gridRef.current.modes);
   const compositionState = useRef<CompositionState>({
     isSendingComposition: false,
@@ -75,7 +89,8 @@ export function useCanvasTerminal(
 
     function resetEphemeralState(): void {
       setPreedit('');
-      // Phase 3B will append: setSelection(null), setLinkHover(null), …
+      setSelection(null);
+      setLinkHover(null);
     }
 
     let rafId: number | null = null;
@@ -133,6 +148,21 @@ export function useCanvasTerminal(
         const wasAlt = gridRef.current.modes.has('alt-screen');
         applyFrame(gridRef.current, frame);
         modesRef.current = gridRef.current.modes;
+        if (frame.kind === 'snapshot') {
+          setHyperlinks(new Map(frame.hyperlinks.map((h) => [h.id, h.uri])));
+        } else if (frame.hyperlinks.length > 0) {
+          setHyperlinks((prev) => {
+            const next = new Map(prev);
+            for (const h of frame.hyperlinks) next.set(h.id, h.uri);
+            return next;
+          });
+        }
+        setOverlayState({
+          cursor: gridRef.current.cursor,
+          cols: gridRef.current.cols,
+          rows: gridRef.current.rows,
+          fm,
+        });
         const isAlt = gridRef.current.modes.has('alt-screen');
         if (wasAlt !== isAlt) resetEphemeralState();
         scheduleRedraw();
@@ -160,14 +190,26 @@ export function useCanvasTerminal(
     const cleanups: Array<() => void> = [];
     const ta = textareaRef.current;
     if (ta) {
-      const fmRef = { current: fm };
+      const localFmRef = { current: fm };
       // String-typed composition submit → bytes via TextEncoder.
       const sendText = (text: string): void => sendBytes(new TextEncoder().encode(text));
 
       cleanups.push(setupComposition(ta, setPreedit, sendText, compositionState.current));
       cleanups.push(setupPaste(ta, modesRef, sendBytes));
-      cleanups.push(setupMouse(ta, canvas, fmRef, modesRef, sendBytes));
+      cleanups.push(setupMouse(ta, canvas, localFmRef, modesRef, sendBytes));
       cleanups.push(setupFocusEvents(ta, modesRef, sendBytes));
+      cleanups.push(
+        setupPointerOverlays(
+          ta,
+          canvas,
+          localFmRef,
+          modesRef,
+          gridRef,
+          hyperlinksRef,
+          setSelection,
+          setLinkHover,
+        ),
+      );
 
       const onKey = (e: KeyboardEvent): void => {
         if (compositionState.current.isSendingComposition) return;
@@ -206,5 +248,8 @@ export function useCanvasTerminal(
     blur: () => textareaRef.current?.blur(),
     socket,
     preedit,
+    selection,
+    linkHover,
+    hyperlinks,
   };
 }
