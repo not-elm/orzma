@@ -6,8 +6,11 @@ const blurSpy = vi.fn();
 const socketStub = {
   status: 'connecting' as const,
   setBinaryHandler: vi.fn(),
+  setFrameHandler: vi.fn(),
+  setControlHandler: vi.fn(),
   sendBinary: vi.fn(),
   sendControl: vi.fn(),
+  reportDecodeError: vi.fn(),
 };
 
 vi.mock('./useTerminalSocket', () => ({

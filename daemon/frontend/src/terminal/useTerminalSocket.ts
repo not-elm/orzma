@@ -1,68 +1,98 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { terminalWsUrl } from './api';
+import { useEffect, useRef, useState } from 'react';
+import { terminalWsUrl, vtTerminalWsUrl } from './api';
 
 export type SocketStatus = 'connecting' | 'connected' | 'disconnected' | 'exited';
 
 export type BinaryHandler = (data: Uint8Array) => void;
+export type ControlHandler = (text: string) => void;
 
-/** Mirrors the backend `ClientControl` enum (daemon/core/src/http/activities.rs). */
-export type ClientControl = { type: 'resize'; cols: number; rows: number };
+/** Client-side control messages (xterm legacy uses `type`; VT mode uses `kind`). */
+export type ClientControl =
+  | { type: 'resize'; cols: number; rows: number }
+  | { kind: 'resize'; cols: number; rows: number };
 
-/** Mirrors the backend `ServerControl` enum. */
+/** Server-side control messages on the raw-bytes path. */
 export type ServerControl = { type: 'exit'; code: number | null };
 
+/** Options for the socket hook. Default is xterm raw-bytes mode (backwards compat). */
+export interface TerminalSocketOptions {
+  mode?: 'vt' | 'xterm';
+  lastSeq?: number;
+}
+
+/** Ref-stable handle returned by `useTerminalSocket`. */
 export interface TerminalSocket {
   status: SocketStatus;
   sendBinary: (data: Uint8Array) => void;
   sendControl: (msg: ClientControl) => void;
-  /**
-   * Register a handler for inbound binary frames (PTY output).
-   * If a frame arrived before a handler was registered, the buffered frames
-   * are delivered synchronously when the handler is set. Pass null to clear.
-   */
   setBinaryHandler: (handler: BinaryHandler | null) => void;
+  setFrameHandler: (handler: BinaryHandler | null) => void;
+  setControlHandler: (handler: ControlHandler | null) => void;
+  reportDecodeError: (message: string) => void;
 }
 
 export function useTerminalSocket(
   windowId: string,
   paneId: string,
   activityId: string | null,
-  reconnectKey: number,
+  options?: TerminalSocketOptions,
 ): TerminalSocket {
   const wsRef = useRef<WebSocket | null>(null);
-  const handlerRef = useRef<BinaryHandler | null>(null);
-  const pendingRef = useRef<Uint8Array[]>([]);
+  const binaryHandlerRef = useRef<BinaryHandler | null>(null);
+  const frameHandlerRef = useRef<BinaryHandler | null>(null);
+  const controlHandlerRef = useRef<ControlHandler | null>(null);
+  const pendingBinaryRef = useRef<Uint8Array[]>([]);
+  const pendingFrameRef = useRef<Uint8Array[]>([]);
+  const pendingControlRef = useRef<string[]>([]);
   const [status, setStatus] = useState<SocketStatus>('connecting');
+  const statusRef = useRef<SocketStatus>('connecting');
+  statusRef.current = status;
+  const apiRef = useRef<TerminalSocket | null>(null);
 
-  // reconnectKey is a re-run trigger (its value isn't read inside the effect),
-  // which biome flags as an "extra" dependency. Suppress the warning.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnectKey is a re-run trigger
+  const mode = options?.mode ?? 'xterm';
+  const lastSeq = options?.lastSeq;
+
   useEffect(() => {
     if (!activityId) return;
-    const ws = new WebSocket(terminalWsUrl(windowId, paneId, activityId));
+    const url =
+      mode === 'vt'
+        ? vtTerminalWsUrl(windowId, paneId, activityId, lastSeq)
+        : terminalWsUrl(windowId, paneId, activityId);
+    const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
-    pendingRef.current = [];
+    pendingBinaryRef.current = [];
+    pendingFrameRef.current = [];
+    pendingControlRef.current = [];
     setStatus('connecting');
 
     ws.onopen = () => setStatus('connected');
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
-        try {
-          const msg = JSON.parse(ev.data);
-          if (msg?.type === 'exit') setStatus('exited');
-        } catch {
-          // Ignore malformed text frames
+        if (mode === 'vt') {
+          const handler = controlHandlerRef.current;
+          if (handler) handler(ev.data);
+          else pendingControlRef.current.push(ev.data);
+        } else {
+          try {
+            const msg = JSON.parse(ev.data) as { type?: string };
+            if (msg?.type === 'exit') setStatus('exited');
+          } catch {
+            // Ignore malformed text frames
+          }
         }
         return;
       }
       if (ev.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(ev.data);
-        const handler = handlerRef.current;
-        if (handler) {
-          handler(bytes);
+        if (mode === 'vt') {
+          const handler = frameHandlerRef.current;
+          if (handler) handler(bytes);
+          else pendingFrameRef.current.push(bytes);
         } else {
-          pendingRef.current.push(bytes);
+          const handler = binaryHandlerRef.current;
+          if (handler) handler(bytes);
+          else pendingBinaryRef.current.push(bytes);
         }
       }
     };
@@ -71,35 +101,60 @@ export function useTerminalSocket(
 
     return () => {
       wsRef.current = null;
-      handlerRef.current = null;
-      pendingRef.current = [];
+      binaryHandlerRef.current = null;
+      frameHandlerRef.current = null;
+      controlHandlerRef.current = null;
+      pendingBinaryRef.current = [];
+      pendingFrameRef.current = [];
+      pendingControlRef.current = [];
       ws.close();
     };
-  }, [windowId, paneId, activityId, reconnectKey]);
+  }, [windowId, paneId, activityId, mode, lastSeq]);
 
-  const setBinaryHandler = useCallback((handler: BinaryHandler | null) => {
-    handlerRef.current = handler;
-    if (handler) {
-      const drained = pendingRef.current;
-      pendingRef.current = [];
-      for (const bytes of drained) handler(bytes);
-    }
-  }, []);
+  if (apiRef.current === null) {
+    const api: TerminalSocket = {
+      get status() {
+        return statusRef.current;
+      },
+      sendBinary(data) {
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(data.buffer as ArrayBuffer);
+      },
+      sendControl(msg) {
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+      },
+      setBinaryHandler(handler) {
+        binaryHandlerRef.current = handler;
+        if (handler) {
+          const drained = pendingBinaryRef.current;
+          pendingBinaryRef.current = [];
+          for (const bytes of drained) handler(bytes);
+        }
+      },
+      setFrameHandler(handler) {
+        frameHandlerRef.current = handler;
+        if (handler) {
+          const drained = pendingFrameRef.current;
+          pendingFrameRef.current = [];
+          for (const bytes of drained) handler(bytes);
+        }
+      },
+      setControlHandler(handler) {
+        controlHandlerRef.current = handler;
+        if (handler) {
+          const drained = pendingControlRef.current;
+          pendingControlRef.current = [];
+          for (const text of drained) handler(text);
+        }
+      },
+      reportDecodeError(message) {
+        // NOTE: Phase 2B logs only; Phase 3 wires ReconnectController + client_error frame.
+        console.warn('[terminal] decode error:', message);
+      },
+    };
+    apiRef.current = api;
+  }
 
-  const sendBinary = useCallback((data: Uint8Array) => {
-    const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) ws.send(data.buffer as ArrayBuffer);
-  }, []);
-
-  const sendControl = useCallback((msg: ClientControl) => {
-    const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-  }, []);
-
-  return {
-    status,
-    sendBinary,
-    sendControl,
-    setBinaryHandler,
-  };
+  return apiRef.current;
 }
