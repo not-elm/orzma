@@ -53,9 +53,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(format!(
-                        "/windows/{wid}/panes/{pid}/activities/{extra_aid}"
-                    ))
+                    .uri(format!("/windows/{wid}/panes/{pid}/activities/{extra_aid}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -120,9 +118,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(format!(
-                        "/windows/{wid}/panes/{pid}/activities/{extra_aid}"
-                    ))
+                    .uri(format!("/windows/{wid}/panes/{pid}/activities/{extra_aid}"))
                     .body(Body::empty())
                     .unwrap(),
             )

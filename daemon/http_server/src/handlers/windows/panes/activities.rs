@@ -17,7 +17,10 @@ pub mod terminal_ws;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(add_to_pane::add_to_pane))
-        .route("/{activity_id}", method_delete(close_activity::close_activity))
+        .route(
+            "/{activity_id}",
+            method_delete(close_activity::close_activity),
+        )
         .route("/{activity_id}/activate", post(activate::activate))
         .route("/{activity_id}/terminal/ws", get(terminal_ws::terminal_ws))
         .route("/{activity_id}/handlers/ws", get(handlers_ws::handlers_ws))

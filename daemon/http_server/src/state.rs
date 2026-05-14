@@ -126,21 +126,21 @@ impl AppState {
 
         // NOTE: PTY spawn must precede the layout publish so the frontend never
         // sees a terminal activity without a backing PTY.
-        if matches!(activity_kind, ActivityKind::Terminal) {
-            if let Err(spawn_err) = crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty(
-                self, wid, pid, &aid,
-            )
-            .await
-            {
-                if let Err(rollback_err) = self.rollback_added_activity(wid, pid, &aid).await {
-                    tracing::warn!(
-                        error = %rollback_err,
-                        %wid, %pid, %aid,
-                        "failed to roll back added activity after PTY spawn failure"
-                    );
-                }
-                return Err(spawn_err);
+        if matches!(activity_kind, ActivityKind::Terminal)
+            && let Err(spawn_err) =
+                crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty(
+                    self, wid, pid, &aid,
+                )
+                .await
+        {
+            if let Err(rollback_err) = self.rollback_added_activity(wid, pid, &aid).await {
+                tracing::warn!(
+                    error = %rollback_err,
+                    %wid, %pid, %aid,
+                    "failed to roll back added activity after PTY spawn failure"
+                );
             }
+            return Err(spawn_err);
         }
 
         self.publish_window_layout(wid).await;
@@ -224,8 +224,8 @@ impl AppState {
         // NOTE: PTY spawn must precede the layout publish so the frontend never
         // sees a terminal activity without a backing PTY (mirrors the invariant
         // in close_activity / add_activity_to_pane).
-        if matches!(activity_kind, ActivityKind::Terminal) {
-            if let Err(spawn_err) =
+        if matches!(activity_kind, ActivityKind::Terminal)
+            && let Err(spawn_err) =
                 crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty(
                     self,
                     wid,
@@ -233,10 +233,9 @@ impl AppState {
                     &new_activity_id,
                 )
                 .await
-            {
-                self.rollback_split(wid, &new_pane_id).await;
-                return Err(spawn_err);
-            }
+        {
+            self.rollback_split(wid, &new_pane_id).await;
+            return Err(spawn_err);
         }
 
         self.publish_window_layout(wid).await;
