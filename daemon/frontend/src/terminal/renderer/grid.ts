@@ -53,7 +53,8 @@ function applySnapshot(grid: Grid, frame: FrameSnapshot): void {
     grid.dirtyRows.add(row);
   }
   grid.cursor = frame.cursor;
-  grid.modes = new Set(frame.modes);
+  grid.modes.clear();
+  for (const m of frame.modes) grid.modes.add(m);
 }
 
 function applyDelta(grid: Grid, frame: FrameDelta): void {

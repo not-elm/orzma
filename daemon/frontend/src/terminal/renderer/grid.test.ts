@@ -59,6 +59,25 @@ describe('applyFrame snapshot', () => {
     expect(g.modes.has('alt-screen')).toBe(true);
     expect(g.modes.has('bracketed-paste')).toBe(true);
   });
+
+  it('preserves grid.modes Set identity across applySnapshot', () => {
+    const g = createGrid({ cols: 80, rows: 24 });
+    const initialModesRef = g.modes;
+    applyFrame(g, snapshot({ modes: ['alt-screen', 'mouse-vt200'] }));
+    expect(g.modes).toBe(initialModesRef);
+    expect(g.modes.has('alt-screen')).toBe(true);
+    expect(g.modes.has('mouse-vt200')).toBe(true);
+  });
+
+  it('clears previous modes on subsequent snapshot without identity change', () => {
+    const g = createGrid({ cols: 80, rows: 24 });
+    const initialModesRef = g.modes;
+    applyFrame(g, snapshot({ modes: ['alt-screen'] }));
+    applyFrame(g, snapshot({ modes: ['focus-events'] }));
+    expect(g.modes).toBe(initialModesRef);
+    expect(g.modes.has('alt-screen')).toBe(false);
+    expect(g.modes.has('focus-events')).toBe(true);
+  });
 });
 
 describe('applyFrame delta', () => {
