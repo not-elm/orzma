@@ -1,6 +1,11 @@
 //! Terminal entry component — branches between xterm.js and VT canvas based on `?mode=vt`.
 
 import { useEffect, useRef } from 'react';
+import { Cursor } from './overlay/Cursor';
+import { IME } from './overlay/IME';
+import { Link } from './overlay/Link';
+import { Selection } from './overlay/Selection';
+import { useOverlayState } from './overlay-store';
 import { StatusBanner } from './StatusBanner';
 import { useCanvasTerminal } from './useCanvasTerminal';
 import { useTerminalSocket } from './useTerminalSocket';
@@ -23,12 +28,9 @@ export function Terminal(props: TerminalProps) {
 }
 
 function VtTerminal({ windowId, paneId, activityId, isActive }: TerminalProps) {
-  const { canvasRef, textareaRef, status, focus, blur } = useCanvasTerminal(
-    windowId,
-    paneId,
-    activityId,
-    isActive,
-  );
+  const { canvasRef, textareaRef, status, focus, blur, preedit, selection, linkHover } =
+    useCanvasTerminal(windowId, paneId, activityId, isActive);
+  const overlay = useOverlayState();
 
   const prevActiveRef = useRef(isActive);
   // biome-ignore lint/correctness/useExhaustiveDependencies: focus/blur are stabilized by React Compiler; adding them would re-run on every render and defeat transition-only semantics
@@ -41,6 +43,10 @@ function VtTerminal({ windowId, paneId, activityId, isActive }: TerminalProps) {
   return (
     <div className="relative h-full w-full bg-background">
       <canvas ref={canvasRef} className="absolute left-0 top-0" />
+      <Cursor cursor={overlay.cursor} isActive={isActive} fm={overlay.fm} />
+      {selection && <Selection selection={selection} cols={overlay.cols} fm={overlay.fm} />}
+      {linkHover && <Link hover={linkHover} fm={overlay.fm} />}
+      {preedit && <IME preedit={preedit} cursor={overlay.cursor} fm={overlay.fm} />}
       <textarea
         ref={textareaRef}
         className="absolute inset-0 resize-none border-0 bg-transparent text-transparent caret-transparent outline-none"
