@@ -13,6 +13,9 @@
     "format": "biome format --write ."
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.11"
+    "@biomejs/biome": "^2.4.11",
+    "@types/node": "catalog:",
+    "msgpackr": "^1.11.0",
+    "tsx": "^4.19.0"
   }
 }
