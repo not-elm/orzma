@@ -13,6 +13,7 @@ pub(crate) mod hyperlink;
 pub(crate) mod listener;
 pub(crate) mod mode_diff;
 
+pub use coalescer::{Coalescer, DamageVerdict};
 pub use frame::{
     Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, ModeFrame,
     ModeKind, RenderFrame, Row, Run, SnapshotReason, encode,
