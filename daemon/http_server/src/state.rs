@@ -102,21 +102,62 @@ impl AppState {
         Ok(())
     }
 
+    /// Add an Activity to a Pane and broadcast the new layout. For
+    /// terminal-kind activities, also spawn the backing PTY; on spawn
+    /// failure the activity record is rolled back before returning the
+    /// error so the frontend never sees a half-state.
     pub async fn add_activity_to_pane(
         &self,
         wid: &WindowId,
         pid: &PaneId,
         activity: Activity,
         extension_name: Option<&str>,
-    ) -> MultiplexerResult<ActivityId> {
+    ) -> HttpResult<ActivityId> {
         let aid = activity.id.clone();
+        let activity_kind = activity.kind.clone();
+
         self.multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.add_activity(activity))
             .await?;
+
         if let Some(name) = extension_name {
             self.extensions.record_activity_owner(&aid, name);
         }
+
+        // NOTE: PTY spawn must precede the layout publish so the frontend never
+        // sees a terminal activity without a backing PTY.
+        if matches!(activity_kind, ActivityKind::Terminal) {
+            if let Err(spawn_err) = crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty(
+                self, wid, pid, &aid,
+            )
+            .await
+            {
+                if let Err(rollback_err) = self.rollback_added_activity(wid, pid, &aid).await {
+                    tracing::warn!(
+                        error = %rollback_err,
+                        %wid, %pid, %aid,
+                        "failed to roll back added activity after PTY spawn failure"
+                    );
+                }
+                return Err(spawn_err);
+            }
+        }
+
+        self.publish_window_layout(wid).await;
         Ok(aid)
+    }
+
+    async fn rollback_added_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> MultiplexerResult<()> {
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
+                w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
+            })
+            .await
     }
 
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and

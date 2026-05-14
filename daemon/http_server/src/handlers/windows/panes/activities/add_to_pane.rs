@@ -1,12 +1,9 @@
-use crate::AppState;
-use crate::error::{HttpError, HttpResult};
-use crate::handlers::publish_window_layout;
-use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
+use crate::{AppState, error::HttpResult};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{ActivityId, ActivityKind, MultiplexerError, PaneId, WindowId};
+use ozmux_multiplexer::{PaneId, WindowId};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -20,7 +17,6 @@ pub async fn add_to_pane(
     axum::Json(body): axum::Json<AddActivityRequest>,
 ) -> HttpResult<(StatusCode, axum::Json<serde_json::Value>)> {
     let parsed = body.activity.into_parsed();
-    let activity_kind = parsed.activity.kind.clone();
     let aid = state
         .add_activity_to_pane(
             &wid,
@@ -30,52 +26,10 @@ pub async fn add_to_pane(
         )
         .await?;
 
-    if matches!(activity_kind, ActivityKind::Terminal) {
-        spawn_pty_with_rollback(&state, &wid, &pid, &aid).await?;
-    }
-
-    // NOTE: publish only after successful spawn so the frontend never sees a pane
-    // with a missing PTY (mirrors split.rs's "spawn must precede publish" invariant).
-    publish_window_layout(&state, &wid).await;
-
     Ok((
         StatusCode::CREATED,
         axum::Json(serde_json::json!({ "activity_id": aid })),
     ))
-}
-
-async fn spawn_pty_with_rollback(
-    state: &AppState,
-    wid: &WindowId,
-    pid: &PaneId,
-    aid: &ActivityId,
-) -> HttpResult<()> {
-    if let Err(spawn_err) = spawn_terminal_pty(state, wid, pid, aid).await {
-        if let Err(rollback_err) = rollback_added_activity(state, wid, pid, aid).await {
-            tracing::warn!(
-                error = %rollback_err,
-                %wid, %pid, %aid,
-                "failed to roll back added activity after PTY spawn failure"
-            );
-        }
-        return Err(spawn_err);
-    }
-    Ok(())
-}
-
-async fn rollback_added_activity(
-    state: &AppState,
-    wid: &WindowId,
-    pid: &PaneId,
-    aid: &ActivityId,
-) -> Result<(), HttpError> {
-    state
-        .multiplexer
-        .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
-            w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
-        })
-        .await?;
-    Ok(())
 }
 
 #[cfg(test)]

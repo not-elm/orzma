@@ -4,24 +4,8 @@ pub mod index;
 pub mod sessions;
 pub mod windows;
 
-use crate::window_view::WindowView;
 use crate::{AppState, HttpError, HttpResult};
 use ozmux_multiplexer::{Activity, ActivityId, MultiplexerError, PaneId, WindowId};
-
-/// Build the current Window layout snapshot under the Window lock and
-/// broadcast it. Used by every handler that mutates a Window.
-pub(crate) async fn publish_window_layout(state: &AppState, wid: &WindowId) {
-    let _ = state
-        .multiplexer
-        .with_window(wid, |w| match WindowView::from_window(w) {
-            Ok(view) => match serde_json::to_value(&view) {
-                Ok(value) => state.layout_broadcast.publish(wid, value),
-                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
-            },
-            Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
-        })
-        .await;
-}
 
 /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
 /// pane has no owner and `PaneNotInWindow` when it lives in a different
