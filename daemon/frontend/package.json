@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "check-types": "tsc -b --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",
@@ -23,6 +25,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.29.0",
+    "@playwright/test": "catalog:",
     "@rolldown/plugin-babel": "^0.2.3",
     "@testing-library/jest-dom": "catalog:",
     "@testing-library/react": "catalog:",

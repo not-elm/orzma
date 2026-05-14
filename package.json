@@ -7,6 +7,7 @@
     "dev": "pnpm --filter ozmux-ui dev",
     "check-types": "pnpm -r --if-present check-types",
     "test": "pnpm -r --if-present test",
+    "test:e2e": "pnpm --filter ozmux-ui test:e2e",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "lint:ci": "biome ci .",
