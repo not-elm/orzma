@@ -98,7 +98,7 @@ function applySnapshot(grid: Grid, frame: FrameSnapshot): void {
 
 function applyDelta(grid: Grid, frame: FrameDelta): void {
   if (frame.dirty_rows.length > 0) {
-    // G3: clone the rowVersions buffer so the reference changes. grid-store's
+    // NOTE: clone the rowVersions buffer so the reference changes. grid-store's
     // shallow equality compares rowVersions by reference (===); mutating the
     // typed array in place would let delta updates pass through unnoticed
     // whenever cursor + geometry stayed the same.

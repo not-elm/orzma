@@ -1,4 +1,41 @@
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
+
+interface CellProbe {
+  cellW: number;
+  cellH: number;
+  gridX: number;
+  gridY: number;
+}
+
+/** Measures the rendered monospace cell inside .terminal-grid's first row.
+ *  Mirrors `renderer/font.ts::cellWidthOf` / `cellHeightOf` so the e2e
+ *  assertions test against the same font environment the renderer uses. */
+async function probeCell(page: Page): Promise<CellProbe> {
+  const result = await page.evaluate(() => {
+    const grid = document.querySelector('.terminal-grid') as HTMLElement | null;
+    if (!grid) return null;
+    const row0 = grid.firstElementChild as HTMLElement | null;
+    const host = row0 ?? grid;
+    const probe = document.createElement('span');
+    probe.style.visibility = 'hidden';
+    probe.style.position = 'absolute';
+    probe.style.whiteSpace = 'pre';
+    probe.className = 'font-mono leading-none';
+    probe.textContent = 'W';
+    host.appendChild(probe);
+    const probeRect = probe.getBoundingClientRect();
+    const gridRect = grid.getBoundingClientRect();
+    probe.remove();
+    return {
+      cellW: probeRect.width,
+      cellH: probeRect.height,
+      gridX: gridRect.left,
+      gridY: gridRect.top,
+    };
+  });
+  if (!result) throw new Error('probeCell: .terminal-grid not mounted');
+  return result;
+}
 
 test.describe('Phase 3.5 — DOM renderer smoke', () => {
   test('terminal-grid mounts under VtTerminal', async ({ page }) => {
@@ -62,134 +99,76 @@ test.describe('Phase 3.5 — DOM renderer smoke', () => {
     expect(count).toBe(0);
   });
 
-  test('F1-F3: cursor x stays within ±1px of column * cellW (probe-based)', async ({ page }) => {
+  test('cursor x stays within ±1px of an integer column boundary', async ({ page }) => {
     await page.goto('/');
     await page.waitForSelector('.terminal-grid');
     await page.locator('textarea').focus();
-    // CSI cursor-position absolute: row 1, col 30. Using printf so the shell
-    // doesn't insert a prompt-redraw mid-test.
     await page.keyboard.type(String.raw`printf "\033[1;30H"`);
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
 
-    // Probe the actual rendered glyph width inside a real row so the probe
-    // shares the same font / line-height context as the cursor's expected
-    // column origin. ±1 column-width tolerance absorbs sub-pixel rounding.
-    const metrics = await page.evaluate(() => {
-      const grid = document.querySelector('.terminal-grid');
-      if (!grid) return null;
-      const row0 = grid.firstElementChild as HTMLElement | null;
-      if (!row0) return null;
-      const probe = document.createElement('span');
-      probe.style.visibility = 'hidden';
-      probe.style.position = 'absolute';
-      probe.style.whiteSpace = 'pre';
-      probe.className = 'font-mono leading-none';
-      probe.textContent = 'W';
-      row0.appendChild(probe);
-      const probeRect = probe.getBoundingClientRect();
-      const gridRect = (grid as HTMLElement).getBoundingClientRect();
-      probe.remove();
-      return { cellW: probeRect.width, gridX: gridRect.left, gridY: gridRect.top };
-    });
-    if (!metrics) throw new Error('grid / row0 missing');
-
+    const { cellW, gridX } = await probeCell(page);
     const cursor = await page.locator('[data-testid="vt-cursor"]').boundingBox();
     if (!cursor) throw new Error('cursor not visible');
 
-    // Cursor must align to the column the shell reports — the shell sees the
-    // 30th-column position from CSI 30G. Allow ±1px to absorb sub-pixel
-    // rounding by the browser.
-    const expectedX = metrics.gridX + 0 * metrics.cellW; // shells typically reset to col 0 then echo
-    // We can't strictly assert col 30 because the prompt re-renders, but we
-    // CAN assert: cursor is on a column boundary, i.e. the offset from gridX
-    // is an integer multiple of cellW (±1px). This catches drift regressions.
-    const cursorOffsetX = cursor.x - metrics.gridX;
-    const columnsFromLeft = cursorOffsetX / metrics.cellW;
-    const nearestColumn = Math.round(columnsFromLeft);
-    const drift = Math.abs(cursorOffsetX - nearestColumn * metrics.cellW);
+    const cursorOffsetX = cursor.x - gridX;
+    const nearestColumn = Math.round(cursorOffsetX / cellW);
+    const drift = Math.abs(cursorOffsetX - nearestColumn * cellW);
     expect(drift).toBeLessThanOrEqual(1);
-    expect(expectedX).toBeGreaterThanOrEqual(0); // sanity
   });
 
-  test('G5: terminal-grid fits the pane (scrollWidth === clientWidth)', async ({ page }) => {
+  test('terminal-grid fits the pane (no horizontal overflow, tracks pane width)', async ({
+    page,
+  }) => {
     await page.goto('/');
     await page.waitForSelector('.terminal-grid');
-    // Allow ResizeObserver + initial fitToContainer to settle.
+    // ResizeObserver fires async; give it a frame to settle.
     await page.waitForTimeout(400);
 
     const fit = await page.evaluate(() => {
       const pane = document.querySelector('.terminal-pane') as HTMLElement | null;
       const grid = document.querySelector('.terminal-grid') as HTMLElement | null;
       if (!pane || !grid) return null;
-      const row0 = grid.firstElementChild as HTMLElement | null;
-      // Probe cellW with the same context as the renderer.
-      const probe = document.createElement('span');
-      probe.style.visibility = 'hidden';
-      probe.style.position = 'absolute';
-      probe.style.whiteSpace = 'pre';
-      probe.className = 'font-mono leading-none';
-      probe.textContent = 'W';
-      (row0 ?? grid).appendChild(probe);
-      const cellW = probe.getBoundingClientRect().width;
-      probe.remove();
-      const cols = (row0?.textContent ?? '').length || 0;
       return {
         paneW: pane.clientWidth,
+        paneH: pane.clientHeight,
         gridW: grid.clientWidth,
         gridScrollW: grid.scrollWidth,
-        cellW,
-        cols,
+        gridH: grid.clientHeight,
+        gridScrollH: grid.scrollHeight,
+        rows: grid.children.length,
       };
     });
     if (!fit) throw new Error('grid not mounted');
+    const { cellW, cellH } = await probeCell(page);
 
-    // Grid does not overflow horizontally.
-    expect(fit.gridScrollW).toBeLessThanOrEqual(fit.gridW + 1); // ±1px sub-pixel
-    // Grid clientWidth tracks pane clientWidth.
-    expect(Math.abs(fit.gridW - fit.paneW)).toBeLessThanOrEqual(2);
-    // Remainder must be less than one cellW (floor() invariant).
-    if (fit.cols > 0) {
-      const remainder = fit.paneW - fit.cols * fit.cellW;
-      expect(remainder).toBeGreaterThanOrEqual(-1);
-      // Allow up to ~2 cellW slack: the prompt may have echoed bytes that
-      // partially fill row 0 below the configured cols. We mainly care that
-      // the row isn't *vastly* shorter than expected (which would indicate
-      // the initial resize was dropped).
-      expect(remainder).toBeLessThanOrEqual(2 * fit.cellW);
-    }
+    // The two invariants that actually catch the "not fitted" symptom:
+    //  1. grid width matches the pane (within sub-pixel rounding).
+    //  2. grid contents do not overflow the grid box.
+    // If G1's WebSocket OPEN race regressed, the server would stay at the
+    // spawn-default 80×24, and on a wider pane gridW would be much less
+    // than paneW. On a narrower pane gridScrollW would exceed gridW.
+    expect(fit.gridScrollW).toBeLessThanOrEqual(fit.gridW + 1);
+    expect(fit.gridScrollH).toBeLessThanOrEqual(fit.gridH + 1);
+    // Pane width gets fully consumed except for the floor() remainder
+    // (< cellW). If the resize was dropped, the gap would be many cells.
+    expect(fit.paneW - fit.gridW).toBeLessThan(cellW);
+    // Number of rows matches floor(paneH / cellH) within ±1.
+    const expectedRows = Math.floor(fit.paneH / cellH);
+    expect(Math.abs(fit.rows - expectedRows)).toBeLessThanOrEqual(1);
   });
 
-  test('F1-F3: cursor y aligns to a row boundary (probe-based)', async ({ page }) => {
+  test('cursor y aligns to an integer row boundary', async ({ page }) => {
     await page.goto('/');
     await page.waitForSelector('.terminal-grid');
 
-    const metrics = await page.evaluate(() => {
-      const grid = document.querySelector('.terminal-grid');
-      if (!grid) return null;
-      const row0 = grid.firstElementChild as HTMLElement | null;
-      if (!row0) return null;
-      const probe = document.createElement('span');
-      probe.style.visibility = 'hidden';
-      probe.style.position = 'absolute';
-      probe.style.whiteSpace = 'pre';
-      probe.className = 'font-mono leading-none';
-      probe.textContent = 'W';
-      row0.appendChild(probe);
-      const probeRect = probe.getBoundingClientRect();
-      const gridRect = (grid as HTMLElement).getBoundingClientRect();
-      probe.remove();
-      return { cellH: probeRect.height, gridY: gridRect.top };
-    });
-    if (!metrics) throw new Error('grid / row0 missing');
-
+    const { cellH, gridY } = await probeCell(page);
     const cursor = await page.locator('[data-testid="vt-cursor"]').boundingBox();
     if (!cursor) throw new Error('cursor not visible');
 
-    const cursorOffsetY = cursor.y - metrics.gridY;
-    const rowsFromTop = cursorOffsetY / metrics.cellH;
-    const nearestRow = Math.round(rowsFromTop);
-    const drift = Math.abs(cursorOffsetY - nearestRow * metrics.cellH);
+    const cursorOffsetY = cursor.y - gridY;
+    const nearestRow = Math.round(cursorOffsetY / cellH);
+    const drift = Math.abs(cursorOffsetY - nearestRow * cellH);
     expect(drift).toBeLessThanOrEqual(1);
   });
 });

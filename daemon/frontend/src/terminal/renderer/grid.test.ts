@@ -236,8 +236,8 @@ describe('Grid.rowVersions and cellAtColumn', () => {
     const beforeRef = g.rowVersions;
     applyFrame(g, delta);
     expect(Array.from(g.rowVersions)).toEqual([1, 2, 1]);
-    // G3: delta with at least one dirty row must replace the rowVersions
-    // typed array so grid-store notifies subscribers (reference comparison).
+    // delta with at least one dirty row must replace the rowVersions typed
+    // array so grid-store notifies subscribers (reference comparison).
     expect(g.rowVersions).not.toBe(beforeRef);
   });
 

@@ -35,8 +35,8 @@ export function useTerminalSocket(
   const controlHandlerRef = useRef<ControlHandler | null>(null);
   const pendingFrameRef = useRef<Uint8Array[]>([]);
   const pendingControlRef = useRef<string[]>([]);
-  // G1: buffer for client→server control messages (currently only `resize`)
-  // sent before WebSocket.OPEN — flushed in onopen. Without this the initial
+  // NOTE: buffer for outbound (client→server) messages sent before
+  // WebSocket.OPEN — flushed in onopen. Without this the initial
   // fitToContainer() resize is dropped and the server stays at the spawn
   // default 80x24, making the pane appear "not fitted".
   const pendingOutboundControlRef = useRef<string[]>([]);
@@ -61,7 +61,10 @@ export function useTerminalSocket(
     setStatus('connecting');
 
     ws.onopen = () => {
-      // G1: flush anything queued while the socket was CONNECTING.
+      // NOTE: flush control before binary. Today only the initial resize is
+      // queued (via sendControl), so the ordering is effectively undefined.
+      // If pre-connect keystroke buffering is ever added, switch to a single
+      // FIFO queue rather than two separate ones to preserve send order.
       const outControl = pendingOutboundControlRef.current;
       pendingOutboundControlRef.current = [];
       for (const text of outControl) ws.send(text);
@@ -106,32 +109,28 @@ export function useTerminalSocket(
       },
       sendBinary(data) {
         const ws = wsRef.current;
+        if (!ws) return;
         // NOTE: slice the exact byteOffset/byteLength range. Passing
         // `data.buffer` would send the entire underlying ArrayBuffer (msgpackr
         // Packr uses an 8192-byte pooled buffer and returns a subarray view),
         // causing the server to re-decode the FIRST frame on every send.
-        const slice = data.buffer.slice(
-          data.byteOffset,
-          data.byteOffset + data.byteLength,
-        ) as ArrayBuffer;
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(slice);
-        } else if (ws && ws.readyState === WebSocket.CONNECTING) {
-          // G1: queue for flush in onopen. Avoids losing input frames
-          // produced before the socket connects.
-          pendingOutboundBinaryRef.current.push(slice);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
+          );
+        } else if (ws.readyState === WebSocket.CONNECTING) {
+          pendingOutboundBinaryRef.current.push(
+            data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
+          );
         }
       },
       sendControl(msg) {
         const ws = wsRef.current;
-        const text = JSON.stringify(msg);
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(text);
-        } else if (ws && ws.readyState === WebSocket.CONNECTING) {
-          // G1: queue for flush in onopen — the initial fitToContainer()
-          // resize lands here, and without buffering the server stays at
-          // its spawn-default 80x24.
-          pendingOutboundControlRef.current.push(text);
+        if (!ws) return;
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        } else if (ws.readyState === WebSocket.CONNECTING) {
+          pendingOutboundControlRef.current.push(JSON.stringify(msg));
         }
       },
       setFrameHandler(handler) {
