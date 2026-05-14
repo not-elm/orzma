@@ -58,36 +58,26 @@ describe('createCanvasRenderer.paint', () => {
     expect(ctx.fillRect).not.toHaveBeenCalled();
   });
 
-  it('paints a cursor block at grid.cursor when visible', () => {
+  it('does not paint a cursor block (overlay owns cursor in Phase 3B)', () => {
     const canvas = document.createElement('canvas');
     // biome-ignore lint/style/noNonNullAssertion: FakeCanvasRenderingContext2D is always non-null in tests
     const ctx = canvas.getContext('2d')!;
     const renderer = createCanvasRenderer(canvas, fakeMetrics());
-    const grid = gridWithRow('hello');
-    grid.cursor = { x: 3, y: 0, shape: 'block', blinking: false, visible: true };
-    renderer.paint(grid, { isActive: true });
-    // The cursor block fillRect at (3*8, 0, 8, 16) is one of the fillRect calls.
-    expect(ctx.fillRect).toHaveBeenCalledWith(3 * 8, 0, 8, 16);
-  });
-
-  it('uses globalAlpha 1 when active and 0.6 when inactive', () => {
-    const canvas = document.createElement('canvas');
-    // biome-ignore lint/style/noNonNullAssertion: FakeCanvasRenderingContext2D is always non-null in tests
-    const ctx = canvas.getContext('2d')!;
-    const renderer = createCanvasRenderer(canvas, fakeMetrics());
-    const grid = gridWithRow('x');
+    // Grid with no dirty rows so the row background fill does not run; any
+    // fillRect call would then be cursor-related.
+    const grid = createGrid({ cols: 5, rows: 1 });
+    grid.cells[0] = Array.from('hello').map((ch) => ({
+      text: ch,
+      width: 1 as const,
+      fg: null,
+      bg: null,
+      style: 0,
+    }));
+    grid.dirtyRows.clear();
     grid.cursor = { x: 0, y: 0, shape: 'block', blinking: false, visible: true };
 
     renderer.paint(grid, { isActive: true });
-    const activeAlphaCalls = (ctx.globalAlpha as unknown as number[] | undefined) ?? [];
-    void activeAlphaCalls;
 
-    grid.dirtyRows.add(0);
-    renderer.paint(grid, { isActive: false });
-    expect(
-      (ctx.fillRect as unknown as ReturnType<typeof vi.fn>).mock.calls.some(
-        (c) => c[0] === 0 && c[1] === 0 && c[2] === 8 && c[3] === 16,
-      ),
-    ).toBe(true);
+    expect(ctx.fillRect).not.toHaveBeenCalled();
   });
 });
