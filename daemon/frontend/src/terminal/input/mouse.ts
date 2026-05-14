@@ -68,9 +68,19 @@ export function encodeMouseEvent(
     return ENC.encode(`\x1b[<${cb};${col1};${row1}${suffix}`);
   }
 
+  // DEFAULT (X10 binary) release uses Cb=3 (button bits cleared) with
+  // modifier bits preserved. Recompute cb with the release sentinel.
+  let defaultCb = cb;
+  if (e.kind === 'up') {
+    defaultCb = 3;
+    if (e.shift) defaultCb += 4;
+    if (e.alt) defaultCb += 8;
+    if (e.ctrl) defaultCb += 16;
+  }
+
   // DEFAULT encoding: \e[M + (Cb+32) + (col1+32) + (row1+32). Bytes must
   // fit in u8 (≤255). xterm.js's DEFAULT.restrict suppresses overflow.
-  const b1 = cb + 32;
+  const b1 = defaultCb + 32;
   const b2 = col1 + 32;
   const b3 = row1 + 32;
   if (b1 > 255 || b2 > 255 || b3 > 255) return null;
@@ -78,15 +88,19 @@ export function encodeMouseEvent(
   return new Uint8Array([0x1b, 0x5b, 0x4d, b1, b2, b3]);
 }
 
-/** Translates clientX/Y on the canvas to 0-based cell coords. */
+/** Translates clientX/Y on the canvas to 0-based cell coords.
+ *  Clamps negative results to 0 — pointer capture can deliver events with
+ *  clientX/Y outside the canvas rect (drag beyond left/top edge), which would
+ *  otherwise produce negative col/row and inject bogus mouse reports into
+ *  the TUI. xterm.js performs the equivalent clamp in its MouseService. */
 export function pointToCell(
   canvas: HTMLCanvasElement,
   ev: { clientX: number; clientY: number },
   fm: FontMetrics,
 ): { col: number; row: number } {
   const rect = canvas.getBoundingClientRect();
-  const col = Math.floor((ev.clientX - rect.left) / fm.cellW);
-  const row = Math.floor((ev.clientY - rect.top) / fm.cellH);
+  const col = Math.max(0, Math.floor((ev.clientX - rect.left) / fm.cellW));
+  const row = Math.max(0, Math.floor((ev.clientY - rect.top) / fm.cellH));
   return { col, row };
 }
 

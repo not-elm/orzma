@@ -80,6 +80,43 @@ describe('encodeMouseEvent', () => {
     expect(Array.from(bytes as Uint8Array)).toEqual([0x1b, 0x5b, 0x4d, 32, 33, 33]);
   });
 
+  it('DEFAULT release encodes Cb=3 (not the press button)', () => {
+    const bytes = encodeMouseEvent(
+      {
+        kind: 'up',
+        button: 'left',
+        col: 0,
+        row: 0,
+        shift: false,
+        alt: false,
+        ctrl: false,
+        buttonHeld: false,
+      },
+      new Set(['mouse-vt200']),
+    );
+    expect(bytes).not.toBeNull();
+    // Cb=3 + 32 = 35, col1+32=33, row1+32=33
+    expect(Array.from(bytes as Uint8Array)).toEqual([0x1b, 0x5b, 0x4d, 35, 33, 33]);
+  });
+
+  it('DEFAULT release preserves modifier bits (Shift on release = 3+4=7)', () => {
+    const bytes = encodeMouseEvent(
+      {
+        kind: 'up',
+        button: 'left',
+        col: 0,
+        row: 0,
+        shift: true,
+        alt: false,
+        ctrl: false,
+        buttonHeld: false,
+      },
+      new Set(['mouse-vt200']),
+    );
+    // Cb=3+4=7 + 32 = 39
+    expect(Array.from(bytes as Uint8Array)).toEqual([0x1b, 0x5b, 0x4d, 39, 33, 33]);
+  });
+
   it('DEFAULT encoding suppresses on coord overflow (>223)', () => {
     const bytes = encodeMouseEvent(
       {
@@ -218,6 +255,26 @@ describe('pointToCell', () => {
 
     const result = pointToCell(canvas, { clientX: 124, clientY: 82 }, fakeMetrics());
     expect(result).toEqual({ col: 3, row: 2 });
+  });
+
+  it('clamps negative col/row to 0 when pointer is outside canvas (drag beyond top-left)', () => {
+    const canvas = document.createElement('canvas');
+    canvas.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        top: 50,
+        right: 900,
+        bottom: 450,
+        width: 800,
+        height: 400,
+        x: 100,
+        y: 50,
+        toJSON: () => '',
+      }) as DOMRect;
+
+    // Pointer at (50, 30) is above-left of the canvas (which starts at 100, 50).
+    const result = pointToCell(canvas, { clientX: 50, clientY: 30 }, fakeMetrics());
+    expect(result).toEqual({ col: 0, row: 0 });
   });
 
   it('is unaffected by devicePixelRatio (CSS-pixel math)', () => {
