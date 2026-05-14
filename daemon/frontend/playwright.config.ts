@@ -12,7 +12,11 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
   },
-  use: { baseURL: 'http://localhost:5173' },
+  use: {
+    baseURL: 'http://localhost:5173',
+    // Clipboard tests need both permissions; Chromium honors these in headless.
+    permissions: ['clipboard-read', 'clipboard-write'],
+  },
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
 });

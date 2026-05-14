@@ -1,21 +1,30 @@
 import { expect, test } from '@playwright/test';
 
-test.describe('Phase 3A — input layering & paste smoke', () => {
-  test('layering invariant: pointer events hit textarea, not canvas', async ({ page }) => {
+test.describe('Phase 3A/3.5 — input layering & paste smoke', () => {
+  test('layering invariant: pointer events fall through textarea to terminal-grid descendants', async ({
+    page,
+  }) => {
     await page.goto('/');
-    await page.waitForSelector('canvas');
+    await page.waitForSelector('.terminal-grid');
     await page.waitForSelector('textarea');
 
     const tag = await page.evaluate(() => {
-      const canvas = document.querySelector('canvas');
-      if (!canvas) return null;
-      const r = canvas.getBoundingClientRect();
+      const grid = document.querySelector('.terminal-grid');
+      if (!grid) return null;
+      const r = grid.getBoundingClientRect();
       const cx = r.left + r.width / 2;
       const cy = r.top + r.height / 2;
-      return document.elementFromPoint(cx, cy)?.tagName ?? null;
+      const el = document.elementFromPoint(cx, cy);
+      if (!el) return null;
+      // Walk up to find the highest ancestor that is NOT the textarea — the
+      // textarea is pointer-events-none, so document.elementFromPoint should
+      // return a descendant of .terminal-grid (typically span / a / row div).
+      return el.tagName;
     });
 
-    expect(tag).toBe('TEXTAREA');
+    expect(tag).not.toBe('TEXTAREA');
+    // Acceptable: SPAN (run), DIV (row), A (link)
+    expect(['SPAN', 'DIV', 'A']).toContain(tag);
   });
 
   test('Cmd+V triggers bracketed paste with CR normalization', async ({ page, browserName }) => {
