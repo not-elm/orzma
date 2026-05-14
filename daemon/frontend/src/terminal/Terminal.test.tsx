@@ -1,5 +1,7 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { createOverlayStore } from './overlay-store';
+import { createGridStore } from './renderer/grid-store';
 
 const focusSpy = vi.fn();
 const blurSpy = vi.fn();
@@ -12,6 +14,9 @@ const socketStub = {
   sendControl: vi.fn(),
   reportDecodeError: vi.fn(),
 };
+
+const gridStoreStub = createGridStore();
+const overlayStoreStub = createOverlayStore();
 
 vi.mock('./useTerminalSocket', () => ({
   useTerminalSocket: () => socketStub,
@@ -27,6 +32,8 @@ vi.mock('./useCanvasTerminal', () => ({
     preedit: '',
     hyperlinks: new Map(),
     fm: { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 },
+    gridStore: gridStoreStub,
+    overlayStore: overlayStoreStub,
   }),
 }));
 vi.mock('./renderer/TerminalGrid', () => ({

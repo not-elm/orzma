@@ -1,17 +1,23 @@
-//! External store for overlay-relevant grid state — driven by `useCanvasTerminal`'s
-//! frame handler, consumed by overlays via `useSyncExternalStore`. Bypasses
-//! React state so cursor moves don't re-run the hook every frame.
+//! Per-Terminal external store for overlay-relevant grid state (cursor,
+//! cols/rows, font metrics). Created via factory in useCanvasTerminal,
+//! provided via Context so Cursor / IME read the pane's own state.
 
-import { useSyncExternalStore } from 'react';
+import { createContext, useContext, useSyncExternalStore } from 'react';
 import type { Cursor } from './protocol/frame';
 import type { FontMetrics } from './renderer/font';
 
-/** Overlay state read by Cursor / IME / Selection / Link components. */
+/** Overlay state read by Cursor / IME components. */
 export interface OverlayState {
   cursor: Cursor;
   cols: number;
   rows: number;
   fm: FontMetrics;
+}
+
+export interface OverlayStore {
+  setOverlayState(next: OverlayState): void;
+  subscribe(cb: () => void): () => void;
+  getSnapshot(): OverlayState;
 }
 
 const INITIAL_CURSOR: Cursor = {
@@ -29,15 +35,6 @@ const INITIAL_FM: FontMetrics = {
   fontCss: '14px monospace',
   dpr: 1,
 };
-
-let state: OverlayState = {
-  cursor: INITIAL_CURSOR,
-  cols: 80,
-  rows: 24,
-  fm: INITIAL_FM,
-};
-
-const listeners = new Set<() => void>();
 
 function shallowEqualCursor(a: Cursor, b: Cursor): boolean {
   return (
@@ -59,21 +56,38 @@ function shallowEqualState(a: OverlayState, b: OverlayState): boolean {
   );
 }
 
-/** Updates the overlay store and notifies subscribers if the state actually changed. */
-export function setOverlayState(next: OverlayState): void {
-  if (shallowEqualState(state, next)) return;
-  state = next;
-  for (const l of listeners) l();
-}
-
-/** Subscribes a React component to the overlay store. */
-export function useOverlayState(): OverlayState {
-  return useSyncExternalStore(
-    (cb) => {
+/** Creates a per-Terminal overlay store. */
+export function createOverlayStore(): OverlayStore {
+  let state: OverlayState = {
+    cursor: INITIAL_CURSOR,
+    cols: 80,
+    rows: 24,
+    fm: INITIAL_FM,
+  };
+  const listeners = new Set<() => void>();
+  return {
+    setOverlayState(next: OverlayState): void {
+      if (shallowEqualState(state, next)) return;
+      state = next;
+      for (const l of listeners) l();
+    },
+    subscribe(cb: () => void): () => void {
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
-    () => state,
-    () => state,
-  );
+    getSnapshot(): OverlayState {
+      return state;
+    },
+  };
+}
+
+export const OverlayStoreContext = createContext<OverlayStore | null>(null);
+
+/** Reads overlay state from the nearest OverlayStoreContext.Provider. */
+export function useOverlayState(): OverlayState {
+  const store = useContext(OverlayStoreContext);
+  if (!store) {
+    throw new Error('useOverlayState must be used inside an OverlayStoreContext.Provider');
+  }
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }

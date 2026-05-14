@@ -11,11 +11,11 @@ import { setupFocusEvents } from './input/focus';
 import { handleKeyDown } from './input/keymap';
 import { setupMouse } from './input/mouse';
 import { setupPaste } from './input/paste';
-import { setOverlayState } from './overlay-store';
+import { createOverlayStore, type OverlayStore } from './overlay-store';
 import { decodeFrame } from './protocol/frame';
 import { cellHeightOf, cellWidthOf, type FontMetrics } from './renderer/font';
 import { applyFrame, createGrid } from './renderer/grid';
-import { setGrid } from './renderer/grid-store';
+import { createGridStore, type GridStore } from './renderer/grid-store';
 import { injectTerminalPalette } from './renderer/palette';
 import type { SocketStatus, TerminalSocket } from './useTerminalSocket';
 import { useTerminalSocket } from './useTerminalSocket';
@@ -31,6 +31,8 @@ export interface CanvasTerminal {
   preedit: string;
   hyperlinks: ReadonlyMap<number, string>;
   fm: FontMetrics;
+  gridStore: GridStore;
+  overlayStore: OverlayStore;
 }
 
 const DEFAULT_FM: FontMetrics = {
@@ -63,6 +65,14 @@ export function useCanvasTerminal(
     startValue: 0,
     pendingTimer: null,
   });
+
+  const gridStoreRef = useRef<GridStore | null>(null);
+  if (!gridStoreRef.current) gridStoreRef.current = createGridStore();
+  const gridStore = gridStoreRef.current;
+
+  const overlayStoreRef = useRef<OverlayStore | null>(null);
+  if (!overlayStoreRef.current) overlayStoreRef.current = createOverlayStore();
+  const overlayStore = overlayStoreRef.current;
 
   const socket = useTerminalSocket(windowId, paneId, activityId);
 
@@ -133,8 +143,8 @@ export function useCanvasTerminal(
             return next;
           });
         }
-        setGrid({ ...gridRef.current });
-        setOverlayState({
+        gridStore.setGrid({ ...gridRef.current });
+        overlayStore.setOverlayState({
           cursor: gridRef.current.cursor,
           cols: gridRef.current.cols,
           rows: gridRef.current.rows,
@@ -211,5 +221,7 @@ export function useCanvasTerminal(
     preedit,
     hyperlinks,
     fm,
+    gridStore,
+    overlayStore,
   };
 }
