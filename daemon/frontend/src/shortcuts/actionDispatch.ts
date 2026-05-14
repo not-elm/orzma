@@ -1,12 +1,13 @@
 import { closePane } from '../layout/closePane';
 import { newTerminalActivity } from '../layout/newTerminalActivity';
 import { splitPane } from '../layout/splitPane';
-import type { PaneId, WindowId } from '../layout/types';
+import type { ActivityId, PaneId, WindowId } from '../layout/types';
 import type { Action } from './wire';
 
 export interface ShortcutContext {
   activeWindow: () => WindowId | null;
   activePane: () => PaneId | null;
+  activeActivity: () => ActivityId | null;
 }
 
 /**

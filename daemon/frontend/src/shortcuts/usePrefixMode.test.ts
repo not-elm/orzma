@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ShortcutContext } from './actionDispatch';
+import { makeShortcutContext } from './__test-helpers';
 import { usePrefixMode } from './usePrefixMode';
 
 const DEFAULT_PAYLOAD = {
@@ -39,11 +39,11 @@ function press(opts: KeyboardEventInit & { key: string }) {
   );
 }
 
-function makeCtx(): ShortcutContext {
-  return {
+function makeCtx() {
+  return makeShortcutContext({
     activeWindow: () => 'wid-1',
     activePane: () => 'pid-1',
-  };
+  });
 }
 
 beforeEach(() => {
