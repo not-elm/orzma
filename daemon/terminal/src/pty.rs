@@ -6,9 +6,9 @@ use ozmux_extension::runtime::RuntimeRoot;
 use ozmux_multiplexer::{ActivityId, PaneId, SessionId, WindowId};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Read, sync::Arc};
 #[cfg(any(test, feature = "test-helpers"))]
 use std::collections::HashSet;
+use std::{collections::HashMap, io::Read, sync::Arc};
 use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
 pub(crate) mod pty_handle;
@@ -20,23 +20,12 @@ pub enum TerminalEvent {
     Exit { code: Option<i32> },
 }
 
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct TerminalService {
     ptys: Arc<RwLock<HashMap<ActivityId, PtyHandle>>>,
     runtime_root: Option<Arc<RuntimeRoot>>,
     #[cfg(any(test, feature = "test-helpers"))]
     forced_failures: Arc<RwLock<HashSet<ActivityId>>>,
-}
-
-impl Default for TerminalService {
-    fn default() -> Self {
-        Self {
-            ptys: Arc::default(),
-            runtime_root: None,
-            #[cfg(any(test, feature = "test-helpers"))]
-            forced_failures: Arc::default(),
-        }
-    }
 }
 
 pub struct SpawnOptions {

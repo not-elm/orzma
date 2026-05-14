@@ -69,10 +69,7 @@ impl Pane {
     /// If the removed activity equals `active_activity`, the active activity
     /// is reset to the first remaining activity (mirroring the close cascade
     /// in `close_pane`).
-    pub fn remove_activity(
-        &mut self,
-        aid: &ActivityId,
-    ) -> MultiplexerResult<Activity> {
+    pub fn remove_activity(&mut self, aid: &ActivityId) -> MultiplexerResult<Activity> {
         if !self.has_activity(aid) {
             return Err(MultiplexerError::ActivityNotInPane {
                 pane: self.id.clone(),

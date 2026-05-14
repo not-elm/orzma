@@ -110,10 +110,8 @@ async fn spawn_pty_with_rollback(
     new_pane_id: &PaneId,
     new_activity_id: &ActivityId,
 ) -> HttpResult<()> {
-    if let Err(spawn_err) = super::spawn_terminal::spawn_terminal_pty(
-        state, wid, new_pane_id, new_activity_id,
-    )
-    .await
+    if let Err(spawn_err) =
+        super::spawn_terminal::spawn_terminal_pty(state, wid, new_pane_id, new_activity_id).await
     {
         rollback_split(state, wid, new_pane_id).await;
         return Err(spawn_err);
