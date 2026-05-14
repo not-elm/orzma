@@ -195,6 +195,8 @@ impl AppState {
         self.multiplexer.pane_owner_window.remove(new_pane_id);
     }
 
+    /// Close a Pane: remove it from the cell tree, tear down extension
+    /// registry rows and PTYs for each activity, and broadcast the new layout.
     pub async fn close_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
         let activities = self
             .multiplexer
@@ -214,6 +216,7 @@ impl AppState {
         Ok(())
     }
 
+    /// Rename a Window and broadcast the new layout.
     pub async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
         self.multiplexer.rename_window(wid, name).await?;
         self.publish_window_layout(wid).await;
