@@ -177,6 +177,13 @@ impl TerminalService {
 
     pub async fn write(&self, activity: &ActivityId, data: &[u8]) -> TerminalResult {
         let handle = self.read(activity).await?;
+        // NOTE: flag is set BEFORE the PTY write so a racing bridge cycle
+        // observing this user input cannot miss the flag — the bridge sees
+        // either an empty PTY (no chunk yet, flag set) or a chunk plus flag.
+        {
+            let mut state = handle.vt_state.lock().expect("vt_state poisoned");
+            state.pending_user_input = true;
+        }
         handle
             .writer
             .lock()
@@ -381,6 +388,15 @@ impl TerminalService {
         };
         state.term.reset_damage();
         Some(snapshot)
+    }
+
+    /// Returns the current value of `pending_user_input` for the given activity.
+    /// Test-only helper that takes the `vt_state` lock briefly.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn peek_pending_user_input(&self, activity: &ActivityId) -> TerminalResult<bool> {
+        let handle = self.read(activity).await?;
+        let state = handle.vt_state.lock().expect("vt_state poisoned");
+        Ok(state.pending_user_input)
     }
 
     /// Test-only: raw subscription to the wire broadcast (no atomicity guarantee).

@@ -255,3 +255,36 @@ async fn alt_screen_via_47() {
         );
     }
 }
+
+#[tokio::test]
+async fn write_sets_pending_user_input_flag() {
+    let svc = TerminalService::default();
+    let pane = PaneId::new();
+    let aid = ActivityId::new();
+    svc.spawn(
+        pane,
+        aid.clone(),
+        SpawnOptions {
+            cols: 10,
+            rows: 3,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+            window_id: None,
+            session_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Before any write: flag must be false (constructor default).
+    let before = svc.peek_pending_user_input(&aid).await.unwrap();
+    assert!(!before, "flag must default to false");
+
+    svc.write(&aid, b"x").await.unwrap();
+
+    // After write: flag must be true (the bridge has not yet consumed it).
+    let after = svc.peek_pending_user_input(&aid).await.unwrap();
+    assert!(after, "write must set pending_user_input = true");
+
+    svc.kill(&aid).await.unwrap();
+}
