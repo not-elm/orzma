@@ -154,3 +154,91 @@ describe('Row basic structure', () => {
     expect(span.className).toContain('bg-default');
   });
 });
+
+describe('Row links', () => {
+  it('renders OSC 8 hyperlinkId run as <a href> with target="_blank"', () => {
+    const cells: Cell[] = [
+      makeCell({ text: 'a', hyperlinkId: 1 }),
+      makeCell({ text: 'b', hyperlinkId: 1 }),
+      makeCell({ text: 'c' }),
+    ];
+    const hyperlinks = new Map([[1, 'https://example.com']]);
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={hyperlinks} probeRef={container} />,
+    );
+    const a = out.querySelector('a');
+    expect(a).not.toBeNull();
+    expect(a?.getAttribute('href')).toBe('https://example.com');
+    expect(a?.getAttribute('target')).toBe('_blank');
+    expect(a?.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(a?.className).toContain('pointer-events-auto');
+  });
+
+  it('renders inline URL match as <a href> via WebLinks regex', () => {
+    const cells: Cell[] = Array.from('see https://example.com here').map((ch) =>
+      makeCell({ text: ch }),
+    );
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={noHyperlinks} probeRef={container} />,
+    );
+    const a = out.querySelector('a');
+    expect(a?.getAttribute('href')).toBe('https://example.com');
+  });
+
+  it('rejects javascript: URI and falls back to <span>', () => {
+    const cells: Cell[] = [makeCell({ text: 'x', hyperlinkId: 1 })];
+    const hyperlinks = new Map([[1, 'javascript:alert(1)']]);
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={hyperlinks} probeRef={container} />,
+    );
+    expect(out.querySelector('a')).toBeNull();
+    expect(out.querySelector('span')?.textContent).toBe('x');
+  });
+
+  it('rejects ftp: and file: URIs (R7 explicit exclusion)', () => {
+    const cellsFtp: Cell[] = [makeCell({ text: 'x', hyperlinkId: 1 })];
+    const hyperlinksFtp = new Map([[1, 'ftp://example.com']]);
+    const { container: outFtp } = render(
+      <Row
+        cells={cellsFtp}
+        version={1}
+        fm={fakeFm}
+        hyperlinks={hyperlinksFtp}
+        probeRef={container}
+      />,
+    );
+    expect(outFtp.querySelector('a')).toBeNull();
+
+    const cellsFile: Cell[] = [makeCell({ text: 'y', hyperlinkId: 2 })];
+    const hyperlinksFile = new Map([[2, 'file:///etc/passwd']]);
+    const { container: outFile } = render(
+      <Row
+        cells={cellsFile}
+        version={1}
+        fm={fakeFm}
+        hyperlinks={hyperlinksFile}
+        probeRef={container}
+      />,
+    );
+    expect(outFile.querySelector('a')).toBeNull();
+  });
+
+  it('accepts mailto: URI', () => {
+    const cells: Cell[] = [makeCell({ text: 'x', hyperlinkId: 1 })];
+    const hyperlinks = new Map([[1, 'mailto:a@b.c']]);
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={hyperlinks} probeRef={container} />,
+    );
+    expect(out.querySelector('a')?.getAttribute('href')).toBe('mailto:a@b.c');
+  });
+
+  it('OSC 8 takes priority over URL regex on overlap', () => {
+    const url = 'https://example.com';
+    const cells: Cell[] = Array.from(url).map((ch) => makeCell({ text: ch, hyperlinkId: 7 }));
+    const hyperlinks = new Map([[7, 'https://overridden.example']]);
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={hyperlinks} probeRef={container} />,
+    );
+    expect(out.querySelector('a')?.getAttribute('href')).toBe('https://overridden.example');
+  });
+});
