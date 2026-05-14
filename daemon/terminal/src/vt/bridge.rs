@@ -4,7 +4,6 @@
 //! are wired in Phase 2.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
@@ -32,13 +31,14 @@ pub struct VtState {
     /// Bounded ring of encoded delta frames available for replay on
     /// reconnect.
     pub frame_ring: FrameRing,
-    /// Most recent client → server input timestamp, used by the Phase 2
-    /// coalescer to allow interactive-echo immediate flush.
+    /// One-shot flag set by [`crate::TerminalService::write`] when the
+    /// client sends bytes to the PTY. Consumed by the bridge's coalescer
+    /// on the first eligible emit (mirrors xterm.js's `_didUserInput`).
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "consumed by Phase 2 frame coalescer")
+        expect(dead_code, reason = "consumed by Task 6 bridge rewrite")
     )]
-    pub last_input_at: Option<Instant>,
+    pub pending_user_input: bool,
     /// Monotonic per-activity frame sequence number. Single-producer
     /// (bridge task) under the VtState lock.
     pub frame_seq: u32,
@@ -74,7 +74,7 @@ impl VtState {
             term,
             parser: alacritty_terminal::vte::ansi::Processor::new(),
             frame_ring: FrameRing::new(256 * 1024),
-            last_input_at: None,
+            pending_user_input: false,
             frame_seq: 0,
             first_emit: true,
             prev_cursor: None,
@@ -302,7 +302,7 @@ mod tests {
     fn vt_state_constructs_with_dimensions() {
         let state = make_state(80, 24);
         assert!(state.frame_ring.is_empty());
-        assert!(state.last_input_at.is_none());
+        assert!(!state.pending_user_input);
         assert_eq!(state.frame_seq, 0);
         assert!(state.first_emit);
         assert!(state.prev_cursor.is_none());
