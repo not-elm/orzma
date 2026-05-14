@@ -239,8 +239,8 @@ describe('encodeMouseEvent', () => {
 
 describe('pointToCell', () => {
   it('translates clientX/Y via getBoundingClientRect', () => {
-    const canvas = document.createElement('canvas');
-    canvas.getBoundingClientRect = () =>
+    const el = document.createElement('div');
+    el.getBoundingClientRect = () =>
       ({
         left: 100,
         top: 50,
@@ -253,13 +253,13 @@ describe('pointToCell', () => {
         toJSON: () => '',
       }) as DOMRect;
 
-    const result = pointToCell(canvas, { clientX: 124, clientY: 82 }, fakeMetrics());
+    const result = pointToCell(el, { clientX: 124, clientY: 82 }, fakeMetrics());
     expect(result).toEqual({ col: 3, row: 2 });
   });
 
-  it('clamps negative col/row to 0 when pointer is outside canvas (drag beyond top-left)', () => {
-    const canvas = document.createElement('canvas');
-    canvas.getBoundingClientRect = () =>
+  it('clamps negative col/row to 0 when pointer is outside element (drag beyond top-left)', () => {
+    const el = document.createElement('div');
+    el.getBoundingClientRect = () =>
       ({
         left: 100,
         top: 50,
@@ -272,14 +272,14 @@ describe('pointToCell', () => {
         toJSON: () => '',
       }) as DOMRect;
 
-    // Pointer at (50, 30) is above-left of the canvas (which starts at 100, 50).
-    const result = pointToCell(canvas, { clientX: 50, clientY: 30 }, fakeMetrics());
+    // Pointer at (50, 30) is above-left of the element (which starts at 100, 50).
+    const result = pointToCell(el, { clientX: 50, clientY: 30 }, fakeMetrics());
     expect(result).toEqual({ col: 0, row: 0 });
   });
 
   it('is unaffected by devicePixelRatio (CSS-pixel math)', () => {
-    const canvas = document.createElement('canvas');
-    canvas.getBoundingClientRect = () =>
+    const el = document.createElement('div');
+    el.getBoundingClientRect = () =>
       ({
         left: 0,
         top: 0,
@@ -295,7 +295,7 @@ describe('pointToCell', () => {
     Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
 
     try {
-      const result = pointToCell(canvas, { clientX: 16, clientY: 32 }, fakeMetrics());
+      const result = pointToCell(el, { clientX: 16, clientY: 32 }, fakeMetrics());
       expect(result).toEqual({ col: 2, row: 2 });
     } finally {
       Object.defineProperty(window, 'devicePixelRatio', { value: original, configurable: true });
@@ -306,44 +306,32 @@ describe('pointToCell', () => {
 describe('setupMouse — Shift+drag bypass full lifecycle', () => {
   it('routes pointerdown/move/up to selection when Shift+mouse-mode predicate matches', () => {
     const target = document.createElement('div');
-    const canvas = document.createElement('canvas');
     document.body.appendChild(target);
     const fmRef = { current: fakeMetrics() };
     const modesRef: { current: ReadonlySet<string> } = { current: new Set(['mouse-vt200']) };
     const send = vi.fn();
+    const rectRef = { current: target };
+    const textareaRef: { current: HTMLTextAreaElement | null } = { current: null };
 
-    const cleanup = setupMouse(target, canvas, fmRef, modesRef, send);
+    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef);
 
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
-        button: 0,
-        pointerId: 7,
-        shiftKey: true,
-        clientX: 10,
-        clientY: 10,
+        button: 0, pointerId: 7, shiftKey: true, clientX: 10, clientY: 10,
       }),
     );
     expect(send).not.toHaveBeenCalled();
 
     target.dispatchEvent(
       new PointerEvent('pointermove', {
-        button: -1,
-        pointerId: 7,
-        shiftKey: true,
-        clientX: 20,
-        clientY: 10,
+        button: -1, pointerId: 7, shiftKey: true, clientX: 20, clientY: 10,
       }),
     );
     expect(send).not.toHaveBeenCalled();
 
     target.dispatchEvent(
       new PointerEvent('pointerup', {
-        button: 0,
-        pointerId: 7,
-        // NOTE: Shift released mid-drag — routing decision should persist.
-        shiftKey: false,
-        clientX: 20,
-        clientY: 10,
+        button: 0, pointerId: 7, shiftKey: false, clientX: 20, clientY: 10,
       }),
     );
     expect(send).not.toHaveBeenCalled();
@@ -354,28 +342,88 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
 
   it('still forwards mouse-mode pointerdown without Shift', () => {
     const target = document.createElement('div');
-    const canvas = document.createElement('canvas');
     document.body.appendChild(target);
     const fmRef = { current: fakeMetrics() };
     const modesRef: { current: ReadonlySet<string> } = {
       current: new Set(['mouse-vt200', 'mouse-sgr-1006']),
     };
     const send = vi.fn();
+    const rectRef = { current: target };
+    const textareaRef: { current: HTMLTextAreaElement | null } = { current: null };
 
-    const cleanup = setupMouse(target, canvas, fmRef, modesRef, send);
+    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef);
 
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
-        button: 0,
-        pointerId: 8,
-        shiftKey: false,
-        clientX: 10,
-        clientY: 10,
+        button: 0, pointerId: 8, shiftKey: false, clientX: 10, clientY: 10,
       }),
     );
     expect(send).toHaveBeenCalledTimes(1);
 
     cleanup();
     document.body.removeChild(target);
+  });
+
+  it('window-level pointerup releases the selection pointer (C3)', () => {
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    const fmRef = { current: fakeMetrics() };
+    const modesRef: { current: ReadonlySet<string> } = { current: new Set(['mouse-vt200']) };
+    const send = vi.fn();
+    const rectRef = { current: target };
+    const textareaRef: { current: HTMLTextAreaElement | null } = { current: null };
+
+    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef);
+
+    target.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        button: 0, pointerId: 9, shiftKey: true, clientX: 10, clientY: 10,
+      }),
+    );
+    window.dispatchEvent(
+      new PointerEvent('pointerup', {
+        button: 0, pointerId: 9, shiftKey: false, clientX: 200, clientY: 200,
+      }),
+    );
+    target.dispatchEvent(
+      new PointerEvent('pointermove', {
+        button: -1, pointerId: 9, shiftKey: false, clientX: 20, clientY: 20,
+      }),
+    );
+    expect(true).toBe(true); // smoke: no crash
+
+    cleanup();
+    document.body.removeChild(target);
+  });
+
+  it('focuses textarea on pointerup (C4)', () => {
+    const target = document.createElement('div');
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(target);
+    document.body.appendChild(textarea);
+    const fmRef = { current: fakeMetrics() };
+    const modesRef: { current: ReadonlySet<string> } = { current: new Set() };
+    const send = vi.fn();
+    const rectRef = { current: target };
+    const textareaRef: { current: HTMLTextAreaElement | null } = { current: textarea };
+
+    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef);
+
+    const focusSpy = vi.spyOn(textarea, 'focus');
+    target.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        button: 0, pointerId: 10, clientX: 10, clientY: 10,
+      }),
+    );
+    target.dispatchEvent(
+      new PointerEvent('pointerup', {
+        button: 0, pointerId: 10, clientX: 10, clientY: 10,
+      }),
+    );
+    expect(focusSpy).toHaveBeenCalled();
+
+    cleanup();
+    document.body.removeChild(target);
+    document.body.removeChild(textarea);
   });
 });

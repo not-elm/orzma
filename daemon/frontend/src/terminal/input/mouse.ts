@@ -1,5 +1,6 @@
 //! Mouse event encoding (modes 1000/1002/1003/1006) + cell-coord translation
-//! + textarea-attached listener with RAF coalescing.
+//! + pointer listener with RAF coalescing, window-level drag-release reset (C3),
+//! and textarea focus-refocus on pointerup (C4).
 
 import type { FontMetrics } from '../renderer/font';
 
@@ -88,17 +89,13 @@ export function encodeMouseEvent(
   return new Uint8Array([0x1b, 0x5b, 0x4d, b1, b2, b3]);
 }
 
-/** Translates clientX/Y on the canvas to 0-based cell coords.
- *  Clamps negative results to 0 — pointer capture can deliver events with
- *  clientX/Y outside the canvas rect (drag beyond left/top edge), which would
- *  otherwise produce negative col/row and inject bogus mouse reports into
- *  the TUI. xterm.js performs the equivalent clamp in its MouseService. */
+/** Translates clientX/Y on the rect-defining element to 0-based cell coords. */
 export function pointToCell(
-  canvas: HTMLCanvasElement,
+  rectEl: HTMLElement,
   ev: { clientX: number; clientY: number },
   fm: FontMetrics,
 ): { col: number; row: number } {
-  const rect = canvas.getBoundingClientRect();
+  const rect = rectEl.getBoundingClientRect();
   const col = Math.max(0, Math.floor((ev.clientX - rect.left) / fm.cellW));
   const row = Math.max(0, Math.floor((ev.clientY - rect.top) / fm.cellH));
   return { col, row };
@@ -122,22 +119,20 @@ export function shouldRouteToSelection(e: PointerEvent, modes: ReadonlySet<strin
   return e.shiftKey;
 }
 
-/** Wires pointer + wheel + contextmenu listeners on `target` (the textarea),
- *  translates coordinates relative to `canvas`, and dispatches encoded bytes. */
+/** Wires pointer + wheel + contextmenu listeners on `target`, translates
+ *  coordinates relative to `rectRef.current`, dispatches encoded bytes, and
+ *  re-focuses `textareaRef.current` on pointerup so keystrokes still reach
+ *  the input sink. Window-level pointerup ensures drags releasing outside
+ *  the grid still reset currentSelectionPointer (C3). */
 export function setupMouse(
   target: HTMLElement,
-  canvas: HTMLCanvasElement,
+  rectRef: { current: HTMLElement | null },
   fmRef: { current: FontMetrics },
   modesRef: { current: ReadonlySet<string> },
   send: (bytes: Uint8Array) => void,
+  textareaRef: { current: HTMLTextAreaElement | null },
 ): () => void {
-  // NOTE: keyed by PointerEvent.button (0/1/2), NOT pointerId. pointerId
-  // identifies the device, not the button; a Set of pointerIds cannot
-  // represent multiple buttons held on the same mouse.
   const heldButtons = new Set<MouseButton>();
-  // NOTE: tracks the pointerId whose down was claimed by the selection
-  // overlay. Persists for the full down→move→up lifecycle so a user who
-  // releases Shift mid-drag still routes to selection (xterm.js parity).
   let currentSelectionPointer: number | null = null;
 
   function anyMode(): boolean {
@@ -146,11 +141,13 @@ export function setupMouse(
   }
 
   function lastButtonName(): MouseEventInput['button'] {
-    // Set iteration order is insertion order in JS; the most recently added
-    // entry is the last one in iteration. Matches xterm.js "last button down".
     const last = Array.from(heldButtons).at(-1);
     if (last === undefined) return 'none';
     return buttonName(last);
+  }
+
+  function refocus(): void {
+    textareaRef.current?.focus({ preventScroll: true });
   }
 
   const onPointerDown = (e: PointerEvent): void => {
@@ -162,13 +159,13 @@ export function setupMouse(
     try {
       target.setPointerCapture(e.pointerId);
     } catch {
-      // NOTE: setPointerCapture throws NotFoundError if the pointer is no
-      // longer active; ignore and continue with bubbled events.
+      // benign: pointer no longer active
     }
     heldButtons.add(e.button as MouseButton);
     if (anyMode()) e.preventDefault();
-
-    const { col, row } = pointToCell(canvas, e, fmRef.current);
+    const rectEl = rectRef.current;
+    if (!rectEl) return;
+    const { col, row } = pointToCell(rectEl, e, fmRef.current);
     const bytes = encodeMouseEvent(
       {
         kind: 'down',
@@ -196,7 +193,9 @@ export function setupMouse(
       const ev = pendingEvent;
       pendingEvent = null;
       if (!ev) return;
-      const { col, row } = pointToCell(canvas, ev, fmRef.current);
+      const rectEl = rectRef.current;
+      if (!rectEl) return;
+      const { col, row } = pointToCell(rectEl, ev, fmRef.current);
       const bytes = encodeMouseEvent(
         {
           kind: 'move',
@@ -217,25 +216,30 @@ export function setupMouse(
   const onPointerUp = (e: PointerEvent): void => {
     if (currentSelectionPointer === e.pointerId) {
       currentSelectionPointer = null;
+      refocus();
       return;
     }
     if (e.button < 0 || e.button > 2) return;
     heldButtons.delete(e.button as MouseButton);
-    const { col, row } = pointToCell(canvas, e, fmRef.current);
-    const bytes = encodeMouseEvent(
-      {
-        kind: 'up',
-        button: buttonName(e.button),
-        col,
-        row,
-        shift: e.shiftKey,
-        alt: e.altKey,
-        ctrl: e.ctrlKey,
-        buttonHeld: heldButtons.size > 0,
-      },
-      modesRef.current,
-    );
-    if (bytes) send(bytes);
+    const rectEl = rectRef.current;
+    if (rectEl) {
+      const { col, row } = pointToCell(rectEl, e, fmRef.current);
+      const bytes = encodeMouseEvent(
+        {
+          kind: 'up',
+          button: buttonName(e.button),
+          col,
+          row,
+          shift: e.shiftKey,
+          alt: e.altKey,
+          ctrl: e.ctrlKey,
+          buttonHeld: heldButtons.size > 0,
+        },
+        modesRef.current,
+      );
+      if (bytes) send(bytes);
+    }
+    refocus();
   };
 
   const onPointerCancel = (e: PointerEvent): void => {
@@ -246,10 +250,22 @@ export function setupMouse(
     heldButtons.clear();
   };
 
+  // C3: window-scope pointerup so drags releasing outside the target reset
+  // currentSelectionPointer (otherwise the pointerId could be reused and
+  // misidentified on subsequent moves).
+  const onWindowPointerUp = (e: PointerEvent): void => {
+    if (currentSelectionPointer === e.pointerId) {
+      currentSelectionPointer = null;
+      refocus();
+    }
+  };
+
   const onWheel = (e: WheelEvent): void => {
     if (!anyMode()) return;
     e.preventDefault();
-    const { col, row } = pointToCell(canvas, e, fmRef.current);
+    const rectEl = rectRef.current;
+    if (!rectEl) return;
+    const { col, row } = pointToCell(rectEl, e, fmRef.current);
     const button: MouseEventInput['button'] = e.deltaY < 0 ? 'wheelUp' : 'wheelDown';
     const bytes = encodeMouseEvent(
       {
@@ -278,6 +294,7 @@ export function setupMouse(
   target.addEventListener('lostpointercapture', onLostCapture);
   target.addEventListener('wheel', onWheel, { passive: false });
   target.addEventListener('contextmenu', onContextMenu);
+  window.addEventListener('pointerup', onWindowPointerUp);
 
   return () => {
     if (pendingRaf !== null) {
@@ -292,5 +309,6 @@ export function setupMouse(
     target.removeEventListener('lostpointercapture', onLostCapture);
     target.removeEventListener('wheel', onWheel);
     target.removeEventListener('contextmenu', onContextMenu);
+    window.removeEventListener('pointerup', onWindowPointerUp);
   };
 }
