@@ -48,10 +48,17 @@ class FakeCanvasRenderingContext2D {
   }));
 }
 
+// NOTE: caches one FakeCanvasRenderingContext2D per canvas element to match browser semantics —
+// repeated getContext('2d') calls on the same canvas return the same object.
+const canvasCtxCache = new WeakMap<HTMLCanvasElement, FakeCanvasRenderingContext2D>();
 HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement, ctxId: string) {
-  return ctxId === '2d'
-    ? (new FakeCanvasRenderingContext2D() as unknown as CanvasRenderingContext2D)
-    : null;
+  if (ctxId !== '2d') return null;
+  let ctx = canvasCtxCache.get(this);
+  if (!ctx) {
+    ctx = new FakeCanvasRenderingContext2D();
+    canvasCtxCache.set(this, ctx);
+  }
+  return ctx as unknown as CanvasRenderingContext2D;
 }) as typeof HTMLCanvasElement.prototype.getContext;
 
 // === ImageBitmap stub (glyph atlas uses createImageBitmap in browsers) ===
