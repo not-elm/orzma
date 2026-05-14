@@ -1,3 +1,4 @@
+import { closeActivity } from '../layout/closeActivity';
 import { closePane } from '../layout/closePane';
 import { newTerminalActivity } from '../layout/newTerminalActivity';
 import { splitPane } from '../layout/splitPane';
@@ -25,6 +26,8 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
     }
     case 'new-terminal-activity':
       return () => withActivePane(ctx, newTerminalActivity);
+    case 'close-activity':
+      return () => withActivePaneActivity(ctx, closeActivity);
     default:
       console.warn('actionToHandler: unsupported action', action);
       return null;
@@ -38,4 +41,14 @@ function withActivePane(
   const w = ctx.activeWindow();
   const p = ctx.activePane();
   if (w && p) void run(w, p);
+}
+
+function withActivePaneActivity(
+  ctx: ShortcutContext,
+  run: (w: WindowId, p: PaneId, a: ActivityId) => void | Promise<void>,
+): void {
+  const w = ctx.activeWindow();
+  const p = ctx.activePane();
+  const a = ctx.activeActivity();
+  if (w && p && a) void run(w, p, a);
 }

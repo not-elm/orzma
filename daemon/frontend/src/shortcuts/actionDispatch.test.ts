@@ -135,4 +135,41 @@ describe('actionToHandler', () => {
     await Promise.resolve();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('returns a handler that DELETEs the activity for close-activity', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext({
+      activeWindow: () => 'wid-1',
+      activePane: () => 'pid-1',
+      activeActivity: () => 'aid-9',
+    });
+    const handler = actionToHandler({ type: 'close-activity' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/activities/aid-9', {
+      method: 'DELETE',
+    });
+  });
+
+  it('close-activity handler is a no-op when active activity is null', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext({
+      activeWindow: () => 'wid-1',
+      activePane: () => 'pid-1',
+      activeActivity: () => null,
+    });
+    const handler = actionToHandler({ type: 'close-activity' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
