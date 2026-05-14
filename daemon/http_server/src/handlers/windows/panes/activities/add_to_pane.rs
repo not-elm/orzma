@@ -31,18 +31,7 @@ pub async fn add_to_pane(
         .await?;
 
     if matches!(activity_kind, ActivityKind::Terminal) {
-        if let Err(spawn_err) =
-            spawn_terminal_pty(&state, &wid, &pid, &aid).await
-        {
-            if let Err(rollback_err) = rollback_added_activity(&state, &wid, &pid, &aid).await {
-                tracing::warn!(
-                    error = %rollback_err,
-                    %wid, %pid, %aid,
-                    "failed to roll back added activity after PTY spawn failure"
-                );
-            }
-            return Err(spawn_err);
-        }
+        spawn_pty_with_rollback(&state, &wid, &pid, &aid).await?;
     }
 
     // NOTE: publish only after successful spawn so the frontend never sees a pane
@@ -53,6 +42,25 @@ pub async fn add_to_pane(
         StatusCode::CREATED,
         axum::Json(serde_json::json!({ "activity_id": aid })),
     ))
+}
+
+async fn spawn_pty_with_rollback(
+    state: &AppState,
+    wid: &WindowId,
+    pid: &PaneId,
+    aid: &ActivityId,
+) -> HttpResult<()> {
+    if let Err(spawn_err) = spawn_terminal_pty(state, wid, pid, aid).await {
+        if let Err(rollback_err) = rollback_added_activity(state, wid, pid, aid).await {
+            tracing::warn!(
+                error = %rollback_err,
+                %wid, %pid, %aid,
+                "failed to roll back added activity after PTY spawn failure"
+            );
+        }
+        return Err(spawn_err);
+    }
+    Ok(())
 }
 
 async fn rollback_added_activity(
