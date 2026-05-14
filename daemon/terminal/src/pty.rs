@@ -399,6 +399,18 @@ impl TerminalService {
         Ok(state.pending_user_input)
     }
 
+    /// Returns a clone of the VT chunk sender for the given activity. Test-only.
+    /// Allows tests to inject bytes that go straight into the bridge's
+    /// `parser.advance`, bypassing the shell so damage timing is deterministic.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn vt_chunk_sender_for_test(
+        &self,
+        activity: &ActivityId,
+    ) -> TerminalResult<tokio::sync::mpsc::Sender<bytes::Bytes>> {
+        let handle = self.read(activity).await?;
+        Ok(handle.vt_chunk_tx.clone())
+    }
+
     /// Test-only: raw subscription to the wire broadcast (no atomicity guarantee).
     /// Production paths use `subscribe_frames` (Task 13).
     #[cfg(any(test, feature = "test-helpers"))]
