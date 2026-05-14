@@ -26,6 +26,7 @@ fn main() {
             x: 0,
             y: 0,
             shape: CursorShape::Block,
+            blinking: false,
             visible: true,
         },
         rows_data: vec![Row {
@@ -40,6 +41,7 @@ fn main() {
         }],
         reason: SnapshotReason::Initial,
         modes: vec![],
+        hyperlinks: vec![],
     };
     fs::write(dir.join("snapshot_minimal.bin"), encode(&snap).unwrap()).unwrap();
     fs::write(
@@ -59,6 +61,7 @@ fn main() {
             x: 3,
             y: 0,
             shape: CursorShape::Block,
+            blinking: false,
             visible: true,
         },
         dirty_rows: vec![DirtyRow {
@@ -72,6 +75,7 @@ fn main() {
                 hyperlink_id: None,
             }],
         }],
+        hyperlinks: vec![],
     };
     let delta_frame = RenderFrame::Delta(delta_payload);
     fs::write(dir.join("delta_minimal.bin"), encode(&delta_frame).unwrap()).unwrap();
@@ -115,6 +119,7 @@ fn main() {
             x: 0,
             y: 0,
             shape: CursorShape::Block,
+            blinking: false,
             visible: true,
         },
         rows_data: vec![Row {
@@ -129,6 +134,7 @@ fn main() {
         }],
         reason: SnapshotReason::Initial,
         modes: vec!["mouse-any-event".to_string(), "mouse-sgr-1006".to_string()],
+        hyperlinks: vec![],
     };
     fs::write(
         dir.join("snapshot_modes_mouse.bin"),

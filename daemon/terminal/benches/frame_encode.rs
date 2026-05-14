@@ -32,11 +32,13 @@ fn make_snapshot_80x24() -> FrameSnapshot {
             x: 0,
             y: 0,
             shape: CursorShape::Block,
+            blinking: false,
             visible: true,
         },
         rows_data: vec![row; 24],
         reason: SnapshotReason::Initial,
         modes: vec![],
+        hyperlinks: vec![],
     }
 }
 
@@ -55,6 +57,7 @@ fn make_delta_4rows() -> FrameDelta {
             x: 0,
             y: 0,
             shape: CursorShape::Block,
+            blinking: false,
             visible: true,
         },
         dirty_rows: (0..4u16)
@@ -63,6 +66,7 @@ fn make_delta_4rows() -> FrameDelta {
                 runs: vec![run.clone()],
             })
             .collect(),
+        hyperlinks: vec![],
     }
 }
 

@@ -72,6 +72,7 @@ pub fn build_snapshot<T>(term: &Term<T>, seq: u32, reason: SnapshotReason) -> Fr
         rows_data,
         reason,
         modes: snapshot_modes(*term.mode()),
+        hyperlinks: Vec::new(),
     }
 }
 
@@ -91,6 +92,7 @@ pub fn build_delta<T>(term: &Term<T>, seq: u32, rows: &[u16]) -> FrameDelta {
         seq,
         cursor: extract_cursor(term),
         dirty_rows,
+        hyperlinks: Vec::new(),
     }
 }
 
@@ -109,6 +111,7 @@ pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
         x,
         y,
         shape: CursorShape::Block,
+        blinking: false,
         visible: term.mode().contains(TermMode::SHOW_CURSOR),
     }
 }

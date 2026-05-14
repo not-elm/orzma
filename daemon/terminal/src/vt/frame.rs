@@ -28,10 +28,30 @@ pub enum CursorShape {
 /// Cursor state at snapshot time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
+    /// Column position (0-based).
     pub x: u16,
+    /// Row position (0-based).
     pub y: u16,
+    /// Visual shape selected by DECSCUSR.
     pub shape: CursorShape,
+    /// True when DECSCUSR selects a blinking variant. Steady variants
+    /// (`\033[2 q`, `\033[4 q`, `\033[6 q`) set this to false.
+    pub blinking: bool,
+    /// True when the cursor should be rendered. Gated by DECTCEM
+    /// (`TermMode::SHOW_CURSOR`) AND DECSCUSR shape != Hidden.
     pub visible: bool,
+}
+
+/// OSC 8 hyperlink: server-assigned wire id → URI mapping.
+///
+/// Wire id is a monotonic u32 assigned by `crate::vt::hyperlink::HyperlinkInterner`
+/// keyed by `(alacritty_id, uri)`. Cells reference these via [`Run::hyperlink_id`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hyperlink {
+    /// Monotonic u32 wire id assigned server-side.
+    pub id: u32,
+    /// The hyperlink target URI.
+    pub uri: String,
 }
 
 /// Style bitmask constants for [`Run::style`].
@@ -126,6 +146,9 @@ pub struct FrameSnapshot {
     /// Currently-set wire mode names (subset of TRACKED_MODES). Authoritative
     /// for clients that missed a `mode` text sidecar.
     pub modes: Vec<String>,
+    /// All hyperlinks referenced by any cell in this snapshot. The client
+    /// REPLACES its cumulative Map with this list on snapshot reception.
+    pub hyperlinks: Vec<Hyperlink>,
 }
 
 /// Differential update relative to the prior frame.
@@ -139,6 +162,10 @@ pub struct FrameDelta {
     pub cursor: Cursor,
     /// Entire rows that changed.
     pub dirty_rows: Vec<DirtyRow>,
+    /// Hyperlinks referenced by this delta's dirty rows. Clients merge
+    /// cumulatively into their hyperlink Map. NOT cumulative on the server —
+    /// only the ids referenced by this delta's dirty rows are included.
+    pub hyperlinks: Vec<Hyperlink>,
 }
 
 /// Wire-level render frame, dispatched by the `kind` tag.
@@ -239,11 +266,37 @@ mod tests {
             x: 5,
             y: 3,
             shape: CursorShape::Bar,
+            blinking: false,
             visible: false,
         };
         let bytes = encode(&cur).unwrap();
         let decoded: Cursor = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded, cur);
+    }
+
+    #[test]
+    fn cursor_blinking_field_round_trip() {
+        let cur = Cursor {
+            x: 1,
+            y: 2,
+            shape: CursorShape::Underline,
+            blinking: true,
+            visible: true,
+        };
+        let bytes = encode(&cur).unwrap();
+        let decoded: Cursor = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, cur);
+    }
+
+    #[test]
+    fn hyperlink_round_trip() {
+        let h = Hyperlink {
+            id: 42,
+            uri: "https://example.com".to_string(),
+        };
+        let bytes = encode(&h).unwrap();
+        let decoded: Hyperlink = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, h);
     }
 
     #[test]
@@ -256,6 +309,7 @@ mod tests {
                 x: 0,
                 y: 0,
                 shape: CursorShape::Block,
+                blinking: false,
                 visible: true,
             },
             rows_data: vec![
@@ -273,6 +327,33 @@ mod tests {
             ],
             reason: SnapshotReason::Initial,
             modes: vec![],
+            hyperlinks: vec![],
+        };
+        let bytes = encode(&snap).unwrap();
+        let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, snap);
+    }
+
+    #[test]
+    fn snapshot_hyperlinks_field_round_trip() {
+        let snap = FrameSnapshot {
+            seq: 1,
+            cols: 1,
+            rows: 1,
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                blinking: false,
+                visible: true,
+            },
+            rows_data: vec![Row { runs: vec![] }],
+            reason: SnapshotReason::Initial,
+            modes: vec![],
+            hyperlinks: vec![Hyperlink {
+                id: 7,
+                uri: "https://ozmux.example".to_string(),
+            }],
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
@@ -287,6 +368,7 @@ mod tests {
                 x: 7,
                 y: 2,
                 shape: CursorShape::Block,
+                blinking: false,
                 visible: true,
             },
             dirty_rows: vec![
@@ -306,6 +388,29 @@ mod tests {
                     }],
                 },
             ],
+            hyperlinks: vec![],
+        };
+        let bytes = encode(&delta).unwrap();
+        let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, delta);
+    }
+
+    #[test]
+    fn delta_hyperlinks_field_round_trip() {
+        let delta = FrameDelta {
+            seq: 2,
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                blinking: false,
+                visible: true,
+            },
+            dirty_rows: vec![],
+            hyperlinks: vec![Hyperlink {
+                id: 1,
+                uri: "https://example.org".to_string(),
+            }],
         };
         let bytes = encode(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
@@ -341,11 +446,13 @@ mod tests {
                 x: 0,
                 y: 0,
                 shape: CursorShape::Block,
+                blinking: false,
                 visible: true,
             },
             rows_data: vec![],
             reason: SnapshotReason::Initial,
             modes: vec![],
+            hyperlinks: vec![],
         });
         let bytes = encode(&snap).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
@@ -376,11 +483,13 @@ mod tests {
                 x: 0,
                 y: 0,
                 shape: CursorShape::Block,
+                blinking: false,
                 visible: true,
             },
             rows_data: vec![],
             reason: SnapshotReason::Initial,
             modes: vec!["alt-screen".to_string(), "bracketed-paste".to_string()],
+            hyperlinks: vec![],
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
