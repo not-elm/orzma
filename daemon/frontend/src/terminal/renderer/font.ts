@@ -1,6 +1,6 @@
 import stringWidth from 'string-width';
 
-/** Per-cell font geometry derived from canvas measureText. */
+/** Per-cell font geometry produced by the DOM probes (`cellWidthOf` / `cellHeightOf`). */
 export interface FontMetrics {
   /** Pixel width of one terminal cell. */
   cellW: number;
@@ -12,25 +12,6 @@ export interface FontMetrics {
   fontCss: string;
   /** Device pixel ratio at measurement time. */
   dpr: number;
-}
-
-/** Measures one cell in the given CSS font. Returns ceil-rounded pixel sizes. */
-export function measureFont(canvas: HTMLCanvasElement, fontCss: string): FontMetrics {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    throw new Error('measureFont: getContext("2d") returned null');
-  }
-  ctx.font = fontCss;
-  const m = ctx.measureText('M');
-  const ascent = m.actualBoundingBoxAscent ?? 12;
-  const descent = m.actualBoundingBoxDescent ?? 3;
-  return {
-    cellW: Math.ceil(m.width),
-    cellH: Math.ceil(ascent + descent),
-    baseline: Math.ceil(ascent),
-    fontCss,
-    dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
-  };
 }
 
 /** Returns the column width of one grapheme cluster (0, 1, or 2). */
