@@ -71,32 +71,47 @@ pub(crate) struct PtyHandle {
     pub event_sender: Sender<TerminalEvent>,
     _child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
 
-    /// Bundled VT state (Term + Parser + FrameRing + last_input_at), wrapped
-    /// in `std::sync::Mutex` for short-held locks per PTY chunk in the bridge
-    /// task. Read by `TerminalService::inspect_row` under the `test-helpers`
-    /// feature.
-    #[cfg_attr(
-        not(any(test, feature = "test-helpers")),
-        expect(dead_code, reason = "consumed by Phase 2 frame coalescer")
-    )]
+    /// Bundled VT state (Term + Parser + FrameRing + pending_user_input),
+    /// wrapped in `std::sync::Mutex` for short-held locks per PTY chunk in
+    /// the bridge task. Read by `TerminalService::write`, `resize`,
+    /// `subscribe_frames`, `read_geometry`, and the
+    /// `cfg(any(test, feature = "test-helpers"))` helpers (`inspect_row`,
+    /// `inspect_damage_and_reset`, `peek_pending_user_input`) in `pty.rs`.
     pub(crate) vt_state: Arc<std::sync::Mutex<VtState>>,
 
     /// Reply-required events from `TermListener` (unbounded; must-not-drop
     /// to avoid capability-query backflow regression).
-    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
+    #[expect(
+        dead_code,
+        reason = "held for the lifetime of TermListener (which owns a clone); \
+                  reply_rx is consumed by run_bridge_task"
+    )]
     pub(crate) reply_tx: mpsc::UnboundedSender<ReplyFrame>,
 
     /// Best-effort control events (bounded cap=64); try_send drops are
     /// rate-limited via `DropCounter`.
-    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
+    #[expect(
+        dead_code,
+        reason = "held for the lifetime of TermListener (which owns a clone); \
+                  control_rx is consumed by run_bridge_task"
+    )]
     pub(crate) control_tx: mpsc::Sender<ControlFrame>,
 
     /// Broadcast of wire messages (Binary deltas + Text sidecars).
-    #[expect(dead_code, reason = "consumed by Phase 2A subscribe_frames (Task 13+)")]
+    #[expect(
+        dead_code,
+        reason = "held to keep the broadcast channel open; the active Sender \
+                  lives on VtState::wire_broadcast and subscribers attach via \
+                  TerminalService::subscribe_frames"
+    )]
     pub(crate) frame_broadcast: broadcast::Sender<WireMessage>,
 
     /// Aggregated drop counter for bounded channel `try_send` failures.
-    #[expect(dead_code, reason = "consumed by Phase 2 frame coalescer")]
+    #[expect(
+        dead_code,
+        reason = "held for the lifetime of TermListener (which owns an Arc clone) \
+                  so the counter outlives any in-flight try_send"
+    )]
     pub(crate) drop_counter: Arc<DropCounter>,
 
     /// Handle-side sender for the VT fan-out channel. Used by
