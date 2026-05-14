@@ -1,4 +1,3 @@
-use crate::handlers::publish_window_layout;
 use crate::{AppState, error::HttpResult};
 use axum::{
     Json,
@@ -18,11 +17,7 @@ pub async fn rename(
     Path(window_id): Path<WindowId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
-    state
-        .multiplexer
-        .rename_window(&window_id, body.name)
-        .await?;
-    publish_window_layout(&state, &window_id).await;
+    state.rename_window(&window_id, body.name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -214,6 +214,12 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
+        self.multiplexer.rename_window(wid, name).await?;
+        self.publish_window_layout(wid).await;
+        Ok(())
+    }
+
     /// Build the current Window layout snapshot under the Window lock and
     /// broadcast it. Used by every handler that mutates a Window.
     async fn publish_window_layout(&self, wid: &WindowId) {
