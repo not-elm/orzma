@@ -6,6 +6,7 @@
     "x": 0,
     "y": 0,
     "shape": "block",
+    "blinking": false,
     "visible": true
   },
   "rows_data": [
@@ -23,5 +24,6 @@
     }
   ],
   "reason": "initial",
-  "modes": []
+  "modes": [],
+  "hyperlinks": []
 }

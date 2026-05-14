@@ -6,6 +6,7 @@
     "x": 0,
     "y": 0,
     "shape": "block",
+    "blinking": false,
     "visible": true
   },
   "rows_data": [
@@ -26,5 +27,6 @@
   "modes": [
     "mouse-any-event",
     "mouse-sgr-1006"
-  ]
+  ],
+  "hyperlinks": []
 }

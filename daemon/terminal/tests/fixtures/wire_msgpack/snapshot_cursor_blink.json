@@ -1,0 +1,21 @@
+{
+  "kind": "snapshot",
+  "seq": 3,
+  "cols": 1,
+  "rows": 1,
+  "cursor": {
+    "x": 0,
+    "y": 0,
+    "shape": "underline",
+    "blinking": true,
+    "visible": true
+  },
+  "rows_data": [
+    {
+      "runs": []
+    }
+  ],
+  "reason": "initial",
+  "modes": [],
+  "hyperlinks": []
+}

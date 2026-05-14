@@ -5,8 +5,8 @@
 //!   `cargo run -p ozmux_terminal --example emit_fixture -- --all` — emits all 4 fixtures + JSON
 
 use ozmux_terminal::vt::{
-    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, ModeFrame, RenderFrame, Row,
-    Run, SnapshotReason, encode,
+    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, ModeFrame,
+    RenderFrame, Row, Run, SnapshotReason, encode,
 };
 use std::fs;
 use std::path::Path;
@@ -155,7 +155,7 @@ fn main() {
         "seq": 0,
         "cols": 80,
         "rows": 24,
-        "cursor": { "x": 0, "y": 0, "shape": "block", "visible": true },
+        "cursor": { "x": 0, "y": 0, "shape": "block", "blinking": false, "visible": true },
         "escape_caps": [
             "sgr", "cup", "ed", "el", "decset", "decrst", "alt-screen-1049", "bracketed-paste",
             "mouse-vt200", "mouse-btn-event", "mouse-any-event", "mouse-sgr-1006",
@@ -170,5 +170,124 @@ fn main() {
     )
     .unwrap();
 
-    eprintln!("wrote 6 fixtures to {}", dir.display());
+    // Phase 3B fixtures.
+    let blink_cursor = Cursor {
+        x: 0,
+        y: 0,
+        shape: CursorShape::Underline,
+        blinking: true,
+        visible: true,
+    };
+    let steady_bar_cursor = Cursor {
+        x: 0,
+        y: 0,
+        shape: CursorShape::Bar,
+        blinking: false,
+        visible: true,
+    };
+    let hyperlinks_sample = vec![Hyperlink {
+        id: 0,
+        uri: "https://ozmux.example".to_string(),
+    }];
+
+    // 7) snapshot_with_hyperlinks — RenderFrame-wrapped to exercise `kind` tag.
+    let snap = FrameSnapshot {
+        seq: 1,
+        cols: 5,
+        rows: 1,
+        cursor: blink_cursor.clone(),
+        rows_data: vec![Row {
+            runs: vec![Run {
+                cols: 5,
+                fg: Color::Default,
+                bg: Color::Default,
+                style: 0,
+                text: "hello".into(),
+                hyperlink_id: Some(0),
+            }],
+        }],
+        reason: SnapshotReason::Initial,
+        modes: vec![],
+        hyperlinks: hyperlinks_sample.clone(),
+    };
+    let frame = RenderFrame::Snapshot(snap);
+    fs::write(
+        dir.join("snapshot_with_hyperlinks.bin"),
+        encode(&frame).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("snapshot_with_hyperlinks.json"),
+        serde_json::to_string_pretty(&frame).unwrap(),
+    )
+    .unwrap();
+
+    // 8) delta_with_hyperlinks
+    let delta = FrameDelta {
+        seq: 2,
+        cursor: blink_cursor.clone(),
+        dirty_rows: vec![DirtyRow {
+            row: 0,
+            runs: vec![Run {
+                cols: 5,
+                fg: Color::Default,
+                bg: Color::Default,
+                style: 0,
+                text: "world".into(),
+                hyperlink_id: Some(0),
+            }],
+        }],
+        hyperlinks: hyperlinks_sample,
+    };
+    let frame = RenderFrame::Delta(delta);
+    fs::write(
+        dir.join("delta_with_hyperlinks.bin"),
+        encode(&frame).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("delta_with_hyperlinks.json"),
+        serde_json::to_string_pretty(&frame).unwrap(),
+    )
+    .unwrap();
+
+    // 9) snapshot_cursor_blink — blinking underline cursor, no hyperlinks.
+    let snap = FrameSnapshot {
+        seq: 3,
+        cols: 1,
+        rows: 1,
+        cursor: blink_cursor,
+        rows_data: vec![Row { runs: vec![] }],
+        reason: SnapshotReason::Initial,
+        modes: vec![],
+        hyperlinks: vec![],
+    };
+    let frame = RenderFrame::Snapshot(snap);
+    fs::write(
+        dir.join("snapshot_cursor_blink.bin"),
+        encode(&frame).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("snapshot_cursor_blink.json"),
+        serde_json::to_string_pretty(&frame).unwrap(),
+    )
+    .unwrap();
+
+    // 10) delta_cursor_shape — steady bar cursor, empty dirty_rows.
+    let delta = FrameDelta {
+        seq: 4,
+        cursor: steady_bar_cursor,
+        dirty_rows: vec![],
+        hyperlinks: vec![],
+    };
+    let frame = RenderFrame::Delta(delta);
+    fs::write(dir.join("delta_cursor_shape.bin"), encode(&frame).unwrap()).unwrap();
+    fs::write(
+        dir.join("delta_cursor_shape.json"),
+        serde_json::to_string_pretty(&frame).unwrap(),
+    )
+    .unwrap();
+
+    eprintln!("wrote 10 fixtures to {}", dir.display());
 }

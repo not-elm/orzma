@@ -1,6 +1,7 @@
 {
   "cols": 80,
   "cursor": {
+    "blinking": false,
     "shape": "block",
     "visible": true,
     "x": 0,
