@@ -28,9 +28,27 @@ const ARROW_APP: Record<string, Uint8Array> = {
 
 const MODIFIER_ONLY = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
+// NOTE: navigator.platform is deprecated but still the most reliable way to
+// branch macOS-vs-other under Tauri WKWebView / WebView2 / WebKitGTK. Computed
+// once at module load; tests use vi.resetModules + dynamic import to re-evaluate.
+const IS_MAC = typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac');
+
 /** Translates a keydown event into VT escape bytes. Returns null when there is nothing to send. */
 export function handleKeyDown(e: KeyboardEvent, mode: ReadonlySet<string>): Uint8Array | null {
   if (e.isComposing) return null;
+
+  // Platform-aware clipboard bypass — MUST be the first early-return so bare
+  // Ctrl+C continues to fall through to the Ctrl+letter branch and produce
+  // ETX (0x03 / SIGINT). Ctrl+Shift+C/V is the xterm convention for copy/paste
+  // on Linux/Windows; bare Ctrl+C and Ctrl+V remain SIGINT and ^V literal.
+  const clipboardKey = e.key.toLowerCase();
+  if (IS_MAC && e.metaKey && !e.ctrlKey && (clipboardKey === 'v' || clipboardKey === 'c')) {
+    return null;
+  }
+  if (!IS_MAC && e.ctrlKey && e.shiftKey && (clipboardKey === 'v' || clipboardKey === 'c')) {
+    return null;
+  }
+
   if (MODIFIER_ONLY.has(e.key)) return null;
 
   if (e.ctrlKey && e.key.length === 1) {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleKeyDown } from './keymap';
 
 function ev(init: Partial<KeyboardEventInit> & { key: string }): KeyboardEvent {
@@ -61,5 +61,67 @@ describe('handleKeyDown', () => {
     expect(handleKeyDown(ev({ key: 'Shift' }), new Set())).toBeNull();
     expect(handleKeyDown(ev({ key: 'Alt' }), new Set())).toBeNull();
     expect(handleKeyDown(ev({ key: 'Meta' }), new Set())).toBeNull();
+  });
+});
+
+describe('handleKeyDown — clipboard bypass (Phase 3A)', () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(Navigator.prototype, 'platform');
+
+  function setPlatform(p: string): void {
+    Object.defineProperty(navigator, 'platform', { value: p, configurable: true });
+  }
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(Navigator.prototype, 'platform', originalPlatform);
+    }
+  });
+
+  it('on macOS: Cmd+V returns null (browser handles paste)', async () => {
+    setPlatform('MacIntel');
+    vi.resetModules();
+    const { handleKeyDown: hk } = await import('./keymap');
+    const e = ev({ key: 'v', metaKey: true });
+    expect(hk(e, new Set())).toBeNull();
+  });
+
+  it('on macOS: Cmd+C returns null', async () => {
+    setPlatform('MacIntel');
+    vi.resetModules();
+    const { handleKeyDown: hk } = await import('./keymap');
+    const e = ev({ key: 'c', metaKey: true });
+    expect(hk(e, new Set())).toBeNull();
+  });
+
+  it('on Linux: bare Ctrl+C still sends ETX 0x03 (SIGINT preserved)', async () => {
+    setPlatform('Linux x86_64');
+    vi.resetModules();
+    const { handleKeyDown: hk } = await import('./keymap');
+    const result = hk(ev({ key: 'c', ctrlKey: true }), new Set());
+    expect(result).not.toBeNull();
+    expect(Array.from(result as Uint8Array)).toEqual([0x03]);
+  });
+
+  it('on Linux: bare Ctrl+V still sends 0x16 (^V literal preserved)', async () => {
+    setPlatform('Linux x86_64');
+    vi.resetModules();
+    const { handleKeyDown: hk } = await import('./keymap');
+    const result = hk(ev({ key: 'v', ctrlKey: true }), new Set());
+    expect(result).not.toBeNull();
+    expect(Array.from(result as Uint8Array)).toEqual([0x16]);
+  });
+
+  it('on Linux: Ctrl+Shift+V returns null (browser paste)', async () => {
+    setPlatform('Linux x86_64');
+    vi.resetModules();
+    const { handleKeyDown: hk } = await import('./keymap');
+    expect(hk(ev({ key: 'V', ctrlKey: true, shiftKey: true }), new Set())).toBeNull();
+  });
+
+  it('on Linux: Ctrl+Shift+C returns null (browser copy, no SIGINT regression)', async () => {
+    setPlatform('Linux x86_64');
+    vi.resetModules();
+    const { handleKeyDown: hk } = await import('./keymap');
+    expect(hk(ev({ key: 'C', ctrlKey: true, shiftKey: true }), new Set())).toBeNull();
   });
 });
