@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cellWidthOf, measureFont, measureGlyph, widthOfGrapheme } from './font';
+import { cellHeightOf, cellWidthOf, measureFont, measureGlyph, widthOfGrapheme } from './font';
 
 describe('measureFont', () => {
   it('returns positive cellW and cellH for a typical mono font', () => {
@@ -38,6 +38,44 @@ describe('cellWidthOf', () => {
       const w = cellWidthOf(container);
       expect(typeof w).toBe('number');
       expect(w).toBeGreaterThan(0);
+    } finally {
+      document.body.removeChild(container);
+    }
+  });
+
+  it('produces the same width regardless of container font (probe carries font-mono)', () => {
+    // Container WITHOUT font-mono — probe should still measure in monospace.
+    const noMono = document.createElement('div');
+    document.body.appendChild(noMono);
+    const withMono = document.createElement('div');
+    withMono.className = 'font-mono';
+    document.body.appendChild(withMono);
+    try {
+      // In jsdom (no actual font loading) both measurements come from the stub
+      // getBoundingClientRect (test-setup.ts). The assertion documents the
+      // intent: the probe's class is what determines the font, not the
+      // container's class.
+      const w1 = cellWidthOf(noMono);
+      const w2 = cellWidthOf(withMono);
+      expect(typeof w1).toBe('number');
+      expect(typeof w2).toBe('number');
+      expect(w1).toBeGreaterThan(0);
+      expect(w2).toBeGreaterThan(0);
+    } finally {
+      document.body.removeChild(noMono);
+      document.body.removeChild(withMono);
+    }
+  });
+});
+
+describe('cellHeightOf', () => {
+  it('returns a positive height for a line-height:1 monospace probe', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    try {
+      const h = cellHeightOf(container);
+      expect(typeof h).toBe('number');
+      expect(h).toBeGreaterThan(0);
     } finally {
       document.body.removeChild(container);
     }

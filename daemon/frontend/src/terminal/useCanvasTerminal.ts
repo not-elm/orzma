@@ -13,7 +13,7 @@ import { setupMouse } from './input/mouse';
 import { setupPaste } from './input/paste';
 import { setOverlayState } from './overlay-store';
 import { decodeFrame } from './protocol/frame';
-import { cellWidthOf, type FontMetrics } from './renderer/font';
+import { cellHeightOf, cellWidthOf, type FontMetrics } from './renderer/font';
 import { applyFrame, createGrid } from './renderer/grid';
 import { setGrid } from './renderer/grid-store';
 import { injectTerminalPalette } from './renderer/palette';
@@ -72,16 +72,11 @@ export function useCanvasTerminal(
     if (!pane) return;
     injectTerminalPalette();
 
-    // DOM probe: measure cell size from the actual rendered font.
+    // DOM probe: measure cell size in the .terminal-grid font environment.
+    // Probes carry `font-mono leading-none` (see font.ts) so the measurements
+    // match what Row.tsx + TerminalGrid.tsx will actually render.
     const cellW = cellWidthOf(pane);
-    const heightProbe = document.createElement('span');
-    heightProbe.style.visibility = 'hidden';
-    heightProbe.style.position = 'absolute';
-    heightProbe.className = 'font-mono';
-    heightProbe.textContent = 'W';
-    pane.appendChild(heightProbe);
-    const cellH = heightProbe.getBoundingClientRect().height || DEFAULT_FM.cellH;
-    pane.removeChild(heightProbe);
+    const cellH = cellHeightOf(pane) || DEFAULT_FM.cellH;
     const measuredFm: FontMetrics = {
       cellW,
       cellH,

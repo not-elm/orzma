@@ -41,14 +41,20 @@ export function widthOfGrapheme(text: string): 0 | 1 | 2 {
   return 1;
 }
 
-/** Measures the rendered width of "W" in the current font of `container`.
+/** Measures the rendered width of "W" in the monospace font.
  *  Used by Row.tsx for `letterSpacing = cellW - cellWidthOf(...)` to prevent
- *  sub-pixel drift on long rows (xterm.js `DomRenderer._setDefaultSpacing`). */
+ *  sub-pixel drift on long rows (xterm.js `DomRenderer._setDefaultSpacing`).
+ *
+ *  NOTE: probe carries `font-mono leading-none` so the measurement matches
+ *  `.terminal-grid` itself — `container` only determines where the probe is
+ *  attached (so it inherits the same theme tokens / parent stacking context).
+ *  The container's own font does NOT need to be monospace. */
 export function cellWidthOf(container: HTMLElement): number {
   const probe = document.createElement('span');
   probe.style.visibility = 'hidden';
   probe.style.position = 'absolute';
   probe.style.whiteSpace = 'pre';
+  probe.className = 'font-mono leading-none';
   probe.textContent = 'W';
   container.appendChild(probe);
   const width = probe.getBoundingClientRect().width;
@@ -56,9 +62,25 @@ export function cellWidthOf(container: HTMLElement): number {
   return width;
 }
 
+/** Measures the rendered line-height-1 height of one row in the monospace
+ *  font. Mirrors `.terminal-grid` environment (font-mono + leading-none) so
+ *  `cellH` matches the actual row line-box height. */
+export function cellHeightOf(container: HTMLElement): number {
+  const probe = document.createElement('span');
+  probe.style.visibility = 'hidden';
+  probe.style.position = 'absolute';
+  probe.style.whiteSpace = 'pre';
+  probe.className = 'font-mono leading-none';
+  probe.textContent = 'W';
+  container.appendChild(probe);
+  const height = probe.getBoundingClientRect().height;
+  container.removeChild(probe);
+  return height;
+}
+
 const glyphWidthCache = new Map<string, number>();
 
-/** Measures the rendered width of `chars` in `container`'s font, optionally
+/** Measures the rendered width of `chars` in the monospace font, optionally
  *  with bold / italic applied. Cached by (chars, bold, italic) key. */
 export function measureGlyph(
   container: HTMLElement,
@@ -73,6 +95,7 @@ export function measureGlyph(
   probe.style.visibility = 'hidden';
   probe.style.position = 'absolute';
   probe.style.whiteSpace = 'pre';
+  probe.className = 'font-mono leading-none';
   if (bold) probe.style.fontWeight = 'bold';
   if (italic) probe.style.fontStyle = 'italic';
   probe.textContent = chars;
