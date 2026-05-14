@@ -5,9 +5,10 @@
 //! `vt_state` lock; this module performs no locking.
 
 use crate::vt::frame::{
-    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, ModeFrame, Row, Run,
-    SnapshotReason, style,
+    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, ModeFrame, Row,
+    Run, SnapshotReason, style,
 };
+use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::mode_diff::{TRACKED_MODES, diff_mode};
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
@@ -16,6 +17,7 @@ use alacritty_terminal::term::TermDamage;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};
+use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 
 /// Outcome of damage inspection.
@@ -56,12 +58,18 @@ pub fn build_mode(prev: TermMode, curr: TermMode, seq: u32) -> Option<ModeFrame>
 /// Reads the current terminal grid via shared reference, coalescing each row
 /// into runs of cells with identical attributes. Wide-char spacer cells are
 /// skipped so the wide character itself accounts for its full column width.
-pub fn build_snapshot<T>(term: &Term<T>, seq: u32, reason: SnapshotReason) -> FrameSnapshot {
+pub fn build_snapshot<T>(
+    term: &Term<T>,
+    seq: u32,
+    reason: SnapshotReason,
+    interner: &mut HyperlinkInterner,
+) -> FrameSnapshot {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
+    let mut emitted: HashMap<u32, String> = HashMap::new();
     let rows_data: Vec<Row> = (0..rows as i32)
         .map(|y| Row {
-            runs: coalesce_row(term, y),
+            runs: coalesce_row(term, y, interner, &mut emitted),
         })
         .collect();
     FrameSnapshot {
@@ -72,7 +80,10 @@ pub fn build_snapshot<T>(term: &Term<T>, seq: u32, reason: SnapshotReason) -> Fr
         rows_data,
         reason,
         modes: snapshot_modes(*term.mode()),
-        hyperlinks: Vec::new(),
+        hyperlinks: emitted
+            .into_iter()
+            .map(|(id, uri)| Hyperlink { id, uri })
+            .collect(),
     }
 }
 
@@ -80,19 +91,28 @@ pub fn build_snapshot<T>(term: &Term<T>, seq: u32, reason: SnapshotReason) -> Fr
 ///
 /// Each entry is a full-row replacement (not partial). Row ordering follows
 /// the supplied slice.
-pub fn build_delta<T>(term: &Term<T>, seq: u32, rows: &[u16]) -> FrameDelta {
+pub fn build_delta<T>(
+    term: &Term<T>,
+    seq: u32,
+    rows: &[u16],
+    interner: &mut HyperlinkInterner,
+) -> FrameDelta {
+    let mut emitted: HashMap<u32, String> = HashMap::new();
     let dirty_rows: Vec<DirtyRow> = rows
         .iter()
         .map(|&r| DirtyRow {
             row: r,
-            runs: coalesce_row(term, r as i32),
+            runs: coalesce_row(term, r as i32, interner, &mut emitted),
         })
         .collect();
     FrameDelta {
         seq,
         cursor: extract_cursor(term),
         dirty_rows,
-        hyperlinks: Vec::new(),
+        hyperlinks: emitted
+            .into_iter()
+            .map(|(id, uri)| Hyperlink { id, uri })
+            .collect(),
     }
 }
 
@@ -139,7 +159,19 @@ fn snapshot_modes(curr: TermMode) -> Vec<String> {
         .collect()
 }
 
-fn coalesce_row<T>(term: &Term<T>, y: i32) -> Vec<Run> {
+/// Coalesces a row's cells into runs of identical attributes.
+///
+/// Accepts `&mut HyperlinkInterner` (not `&mut VtState`) so the caller can
+/// split-borrow `&term` and `&mut interner` from `VtState` disjointly.
+/// `emitted_hyperlinks` accumulates `(wire_id, uri)` pairs encountered in this
+/// row — the caller merges across all coalesced rows to produce the wire
+/// `FrameSnapshot.hyperlinks` / `FrameDelta.hyperlinks`.
+pub(crate) fn coalesce_row<T>(
+    term: &Term<T>,
+    y: i32,
+    interner: &mut HyperlinkInterner,
+    emitted_hyperlinks: &mut HashMap<u32, String>,
+) -> Vec<Run> {
     let cols = term.columns() as u16;
     let grid_row = &term.grid()[Line(y)];
     let mut runs: Vec<Run> = Vec::new();
@@ -158,7 +190,15 @@ fn coalesce_row<T>(term: &Term<T>, y: i32) -> Vec<Run> {
         {
             continue;
         }
-        let cell_attrs = RunAttrs::from_cell(cell);
+        // Resolve hyperlink (alac String id → wire u32 via interner).
+        let hyperlink_id = cell.hyperlink().map(|h| {
+            let id = interner.intern(h.id(), h.uri().as_ref());
+            emitted_hyperlinks
+                .entry(id)
+                .or_insert_with(|| h.uri().to_string());
+            id
+        });
+        let cell_attrs = RunAttrs::from_cell(cell, hyperlink_id);
         // NOTE: alacritty represents an unallocated cell as `'\0'`. Treat it as
         // a width-1 space so the renderer always paints a background for every
         // grid column; otherwise width-0 NUL cells skip bg fill on the client
@@ -194,14 +234,16 @@ struct RunAttrs {
     fg: Color,
     bg: Color,
     style: u8,
+    hyperlink_id: Option<u32>,
 }
 
 impl RunAttrs {
-    fn from_cell(cell: &Cell) -> Self {
+    fn from_cell(cell: &Cell, hyperlink_id: Option<u32>) -> Self {
         Self {
             fg: color_from_alacritty(cell.fg),
             bg: color_from_alacritty(cell.bg),
             style: style_from_flags(cell.flags),
+            hyperlink_id,
         }
     }
 
@@ -212,7 +254,7 @@ impl RunAttrs {
             bg: self.bg,
             style: self.style,
             text,
-            hyperlink_id: None,
+            hyperlink_id: self.hyperlink_id,
         }
     }
 }
@@ -326,7 +368,8 @@ mod tests {
     #[test]
     fn snapshot_empty_grid_yields_empty_or_space_rows() {
         let term = make_term(10, 3);
-        let snap = build_snapshot(&term, 5, SnapshotReason::Initial);
+        let mut interner = HyperlinkInterner::new();
+        let snap = build_snapshot(&term, 5, SnapshotReason::Initial, &mut interner);
         assert_eq!(snap.seq, 5);
         assert_eq!(snap.cols, 10);
         assert_eq!(snap.rows, 3);
@@ -347,7 +390,8 @@ mod tests {
     fn snapshot_three_ascii_chars_one_run_prefix() {
         let mut term = make_term(10, 1);
         install_text(&mut term, "abc");
-        let snap = build_snapshot(&term, 0, SnapshotReason::Initial);
+        let mut interner = HyperlinkInterner::new();
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         let row = &snap.rows_data[0];
         let merged: String = row.runs.iter().map(|r| r.text.as_str()).collect();
         assert!(merged.starts_with("abc"), "got: {merged:?}");
@@ -358,7 +402,8 @@ mod tests {
         let mut term = make_term(10, 1);
         // NOTE: "あ" is U+3042, East Asian Wide.
         install_text(&mut term, "あ");
-        let snap = build_snapshot(&term, 0, SnapshotReason::Initial);
+        let mut interner = HyperlinkInterner::new();
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         let row = &snap.rows_data[0];
         let merged: String = row.runs.iter().map(|r| r.text.as_str()).collect();
         assert!(merged.starts_with("あ"), "got: {merged:?}");
@@ -370,7 +415,8 @@ mod tests {
     fn snapshot_modes_includes_alt_screen_when_set() {
         let mut term = make_term(10, 1);
         install_text(&mut term, "\x1b[?1049h");
-        let snap = build_snapshot(&term, 0, SnapshotReason::Initial);
+        let mut interner = HyperlinkInterner::new();
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         assert!(
             snap.modes.iter().any(|s| s == "alt-screen"),
             "expected alt-screen in modes; got {:?}",
@@ -381,7 +427,8 @@ mod tests {
     #[test]
     fn snapshot_cursor_position_zero_zero_initially() {
         let term = make_term(10, 3);
-        let snap = build_snapshot(&term, 0, SnapshotReason::Initial);
+        let mut interner = HyperlinkInterner::new();
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         assert_eq!(snap.cursor.x, 0);
         assert_eq!(snap.cursor.y, 0);
         assert!(snap.cursor.visible);
@@ -391,7 +438,8 @@ mod tests {
     fn delta_single_dirty_row_yields_one_dirty_row() {
         let mut term = make_term(10, 3);
         install_text(&mut term, "xyz");
-        let delta = build_delta(&term, 9, &[0u16]);
+        let mut interner = HyperlinkInterner::new();
+        let delta = build_delta(&term, 9, &[0u16], &mut interner);
         assert_eq!(delta.seq, 9);
         assert_eq!(delta.dirty_rows.len(), 1);
         assert_eq!(delta.dirty_rows[0].row, 0);
@@ -407,7 +455,8 @@ mod tests {
     fn delta_multiple_dirty_rows_preserve_order() {
         let mut term = make_term(10, 3);
         install_text(&mut term, "aaa\r\nbbb\r\nccc");
-        let delta = build_delta(&term, 0, &[0, 2]);
+        let mut interner = HyperlinkInterner::new();
+        let delta = build_delta(&term, 0, &[0, 2], &mut interner);
         assert_eq!(delta.dirty_rows.len(), 2);
         assert_eq!(delta.dirty_rows[0].row, 0);
         assert_eq!(delta.dirty_rows[1].row, 2);
@@ -416,7 +465,8 @@ mod tests {
     #[test]
     fn delta_empty_rows_slice_yields_empty_dirty_rows() {
         let term = make_term(10, 3);
-        let delta = build_delta(&term, 100, &[]);
+        let mut interner = HyperlinkInterner::new();
+        let delta = build_delta(&term, 100, &[], &mut interner);
         assert_eq!(delta.seq, 100);
         assert!(delta.dirty_rows.is_empty());
     }
@@ -425,7 +475,8 @@ mod tests {
     fn delta_carries_current_cursor_state() {
         let mut term = make_term(10, 3);
         install_text(&mut term, "abc");
-        let delta = build_delta(&term, 1, &[0]);
+        let mut interner = HyperlinkInterner::new();
+        let delta = build_delta(&term, 1, &[0], &mut interner);
         assert_eq!(delta.cursor.x, 3);
         assert_eq!(delta.cursor.y, 0);
         assert!(delta.cursor.visible);

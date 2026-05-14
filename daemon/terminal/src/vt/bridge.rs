@@ -18,6 +18,7 @@ use crate::vt::frame_builder::{
     DirtyRows, build_delta, build_mode, build_snapshot, collect_dirty_rows, extract_cursor,
 };
 use crate::vt::frame_ring::{FrameRing, WireMessage};
+use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 
 /// All state mutated by the VT bridge task, wrapped by `PtyHandle` in
@@ -47,6 +48,10 @@ pub struct VtState {
     /// emits when the screen is otherwise idle (e.g., arrow-key motion that
     /// produces no dirty rows).
     pub prev_cursor: Option<Cursor>,
+    /// OSC 8 hyperlink id interner. Maps alacritty `(id, uri)` pairs to
+    /// monotonic u32 wire ids. Persists for the session — u32 wrapping
+    /// (4G ids) exceeds any realistic session.
+    pub hyperlinks: HyperlinkInterner,
     /// Broadcast of wire messages (Binary deltas + Text sidecars). All emit
     /// paths go through this sender; subscribers attach via subscribe_frames.
     pub wire_broadcast: broadcast::Sender<WireMessage>,
@@ -73,6 +78,7 @@ impl VtState {
             frame_seq: 0,
             first_emit: true,
             prev_cursor: None,
+            hyperlinks: HyperlinkInterner::new(),
             wire_broadcast,
         }
     }
@@ -180,13 +186,22 @@ pub async fn run_bridge_task(
                 }
                 let kind = decide_frame_kind(&state, dirty);
                 state.first_emit = false;
-                let frame = match kind {
-                    FrameKind::Snapshot { reason } => RenderFrame::Snapshot(
-                        build_snapshot(&state.term, state.frame_seq, reason)
-                    ),
-                    FrameKind::Delta { rows } => RenderFrame::Delta(
-                        build_delta(&state.term, state.frame_seq, &rows)
-                    ),
+                let seq = state.frame_seq;
+                // Split-borrow: VtState's `term` is read-only, `hyperlinks` mutates.
+                let frame = {
+                    let VtState {
+                        ref term,
+                        ref mut hyperlinks,
+                        ..
+                    } = *state;
+                    match kind {
+                        FrameKind::Snapshot { reason } => RenderFrame::Snapshot(
+                            build_snapshot(term, seq, reason, hyperlinks),
+                        ),
+                        FrameKind::Delta { rows } => {
+                            RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks))
+                        }
+                    }
                 };
                 state.prev_cursor = Some(curr_cursor);
                 state.term.reset_damage();

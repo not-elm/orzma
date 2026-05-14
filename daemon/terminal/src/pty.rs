@@ -1,6 +1,7 @@
 use crate::{
     error::{PtyErrorBridge, TerminalError, TerminalResult},
     pty::pty_handle::{PtyHandle, ScrollbackBuffer},
+    vt::bridge::VtState,
     vt::frame::{RenderFrame, SnapshotReason, encode},
     vt::frame_builder::build_snapshot,
     vt::frame_ring::WireMessage,
@@ -267,7 +268,7 @@ impl TerminalService {
         drop(handle);
 
         // Single critical section: snapshot (or replay) AND subscribe.
-        let state = vt_state.lock().expect("vt_state poisoned");
+        let mut state = vt_state.lock().expect("vt_state poisoned");
 
         // Resume path: ring has the requested seq range available.
         if let Some(last) = last_seq
@@ -289,7 +290,14 @@ impl TerminalService {
             SnapshotReason::Reconnect
         };
         let snap_seq = state.frame_seq.saturating_sub(1);
-        let snap = build_snapshot(&state.term, snap_seq, reason);
+        let snap = {
+            let VtState {
+                ref term,
+                ref mut hyperlinks,
+                ..
+            } = *state;
+            build_snapshot(term, snap_seq, reason, hyperlinks)
+        };
         let encoded_vec =
             encode(&RenderFrame::Snapshot(snap)).expect("encode infallible for valid frame");
         let rx = state.wire_broadcast.subscribe();
