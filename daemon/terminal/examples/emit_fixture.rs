@@ -91,14 +91,70 @@ fn main() {
     )
     .unwrap();
 
-    // 4) hello — JSON text frame
+    // 4) mode_change_mouse — JSON text frame announcing the renamed mouse modes.
+    let mode_mouse = ModeFrame::new(
+        3,
+        vec!["mouse-vt200".to_string(), "mouse-btn-event".to_string()],
+        vec![],
+    );
+    let mode_mouse_json = serde_json::to_string(&mode_mouse).unwrap();
+    fs::write(dir.join("mode_change_mouse.bin"), &mode_mouse_json).unwrap();
+    fs::write(
+        dir.join("mode_change_mouse.json"),
+        serde_json::to_string_pretty(&mode_mouse).unwrap(),
+    )
+    .unwrap();
+
+    // 5) snapshot_modes_mouse — msgpack snapshot whose modes field exercises
+    //    the renamed mouse mode strings end-to-end.
+    let snap_mouse = FrameSnapshot {
+        seq: 7,
+        cols: 3,
+        rows: 1,
+        cursor: Cursor {
+            x: 0,
+            y: 0,
+            shape: CursorShape::Block,
+            visible: true,
+        },
+        rows_data: vec![Row {
+            runs: vec![Run {
+                cols: 3,
+                fg: Color::Default,
+                bg: Color::Default,
+                style: 0,
+                text: "abc".into(),
+                hyperlink_id: None,
+            }],
+        }],
+        reason: SnapshotReason::Initial,
+        modes: vec!["mouse-any-event".to_string(), "mouse-sgr-1006".to_string()],
+    };
+    fs::write(
+        dir.join("snapshot_modes_mouse.bin"),
+        encode(&snap_mouse).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("snapshot_modes_mouse.json"),
+        serde_json::to_string_pretty(&snap_mouse).unwrap(),
+    )
+    .unwrap();
+
+    // 6) hello — JSON text frame.
+    //    NOTE: escape_caps mirrors http_server `vt_ws.rs::ESCAPE_CAPS`. Update
+    //    both together when the wire capability list changes.
     let hello = serde_json::json!({
         "kind": "hello",
         "seq": 0,
         "cols": 80,
         "rows": 24,
         "cursor": { "x": 0, "y": 0, "shape": "block", "visible": true },
-        "escape_caps": ["sgr", "cup", "ed", "el", "decset", "decrst", "alt-screen-1049", "bracketed-paste"],
+        "escape_caps": [
+            "sgr", "cup", "ed", "el", "decset", "decrst", "alt-screen-1049", "bracketed-paste",
+            "mouse-vt200", "mouse-btn-event", "mouse-any-event", "mouse-sgr-1006",
+            "focus-events", "app-cursor-keys",
+        ],
         "input_caps": ["text-utf8", "key-vt-encoded"],
     });
     fs::write(dir.join("hello.bin"), hello.to_string()).unwrap();
@@ -108,5 +164,5 @@ fn main() {
     )
     .unwrap();
 
-    eprintln!("wrote 4 fixtures to {}", dir.display());
+    eprintln!("wrote 6 fixtures to {}", dir.display());
 }

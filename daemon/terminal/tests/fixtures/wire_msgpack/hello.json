@@ -14,7 +14,13 @@
     "decset",
     "decrst",
     "alt-screen-1049",
-    "bracketed-paste"
+    "bracketed-paste",
+    "mouse-vt200",
+    "mouse-btn-event",
+    "mouse-any-event",
+    "mouse-sgr-1006",
+    "focus-events",
+    "app-cursor-keys"
   ],
   "input_caps": [
     "text-utf8",
