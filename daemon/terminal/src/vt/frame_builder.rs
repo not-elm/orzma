@@ -107,12 +107,27 @@ pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
     if cell.flags.contains(Flags::WIDE_CHAR_SPACER) && x > 0 {
         x -= 1;
     }
+    // DECSCUSR shape selection. `HollowBlock` (CSI 0/1 SP q in some variants)
+    // maps to Block; alacritty distinguishes them but our wire vocabulary does
+    // not — clients render the same overlay.
+    let style = term.cursor_style();
+    let shape = match style.shape {
+        alacritty_terminal::vte::ansi::CursorShape::Block
+        | alacritty_terminal::vte::ansi::CursorShape::HollowBlock => CursorShape::Block,
+        alacritty_terminal::vte::ansi::CursorShape::Underline => CursorShape::Underline,
+        alacritty_terminal::vte::ansi::CursorShape::Beam => CursorShape::Bar,
+        alacritty_terminal::vte::ansi::CursorShape::Hidden => CursorShape::Block,
+    };
     Cursor {
         x,
         y,
-        shape: CursorShape::Block,
-        blinking: false,
-        visible: term.mode().contains(TermMode::SHOW_CURSOR),
+        shape,
+        blinking: style.blinking,
+        // NOTE: DECTCEM (`\033[?25l/h`) toggles `TermMode::SHOW_CURSOR` — used
+        // by vim/less/fzf for cursor hiding. DECSCUSR `Hidden` shape is a
+        // separate concept. Both must gate visibility.
+        visible: term.mode().contains(TermMode::SHOW_CURSOR)
+            && style.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden,
     }
 }
 
@@ -414,5 +429,48 @@ mod tests {
         assert_eq!(delta.cursor.x, 3);
         assert_eq!(delta.cursor.y, 0);
         assert!(delta.cursor.visible);
+    }
+
+    #[test]
+    fn extract_cursor_reads_decscusr_blinking_underline() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "\x1b[3 q");
+        let c = extract_cursor(&term);
+        assert_eq!(c.shape, CursorShape::Underline);
+        assert!(c.blinking, "shape 3 (blinking underline) → blinking=true");
+    }
+
+    #[test]
+    fn extract_cursor_reads_steady_block() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "\x1b[2 q");
+        let c = extract_cursor(&term);
+        assert_eq!(c.shape, CursorShape::Block);
+        assert!(!c.blinking, "shape 2 (steady block) → blinking=false");
+    }
+
+    #[test]
+    fn extract_cursor_reads_blinking_bar() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "\x1b[5 q");
+        let c = extract_cursor(&term);
+        assert_eq!(c.shape, CursorShape::Bar);
+        assert!(c.blinking);
+    }
+
+    #[test]
+    fn extract_cursor_dectcem_hide() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "\x1b[?25l");
+        let c = extract_cursor(&term);
+        assert!(!c.visible, "DECTCEM hide (`?25l`) → visible=false");
+    }
+
+    #[test]
+    fn extract_cursor_dectcem_show_after_hide() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "\x1b[?25l\x1b[?25h");
+        let c = extract_cursor(&term);
+        assert!(c.visible, "DECTCEM show after hide → visible=true");
     }
 }
