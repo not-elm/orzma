@@ -38,6 +38,18 @@ export interface Grid {
   cellAtColumn(row: number, col: number): CellSpan | undefined;
 }
 
+/** Returns a shallow-cloned `Grid` safe to publish to subscribers (e.g.,
+ *  `gridStore.setGrid`). The `cells` array and `modes` Set are duplicated
+ *  so subsequent in-place mutations from `applyFrame` cannot race with
+ *  consumers that read the published reference across microtask boundaries. */
+export function snapshotGrid(grid: Grid): Grid {
+  return {
+    ...grid,
+    cells: grid.cells.slice(),
+    modes: new Set(grid.modes),
+  };
+}
+
 /** Constructs an empty grid with default state. */
 export function createGrid(init: { cols: number; rows: number }): Grid {
   const grid: Grid = {

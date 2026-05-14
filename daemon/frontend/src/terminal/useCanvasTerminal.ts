@@ -14,7 +14,7 @@ import { setupPaste } from './input/paste';
 import { createOverlayStore, type OverlayStore } from './overlay-store';
 import { decodeFrame } from './protocol/frame';
 import { cellHeightOf, cellWidthOf, type FontMetrics } from './renderer/font';
-import { applyFrame, createGrid } from './renderer/grid';
+import { applyFrame, createGrid, snapshotGrid } from './renderer/grid';
 import { createGridStore, type GridStore } from './renderer/grid-store';
 import { injectTerminalPalette } from './renderer/palette';
 import type { SocketStatus, TerminalSocket } from './useTerminalSocket';
@@ -182,16 +182,7 @@ export function useCanvasTerminal(
         latestHyperlinks = nextHyperlinks;
         setHyperlinks(nextHyperlinks);
       }
-      // NOTE: defense-in-depth deep-copy of cells and modes. The shallow
-      // spread alone would share array/Set references with gridRef.current,
-      // letting subsequent applyFrame mutations race against React's render
-      // commit across microtask boundaries. See phase2b-flicker-persistence
-      // design doc (Round 1) F4 refinement.
-      gridStore.setGrid({
-        ...gridRef.current,
-        cells: gridRef.current.cells.slice(),
-        modes: new Set(gridRef.current.modes),
-      });
+      gridStore.setGrid(snapshotGrid(gridRef.current));
       overlayStore.setOverlayState({
         cursor: gridRef.current.cursor,
         cols: gridRef.current.cols,
