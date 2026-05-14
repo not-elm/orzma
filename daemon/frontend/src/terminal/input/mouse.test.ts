@@ -317,21 +317,33 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
 
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
-        button: 0, pointerId: 7, shiftKey: true, clientX: 10, clientY: 10,
+        button: 0,
+        pointerId: 7,
+        shiftKey: true,
+        clientX: 10,
+        clientY: 10,
       }),
     );
     expect(send).not.toHaveBeenCalled();
 
     target.dispatchEvent(
       new PointerEvent('pointermove', {
-        button: -1, pointerId: 7, shiftKey: true, clientX: 20, clientY: 10,
+        button: -1,
+        pointerId: 7,
+        shiftKey: true,
+        clientX: 20,
+        clientY: 10,
       }),
     );
     expect(send).not.toHaveBeenCalled();
 
     target.dispatchEvent(
       new PointerEvent('pointerup', {
-        button: 0, pointerId: 7, shiftKey: false, clientX: 20, clientY: 10,
+        button: 0,
+        pointerId: 7,
+        shiftKey: false,
+        clientX: 20,
+        clientY: 10,
       }),
     );
     expect(send).not.toHaveBeenCalled();
@@ -355,7 +367,11 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
 
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
-        button: 0, pointerId: 8, shiftKey: false, clientX: 10, clientY: 10,
+        button: 0,
+        pointerId: 8,
+        shiftKey: false,
+        clientX: 10,
+        clientY: 10,
       }),
     );
     expect(send).toHaveBeenCalledTimes(1);
@@ -377,17 +393,29 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
 
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
-        button: 0, pointerId: 9, shiftKey: true, clientX: 10, clientY: 10,
+        button: 0,
+        pointerId: 9,
+        shiftKey: true,
+        clientX: 10,
+        clientY: 10,
       }),
     );
     window.dispatchEvent(
       new PointerEvent('pointerup', {
-        button: 0, pointerId: 9, shiftKey: false, clientX: 200, clientY: 200,
+        button: 0,
+        pointerId: 9,
+        shiftKey: false,
+        clientX: 200,
+        clientY: 200,
       }),
     );
     target.dispatchEvent(
       new PointerEvent('pointermove', {
-        button: -1, pointerId: 9, shiftKey: false, clientX: 20, clientY: 20,
+        button: -1,
+        pointerId: 9,
+        shiftKey: false,
+        clientX: 20,
+        clientY: 20,
       }),
     );
     expect(true).toBe(true); // smoke: no crash
@@ -412,12 +440,18 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
     const focusSpy = vi.spyOn(textarea, 'focus');
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
-        button: 0, pointerId: 10, clientX: 10, clientY: 10,
+        button: 0,
+        pointerId: 10,
+        clientX: 10,
+        clientY: 10,
       }),
     );
     target.dispatchEvent(
       new PointerEvent('pointerup', {
-        button: 0, pointerId: 10, clientX: 10, clientY: 10,
+        button: 0,
+        pointerId: 10,
+        clientX: 10,
+        clientY: 10,
       }),
     );
     expect(focusSpy).toHaveBeenCalled();

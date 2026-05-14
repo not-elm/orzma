@@ -13,7 +13,7 @@ import { setupMouse } from './input/mouse';
 import { setupPaste } from './input/paste';
 import { setOverlayState } from './overlay-store';
 import { decodeFrame } from './protocol/frame';
-import { type FontMetrics, cellWidthOf } from './renderer/font';
+import { cellWidthOf, type FontMetrics } from './renderer/font';
 import { applyFrame, createGrid } from './renderer/grid';
 import { setGrid } from './renderer/grid-store';
 import { injectTerminalPalette } from './renderer/palette';
@@ -34,7 +34,11 @@ export interface CanvasTerminal {
 }
 
 const DEFAULT_FM: FontMetrics = {
-  cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1,
+  cellW: 8,
+  cellH: 16,
+  baseline: 12,
+  fontCss: '14px monospace',
+  dpr: 1,
 };
 
 /** Subscribes to the VT socket, decodes frames into the grid, pushes the grid
@@ -55,7 +59,9 @@ export function useCanvasTerminal(
   const [fm, setFm] = useState<FontMetrics>(DEFAULT_FM);
   const modesRef = useRef<ReadonlySet<string>>(gridRef.current.modes);
   const compositionState = useRef<CompositionState>({
-    isSendingComposition: false, startValue: 0, pendingTimer: null,
+    isSendingComposition: false,
+    startValue: 0,
+    pendingTimer: null,
   });
 
   const socket = useTerminalSocket(windowId, paneId, activityId, { mode: 'vt' });
@@ -77,7 +83,8 @@ export function useCanvasTerminal(
     const cellH = heightProbe.getBoundingClientRect().height || DEFAULT_FM.cellH;
     pane.removeChild(heightProbe);
     const measuredFm: FontMetrics = {
-      cellW, cellH,
+      cellW,
+      cellH,
       baseline: Math.round(cellH * 0.8),
       fontCss: getComputedStyle(pane).font,
       dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,

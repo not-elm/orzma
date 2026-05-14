@@ -19,6 +19,22 @@ vi.mock('./useTerminalSocket', () => ({
 vi.mock('./useXtermTerminal', () => ({
   useXtermTerminal: () => ({ focus: focusSpy, blur: blurSpy }),
 }));
+vi.mock('./useCanvasTerminal', () => ({
+  useCanvasTerminal: () => ({
+    paneRef: { current: null },
+    textareaRef: { current: null },
+    status: 'connecting' as const,
+    focus: focusSpy,
+    blur: blurSpy,
+    socket: socketStub,
+    preedit: '',
+    hyperlinks: new Map(),
+    fm: { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 },
+  }),
+}));
+vi.mock('./renderer/TerminalGrid', () => ({
+  TerminalGrid: () => <div data-testid="terminal-grid" />,
+}));
 
 import { Terminal } from './Terminal';
 
@@ -64,11 +80,12 @@ describe('<Terminal>', () => {
     expect(focusSpy).not.toHaveBeenCalled();
   });
 
-  it('renders canvas + textarea when ?mode=vt is set', () => {
+  it('renders <TerminalGrid> + textarea when ?mode=vt is set', () => {
     history.replaceState({}, '', '/?mode=vt');
     try {
       const { container } = render(<Terminal windowId="w" paneId="p" activityId="a" isActive />);
-      expect(container.querySelector('canvas')).not.toBeNull();
+      expect(container.querySelector('[data-testid="terminal-grid"]')).not.toBeNull();
+      expect(container.querySelector('canvas')).toBeNull();
       expect(container.querySelector('textarea')).not.toBeNull();
     } finally {
       history.replaceState({}, '', '/');
