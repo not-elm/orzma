@@ -357,13 +357,13 @@ mod tests {
         let m = ModeFrame::new(
             17,
             vec!["alt-screen".to_string()],
-            vec!["mouse-x10".to_string()],
+            vec!["mouse-vt200".to_string()],
         );
         let json = serde_json::to_string(&m).unwrap();
         assert!(json.contains(r#""kind":"mode""#));
         assert!(json.contains(r#""seq":17"#));
         assert!(json.contains(r#""added":["alt-screen"]"#));
-        assert!(json.contains(r#""removed":["mouse-x10"]"#));
+        assert!(json.contains(r#""removed":["mouse-vt200"]"#));
     }
 
     #[test]
