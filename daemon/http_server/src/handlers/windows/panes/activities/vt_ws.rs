@@ -392,4 +392,68 @@ mod tests {
         }
         assert!(closed_1011, "expected Close(1011) after malformed input");
     }
+
+    #[tokio::test]
+    async fn end_to_end_echo_appears_in_delta_text() {
+        use futures_util::SinkExt;
+        use ozmux_terminal::vt::{FrameDelta, RenderFrame};
+
+        let (addr, _state, wid, pid, aid) =
+            crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
+        let url = format!(
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let _ = ws.next().await.unwrap().unwrap(); // hello
+        let _ = ws.next().await.unwrap().unwrap(); // initial snapshot
+
+        // Drain any shell-startup deltas so the echo response is the next emit.
+        let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        while tokio::time::Instant::now() < drain_deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(100), ws.next()).await {
+                Ok(Some(Ok(_))) => continue,
+                _ => break,
+            }
+        }
+
+        // Send a client input frame: msgpack-encoded {kind: "input", data: bytes}.
+        let input_payload = rmp_serde::to_vec_named(&serde_json::json!({
+            "kind": "input",
+            "data": serde_bytes::Bytes::new(b"echo wire_loop\n"),
+        }))
+        .unwrap();
+        ws.send(TtMessage::Binary(input_payload.into()))
+            .await
+            .unwrap();
+
+        // Collect frames until a Snapshot or Delta contains "wire_loop".
+        let mut saw = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), ws.next()).await {
+                Ok(Some(Ok(TtMessage::Binary(b)))) => {
+                    let f: RenderFrame = rmp_serde::from_slice(&b).unwrap();
+                    let text: String = match f {
+                        RenderFrame::Snapshot(s) => s
+                            .rows_data
+                            .iter()
+                            .flat_map(|r| r.runs.iter().map(|run| run.text.clone()))
+                            .collect(),
+                        RenderFrame::Delta(FrameDelta { dirty_rows, .. }) => dirty_rows
+                            .iter()
+                            .flat_map(|d| d.runs.iter().map(|run| run.text.clone()))
+                            .collect(),
+                    };
+                    if text.contains("wire_loop") {
+                        saw = true;
+                        break;
+                    }
+                }
+                Ok(Some(Ok(TtMessage::Close(_)))) | Ok(None) => break,
+                _ => continue,
+            }
+        }
+        assert!(saw, "expected 'wire_loop' to appear in a server frame");
+        ws.close(None).await.ok();
+    }
 }
