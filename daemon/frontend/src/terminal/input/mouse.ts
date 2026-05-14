@@ -111,6 +111,17 @@ function buttonName(b: number): MouseEventInput['button'] {
   return 'none';
 }
 
+/** Returns whether a pointer event should bypass mouse-mode forwarding and
+ *  route to the selection overlay instead. Shared with `setupPointerOverlays`
+ *  so the bypass predicate stays consistent between the input dispatcher and
+ *  the selection drag handler. */
+export function shouldRouteToSelection(e: PointerEvent, modes: ReadonlySet<string>): boolean {
+  const anyMouseMode =
+    modes.has('mouse-vt200') || modes.has('mouse-btn-event') || modes.has('mouse-any-event');
+  if (!anyMouseMode) return true;
+  return e.shiftKey;
+}
+
 /** Wires pointer + wheel + contextmenu listeners on `target` (the textarea),
  *  translates coordinates relative to `canvas`, and dispatches encoded bytes. */
 export function setupMouse(
@@ -124,6 +135,10 @@ export function setupMouse(
   // identifies the device, not the button; a Set of pointerIds cannot
   // represent multiple buttons held on the same mouse.
   const heldButtons = new Set<MouseButton>();
+  // NOTE: tracks the pointerId whose down was claimed by the selection
+  // overlay. Persists for the full down→move→up lifecycle so a user who
+  // releases Shift mid-drag still routes to selection (xterm.js parity).
+  let currentSelectionPointer: number | null = null;
 
   function anyMode(): boolean {
     const m = modesRef.current;
@@ -140,6 +155,10 @@ export function setupMouse(
 
   const onPointerDown = (e: PointerEvent): void => {
     if (e.button < 0 || e.button > 2) return;
+    if (shouldRouteToSelection(e, modesRef.current)) {
+      currentSelectionPointer = e.pointerId;
+      return;
+    }
     try {
       target.setPointerCapture(e.pointerId);
     } catch {
@@ -169,6 +188,7 @@ export function setupMouse(
   let pendingRaf: number | null = null;
   let pendingEvent: PointerEvent | null = null;
   const onPointerMove = (e: PointerEvent): void => {
+    if (currentSelectionPointer === e.pointerId) return;
     pendingEvent = e;
     if (pendingRaf !== null) return;
     pendingRaf = requestAnimationFrame(() => {
@@ -195,6 +215,10 @@ export function setupMouse(
   };
 
   const onPointerUp = (e: PointerEvent): void => {
+    if (currentSelectionPointer === e.pointerId) {
+      currentSelectionPointer = null;
+      return;
+    }
     if (e.button < 0 || e.button > 2) return;
     heldButtons.delete(e.button as MouseButton);
     const { col, row } = pointToCell(canvas, e, fmRef.current);
@@ -214,7 +238,8 @@ export function setupMouse(
     if (bytes) send(bytes);
   };
 
-  const onPointerCancel = (): void => {
+  const onPointerCancel = (e: PointerEvent): void => {
+    if (currentSelectionPointer === e.pointerId) currentSelectionPointer = null;
     heldButtons.clear();
   };
   const onLostCapture = (): void => {

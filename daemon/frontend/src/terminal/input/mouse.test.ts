@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { FontMetrics } from '../renderer/font';
-import { encodeMouseEvent, pointToCell } from './mouse';
+import { encodeMouseEvent, pointToCell, setupMouse } from './mouse';
 
 const dec = new TextDecoder();
 
@@ -300,5 +300,82 @@ describe('pointToCell', () => {
     } finally {
       Object.defineProperty(window, 'devicePixelRatio', { value: original, configurable: true });
     }
+  });
+});
+
+describe('setupMouse — Shift+drag bypass full lifecycle', () => {
+  it('routes pointerdown/move/up to selection when Shift+mouse-mode predicate matches', () => {
+    const target = document.createElement('div');
+    const canvas = document.createElement('canvas');
+    document.body.appendChild(target);
+    const fmRef = { current: fakeMetrics() };
+    const modesRef: { current: ReadonlySet<string> } = { current: new Set(['mouse-vt200']) };
+    const send = vi.fn();
+
+    const cleanup = setupMouse(target, canvas, fmRef, modesRef, send);
+
+    target.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        button: 0,
+        pointerId: 7,
+        shiftKey: true,
+        clientX: 10,
+        clientY: 10,
+      }),
+    );
+    expect(send).not.toHaveBeenCalled();
+
+    target.dispatchEvent(
+      new PointerEvent('pointermove', {
+        button: -1,
+        pointerId: 7,
+        shiftKey: true,
+        clientX: 20,
+        clientY: 10,
+      }),
+    );
+    expect(send).not.toHaveBeenCalled();
+
+    target.dispatchEvent(
+      new PointerEvent('pointerup', {
+        button: 0,
+        pointerId: 7,
+        // NOTE: Shift released mid-drag — routing decision should persist.
+        shiftKey: false,
+        clientX: 20,
+        clientY: 10,
+      }),
+    );
+    expect(send).not.toHaveBeenCalled();
+
+    cleanup();
+    document.body.removeChild(target);
+  });
+
+  it('still forwards mouse-mode pointerdown without Shift', () => {
+    const target = document.createElement('div');
+    const canvas = document.createElement('canvas');
+    document.body.appendChild(target);
+    const fmRef = { current: fakeMetrics() };
+    const modesRef: { current: ReadonlySet<string> } = {
+      current: new Set(['mouse-vt200', 'mouse-sgr-1006']),
+    };
+    const send = vi.fn();
+
+    const cleanup = setupMouse(target, canvas, fmRef, modesRef, send);
+
+    target.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        button: 0,
+        pointerId: 8,
+        shiftKey: false,
+        clientX: 10,
+        clientY: 10,
+      }),
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    document.body.removeChild(target);
   });
 });
