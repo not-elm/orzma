@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend test-wire-goldens memo-build-sdk
+.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/core/src/http
@@ -68,3 +68,7 @@ test-wire-goldens:
 		echo "verify $$bin"; \
 		tools/bin-to-diag.sh "$$bin" | diff -u "$${bin%.bin}.diag.txt" -; \
 	done
+
+test-wire-contract:
+	cargo run -p ozmux_terminal --example emit_fixture -- --all
+	pnpm exec tsx tools/verify-msgpack.ts daemon/terminal/tests/fixtures/wire_msgpack/
