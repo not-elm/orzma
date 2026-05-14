@@ -1,6 +1,12 @@
-//! VT canvas terminal hook — wires the VT WebSocket to the renderer grid + canvas.
+//! VT canvas terminal hook — wires the VT WebSocket to the renderer grid + canvas + input modules.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { type CompositionState, setupComposition } from './input/composition';
+import { encodeInputFrame } from './input/encode-input';
+import { setupFocusEvents } from './input/focus';
+import { handleKeyDown } from './input/keymap';
+import { setupMouse } from './input/mouse';
+import { setupPaste } from './input/paste';
 import { decodeFrame } from './protocol/frame';
 import { createCanvasRenderer, DEFAULT_BG } from './renderer/canvas';
 import { measureFont } from './renderer/font';
@@ -16,11 +22,14 @@ export interface CanvasTerminal {
   focus: () => void;
   blur: () => void;
   socket: TerminalSocket;
+  preedit: string;
 }
 
 const DEFAULT_FONT = '14px "JetBrains Mono", monospace';
 
-/** Subscribes to the VT socket, decodes frames into the grid, and schedules canvas redraws. */
+/** Subscribes to the VT socket, decodes frames into the grid, schedules canvas
+ *  redraws, and wires all Phase 3A input listeners (IME / paste / mouse / focus
+ *  / keydown). */
 export function useCanvasTerminal(
   windowId: string,
   paneId: string,
@@ -33,9 +42,17 @@ export function useCanvasTerminal(
   const rendererRef = useRef<ReturnType<typeof createCanvasRenderer> | null>(null);
   const isActiveRef = useRef(isActive);
   const scheduleRedrawRef = useRef<(() => void) | null>(null);
+  const [preedit, setPreedit] = useState('');
+  const modesRef = useRef<ReadonlySet<string>>(gridRef.current.modes);
+  const compositionState = useRef<CompositionState>({
+    isSendingComposition: false,
+    startValue: 0,
+    pendingTimer: null,
+  });
 
   const socket = useTerminalSocket(windowId, paneId, activityId, { mode: 'vt' });
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: windowId/paneId/activityId are connection keys — the socket object is ref-stable across reconnects, so we must re-run this effect to re-attach handlers on the new WS when any of them changes.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -43,8 +60,26 @@ export function useCanvasTerminal(
     const fm = measureFont(canvas, DEFAULT_FONT);
     rendererRef.current = createCanvasRenderer(canvas, fm);
 
+    // disposed flag bound to this effect run — gates any deferred (setTimeout
+    // / RAF) callback so it cannot send to a torn-down socket after pane switch.
+    let disposed = false;
+    const sendBytes = (b: Uint8Array): void => {
+      if (disposed) return;
+      socket.sendBinary(encodeInputFrame(b));
+    };
+
+    // grid.modes is mutated in place by applySnapshot (renderer/grid.ts),
+    // so modesRef tracks the Set identity once. Reassign defensively in the
+    // frame handler in case a future regression reintroduces Set replacement.
+    modesRef.current = gridRef.current.modes;
+
+    function resetEphemeralState(): void {
+      setPreedit('');
+      // Phase 3B will append: setSelection(null), setLinkHover(null), …
+    }
+
     let rafId: number | null = null;
-    const scheduleRedraw = () => {
+    const scheduleRedraw = (): void => {
       if (rafId !== null) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
@@ -56,7 +91,7 @@ export function useCanvasTerminal(
 
     let lastCols = 0;
     let lastRows = 0;
-    const fitToContainer = () => {
+    const fitToContainer = (): void => {
       const container = canvas.parentElement;
       if (!container) return;
       const cssW = container.clientWidth;
@@ -76,9 +111,6 @@ export function useCanvasTerminal(
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.font = fm.fontCss;
         ctx.textBaseline = 'alphabetic';
-        // NOTE: paint terminal background across the entire backing store so
-        // freshly-resized regions never expose the parent pane's bg through
-        // transparent canvas pixels before the next snapshot/delta arrives.
         ctx.fillStyle = DEFAULT_BG;
         ctx.fillRect(0, 0, cols * fm.cellW, rows * fm.cellH);
       }
@@ -98,7 +130,11 @@ export function useCanvasTerminal(
     socket.setFrameHandler((bytes) => {
       try {
         const frame = decodeFrame(bytes);
+        const wasAlt = gridRef.current.modes.has('alt-screen');
         applyFrame(gridRef.current, frame);
+        modesRef.current = gridRef.current.modes;
+        const isAlt = gridRef.current.modes.has('alt-screen');
+        if (wasAlt !== isAlt) resetEphemeralState();
         scheduleRedraw();
       } catch (e) {
         socket.reportDecodeError(String(e));
@@ -107,26 +143,53 @@ export function useCanvasTerminal(
 
     socket.setControlHandler((text) => {
       try {
-        const msg = JSON.parse(text) as { kind?: string };
+        const msg = JSON.parse(text) as { kind?: string; added?: string[]; removed?: string[] };
         if (msg.kind === 'mode') {
-          const mode = msg as { added?: string[]; removed?: string[] };
-          for (const m of mode.added ?? []) gridRef.current.modes.add(m);
-          for (const m of mode.removed ?? []) gridRef.current.modes.delete(m);
+          const altToggled =
+            msg.added?.includes('alt-screen') === true ||
+            msg.removed?.includes('alt-screen') === true;
+          for (const m of msg.added ?? []) gridRef.current.modes.add(m);
+          for (const m of msg.removed ?? []) gridRef.current.modes.delete(m);
+          if (altToggled) resetEphemeralState();
         }
-        // NOTE: hello/error/clipboard text frames are ignored in Phase 2B.
       } catch (e) {
         socket.reportDecodeError(String(e));
       }
     });
 
+    const cleanups: Array<() => void> = [];
+    const ta = textareaRef.current;
+    if (ta) {
+      const fmRef = { current: fm };
+      // String-typed composition submit → bytes via TextEncoder.
+      const sendText = (text: string): void => sendBytes(new TextEncoder().encode(text));
+
+      cleanups.push(setupComposition(ta, setPreedit, sendText, compositionState.current));
+      cleanups.push(setupPaste(ta, modesRef, sendBytes));
+      cleanups.push(setupMouse(ta, canvas, fmRef, modesRef, sendBytes));
+      cleanups.push(setupFocusEvents(ta, modesRef, sendBytes));
+
+      const onKey = (e: KeyboardEvent): void => {
+        if (compositionState.current.isSendingComposition) return;
+        const bytes = handleKeyDown(e, gridRef.current.modes);
+        if (!bytes) return;
+        e.preventDefault();
+        sendBytes(bytes);
+      };
+      ta.addEventListener('keydown', onKey);
+      cleanups.push(() => ta.removeEventListener('keydown', onKey));
+    }
+
     return () => {
+      disposed = true;
+      for (const c of cleanups) c();
       ro.disconnect();
       socket.setFrameHandler(null);
       socket.setControlHandler(null);
       scheduleRedrawRef.current = null;
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [socket]);
+  }, [socket, windowId, paneId, activityId]);
 
   useEffect(() => {
     isActiveRef.current = isActive;
@@ -142,5 +205,6 @@ export function useCanvasTerminal(
     focus: () => textareaRef.current?.focus(),
     blur: () => textareaRef.current?.blur(),
     socket,
+    preedit,
   };
 }

@@ -51,3 +51,22 @@ describe('useCanvasTerminal', () => {
     );
   });
 });
+
+describe('useCanvasTerminal — Phase 3A wiring', () => {
+  it('exposes preedit in the return value', () => {
+    const { result } = renderHook(() => useCanvasTerminal('w', 'p', 'a', true));
+    expect(result.current.preedit).toBe('');
+  });
+
+  it('resets preedit when alt-screen mode toggles via control frame', async () => {
+    const { result } = renderHook(() => useCanvasTerminal('w', 'p', 'a', true));
+    await new Promise((r) => setTimeout(r, 10));
+
+    server?.clients().forEach((c) => {
+      c.send(JSON.stringify({ kind: 'mode', seq: 1, added: ['alt-screen'], removed: [] }));
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(result.current.preedit).toBe('');
+  });
+});
