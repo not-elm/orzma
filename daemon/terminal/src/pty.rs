@@ -209,7 +209,11 @@ impl TerminalService {
             .to_terminal_result()?;
 
         // 3) Wake the bridge so it observes Full damage and emits a snapshot.
-        let _ = handle.vt_chunk_tx.try_send(bytes::Bytes::new());
+        // NOTE: send().await (not try_send) so a backpressured channel still
+        // delivers the wakeup — otherwise the resize-induced Full damage waits
+        // until the next genuine PTY chunk, which a non-TUI shell may not
+        // produce on SIGWINCH.
+        let _ = handle.vt_chunk_tx.send(bytes::Bytes::new()).await;
 
         Ok(())
     }

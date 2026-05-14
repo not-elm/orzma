@@ -1,6 +1,7 @@
-//! Phase 2A VT WebSocket loop: hello frame + atomic subscribe + frame relay.
+//! Phase 2A VT WebSocket loop: hello frame + atomic subscribe + frame relay +
+//! client input dispatch (resize / ack / input) with connection-local 1011.
 
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use ozmux_multiplexer::ActivityId;
 use ozmux_terminal::vt::WireMessage;
@@ -19,16 +20,106 @@ const ESCAPE_CAPS: &[&str] = &[
 ];
 const INPUT_CAPS: &[&str] = &["text-utf8", "key-vt-encoded"];
 
+/// Inbound JSON control messages from the client.
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ClientControl {
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
+    Ack {
+        #[allow(dead_code, reason = "Phase 2A drains acks")]
+        seq: u32,
+    },
+    ClientError {
+        #[allow(dead_code, reason = "Phase 2A logs only")]
+        category: String,
+        #[serde(default)]
+        #[allow(dead_code, reason = "Phase 2A logs only")]
+        detail: Option<String>,
+    },
+}
+
+/// Inbound msgpack binary messages from the client.
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ClientBinary {
+    Input { data: serde_bytes::ByteBuf },
+}
+
+/// Decodes and dispatches an inbound text frame.
+async fn handle_client_text(
+    terminal: &TerminalService,
+    aid: &ActivityId,
+    text: &str,
+) -> Result<(), String> {
+    let ctrl: ClientControl =
+        serde_json::from_str(text).map_err(|e| format!("json decode: {e}"))?;
+    match ctrl {
+        ClientControl::Resize { cols, rows } => {
+            terminal
+                .resize(aid, cols, rows)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        ClientControl::Ack { .. } => { /* Phase 2A drains */ }
+        ClientControl::ClientError { .. } => { /* Phase 2A logs only */ }
+    }
+    Ok(())
+}
+
+/// Decodes and dispatches an inbound binary frame.
+async fn handle_client_binary(
+    terminal: &TerminalService,
+    aid: &ActivityId,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let frame: ClientBinary =
+        rmp_serde::from_slice(bytes).map_err(|e| format!("msgpack decode: {e}"))?;
+    match frame {
+        ClientBinary::Input { data } => {
+            terminal
+                .write(aid, &data)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Sends an error text frame and then a Close(1011) frame on this connection only.
+async fn send_error_and_close(
+    tx: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    category: &str,
+    detail: &str,
+) {
+    let err = serde_json::json!({
+        "kind": "error",
+        "category": category,
+        "detail": detail,
+    });
+    let _ = tx.send(Message::Text(err.to_string().into())).await;
+    let _ = tx
+        .send(Message::Close(Some(CloseFrame {
+            code: 1011,
+            reason: category.to_string().into(),
+        })))
+        .await;
+}
+
 /// VT WebSocket loop: sends the hello frame, subscribes atomically, sends
 /// the initial snapshot or replay deltas, then relays live frames until the
-/// channel closes or the client disconnects.
+/// channel closes or the client disconnects. Client messages (resize, ack,
+/// input) are dispatched concurrently; decode failures emit an error frame
+/// and close the connection with WS code 1011.
 pub(super) async fn vt_ws_loop(
     socket: WebSocket,
     terminal: TerminalService,
     aid: ActivityId,
     last_seq: Option<u32>,
 ) {
-    let (mut tx, _rx_ws) = socket.split();
+    let (mut tx, mut rx_ws) = socket.split();
 
     let geom = match terminal.read_geometry(&aid).await {
         Ok(g) => g,
@@ -71,35 +162,48 @@ pub(super) async fn vt_ws_loop(
     };
 
     loop {
-        match rx_frames.recv().await {
-            Ok(WireMessage::Binary { encoded, .. }) => {
-                if tx.send(Message::Binary(encoded)).await.is_err() {
-                    break;
-                }
-            }
-            Ok(WireMessage::Text(s)) => {
-                if tx.send(Message::Text(s.into())).await.is_err() {
-                    break;
-                }
-            }
-            Err(RecvError::Lagged(_)) => {
-                // NOTE: We pass Some(0) so subscribe_frames sees a last_seq
-                // that is guaranteed to be before any ring entry, forcing a
-                // FreshSnapshot with SnapshotReason::Lagged. Passing None
-                // would instead yield SnapshotReason::Reconnect, which is
-                // semantically wrong here. This is a Phase 2A expedient;
-                // a dedicated API would be cleaner.
-                match terminal.subscribe_frames(&aid, Some(0)).await {
-                    Ok(FrameSubscription::FreshSnapshot { snapshot, rx }) => {
-                        if tx.send(Message::Binary(snapshot)).await.is_err() {
-                            break;
-                        }
-                        rx_frames = rx;
+        tokio::select! {
+            srv = rx_frames.recv() => match srv {
+                Ok(WireMessage::Binary { encoded, .. }) => {
+                    if tx.send(Message::Binary(encoded)).await.is_err() {
+                        break;
                     }
-                    _ => break,
                 }
+                Ok(WireMessage::Text(s)) => {
+                    if tx.send(Message::Text(s.into())).await.is_err() { break; }
+                }
+                Err(RecvError::Lagged(_)) => {
+                    // NOTE: passing Some(0) forces SnapshotReason::Lagged because
+                    // any non-empty ring's first seq is > 0. Passing None would
+                    // yield Reconnect, which misrepresents the cause here. A
+                    // dedicated API would be cleaner; revisit in Phase 2B.
+                    match terminal.subscribe_frames(&aid, Some(0)).await {
+                        Ok(FrameSubscription::FreshSnapshot { snapshot, rx }) => {
+                            if tx.send(Message::Binary(snapshot)).await.is_err() { break; }
+                            rx_frames = rx;
+                        }
+                        _ => break,
+                    }
+                }
+                Err(RecvError::Closed) => break,
+            },
+            cli = rx_ws.next() => match cli {
+                Some(Ok(Message::Text(s))) => {
+                    if let Err(e) = handle_client_text(&terminal, &aid, s.as_str()).await {
+                        send_error_and_close(&mut tx, "client_text_decode", &e).await;
+                        break;
+                    }
+                }
+                Some(Ok(Message::Binary(b))) => {
+                    if let Err(e) = handle_client_binary(&terminal, &aid, &b).await {
+                        send_error_and_close(&mut tx, "client_input_decode", &e).await;
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Err(_)) => break,
+                _ => continue,
             }
-            Err(RecvError::Closed) => break,
         }
     }
 }
@@ -199,5 +303,93 @@ mod tests {
             "more deltas/snapshots should flow after subscribe"
         );
         ws.close(None).await.ok();
+    }
+
+    #[tokio::test]
+    async fn client_text_resize_is_accepted() {
+        use ozmux_terminal::vt::{FrameSnapshot, RenderFrame, SnapshotReason};
+
+        let (addr, state, wid, pid, aid) =
+            crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
+        let url = format!(
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let _ = ws.next().await.unwrap().unwrap(); // hello
+        let _ = ws.next().await.unwrap().unwrap(); // initial snapshot
+
+        // Drain any shell-startup deltas so the resize-induced snapshot is the
+        // next thing the bridge has to emit (otherwise a queue of prompt
+        // deltas can outlast the test deadline).
+        let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        while tokio::time::Instant::now() < drain_deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(100), ws.next()).await {
+                Ok(Some(Ok(_))) => continue,
+                _ => break,
+            }
+        }
+
+        // Send a resize JSON.
+        let resize = serde_json::json!({ "kind": "resize", "cols": 80, "rows": 30 });
+        use futures_util::SinkExt;
+        ws.send(TtMessage::Text(resize.to_string().into()))
+            .await
+            .unwrap();
+
+        // Expect a Binary Snapshot{Resize} to follow within 10s.
+        let mut saw = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), ws.next()).await {
+                Ok(Some(Ok(TtMessage::Binary(b)))) => {
+                    let f: RenderFrame = rmp_serde::from_slice(&b).unwrap();
+                    if let RenderFrame::Snapshot(FrameSnapshot { reason, .. }) = f
+                        && matches!(reason, SnapshotReason::Resize)
+                    {
+                        saw = true;
+                        break;
+                    }
+                }
+                Ok(Some(Ok(TtMessage::Close(_)))) | Ok(None) => break,
+                _ => continue,
+            }
+        }
+        let _ = state;
+        assert!(saw, "client resize must trigger Snapshot{{Resize}}");
+        ws.close(None).await.ok();
+    }
+
+    #[tokio::test]
+    async fn malformed_client_text_closes_with_1011() {
+        let (addr, _state, wid, pid, aid) =
+            crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
+        let url = format!(
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let _ = ws.next().await.unwrap().unwrap();
+        let _ = ws.next().await.unwrap().unwrap();
+
+        use futures_util::SinkExt;
+        ws.send(TtMessage::Text("not json".into())).await.unwrap();
+
+        // Expect a Close from the server within 2s with code 1011 (Error in tungstenite).
+        let mut closed_1011 = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), ws.next()).await {
+                Ok(Some(Ok(TtMessage::Close(Some(frame))))) => {
+                    if frame.code
+                        == tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Error
+                    {
+                        closed_1011 = true;
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                _ => continue,
+            }
+        }
+        assert!(closed_1011, "expected Close(1011) after malformed input");
     }
 }
