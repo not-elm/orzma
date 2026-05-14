@@ -193,3 +193,65 @@ describe('expandRunsToRow', () => {
     expect(nfd[0].width).toBe(1);
   });
 });
+
+describe('Grid.rowVersions and cellAtColumn', () => {
+  it('rowVersions initializes to Uint32Array of length rows', () => {
+    const g = createGrid({ cols: 80, rows: 24 });
+    expect(g.rowVersions).toBeInstanceOf(Uint32Array);
+    expect(g.rowVersions.length).toBe(24);
+    expect(Array.from(g.rowVersions)).toEqual(Array(24).fill(0));
+  });
+
+  it('applyFrame snapshot resizes rowVersions and bumps all rows', () => {
+    const g = createGrid({ cols: 80, rows: 24 });
+    applyFrame(
+      g,
+      snapshot({
+        cols: 2,
+        rows: 3,
+        rows_data: [{ runs: [] }, { runs: [] }, { runs: [] }],
+      }),
+    );
+    expect(g.rowVersions.length).toBe(3);
+    expect(Array.from(g.rowVersions)).toEqual([1, 1, 1]);
+  });
+
+  it('applyFrame delta bumps only dirty rows', () => {
+    const g = createGrid({ cols: 3, rows: 3 });
+    applyFrame(
+      g,
+      snapshot({
+        cols: 3,
+        rows: 3,
+        rows_data: [{ runs: [] }, { runs: [] }, { runs: [] }],
+      }),
+    );
+    const delta: FrameDelta = {
+      kind: 'delta',
+      seq: 2,
+      cursor: { x: 0, y: 0, shape: 'block', blinking: false, visible: true },
+      dirty_rows: [{ row: 1, runs: [] }],
+      hyperlinks: [],
+    };
+    applyFrame(g, delta);
+    expect(Array.from(g.rowVersions)).toEqual([1, 2, 1]);
+  });
+
+  it('cellAtColumn returns the cell at a given terminal column (wide-char aware)', () => {
+    const g = createGrid({ cols: 5, rows: 1 });
+    g.cells[0] = [
+      { text: 'a', width: 1, fg: null, bg: null, style: 0 },
+      { text: '日', width: 2, fg: null, bg: null, style: 0 },
+      { text: 'z', width: 1, fg: null, bg: null, style: 0 },
+    ];
+    expect(g.cellAtColumn(0, 0)?.cell.text).toBe('a');
+    expect(g.cellAtColumn(0, 0)?.startCol).toBe(0);
+    expect(g.cellAtColumn(0, 0)?.endCol).toBe(1);
+    expect(g.cellAtColumn(0, 1)?.cell.text).toBe('日');
+    expect(g.cellAtColumn(0, 1)?.startCol).toBe(1);
+    expect(g.cellAtColumn(0, 1)?.endCol).toBe(3);
+    expect(g.cellAtColumn(0, 2)?.cell.text).toBe('日');
+    expect(g.cellAtColumn(0, 3)?.cell.text).toBe('z');
+    expect(g.cellAtColumn(0, 4)).toBeUndefined();
+  });
+});

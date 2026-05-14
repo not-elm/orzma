@@ -11,6 +11,15 @@ export interface Cell {
   hyperlinkId?: number;
 }
 
+/** Result of locating a cell at a terminal column. */
+export interface CellSpan {
+  cell: Cell;
+  /** Starting column (inclusive). */
+  startCol: number;
+  /** Ending column (exclusive). For wide-char cells, `endCol - startCol === 2`. */
+  endCol: number;
+}
+
 /** Renderer-side mirror of the server's terminal grid. */
 export interface Grid {
   cols: number;
@@ -20,11 +29,18 @@ export interface Grid {
   modes: Set<string>;
   title: string;
   dirtyRows: Set<number>;
+  // NOTE: bumped by applyFrame independently of dirtyRows. dirtyRows is
+  // consumed (cleared) by the renderer each paint; rowVersions persists so
+  // pointer-overlay row-hover caches can invalidate without racing the
+  // renderer.
+  rowVersions: Uint32Array;
+  /** Returns the cell at terminal column `col`, accounting for wide-char width. */
+  cellAtColumn(row: number, col: number): CellSpan | undefined;
 }
 
 /** Constructs an empty grid with default state. */
 export function createGrid(init: { cols: number; rows: number }): Grid {
-  return {
+  const grid: Grid = {
     cols: init.cols,
     rows: init.rows,
     cells: Array.from({ length: init.rows }, () => []),
@@ -32,7 +48,26 @@ export function createGrid(init: { cols: number; rows: number }): Grid {
     modes: new Set(),
     title: '',
     dirtyRows: new Set(),
+    rowVersions: new Uint32Array(init.rows),
+    cellAtColumn(row, col) {
+      return cellAtColumnImpl(this, row, col);
+    },
   };
+  return grid;
+}
+
+function cellAtColumnImpl(grid: Grid, row: number, col: number): CellSpan | undefined {
+  const cells = grid.cells[row];
+  if (!cells) return undefined;
+  let runningCol = 0;
+  for (const cell of cells) {
+    if (cell.width === 0) continue;
+    if (runningCol + cell.width > col) {
+      return { cell, startCol: runningCol, endCol: runningCol + cell.width };
+    }
+    runningCol += cell.width;
+  }
+  return undefined;
 }
 
 /** Applies a snapshot or delta to the grid, marking dirty rows. */
@@ -55,12 +90,19 @@ function applySnapshot(grid: Grid, frame: FrameSnapshot): void {
   grid.cursor = frame.cursor;
   grid.modes.clear();
   for (const m of frame.modes) grid.modes.add(m);
+  grid.rowVersions = new Uint32Array(frame.rows);
+  for (let row = 0; row < frame.rows; row++) {
+    grid.rowVersions[row] = 1;
+  }
 }
 
 function applyDelta(grid: Grid, frame: FrameDelta): void {
   for (const { row, runs } of frame.dirty_rows) {
     grid.cells[row] = expandRunsToRow(runs, grid.cols);
     grid.dirtyRows.add(row);
+    if (row < grid.rowVersions.length) {
+      grid.rowVersions[row] += 1;
+    }
   }
   grid.cursor = frame.cursor;
 }
