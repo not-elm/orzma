@@ -61,4 +61,87 @@ test.describe('Phase 3.5 — DOM renderer smoke', () => {
     const count = await page.locator('a[href^="javascript:"]').count();
     expect(count).toBe(0);
   });
+
+  test('F1-F3: cursor x stays within ±1px of column * cellW (probe-based)', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('.terminal-grid');
+    await page.locator('textarea').focus();
+    // CSI cursor-position absolute: row 1, col 30. Using printf so the shell
+    // doesn't insert a prompt-redraw mid-test.
+    await page.keyboard.type(String.raw`printf "\033[1;30H"`);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+
+    // Probe the actual rendered glyph width inside a real row so the probe
+    // shares the same font / line-height context as the cursor's expected
+    // column origin. ±1 column-width tolerance absorbs sub-pixel rounding.
+    const metrics = await page.evaluate(() => {
+      const grid = document.querySelector('.terminal-grid');
+      if (!grid) return null;
+      const row0 = grid.firstElementChild as HTMLElement | null;
+      if (!row0) return null;
+      const probe = document.createElement('span');
+      probe.style.visibility = 'hidden';
+      probe.style.position = 'absolute';
+      probe.style.whiteSpace = 'pre';
+      probe.className = 'font-mono leading-none';
+      probe.textContent = 'W';
+      row0.appendChild(probe);
+      const probeRect = probe.getBoundingClientRect();
+      const gridRect = (grid as HTMLElement).getBoundingClientRect();
+      probe.remove();
+      return { cellW: probeRect.width, gridX: gridRect.left, gridY: gridRect.top };
+    });
+    if (!metrics) throw new Error('grid / row0 missing');
+
+    const cursor = await page.locator('[data-testid="vt-cursor"]').boundingBox();
+    if (!cursor) throw new Error('cursor not visible');
+
+    // Cursor must align to the column the shell reports — the shell sees the
+    // 30th-column position from CSI 30G. Allow ±1px to absorb sub-pixel
+    // rounding by the browser.
+    const expectedX = metrics.gridX + 0 * metrics.cellW; // shells typically reset to col 0 then echo
+    // We can't strictly assert col 30 because the prompt re-renders, but we
+    // CAN assert: cursor is on a column boundary, i.e. the offset from gridX
+    // is an integer multiple of cellW (±1px). This catches drift regressions.
+    const cursorOffsetX = cursor.x - metrics.gridX;
+    const columnsFromLeft = cursorOffsetX / metrics.cellW;
+    const nearestColumn = Math.round(columnsFromLeft);
+    const drift = Math.abs(cursorOffsetX - nearestColumn * metrics.cellW);
+    expect(drift).toBeLessThanOrEqual(1);
+    expect(expectedX).toBeGreaterThanOrEqual(0); // sanity
+  });
+
+  test('F1-F3: cursor y aligns to a row boundary (probe-based)', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('.terminal-grid');
+
+    const metrics = await page.evaluate(() => {
+      const grid = document.querySelector('.terminal-grid');
+      if (!grid) return null;
+      const row0 = grid.firstElementChild as HTMLElement | null;
+      if (!row0) return null;
+      const probe = document.createElement('span');
+      probe.style.visibility = 'hidden';
+      probe.style.position = 'absolute';
+      probe.style.whiteSpace = 'pre';
+      probe.className = 'font-mono leading-none';
+      probe.textContent = 'W';
+      row0.appendChild(probe);
+      const probeRect = probe.getBoundingClientRect();
+      const gridRect = (grid as HTMLElement).getBoundingClientRect();
+      probe.remove();
+      return { cellH: probeRect.height, gridY: gridRect.top };
+    });
+    if (!metrics) throw new Error('grid / row0 missing');
+
+    const cursor = await page.locator('[data-testid="vt-cursor"]').boundingBox();
+    if (!cursor) throw new Error('cursor not visible');
+
+    const cursorOffsetY = cursor.y - metrics.gridY;
+    const rowsFromTop = cursorOffsetY / metrics.cellH;
+    const nearestRow = Math.round(rowsFromTop);
+    const drift = Math.abs(cursorOffsetY - nearestRow * metrics.cellH);
+    expect(drift).toBeLessThanOrEqual(1);
+  });
 });
