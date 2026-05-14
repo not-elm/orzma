@@ -66,5 +66,5 @@ test-frontend:
 test-wire-goldens:
 	@for bin in daemon/terminal/tests/fixtures/wire_msgpack/*.bin; do \
 		echo "verify $$bin"; \
-		tools/msgpack-to-diag.sh "$$bin" | diff -u "$${bin%.bin}.diag.txt" -; \
+		tools/bin-to-diag.sh "$$bin" | diff -u "$${bin%.bin}.diag.txt" -; \
 	done

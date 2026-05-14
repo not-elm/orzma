@@ -1,0 +1,26 @@
+{
+  "cols": 80,
+  "cursor": {
+    "shape": "block",
+    "visible": true,
+    "x": 0,
+    "y": 0
+  },
+  "escape_caps": [
+    "sgr",
+    "cup",
+    "ed",
+    "el",
+    "decset",
+    "decrst",
+    "alt-screen-1049",
+    "bracketed-paste"
+  ],
+  "input_caps": [
+    "text-utf8",
+    "key-vt-encoded"
+  ],
+  "kind": "hello",
+  "rows": 24,
+  "seq": 0
+}

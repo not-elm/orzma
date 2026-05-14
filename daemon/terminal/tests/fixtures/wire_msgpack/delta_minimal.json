@@ -1,0 +1,19 @@
+{
+  "kind": "delta",
+  "seq": 1,
+  "dirty_rows": [
+    {
+      "row": 0,
+      "runs": [
+        {
+          "cols": 3,
+          "fg": null,
+          "bg": null,
+          "style": 0,
+          "text": "xyz",
+          "hyperlink_id": null
+        }
+      ]
+    }
+  ]
+}

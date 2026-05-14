@@ -1,0 +1,8 @@
+{
+  "kind": "mode",
+  "seq": 2,
+  "added": [
+    "alt-screen"
+  ],
+  "removed": []
+}
