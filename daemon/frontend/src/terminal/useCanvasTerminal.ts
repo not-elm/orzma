@@ -50,6 +50,42 @@ export function useCanvasTerminal(
       });
     };
 
+    let lastCols = 0;
+    let lastRows = 0;
+    const fitToContainer = () => {
+      const container = canvas.parentElement;
+      if (!container) return;
+      const cssW = container.clientWidth;
+      const cssH = container.clientHeight;
+      if (cssW === 0 || cssH === 0) return;
+      const cols = Math.max(1, Math.floor(cssW / fm.cellW));
+      const rows = Math.max(1, Math.floor(cssH / fm.cellH));
+      const dpr = window.devicePixelRatio || 1;
+      const desiredW = Math.round(cols * fm.cellW * dpr);
+      const desiredH = Math.round(rows * fm.cellH * dpr);
+      if (canvas.width !== desiredW) canvas.width = desiredW;
+      if (canvas.height !== desiredH) canvas.height = desiredH;
+      canvas.style.width = `${cols * fm.cellW}px`;
+      canvas.style.height = `${rows * fm.cellH}px`;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.font = fm.fontCss;
+        ctx.textBaseline = 'alphabetic';
+      }
+      if (cols !== lastCols || rows !== lastRows) {
+        lastCols = cols;
+        lastRows = rows;
+        socket.sendControl({ kind: 'resize', cols, rows });
+        for (let r = 0; r < gridRef.current.rows; r++) gridRef.current.dirtyRows.add(r);
+        scheduleRedraw();
+      }
+    };
+
+    const ro = new ResizeObserver(() => fitToContainer());
+    if (canvas.parentElement) ro.observe(canvas.parentElement);
+    fitToContainer();
+
     socket.setFrameHandler((bytes) => {
       try {
         const frame = decodeFrame(bytes);
@@ -75,6 +111,7 @@ export function useCanvasTerminal(
     });
 
     return () => {
+      ro.disconnect();
       socket.setFrameHandler(null);
       socket.setControlHandler(null);
       if (rafId !== null) cancelAnimationFrame(rafId);

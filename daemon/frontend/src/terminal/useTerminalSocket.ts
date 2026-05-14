@@ -118,7 +118,14 @@ export function useTerminalSocket(
       },
       sendBinary(data) {
         const ws = wsRef.current;
-        if (ws?.readyState === WebSocket.OPEN) ws.send(data.buffer as ArrayBuffer);
+        // NOTE: slice the exact byteOffset/byteLength range. Passing
+        // `data.buffer` would send the entire underlying ArrayBuffer (msgpackr
+        // Packr uses an 8192-byte pooled buffer and returns a subarray view),
+        // causing the server to re-decode the FIRST frame on every send.
+        if (ws?.readyState === WebSocket.OPEN) {
+          const slice = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+          ws.send(slice as ArrayBuffer);
+        }
       },
       sendControl(msg) {
         const ws = wsRef.current;

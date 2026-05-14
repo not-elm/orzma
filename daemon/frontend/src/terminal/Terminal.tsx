@@ -60,7 +60,7 @@ function VtTerminal({ windowId, paneId, activityId, isActive }: TerminalProps) {
 
   return (
     <div className="relative h-full w-full bg-background">
-      <canvas ref={canvasRef} className="absolute inset-0" width={1280} height={768} />
+      <canvas ref={canvasRef} className="absolute left-0 top-0" />
       <textarea
         ref={textareaRef}
         className="absolute inset-0 resize-none border-0 bg-transparent text-transparent caret-transparent outline-none"
@@ -68,6 +68,8 @@ function VtTerminal({ windowId, paneId, activityId, isActive }: TerminalProps) {
         autoCorrect="off"
         autoCapitalize="off"
         spellCheck={false}
+        // biome-ignore lint/a11y/noAutofocus: terminal pane requires focus to receive keystrokes; this textarea is invisible and exists solely as the keyboard sink for the canvas.
+        autoFocus={isActive}
       />
       {status === 'disconnected' && (
         <StatusBanner

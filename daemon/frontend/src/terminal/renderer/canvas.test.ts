@@ -46,14 +46,27 @@ describe('createCanvasRenderer.paint', () => {
     expect(grid.dirtyRows.size).toBe(0);
   });
 
-  it('skips paint when dirtyRows is empty', () => {
+  it('skips row repaint when dirtyRows is empty and cursor is hidden', () => {
     const canvas = document.createElement('canvas');
     // biome-ignore lint/style/noNonNullAssertion: FakeCanvasRenderingContext2D is always non-null in tests
     const ctx = canvas.getContext('2d')!;
     const renderer = createCanvasRenderer(canvas, fakeMetrics());
     const grid = gridWithRow('xy');
     grid.dirtyRows.clear();
+    grid.cursor.visible = false;
     renderer.paint(grid);
     expect(ctx.clearRect).not.toHaveBeenCalled();
+  });
+
+  it('paints a cursor block at grid.cursor when visible', () => {
+    const canvas = document.createElement('canvas');
+    // biome-ignore lint/style/noNonNullAssertion: FakeCanvasRenderingContext2D is always non-null in tests
+    const ctx = canvas.getContext('2d')!;
+    const renderer = createCanvasRenderer(canvas, fakeMetrics());
+    const grid = gridWithRow('hello');
+    grid.cursor = { x: 3, y: 0, shape: 'block', visible: true };
+    renderer.paint(grid);
+    // The cursor block fillRect at (3*8, 0, 8, 16) is one of the fillRect calls.
+    expect(ctx.fillRect).toHaveBeenCalledWith(3 * 8, 0, 8, 16);
   });
 });

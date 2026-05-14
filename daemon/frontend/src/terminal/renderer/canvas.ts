@@ -30,14 +30,32 @@ export function createCanvasRenderer(canvas: HTMLCanvasElement, fm: FontMetrics)
   ctx.font = fm.fontCss;
   ctx.textBaseline = 'alphabetic';
 
+  let lastCursorRow: number | null = null;
   return {
     paint(grid: Grid) {
+      // NOTE: ensure both the previous cursor row and the current one repaint so
+      // a moved cursor leaves no ghost. Phase 3 will replace this with a
+      // dedicated <Cursor> overlay (spec § 7).
+      if (lastCursorRow !== null) grid.dirtyRows.add(lastCursorRow);
+      if (grid.cursor.visible) grid.dirtyRows.add(grid.cursor.y);
       for (const row of grid.dirtyRows) {
         paintRow(ctx, grid.cells[row] ?? [], row, fm, grid.cols);
       }
       grid.dirtyRows.clear();
+      drawCursor(ctx, grid, fm);
+      lastCursorRow = grid.cursor.visible ? grid.cursor.y : null;
     },
   };
+}
+
+function drawCursor(ctx: CanvasRenderingContext2D, grid: Grid, fm: FontMetrics): void {
+  if (!grid.cursor.visible) return;
+  const px = grid.cursor.x * fm.cellW;
+  const py = grid.cursor.y * fm.cellH;
+  ctx.fillStyle = '#e5e5e5';
+  ctx.globalAlpha = 0.6;
+  ctx.fillRect(px, py, fm.cellW, fm.cellH);
+  ctx.globalAlpha = 1;
 }
 
 function paintRow(
