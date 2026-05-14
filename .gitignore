@@ -49,3 +49,5 @@ node_modules
 # Vite build output, embedded into ozmux_http_server via include_str!
 daemon/http_server/src/handlers/index.html
 
+
+docs/discussions/
