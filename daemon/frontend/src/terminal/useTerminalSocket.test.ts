@@ -18,14 +18,14 @@ afterEach(() => {
 
 describe('useTerminalSocket', () => {
   it('returns ref-stable identity across renders', () => {
-    const { result, rerender } = renderHook(() => useTerminalSocket('w', 'p', 'a', { mode: 'vt' }));
+    const { result, rerender } = renderHook(() => useTerminalSocket('w', 'p', 'a'));
     const first = result.current;
     rerender();
     expect(result.current).toBe(first);
   });
 
-  it('routes Binary frames to setFrameHandler when mode=vt', async () => {
-    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a', { mode: 'vt' }));
+  it('routes Binary frames to setFrameHandler', async () => {
+    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a'));
     const received: Uint8Array[] = [];
     await waitFor(() => expect(server?.clients().length).toBe(1));
 
@@ -45,7 +45,7 @@ describe('useTerminalSocket', () => {
   });
 
   it('routes Text frames to setControlHandler', async () => {
-    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a', { mode: 'vt' }));
+    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a'));
     const received: string[] = [];
     await waitFor(() => expect(server?.clients().length).toBe(1));
 
@@ -64,7 +64,7 @@ describe('useTerminalSocket', () => {
   });
 
   it('buffers binary frames received before setFrameHandler is registered', async () => {
-    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a', { mode: 'vt' }));
+    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a'));
     await waitFor(() => expect(server?.clients().length).toBe(1));
 
     act(() => {

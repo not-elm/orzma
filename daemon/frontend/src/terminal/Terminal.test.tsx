@@ -16,9 +16,6 @@ const socketStub = {
 vi.mock('./useTerminalSocket', () => ({
   useTerminalSocket: () => socketStub,
 }));
-vi.mock('./useXtermTerminal', () => ({
-  useXtermTerminal: () => ({ focus: focusSpy, blur: blurSpy }),
-}));
 vi.mock('./useCanvasTerminal', () => ({
   useCanvasTerminal: () => ({
     paneRef: { current: null },
@@ -80,22 +77,10 @@ describe('<Terminal>', () => {
     expect(focusSpy).not.toHaveBeenCalled();
   });
 
-  it('renders <TerminalGrid> + textarea when ?mode=vt is set', () => {
-    history.replaceState({}, '', '/?mode=vt');
-    try {
-      const { container } = render(<Terminal windowId="w" paneId="p" activityId="a" isActive />);
-      expect(container.querySelector('[data-testid="terminal-grid"]')).not.toBeNull();
-      expect(container.querySelector('canvas')).toBeNull();
-      expect(container.querySelector('textarea')).not.toBeNull();
-    } finally {
-      history.replaceState({}, '', '/');
-    }
-  });
-
-  it('renders xterm path (no canvas) when ?mode=vt is absent', () => {
-    history.replaceState({}, '', '/');
+  it('renders <TerminalGrid> + textarea (DOM renderer is the only path)', () => {
     const { container } = render(<Terminal windowId="w" paneId="p" activityId="a" isActive />);
+    expect(container.querySelector('[data-testid="terminal-grid"]')).not.toBeNull();
     expect(container.querySelector('canvas')).toBeNull();
-    expect(container.querySelector('textarea')).toBeNull();
+    expect(container.querySelector('textarea')).not.toBeNull();
   });
 });

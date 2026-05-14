@@ -1,22 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { terminalWsUrl, vtTerminalWsUrl } from './api';
+import { vtTerminalWsUrl } from './api';
 
 export type SocketStatus = 'connecting' | 'connected' | 'disconnected' | 'exited';
 
 export type BinaryHandler = (data: Uint8Array) => void;
 export type ControlHandler = (text: string) => void;
 
-/** Client-side control messages (xterm legacy uses `type`; VT mode uses `kind`). */
-export type ClientControl =
-  | { type: 'resize'; cols: number; rows: number }
-  | { kind: 'resize'; cols: number; rows: number };
+/** Client-side control messages on the VT WebSocket. */
+export type ClientControl = { kind: 'resize'; cols: number; rows: number };
 
-/** Server-side control messages on the raw-bytes path. */
-export type ServerControl = { type: 'exit'; code: number | null };
-
-/** Options for the socket hook. Default is xterm raw-bytes mode (backwards compat). */
+/** Options for the socket hook. */
 export interface TerminalSocketOptions {
-  mode?: 'vt' | 'xterm';
   lastSeq?: number;
 }
 
@@ -25,7 +19,6 @@ export interface TerminalSocket {
   status: SocketStatus;
   sendBinary: (data: Uint8Array) => void;
   sendControl: (msg: ClientControl) => void;
-  setBinaryHandler: (handler: BinaryHandler | null) => void;
   setFrameHandler: (handler: BinaryHandler | null) => void;
   setControlHandler: (handler: ControlHandler | null) => void;
   reportDecodeError: (message: string) => void;
@@ -38,10 +31,8 @@ export function useTerminalSocket(
   options?: TerminalSocketOptions,
 ): TerminalSocket {
   const wsRef = useRef<WebSocket | null>(null);
-  const binaryHandlerRef = useRef<BinaryHandler | null>(null);
   const frameHandlerRef = useRef<BinaryHandler | null>(null);
   const controlHandlerRef = useRef<ControlHandler | null>(null);
-  const pendingBinaryRef = useRef<Uint8Array[]>([]);
   const pendingFrameRef = useRef<Uint8Array[]>([]);
   const pendingControlRef = useRef<string[]>([]);
   const [status, setStatus] = useState<SocketStatus>('connecting');
@@ -49,19 +40,14 @@ export function useTerminalSocket(
   statusRef.current = status;
   const apiRef = useRef<TerminalSocket | null>(null);
 
-  const mode = options?.mode ?? 'xterm';
   const lastSeq = options?.lastSeq;
 
   useEffect(() => {
     if (!activityId) return;
-    const url =
-      mode === 'vt'
-        ? vtTerminalWsUrl(windowId, paneId, activityId, lastSeq)
-        : terminalWsUrl(windowId, paneId, activityId);
+    const url = vtTerminalWsUrl(windowId, paneId, activityId, lastSeq);
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
-    pendingBinaryRef.current = [];
     pendingFrameRef.current = [];
     pendingControlRef.current = [];
     setStatus('connecting');
@@ -69,31 +55,16 @@ export function useTerminalSocket(
     ws.onopen = () => setStatus('connected');
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
-        if (mode === 'vt') {
-          const handler = controlHandlerRef.current;
-          if (handler) handler(ev.data);
-          else pendingControlRef.current.push(ev.data);
-        } else {
-          try {
-            const msg = JSON.parse(ev.data) as { type?: string };
-            if (msg?.type === 'exit') setStatus('exited');
-          } catch {
-            // Ignore malformed text frames
-          }
-        }
+        const handler = controlHandlerRef.current;
+        if (handler) handler(ev.data);
+        else pendingControlRef.current.push(ev.data);
         return;
       }
       if (ev.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(ev.data);
-        if (mode === 'vt') {
-          const handler = frameHandlerRef.current;
-          if (handler) handler(bytes);
-          else pendingFrameRef.current.push(bytes);
-        } else {
-          const handler = binaryHandlerRef.current;
-          if (handler) handler(bytes);
-          else pendingBinaryRef.current.push(bytes);
-        }
+        const handler = frameHandlerRef.current;
+        if (handler) handler(bytes);
+        else pendingFrameRef.current.push(bytes);
       }
     };
     ws.onclose = () => setStatus((s) => (s === 'exited' ? s : 'disconnected'));
@@ -101,15 +72,13 @@ export function useTerminalSocket(
 
     return () => {
       wsRef.current = null;
-      binaryHandlerRef.current = null;
       frameHandlerRef.current = null;
       controlHandlerRef.current = null;
-      pendingBinaryRef.current = [];
       pendingFrameRef.current = [];
       pendingControlRef.current = [];
       ws.close();
     };
-  }, [windowId, paneId, activityId, mode, lastSeq]);
+  }, [windowId, paneId, activityId, lastSeq]);
 
   if (apiRef.current === null) {
     const api: TerminalSocket = {
@@ -130,14 +99,6 @@ export function useTerminalSocket(
       sendControl(msg) {
         const ws = wsRef.current;
         if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-      },
-      setBinaryHandler(handler) {
-        binaryHandlerRef.current = handler;
-        if (handler) {
-          const drained = pendingBinaryRef.current;
-          pendingBinaryRef.current = [];
-          for (const bytes of drained) handler(bytes);
-        }
       },
       setFrameHandler(handler) {
         frameHandlerRef.current = handler;

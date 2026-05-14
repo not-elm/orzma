@@ -2,19 +2,19 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Phase 3.5 — DOM renderer smoke', () => {
   test('terminal-grid mounts under VtTerminal', async ({ page }) => {
-    await page.goto('/?mode=vt');
+    await page.goto('/');
     await page.waitForSelector('.terminal-grid');
     await expect(page.locator('.terminal-grid')).toBeVisible({ timeout: 5000 });
   });
 
   test('cursor overlay mounts', async ({ page }) => {
-    await page.goto('/?mode=vt');
+    await page.goto('/');
     await page.waitForSelector('.terminal-grid');
     await expect(page.locator('[data-testid="vt-cursor"]')).toBeVisible({ timeout: 5000 });
   });
 
   test('terminal-grid text content is selectable via document.getSelection()', async ({ page }) => {
-    await page.goto('/?mode=vt');
+    await page.goto('/');
     await page.waitForSelector('.terminal-grid');
     await page.locator('textarea').focus();
     await page.keyboard.type('hello world');
@@ -40,7 +40,7 @@ test.describe('Phase 3.5 — DOM renderer smoke', () => {
   });
 
   test('hover over a plain URL renders <a href> via WebLinks regex', async ({ page }) => {
-    await page.goto('/?mode=vt');
+    await page.goto('/');
     await page.waitForSelector('.terminal-grid');
     await page.locator('textarea').focus();
     await page.keyboard.type('echo "see https://example.com here"');
@@ -51,7 +51,7 @@ test.describe('Phase 3.5 — DOM renderer smoke', () => {
   });
 
   test('R7: javascript: URI does not produce an <a href>', async ({ page }) => {
-    await page.goto('/?mode=vt');
+    await page.goto('/');
     await page.waitForSelector('.terminal-grid');
     await page.locator('textarea').focus();
     await page.keyboard.type('echo "click javascript:alert(1) here"');

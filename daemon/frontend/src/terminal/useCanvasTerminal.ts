@@ -64,7 +64,7 @@ export function useCanvasTerminal(
     pendingTimer: null,
   });
 
-  const socket = useTerminalSocket(windowId, paneId, activityId, { mode: 'vt' });
+  const socket = useTerminalSocket(windowId, paneId, activityId);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: socket is ref-stable; rebind on connection keys
   useEffect(() => {

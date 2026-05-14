@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Phase 3A — input layering & paste smoke', () => {
   test('layering invariant: pointer events hit textarea, not canvas', async ({ page }) => {
-    await page.goto('/?mode=vt');
+    await page.goto('/');
     await page.waitForSelector('canvas');
     await page.waitForSelector('textarea');
 
@@ -20,7 +20,7 @@ test.describe('Phase 3A — input layering & paste smoke', () => {
 
   test('Cmd+V triggers bracketed paste with CR normalization', async ({ page, browserName }) => {
     test.skip(browserName !== 'chromium', 'clipboard API only reliable on Chromium in CI');
-    await page.goto('/?mode=vt');
+    await page.goto('/');
     await page.waitForSelector('textarea');
 
     // Capture WS binary frames sent from the browser to the daemon.
@@ -68,7 +68,7 @@ test.describe('Phase 3A — input layering & paste smoke', () => {
   });
 
   test('composition smoke: insertText does not crash the terminal', async ({ page }) => {
-    await page.goto('/?mode=vt');
+    await page.goto('/');
     await page.waitForSelector('textarea');
     await page.locator('textarea').focus();
 
