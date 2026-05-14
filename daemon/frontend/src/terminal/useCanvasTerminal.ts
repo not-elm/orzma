@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { decodeFrame } from './protocol/frame';
-import { createCanvasRenderer } from './renderer/canvas';
+import { createCanvasRenderer, DEFAULT_BG } from './renderer/canvas';
 import { measureFont } from './renderer/font';
 import { applyFrame, createGrid } from './renderer/grid';
 import type { SocketStatus, TerminalSocket } from './useTerminalSocket';
@@ -25,11 +25,14 @@ export function useCanvasTerminal(
   windowId: string,
   paneId: string,
   activityId: string | null,
+  isActive: boolean,
 ): CanvasTerminal {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const gridRef = useRef(createGrid({ cols: 80, rows: 24 }));
   const rendererRef = useRef<ReturnType<typeof createCanvasRenderer> | null>(null);
+  const isActiveRef = useRef(isActive);
+  const scheduleRedrawRef = useRef<(() => void) | null>(null);
 
   const socket = useTerminalSocket(windowId, paneId, activityId, { mode: 'vt' });
 
@@ -46,9 +49,10 @@ export function useCanvasTerminal(
       rafId = requestAnimationFrame(() => {
         rafId = null;
         const r = rendererRef.current;
-        if (r) r.paint(gridRef.current);
+        if (r) r.paint(gridRef.current, { isActive: isActiveRef.current });
       });
     };
+    scheduleRedrawRef.current = scheduleRedraw;
 
     let lastCols = 0;
     let lastRows = 0;
@@ -72,6 +76,11 @@ export function useCanvasTerminal(
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.font = fm.fontCss;
         ctx.textBaseline = 'alphabetic';
+        // NOTE: paint terminal background across the entire backing store so
+        // freshly-resized regions never expose the parent pane's bg through
+        // transparent canvas pixels before the next snapshot/delta arrives.
+        ctx.fillStyle = DEFAULT_BG;
+        ctx.fillRect(0, 0, cols * fm.cellW, rows * fm.cellH);
       }
       if (cols !== lastCols || rows !== lastRows) {
         lastCols = cols;
@@ -114,9 +123,17 @@ export function useCanvasTerminal(
       ro.disconnect();
       socket.setFrameHandler(null);
       socket.setControlHandler(null);
+      scheduleRedrawRef.current = null;
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [socket]);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+    const grid = gridRef.current;
+    if (grid.cursor.visible) grid.dirtyRows.add(grid.cursor.y);
+    scheduleRedrawRef.current?.();
+  }, [isActive]);
 
   return {
     canvasRef,

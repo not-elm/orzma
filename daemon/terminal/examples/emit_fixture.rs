@@ -55,6 +55,12 @@ fn main() {
     // 2) delta_minimal — wrapped in RenderFrame so the wire `kind` tag appears
     let delta_payload = FrameDelta {
         seq: 1,
+        cursor: Cursor {
+            x: 3,
+            y: 0,
+            shape: CursorShape::Block,
+            visible: true,
+        },
         dirty_rows: vec![DirtyRow {
             row: 0,
             runs: vec![Run {

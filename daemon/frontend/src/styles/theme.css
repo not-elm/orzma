@@ -23,6 +23,8 @@
   --tn-yellow: #e0af68;
   --tn-cyan: #7dcfff;
   --tn-red: #f7768e;
+  --tn-cursor: #ffffff;
+  --tn-cursor-inactive: #e5e5e5;
 }
 
 /* ============================================================
@@ -64,6 +66,8 @@
   --color-tmux-pane-active: var(--tn-blue);
   --color-tmux-status-bar: var(--tn-bg-status);
   --color-tmux-status-bar-foreground: var(--tn-blue);
+  --color-tmux-cursor: var(--tn-cursor);
+  --color-tmux-cursor-inactive: var(--tn-cursor-inactive);
 
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;

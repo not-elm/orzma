@@ -87,6 +87,7 @@ describe('applyFrame delta', () => {
     const delta: FrameDelta = {
       kind: 'delta',
       seq: 1,
+      cursor: { x: 0, y: 0, shape: 'block', visible: true },
       dirty_rows: [
         {
           row: 1,
@@ -103,6 +104,19 @@ describe('applyFrame delta', () => {
     expect(g.dirtyRows.has(1)).toBe(true);
     expect(g.dirtyRows.has(0)).toBe(false);
     expect(g.dirtyRows.has(2)).toBe(false);
+  });
+
+  it('updates grid.cursor from delta cursor field', () => {
+    const g = createGrid({ cols: 10, rows: 2 });
+    g.cursor = { x: 0, y: 0, shape: 'block', visible: true };
+    const delta: FrameDelta = {
+      kind: 'delta',
+      seq: 5,
+      cursor: { x: 4, y: 1, shape: 'block', visible: true },
+      dirty_rows: [],
+    };
+    applyFrame(g, delta);
+    expect(g.cursor).toEqual({ x: 4, y: 1, shape: 'block', visible: true });
   });
 });
 

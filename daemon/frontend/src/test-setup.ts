@@ -26,11 +26,13 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 
 // === Canvas2D stub (jsdom does not implement getContext('2d')) ===
 class FakeCanvasRenderingContext2D {
+  canvas: HTMLCanvasElement;
   fillStyle: string = '#000';
   strokeStyle: string = '#000';
   font: string = '';
   textBaseline: CanvasTextBaseline = 'alphabetic';
   globalCompositeOperation: GlobalCompositeOperation = 'source-over';
+  globalAlpha: number = 1;
   fillText = vi.fn();
   fillRect = vi.fn();
   clearRect = vi.fn();
@@ -40,12 +42,17 @@ class FakeCanvasRenderingContext2D {
   lineTo = vi.fn();
   stroke = vi.fn();
   scale = vi.fn();
+  setTransform = vi.fn();
+  getTransform = vi.fn(() => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }));
   drawImage = vi.fn();
   measureText = vi.fn((s: string) => ({
     width: s.length * 8,
     actualBoundingBoxAscent: 12,
     actualBoundingBoxDescent: 3,
   }));
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
+  }
 }
 
 // NOTE: caches one FakeCanvasRenderingContext2D per canvas element to match browser semantics —
@@ -55,7 +62,7 @@ HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement
   if (ctxId !== '2d') return null;
   let ctx = canvasCtxCache.get(this);
   if (!ctx) {
-    ctx = new FakeCanvasRenderingContext2D();
+    ctx = new FakeCanvasRenderingContext2D(this);
     canvasCtxCache.set(this, ctx);
   }
   return ctx as unknown as CanvasRenderingContext2D;

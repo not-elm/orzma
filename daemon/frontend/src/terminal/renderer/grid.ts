@@ -61,6 +61,7 @@ function applyDelta(grid: Grid, frame: FrameDelta): void {
     grid.cells[row] = expandRunsToRow(runs, grid.cols);
     grid.dirtyRows.add(row);
   }
+  grid.cursor = frame.cursor;
 }
 
 /** Reverses run coalescing: returns one Cell per grapheme cluster. */

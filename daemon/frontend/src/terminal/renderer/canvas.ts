@@ -7,7 +7,10 @@ import type { FontMetrics } from './font';
 import type { Cell, Grid } from './grid';
 
 const DEFAULT_FG = '#e5e5e5';
-const DEFAULT_BG = '#0a0a0a';
+/** Terminal canvas background color. Exported so the hook can pre-fill the
+ * canvas on resize and avoid exposing the parent pane's bg through transparent
+ * pixels. */
+export const DEFAULT_BG = '#0a0a0a';
 
 const STYLE_BOLD = 1;
 const STYLE_ITALIC = 2;
@@ -16,9 +19,19 @@ const STYLE_STRIKE = 8;
 const STYLE_REVERSE = 16;
 const STYLE_DIM = 32;
 
+const CURSOR_COLOR_VAR_ACTIVE = '--color-tmux-cursor';
+const CURSOR_COLOR_VAR_INACTIVE = '--color-tmux-cursor-inactive';
+const CURSOR_FALLBACK_ACTIVE = '#ffffff';
+const CURSOR_FALLBACK_INACTIVE = '#e5e5e5';
+
+/** Per-paint options that vary independently of the grid. */
+export interface PaintOptions {
+  isActive: boolean;
+}
+
 /** Canvas2D-based terminal renderer with dirty-row repainting. */
 export interface CanvasRenderer {
-  paint: (grid: Grid) => void;
+  paint: (grid: Grid, opts: PaintOptions) => void;
 }
 
 /** Creates a renderer bound to the given canvas + font metrics. */
@@ -32,7 +45,7 @@ export function createCanvasRenderer(canvas: HTMLCanvasElement, fm: FontMetrics)
 
   let lastCursorRow: number | null = null;
   return {
-    paint(grid: Grid) {
+    paint(grid: Grid, opts: PaintOptions) {
       // NOTE: ensure both the previous cursor row and the current one repaint so
       // a moved cursor leaves no ghost. Phase 3 will replace this with a
       // dedicated <Cursor> overlay (spec § 7).
@@ -42,20 +55,34 @@ export function createCanvasRenderer(canvas: HTMLCanvasElement, fm: FontMetrics)
         paintRow(ctx, grid.cells[row] ?? [], row, fm, grid.cols);
       }
       grid.dirtyRows.clear();
-      drawCursor(ctx, grid, fm);
+      drawCursor(ctx, canvas, grid, fm, opts.isActive);
       lastCursorRow = grid.cursor.visible ? grid.cursor.y : null;
     },
   };
 }
 
-function drawCursor(ctx: CanvasRenderingContext2D, grid: Grid, fm: FontMetrics): void {
+function drawCursor(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  grid: Grid,
+  fm: FontMetrics,
+  isActive: boolean,
+): void {
   if (!grid.cursor.visible) return;
   const px = grid.cursor.x * fm.cellW;
   const py = grid.cursor.y * fm.cellH;
-  ctx.fillStyle = '#e5e5e5';
-  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = resolveCursorColor(canvas, isActive);
+  ctx.globalAlpha = isActive ? 1 : 0.6;
   ctx.fillRect(px, py, fm.cellW, fm.cellH);
   ctx.globalAlpha = 1;
+}
+
+function resolveCursorColor(canvas: HTMLCanvasElement, isActive: boolean): string {
+  const varName = isActive ? CURSOR_COLOR_VAR_ACTIVE : CURSOR_COLOR_VAR_INACTIVE;
+  const fallback = isActive ? CURSOR_FALLBACK_ACTIVE : CURSOR_FALLBACK_INACTIVE;
+  const target = canvas.parentElement ?? canvas;
+  const resolved = getComputedStyle(target).getPropertyValue(varName).trim();
+  return resolved.length > 0 ? resolved : fallback;
 }
 
 function paintRow(
@@ -66,7 +93,15 @@ function paintRow(
   cols: number,
 ): void {
   const y = row * fm.cellH;
-  ctx.clearRect(0, y, cols * fm.cellW, fm.cellH);
+  // NOTE: fill (not clearRect) the entire row width covered by the canvas,
+  // not just `cols * fm.cellW`. clearRect leaves transparent pixels that show
+  // the parent pane's bg through; and during a resize-in-flight the canvas
+  // CSS width can exceed grid.cols * cellW briefly. fill_with DEFAULT_BG
+  // guarantees a clean terminal background everywhere.
+  const cssW = ctx.canvas.width / ctx.getTransform().a;
+  const rowW = Math.max(cols * fm.cellW, cssW);
+  ctx.fillStyle = DEFAULT_BG;
+  ctx.fillRect(0, y, rowW, fm.cellH);
   let xCell = 0;
   for (const cell of cells) {
     if (cell.width === 0) continue; // combining marks: drawn as part of prev cluster

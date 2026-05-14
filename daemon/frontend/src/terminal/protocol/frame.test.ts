@@ -39,6 +39,7 @@ describe('decodeFrame round-trip (Packr → decodeFrame)', () => {
     const original = {
       kind: 'delta',
       seq: 42,
+      cursor: { x: 5, y: 7, shape: 'block', visible: true },
       dirty_rows: [
         {
           row: 7,

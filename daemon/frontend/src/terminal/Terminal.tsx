@@ -31,6 +31,7 @@ function VtTerminal({ windowId, paneId, activityId, isActive }: TerminalProps) {
     windowId,
     paneId,
     activityId,
+    isActive,
   );
 
   // NOTE: keydown listener attaches to the textarea, encodes via keymap, and

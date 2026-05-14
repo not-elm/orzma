@@ -18,7 +18,7 @@ afterEach(() => {
 
 describe('useCanvasTerminal', () => {
   it('returns canvasRef + textareaRef + status + focus/blur + socket', () => {
-    const { result } = renderHook(() => useCanvasTerminal('w', 'p', 'a'));
+    const { result } = renderHook(() => useCanvasTerminal('w', 'p', 'a', true));
     expect(result.current.canvasRef).toBeDefined();
     expect(result.current.textareaRef).toBeDefined();
     expect(typeof result.current.focus).toBe('function');
@@ -29,7 +29,7 @@ describe('useCanvasTerminal', () => {
   it('attaches refs assigned to mounted DOM elements', async () => {
     const { render } = await import('@testing-library/react');
     function Probe() {
-      const term = useCanvasTerminal('w', 'p', 'a');
+      const term = useCanvasTerminal('w', 'p', 'a', true);
       return (
         <div>
           <canvas ref={term.canvasRef} />
@@ -43,7 +43,7 @@ describe('useCanvasTerminal', () => {
   });
 
   it('updates status as WebSocket connects', async () => {
-    const { result } = renderHook(() => useCanvasTerminal('w', 'p', 'a'));
+    const { result } = renderHook(() => useCanvasTerminal('w', 'p', 'a', true));
     await waitFor(() =>
       expect(result.current.status === 'connecting' || result.current.status === 'connected').toBe(
         true,

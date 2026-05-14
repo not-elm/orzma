@@ -87,7 +87,11 @@ pub fn build_delta<T>(term: &Term<T>, seq: u32, rows: &[u16]) -> FrameDelta {
             runs: coalesce_row(term, r as i32),
         })
         .collect();
-    FrameDelta { seq, dirty_rows }
+    FrameDelta {
+        seq,
+        cursor: extract_cursor(term),
+        dirty_rows,
+    }
 }
 
 pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
@@ -137,10 +141,15 @@ fn coalesce_row<T>(term: &Term<T>, y: i32) -> Vec<Run> {
             continue;
         }
         let cell_attrs = RunAttrs::from_cell(cell);
-        let cell_width = char_width(cell.c);
+        // NOTE: alacritty represents an unallocated cell as `'\0'`. Treat it as
+        // a width-1 space so the renderer always paints a background for every
+        // grid column; otherwise width-0 NUL cells skip bg fill on the client
+        // and the parent pane bleeds through.
+        let glyph = if cell.c == '\0' { ' ' } else { cell.c };
+        let cell_width = char_width(glyph);
         match &acc_attrs {
             Some(prev) if *prev == cell_attrs => {
-                acc_text.push(cell.c);
+                acc_text.push(glyph);
                 acc_cols += cell_width;
             }
             _ => {
@@ -151,7 +160,7 @@ fn coalesce_row<T>(term: &Term<T>, y: i32) -> Vec<Run> {
                     ));
                 }
                 acc_attrs = Some(cell_attrs);
-                acc_text.push(cell.c);
+                acc_text.push(glyph);
                 acc_cols = cell_width;
             }
         }
@@ -306,10 +315,13 @@ mod tests {
         assert_eq!(snap.rows_data.len(), 3);
         for row in &snap.rows_data {
             assert!(
+                row.runs.iter().all(|r| r.text.chars().all(|c| c == ' ')),
+                "empty cells should serialize as space, not NUL; got runs={:?}",
                 row.runs
-                    .iter()
-                    .all(|r| r.text.chars().all(|c| c == ' ' || c == '\0'))
             );
+            // Each row must coalesce into exactly grid width's worth of cells.
+            let total: u16 = row.runs.iter().map(|r| r.cols).sum();
+            assert_eq!(total, snap.cols);
         }
     }
 
@@ -389,5 +401,15 @@ mod tests {
         let delta = build_delta(&term, 100, &[]);
         assert_eq!(delta.seq, 100);
         assert!(delta.dirty_rows.is_empty());
+    }
+
+    #[test]
+    fn delta_carries_current_cursor_state() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "abc");
+        let delta = build_delta(&term, 1, &[0]);
+        assert_eq!(delta.cursor.x, 3);
+        assert_eq!(delta.cursor.y, 0);
+        assert!(delta.cursor.visible);
     }
 }

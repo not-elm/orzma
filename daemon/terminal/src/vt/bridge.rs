@@ -13,9 +13,9 @@ use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::vt::frame::{RenderFrame, SnapshotReason, encode};
+use crate::vt::frame::{Cursor, RenderFrame, SnapshotReason, encode};
 use crate::vt::frame_builder::{
-    DirtyRows, build_delta, build_mode, build_snapshot, collect_dirty_rows,
+    DirtyRows, build_delta, build_mode, build_snapshot, collect_dirty_rows, extract_cursor,
 };
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
@@ -43,6 +43,10 @@ pub struct VtState {
     pub frame_seq: u32,
     /// Set false after the first frame emit so subsequent ones become deltas.
     pub first_emit: bool,
+    /// Most recently emitted cursor state. Used to trigger cursor-only delta
+    /// emits when the screen is otherwise idle (e.g., arrow-key motion that
+    /// produces no dirty rows).
+    pub prev_cursor: Option<Cursor>,
     /// Broadcast of wire messages (Binary deltas + Text sidecars). All emit
     /// paths go through this sender; subscribers attach via subscribe_frames.
     pub wire_broadcast: broadcast::Sender<WireMessage>,
@@ -68,6 +72,7 @@ impl VtState {
             last_input_at: None,
             frame_seq: 0,
             first_emit: true,
+            prev_cursor: None,
             wire_broadcast,
         }
     }
@@ -157,11 +162,20 @@ pub async fn run_bridge_task(
                 }
                 let dirty = collect_dirty_rows(&mut state.term);
                 let curr_mode = *state.term.mode();
+                let curr_cursor = extract_cursor(&state.term);
+                let cursor_unchanged = state
+                    .prev_cursor
+                    .as_ref()
+                    .is_some_and(|prev| *prev == curr_cursor);
                 // Skip emit entirely when there is nothing to report: dirty is
-                // an empty Rows set, mode is unchanged, and this is not the
-                // bootstrap frame.
+                // an empty Rows set, mode is unchanged, cursor is unchanged,
+                // and this is not the bootstrap frame.
                 let dirty_is_empty = matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
-                if dirty_is_empty && prev_mode == curr_mode && !state.first_emit {
+                if dirty_is_empty
+                    && prev_mode == curr_mode
+                    && cursor_unchanged
+                    && !state.first_emit
+                {
                     continue;
                 }
                 let kind = decide_frame_kind(&state, dirty);
@@ -174,6 +188,7 @@ pub async fn run_bridge_task(
                         build_delta(&state.term, state.frame_seq, &rows)
                     ),
                 };
+                state.prev_cursor = Some(curr_cursor);
                 state.term.reset_damage();
                 let encoded_vec = encode(&frame).expect("encode infallible");
 
@@ -275,6 +290,7 @@ mod tests {
         assert!(state.last_input_at.is_none());
         assert_eq!(state.frame_seq, 0);
         assert!(state.first_emit);
+        assert!(state.prev_cursor.is_none());
         assert_eq!(state.term.columns(), 80);
         assert_eq!(state.term.screen_lines(), 24);
     }

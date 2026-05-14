@@ -54,6 +54,7 @@ export interface FrameSnapshot {
 export interface FrameDelta {
   kind: 'delta';
   seq: number;
+  cursor: Cursor;
   dirty_rows: DirtyRow[];
 }
 

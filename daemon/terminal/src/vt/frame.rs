@@ -133,6 +133,10 @@ pub struct FrameSnapshot {
 pub struct FrameDelta {
     /// Monotonic frame sequence number.
     pub seq: u32,
+    /// Cursor state at delta emit time. Always present so cursor-only motion
+    /// (arrow keys, character input that doesn't change cell content) is
+    /// faithfully tracked client-side without waiting for the next snapshot.
+    pub cursor: Cursor,
     /// Entire rows that changed.
     pub dirty_rows: Vec<DirtyRow>,
 }
@@ -279,6 +283,12 @@ mod tests {
     fn delta_with_dirty_rows_round_trip() {
         let delta = FrameDelta {
             seq: 100,
+            cursor: Cursor {
+                x: 7,
+                y: 2,
+                shape: CursorShape::Block,
+                visible: true,
+            },
             dirty_rows: vec![
                 DirtyRow {
                     row: 0,

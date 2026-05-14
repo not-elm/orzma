@@ -51,6 +51,12 @@ fn make_delta_4rows() -> FrameDelta {
     };
     FrameDelta {
         seq: 0,
+        cursor: Cursor {
+            x: 0,
+            y: 0,
+            shape: CursorShape::Block,
+            visible: true,
+        },
         dirty_rows: (0..4u16)
             .map(|row| DirtyRow {
                 row,
