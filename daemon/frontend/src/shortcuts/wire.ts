@@ -35,6 +35,7 @@ const ActionSchema = z.discriminatedUnion('type', [
     direction: z.enum(['horizontal', 'vertical']),
   }),
   z.object({ type: z.literal('new-terminal-activity') }),
+  z.object({ type: z.literal('close-activity') }),
 ]);
 
 const PrefixSchema = KeyChordFieldsSchema.extend({
