@@ -80,20 +80,67 @@ export function applyFrame(grid: Grid, frame: RenderFrame): void {
 }
 
 function applySnapshot(grid: Grid, frame: FrameSnapshot): void {
+  // NOTE: per-row content diffing. A vim page-down or terminal scroll arrives
+  // as a snapshot (Alacritty marks scroll as full damage; ozmux's bridge
+  // also promotes deltas with ≥70% dirty rows to snapshots). The naive
+  // "reset cells + bump every row" approach would force React.memo on every
+  // <Row> to re-render every frame. By comparing the new content against the
+  // previous row and preserving the cells reference + rowVersions entry when
+  // nothing changed, unchanged rows skip render entirely.
+  const prevCells = grid.cells;
+  const prevVersions = grid.rowVersions;
+  const nextCells: Cell[][] = new Array(frame.rows);
+  const nextVersions = new Uint32Array(frame.rows);
   grid.cols = frame.cols;
   grid.rows = frame.rows;
-  grid.cells = new Array(frame.rows);
   for (let row = 0; row < frame.rows; row++) {
-    grid.cells[row] = expandRunsToRow(frame.rows_data[row]?.runs ?? [], frame.cols);
-    grid.dirtyRows.add(row);
+    const next = expandRunsToRow(frame.rows_data[row]?.runs ?? [], frame.cols);
+    const prev = prevCells[row];
+    const prevVersion = row < prevVersions.length ? prevVersions[row] : 0;
+    if (prev !== undefined && rowsEqual(prev, next)) {
+      nextCells[row] = prev;
+      nextVersions[row] = prevVersion;
+    } else {
+      nextCells[row] = next;
+      nextVersions[row] = prevVersion + 1;
+      grid.dirtyRows.add(row);
+    }
   }
+  grid.cells = nextCells;
+  grid.rowVersions = nextVersions;
   grid.cursor = frame.cursor;
   grid.modes.clear();
   for (const m of frame.modes) grid.modes.add(m);
-  grid.rowVersions = new Uint32Array(frame.rows);
-  for (let row = 0; row < frame.rows; row++) {
-    grid.rowVersions[row] = 1;
+}
+
+function colorsEqual(a: Color, b: Color): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
   }
+  return false;
+}
+
+function cellsEqual(a: Cell, b: Cell): boolean {
+  return (
+    a.text === b.text &&
+    a.width === b.width &&
+    a.style === b.style &&
+    a.hyperlinkId === b.hyperlinkId &&
+    colorsEqual(a.fg, b.fg) &&
+    colorsEqual(a.bg, b.bg)
+  );
+}
+
+function rowsEqual(a: readonly Cell[], b: readonly Cell[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const ai = a[i];
+    const bi = b[i];
+    if (ai === undefined || bi === undefined) return ai === bi;
+    if (!cellsEqual(ai, bi)) return false;
+  }
+  return true;
 }
 
 function applyDelta(grid: Grid, frame: FrameDelta): void {

@@ -158,6 +158,64 @@ test.describe('Phase 3.5 — DOM renderer smoke', () => {
     expect(Math.abs(fit.rows - expectedRows)).toBeLessThanOrEqual(1);
   });
 
+  test('H1+H2+H2: continuous output coalesces row mutations (no flicker)', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('.terminal-grid');
+    await page.locator('textarea').focus();
+
+    // Attach a MutationObserver before firing the redraw burst. Count
+    // childList mutations per row <div>. If RAF batching + content-diff
+    // rowVersions work, each row should be replaced at most ~once per
+    // visible frame, not once per WS frame.
+    await page.evaluate(() => {
+      const grid = document.querySelector('.terminal-grid');
+      if (!grid) throw new Error('grid missing');
+      const counts = new Map<Element, number>();
+      const obs = new MutationObserver((records) => {
+        for (const r of records) {
+          if (r.type !== 'childList') continue;
+          const row = (r.target as Element).closest('.terminal-grid > div');
+          if (!row) continue;
+          counts.set(row, (counts.get(row) ?? 0) + 1);
+        }
+      });
+      obs.observe(grid, { childList: true, subtree: true });
+      const w = window as unknown as { __flickerObs: MutationObserver; __flickerCounts: Map<Element, number> };
+      w.__flickerObs = obs;
+      w.__flickerCounts = counts;
+    });
+
+    // Drive a high-frequency redraw burst: `seq` produces lots of lines
+    // very quickly, exercising the scroll path that promotes to snapshots.
+    await page.keyboard.type('seq 1 2000');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(800);
+
+    const stats = await page.evaluate(() => {
+      const w = window as unknown as {
+        __flickerObs: MutationObserver;
+        __flickerCounts: Map<Element, number>;
+      };
+      w.__flickerObs.disconnect();
+      const counts = Array.from(w.__flickerCounts.values());
+      return {
+        rowCount: counts.length,
+        maxMutations: counts.length === 0 ? 0 : Math.max(...counts),
+        totalMutations: counts.reduce((a, b) => a + b, 0),
+      };
+    });
+
+    // Sanity: at least some rows were touched during the burst.
+    expect(stats.rowCount).toBeGreaterThan(0);
+    // The exact bound depends on terminal size and the run's payload size,
+    // but per-row mutation count should be **far less than** the WS frame
+    // count (which for `seq 1 2000` is hundreds). With RAF batching the
+    // upper bound is roughly the number of paint frames during the burst
+    // (800ms ÷ 16ms ≈ 50). Use a generous cap to remain stable on slower
+    // CI while still catching the regression where the cap was ~hundreds.
+    expect(stats.maxMutations).toBeLessThanOrEqual(120);
+  });
+
   test('cursor y aligns to an integer row boundary', async ({ page }) => {
     await page.goto('/');
     await page.waitForSelector('.terminal-grid');

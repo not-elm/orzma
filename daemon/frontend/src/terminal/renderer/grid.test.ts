@@ -202,18 +202,53 @@ describe('Grid.rowVersions and cellAtColumn', () => {
     expect(Array.from(g.rowVersions)).toEqual(Array(24).fill(0));
   });
 
-  it('applyFrame snapshot resizes rowVersions and bumps all rows', () => {
+  it('applyFrame snapshot resizes rowVersions and bumps rows whose content changed', () => {
     const g = createGrid({ cols: 80, rows: 24 });
     applyFrame(
       g,
       snapshot({
-        cols: 2,
+        cols: 3,
         rows: 3,
-        rows_data: [{ runs: [] }, { runs: [] }, { runs: [] }],
+        rows_data: [
+          {
+            runs: [{ cols: 3, fg: null, bg: null, style: 0, text: 'abc', hyperlink_id: null }],
+          },
+          {
+            runs: [{ cols: 3, fg: null, bg: null, style: 0, text: 'def', hyperlink_id: null }],
+          },
+          {
+            runs: [{ cols: 3, fg: null, bg: null, style: 0, text: 'ghi', hyperlink_id: null }],
+          },
+        ],
       }),
     );
     expect(g.rowVersions.length).toBe(3);
+    // Every row's content differs from the previous (empty) grid → all bump.
     expect(Array.from(g.rowVersions)).toEqual([1, 1, 1]);
+  });
+
+  it('applyFrame snapshot with identical content does NOT bump rowVersions (H2)', () => {
+    const g = createGrid({ cols: 80, rows: 24 });
+    const snap = snapshot({
+      cols: 3,
+      rows: 2,
+      rows_data: [
+        {
+          runs: [{ cols: 3, fg: null, bg: null, style: 0, text: 'abc', hyperlink_id: null }],
+        },
+        {
+          runs: [{ cols: 3, fg: null, bg: null, style: 0, text: 'def', hyperlink_id: null }],
+        },
+      ],
+    });
+    applyFrame(g, snap);
+    const firstCells = g.cells.slice();
+    const firstVersions = Array.from(g.rowVersions);
+    applyFrame(g, snap);
+    // Content unchanged → cells references preserved, versions stable.
+    expect(g.cells[0]).toBe(firstCells[0]);
+    expect(g.cells[1]).toBe(firstCells[1]);
+    expect(Array.from(g.rowVersions)).toEqual(firstVersions);
   });
 
   it('applyFrame delta bumps only dirty rows', () => {
@@ -235,7 +270,9 @@ describe('Grid.rowVersions and cellAtColumn', () => {
     };
     const beforeRef = g.rowVersions;
     applyFrame(g, delta);
-    expect(Array.from(g.rowVersions)).toEqual([1, 2, 1]);
+    // H2: snapshot preserved unchanged rows at version 0; delta bumps only
+    // the dirty row.
+    expect(Array.from(g.rowVersions)).toEqual([0, 1, 0]);
     // delta with at least one dirty row must replace the rowVersions typed
     // array so grid-store notifies subscribers (reference comparison).
     expect(g.rowVersions).not.toBe(beforeRef);

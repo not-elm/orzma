@@ -43,6 +43,15 @@ const DEFAULT_FM: FontMetrics = {
   dpr: 1,
 };
 
+function mapsEqual<K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    if (b.get(k) !== v) return false;
+  }
+  return true;
+}
+
 /** Subscribes to the VT socket, decodes frames into the grid, pushes the grid
  *  into grid-store, and wires all Phase 3A input listeners (IME / paste / mouse
  *  / focus / keydown) plus Phase 3.5 native clipboard copy. */
@@ -58,6 +67,8 @@ export function useCanvasTerminal(
   const isActiveRef = useRef(isActive);
   const [preedit, setPreedit] = useState('');
   const [hyperlinks, setHyperlinks] = useState<ReadonlyMap<number, string>>(new Map());
+  const hyperlinksRef = useRef(hyperlinks);
+  hyperlinksRef.current = hyperlinks;
   const [fm, setFm] = useState<FontMetrics>(DEFAULT_FM);
   const modesRef = useRef<ReadonlySet<string>>(gridRef.current.modes);
   const compositionState = useRef<CompositionState>({
@@ -128,32 +139,65 @@ export function useCanvasTerminal(
     ro.observe(pane);
     fitToContainer();
 
-    socket.setFrameHandler((bytes) => {
-      try {
-        const frame = decodeFrame(bytes);
-        const wasAlt = gridRef.current.modes.has('alt-screen');
-        applyFrame(gridRef.current, frame);
-        modesRef.current = gridRef.current.modes;
-        if (frame.kind === 'snapshot') {
-          setHyperlinks(new Map(frame.hyperlinks.map((h) => [h.id, h.uri])));
-        } else if (frame.hyperlinks.length > 0) {
-          setHyperlinks((prev) => {
-            const next = new Map(prev);
-            for (const h of frame.hyperlinks) next.set(h.id, h.uri);
-            return next;
-          });
+    // H1: RAF-batch incoming frames. Vim page-down / scroll bursts produce
+    // several frames in the same animation frame; xterm.js and wterm both
+    // coalesce these into a single render to avoid flicker. We buffer the
+    // raw bytes here and flush all of them inside one requestAnimationFrame.
+    const pendingFrames: Uint8Array[] = [];
+    let rafScheduled = false;
+    let latestHyperlinks: ReadonlyMap<number, string> = hyperlinksRef.current;
+
+    const flushFrames = (): void => {
+      rafScheduled = false;
+      if (disposed) return;
+      if (pendingFrames.length === 0) return;
+      const wasAlt = gridRef.current.modes.has('alt-screen');
+      const batch = pendingFrames.splice(0);
+      let hyperlinksDirty = false;
+      let nextHyperlinks = latestHyperlinks;
+      for (const bytes of batch) {
+        let frame: ReturnType<typeof decodeFrame>;
+        try {
+          frame = decodeFrame(bytes);
+        } catch (e) {
+          socket.reportDecodeError(String(e));
+          continue;
         }
-        gridStore.setGrid({ ...gridRef.current });
-        overlayStore.setOverlayState({
-          cursor: gridRef.current.cursor,
-          cols: gridRef.current.cols,
-          rows: gridRef.current.rows,
-          fm: measuredFm,
-        });
-        const isAlt = gridRef.current.modes.has('alt-screen');
-        if (wasAlt !== isAlt) resetEphemeralState();
-      } catch (e) {
-        socket.reportDecodeError(String(e));
+        applyFrame(gridRef.current, frame);
+        if (frame.kind === 'snapshot') {
+          nextHyperlinks = new Map(frame.hyperlinks.map((h) => [h.id, h.uri]));
+          hyperlinksDirty = true;
+        } else if (frame.hyperlinks.length > 0) {
+          const merged = new Map(nextHyperlinks);
+          for (const h of frame.hyperlinks) merged.set(h.id, h.uri);
+          nextHyperlinks = merged;
+          hyperlinksDirty = true;
+        }
+      }
+      modesRef.current = gridRef.current.modes;
+      // H2': only call setState when the content actually changed —
+      // otherwise the new Map reference would invalidate React.memo on every
+      // <Row> even though the cells were untouched.
+      if (hyperlinksDirty && !mapsEqual(latestHyperlinks, nextHyperlinks)) {
+        latestHyperlinks = nextHyperlinks;
+        setHyperlinks(nextHyperlinks);
+      }
+      gridStore.setGrid({ ...gridRef.current });
+      overlayStore.setOverlayState({
+        cursor: gridRef.current.cursor,
+        cols: gridRef.current.cols,
+        rows: gridRef.current.rows,
+        fm: measuredFm,
+      });
+      const isAlt = gridRef.current.modes.has('alt-screen');
+      if (wasAlt !== isAlt) resetEphemeralState();
+    };
+
+    socket.setFrameHandler((bytes) => {
+      pendingFrames.push(bytes);
+      if (!rafScheduled) {
+        rafScheduled = true;
+        requestAnimationFrame(flushFrames);
       }
     });
 
