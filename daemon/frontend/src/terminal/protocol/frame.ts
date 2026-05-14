@@ -11,7 +11,14 @@ export interface Cursor {
   x: number;
   y: number;
   shape: CursorShape;
+  blinking: boolean;
   visible: boolean;
+}
+
+/** OSC 8 hyperlink (id → URI) carried with the frame. */
+export interface Hyperlink {
+  id: number;
+  uri: string;
 }
 
 /** A contiguous run of cells sharing fg/bg/style/hyperlink_id. */
@@ -41,6 +48,7 @@ export type SnapshotReason = 'initial' | 'reconnect' | 'lagged' | 'resize';
 
 /** Full-screen snapshot frame (msgpack-decoded). */
 export interface FrameSnapshot {
+  kind: 'snapshot';
   seq: number;
   cols: number;
   rows: number;
@@ -48,6 +56,7 @@ export interface FrameSnapshot {
   rows_data: Row[];
   reason: SnapshotReason;
   modes: string[];
+  hyperlinks: Hyperlink[];
 }
 
 /** Differential frame (only dirty rows). */
@@ -56,10 +65,11 @@ export interface FrameDelta {
   seq: number;
   cursor: Cursor;
   dirty_rows: DirtyRow[];
+  hyperlinks: Hyperlink[];
 }
 
 /** Render frame tagged union (matches wire spec § 4 RenderFrame discriminator). */
-export type RenderFrame = (FrameSnapshot & { kind?: 'snapshot' }) | FrameDelta;
+export type RenderFrame = FrameSnapshot | FrameDelta;
 
 // Mandatory msgpackr config (mirrors tools/verify-msgpack.ts and Phase 2A wire contract).
 // Any drift here is a wire-contract violation.

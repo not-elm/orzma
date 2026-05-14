@@ -4,10 +4,11 @@ import { applyFrame, createGrid, expandRunsToRow } from './grid';
 
 function snapshot(over: Partial<FrameSnapshot> = {}): FrameSnapshot {
   return {
+    kind: 'snapshot',
     seq: 0,
     cols: 3,
     rows: 1,
-    cursor: { x: 0, y: 0, shape: 'block', visible: true },
+    cursor: { x: 0, y: 0, shape: 'block', blinking: false, visible: true },
     rows_data: [
       {
         runs: [
@@ -24,6 +25,7 @@ function snapshot(over: Partial<FrameSnapshot> = {}): FrameSnapshot {
     ],
     reason: 'initial',
     modes: [],
+    hyperlinks: [],
     ...over,
   };
 }
@@ -34,7 +36,7 @@ describe('createGrid', () => {
     expect(g.cols).toBe(80);
     expect(g.rows).toBe(24);
     expect(g.cells.length).toBe(24);
-    expect(g.cursor).toEqual({ x: 0, y: 0, shape: 'block', visible: true });
+    expect(g.cursor).toEqual({ x: 0, y: 0, shape: 'block', blinking: false, visible: true });
     expect(g.dirtyRows.size).toBe(0);
     expect(g.modes.size).toBe(0);
   });
@@ -106,13 +108,14 @@ describe('applyFrame delta', () => {
     const delta: FrameDelta = {
       kind: 'delta',
       seq: 1,
-      cursor: { x: 0, y: 0, shape: 'block', visible: true },
+      cursor: { x: 0, y: 0, shape: 'block', blinking: false, visible: true },
       dirty_rows: [
         {
           row: 1,
           runs: [{ cols: 3, fg: null, bg: null, style: 0, text: 'XYZ', hyperlink_id: null }],
         },
       ],
+      hyperlinks: [],
     };
     applyFrame(g, delta);
     expect(g.cells[0][0].text).toBe('a');
@@ -127,15 +130,16 @@ describe('applyFrame delta', () => {
 
   it('updates grid.cursor from delta cursor field', () => {
     const g = createGrid({ cols: 10, rows: 2 });
-    g.cursor = { x: 0, y: 0, shape: 'block', visible: true };
+    g.cursor = { x: 0, y: 0, shape: 'block', blinking: false, visible: true };
     const delta: FrameDelta = {
       kind: 'delta',
       seq: 5,
-      cursor: { x: 4, y: 1, shape: 'block', visible: true },
+      cursor: { x: 4, y: 1, shape: 'block', blinking: false, visible: true },
       dirty_rows: [],
+      hyperlinks: [],
     };
     applyFrame(g, delta);
-    expect(g.cursor).toEqual({ x: 4, y: 1, shape: 'block', visible: true });
+    expect(g.cursor).toEqual({ x: 4, y: 1, shape: 'block', blinking: false, visible: true });
   });
 });
 

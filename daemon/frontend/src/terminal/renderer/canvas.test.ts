@@ -64,7 +64,7 @@ describe('createCanvasRenderer.paint', () => {
     const ctx = canvas.getContext('2d')!;
     const renderer = createCanvasRenderer(canvas, fakeMetrics());
     const grid = gridWithRow('hello');
-    grid.cursor = { x: 3, y: 0, shape: 'block', visible: true };
+    grid.cursor = { x: 3, y: 0, shape: 'block', blinking: false, visible: true };
     renderer.paint(grid, { isActive: true });
     // The cursor block fillRect at (3*8, 0, 8, 16) is one of the fillRect calls.
     expect(ctx.fillRect).toHaveBeenCalledWith(3 * 8, 0, 8, 16);
@@ -76,7 +76,7 @@ describe('createCanvasRenderer.paint', () => {
     const ctx = canvas.getContext('2d')!;
     const renderer = createCanvasRenderer(canvas, fakeMetrics());
     const grid = gridWithRow('x');
-    grid.cursor = { x: 0, y: 0, shape: 'block', visible: true };
+    grid.cursor = { x: 0, y: 0, shape: 'block', blinking: false, visible: true };
 
     renderer.paint(grid, { isActive: true });
     const activeAlphaCalls = (ctx.globalAlpha as unknown as number[] | undefined) ?? [];

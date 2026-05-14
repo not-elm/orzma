@@ -13,7 +13,7 @@ describe('parseHello', () => {
     expect(hello.seq).toBe(0);
     expect(typeof hello.cols).toBe('number');
     expect(typeof hello.rows).toBe('number');
-    expect(hello.cursor).toEqual({ x: 0, y: 0, shape: 'block', visible: true });
+    expect(hello.cursor).toEqual({ x: 0, y: 0, shape: 'block', blinking: false, visible: true });
     expect(Array.isArray(hello.escape_caps)).toBe(true);
     expect(Array.isArray(hello.input_caps)).toBe(true);
   });

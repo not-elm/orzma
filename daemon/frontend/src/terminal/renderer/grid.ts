@@ -28,7 +28,7 @@ export function createGrid(init: { cols: number; rows: number }): Grid {
     cols: init.cols,
     rows: init.rows,
     cells: Array.from({ length: init.rows }, () => []),
-    cursor: { x: 0, y: 0, shape: 'block', visible: true },
+    cursor: { x: 0, y: 0, shape: 'block', blinking: false, visible: true },
     modes: new Set(),
     title: '',
     dirtyRows: new Set(),
@@ -37,10 +37,10 @@ export function createGrid(init: { cols: number; rows: number }): Grid {
 
 /** Applies a snapshot or delta to the grid, marking dirty rows. */
 export function applyFrame(grid: Grid, frame: RenderFrame): void {
-  if ('kind' in frame && frame.kind === 'delta') {
+  if (frame.kind === 'delta') {
     applyDelta(grid, frame);
   } else {
-    applySnapshot(grid, frame as FrameSnapshot);
+    applySnapshot(grid, frame);
   }
 }
 

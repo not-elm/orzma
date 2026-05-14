@@ -39,7 +39,7 @@ describe('decodeFrame round-trip (Packr → decodeFrame)', () => {
     const original = {
       kind: 'delta',
       seq: 42,
-      cursor: { x: 5, y: 7, shape: 'block', visible: true },
+      cursor: { x: 5, y: 7, shape: 'block', blinking: false, visible: true },
       dirty_rows: [
         {
           row: 7,
@@ -55,9 +55,32 @@ describe('decodeFrame round-trip (Packr → decodeFrame)', () => {
           ],
         },
       ],
+      hyperlinks: [],
     };
     const bytes = packr.pack(original);
     const decoded = decodeFrame(bytes);
     expect(decoded).toEqual(original);
+  });
+});
+
+describe('Phase 3B wire types', () => {
+  it('snapshot_with_hyperlinks decodes with hyperlinks field and blinking cursor', () => {
+    const frame = decodeFrame(readBin('snapshot_with_hyperlinks'));
+    expect(frame.kind).toBe('snapshot');
+    if (frame.kind === 'snapshot') {
+      expect(frame.hyperlinks).toEqual([{ id: 0, uri: 'https://ozmux.example' }]);
+      expect(frame.cursor.blinking).toBe(true);
+      expect(frame.cursor.shape).toBe('underline');
+    }
+  });
+
+  it('delta_cursor_shape decodes with steady bar cursor and empty hyperlinks', () => {
+    const frame = decodeFrame(readBin('delta_cursor_shape'));
+    expect(frame.kind).toBe('delta');
+    if (frame.kind === 'delta') {
+      expect(frame.cursor.shape).toBe('bar');
+      expect(frame.cursor.blinking).toBe(false);
+      expect(frame.hyperlinks).toEqual([]);
+    }
   });
 });
