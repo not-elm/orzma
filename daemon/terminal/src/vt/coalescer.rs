@@ -83,6 +83,16 @@ impl Coalescer {
     /// `pending_user_input` is consumed *by the caller* on a `true` return —
     /// the caller flips the bool before invoking this method only when the
     /// verdict is `AtMostOneRow`. This method is pure: it does not mutate state.
+    ///
+    /// # Invariants
+    ///
+    /// `DamageVerdict::Full` is deliberately NOT in the immediate-flush set.
+    /// alt-screen entry (`\x1b[?1049h\x1b[2J\x1b[H`) and row contents typically
+    /// arrive in separate PTY chunks 1-5 ms apart; immediate-flushing on Full
+    /// would broadcast a snapshot of the post-clear, pre-content `Term` (all
+    /// rows blank) before content arrives. Routing Full through the coalescer
+    /// window lets `wait_deadline`'s `try_recv` drain absorb the row-content
+    /// chunk into the same emit.
     pub fn should_flush_immediately(
         &self,
         is_bootstrap: bool,
@@ -90,9 +100,6 @@ impl Coalescer {
         pending_user_input: bool,
     ) -> bool {
         if is_bootstrap {
-            return true;
-        }
-        if matches!(verdict, DamageVerdict::Full) {
             return true;
         }
         if pending_user_input && matches!(verdict, DamageVerdict::AtMostOneRow) {
@@ -162,9 +169,14 @@ mod tests {
     }
 
     #[test]
-    fn should_flush_immediately_on_full_damage() {
+    fn should_not_flush_on_full_damage_alone() {
+        // Full damage routes through the coalescer window — see Invariants
+        // section on `should_flush_immediately`. The chunk-split alt-screen
+        // entry case relies on this so row-content chunks arriving within
+        // the window get folded into the same snapshot.
         let c = Coalescer::new();
-        assert!(c.should_flush_immediately(false, &DamageVerdict::Full, false));
+        assert!(!c.should_flush_immediately(false, &DamageVerdict::Full, false));
+        assert!(!c.should_flush_immediately(false, &DamageVerdict::Full, true));
     }
 
     #[test]

@@ -182,7 +182,16 @@ export function useCanvasTerminal(
         latestHyperlinks = nextHyperlinks;
         setHyperlinks(nextHyperlinks);
       }
-      gridStore.setGrid({ ...gridRef.current });
+      // NOTE: defense-in-depth deep-copy of cells and modes. The shallow
+      // spread alone would share array/Set references with gridRef.current,
+      // letting subsequent applyFrame mutations race against React's render
+      // commit across microtask boundaries. See phase2b-flicker-persistence
+      // design doc (Round 1) F4 refinement.
+      gridStore.setGrid({
+        ...gridRef.current,
+        cells: gridRef.current.cells.slice(),
+        modes: new Set(gridRef.current.modes),
+      });
       overlayStore.setOverlayState({
         cursor: gridRef.current.cursor,
         cols: gridRef.current.cols,

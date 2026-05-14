@@ -246,6 +246,73 @@ async fn pending_user_input_is_one_shot() {
     svc.kill(&aid).await.unwrap();
 }
 
+async fn drain_binary_frames(rx: &mut Receiver<WireMessage>, settle: Duration) -> Vec<Bytes> {
+    let mut frames = Vec::new();
+    let deadline = tokio::time::Instant::now() + settle;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+            Ok(Ok(WireMessage::Binary { encoded, .. })) => frames.push(encoded),
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) => break,
+            Err(_) => continue,
+        }
+    }
+    frames
+}
+
+#[tokio::test]
+async fn alt_screen_entry_chunk_split_does_not_emit_blank_snapshot() {
+    use ozmux_terminal::vt::RenderFrame;
+
+    let (svc, aid) = spawn_test_service(80, 24).await;
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+    let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
+
+    // Drain bootstrap.
+    let _ = drain_binary_count(&mut rx, Duration::from_millis(200)).await;
+
+    // Chunk 1: alt-screen entry + clear + home — no row contents yet.
+    // This triggers TermDamage::Full. Pre-fix bridge immediate-flushes here,
+    // emitting a blank snapshot before row content arrives.
+    chunk_tx
+        .send(Bytes::from_static(b"\x1b[?1049h\x1b[2J\x1b[H"))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    // Chunk 2: row contents.
+    chunk_tx
+        .send(Bytes::from_static(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4"))
+        .await
+        .unwrap();
+
+    // Wait for coalescer max-cap (12ms) + slack.
+    let frames = drain_binary_frames(&mut rx, Duration::from_millis(100)).await;
+
+    assert_eq!(
+        frames.len(),
+        1,
+        "expected exactly 1 coalesced frame for alt-screen entry + content, got {}",
+        frames.len()
+    );
+
+    let frame: RenderFrame = rmp_serde::from_slice(&frames[0]).unwrap();
+    let RenderFrame::Snapshot(snap) = frame else {
+        panic!("expected snapshot for Full damage path, got delta");
+    };
+
+    let row0_text: String = snap.rows_data[0]
+        .runs
+        .iter()
+        .flat_map(|r| r.text.chars())
+        .collect();
+    assert!(
+        row0_text.starts_with("row0"),
+        "row 0 must contain row0 content (chunk-split must not emit blank snapshot), got {row0_text:?}"
+    );
+
+    svc.kill(&aid).await.unwrap();
+}
+
 #[tokio::test]
 async fn pty_chunks_are_drained_even_when_emit_lags() {
     let (svc, aid) = spawn_test_service(80, 24).await;
