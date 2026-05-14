@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Packr } from 'msgpackr/index-no-eval';
 import { describe, expect, it } from 'vitest';
 import { decodeFrame } from './frame';
 
@@ -29,5 +30,33 @@ describe('decodeFrame', () => {
   it('does not BigInt-coerce u32 seq values', () => {
     const decoded = decodeFrame(readBin('delta_minimal')) as { seq: unknown };
     expect(typeof decoded.seq).toBe('number');
+  });
+});
+
+describe('decodeFrame round-trip (Packr → decodeFrame)', () => {
+  it('preserves a fabricated FrameDelta through Packr → decodeFrame', () => {
+    const packr = new Packr({ useRecords: false, mapsAsObjects: true, int64AsType: 'number' });
+    const original = {
+      kind: 'delta',
+      seq: 42,
+      dirty_rows: [
+        {
+          row: 7,
+          runs: [
+            {
+              cols: 5,
+              fg: [255, 0, 0],
+              bg: null,
+              style: 1,
+              text: 'hello',
+              hyperlink_id: null,
+            },
+          ],
+        },
+      ],
+    };
+    const bytes = packr.pack(original);
+    const decoded = decodeFrame(bytes);
+    expect(decoded).toEqual(original);
   });
 });
