@@ -22,6 +22,11 @@ function buildPaletteCss(): string {
   // Combined font-kerning selector — container alone doesn't inherit to
   // inline children on every browser engine.
   lines.push(`.terminal-grid, .terminal-grid span { font-kerning: none; }`);
+  // Lock inline-block run alignment to the top of the row's line-box.
+  // Default `vertical-align: baseline` lets glyphs of mixed metrics (bold,
+  // italic, link, etc.) drift vertically — the absolute-positioned Cursor
+  // overlay cannot follow those drifts. F3: force top-alignment.
+  lines.push(`.terminal-grid span, .terminal-grid a { vertical-align: top; }`);
   // Native selection color uses theme token.
   lines.push(`.terminal-grid ::selection { background-color: var(--color-selection); }`);
   return lines.join('\n');

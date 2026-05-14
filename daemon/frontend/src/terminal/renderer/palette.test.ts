@@ -42,6 +42,13 @@ describe('injectTerminalPalette', () => {
     expect(css).toContain('font-kerning: none');
   });
 
+  it('emits vertical-align: top rule for spans / anchors inside .terminal-grid (F3)', () => {
+    injectTerminalPalette();
+    const css = document.getElementById(STYLE_ID)?.textContent ?? '';
+    expect(css).toContain('.terminal-grid span, .terminal-grid a');
+    expect(css).toContain('vertical-align: top');
+  });
+
   it('emits a ::selection rule using --color-selection', () => {
     injectTerminalPalette();
     const css = document.getElementById(STYLE_ID)?.textContent ?? '';

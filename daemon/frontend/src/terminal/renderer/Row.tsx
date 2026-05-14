@@ -204,8 +204,8 @@ export const Row = memo(function Row({ cells, fm, hyperlinks, probeRef }: RowPro
   return (
     <div
       className="block whitespace-pre"
-      // biome-ignore lint/plugin: row height from measured cell metrics
-      style={{ height: `${fm.cellH}px` }}
+      // biome-ignore lint/plugin: row height + line-height locked to measured cellH (F3)
+      style={{ height: `${fm.cellH}px`, lineHeight: `${fm.cellH}px` }}
     >
       {runs.map((run) => {
         const fgClass = !Array.isArray(run.fg)

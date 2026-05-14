@@ -64,6 +64,9 @@ describe('Row basic structure', () => {
     // Native mouse-driven selection requires pointer-events to remain auto.
     expect(row.className).not.toContain('pointer-events-none');
     expect(row.style.height).toBe('16px');
+    // F3: line-height locks the line-box height to cellH so glyphs don't
+    // drift vertically across runs of mixed metrics.
+    expect(row.style.lineHeight).toBe('16px');
   });
 
   it('wide char (width=2) goes into its own <span> with letter-spacing applied', () => {
