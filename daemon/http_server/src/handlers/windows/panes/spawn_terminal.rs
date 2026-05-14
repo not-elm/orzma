@@ -12,7 +12,7 @@ use ozmux_terminal::SpawnOptions;
 /// Spawn the PTY for a freshly-added terminal Activity in `pid` of `wid`.
 /// Returns the underlying `TerminalError` on spawn failure; the caller
 /// owns the rollback.
-pub(super) async fn spawn_terminal_pty(
+pub(crate) async fn spawn_terminal_pty(
     state: &AppState,
     wid: &WindowId,
     pid: &PaneId,

@@ -5,11 +5,33 @@ use axum::extract::FromRef;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
-    Activity, ActivityId, MultiplexerError, MultiplexerResult, MultiplexerService, PaneId,
-    SessionId, SetActiveOutcome, SetActivePaneOutcome, WindowId,
+    Activity, ActivityId, ActivityKind, MultiplexerError, MultiplexerResult, MultiplexerService,
+    PaneId, SessionId, SetActiveOutcome, SetActivePaneOutcome, Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
+
+/// Input bundle for [`AppState::split_pane`].
+pub struct SplitInput {
+    /// Id for the new pane (caller-supplied or server-generated).
+    pub new_pane_id: PaneId,
+    /// The activity to seat in the new pane.
+    pub new_activity: Activity,
+    /// Extension name when the activity kind is Extension.
+    pub extension_name: Option<String>,
+    /// Which side of the target pane the new pane appears on.
+    pub side: Side,
+    /// Axis along which to split.
+    pub orientation: SplitOrientation,
+}
+
+/// Ids produced by a successful [`AppState::split_pane`].
+pub struct SplitOutcome {
+    /// Id of the newly-created pane.
+    pub new_pane_id: PaneId,
+    /// Id of the activity seated in the new pane.
+    pub new_activity_id: ActivityId,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -95,6 +117,82 @@ impl AppState {
             self.extensions.record_activity_owner(&aid, name);
         }
         Ok(aid)
+    }
+
+    /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
+    /// spawn a PTY when the activity is Terminal. Rolls back on spawn failure.
+    pub async fn split_pane(
+        &self,
+        wid: &WindowId,
+        target_pane_id: &PaneId,
+        input: SplitInput,
+    ) -> HttpResult<SplitOutcome> {
+        let new_pane_id = input.new_pane_id.clone();
+        let new_activity_id = input.new_activity.id.clone();
+        let activity_kind = input.new_activity.kind.clone();
+
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
+                w.split_pane(
+                    target_pane_id,
+                    new_pane_id.clone(),
+                    input.new_activity,
+                    input.side,
+                    input.orientation,
+                )
+            })
+            .await?;
+
+        self.multiplexer
+            .pane_owner_window
+            .insert(new_pane_id.clone(), wid.clone());
+
+        if let Some(name) = input.extension_name.as_deref() {
+            self.extensions
+                .record_pane_and_activity_owners(&new_pane_id, &new_activity_id, name);
+        }
+
+        // NOTE: PTY spawn must precede the layout publish so the frontend never
+        // sees a terminal activity without a backing PTY (mirrors the invariant
+        // in close_activity / add_activity_to_pane).
+        if matches!(activity_kind, ActivityKind::Terminal) {
+            if let Err(spawn_err) =
+                crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty(
+                    self,
+                    wid,
+                    &new_pane_id,
+                    &new_activity_id,
+                )
+                .await
+            {
+                self.rollback_split(wid, &new_pane_id).await;
+                return Err(spawn_err);
+            }
+        }
+
+        self.publish_window_layout(wid).await;
+        Ok(SplitOutcome {
+            new_pane_id,
+            new_activity_id,
+        })
+    }
+
+    async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
+        // NOTE: spawn happens before publish, so the frontend never saw the new
+        // pane — no layout re-broadcast is needed on rollback.
+        let closed = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
+            .await
+            .is_ok();
+        if !closed {
+            tracing::warn!(
+                %new_pane_id,
+                "split rollback failed to close pane after spawn failure"
+            );
+            return;
+        }
+        self.multiplexer.pane_owner_window.remove(new_pane_id);
     }
 
     /// Build the current Window layout snapshot under the Window lock and

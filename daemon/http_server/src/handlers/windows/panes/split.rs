@@ -1,14 +1,13 @@
+use crate::handlers::ensure_pane_in_window;
 use crate::handlers::windows::panes::activities::ActivityInput;
-use crate::handlers::{ensure_pane_in_window, publish_window_layout};
+use crate::state::SplitInput;
 use crate::{AppState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{
-    Activity, ActivityId, ActivityKind, MultiplexerResult, PaneId, Side, SplitOrientation, WindowId,
-};
+use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation, WindowId};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -31,110 +30,37 @@ pub async fn split(
     Json(req): Json<SplitRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
     ensure_pane_in_window(&state, &wid, &target_pane_id)?;
-    split_in_window(&state, &wid, &target_pane_id, req).await
-}
 
-async fn split_in_window(
-    state: &AppState,
-    wid: &WindowId,
-    target_pane_id: &PaneId,
-    req: SplitRequest,
-) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    // Caller IDs win when present; otherwise we fall back to server-generated
-    // ids so simple internal callers don't have to mint UUIDs themselves.
     let new_pane_id = req.new_pane_id.unwrap_or_default();
-    let (new_activity, ext_name) = match req.activity {
+    let (new_activity, extension_name) = match req.activity {
         Some(spec) => {
             let parsed = spec.into_parsed();
             (parsed.activity, parsed.extension_name)
         }
         None => (Activity::terminal(ActivityId::new()), None),
     };
-    let new_activity_id = new_activity.id.clone();
-    // Snapshot the kind before move so we can branch on it post-split without
-    // re-reading the activity off the window.
-    let activity_kind = new_activity.kind.clone();
 
-    state
-        .multiplexer
-        .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
-            w.split_pane(
-                target_pane_id,
-                new_pane_id.clone(),
+    let outcome = state
+        .split_pane(
+            &wid,
+            &target_pane_id,
+            SplitInput {
+                new_pane_id,
                 new_activity,
-                req.side,
-                req.orientation,
-            )
-        })
+                extension_name,
+                side: req.side,
+                orientation: req.orientation,
+            },
+        )
         .await?;
-
-    state
-        .multiplexer
-        .pane_owner_window
-        .insert(new_pane_id.clone(), wid.clone());
-
-    // Extension activities own their pane and need the registry populated
-    // before the iframe / handlers-WS routes are exercised by the browser.
-    // The combined call keeps the two rows (pane + activity) in lockstep so a
-    // future maintainer can't add one without the other.
-    if let Some(name) = ext_name.as_deref() {
-        state
-            .extensions
-            .record_pane_and_activity_owners(&new_pane_id, &new_activity_id, name);
-    }
-
-    // NOTE: PTY spawn must precede the layout publish. If published first,
-    // the frontend opens the terminal WS against an activity TerminalService
-    // doesn't know yet; `snapshot_and_subscribe` returns NotFound, the
-    // connection closes with 1011, and the new pane is stuck in a
-    // "Disconnected" state with no auto-recovery. Extension activities live
-    // in an iframe (no PTY) so they skip the spawn.
-    if matches!(activity_kind, ActivityKind::Terminal) {
-        spawn_pty_with_rollback(state, wid, &new_pane_id, &new_activity_id).await?;
-    }
-
-    publish_window_layout(state, wid).await;
 
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
-            "new_pane_id": new_pane_id,
-            "new_activity_id": new_activity_id,
+            "new_pane_id": outcome.new_pane_id,
+            "new_activity_id": outcome.new_activity_id,
         })),
     ))
-}
-
-async fn spawn_pty_with_rollback(
-    state: &AppState,
-    wid: &WindowId,
-    new_pane_id: &PaneId,
-    new_activity_id: &ActivityId,
-) -> HttpResult<()> {
-    if let Err(spawn_err) =
-        super::spawn_terminal::spawn_terminal_pty(state, wid, new_pane_id, new_activity_id).await
-    {
-        rollback_split(state, wid, new_pane_id).await;
-        return Err(spawn_err);
-    }
-    Ok(())
-}
-
-async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) {
-    // NOTE: spawn happens before publish, so the frontend never saw the new
-    // pane — no layout re-broadcast is needed on rollback.
-    let closed = state
-        .multiplexer
-        .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
-        .await
-        .is_ok();
-    if !closed {
-        tracing::warn!(
-            %new_pane_id,
-            "split rollback failed to close pane after spawn failure"
-        );
-        return;
-    }
-    state.multiplexer.pane_owner_window.remove(new_pane_id);
 }
 
 #[cfg(test)]
