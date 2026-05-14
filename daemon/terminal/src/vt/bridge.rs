@@ -4,6 +4,7 @@
 //! are wired in Phase 2.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
@@ -12,6 +13,7 @@ use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
+use crate::vt::coalescer::{Coalescer, DamageVerdict};
 use crate::vt::frame::{Cursor, RenderFrame, SnapshotReason, encode};
 use crate::vt::frame_builder::{
     DirtyRows, build_delta, build_mode, build_snapshot, collect_dirty_rows, extract_cursor,
@@ -34,11 +36,14 @@ pub struct VtState {
     /// One-shot flag set by [`crate::TerminalService::write`] when the
     /// client sends bytes to the PTY. Consumed by the bridge's coalescer
     /// on the first eligible emit (mirrors xterm.js's `_didUserInput`).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by Task 6 bridge rewrite")
-    )]
     pub pending_user_input: bool,
+    /// Damage stashed by the bridge between the classify call and `emit_now`.
+    /// The bridge reads `Term::damage()` exactly once per cycle so alacritty
+    /// does not implicitly re-damage the cursor row.
+    pub pending_damage: Option<DirtyRows>,
+    /// Whether the verdict for `pending_damage` was `Idle`. Avoids re-reading
+    /// `Term::damage()` in `emit_now` just to recover this bit.
+    pub pending_verdict_idle: bool,
     /// Monotonic per-activity frame sequence number. Single-producer
     /// (bridge task) under the VtState lock.
     pub frame_seq: u32,
@@ -75,6 +80,8 @@ impl VtState {
             parser: alacritty_terminal::vte::ansi::Processor::new(),
             frame_ring: FrameRing::new(256 * 1024),
             pending_user_input: false,
+            pending_damage: None,
+            pending_verdict_idle: false,
             frame_seq: 0,
             first_emit: true,
             prev_cursor: None,
@@ -89,6 +96,24 @@ impl VtState {
     /// disjointly without tripping the borrow checker.
     pub fn advance(&mut self, chunk: &[u8]) {
         self.parser.advance(&mut self.term, chunk);
+    }
+}
+
+/// Classifies the bridge's accumulated damage for the Coalescer's
+/// immediate-flush decision. The cursor delta is folded in so that
+/// cursor-only motion (no dirty rows) counts as `AtMostOneRow`.
+fn classify_damage(dirty: &DirtyRows, cursor_changed: bool) -> DamageVerdict {
+    match dirty {
+        DirtyRows::Full => DamageVerdict::Full,
+        DirtyRows::Rows(rows) if rows.is_empty() => {
+            if cursor_changed {
+                DamageVerdict::AtMostOneRow
+            } else {
+                DamageVerdict::Idle
+            }
+        }
+        DirtyRows::Rows(rows) if rows.len() <= 1 => DamageVerdict::AtMostOneRow,
+        DirtyRows::Rows(_) => DamageVerdict::ManyRows,
     }
 }
 
@@ -143,11 +168,102 @@ fn emit_frame_size_error(wb: &broadcast::Sender<WireMessage>, seq: u32) {
     let _ = wb.send(WireMessage::Text(json.to_string()));
 }
 
-/// Drives the VT bridge: drains PTY chunks into `Term` via `vte::Parser`.
+/// Emits a frame for the damage stashed on `VtState` and disarms the
+/// Coalescer. Called by [`run_bridge_task`] from both the chunk-immediate-flush
+/// path and the deadline-fires path. The `window_open_mode` is consumed via
+/// `.take()` so the next window starts with a fresh capture.
+fn emit_now(
+    vt_state: &Arc<std::sync::Mutex<VtState>>,
+    coalescer: &mut Coalescer,
+    window_open_mode: &mut Option<alacritty_terminal::term::TermMode>,
+) {
+    let mut state = vt_state.lock().expect("vt_state poisoned");
+
+    let Some(dirty) = state.pending_damage.take() else {
+        coalescer.disarm();
+        *window_open_mode = None;
+        return;
+    };
+    let idle_verdict = state.pending_verdict_idle;
+    state.pending_verdict_idle = false;
+
+    let prev_mode = window_open_mode
+        .take()
+        .unwrap_or_else(|| *state.term.mode());
+    let curr_mode = *state.term.mode();
+    let curr_cursor = extract_cursor(&state.term);
+    let cursor_unchanged = state
+        .prev_cursor
+        .as_ref()
+        .is_some_and(|prev| *prev == curr_cursor);
+
+    let dirty_is_empty = matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
+    if idle_verdict
+        && dirty_is_empty
+        && prev_mode == curr_mode
+        && cursor_unchanged
+        && !state.first_emit
+    {
+        coalescer.disarm();
+        return;
+    }
+
+    let kind = decide_frame_kind(&state, dirty);
+    state.first_emit = false;
+    let seq = state.frame_seq;
+    let frame = {
+        let VtState {
+            ref term,
+            ref mut hyperlinks,
+            ..
+        } = *state;
+        match kind {
+            FrameKind::Snapshot { reason } => {
+                RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks))
+            }
+            FrameKind::Delta { rows } => {
+                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks))
+            }
+        }
+    };
+    state.prev_cursor = Some(curr_cursor);
+    state.term.reset_damage();
+    let encoded_vec = encode(&frame).expect("encode infallible");
+
+    if encoded_vec.len() > MAX_FRAME_BYTES {
+        emit_frame_size_error(&state.wire_broadcast, state.frame_seq);
+        state.frame_seq = state.frame_seq.wrapping_add(1);
+        // NOTE: offending frame is dropped here; no ring push, no Binary broadcast.
+    } else {
+        let binary_seq = state.frame_seq;
+        state.frame_seq = state.frame_seq.wrapping_add(1);
+        let encoded = Bytes::from(encoded_vec);
+        state.frame_ring.push(binary_seq, encoded.clone());
+
+        // NOTE: mode is announced BEFORE the binary so the client
+        // applies mode-related side-effects before re-rendering.
+        if let Some(m) = build_mode(prev_mode, curr_mode, state.frame_seq) {
+            state.frame_seq = state.frame_seq.wrapping_add(1);
+            let json = serde_json::to_string(&m).expect("mode json infallible");
+            let _ = state.wire_broadcast.send(WireMessage::Text(json));
+        }
+        let _ = state.wire_broadcast.send(WireMessage::Binary {
+            seq: binary_seq,
+            encoded,
+        });
+    }
+
+    coalescer.disarm();
+}
+
+/// Drives the VT bridge: drains PTY chunks into `Term` via `vte::Parser` and
+/// emits wire frames via the per-bridge [`Coalescer`].
 ///
-/// Phase 1 does not emit any frames; `reply_rx` / `control_rx` are drained
-/// to keep the channels from filling up while the Phase 2 coalescer and
-/// PTY writer are unimplemented.
+/// `state.advance(chunk)` runs on every received chunk — the bounded
+/// `pty_rx` channel uses `try_send` with silent drop, so any delay in
+/// parsing risks data loss that is unrecoverable from the wire log.
+/// The Coalescer only buffers the *decision to emit*; the Term itself
+/// stays continuously up to date.
 pub async fn run_bridge_task(
     vt_state: Arc<std::sync::Mutex<VtState>>,
     mut pty_rx: mpsc::Receiver<Bytes>,
@@ -155,76 +271,71 @@ pub async fn run_bridge_task(
     mut control_rx: mpsc::Receiver<ControlFrame>,
     cancel: CancellationToken,
 ) {
+    let mut coalescer = Coalescer::new();
+    let mut window_open_mode: Option<alacritty_terminal::term::TermMode> = None;
+
     loop {
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
+            () = coalescer.wait_deadline() => {
+                // NOTE: drain any chunks already queued at the moment the
+                // deadline fires so they fold into the same emit. Without
+                // this, a chunk that arrives a few hundred microseconds
+                // before timer expiry would emit its own frame on the
+                // next iteration, defeating coalescing.
+                while let Ok(chunk) = pty_rx.try_recv() {
+                    let mut state = vt_state.lock().expect("vt_state poisoned");
+                    let pre_advance_mode = *state.term.mode();
+                    if !chunk.is_empty() {
+                        state.advance(&chunk);
+                    }
+                    if window_open_mode.is_none() {
+                        window_open_mode = Some(pre_advance_mode);
+                    }
+                    let dirty = collect_dirty_rows(&mut state.term);
+                    state.pending_verdict_idle =
+                        matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
+                    state.pending_damage = Some(dirty);
+                }
+                emit_now(&vt_state, &mut coalescer, &mut window_open_mode);
+            }
             chunk = pty_rx.recv() => {
                 let Some(chunk) = chunk else { break };
-                let mut state = vt_state.lock().expect("vt_state poisoned");
-                let prev_mode = *state.term.mode();
-                if !chunk.is_empty() {
-                    state.advance(&chunk);
-                }
-                let dirty = collect_dirty_rows(&mut state.term);
-                let curr_mode = *state.term.mode();
-                let curr_cursor = extract_cursor(&state.term);
-                let cursor_unchanged = state
-                    .prev_cursor
-                    .as_ref()
-                    .is_some_and(|prev| *prev == curr_cursor);
-                // Skip emit entirely when there is nothing to report: dirty is
-                // an empty Rows set, mode is unchanged, cursor is unchanged,
-                // and this is not the bootstrap frame.
-                let dirty_is_empty = matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
-                if dirty_is_empty
-                    && prev_mode == curr_mode
-                    && cursor_unchanged
-                    && !state.first_emit
-                {
-                    continue;
-                }
-                let kind = decide_frame_kind(&state, dirty);
-                state.first_emit = false;
-                let seq = state.frame_seq;
-                // Split-borrow: VtState's `term` is read-only, `hyperlinks` mutates.
-                let frame = {
-                    let VtState {
-                        ref term,
-                        ref mut hyperlinks,
-                        ..
-                    } = *state;
-                    match kind {
-                        FrameKind::Snapshot { reason } => RenderFrame::Snapshot(
-                            build_snapshot(term, seq, reason, hyperlinks),
-                        ),
-                        FrameKind::Delta { rows } => {
-                            RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks))
-                        }
+                let should_flush = {
+                    let mut state = vt_state.lock().expect("vt_state poisoned");
+                    let pre_advance_mode = *state.term.mode();
+                    if !chunk.is_empty() {
+                        state.advance(&chunk);
                     }
+                    if !coalescer.is_armed() && window_open_mode.is_none() {
+                        window_open_mode = Some(pre_advance_mode);
+                    }
+                    let dirty = collect_dirty_rows(&mut state.term);
+                    let curr_cursor = extract_cursor(&state.term);
+                    let cursor_changed = state
+                        .prev_cursor
+                        .as_ref()
+                        .is_none_or(|prev| *prev != curr_cursor);
+                    let verdict = classify_damage(&dirty, cursor_changed);
+                    let pending = state.pending_user_input;
+                    let is_bootstrap = state.first_emit;
+                    let flush = coalescer.should_flush_immediately(
+                        is_bootstrap,
+                        &verdict,
+                        pending,
+                    );
+                    if flush && pending && matches!(verdict, DamageVerdict::AtMostOneRow) {
+                        state.pending_user_input = false;
+                    }
+                    state.pending_verdict_idle = matches!(verdict, DamageVerdict::Idle);
+                    state.pending_damage = Some(dirty);
+                    flush
                 };
-                state.prev_cursor = Some(curr_cursor);
-                state.term.reset_damage();
-                let encoded_vec = encode(&frame).expect("encode infallible");
-
-                if encoded_vec.len() > MAX_FRAME_BYTES {
-                    emit_frame_size_error(&state.wire_broadcast, state.frame_seq);
-                    state.frame_seq = state.frame_seq.wrapping_add(1);
-                    // NOTE: offending frame is dropped here; no ring push, no Binary broadcast.
+                if should_flush {
+                    emit_now(&vt_state, &mut coalescer, &mut window_open_mode);
                 } else {
-                    let seq = state.frame_seq;
-                    state.frame_seq = state.frame_seq.wrapping_add(1);
-                    let encoded = Bytes::from(encoded_vec);
-                    state.frame_ring.push(seq, encoded.clone());
-
-                    // NOTE: mode is announced BEFORE the binary so the client
-                    // applies mode-related side-effects before re-rendering.
-                    if let Some(m) = build_mode(prev_mode, curr_mode, state.frame_seq) {
-                        state.frame_seq = state.frame_seq.wrapping_add(1);
-                        let json = serde_json::to_string(&m).expect("mode json infallible");
-                        let _ = state.wire_broadcast.send(WireMessage::Text(json));
-                    }
-                    let _ = state.wire_broadcast.send(WireMessage::Binary { seq, encoded });
+                    coalescer.arm_or_extend(Instant::now());
                 }
             }
             reply = reply_rx.recv() => {
@@ -308,6 +419,8 @@ mod tests {
         assert!(state.prev_cursor.is_none());
         assert_eq!(state.term.columns(), 80);
         assert_eq!(state.term.screen_lines(), 24);
+        assert!(state.pending_damage.is_none());
+        assert!(!state.pending_verdict_idle);
     }
 
     use bytes::Bytes;
