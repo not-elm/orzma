@@ -29,9 +29,9 @@ pub(crate) const TRACKED_MODES: &[(TermMode, &str)] = &[
     (TermMode::BRACKETED_PASTE, "bracketed-paste"),
     (TermMode::APP_CURSOR, "app-cursor-keys"),
     (TermMode::FOCUS_IN_OUT, "focus-events"),
-    (TermMode::MOUSE_REPORT_CLICK, "mouse-x10"),
-    (TermMode::MOUSE_DRAG, "mouse-vt200"),
-    (TermMode::MOUSE_MOTION, "mouse-btn-event"),
+    (TermMode::MOUSE_REPORT_CLICK, "mouse-vt200"),
+    (TermMode::MOUSE_DRAG, "mouse-btn-event"),
+    (TermMode::MOUSE_MOTION, "mouse-any-event"),
     (TermMode::SGR_MOUSE, "mouse-sgr-1006"),
 ];
 
@@ -84,5 +84,17 @@ mod tests {
         let mut added_sorted = change.added.clone();
         added_sorted.sort();
         assert_eq!(added_sorted, vec!["bracketed-paste", "mouse-sgr-1006"]);
+    }
+
+    #[test]
+    fn mouse_mode_names_match_alacritty_decset_mapping() {
+        let change = diff_mode(TermMode::empty(), TermMode::MOUSE_REPORT_CLICK);
+        assert_eq!(change.added, vec!["mouse-vt200"]);
+
+        let change = diff_mode(TermMode::empty(), TermMode::MOUSE_DRAG);
+        assert_eq!(change.added, vec!["mouse-btn-event"]);
+
+        let change = diff_mode(TermMode::empty(), TermMode::MOUSE_MOTION);
+        assert_eq!(change.added, vec!["mouse-any-event"]);
     }
 }
