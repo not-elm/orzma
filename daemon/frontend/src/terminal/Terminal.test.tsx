@@ -63,4 +63,22 @@ describe('<Terminal>', () => {
     expect(blurSpy).toHaveBeenCalledTimes(1);
     expect(focusSpy).not.toHaveBeenCalled();
   });
+
+  it('renders canvas + textarea when ?mode=vt is set', () => {
+    history.replaceState({}, '', '/?mode=vt');
+    try {
+      const { container } = render(<Terminal windowId="w" paneId="p" activityId="a" isActive />);
+      expect(container.querySelector('canvas')).not.toBeNull();
+      expect(container.querySelector('textarea')).not.toBeNull();
+    } finally {
+      history.replaceState({}, '', '/');
+    }
+  });
+
+  it('renders xterm path (no canvas) when ?mode=vt is absent', () => {
+    history.replaceState({}, '', '/');
+    const { container } = render(<Terminal windowId="w" paneId="p" activityId="a" isActive />);
+    expect(container.querySelector('canvas')).toBeNull();
+    expect(container.querySelector('textarea')).toBeNull();
+  });
 });
