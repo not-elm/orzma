@@ -68,6 +68,25 @@ HTMLCanvasElement.prototype.getContext = vi.fn(function (this: HTMLCanvasElement
   return ctx as unknown as CanvasRenderingContext2D;
 }) as typeof HTMLCanvasElement.prototype.getContext;
 
+// === getBoundingClientRect stub (jsdom does not perform layout) ===
+// NOTE: DOM probe functions (cellWidthOf, measureGlyph) rely on getBoundingClientRect
+// to measure rendered glyph widths. jsdom returns all-zero DOMRects, so we stub it to
+// return a fixed non-zero width so tests can assert `> 0`.
+HTMLElement.prototype.getBoundingClientRect = vi.fn(function (this: HTMLElement) {
+  const textLength = (this.textContent ?? '').length;
+  return {
+    width: textLength > 0 ? textLength * 8 : 0,
+    height: 14,
+    top: 0,
+    left: 0,
+    bottom: 14,
+    right: textLength * 8,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect;
+});
+
 // === ImageBitmap stub (glyph atlas uses createImageBitmap in browsers) ===
 if (typeof (globalThis as { createImageBitmap?: unknown }).createImageBitmap !== 'function') {
   (globalThis as { createImageBitmap: unknown }).createImageBitmap = vi.fn(

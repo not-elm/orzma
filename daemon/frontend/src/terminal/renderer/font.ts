@@ -40,3 +40,50 @@ export function widthOfGrapheme(text: string): 0 | 1 | 2 {
   if (w === 2) return 2;
   return 1;
 }
+
+/** Measures the rendered width of "W" in the current font of `container`.
+ *  Used by Row.tsx for `letterSpacing = cellW - cellWidthOf(...)` to prevent
+ *  sub-pixel drift on long rows (xterm.js `DomRenderer._setDefaultSpacing`). */
+export function cellWidthOf(container: HTMLElement): number {
+  const probe = document.createElement('span');
+  probe.style.visibility = 'hidden';
+  probe.style.position = 'absolute';
+  probe.style.whiteSpace = 'pre';
+  probe.textContent = 'W';
+  container.appendChild(probe);
+  const width = probe.getBoundingClientRect().width;
+  container.removeChild(probe);
+  return width;
+}
+
+const glyphWidthCache = new Map<string, number>();
+
+/** Measures the rendered width of `chars` in `container`'s font, optionally
+ *  with bold / italic applied. Cached by (chars, bold, italic) key. */
+export function measureGlyph(
+  container: HTMLElement,
+  chars: string,
+  bold: boolean,
+  italic: boolean,
+): number {
+  const key = `${bold ? 'b' : ''}${italic ? 'i' : ''}|${chars}`;
+  const hit = glyphWidthCache.get(key);
+  if (hit !== undefined) return hit;
+  const probe = document.createElement('span');
+  probe.style.visibility = 'hidden';
+  probe.style.position = 'absolute';
+  probe.style.whiteSpace = 'pre';
+  if (bold) probe.style.fontWeight = 'bold';
+  if (italic) probe.style.fontStyle = 'italic';
+  probe.textContent = chars;
+  container.appendChild(probe);
+  const width = probe.getBoundingClientRect().width;
+  container.removeChild(probe);
+  glyphWidthCache.set(key, width);
+  return width;
+}
+
+/** Test helper — clears the glyph width cache between vitest cases. */
+export function __resetGlyphWidthCacheForTests(): void {
+  glyphWidthCache.clear();
+}
