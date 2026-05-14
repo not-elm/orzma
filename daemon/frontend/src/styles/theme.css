@@ -25,6 +25,7 @@
   --tn-red: #f7768e;
   --tn-cursor: #ffffff;
   --tn-cursor-inactive: #e5e5e5;
+  --tn-selection: rgba(122, 162, 247, 0.35);
 }
 
 /* ============================================================
@@ -68,6 +69,7 @@
   --color-tmux-status-bar-foreground: var(--tn-blue);
   --color-tmux-cursor: var(--tn-cursor);
   --color-tmux-cursor-inactive: var(--tn-cursor-inactive);
+  --color-selection: var(--tn-selection);
 
   --animate-cursor-blink: cursor-blink 1200ms step-end infinite;
 
