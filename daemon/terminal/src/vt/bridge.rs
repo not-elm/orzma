@@ -229,8 +229,10 @@ fn emit_now(
 
     if encoded_vec.len() > MAX_FRAME_BYTES {
         emit_frame_size_error(&state.wire_broadcast, state.frame_seq);
+        // NOTE: frame_seq still advances on drop so the wire reflects a gap;
+        // clients use the gap to know a frame was lost rather than silently
+        // skipping seq numbers.
         state.frame_seq = state.frame_seq.wrapping_add(1);
-        // NOTE: offending frame is dropped here; no ring push, no Binary broadcast.
     } else {
         let binary_seq = state.frame_seq;
         state.frame_seq = state.frame_seq.wrapping_add(1);

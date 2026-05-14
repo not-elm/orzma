@@ -4,12 +4,11 @@
 //! invariants under timing pressure. Real PTYs are used (not mocks) so the
 //! tests exercise the same code path production hits.
 
-use std::time::Duration;
-
 use bytes::Bytes;
 use ozmux_multiplexer::{ActivityId, PaneId};
 use ozmux_terminal::vt::WireMessage;
 use ozmux_terminal::{SpawnOptions, TerminalService};
+use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 
 async fn spawn_test_service(cols: u16, rows: u16) -> (TerminalService, ActivityId) {
