@@ -1,8 +1,13 @@
 //! Row component for the DOM renderer. Renders one terminal row as a
-//! pointer-events-none <div> containing inline-block <span> runs (or <a>
-//! for OSC 8 / URL regex matches — added in Task 7). Wide chars get
-//! per-span letterSpacing correction. Underline/overline runs swap space
-//! → NBSP so text-decoration paints.
+//! <div> containing inline-block <span> runs (or <a> for OSC 8 / URL regex
+//! matches). Wide chars get per-span letterSpacing correction. Underline/
+//! overline runs swap space → NBSP so text-decoration paints.
+//!
+//! NOTE: rows do NOT carry `pointer-events: none` — that would disable native
+//! mouse-driven text selection on the inline span content (D1 dominates N1).
+//! React.memo + rowVersions still bounds re-renders to actual changes, so the
+//! xterm.js "click during replace" landmine (N1) has a smaller surface than
+//! it does for xterm.js's unconditional row replacement.
 
 import { clsx } from 'clsx';
 import { memo } from 'react';
@@ -198,7 +203,7 @@ export const Row = memo(function Row({ cells, fm, hyperlinks, probeRef }: RowPro
   const runs = coalesceCellsWithLinks(cells, linkSpans);
   return (
     <div
-      className="block whitespace-pre pointer-events-none"
+      className="block whitespace-pre"
       // biome-ignore lint/plugin: row height from measured cell metrics
       style={{ height: `${fm.cellH}px` }}
     >
@@ -229,7 +234,7 @@ export const Row = memo(function Row({ cells, fm, hyperlinks, probeRef }: RowPro
               target="_blank"
               rel="noopener noreferrer"
               className={clsx(
-                'inline-block no-underline hover:underline pointer-events-auto',
+                'inline-block no-underline hover:underline',
                 fgClass,
                 bgClass,
                 attrClasses,

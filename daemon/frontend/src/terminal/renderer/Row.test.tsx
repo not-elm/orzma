@@ -48,7 +48,7 @@ describe('Row basic structure', () => {
     expect(joined).toBe('abc');
   });
 
-  it('row container has pointer-events-none + height in px', () => {
+  it('row container has block whitespace-pre + height in px (no pointer-events-none — D1 dominates N1)', () => {
     const { container: out } = render(
       <Row
         cells={[makeCell()]}
@@ -59,7 +59,10 @@ describe('Row basic structure', () => {
       />,
     );
     const row = out.firstElementChild as HTMLElement;
-    expect(row.className).toContain('pointer-events-none');
+    expect(row.className).toContain('block');
+    expect(row.className).toContain('whitespace-pre');
+    // Native mouse-driven selection requires pointer-events to remain auto.
+    expect(row.className).not.toContain('pointer-events-none');
     expect(row.style.height).toBe('16px');
   });
 
@@ -171,7 +174,8 @@ describe('Row links', () => {
     expect(a?.getAttribute('href')).toBe('https://example.com');
     expect(a?.getAttribute('target')).toBe('_blank');
     expect(a?.getAttribute('rel')).toBe('noopener noreferrer');
-    expect(a?.className).toContain('pointer-events-auto');
+    // No pointer-events-auto needed — rows are default pointer-events
+    expect(a?.className).toContain('hover:underline');
   });
 
   it('renders inline URL match as <a href> via WebLinks regex', () => {
