@@ -1,8 +1,6 @@
 //! Terminal entry component — branches between xterm.js and VT canvas based on `?mode=vt`.
 
 import { useEffect, useRef } from 'react';
-import { encodeInputFrame } from './input/encode-input';
-import { handleKeyDown } from './input/keymap';
 import { StatusBanner } from './StatusBanner';
 import { useCanvasTerminal } from './useCanvasTerminal';
 import { useTerminalSocket } from './useTerminalSocket';
@@ -20,36 +18,17 @@ function isVtMode(): boolean {
   return new URLSearchParams(location.search).get('mode') === 'vt';
 }
 
-const EMPTY_MODE_SET = new Set<string>();
-
 export function Terminal(props: TerminalProps) {
   return isVtMode() ? <VtTerminal {...props} /> : <XtermTerminal {...props} />;
 }
 
 function VtTerminal({ windowId, paneId, activityId, isActive }: TerminalProps) {
-  const { canvasRef, textareaRef, status, focus, blur, socket } = useCanvasTerminal(
+  const { canvasRef, textareaRef, status, focus, blur } = useCanvasTerminal(
     windowId,
     paneId,
     activityId,
     isActive,
   );
-
-  // NOTE: keydown listener attaches to the textarea, encodes via keymap, and
-  // ships msgpack input frames over the VT socket.
-  useEffect(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    const onKey = (e: KeyboardEvent) => {
-      // NOTE: Phase 2B passes an empty mode set to keymap. App-cursor-keys
-      // propagation from grid.modes is Phase 3 polish.
-      const bytes = handleKeyDown(e, EMPTY_MODE_SET);
-      if (!bytes) return;
-      e.preventDefault();
-      socket.sendBinary(encodeInputFrame(bytes));
-    };
-    ta.addEventListener('keydown', onKey);
-    return () => ta.removeEventListener('keydown', onKey);
-  }, [socket, textareaRef]);
 
   const prevActiveRef = useRef(isActive);
   // biome-ignore lint/correctness/useExhaustiveDependencies: focus/blur are stabilized by React Compiler; adding them would re-run on every render and defeat transition-only semantics
