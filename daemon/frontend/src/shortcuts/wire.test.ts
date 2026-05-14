@@ -145,4 +145,21 @@ describe('parseShortcuts', () => {
     expect(parseShortcuts('nope')).toBeNull();
     expect(parseShortcuts(42)).toBeNull();
   });
+
+  it('parses a new-terminal-activity binding', () => {
+    const withNTA = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: 'c',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'new-terminal-activity' },
+        },
+      ],
+    };
+    const out = parseShortcuts(withNTA);
+    expect(out?.bindings).toHaveLength(2);
+    expect(out?.bindings[1].action).toEqual({ type: 'new-terminal-activity' });
+  });
 });

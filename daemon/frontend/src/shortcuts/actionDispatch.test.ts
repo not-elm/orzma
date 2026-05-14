@@ -10,6 +10,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = origFetch;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -93,5 +94,53 @@ describe('actionToHandler', () => {
     const handler = actionToHandler({ type: 'totally-unknown' } as unknown as Action, ctx);
     expect(handler).toBeNull();
     expect(console.warn).toHaveBeenCalled();
+  });
+
+  it('returns a handler that POSTs add then activate for new-terminal-activity', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 201 } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 204 } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    vi.stubGlobal('crypto', {
+      ...globalThis.crypto,
+      randomUUID: () => 'aid-stub',
+    });
+    const ctx: ShortcutContext = {
+      activeWindow: () => 'wid-1',
+      activePane: () => 'pid-1',
+    };
+    const handler = actionToHandler({ type: 'new-terminal-activity' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/windows/wid-1/panes/pid-1/activities',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/windows/wid-1/panes/pid-1/activities/aid-stub/activate',
+      { method: 'POST' },
+    );
+  });
+
+  it('new-terminal-activity handler is a no-op when active pane is null', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx: ShortcutContext = {
+      activeWindow: () => null,
+      activePane: () => null,
+    };
+    const handler = actionToHandler({ type: 'new-terminal-activity' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

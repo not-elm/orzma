@@ -152,6 +152,13 @@ impl Default for Shortcuts {
                         direction: SplitDirection::Vertical,
                     },
                 },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('c'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::NewTerminalActivity,
+                },
             ],
         }
     }
@@ -395,11 +402,23 @@ mod tests {
     }
 
     #[test]
+    fn binding_deserializes_new_terminal_activity() {
+        let toml = r#"
+            key = "c"
+            action = { type = "new-terminal-activity" }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert_eq!(b.chord.key, Key::Char('c'));
+        assert_eq!(b.chord.modifiers, Modifiers::default());
+        assert!(matches!(b.action, Action::NewTerminalActivity));
+    }
+
+    #[test]
     fn default_shortcuts_serializes_to_stable_json() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         assert_eq!(
             json,
-            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}}]}"#
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}}]}"#
         );
     }
 }

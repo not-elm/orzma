@@ -9,7 +9,6 @@ use axum::{
 use ozmux_multiplexer::{
     Activity, ActivityId, ActivityKind, MultiplexerResult, PaneId, Side, SplitOrientation, WindowId,
 };
-use ozmux_terminal::SpawnOptions;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -111,25 +110,11 @@ async fn spawn_pty_with_rollback(
     new_pane_id: &PaneId,
     new_activity_id: &ActivityId,
 ) -> HttpResult<()> {
-    let session_id = super::session_owning_window(state, wid).await;
-    let spawn_result = state
-        .terminal
-        .spawn(
-            new_pane_id.clone(),
-            new_activity_id.clone(),
-            SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
-                cwd: None,
-                window_id: Some(wid.clone()),
-                session_id,
-            },
-        )
-        .await;
-    if let Err(spawn_err) = spawn_result {
+    if let Err(spawn_err) =
+        super::spawn_terminal::spawn_terminal_pty(state, wid, new_pane_id, new_activity_id).await
+    {
         rollback_split(state, wid, new_pane_id).await;
-        return Err(spawn_err.into());
+        return Err(spawn_err);
     }
     Ok(())
 }

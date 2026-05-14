@@ -1,4 +1,5 @@
 import { closePane } from '../layout/closePane';
+import { newTerminalActivity } from '../layout/newTerminalActivity';
 import { splitPane } from '../layout/splitPane';
 import type { PaneId, WindowId } from '../layout/types';
 import type { Action } from './wire';
@@ -21,6 +22,8 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
       const orientation = action.direction;
       return () => withActivePane(ctx, (w, p) => splitPane(w, p, orientation));
     }
+    case 'new-terminal-activity':
+      return () => withActivePane(ctx, newTerminalActivity);
     default:
       console.warn('actionToHandler: unsupported action', action);
       return null;
