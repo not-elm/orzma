@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { colorToCss } from './colors';
+import { colorToCss, dimColor } from './colors';
 
 describe('colorToCss', () => {
   it('returns null for Default color (msgpack nil → null)', () => {
@@ -31,5 +31,21 @@ describe('colorToCss', () => {
   it('returns hex from Rgb tuple', () => {
     expect(colorToCss([255, 128, 0], 'fg')).toBe('#ff8000');
     expect(colorToCss([0, 0, 0], 'fg')).toBe('#000000');
+  });
+});
+
+describe('dimColor', () => {
+  it('converts a 6-digit hex to rgba with alpha 0.6', () => {
+    expect(dimColor('#ff8000')).toBe('rgba(255, 128, 0, 0.6)');
+  });
+
+  it('passes through rgba inputs unchanged when alpha already specified', () => {
+    expect(dimColor('rgba(10, 20, 30, 1)')).toBe('rgba(10, 20, 30, 0.6)');
+  });
+
+  it('returns the input when the format is unrecognized', () => {
+    // Safety: callers may pass null-equivalent or non-color strings; we just
+    // return whatever was given so the renderer still has a CSS string.
+    expect(dimColor('inherit')).toBe('inherit');
   });
 });

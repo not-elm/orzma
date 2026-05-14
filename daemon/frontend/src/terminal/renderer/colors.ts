@@ -47,3 +47,20 @@ export function colorToCss(color: Color, _channel: 'fg' | 'bg'): string | null {
 function hex2(n: number): string {
   return n.toString(16).padStart(2, '0');
 }
+
+/** Returns the input CSS color with alpha 0.6 applied for STYLE_DIM rendering.
+ *  Only the foreground is dimmed — background passes through unchanged
+ *  (canvas `applyDim` parity, C8). */
+export function dimColor(css: string): string {
+  if (css.startsWith('#') && css.length === 7) {
+    const r = parseInt(css.slice(1, 3), 16);
+    const g = parseInt(css.slice(3, 5), 16);
+    const b = parseInt(css.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, 0.6)`;
+  }
+  const rgbaMatch = css.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*[\d.]+)?\)$/);
+  if (rgbaMatch) {
+    return `rgba(${rgbaMatch[1]}, ${rgbaMatch[2]}, ${rgbaMatch[3]}, 0.6)`;
+  }
+  return css;
+}
