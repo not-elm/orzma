@@ -233,8 +233,35 @@ describe('Grid.rowVersions and cellAtColumn', () => {
       dirty_rows: [{ row: 1, runs: [] }],
       hyperlinks: [],
     };
+    const beforeRef = g.rowVersions;
     applyFrame(g, delta);
     expect(Array.from(g.rowVersions)).toEqual([1, 2, 1]);
+    // G3: delta with at least one dirty row must replace the rowVersions
+    // typed array so grid-store notifies subscribers (reference comparison).
+    expect(g.rowVersions).not.toBe(beforeRef);
+  });
+
+  it('applyFrame delta with EMPTY dirty_rows keeps the rowVersions reference (cursor-only update)', () => {
+    const g = createGrid({ cols: 3, rows: 3 });
+    applyFrame(
+      g,
+      snapshot({
+        cols: 3,
+        rows: 3,
+        rows_data: [{ runs: [] }, { runs: [] }, { runs: [] }],
+      }),
+    );
+    const beforeRef = g.rowVersions;
+    const delta: FrameDelta = {
+      kind: 'delta',
+      seq: 3,
+      cursor: { x: 1, y: 0, shape: 'block', blinking: false, visible: true },
+      dirty_rows: [],
+      hyperlinks: [],
+    };
+    applyFrame(g, delta);
+    // No dirty rows → no row version bumps → reference unchanged.
+    expect(g.rowVersions).toBe(beforeRef);
   });
 
   it('cellAtColumn returns the cell at a given terminal column (wide-char aware)', () => {

@@ -20,7 +20,7 @@ export function TerminalGrid({ fm, hyperlinks }: TerminalGridProps) {
       ref={probeRef}
       role="presentation"
       aria-hidden="true"
-      className="terminal-grid font-mono whitespace-pre leading-none select-text cursor-text text-foreground"
+      className="terminal-grid font-mono whitespace-pre leading-none select-text cursor-text text-foreground overflow-hidden"
     >
       {grid.cells.map((cells, i) => (
         <Row

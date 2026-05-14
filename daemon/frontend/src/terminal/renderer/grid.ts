@@ -97,12 +97,20 @@ function applySnapshot(grid: Grid, frame: FrameSnapshot): void {
 }
 
 function applyDelta(grid: Grid, frame: FrameDelta): void {
-  for (const { row, runs } of frame.dirty_rows) {
-    grid.cells[row] = expandRunsToRow(runs, grid.cols);
-    grid.dirtyRows.add(row);
-    if (row < grid.rowVersions.length) {
-      grid.rowVersions[row] += 1;
+  if (frame.dirty_rows.length > 0) {
+    // G3: clone the rowVersions buffer so the reference changes. grid-store's
+    // shallow equality compares rowVersions by reference (===); mutating the
+    // typed array in place would let delta updates pass through unnoticed
+    // whenever cursor + geometry stayed the same.
+    const nextVersions = new Uint32Array(grid.rowVersions);
+    for (const { row, runs } of frame.dirty_rows) {
+      grid.cells[row] = expandRunsToRow(runs, grid.cols);
+      grid.dirtyRows.add(row);
+      if (row < nextVersions.length) {
+        nextVersions[row] += 1;
+      }
     }
+    grid.rowVersions = nextVersions;
   }
   grid.cursor = frame.cursor;
 }

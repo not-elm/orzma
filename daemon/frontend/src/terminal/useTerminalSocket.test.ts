@@ -79,4 +79,37 @@ describe('useTerminalSocket', () => {
     await waitFor(() => expect(received.length).toBe(1));
     expect(Array.from(received[0])).toEqual([9]);
   });
+
+  it('G1: sendControl before WebSocket.OPEN is buffered and flushed on open', async () => {
+    // Server-side message log. mock-socket exposes server.on('connection') —
+    // capture the client and record every send from that client.
+    const recv: string[] = [];
+    server?.on('connection', (sock) => {
+      sock.on('message', (m: string | ArrayBuffer | Blob | ArrayBufferView) => {
+        if (typeof m === 'string') recv.push(m);
+      });
+    });
+
+    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a'));
+    // Send BEFORE awaiting connection — should land in the pending queue.
+    result.current.sendControl({ kind: 'resize', cols: 120, rows: 40 });
+
+    await waitFor(() =>
+      expect(recv).toEqual([JSON.stringify({ kind: 'resize', cols: 120, rows: 40 })]),
+    );
+  });
+
+  it('G1: sendBinary before WebSocket.OPEN is buffered and flushed on open', async () => {
+    const recvBytes: number[][] = [];
+    server?.on('connection', (sock) => {
+      sock.on('message', (m: string | ArrayBuffer | Blob | ArrayBufferView) => {
+        if (m instanceof ArrayBuffer) recvBytes.push(Array.from(new Uint8Array(m)));
+      });
+    });
+
+    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a'));
+    result.current.sendBinary(new Uint8Array([7, 8, 9]));
+
+    await waitFor(() => expect(recvBytes).toEqual([[7, 8, 9]]));
+  });
 });

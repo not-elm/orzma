@@ -112,6 +112,54 @@ test.describe('Phase 3.5 — DOM renderer smoke', () => {
     expect(expectedX).toBeGreaterThanOrEqual(0); // sanity
   });
 
+  test('G5: terminal-grid fits the pane (scrollWidth === clientWidth)', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('.terminal-grid');
+    // Allow ResizeObserver + initial fitToContainer to settle.
+    await page.waitForTimeout(400);
+
+    const fit = await page.evaluate(() => {
+      const pane = document.querySelector('.terminal-pane') as HTMLElement | null;
+      const grid = document.querySelector('.terminal-grid') as HTMLElement | null;
+      if (!pane || !grid) return null;
+      const row0 = grid.firstElementChild as HTMLElement | null;
+      // Probe cellW with the same context as the renderer.
+      const probe = document.createElement('span');
+      probe.style.visibility = 'hidden';
+      probe.style.position = 'absolute';
+      probe.style.whiteSpace = 'pre';
+      probe.className = 'font-mono leading-none';
+      probe.textContent = 'W';
+      (row0 ?? grid).appendChild(probe);
+      const cellW = probe.getBoundingClientRect().width;
+      probe.remove();
+      const cols = (row0?.textContent ?? '').length || 0;
+      return {
+        paneW: pane.clientWidth,
+        gridW: grid.clientWidth,
+        gridScrollW: grid.scrollWidth,
+        cellW,
+        cols,
+      };
+    });
+    if (!fit) throw new Error('grid not mounted');
+
+    // Grid does not overflow horizontally.
+    expect(fit.gridScrollW).toBeLessThanOrEqual(fit.gridW + 1); // ±1px sub-pixel
+    // Grid clientWidth tracks pane clientWidth.
+    expect(Math.abs(fit.gridW - fit.paneW)).toBeLessThanOrEqual(2);
+    // Remainder must be less than one cellW (floor() invariant).
+    if (fit.cols > 0) {
+      const remainder = fit.paneW - fit.cols * fit.cellW;
+      expect(remainder).toBeGreaterThanOrEqual(-1);
+      // Allow up to ~2 cellW slack: the prompt may have echoed bytes that
+      // partially fill row 0 below the configured cols. We mainly care that
+      // the row isn't *vastly* shorter than expected (which would indicate
+      // the initial resize was dropped).
+      expect(remainder).toBeLessThanOrEqual(2 * fit.cellW);
+    }
+  });
+
   test('F1-F3: cursor y aligns to a row boundary (probe-based)', async ({ page }) => {
     await page.goto('/');
     await page.waitForSelector('.terminal-grid');
