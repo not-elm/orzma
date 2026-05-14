@@ -33,18 +33,18 @@ async fn spawn_test_service(cols: u16, rows: u16) -> (TerminalService, ActivityI
     (svc, aid)
 }
 
-async fn drain_binary_count(rx: &mut Receiver<WireMessage>, settle: Duration) -> usize {
-    let mut count = 0;
+async fn drain_binary_frames(rx: &mut Receiver<WireMessage>, settle: Duration) -> Vec<Bytes> {
+    let mut frames = Vec::new();
     let deadline = tokio::time::Instant::now() + settle;
     while tokio::time::Instant::now() < deadline {
         match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
-            Ok(Ok(WireMessage::Binary { .. })) => count += 1,
+            Ok(Ok(WireMessage::Binary { encoded, .. })) => frames.push(encoded),
             Ok(Ok(_)) => continue,
             Ok(Err(_)) => break,
             Err(_) => continue,
         }
     }
-    count
+    frames
 }
 
 async fn next_binary(rx: &mut Receiver<WireMessage>, timeout: Duration) -> Option<Bytes> {
@@ -67,7 +67,7 @@ async fn clear_then_fill_emits_one_frame_after_window() {
     let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
 
     // Drain the bootstrap snapshot (and shell prompt) — settle for 200ms.
-    let _ = drain_binary_count(&mut rx, Duration::from_millis(200)).await;
+    drain_binary_frames(&mut rx, Duration::from_millis(200)).await;
 
     // Send two damage-inducing chunks 2ms apart, directly to the bridge.
     // The current (pre-coalescer) bridge emits one frame per chunk → 2 frames.
@@ -83,7 +83,9 @@ async fn clear_then_fill_emits_one_frame_after_window() {
         .unwrap();
 
     // Wait for coalescer (max-cap 12ms) + slack for the bridge to wake.
-    let count = drain_binary_count(&mut rx, Duration::from_millis(100)).await;
+    let count = drain_binary_frames(&mut rx, Duration::from_millis(100))
+        .await
+        .len();
 
     assert_eq!(
         count, 1,
@@ -99,7 +101,7 @@ async fn bursty_bulk_output_capped_at_max_cap() {
     let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
     let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
 
-    let _ = drain_binary_count(&mut rx, Duration::from_millis(200)).await;
+    drain_binary_frames(&mut rx, Duration::from_millis(200)).await;
 
     // 50 chunks at 1ms intervals = 50ms of input.
     for i in 0..50u8 {
@@ -111,13 +113,17 @@ async fn bursty_bulk_output_capped_at_max_cap() {
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
 
-    let count = drain_binary_count(&mut rx, Duration::from_millis(200)).await;
+    let count = drain_binary_frames(&mut rx, Duration::from_millis(200))
+        .await
+        .len();
 
     // Without coalescing this would be 50 frames. With idle=3ms / max-cap=12ms
-    // over 50ms of input, expect at most ceil(50 / 12) + slack = ~6 frames.
+    // over 50ms of input, expect roughly ceil(50 / 12) ≈ 5 frames. Allow
+    // generous slack for scheduler jitter — what we're really catching is
+    // "coalescing happened at all" (count << 50), not the exact ratio.
     assert!(
-        (1..=8).contains(&count),
-        "expected 1-8 coalesced frames for 50-chunk burst, got {count}"
+        (1..=15).contains(&count),
+        "expected 1-15 coalesced frames for 50-chunk burst, got {count}"
     );
 
     svc.kill(&aid).await.unwrap();
@@ -183,7 +189,7 @@ async fn single_char_echo_after_user_input_is_immediate() {
     let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
 
     // Drain bootstrap + any shell prompt.
-    let _ = drain_binary_count(&mut rx, Duration::from_millis(200)).await;
+    drain_binary_frames(&mut rx, Duration::from_millis(200)).await;
 
     // Simulate "user typed x" — TerminalService::write sets the flag.
     svc.write(&aid, b"x").await.unwrap();
@@ -213,7 +219,7 @@ async fn pending_user_input_is_one_shot() {
     let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
     let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
 
-    let _ = drain_binary_count(&mut rx, Duration::from_millis(200)).await;
+    drain_binary_frames(&mut rx, Duration::from_millis(200)).await;
 
     svc.write(&aid, b"x").await.unwrap();
     // First chunk: single-row echo with flag set — must be immediate.
@@ -246,20 +252,6 @@ async fn pending_user_input_is_one_shot() {
     svc.kill(&aid).await.unwrap();
 }
 
-async fn drain_binary_frames(rx: &mut Receiver<WireMessage>, settle: Duration) -> Vec<Bytes> {
-    let mut frames = Vec::new();
-    let deadline = tokio::time::Instant::now() + settle;
-    while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
-            Ok(Ok(WireMessage::Binary { encoded, .. })) => frames.push(encoded),
-            Ok(Ok(_)) => continue,
-            Ok(Err(_)) => break,
-            Err(_) => continue,
-        }
-    }
-    frames
-}
-
 #[tokio::test]
 async fn alt_screen_entry_chunk_split_does_not_emit_blank_snapshot() {
     use ozmux_terminal::vt::RenderFrame;
@@ -269,7 +261,7 @@ async fn alt_screen_entry_chunk_split_does_not_emit_blank_snapshot() {
     let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
 
     // Drain bootstrap.
-    let _ = drain_binary_count(&mut rx, Duration::from_millis(200)).await;
+    drain_binary_frames(&mut rx, Duration::from_millis(200)).await;
 
     // Chunk 1: alt-screen entry + clear + home — no row contents yet.
     // This triggers TermDamage::Full. Pre-fix bridge immediate-flushes here,

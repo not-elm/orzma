@@ -41,9 +41,6 @@ pub struct VtState {
     /// The bridge reads `Term::damage()` exactly once per cycle so alacritty
     /// does not implicitly re-damage the cursor row.
     pub pending_damage: Option<DirtyRows>,
-    /// Whether the verdict for `pending_damage` was `Idle`. Avoids re-reading
-    /// `Term::damage()` in `emit_now` just to recover this bit.
-    pub pending_verdict_idle: bool,
     /// Monotonic per-activity frame sequence number. Single-producer
     /// (bridge task) under the VtState lock.
     pub frame_seq: u32,
@@ -81,7 +78,6 @@ impl VtState {
             frame_ring: FrameRing::new(256 * 1024),
             pending_user_input: false,
             pending_damage: None,
-            pending_verdict_idle: false,
             frame_seq: 0,
             first_emit: true,
             prev_cursor: None,
@@ -96,6 +92,14 @@ impl VtState {
     /// disjointly without tripping the borrow checker.
     pub fn advance(&mut self, chunk: &[u8]) {
         self.parser.advance(&mut self.term, chunk);
+    }
+
+    /// Returns true if the current `Term` cursor differs from the most recently
+    /// emitted cursor (`prev_cursor`). Used by the bridge to drive cursor-only
+    /// emit decisions and `AtMostOneRow` damage classification.
+    pub fn cursor_changed(&self) -> bool {
+        let curr = extract_cursor(&self.term);
+        self.prev_cursor.as_ref().is_none_or(|prev| *prev != curr)
     }
 }
 
@@ -184,8 +188,6 @@ fn emit_now(
         *window_open_mode = None;
         return;
     };
-    let idle_verdict = state.pending_verdict_idle;
-    state.pending_verdict_idle = false;
 
     let prev_mode = window_open_mode
         .take()
@@ -198,12 +200,7 @@ fn emit_now(
         .is_some_and(|prev| *prev == curr_cursor);
 
     let dirty_is_empty = matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
-    if idle_verdict
-        && dirty_is_empty
-        && prev_mode == curr_mode
-        && cursor_unchanged
-        && !state.first_emit
-    {
+    if dirty_is_empty && prev_mode == curr_mode && cursor_unchanged && !state.first_emit {
         coalescer.disarm();
         return;
     }
@@ -280,23 +277,22 @@ pub async fn run_bridge_task(
             () = cancel.cancelled() => break,
             () = coalescer.wait_deadline() => {
                 // NOTE: drain any chunks already queued at the moment the
-                // deadline fires so they fold into the same emit. Without
-                // this, a chunk that arrives a few hundred microseconds
-                // before timer expiry would emit its own frame on the
-                // next iteration, defeating coalescing.
-                while let Ok(chunk) = pty_rx.try_recv() {
+                // deadline fires so they fold into the same emit. Single
+                // lock spans the drain so damage is collected once at the
+                // end (alacritty's damage state is cumulative across
+                // advance calls until reset_damage).
+                {
                     let mut state = vt_state.lock().expect("vt_state poisoned");
                     let pre_advance_mode = *state.term.mode();
-                    if !chunk.is_empty() {
-                        state.advance(&chunk);
+                    while let Ok(chunk) = pty_rx.try_recv() {
+                        if !chunk.is_empty() {
+                            state.advance(&chunk);
+                        }
                     }
                     if window_open_mode.is_none() {
                         window_open_mode = Some(pre_advance_mode);
                     }
-                    let dirty = collect_dirty_rows(&mut state.term);
-                    state.pending_verdict_idle =
-                        matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
-                    state.pending_damage = Some(dirty);
+                    state.pending_damage = Some(collect_dirty_rows(&mut state.term));
                 }
                 emit_now(&vt_state, &mut coalescer, &mut window_open_mode);
             }
@@ -312,23 +308,18 @@ pub async fn run_bridge_task(
                         window_open_mode = Some(pre_advance_mode);
                     }
                     let dirty = collect_dirty_rows(&mut state.term);
-                    let curr_cursor = extract_cursor(&state.term);
-                    let cursor_changed = state
-                        .prev_cursor
-                        .as_ref()
-                        .is_none_or(|prev| *prev != curr_cursor);
-                    let verdict = classify_damage(&dirty, cursor_changed);
-                    let pending = state.pending_user_input;
-                    let is_bootstrap = state.first_emit;
+                    let verdict = classify_damage(&dirty, state.cursor_changed());
                     let flush = coalescer.should_flush_immediately(
-                        is_bootstrap,
+                        state.first_emit,
                         &verdict,
-                        pending,
+                        state.pending_user_input,
                     );
-                    if flush && pending && matches!(verdict, DamageVerdict::AtMostOneRow) {
+                    if flush
+                        && state.pending_user_input
+                        && matches!(verdict, DamageVerdict::AtMostOneRow)
+                    {
                         state.pending_user_input = false;
                     }
-                    state.pending_verdict_idle = matches!(verdict, DamageVerdict::Idle);
                     state.pending_damage = Some(dirty);
                     flush
                 };
@@ -420,7 +411,6 @@ mod tests {
         assert_eq!(state.term.columns(), 80);
         assert_eq!(state.term.screen_lines(), 24);
         assert!(state.pending_damage.is_none());
-        assert!(!state.pending_verdict_idle);
     }
 
     use bytes::Bytes;
