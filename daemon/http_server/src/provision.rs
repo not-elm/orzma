@@ -7,7 +7,7 @@
 //! `ActivityKind` enum and adding one arm here.
 
 use crate::AppState;
-use crate::error::HttpResult;
+use crate::error::{HttpError, HttpResult};
 use ozmux_multiplexer::{ActivityId, ActivityKind, PaneId, WindowId};
 
 /// Spin up whatever runtime resource the given activity kind needs.
@@ -30,10 +30,10 @@ pub(crate) async fn provision_activity_runtime(
             .await
         }
         ActivityKind::Extension { .. } => Ok(()),
-        // The Browser branch lands in Phase 3 Task 3.2 once BrowserService is
-        // wired into AppState. For Phase 1 the daemon has no BrowserService,
-        // so creating a browser activity over REST simply leaves the page
-        // unspawned and observably inert.
-        ActivityKind::Browser { .. } => Ok(()),
+        ActivityKind::Browser { initial_url } => state
+            .browser
+            .spawn(wid, pid, aid, initial_url.clone())
+            .await
+            .map_err(|e| HttpError::Internal(format!("browser spawn failed: {e}"))),
     }
 }

@@ -272,4 +272,10 @@ mod tests {
         let recv = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
         assert!(recv.is_err(), "no broadcast must be sent on rollback");
     }
+
+    // TODO: add a Browser-spawn rollback test once BrowserService exposes a
+    // fault-injection helper (similar to terminal.inject_spawn_failure).
+    // For now, the rollback path is structurally identical to the Terminal
+    // path tested above and is exercised end-to-end by the Playwright test
+    // in Phase 6.
 }

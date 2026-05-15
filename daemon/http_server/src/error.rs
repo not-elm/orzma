@@ -43,6 +43,10 @@ pub enum HttpError {
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
 
+    /// An unrecoverable server-side error with a free-form message.
+    #[error("internal error: {0}")]
+    Internal(String),
+
     /// The request's `Origin` header is not in the allowlist.
     #[error("forbidden origin")]
     ForbiddenOrigin,
@@ -111,6 +115,7 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::ServiceUnavailable(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
             }
+            HttpError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
             HttpError::Session(MultiplexerError::ActivityNotFound(_))
             | HttpError::Session(MultiplexerError::ActivityNotInPane { .. }) => {
                 (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
