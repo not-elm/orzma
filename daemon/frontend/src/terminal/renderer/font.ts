@@ -14,6 +14,28 @@ export interface FontMetrics {
   dpr: number;
 }
 
+/** Class that makes an element pick up the configured terminal font and size
+ *  from the runtime palette stylesheet (`palette.ts`). `font-mono` is the
+ *  pre-injection fallback. */
+export const PROBE_CLASS = 'ozmux-font-probe';
+
+/** Per-style font-family classes emitted by `palette.ts` and applied to run
+ *  spans (`Row.tsx`) and glyph probes. */
+export const FACE_BOLD = 'tf-bold';
+export const FACE_ITALIC = 'tf-italic';
+export const FACE_BOLD_ITALIC = 'tf-bold-italic';
+
+const PROBE_BASE_CLASS = `font-mono ${PROBE_CLASS} leading-none`;
+
+/** Returns the `tf-*` font-family class for a (bold, italic) pair, or `''`
+ *  for the normal face. */
+export function faceClass(bold: boolean, italic: boolean): string {
+  if (bold && italic) return FACE_BOLD_ITALIC;
+  if (bold) return FACE_BOLD;
+  if (italic) return FACE_ITALIC;
+  return '';
+}
+
 /** Returns the column width of one grapheme cluster (0, 1, or 2). */
 export function widthOfGrapheme(text: string): 0 | 1 | 2 {
   const w = stringWidth(text);
@@ -22,46 +44,48 @@ export function widthOfGrapheme(text: string): 0 | 1 | 2 {
   return 1;
 }
 
-/** Measures the rendered width of "W" in the monospace font.
- *  Used by Row.tsx for `letterSpacing = cellW - cellWidthOf(...)` to prevent
- *  sub-pixel drift on long rows (xterm.js `DomRenderer._setDefaultSpacing`).
- *
- *  NOTE: probe carries `font-mono leading-none` so the measurement matches
- *  `.terminal-grid` itself — `container` only determines where the probe is
- *  attached (so it inherits the same theme tokens / parent stacking context).
- *  The container's own font does NOT need to be monospace. */
-export function cellWidthOf(container: HTMLElement): number {
+/** Creates a hidden measurement probe inside `container`, reads its bounding
+ *  rect via `read`, then removes it. `container` only determines where the
+ *  probe attaches (for theme-token / stacking-context inheritance) — the
+ *  probe's own classes drive the measured font. */
+function withProbe<T>(
+  container: HTMLElement,
+  className: string,
+  text: string,
+  read: (rect: DOMRect) => T,
+  configure?: (probe: HTMLElement) => void,
+): T {
   const probe = document.createElement('span');
   probe.style.visibility = 'hidden';
   probe.style.position = 'absolute';
   probe.style.whiteSpace = 'pre';
-  probe.className = 'font-mono leading-none';
-  probe.textContent = 'W';
+  probe.className = className;
+  configure?.(probe);
+  probe.textContent = text;
   container.appendChild(probe);
-  const width = probe.getBoundingClientRect().width;
+  const result = read(probe.getBoundingClientRect());
   container.removeChild(probe);
-  return width;
+  return result;
 }
 
-/** Measures the rendered line-height-1 height of one row in the monospace
- *  font. Mirrors `.terminal-grid` environment (font-mono + leading-none) so
+/** Measures the rendered width of "W" in the terminal font. Used by Row.tsx
+ *  for `letterSpacing = cellW - cellWidthOf(...)` to prevent sub-pixel drift
+ *  on long rows (xterm.js `DomRenderer._setDefaultSpacing`). */
+export function cellWidthOf(container: HTMLElement): number {
+  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => r.width);
+}
+
+/** Measures the line-height-1 height of one row in the terminal font, so
  *  `cellH` matches the actual row line-box height. */
 export function cellHeightOf(container: HTMLElement): number {
-  const probe = document.createElement('span');
-  probe.style.visibility = 'hidden';
-  probe.style.position = 'absolute';
-  probe.style.whiteSpace = 'pre';
-  probe.className = 'font-mono leading-none';
-  probe.textContent = 'W';
-  container.appendChild(probe);
-  const height = probe.getBoundingClientRect().height;
-  container.removeChild(probe);
-  return height;
+  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => r.height);
 }
 
+// NOTE: keyed by (chars, bold, italic) only — must be cleared if the font
+// config changes at runtime (currently loaded once before first render).
 const glyphWidthCache = new Map<string, number>();
 
-/** Measures the rendered width of `chars` in the monospace font, optionally
+/** Measures the rendered width of `chars` in the terminal font, optionally
  *  with bold / italic applied. Cached by (chars, bold, italic) key. */
 export function measureGlyph(
   container: HTMLElement,
@@ -72,17 +96,17 @@ export function measureGlyph(
   const key = `${bold ? 'b' : ''}${italic ? 'i' : ''}|${chars}`;
   const hit = glyphWidthCache.get(key);
   if (hit !== undefined) return hit;
-  const probe = document.createElement('span');
-  probe.style.visibility = 'hidden';
-  probe.style.position = 'absolute';
-  probe.style.whiteSpace = 'pre';
-  probe.className = 'font-mono leading-none';
-  if (bold) probe.style.fontWeight = 'bold';
-  if (italic) probe.style.fontStyle = 'italic';
-  probe.textContent = chars;
-  container.appendChild(probe);
-  const width = probe.getBoundingClientRect().width;
-  container.removeChild(probe);
+  const face = faceClass(bold, italic);
+  const width = withProbe(
+    container,
+    face ? `${PROBE_BASE_CLASS} ${face}` : PROBE_BASE_CLASS,
+    chars,
+    (r) => r.width,
+    (probe) => {
+      if (bold) probe.style.fontWeight = 'bold';
+      if (italic) probe.style.fontStyle = 'italic';
+    },
+  );
   glyphWidthCache.set(key, width);
   return width;
 }

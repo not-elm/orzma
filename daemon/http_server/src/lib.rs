@@ -65,7 +65,9 @@ pub fn daemon_router(state: AppState) -> Router {
 
 /// Router for read-only config endpoints under `/configs`.
 pub fn configs_router() -> Router<AppState> {
-    Router::new().route("/shortcuts", get(handlers::configs::shortcuts::get))
+    Router::new()
+        .route("/shortcuts", get(handlers::configs::shortcuts::get))
+        .route("/font", get(handlers::configs::font::get))
 }
 
 pub fn sessions_router() -> Router<AppState> {

@@ -42,6 +42,13 @@ pub enum OzmuxConfigsError {
         chord: crate::shortcuts::KeyChord,
     },
 
+    /// The configured font size is outside the supported range.
+    #[error("font size {size} is out of range (expected 0 < size <= 200)")]
+    InvalidFontSize {
+        /// The offending size value.
+        size: f32,
+    },
+
     /// Neither `$XDG_CONFIG_HOME` nor a home directory could be resolved.
     #[error("could not determine config directory (no $XDG_CONFIG_HOME and no home dir)")]
     HomeDirNotFound,

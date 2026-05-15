@@ -91,8 +91,8 @@ export function useTerminal(
     injectTerminalPalette();
 
     // DOM probe: measure cell size in the .terminal-grid font environment.
-    // Probes carry `font-mono leading-none` (see font.ts) so the measurements
-    // match what Row.tsx + TerminalGrid.tsx will actually render.
+    // Probes carry `font-mono ozmux-font-probe leading-none` (see font.ts) so
+    // the measurements match what Row.tsx + TerminalGrid.tsx will actually render.
     const cellW = cellWidthOf(pane);
     const cellH = cellHeightOf(pane) || DEFAULT_FM.cellH;
     const measuredFm: FontMetrics = {

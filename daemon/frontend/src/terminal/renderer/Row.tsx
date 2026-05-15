@@ -13,7 +13,7 @@ import { clsx } from 'clsx';
 import { memo } from 'react';
 import type { Color } from '../protocol/frame';
 import { colorToCss, dimColor } from './colors';
-import { measureGlyph } from './font';
+import { faceClass, measureGlyph } from './font';
 import type { Cell } from './grid';
 
 interface RowProps {
@@ -56,6 +56,10 @@ function styleClasses(style: number): string {
     style & STYLE_UNDERLINE && 'underline',
     style & STYLE_STRIKE && 'line-through',
   );
+}
+
+function familyClass(style: number): string {
+  return faceClass((style & STYLE_BOLD) !== 0, (style & STYLE_ITALIC) !== 0);
 }
 
 function colorClass(c: Color, channel: 'fg' | 'bg'): string {
@@ -214,7 +218,7 @@ export const Row = memo(function Row({ cells, fm, hyperlinks, probeRef }: RowPro
         const bgClass = !Array.isArray(run.bg)
           ? colorClass(run.style & STYLE_REVERSE ? run.fg : run.bg, 'bg')
           : '';
-        const attrClasses = styleClasses(run.style);
+        const attrClasses = clsx(styleClasses(run.style), familyClass(run.style));
         const inlineStyle: React.CSSProperties = colorInlineStyle(run.fg, run.bg, run.style);
         const text = swapSpacesForDecoration(run.text, run.style);
 

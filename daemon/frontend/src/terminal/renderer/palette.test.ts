@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { injectTerminalPalette, removeTerminalPalette } from './palette';
-
-const STYLE_ID = 'ozmux-terminal-palette';
+import { injectTerminalPalette, removeTerminalPalette, STYLE_ID } from './palette';
 
 afterEach(() => {
   removeTerminalPalette();
@@ -61,5 +59,24 @@ describe('injectTerminalPalette', () => {
     injectTerminalPalette();
     const styles = document.querySelectorAll(`#${STYLE_ID}`);
     expect(styles.length).toBe(1);
+  });
+});
+
+describe('injectTerminalPalette font rules', () => {
+  it('emits .terminal-grid font-family and font-size from the font config', () => {
+    injectTerminalPalette();
+    const css = document.getElementById(STYLE_ID)?.textContent ?? '';
+    expect(css).toMatch(/\.terminal-grid\s*\{[^}]*font-family:/);
+    expect(css).toMatch(/\.terminal-grid\s*\{[^}]*font-size:\s*15px/);
+  });
+
+  it('emits per-style family classes for runs and probes', () => {
+    injectTerminalPalette();
+    const css = document.getElementById(STYLE_ID)?.textContent ?? '';
+    expect(css).toContain('.terminal-grid .tf-bold { font-family:');
+    expect(css).toContain('.terminal-grid .tf-italic');
+    expect(css).toContain('.terminal-grid .tf-bold-italic');
+    expect(css).toContain('.ozmux-font-probe');
+    expect(css).toContain('.ozmux-font-probe.tf-bold { font-family:');
   });
 });

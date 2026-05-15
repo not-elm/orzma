@@ -4,6 +4,7 @@
 use crate::OzmuxConfigs;
 use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
+use crate::font::FontPatch;
 use crate::shortcuts::{Binding, Modifiers, Prefix};
 use crate::theme::ThemePatch;
 use serde::Deserialize;
@@ -14,6 +15,7 @@ use std::collections::HashSet;
 pub(crate) struct RawConfigs {
     pub(crate) shortcuts: Option<RawShortcuts>,
     pub(crate) theme: Option<ThemePatch>,
+    pub(crate) font: Option<FontPatch>,
 }
 
 /// `[shortcuts]` shape with each subfield optional.
@@ -26,8 +28,8 @@ pub(crate) struct RawShortcuts {
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `prefix` and `bindings` are independently
-    /// optional; `bindings` is full-replace. The `theme` section uses
-    /// `ThemePatch::apply_to` for per-field merge.
+    /// optional; `bindings` is full-replace. The `theme` and `font` sections use
+    /// their respective `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(raw) = self.shortcuts {
             if let Some(prefix) = raw.prefix {
@@ -39,6 +41,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.theme {
             base.theme = patch.apply_to(base.theme);
+        }
+        if let Some(patch) = self.font {
+            base.font = patch.apply_to(base.font);
         }
         base
     }
@@ -59,6 +64,10 @@ pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
                 chord: b.chord.clone(),
             });
         }
+    }
+    let size = configs.font.size;
+    if !(size > 0.0 && size <= 200.0) {
+        return Err(OzmuxConfigsError::InvalidFontSize { size });
     }
     Ok(())
 }
@@ -155,5 +164,63 @@ mod tests {
     #[test]
     fn validate_accepts_default_config() {
         validate(&OzmuxConfigs::default()).unwrap();
+    }
+
+    #[test]
+    fn font_section_merges_and_falls_back() {
+        let raw: RawConfigs = toml::from_str(
+            r#"
+            [font]
+            size = 15.0
+            [font.normal]
+            family = "Hack Nerd Font"
+            style = "Regular"
+            [font.offset]
+            x = 0
+        "#,
+        )
+        .unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.font.size, 15.0);
+        assert_eq!(merged.font.normal_family, "Hack Nerd Font");
+        assert_eq!(merged.font.bold_family, "Hack Nerd Font");
+    }
+
+    #[test]
+    fn absent_font_section_keeps_defaults() {
+        let raw = RawConfigs::default();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.font, crate::font::FontConfig::default());
+    }
+
+    #[test]
+    fn validate_rejects_zero_font_size() {
+        let raw: RawConfigs = toml::from_str("[font]\nsize = 0.0\n").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        let err = validate(&merged).unwrap_err();
+        assert!(matches!(
+            err,
+            crate::OzmuxConfigsError::InvalidFontSize { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_oversized_font() {
+        let raw: RawConfigs = toml::from_str("[font]\nsize = 999.0\n").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert!(matches!(
+            validate(&merged).unwrap_err(),
+            crate::OzmuxConfigsError::InvalidFontSize { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_nan_font_size() {
+        let raw: RawConfigs = toml::from_str("[font]\nsize = nan\n").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert!(matches!(
+            validate(&merged).unwrap_err(),
+            crate::OzmuxConfigsError::InvalidFontSize { .. }
+        ));
     }
 }

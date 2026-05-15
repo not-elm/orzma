@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { cellHeightOf, cellWidthOf, measureGlyph, widthOfGrapheme } from './font';
+import { injectTerminalPalette, removeTerminalPalette } from './palette';
 
 describe('widthOfGrapheme', () => {
   it('returns 1 for ASCII', () => {
@@ -95,6 +96,46 @@ describe('measureGlyph', () => {
       // jsdom returns the same width for both; we only assert no crash + numeric output.
       expect(typeof plain).toBe('number');
       expect(typeof bold).toBe('number');
+    } finally {
+      document.body.removeChild(container);
+    }
+  });
+});
+
+describe('probe classes', () => {
+  afterEach(() => removeTerminalPalette());
+
+  it('cellWidthOf probe carries the ozmux-font-probe class', () => {
+    injectTerminalPalette();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const seen: string[] = [];
+    const origAppend = container.appendChild.bind(container);
+    container.appendChild = ((node: Node) => {
+      if (node instanceof HTMLElement) seen.push(node.className);
+      return origAppend(node);
+    }) as typeof container.appendChild;
+    try {
+      cellWidthOf(container);
+      expect(seen.some((c) => c.split(' ').includes('ozmux-font-probe'))).toBe(true);
+    } finally {
+      document.body.removeChild(container);
+    }
+  });
+
+  it('measureGlyph bold probe carries tf-bold', () => {
+    injectTerminalPalette();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const seen: string[] = [];
+    const origAppend = container.appendChild.bind(container);
+    container.appendChild = ((node: Node) => {
+      if (node instanceof HTMLElement) seen.push(node.className);
+      return origAppend(node);
+    }) as typeof container.appendChild;
+    try {
+      measureGlyph(container, 'x', true, false);
+      expect(seen.some((c) => c.split(' ').includes('tf-bold'))).toBe(true);
     } finally {
       document.body.removeChild(container);
     }
