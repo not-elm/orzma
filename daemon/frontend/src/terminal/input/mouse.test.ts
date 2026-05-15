@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FontMetrics } from '../renderer/font';
+import type { ClientControl } from '../useTerminalSocket';
 import { encodeMouseEvent, pointToCell, setupMouse } from './mouse';
 
 const dec = new TextDecoder();
@@ -463,5 +464,127 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
     cleanup();
     document.body.removeChild(target);
     document.body.removeChild(textarea);
+  });
+});
+
+// NOTE: WheelEvent dispatched on the target requires `passive: false` on the
+// listener; jsdom honours preventDefault() but does not enforce passiveness.
+function dispatchWheel(target: HTMLElement, deltaY: number): void {
+  target.dispatchEvent(
+    new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }),
+  );
+}
+
+function flushRaf(): Promise<void> {
+  return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function makeWheelHarness(modes: ReadonlySet<string>) {
+  const target = document.createElement('div');
+  target.getBoundingClientRect = () =>
+    ({
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 400,
+      width: 800,
+      height: 400,
+      x: 0,
+      y: 0,
+      toJSON: () => '',
+    }) as DOMRect;
+  document.body.appendChild(target);
+  const fmRef = { current: { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 } as FontMetrics };
+  const modesRef: { current: ReadonlySet<string> } = { current: modes };
+  const send = vi.fn<[Uint8Array], void>();
+  const sendControl = vi.fn<[ClientControl], void>();
+  const rectRef = { current: target };
+  const textareaRef: { current: HTMLTextAreaElement | null } = { current: null };
+  const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef, sendControl);
+  return { target, modesRef, send, sendControl, cleanup };
+}
+
+describe('wheel routing', () => {
+  afterEach(() => {
+    // Clear any pending RAFs between tests.
+    document.body.innerHTML = '';
+  });
+
+  it('mouse mode OFF + wheel-up → sendControl with positive delta, send not called', async () => {
+    const { target, send, sendControl, cleanup } = makeWheelHarness(new Set());
+
+    // deltaY < 0 means wheel-up in DOM; PIXELS_PER_LINE=40, so -80 → lines=2
+    dispatchWheel(target, -80);
+    expect(send).not.toHaveBeenCalled();
+    // sendControl is called after the RAF flushes
+    await flushRaf();
+    expect(sendControl).toHaveBeenCalledTimes(1);
+    expect(sendControl).toHaveBeenCalledWith({ kind: 'scroll', delta: 2 });
+
+    cleanup();
+  });
+
+  it('mouse mode ON (mouse-vt200 + mouse-sgr-1006) + wheel → send called, sendControl not called', async () => {
+    const { target, send, sendControl, cleanup } = makeWheelHarness(
+      new Set(['mouse-vt200', 'mouse-sgr-1006']),
+    );
+
+    dispatchWheel(target, -40);
+    // send is called synchronously via the passthrough path
+    expect(send).toHaveBeenCalledTimes(1);
+    // flush RAF to ensure sendControl is never scheduled either
+    await flushRaf();
+    expect(sendControl).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it('multiple wheel events in one RAF tick → single sendControl with accumulated delta', async () => {
+    const { target, send, sendControl, cleanup } = makeWheelHarness(new Set());
+
+    // Three events before the RAF fires: -40 + -40 + -40 = -120 total → delta=3
+    dispatchWheel(target, -40);
+    dispatchWheel(target, -40);
+    dispatchWheel(target, -40);
+    expect(sendControl).not.toHaveBeenCalled();
+
+    await flushRaf();
+    expect(send).not.toHaveBeenCalled();
+    expect(sendControl).toHaveBeenCalledTimes(1);
+    expect(sendControl).toHaveBeenCalledWith({ kind: 'scroll', delta: 3 });
+
+    cleanup();
+  });
+
+  it('alt-screen mode + wheel → passthrough via send, sendControl not called', async () => {
+    const { target, send, sendControl, cleanup } = makeWheelHarness(new Set(['alt-screen']));
+
+    dispatchWheel(target, 40);
+    // alt-screen is passthrough: encodeMouseEvent will return null (no mouse
+    // encoding mode), so send is NOT called, but sendControl is also NOT called.
+    // The passthrough branch still calls send(bytes) only when bytes != null.
+    // With only 'alt-screen' in modes, gatingDropsEvent returns true (no
+    // mouse-vt200/btn/any-event), so encodeMouseEvent returns null → send not called.
+    await flushRaf();
+    expect(send).not.toHaveBeenCalled();
+    expect(sendControl).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it('alt-screen + mouse-vt200 + mouse-sgr-1006 → wheel-down reaches send as SGR bytes', async () => {
+    const { target, send, sendControl, cleanup } = makeWheelHarness(
+      new Set(['alt-screen', 'mouse-vt200', 'mouse-sgr-1006']),
+    );
+
+    // deltaY > 0 → wheelDown → Cb=65 in SGR
+    dispatchWheel(target, 40);
+    expect(send).toHaveBeenCalledTimes(1);
+    await flushRaf();
+    expect(sendControl).not.toHaveBeenCalled();
+    const bytes = send.mock.calls[0][0];
+    expect(new TextDecoder().decode(bytes)).toContain('<65;');
+
+    cleanup();
   });
 });
