@@ -21,10 +21,17 @@ export type WindowLayoutNode =
     }
   | { type: 'pane'; cell_id: CellId; pane_id: PaneId };
 
+export interface ActivityView {
+  id: ActivityId;
+  kind: 'terminal' | 'extension';
+  title: string;
+  iframe_url?: string;
+}
+
 export interface PaneView {
   id: PaneId;
   active_activity: ActivityId;
-  activities: Array<{ id: ActivityId; kind: 'terminal' | 'extension'; iframe_url?: string }>;
+  activities: ActivityView[];
 }
 
 export interface WindowView {
