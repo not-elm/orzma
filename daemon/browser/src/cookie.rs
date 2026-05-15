@@ -28,10 +28,6 @@ use decrypt_cookies::prelude::*;
 /// installed; returns `Err(BrowserError::Cookie)` on read/decrypt failures
 /// so the caller can decide whether to proceed without cookies (the spec
 /// calls for a non-fatal warning).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by BrowserService::spawn in a later task")
-)]
 pub(crate) async fn import_chrome_default_cookies() -> BrowserResult<Vec<CookieParam>> {
     #[cfg(not(target_os = "macos"))]
     {
