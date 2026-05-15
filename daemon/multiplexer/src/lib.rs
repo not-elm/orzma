@@ -1,3 +1,6 @@
+//! In-memory multiplexer domain model: sessions, windows, panes, activities,
+//! and the layout cell tree. No I/O.
+
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;

@@ -7,12 +7,16 @@
     "dev": "pnpm --filter ozmux-ui dev",
     "check-types": "pnpm -r --if-present check-types",
     "test": "pnpm -r --if-present test",
+    "test:e2e": "pnpm --filter ozmux-ui test:e2e",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "lint:ci": "biome ci .",
     "format": "biome format --write ."
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.11"
+    "@biomejs/biome": "^2.4.11",
+    "@types/node": "catalog:",
+    "msgpackr": "^1.11.0",
+    "tsx": "^4.19.0"
   }
 }

@@ -1,0 +1,33 @@
+{
+  "cols": 80,
+  "cursor": {
+    "blinking": false,
+    "shape": "block",
+    "visible": true,
+    "x": 0,
+    "y": 0
+  },
+  "escape_caps": [
+    "sgr",
+    "cup",
+    "ed",
+    "el",
+    "decset",
+    "decrst",
+    "alt-screen-1049",
+    "bracketed-paste",
+    "mouse-vt200",
+    "mouse-btn-event",
+    "mouse-any-event",
+    "mouse-sgr-1006",
+    "focus-events",
+    "app-cursor-keys"
+  ],
+  "input_caps": [
+    "text-utf8",
+    "key-vt-encoded"
+  ],
+  "kind": "hello",
+  "rows": 24,
+  "seq": 0
+}

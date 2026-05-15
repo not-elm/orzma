@@ -1,0 +1,14 @@
+{
+  "kind": "delta",
+  "seq": 4,
+  "cursor": {
+    "x": 0,
+    "y": 0,
+    "shape": "bar",
+    "blinking": false,
+    "visible": true
+  },
+  "dirty_rows": [],
+  "hyperlinks": [],
+  "display_offset": 0
+}

@@ -1,0 +1,31 @@
+{
+  "seq": 0,
+  "cols": 3,
+  "rows": 1,
+  "cursor": {
+    "x": 0,
+    "y": 0,
+    "shape": "block",
+    "blinking": false,
+    "visible": true
+  },
+  "rows_data": [
+    {
+      "runs": [
+        {
+          "cols": 3,
+          "fg": null,
+          "bg": null,
+          "style": 0,
+          "text": "abc",
+          "hyperlink_id": null
+        }
+      ]
+    }
+  ],
+  "reason": "initial",
+  "modes": [],
+  "hyperlinks": [],
+  "display_offset": 0,
+  "history_size": 0
+}

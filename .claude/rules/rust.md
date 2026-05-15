@@ -87,6 +87,80 @@ Forbidden:
 
 Note on preludes: a module that *defines* a prelude (i.e., re-exports curated names for downstream consumers) may itself use `pub use foo::*;` inside its own definition. The rule above forbids glob imports in **consumer** code.
 
+## Visibility — minimize scope
+
+Every item (functions, types, fields, modules, constants, traits) starts
+private and is widened only when a concrete caller outside the current
+scope needs it. Reach for the narrowest visibility that compiles.
+
+Ladder, from narrowest to widest — pick the first one that works:
+
+| Visibility | Use when |
+| --- | --- |
+| (none — private) | Only used inside the defining module |
+| `pub(super)` | Only used by the immediate parent module |
+| `pub(in path)` | Used by a specific subtree of the crate |
+| `pub(crate)` | Used elsewhere in this crate, but not exported |
+| `pub` | Part of the crate's external API |
+
+Required:
+
+- Default to private. Add visibility modifiers only when a real caller
+  forces it.
+- When a `pub` item turns out to have only in-crate callers, demote it to
+  `pub(crate)` (or narrower). Re-narrow during refactors, not just on
+  the way up.
+- Struct fields stay private unless an external constructor or pattern
+  match requires them. Prefer accessor methods over `pub` fields.
+- Helper modules used by only one parent should be declared inside that
+  parent (`mod helper;` without `pub`) so the names cannot leak.
+
+Exception — items inside a container whose own visibility is already
+narrow:
+
+- When the container struct, enum, or trait is `pub(crate)` (or
+  narrower), associated methods and fields written as plain `pub` do not
+  need to be demoted to match. The container already caps reachability,
+  so `pub fn new()` on a `pub(crate) struct Foo` cannot be called from
+  outside the crate regardless of the `pub` keyword on the method.
+- Still demote when the associated item can go strictly **narrower than
+  the container** (e.g., a helper method only called inside the
+  defining module of a `pub(crate)` struct should be private). The
+  exception buys you "don't bother matching", not "stop narrowing
+  further".
+- This applies symmetrically to struct fields, enum variants' inner
+  items, and inherent + trait `impl` blocks.
+
+Forbidden:
+
+| Pattern | Why |
+| --- | --- |
+| `pub` on items with no out-of-module callers | Inflates the public surface and forces doc comments that need not exist |
+| `pub` fields on structs with invariants | Bypasses any validation in constructors / setters |
+| `pub use` re-exports for items that no external consumer references | Same as above; widens the surface for no caller |
+
+Recommended workflow when adding a new item:
+
+1. Start with no visibility modifier (private).
+2. Compile. If a caller in the same crate fails to resolve it, widen by
+   one step (`pub(super)` → `pub(in path)` → `pub(crate)`).
+3. Only reach `pub` when the item is genuinely part of the crate's
+   external API (used by another workspace member or a downstream
+   consumer).
+
+Recommended workflow when reviewing existing code:
+
+- For any `pub` item, grep for cross-crate callers. If there are none,
+  demote to `pub(crate)`. If there are no callers outside the current
+  module, demote further.
+
+Tooling note: `#![warn(unreachable_pub)]` catches `pub` items that
+nothing outside the crate can reach. It is useful for one-off audits
+but is *not* enabled crate-wide here — the exception above (associated
+items on `pub(crate)` containers stay `pub`) would create persistent
+noise. Run it locally when you want to audit a crate, then turn it back
+off.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:
@@ -116,6 +190,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - File-level module `//!` requirement
 - "No blank lines between import groups"
 - `#[expect]` preference over `#[allow]`
+- Visibility minimization — `pub` items demoted to `pub(crate)` / narrower when no cross-crate caller exists, with the "container already narrow" exception above. `#![warn(unreachable_pub)]` can be enabled temporarily to audit but is not on by default.
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 

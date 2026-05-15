@@ -1,3 +1,5 @@
+//! Proc-macro crate: derive helpers for newtype patterns used across the workspace.
+
 use darling::FromDeriveInput;
 use proc_macro::TokenStream;
 use syn::{Data, DeriveInput, Fields, parse_macro_input};

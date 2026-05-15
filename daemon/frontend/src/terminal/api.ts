@@ -14,7 +14,15 @@ export const activateActivityEndpoint = (wid: string, pid: string, aid: string) 
 export const closeActivityEndpoint = (wid: string, pid: string, aid: string) =>
   `/windows/${wid}/panes/${pid}/activities/${aid}`;
 
-export const terminalWsUrl = (windowId: string, paneId: string, activityId: string) => {
+export const vtTerminalWsUrl = (
+  windowId: string,
+  paneId: string,
+  activityId: string,
+  lastSeq?: number,
+) => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/terminal/ws`;
+  const base = `${proto}//${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/terminal/ws`;
+  if (typeof lastSeq !== 'number') return base;
+  const params = new URLSearchParams({ last_seq: String(lastSeq) });
+  return `${base}?${params.toString()}`;
 };

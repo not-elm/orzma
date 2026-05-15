@@ -23,7 +23,7 @@ export function PaneMockup() {
             <div className="text-warning"> M src/lib.rs</div>
           </div>
 
-          <div className="bg-background text-foreground p-3 border border-tmux-pane-border">
+          <div className="bg-tmux-pane-inactive-bg text-foreground p-3 border border-tmux-pane-border">
             <div className="text-muted-foreground">[logs]</div>
             <div>listening :8080</div>
             <div className="text-success">200 GET /api/sessions</div>

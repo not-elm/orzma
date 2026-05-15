@@ -10,11 +10,7 @@ use ozmux_multiplexer::{Activity, ActivityId, MultiplexerError, PaneId, WindowId
 /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
 /// pane has no owner and `PaneNotInWindow` when it lives in a different
 /// Window. Used by every URL of shape `/windows/:wid/panes/:pid/*`.
-pub(crate) fn ensure_pane_in_window(
-    state: &AppState,
-    wid: &WindowId,
-    pid: &PaneId,
-) -> HttpResult<()> {
+fn ensure_pane_in_window(state: &AppState, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
     let actual = state.multiplexer.lookup_pane_window(pid)?;
     if &actual != wid {
         return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
@@ -29,7 +25,7 @@ pub(crate) fn ensure_pane_in_window(
 /// that also returns the resolved `Activity`. Callers like `iframe_serve`
 /// need both the validation and the activity metadata; doing them in one
 /// helper avoids a second Window lock acquisition.
-pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
+async fn ensure_activity_in_pane_in_window_and_fetch(
     state: &AppState,
     wid: &WindowId,
     pid: &PaneId,
@@ -52,7 +48,7 @@ pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
 
 /// Membership-only variant for handlers that don't need the Activity payload
 /// (terminal WS, handlers WS).
-pub(crate) async fn ensure_activity_in_pane_in_window(
+async fn ensure_activity_in_pane_in_window(
     state: &AppState,
     wid: &WindowId,
     pid: &PaneId,

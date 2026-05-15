@@ -1,3 +1,5 @@
+//! HTTP/WebSocket server: axum router, REST handlers, and PTY WS bridging.
+
 pub mod error;
 pub mod extractors;
 pub mod handlers;
@@ -106,7 +108,7 @@ pub(crate) mod test_helpers {
     use axum::Router;
     use ozmux_multiplexer::{ActivityId, PaneId, SessionId, WindowId};
 
-    pub fn fresh_state() -> AppState {
+    pub(crate) fn fresh_state() -> AppState {
         AppState::new(
             ozmux_terminal::TerminalService::default(),
             ozmux_extension::ExtensionRegistry::default(),
@@ -115,15 +117,15 @@ pub(crate) mod test_helpers {
         )
     }
 
-    pub fn daemon_router_for_test(state: AppState) -> Router {
+    pub(crate) fn daemon_router_for_test(state: AppState) -> Router {
         daemon_router(state)
     }
 
-    pub fn router_with(state: AppState) -> (Router, AppState) {
+    pub(crate) fn router_with(state: AppState) -> (Router, AppState) {
         (daemon_router(state.clone()), state)
     }
 
-    pub fn router_with_registry(
+    pub(crate) fn router_with_registry(
         state: AppState,
         registry: ozmux_extension::ExtensionRegistry,
     ) -> (Router, AppState) {
@@ -136,7 +138,9 @@ pub(crate) mod test_helpers {
 
     /// Bootstrap test fixture: registers one Session with one Window
     /// (one Pane, one Activity). Returns the four ids.
-    pub async fn bootstrap_default(state: &AppState) -> (SessionId, WindowId, PaneId, ActivityId) {
+    pub(crate) async fn bootstrap_default(
+        state: &AppState,
+    ) -> (SessionId, WindowId, PaneId, ActivityId) {
         let sid = state
             .multiplexer
             .create_session(Some("Session1".into()))
