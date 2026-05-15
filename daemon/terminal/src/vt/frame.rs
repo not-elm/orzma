@@ -169,6 +169,9 @@ pub struct FrameDelta {
     /// cumulatively into their hyperlink Map. NOT cumulative on the server —
     /// only the ids referenced by this delta's dirty rows are included.
     pub hyperlinks: Vec<Hyperlink>,
+    /// Lines scrolled back from the live tail. `0` = at live tail.
+    #[serde(default)]
+    pub display_offset: u32,
 }
 
 /// Wire-level render frame, dispatched by the `kind` tag.
@@ -396,6 +399,7 @@ mod tests {
                 },
             ],
             hyperlinks: vec![],
+            display_offset: 0,
         };
         let bytes = encode(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
@@ -418,6 +422,7 @@ mod tests {
                 id: 1,
                 uri: "https://example.org".to_string(),
             }],
+            display_offset: 0,
         };
         let bytes = encode(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
@@ -505,6 +510,21 @@ mod tests {
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded.modes, ["alt-screen", "bracketed-paste"]);
+    }
+
+    #[test]
+    fn delta_encodes_display_offset() {
+        let delta = FrameDelta {
+            seq: 7,
+            cursor: Cursor { x: 0, y: 0, shape: CursorShape::Block, blinking: false, visible: true },
+            dirty_rows: vec![],
+            hyperlinks: vec![],
+            display_offset: 12,
+        };
+        let bytes = encode(&RenderFrame::Delta(delta.clone())).unwrap();
+        let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
+        let RenderFrame::Delta(out) = decoded else { panic!("expected Delta") };
+        assert_eq!(out.display_offset, 12);
     }
 
     #[test]

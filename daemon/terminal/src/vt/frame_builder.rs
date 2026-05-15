@@ -115,6 +115,7 @@ pub fn build_delta<T>(
             .into_iter()
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
+        display_offset: 0,
     }
 }
 

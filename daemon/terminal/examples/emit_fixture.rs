@@ -78,6 +78,7 @@ fn main() {
             }],
         }],
         hyperlinks: vec![],
+        display_offset: 0,
     };
     let delta_frame = RenderFrame::Delta(delta_payload);
     fs::write(dir.join("delta_minimal.bin"), encode(&delta_frame).unwrap()).unwrap();
@@ -244,6 +245,7 @@ fn main() {
             }],
         }],
         hyperlinks: hyperlinks_sample,
+        display_offset: 0,
     };
     let frame = RenderFrame::Delta(delta);
     fs::write(
@@ -288,6 +290,7 @@ fn main() {
         cursor: steady_bar_cursor,
         dirty_rows: vec![],
         hyperlinks: vec![],
+        display_offset: 0,
     };
     let frame = RenderFrame::Delta(delta);
     fs::write(dir.join("delta_cursor_shape.bin"), encode(&frame).unwrap()).unwrap();
