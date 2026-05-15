@@ -29,12 +29,25 @@ pub mod types;
 ///
 /// Each entry owns a `TerminalHandle` (PTY + scrollback + VT bridge) and is
 /// keyed by [`ActivityId`].
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct TerminalService {
     ptys: Arc<RwLock<HashMap<ActivityId, TerminalHandle>>>,
     runtime_root: Option<Arc<RuntimeRoot>>,
+    title_tx: broadcast::Sender<ozmux_multiplexer::WindowId>,
     #[cfg(any(test, feature = "test-helpers"))]
     forced_failures: Arc<RwLock<HashSet<ActivityId>>>,
+}
+
+impl Default for TerminalService {
+    fn default() -> Self {
+        Self {
+            ptys: Arc::default(),
+            runtime_root: None,
+            title_tx: broadcast::channel(256).0,
+            #[cfg(any(test, feature = "test-helpers"))]
+            forced_failures: Arc::default(),
+        }
+    }
 }
 
 impl TerminalService {
@@ -42,10 +55,8 @@ impl TerminalService {
     /// to spawned shells via `PATH`.
     pub fn with_runtime_root(root: Arc<RuntimeRoot>) -> Self {
         Self {
-            ptys: Arc::default(),
             runtime_root: Some(root),
-            #[cfg(any(test, feature = "test-helpers"))]
-            forced_failures: Arc::default(),
+            ..Self::default()
         }
     }
 
@@ -131,6 +142,8 @@ impl TerminalService {
             opts.rows,
             vt_chunk_tx,
             vt_chunk_rx,
+            opts.window_id.clone(),
+            self.title_tx.clone(),
         );
         ptys.insert(activity_id, handle);
         Ok(())
@@ -203,6 +216,31 @@ impl TerminalService {
             }
         }
         Ok(())
+    }
+
+    /// Subscribes to window-scoped terminal title-change notifications.
+    /// Each item is the `WindowId` of a window whose terminal title changed.
+    pub fn subscribe_title_changes(
+        &self,
+    ) -> broadcast::Receiver<ozmux_multiplexer::WindowId> {
+        self.title_tx.subscribe()
+    }
+
+    /// Snapshots the current sanitized title of every running terminal.
+    /// Activities with no title set are omitted.
+    pub async fn all_titles(&self) -> HashMap<ActivityId, String> {
+        let ptys = self.ptys.read().await;
+        ptys.iter()
+            .filter_map(|(aid, handle)| {
+                let title = handle
+                    .vt_state
+                    .lock()
+                    .expect("vt_state poisoned")
+                    .title
+                    .clone();
+                title.map(|t| (aid.clone(), t))
+            })
+            .collect()
     }
 
     /// Returns the current scrollback snapshot and a fresh broadcast receiver

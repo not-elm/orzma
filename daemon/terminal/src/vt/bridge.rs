@@ -21,6 +21,8 @@ use crate::vt::frame_builder::{
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
+use crate::vt::title::sanitize_title;
+use ozmux_multiplexer::WindowId;
 
 /// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
@@ -57,6 +59,10 @@ pub(crate) struct VtState {
     /// Broadcast of wire messages (Binary deltas + Text sidecars). All emit
     /// paths go through this sender; subscribers attach via subscribe_frames.
     pub wire_broadcast: broadcast::Sender<WireMessage>,
+    /// Most recent sanitized OSC terminal title, or `None` before any
+    /// title has been set / after `ResetTitle`. Read by
+    /// `TerminalService::all_titles` for tab labels.
+    pub title: Option<String>,
 }
 
 impl VtState {
@@ -83,6 +89,7 @@ impl VtState {
             prev_cursor: None,
             hyperlinks: HyperlinkInterner::new(),
             wire_broadcast,
+            title: None,
         }
     }
 
@@ -268,6 +275,8 @@ pub(crate) async fn run_bridge_task(
     mut pty_rx: mpsc::Receiver<Bytes>,
     mut reply_rx: mpsc::UnboundedReceiver<ReplyFrame>,
     mut control_rx: mpsc::Receiver<ControlFrame>,
+    activity_window: Option<WindowId>,
+    title_tx: broadcast::Sender<WindowId>,
     cancel: CancellationToken,
 ) {
     let mut coalescer = Coalescer::new();
@@ -337,8 +346,23 @@ pub(crate) async fn run_bridge_task(
                 }
             }
             ctrl = control_rx.recv() => {
-                if ctrl.is_none() {
-                    break;
+                match ctrl {
+                    None => break,
+                    Some(ControlFrame::Title(raw)) => {
+                        let clean = sanitize_title(&raw);
+                        vt_state.lock().expect("vt_state poisoned").title = Some(clean);
+                        if let Some(wid) = &activity_window {
+                            let _ = title_tx.send(wid.clone());
+                        }
+                    }
+                    Some(ControlFrame::ResetTitle) => {
+                        vt_state.lock().expect("vt_state poisoned").title = None;
+                        if let Some(wid) = &activity_window {
+                            let _ = title_tx.send(wid.clone());
+                        }
+                    }
+                    // NOTE: Bell and Clipboard remain intentionally dropped.
+                    Some(ControlFrame::Bell | ControlFrame::Clipboard { .. }) => {}
                 }
             }
         }
@@ -437,11 +461,14 @@ mod tests {
 
         let (pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
         let cancel = CancellationToken::new();
+        let (title_tx, _title_rx) = broadcast::channel::<ozmux_multiplexer::WindowId>(8);
         let handle = tokio::spawn(super::run_bridge_task(
             vt_state.clone(),
             pty_rx,
             reply_rx,
             control_rx,
+            None,
+            title_tx,
             cancel.clone(),
         ));
 
@@ -458,6 +485,54 @@ mod tests {
         assert!(
             line0_text.starts_with("hello"),
             "expected 'hello' on row 0, got: {line0_text:?}"
+        );
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn bridge_task_captures_and_sanitizes_title() {
+        let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
+        let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
+        let drop_counter = Arc::new(DropCounter::new());
+        let listener = TermListener {
+            reply_tx,
+            control_tx: control_tx.clone(),
+            drop_counter,
+        };
+        let (wire_broadcast, _rx) = broadcast::channel::<WireMessage>(8);
+        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(
+            10,
+            3,
+            listener,
+            wire_broadcast,
+        )));
+        let (_pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
+        let (title_tx, mut title_rx) =
+            broadcast::channel::<ozmux_multiplexer::WindowId>(8);
+        let wid = ozmux_multiplexer::WindowId::new();
+        let cancel = CancellationToken::new();
+        let handle = tokio::spawn(super::run_bridge_task(
+            vt_state.clone(),
+            pty_rx,
+            reply_rx,
+            control_rx,
+            Some(wid.clone()),
+            title_tx,
+            cancel.clone(),
+        ));
+
+        control_tx
+            .send(ControlFrame::Title("hi\x07there".into()))
+            .await
+            .unwrap();
+        let signalled = title_rx.recv().await.unwrap();
+        assert_eq!(signalled, wid);
+        assert_eq!(
+            vt_state.lock().unwrap().title.as_deref(),
+            Some("hithere"),
+            "control char should be stripped before storage"
         );
 
         cancel.cancel();
