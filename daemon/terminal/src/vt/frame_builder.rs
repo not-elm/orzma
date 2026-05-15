@@ -201,8 +201,10 @@ fn snapshot_modes(curr: TermMode) -> Vec<String> {
 /// - The returned runs reflect the grid line currently displayed at
 ///   viewport row `y`, taking the active grid's `display_offset` into
 ///   account.
-/// - Viewport-to-grid translation happens exactly once, inside
-///   `viewport_row_to_line`. Callers must not pre-translate.
+///
+/// # Preconditions
+/// - Callers must pass the raw viewport `y`; `viewport_row_to_line`
+///   performs the grid translation internally.
 fn coalesce_row<T>(
     term: &Term<T>,
     y: i32,
