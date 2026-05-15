@@ -154,6 +154,31 @@ pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
     }
 }
 
+/// Returns the alacritty `Line` currently displayed at viewport row `y`.
+///
+/// Translates the wire-protocol viewport coordinate `y` (0..screen_lines)
+/// into the active grid's line index using the current `display_offset`.
+/// Equivalent to alacritty's `viewport_to_point(display_offset, ..).line`.
+///
+/// Negative `Line` values are legal here: alacritty's ring storage maps
+/// them to scrollback history (`Line(-1)` = most recent scrolled-out
+/// line). Both bounds of `Storage::compute_index` are satisfied because
+/// alacritty guarantees `display_offset <= history_size <= max_scroll_limit`.
+///
+/// # Invariants (caller-side)
+/// - `0 <= y < screen_lines`
+/// - `display_offset` fits in `i32`. ozmux uses the default
+///   `scrolling_history = 10000`, far below `i32::MAX`.
+fn viewport_row_to_line<T>(term: &Term<T>, y: i32) -> Line {
+    debug_assert!(
+        (0..term.screen_lines() as i32).contains(&y),
+        "viewport row {y} out of range 0..{}",
+        term.screen_lines(),
+    );
+    let off = term.grid().display_offset() as i32;
+    Line(y - off)
+}
+
 fn snapshot_modes(curr: TermMode) -> Vec<String> {
     TRACKED_MODES
         .iter()
@@ -553,5 +578,46 @@ mod tests {
         let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         assert_eq!(snap.display_offset, 2);
         assert!(snap.history_size >= 2, "history_size={}", snap.history_size);
+    }
+
+    #[test]
+    fn viewport_row_to_line_at_zero_offset_is_identity() {
+        let term = make_term(10, 24);
+        for y in 0..24i32 {
+            assert_eq!(viewport_row_to_line(&term, y), Line(y));
+        }
+    }
+
+    #[test]
+    fn viewport_row_to_line_with_offset_subtracts_display_offset() {
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::Config;
+        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let mut term = make_term_with_config(cfg, 10, 24);
+        for _ in 0..30 {
+            install_text(&mut term, "x\r\n");
+        }
+        term.scroll_display(Scroll::Delta(5));
+        assert_eq!(term.grid().display_offset(), 5);
+        assert_eq!(viewport_row_to_line(&term, 0), Line(-5));
+        assert_eq!(viewport_row_to_line(&term, 5), Line(0));
+        assert_eq!(viewport_row_to_line(&term, 23), Line(18));
+    }
+
+    #[test]
+    fn viewport_row_to_line_at_max_offset_reaches_oldest_history() {
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::Config;
+        let cfg = Config { scrolling_history: 50, ..Config::default() };
+        let mut term = make_term_with_config(cfg, 10, 4);
+        for _ in 0..100 {
+            install_text(&mut term, "x\r\n");
+        }
+        // Scroll to the absolute top.
+        term.scroll_display(Scroll::Top);
+        let off = term.grid().display_offset() as i32;
+        assert!(off > 0, "expected non-zero display_offset, got {off}");
+        // y = 0 must land at Line(-off), the oldest scrollback line.
+        assert_eq!(viewport_row_to_line(&term, 0), Line(-off));
     }
 }
