@@ -5,8 +5,8 @@
 //!   `cargo run -p ozmux_terminal --example emit_fixture -- --all` — emits all 4 fixtures + JSON
 
 use ozmux_terminal::vt::{
-    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, ModeFrame,
-    RenderFrame, Row, Run, SnapshotReason, encode,
+    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkUri,
+    HyperlinkWireId, ModeFrame, RenderFrame, Row, Run, SnapshotReason, encode,
 };
 use std::fs;
 use std::path::Path;
@@ -191,8 +191,8 @@ fn main() {
         visible: true,
     };
     let hyperlinks_sample = vec![Hyperlink {
-        id: 0,
-        uri: "https://ozmux.example".to_string(),
+        id: HyperlinkWireId(0),
+        uri: HyperlinkUri::new("https://ozmux.example"),
     }];
 
     // 7) snapshot_with_hyperlinks — RenderFrame-wrapped to exercise `kind` tag.
@@ -208,7 +208,7 @@ fn main() {
                 bg: Color::Default,
                 style: 0,
                 text: "hello".into(),
-                hyperlink_id: Some(0),
+                hyperlink_id: Some(HyperlinkWireId(0)),
             }],
         }],
         reason: SnapshotReason::Initial,
@@ -241,7 +241,7 @@ fn main() {
                 bg: Color::Default,
                 style: 0,
                 text: "world".into(),
-                hyperlink_id: Some(0),
+                hyperlink_id: Some(HyperlinkWireId(0)),
             }],
         }],
         hyperlinks: hyperlinks_sample,
