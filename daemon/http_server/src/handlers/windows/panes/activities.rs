@@ -67,22 +67,57 @@ impl ActivityInput {
     /// Convert the wire payload into a domain `Activity`, also surfacing the
     /// owning extension's name for Extension-kind activities.
     pub(super) fn into_parsed(self) -> ParsedActivity {
-        let (kind, extension_name) = match self.kind {
-            ActivityKindInput::Terminal => (ActivityKind::Terminal, None),
+        match self.kind {
+            ActivityKindInput::Terminal => {
+                // NOTE: build via Activity::terminal so a missing name defaults
+                // to "Terminal", matching every other terminal-creation path.
+                let mut activity = Activity::terminal(self.activity_id);
+                if let Some(name) = self.name {
+                    activity.name = name;
+                }
+                ParsedActivity {
+                    activity,
+                    extension_name: None,
+                }
+            }
             ActivityKindInput::Extension {
                 html_root,
                 extension_name,
-            } => (ActivityKind::Extension { html_root }, Some(extension_name)),
-        };
-        let activity = Activity {
-            id: self.activity_id,
-            name: self.name.unwrap_or_else(|| "Activity".into()),
-            kind,
-        };
-        ParsedActivity {
-            activity,
-            extension_name,
+            } => ParsedActivity {
+                activity: Activity {
+                    id: self.activity_id,
+                    name: self.name.unwrap_or_else(|| "Activity".into()),
+                    kind: ActivityKind::Extension { html_root },
+                },
+                extension_name: Some(extension_name),
+            },
         }
+    }
+}
+
+#[cfg(test)]
+mod into_parsed_tests {
+    use super::ActivityInput;
+
+    #[test]
+    fn terminal_without_name_defaults_to_terminal() {
+        let input: ActivityInput = serde_json::from_value(serde_json::json!({
+            "activity_id": "aid-1",
+            "kind": { "type": "terminal" }
+        }))
+        .unwrap();
+        assert_eq!(input.into_parsed().activity.name, "Terminal");
+    }
+
+    #[test]
+    fn terminal_with_explicit_name_is_preserved() {
+        let input: ActivityInput = serde_json::from_value(serde_json::json!({
+            "activity_id": "aid-1",
+            "name": "build",
+            "kind": { "type": "terminal" }
+        }))
+        .unwrap();
+        assert_eq!(input.into_parsed().activity.name, "build");
     }
 }
 
