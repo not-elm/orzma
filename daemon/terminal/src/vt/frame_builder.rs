@@ -194,6 +194,15 @@ fn snapshot_modes(curr: TermMode) -> Vec<String> {
 /// `emitted_hyperlinks` accumulates `(wire_id, uri)` pairs encountered in this
 /// row — the caller merges across all coalesced rows to produce the wire
 /// `FrameSnapshot.hyperlinks` / `FrameDelta.hyperlinks`.
+///
+/// # Invariants
+/// - `y` is a viewport row in `0..screen_lines` (matches wire-protocol
+///   `row` semantics).
+/// - The returned runs reflect the grid line currently displayed at
+///   viewport row `y`, taking the active grid's `display_offset` into
+///   account.
+/// - Viewport-to-grid translation happens exactly once, inside
+///   `viewport_row_to_line`. Callers must not pre-translate.
 fn coalesce_row<T>(
     term: &Term<T>,
     y: i32,
@@ -201,7 +210,7 @@ fn coalesce_row<T>(
     emitted_hyperlinks: &mut HashMap<HyperlinkWireId, HyperlinkUri>,
 ) -> Vec<Run> {
     let cols = term.columns() as u16;
-    let grid_row = &term.grid()[Line(y)];
+    let grid_row = &term.grid()[viewport_row_to_line(term, y)];
     let mut runs: Vec<Run> = Vec::new();
     let mut acc_text = String::new();
     let mut acc_cols: u16 = 0;
@@ -618,5 +627,86 @@ mod tests {
         assert!(off > 0, "expected non-zero display_offset, got {off}");
         // NOTE: y=0 must reach the oldest scrollback line when fully scrolled up.
         assert_eq!(viewport_row_to_line(&term, 0), Line(-off));
+    }
+
+    #[test]
+    fn coalesce_row_reads_live_tail_when_not_scrolled() {
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "abc");
+        let mut interner = HyperlinkInterner::new();
+        let mut emitted = HashMap::new();
+        let runs = coalesce_row(&term, 0, &mut interner, &mut emitted);
+        let merged: String = runs.iter().map(|r| r.text.as_str()).collect();
+        assert!(merged.starts_with("abc"), "got: {merged:?}");
+    }
+
+    #[test]
+    fn coalesce_row_reads_scrollback_when_scrolled() {
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::Config;
+        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let mut term = make_term_with_config(cfg, 10, 3);
+        // NOTE: push "marker" first so it ends up at the very top of history.
+        install_text(&mut term, "marker\r\n");
+        for i in 0..20 {
+            install_text(&mut term, &format!("filler{i}\r\n"));
+        }
+        term.scroll_display(Scroll::Top);
+        let mut interner = HyperlinkInterner::new();
+        let mut emitted = HashMap::new();
+        let runs = coalesce_row(&term, 0, &mut interner, &mut emitted);
+        let merged: String = runs.iter().map(|r| r.text.as_str()).collect();
+        assert!(
+            merged.starts_with("marker"),
+            "viewport row 0 should show oldest scrollback line; got {merged:?}",
+        );
+    }
+
+    #[test]
+    fn build_snapshot_after_scroll_contains_scrollback_content() {
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::Config;
+        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let mut term = make_term_with_config(cfg, 10, 3);
+        install_text(&mut term, "alpha\r\n");
+        for i in 0..20 {
+            install_text(&mut term, &format!("noise{i}\r\n"));
+        }
+        term.scroll_display(Scroll::Top);
+        let mut interner = HyperlinkInterner::new();
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
+        let row0: String = snap.rows_data[0]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        assert!(
+            row0.starts_with("alpha"),
+            "snapshot row 0 after Scroll::Top should be oldest history line; got {row0:?}",
+        );
+    }
+
+    #[test]
+    fn build_delta_with_offset_reads_scrollback() {
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::Config;
+        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let mut term = make_term_with_config(cfg, 10, 3);
+        install_text(&mut term, "alpha\r\n");
+        for i in 0..20 {
+            install_text(&mut term, &format!("noise{i}\r\n"));
+        }
+        term.scroll_display(Scroll::Top);
+        let mut interner = HyperlinkInterner::new();
+        let delta = build_delta(&term, 0, &[0u16], &mut interner);
+        let row0: String = delta.dirty_rows[0]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        assert!(
+            row0.starts_with("alpha"),
+            "delta row 0 after Scroll::Top should be oldest history line; got {row0:?}",
+        );
     }
 }
