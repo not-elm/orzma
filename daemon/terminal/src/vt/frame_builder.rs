@@ -613,11 +613,10 @@ mod tests {
         for _ in 0..100 {
             install_text(&mut term, "x\r\n");
         }
-        // Scroll to the absolute top.
         term.scroll_display(Scroll::Top);
         let off = term.grid().display_offset() as i32;
         assert!(off > 0, "expected non-zero display_offset, got {off}");
-        // y = 0 must land at Line(-off), the oldest scrollback line.
+        // NOTE: y=0 must reach the oldest scrollback line when fully scrolled up.
         assert_eq!(viewport_row_to_line(&term, 0), Line(-off));
     }
 }
