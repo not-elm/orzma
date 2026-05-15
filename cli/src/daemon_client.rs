@@ -9,7 +9,7 @@ const BASE_URL: &str = "http://127.0.0.1:3200";
 /// Create a new Browser Activity in the given pane. Returns the
 /// freshly-generated `activity_id`. The caller must subsequently activate
 /// it (`POST .../activate`) to bring it foreground.
-pub async fn create_browser_activity(
+pub(crate) async fn create_browser_activity(
     wid: &str,
     pid: &str,
     initial_url: Option<&str>,
@@ -41,7 +41,7 @@ pub async fn create_browser_activity(
 }
 
 /// Activate an existing Activity so it becomes the foreground tab in its pane.
-pub async fn activate(wid: &str, pid: &str, aid: &str) -> Result<()> {
+pub(crate) async fn activate(wid: &str, pid: &str, aid: &str) -> Result<()> {
     let resp = reqwest::Client::new()
         .post(format!(
             "{BASE_URL}/windows/{wid}/panes/{pid}/activities/{aid}/activate"
