@@ -35,7 +35,7 @@ impl Default for FontConfig {
 
 /// Per-face TOML patch — the body of `[font.normal]`, `[font.bold]`, etc.
 #[derive(Deserialize, Default, Clone, Debug)]
-pub struct FacePatch {
+pub(crate) struct FacePatch {
     /// Family-name override for this face.
     pub family: Option<String>,
     /// Alacritty's `style` key — accepted for format compatibility and
@@ -45,7 +45,7 @@ pub struct FacePatch {
 
 /// Per-field-optional view of the `[font]` section for TOML deserialization.
 #[derive(Deserialize, Default, Clone, Debug)]
-pub struct FontPatch {
+pub(crate) struct FontPatch {
     /// Optional `[font].size` override.
     pub size: Option<f32>,
     /// Optional `[font.normal]` face.

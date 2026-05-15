@@ -66,7 +66,7 @@ pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
         }
     }
     let size = configs.font.size;
-    if size <= 0.0 || size > 200.0 {
+    if !(size > 0.0 && size <= 200.0) {
         return Err(OzmuxConfigsError::InvalidFontSize { size });
     }
     Ok(())
@@ -207,6 +207,16 @@ mod tests {
     #[test]
     fn validate_rejects_oversized_font() {
         let raw: RawConfigs = toml::from_str("[font]\nsize = 999.0\n").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert!(matches!(
+            validate(&merged).unwrap_err(),
+            crate::OzmuxConfigsError::InvalidFontSize { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_nan_font_size() {
+        let raw: RawConfigs = toml::from_str("[font]\nsize = nan\n").unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert!(matches!(
             validate(&merged).unwrap_err(),
