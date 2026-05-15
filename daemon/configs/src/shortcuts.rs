@@ -159,6 +159,13 @@ impl Default for Shortcuts {
                     },
                     action: Action::NewTerminalActivity,
                 },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('w'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::CloseActivity,
+                },
             ],
         }
     }
@@ -414,11 +421,23 @@ mod tests {
     }
 
     #[test]
+    fn binding_deserializes_close_activity() {
+        let toml = r#"
+            key = "w"
+            action = { type = "close-activity" }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert_eq!(b.chord.key, Key::Char('w'));
+        assert_eq!(b.chord.modifiers, Modifiers::default());
+        assert!(matches!(b.action, Action::CloseActivity));
+    }
+
+    #[test]
     fn default_shortcuts_serializes_to_stable_json() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         assert_eq!(
             json,
-            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}}]}"#
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"}}]}"#
         );
     }
 }

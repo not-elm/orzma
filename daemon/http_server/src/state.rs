@@ -1,15 +1,38 @@
-use crate::HttpResult;
+use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::window_view::WindowView;
+use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
-    Activity, ActivityId, MultiplexerError, MultiplexerResult, MultiplexerService, PaneId,
-    SessionId, SetActiveOutcome, SetActivePaneOutcome, WindowId,
+    Activity, ActivityId, ActivityKind, MultiplexerError, MultiplexerResult, MultiplexerService,
+    PaneId, SessionId, SetActiveOutcome, SetActivePaneOutcome, Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
+
+/// Input bundle for [`AppState::split_pane`].
+pub struct SplitInput {
+    /// Id for the new pane (caller-supplied or server-generated).
+    pub new_pane_id: PaneId,
+    /// The activity to seat in the new pane.
+    pub new_activity: Activity,
+    /// Extension name when the activity kind is Extension.
+    pub extension_name: Option<String>,
+    /// Which side of the target pane the new pane appears on.
+    pub side: Side,
+    /// Axis along which to split.
+    pub orientation: SplitOrientation,
+}
+
+/// Ids produced by a successful [`AppState::split_pane`].
+pub struct SplitOutcome {
+    /// Id of the newly-created pane.
+    pub new_pane_id: PaneId,
+    /// Id of the activity seated in the new pane.
+    pub new_activity_id: ActivityId,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -80,36 +103,154 @@ impl AppState {
         Ok(())
     }
 
+    /// Add an Activity to a Pane and broadcast the new layout. For
+    /// terminal-kind activities, also spawn the backing PTY; on spawn
+    /// failure the activity record is rolled back before returning the
+    /// error so the frontend never sees a half-state.
     pub async fn add_activity_to_pane(
         &self,
         wid: &WindowId,
         pid: &PaneId,
         activity: Activity,
         extension_name: Option<&str>,
-    ) -> MultiplexerResult<ActivityId> {
+    ) -> HttpResult<ActivityId> {
         let aid = activity.id.clone();
+        let activity_kind = activity.kind.clone();
+
         self.multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.add_activity(activity))
             .await?;
+
         if let Some(name) = extension_name {
             self.extensions.record_activity_owner(&aid, name);
         }
+
+        // NOTE: PTY spawn must precede the layout publish so the frontend never
+        // sees a terminal activity without a backing PTY.
+        if matches!(activity_kind, ActivityKind::Terminal)
+            && let Err(spawn_err) = spawn_terminal_pty(self, wid, pid, &aid).await
+        {
+            if let Err(rollback_err) = self.rollback_added_activity(wid, pid, &aid).await {
+                tracing::warn!(
+                    error = %rollback_err,
+                    %wid, %pid, %aid,
+                    "failed to roll back added activity after PTY spawn failure"
+                );
+            }
+            return Err(spawn_err);
+        }
+
+        self.publish_window_layout(wid).await;
         Ok(aid)
     }
 
-    /// Build the current Window layout snapshot under the Window lock and
-    /// broadcast it. Used by every handler that mutates a Window.
-    async fn publish_window_layout(&self, wid: &WindowId) {
-        let _ = self
+    /// Close a single Activity in a Pane: kill its PTY (terminal kind) or
+    /// forget its extension registry entry (extension kind), then broadcast
+    /// the new layout. Refuses to close the last activity via
+    /// `Pane::remove_activity`'s built-in `CannotRemoveLastActivity` guard.
+    pub async fn close_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> HttpResult<()> {
+        self.ensure_pane_in_window(wid, pid)?;
+        let removed = self
             .multiplexer
-            .with_window(wid, |w| match WindowView::from_window(w) {
-                Ok(view) => match serde_json::to_value(&view) {
-                    Ok(value) => self.layout_broadcast.publish(wid, value),
-                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
-                },
-                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+            .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
+            .await?;
+
+        match removed.kind {
+            ActivityKind::Terminal => {
+                let _ = self.terminal.kill(aid).await;
+            }
+            ActivityKind::Extension { .. } => {
+                self.extensions.forget_activity(aid);
+            }
+        }
+
+        self.publish_window_layout(wid).await;
+        Ok(())
+    }
+
+    /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
+    /// spawn a PTY when the activity is Terminal. Rolls back on spawn failure.
+    pub async fn split_pane(
+        &self,
+        wid: &WindowId,
+        target_pane_id: &PaneId,
+        input: SplitInput,
+    ) -> HttpResult<SplitOutcome> {
+        self.ensure_pane_in_window(wid, target_pane_id)?;
+        let new_pane_id = input.new_pane_id.clone();
+        let new_activity_id = input.new_activity.id.clone();
+        let activity_kind = input.new_activity.kind.clone();
+
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
+                w.split_pane(
+                    target_pane_id,
+                    new_pane_id.clone(),
+                    input.new_activity,
+                    input.side,
+                    input.orientation,
+                )
             })
-            .await;
+            .await?;
+
+        self.multiplexer
+            .pane_owner_window
+            .insert(new_pane_id.clone(), wid.clone());
+
+        if let Some(name) = input.extension_name.as_deref() {
+            self.extensions
+                .record_pane_and_activity_owners(&new_pane_id, &new_activity_id, name);
+        }
+
+        // NOTE: PTY spawn must precede the layout publish so the frontend never
+        // sees a terminal activity without a backing PTY.
+        if matches!(activity_kind, ActivityKind::Terminal)
+            && let Err(spawn_err) =
+                spawn_terminal_pty(self, wid, &new_pane_id, &new_activity_id).await
+        {
+            self.rollback_split(wid, &new_pane_id).await;
+            return Err(spawn_err);
+        }
+
+        self.publish_window_layout(wid).await;
+        Ok(SplitOutcome {
+            new_pane_id,
+            new_activity_id,
+        })
+    }
+
+    /// Close a Pane: remove it from the cell tree, tear down extension
+    /// registry rows and PTYs for each activity, and broadcast the new layout.
+    pub async fn close_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
+        self.ensure_pane_in_window(wid, pid)?;
+        let activities = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.close_pane(pid))
+            .await?;
+
+        self.multiplexer.pane_owner_window.remove(pid);
+        self.extensions.forget_pane(pid);
+        for aid in &activities {
+            self.extensions.forget_activity(aid);
+        }
+        for aid in &activities {
+            let _ = self.terminal.kill(aid).await;
+        }
+
+        self.publish_window_layout(wid).await;
+        Ok(())
+    }
+
+    /// Rename a Window and broadcast the new layout.
+    pub async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
+        self.multiplexer.rename_window(wid, name).await?;
+        self.publish_window_layout(wid).await;
+        Ok(())
     }
 
     /// Close a Window: tear down its Panes/Activities and run runtime
@@ -137,6 +278,105 @@ impl AppState {
             activities.extend(self.close_window(&wid).await?);
         }
         Ok(activities)
+    }
+
+    async fn rollback_added_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> MultiplexerResult<()> {
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
+                w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
+            })
+            .await
+    }
+
+    async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
+        // NOTE: spawn happens before publish, so the frontend never saw the new
+        // pane — no layout re-broadcast is needed on rollback.
+        let closed = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
+            .await
+            .is_ok();
+        if !closed {
+            tracing::warn!(
+                %new_pane_id,
+                "split rollback failed to close pane after spawn failure"
+            );
+            return;
+        }
+        self.multiplexer.pane_owner_window.remove(new_pane_id);
+    }
+
+    /// Build the current Window layout snapshot under the Window lock and
+    /// broadcast it. Used by every handler that mutates a Window.
+    async fn publish_window_layout(&self, wid: &WindowId) {
+        let _ = self
+            .multiplexer
+            .with_window(wid, |w| match WindowView::from_window(w) {
+                Ok(view) => match serde_json::to_value(&view) {
+                    Ok(value) => self.layout_broadcast.publish(wid, value),
+                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+                },
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+            })
+            .await;
+    }
+
+    /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
+    /// pane has no owner and `PaneNotInWindow` when it lives in a different
+    /// Window. Used by every URL of shape `/windows/:wid/panes/:pid/*`.
+    fn ensure_pane_in_window(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
+        let actual = self.multiplexer.lookup_pane_window(pid)?;
+        if &actual != wid {
+            return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
+                window: wid.clone(),
+                pane: pid.clone(),
+            }));
+        }
+        Ok(())
+    }
+
+    /// Combined membership check for `/windows/:wid/panes/:pid/activities/:aid/*`
+    /// that also returns the resolved `Activity`. Callers like `iframe_serve`
+    /// need both the validation and the activity metadata; doing them in one
+    /// helper avoids a second Window lock acquisition.
+    pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> HttpResult<Activity> {
+        self.ensure_pane_in_window(wid, pid)?;
+        let activity = self
+            .multiplexer
+            .with_window(wid, |w| w.pane(pid).map(|p| p.activity(aid).cloned()))
+            .await
+            .ok_or_else(|| HttpError::Session(MultiplexerError::WindowNotFound(wid.clone())))??
+            .ok_or_else(|| {
+                HttpError::Session(MultiplexerError::ActivityNotInPane {
+                    pane: pid.clone(),
+                    activity: aid.clone(),
+                })
+            })?;
+        Ok(activity)
+    }
+
+    /// Membership-only variant for handlers that don't need the Activity
+    /// payload (terminal WS, handlers WS).
+    pub(crate) async fn ensure_activity_in_pane_in_window(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> HttpResult<()> {
+        let _ = self
+            .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
+            .await?;
+        Ok(())
     }
 }
 

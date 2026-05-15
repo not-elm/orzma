@@ -14,12 +14,16 @@ export function App() {
   const view = layout.status === 'gone' ? null : layout.view;
   const activePaneRef = useRef<string | null>(null);
   const activeWindowRef = useRef<string | null>(null);
+  const activeActivityRef = useRef<string | null>(null);
   activePaneRef.current = view?.active_pane ?? null;
   activeWindowRef.current = wid;
+  const activePaneObj = view?.panes.find((p) => p.id === view.active_pane);
+  activeActivityRef.current = activePaneObj?.active_activity ?? null;
 
   const ctx: ShortcutContext = {
     activeWindow: () => activeWindowRef.current,
     activePane: () => activePaneRef.current,
+    activeActivity: () => activeActivityRef.current,
   };
 
   const { isArmed, prefix } = usePrefixMode(ctx);

@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react';
 import { useEffect, useRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ShortcutContext } from '../shortcuts/actionDispatch';
+import { makeShortcutContext } from '../shortcuts/__test-helpers';
 import * as prefix from '../shortcuts/usePrefixMode';
 import { usePrefixMode } from '../shortcuts/usePrefixMode';
 import { useIframeKeydownBridge } from './useIframeKeydownBridge';
@@ -51,10 +51,10 @@ describe('useIframeKeydownBridge', () => {
     }) as typeof globalThis.fetch;
 
     try {
-      const ctx: ShortcutContext = {
+      const ctx = makeShortcutContext({
         activeWindow: () => 'wid-1',
         activePane: () => 'pid-1',
-      };
+      });
       const Holder = () => {
         usePrefixMode(ctx);
         const ref = useRef<HTMLIFrameElement>(null);

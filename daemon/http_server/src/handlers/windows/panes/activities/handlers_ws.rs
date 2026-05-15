@@ -1,6 +1,5 @@
 use crate::AppState;
 use crate::error::HttpError;
-use crate::handlers::ensure_activity_in_pane_in_window;
 use axum::{
     extract::{
         FromRequest, Path, State, WebSocketUpgrade,
@@ -105,7 +104,9 @@ pub async fn handlers_ws(
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
     req: axum::extract::Request,
 ) -> Result<Response, HttpError> {
-    ensure_activity_in_pane_in_window(&state, &wid, &pid, &aid).await?;
+    state
+        .ensure_activity_in_pane_in_window(&wid, &pid, &aid)
+        .await?;
     let origin = req
         .headers()
         .get(axum::http::header::ORIGIN)

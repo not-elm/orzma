@@ -1,6 +1,5 @@
 use crate::AppState;
 use crate::error::HttpError;
-use crate::handlers::ensure_activity_in_pane_in_window_and_fetch;
 use axum::{
     extract::{Path, State},
     http::header::CONTENT_TYPE,
@@ -16,7 +15,9 @@ pub async fn iframe_serve(
     State(state): State<AppState>,
     Path((wid, pid, aid, path)): Path<(WindowId, PaneId, ActivityId, String)>,
 ) -> Result<Response, HttpError> {
-    let activity = ensure_activity_in_pane_in_window_and_fetch(&state, &wid, &pid, &aid).await?;
+    let activity = state
+        .ensure_activity_in_pane_in_window_and_fetch(&wid, &pid, &aid)
+        .await?;
     if !matches!(activity.kind, ActivityKind::Extension { .. }) {
         return Err(HttpError::IframeFileNotFound(path));
     }

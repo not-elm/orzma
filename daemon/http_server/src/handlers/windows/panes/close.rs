@@ -1,4 +1,3 @@
-use crate::handlers::{ensure_pane_in_window, publish_window_layout};
 use crate::{AppState, error::HttpResult};
 use axum::{
     extract::{Path, State},
@@ -10,30 +9,7 @@ pub async fn close(
     State(state): State<AppState>,
     Path((wid, pane_id)): Path<(WindowId, PaneId)>,
 ) -> HttpResult<StatusCode> {
-    ensure_pane_in_window(&state, &wid, &pane_id)?;
-    close_in_window(&state, &wid, &pane_id).await
-}
-
-async fn close_in_window(
-    state: &AppState,
-    wid: &WindowId,
-    pane_id: &PaneId,
-) -> HttpResult<StatusCode> {
-    let activities = state
-        .multiplexer
-        .with_window_or_404(wid, |w| w.close_pane(pane_id))
-        .await?;
-
-    state.multiplexer.pane_owner_window.remove(pane_id);
-    state.extensions.forget_pane(pane_id);
-    for aid in &activities {
-        state.extensions.forget_activity(aid);
-    }
-    for aid in &activities {
-        let _ = state.terminal.kill(aid).await;
-    }
-
-    publish_window_layout(state, wid).await;
+    state.close_pane(&wid, &pane_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

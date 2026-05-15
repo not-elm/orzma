@@ -1,7 +1,7 @@
 use crate::AppState;
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{delete as method_delete, get, post},
 };
 use ozmux_multiplexer::{Activity, ActivityId, ActivityKind};
 use serde::Deserialize;
@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 pub mod activate;
 pub mod add_to_pane;
+pub mod close_activity;
 pub mod handlers_ws;
 pub mod iframe_serve;
 pub mod terminal_ws;
@@ -17,6 +18,10 @@ mod vt_ws;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(add_to_pane::add_to_pane))
+        .route(
+            "/{activity_id}",
+            method_delete(close_activity::close_activity),
+        )
         .route("/{activity_id}/activate", post(activate::activate))
         .route("/{activity_id}/terminal/ws", get(terminal_ws::terminal_ws))
         .route("/{activity_id}/handlers/ws", get(handlers_ws::handlers_ws))

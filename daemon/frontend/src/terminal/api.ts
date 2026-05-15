@@ -11,6 +11,8 @@ export const addActivityEndpoint = (wid: string, pid: string) =>
   `/windows/${wid}/panes/${pid}/activities`;
 export const activateActivityEndpoint = (wid: string, pid: string, aid: string) =>
   `/windows/${wid}/panes/${pid}/activities/${aid}/activate`;
+export const closeActivityEndpoint = (wid: string, pid: string, aid: string) =>
+  `/windows/${wid}/panes/${pid}/activities/${aid}`;
 
 export const vtTerminalWsUrl = (
   windowId: string,

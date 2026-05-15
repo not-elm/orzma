@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { actionToHandler, type ShortcutContext } from './actionDispatch';
+import { makeShortcutContext } from './__test-helpers';
+import { actionToHandler } from './actionDispatch';
 import type { Action } from './wire';
 
 const origFetch = globalThis.fetch;
@@ -18,10 +19,10 @@ describe('actionToHandler', () => {
   it('returns a handler that calls closePane on close-pane', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    const ctx: ShortcutContext = {
+    const ctx = makeShortcutContext({
       activeWindow: () => 'wid-1',
       activePane: () => 'pid-1',
-    };
+    });
     const handler = actionToHandler({ type: 'close-pane' }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
@@ -36,10 +37,7 @@ describe('actionToHandler', () => {
   it('returns a no-op handler when context lacks an active pane', async () => {
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    const ctx: ShortcutContext = {
-      activeWindow: () => null,
-      activePane: () => null,
-    };
+    const ctx = makeShortcutContext();
     const handler = actionToHandler({ type: 'close-pane' }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
@@ -55,10 +53,10 @@ describe('actionToHandler', () => {
   ] as const)('returns a handler that POSTs split with %s orientation', async (orientation) => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    const ctx: ShortcutContext = {
+    const ctx = makeShortcutContext({
       activeWindow: () => 'wid-1',
       activePane: () => 'pid-1',
-    };
+    });
     const handler = actionToHandler({ type: 'split-pane', direction: orientation }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
@@ -76,10 +74,7 @@ describe('actionToHandler', () => {
   it('split-pane handler is a no-op when active pane is null', async () => {
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    const ctx: ShortcutContext = {
-      activeWindow: () => null,
-      activePane: () => null,
-    };
+    const ctx = makeShortcutContext();
     const handler = actionToHandler({ type: 'split-pane', direction: 'horizontal' }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
@@ -90,7 +85,7 @@ describe('actionToHandler', () => {
   });
 
   it('returns null and warns for unknown action types', () => {
-    const ctx: ShortcutContext = { activeWindow: () => null, activePane: () => null };
+    const ctx = makeShortcutContext();
     const handler = actionToHandler({ type: 'totally-unknown' } as unknown as Action, ctx);
     expect(handler).toBeNull();
     expect(console.warn).toHaveBeenCalled();
@@ -106,10 +101,10 @@ describe('actionToHandler', () => {
       ...globalThis.crypto,
       randomUUID: () => 'aid-stub',
     });
-    const ctx: ShortcutContext = {
+    const ctx = makeShortcutContext({
       activeWindow: () => 'wid-1',
       activePane: () => 'pid-1',
-    };
+    });
     const handler = actionToHandler({ type: 'new-terminal-activity' }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
@@ -131,11 +126,45 @@ describe('actionToHandler', () => {
   it('new-terminal-activity handler is a no-op when active pane is null', async () => {
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
-    const ctx: ShortcutContext = {
-      activeWindow: () => null,
-      activePane: () => null,
-    };
+    const ctx = makeShortcutContext();
     const handler = actionToHandler({ type: 'new-terminal-activity' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns a handler that DELETEs the activity for close-activity', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext({
+      activeWindow: () => 'wid-1',
+      activePane: () => 'pid-1',
+      activeActivity: () => 'aid-9',
+    });
+    const handler = actionToHandler({ type: 'close-activity' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/activities/aid-9', {
+      method: 'DELETE',
+    });
+  });
+
+  it('close-activity handler is a no-op when active activity is null', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext({
+      activeWindow: () => 'wid-1',
+      activePane: () => 'pid-1',
+      activeActivity: () => null,
+    });
+    const handler = actionToHandler({ type: 'close-activity' }, ctx);
     if (handler === null) {
       throw new Error('handler should not be null');
     }

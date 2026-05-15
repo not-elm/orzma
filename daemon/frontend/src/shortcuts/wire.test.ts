@@ -162,4 +162,21 @@ describe('parseShortcuts', () => {
     expect(out?.bindings).toHaveLength(2);
     expect(out?.bindings[1].action).toEqual({ type: 'new-terminal-activity' });
   });
+
+  it('parses a close-activity binding', () => {
+    const withCloseActivity = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: 'w',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'close-activity' },
+        },
+      ],
+    };
+    const out = parseShortcuts(withCloseActivity);
+    expect(out?.bindings).toHaveLength(2);
+    expect(out?.bindings[1].action).toEqual({ type: 'close-activity' });
+  });
 });
