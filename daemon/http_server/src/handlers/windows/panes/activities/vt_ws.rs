@@ -5,7 +5,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use ozmux_multiplexer::ActivityId;
 use ozmux_terminal::vt::WireMessage;
-use ozmux_terminal::{FrameSubscription, TerminalService};
+use ozmux_terminal::{FrameSubscription, TerminalGeometry, TerminalService};
 use tokio::sync::broadcast::error::RecvError;
 
 const ESCAPE_CAPS: &[&str] = &[
@@ -110,6 +110,25 @@ async fn handle_client_binary(
     Ok(())
 }
 
+/// Sends the initial `hello` text frame announcing geometry and capability
+/// negotiation. Returns the underlying sink error when the client has
+/// already disconnected.
+async fn send_hello(
+    tx: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    geom: &TerminalGeometry,
+) -> Result<(), axum::Error> {
+    let hello = serde_json::json!({
+        "kind": "hello",
+        "seq": 0,
+        "cols": geom.cols,
+        "rows": geom.rows,
+        "cursor": geom.cursor,
+        "escape_caps": ESCAPE_CAPS,
+        "input_caps": INPUT_CAPS,
+    });
+    tx.send(Message::Text(hello.to_string().into())).await
+}
+
 /// Sends an error text frame and then a Close(1011) frame on this connection only.
 async fn send_error_and_close(
     tx: &mut futures_util::stream::SplitSink<WebSocket, Message>,
@@ -148,20 +167,7 @@ pub(super) async fn vt_ws_loop(
         Err(_) => return,
     };
 
-    let hello = serde_json::json!({
-        "kind": "hello",
-        "seq": 0,
-        "cols": geom.cols,
-        "rows": geom.rows,
-        "cursor": geom.cursor,
-        "escape_caps": ESCAPE_CAPS,
-        "input_caps": INPUT_CAPS,
-    });
-    if tx
-        .send(Message::Text(hello.to_string().into()))
-        .await
-        .is_err()
-    {
+    if send_hello(&mut tx, &geom).await.is_err() {
         return;
     }
 
