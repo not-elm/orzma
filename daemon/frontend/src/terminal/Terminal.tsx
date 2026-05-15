@@ -1,4 +1,4 @@
-//! Terminal entry component — VT canvas (DOM renderer).
+//! Terminal entry component — DOM renderer.
 
 import { clsx } from 'clsx';
 import { useEffect, useRef, useSyncExternalStore } from 'react';
@@ -9,7 +9,7 @@ import { type GridStore, GridStoreContext } from './renderer/grid-store';
 import { TerminalGrid } from './renderer/TerminalGrid';
 import { StatusBanner } from './StatusBanner';
 import { TerminalScrollbar } from './TerminalScrollbar';
-import { useCanvasTerminal } from './useCanvasTerminal';
+import { useTerminal } from './useTerminal';
 
 interface TerminalProps {
   windowId: string;
@@ -30,7 +30,7 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
     fm,
     gridStore,
     overlayStore,
-  } = useCanvasTerminal(windowId, paneId, activityId, isActive);
+  } = useTerminal(windowId, paneId, activityId, isActive);
 
   const prevActiveRef = useRef(isActive);
   // biome-ignore lint/correctness/useExhaustiveDependencies: focus/blur are stabilized by React Compiler
@@ -61,11 +61,11 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
 interface PaneBodyProps {
   paneRef: React.RefObject<HTMLDivElement | null>;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  status: ReturnType<typeof useCanvasTerminal>['status'];
+  status: ReturnType<typeof useTerminal>['status'];
   isActive: boolean;
   preedit: string;
   hyperlinks: ReadonlyMap<number, string>;
-  fm: ReturnType<typeof useCanvasTerminal>['fm'];
+  fm: ReturnType<typeof useTerminal>['fm'];
   gridStore: GridStore;
 }
 

@@ -1,5 +1,5 @@
 //! Per-Terminal external store for the Grid model — created via factory in
-//! useCanvasTerminal, provided via Context to descendants. Each <Terminal>
+//! useTerminal, provided via Context to descendants. Each <Terminal>
 //! instance gets its own store so split panes don't share cursor / cells.
 //! Bypasses React hook state so frame updates don't re-run the hook every
 //! frame (preserves Phase 3B invariant: hook re-renders only on preedit /
@@ -41,7 +41,7 @@ function gridShallowEqual(a: Grid, b: Grid): boolean {
   );
 }
 
-/** Creates a per-Terminal grid store. Use in useCanvasTerminal via useRef
+/** Creates a per-Terminal grid store. Use in useTerminal via useRef
  *  so each hook instance owns its own state. */
 export function createGridStore(): GridStore {
   let state: Grid = createGrid({ cols: 80, rows: 24 });

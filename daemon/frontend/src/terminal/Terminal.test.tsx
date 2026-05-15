@@ -21,8 +21,8 @@ const overlayStoreStub = createOverlayStore();
 vi.mock('./useTerminalSocket', () => ({
   useTerminalSocket: () => socketStub,
 }));
-vi.mock('./useCanvasTerminal', () => ({
-  useCanvasTerminal: () => ({
+vi.mock('./useTerminal', () => ({
+  useTerminal: () => ({
     paneRef: { current: null },
     textareaRef: { current: null },
     status: 'connecting' as const,

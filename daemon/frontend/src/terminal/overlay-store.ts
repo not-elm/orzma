@@ -1,5 +1,5 @@
 //! Per-Terminal external store for overlay-relevant grid state (cursor,
-//! cols/rows, font metrics). Created via factory in useCanvasTerminal,
+//! cols/rows, font metrics). Created via factory in useTerminal,
 //! provided via Context so Cursor / IME read the pane's own state.
 
 import { createContext, useContext, useSyncExternalStore } from 'react';

@@ -1,7 +1,7 @@
 //! VT terminal hook (DOM renderer): subscribes to the WebSocket, decodes
 //! frames into the grid, pushes the grid into grid-store, and wires all
-//! Phase 3A input listeners (IME / paste / mouse / focus / keydown) plus
-//! Phase 3.5 native clipboard copy.
+//! input listeners (IME / paste / mouse / focus / keydown) plus native
+//! clipboard copy.
 
 import { useEffect, useRef, useState } from 'react';
 import { type CompositionState, setupComposition } from './input/composition';
@@ -21,7 +21,7 @@ import type { SocketStatus, TerminalSocket } from './useTerminalSocket';
 import { useTerminalSocket } from './useTerminalSocket';
 
 /** Public API of the VT terminal hook (DOM renderer). */
-export interface CanvasTerminal {
+export interface TerminalApi {
   paneRef: React.RefObject<HTMLDivElement | null>;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   status: SocketStatus;
@@ -53,14 +53,14 @@ function mapsEqual<K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>): boolean {
 }
 
 /** Subscribes to the VT socket, decodes frames into the grid, pushes the grid
- *  into grid-store, and wires all Phase 3A input listeners (IME / paste / mouse
- *  / focus / keydown) plus Phase 3.5 native clipboard copy. */
-export function useCanvasTerminal(
+ *  into grid-store, and wires all input listeners (IME / paste / mouse / focus
+ *  / keydown) plus native clipboard copy. */
+export function useTerminal(
   windowId: string,
   paneId: string,
   activityId: string | null,
   isActive: boolean,
-): CanvasTerminal {
+): TerminalApi {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const gridRef = useRef(createGrid({ cols: 80, rows: 24 }));
