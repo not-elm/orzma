@@ -136,6 +136,27 @@ impl MultiplexerService {
         Err(MultiplexerError::WindowNotAttachedToSession(wid.clone()))
     }
 
+    /// Find which Window owns the given Activity by linear scan. Returns `None`
+    /// when no Window contains `aid`. O(activities) — acceptable at the 500 ms
+    /// polling cadence used by the browser-title adapter.
+    pub async fn find_window_for_activity(&self, aid: &ActivityId) -> Option<WindowId> {
+        // NOTE: collect (wid, Arc) pairs before awaiting to honour the
+        // DASHMAP-GUARD invariant: never hold a DashMap Ref across an `.await`.
+        let entries: Vec<(WindowId, Arc<Mutex<Window>>)> = self
+            .windows
+            .iter()
+            .map(|e| (e.key().clone(), e.value().clone()))
+            .collect();
+        for (wid, arc) in entries {
+            let window = arc.lock().await;
+            let found = window.panes.iter().any(|(_, p)| p.has_activity(aid));
+            if found {
+                return Some(wid);
+            }
+        }
+        None
+    }
+
     /// Resolve which Window currently owns `pid`. Returns `PaneNotFound`
     /// when the pane has no recorded owner.
     pub fn lookup_pane_window(&self, pid: &PaneId) -> MultiplexerResult<WindowId> {

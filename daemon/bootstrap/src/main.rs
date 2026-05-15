@@ -67,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
     // Adapter task: bridge terminal title-change notifications into ActivityTitles
     // so that all consumers (title_republish, WindowView builder) read from the
     // kind-agnostic map rather than directly from TerminalService.
+    let terminal_titles = titles.clone();
     let multiplexer = state.multiplexer.clone();
     tokio::spawn(async move {
         let mut rx = terminal.subscribe_title_changes();
@@ -93,9 +94,42 @@ async fn main() -> anyhow::Result<()> {
             let all = terminal.all_titles().await;
             for aid in aids {
                 if let Some(title) = all.get(&aid) {
-                    titles.set(&wid, &aid, title.clone()).await;
+                    terminal_titles.set(&wid, &aid, title.clone()).await;
                 }
             }
+        }
+    });
+
+    // Adapter task: poll browser nav-state titles every 500 ms and push any
+    // changes into ActivityTitles so the tab bar shows live page titles.
+    let browser_titles = titles.clone();
+    let browser_svc = state.browser.clone();
+    let browser_mux = state.multiplexer.clone();
+    tokio::spawn(async move {
+        use std::collections::{HashMap, HashSet};
+        let mut last: HashMap<ozmux_multiplexer::ActivityId, String> = HashMap::new();
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let known = browser_svc.known_activities().await;
+            for aid in &known {
+                let Some(mut rx) = browser_svc.watch(aid).await else {
+                    continue;
+                };
+                let title = rx.borrow_and_update().nav.title.clone();
+                if last.get(aid).map(String::as_str) == Some(title.as_str()) {
+                    continue;
+                }
+                last.insert(aid.clone(), title.clone());
+                if let Some(wid) = browser_mux.find_window_for_activity(aid).await {
+                    browser_titles.set(&wid, aid, title).await;
+                }
+            }
+            // Prune stale entries so `last` does not grow unbounded when
+            // activities are closed between polling ticks.
+            let known_set: HashSet<_> = known.into_iter().collect();
+            last.retain(|aid, _| known_set.contains(aid));
         }
     });
 

@@ -146,6 +146,11 @@ impl BrowserService {
         Ok(())
     }
 
+    /// Snapshot of all browser activity ids currently registered. Cheap clone.
+    pub async fn known_activities(&self) -> Vec<ActivityId> {
+        self.pages.read().await.keys().cloned().collect()
+    }
+
     /// Subscribe to the latest-snapshot watch channel for `aid`. The
     /// receiver immediately observes the most recent published snapshot.
     pub async fn watch(&self, aid: &ActivityId) -> Option<watch::Receiver<Arc<BrowserSnapshot>>> {
@@ -274,6 +279,14 @@ impl BrowserService {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn known_activities_starts_empty() {
+        let tmp = tempdir().unwrap();
+        let runtime = Arc::new(RuntimeRoot::new_in(tmp.path(), std::process::id()).unwrap());
+        let svc = BrowserService::new(runtime);
+        assert!(svc.known_activities().await.is_empty());
+    }
 
     #[tokio::test]
     async fn spawn_then_close_with_real_chromium() {
