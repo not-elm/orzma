@@ -17,6 +17,11 @@ pub async fn iframe_serve(
     Path((wid, pid, aid, path)): Path<(WindowId, PaneId, ActivityId, String)>,
     headers: HeaderMap,
 ) -> Result<Response, HttpError> {
+    // NOTE: same-origin GET requests (e.g. the daemon's own frontend loading an
+    // extension iframe) may legitimately omit the Origin header. This route only
+    // filters explicitly cross-origin requests; absent Origin is permitted here
+    // unlike the WebSocket upgrades (terminal_ws, handlers_ws) which always
+    // receive an Origin from the browser.
     if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
         let s = origin.to_str().map_err(|_| HttpError::ForbiddenOrigin)?;
         if !crate::origin_guard::is_allowed_origin(s) {

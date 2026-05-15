@@ -25,11 +25,13 @@ pub async fn terminal_ws(
     Query(params): Query<TerminalWsParams>,
     req: axum::extract::Request,
 ) -> Result<Response, HttpError> {
-    if let Some(origin) = req.headers().get(axum::http::header::ORIGIN) {
-        let s = origin.to_str().map_err(|_| HttpError::ForbiddenOrigin)?;
-        if !crate::origin_guard::is_allowed_origin(s) {
-            return Err(HttpError::ForbiddenOrigin);
-        }
+    let origin = req
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !crate::origin_guard::is_allowed_origin(origin) {
+        return Err(HttpError::ForbiddenOrigin);
     }
     let _activity = state
         .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Terminal)
@@ -77,6 +79,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminal_ws_rejects_missing_origin() {
+        let (router, _state, wid, pid, aid, _tmp) =
+            super::super::test_support::setup_hierarchical_extension(b"<html></html>").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws"
+                    ))
+                    // No Origin header — must be denied just as an explicit disallowed origin.
+                    .header("upgrade", "websocket")
+                    .header("connection", "upgrade")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("sec-websocket-version", "13")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn terminal_ws_rejects_unknown_activity_in_pane() {
         let (router, _state, wid, pid, _aid, _tmp) =
             super::super::test_support::setup_hierarchical_extension(b"<html></html>").await;
@@ -88,7 +114,17 @@ mod tests {
         let phantom_aid = ActivityId::new();
         let url =
             format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{phantom_aid}/terminal/ws");
-        let res = tokio_tungstenite::connect_async(url).await;
+        let req = tokio_tungstenite::tungstenite::http::Request::builder()
+            .uri(&url)
+            .header("host", addr.to_string())
+            .header("origin", "http://127.0.0.1:3200")
+            .header("upgrade", "websocket")
+            .header("connection", "upgrade")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .body(())
+            .unwrap();
+        let res = tokio_tungstenite::connect_async(req).await;
         assert!(res.is_err(), "expected upgrade failure, got Ok");
     }
 }
