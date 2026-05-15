@@ -3,7 +3,7 @@ use crate::error::HttpError;
 use crate::state::ActivityKindDiscriminant;
 use axum::{
     extract::{Path, State},
-    http::header::CONTENT_TYPE,
+    http::{HeaderMap, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
 use ozmux_multiplexer::{Activity, ActivityId, ActivityKind, PaneId, WindowId};
@@ -15,7 +15,14 @@ use serde::Serialize;
 pub async fn iframe_serve(
     State(state): State<AppState>,
     Path((wid, pid, aid, path)): Path<(WindowId, PaneId, ActivityId, String)>,
+    headers: HeaderMap,
 ) -> Result<Response, HttpError> {
+    if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
+        let s = origin.to_str().map_err(|_| HttpError::ForbiddenOrigin)?;
+        if !crate::origin_guard::is_allowed_origin(s) {
+            return Err(HttpError::ForbiddenOrigin);
+        }
+    }
     let activity = state
         .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Extension)
         .await?;

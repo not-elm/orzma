@@ -2,7 +2,7 @@ use crate::AppState;
 use crate::error::HttpError;
 use crate::state::ActivityKindDiscriminant;
 use axum::{
-    extract::{Path, Query, State, WebSocketUpgrade},
+    extract::{FromRequest, Path, Query, State, WebSocketUpgrade},
     response::Response,
 };
 use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
@@ -23,14 +23,23 @@ pub async fn terminal_ws(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
     Query(params): Query<TerminalWsParams>,
-    ws: WebSocketUpgrade,
+    req: axum::extract::Request,
 ) -> Result<Response, HttpError> {
+    if let Some(origin) = req.headers().get(axum::http::header::ORIGIN) {
+        let s = origin.to_str().map_err(|_| HttpError::ForbiddenOrigin)?;
+        if !crate::origin_guard::is_allowed_origin(s) {
+            return Err(HttpError::ForbiddenOrigin);
+        }
+    }
     let _activity = state
         .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Terminal)
         .await?;
 
     const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
-    let ws = ws.max_message_size(MAX_FRAME_BYTES);
+    let ws = WebSocketUpgrade::from_request(req, &())
+        .await
+        .map_err(|e| HttpError::Forbidden(e.to_string()))?
+        .max_message_size(MAX_FRAME_BYTES);
 
     let terminal = state.terminal.clone();
     let last_seq = params.last_seq;
@@ -41,6 +50,31 @@ pub async fn terminal_ws(
 mod tests {
     use ozmux_multiplexer::ActivityId;
     use tokio::net::TcpListener;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn terminal_ws_rejects_disallowed_origin() {
+        let (router, _state, wid, pid, aid, _tmp) =
+            super::super::test_support::setup_hierarchical_extension(b"<html></html>").await;
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws"
+                    ))
+                    .header("origin", "http://evil.example.com")
+                    .header("upgrade", "websocket")
+                    .header("connection", "upgrade")
+                    .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                    .header("sec-websocket-version", "13")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+    }
 
     #[tokio::test]
     async fn terminal_ws_rejects_unknown_activity_in_pane() {

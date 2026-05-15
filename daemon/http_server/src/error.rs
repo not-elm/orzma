@@ -43,6 +43,10 @@ pub enum HttpError {
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
 
+    /// The request's `Origin` header is not in the allowlist.
+    #[error("forbidden origin")]
+    ForbiddenOrigin,
+
     /// The resolved activity's kind does not match what the route requires.
     #[error("activity {aid} kind mismatch: want {want:?}, got {got:?}")]
     ActivityKindMismatch {
@@ -123,6 +127,7 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::Session(MultiplexerError::CannotRemoveLastActivity(_)) => {
                 (StatusCode::CONFLICT, "CANNOT_REMOVE_LAST_ACTIVITY")
             }
+            HttpError::ForbiddenOrigin => (StatusCode::FORBIDDEN, "FORBIDDEN_ORIGIN"),
             HttpError::ActivityKindMismatch { .. } => {
                 (StatusCode::CONFLICT, "ACTIVITY_KIND_MISMATCH")
             }

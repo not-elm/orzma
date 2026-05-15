@@ -5,6 +5,7 @@ pub mod extractors;
 pub mod handlers;
 pub mod layout_broadcast;
 pub mod layout_dto;
+pub(crate) mod origin_guard;
 pub mod state;
 mod title_republish;
 pub mod window_view;
