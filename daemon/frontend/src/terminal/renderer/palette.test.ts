@@ -75,10 +75,10 @@ describe('injectTerminalPalette font rules', () => {
   it('emits per-style family classes for runs and probes', () => {
     injectTerminalPalette();
     const css = document.getElementById(STYLE_ID)?.textContent ?? '';
-    expect(css).toContain('.terminal-grid .tf-bold');
+    expect(css).toContain('.terminal-grid .tf-bold { font-family:');
     expect(css).toContain('.terminal-grid .tf-italic');
     expect(css).toContain('.terminal-grid .tf-bold-italic');
     expect(css).toContain('.ozmux-font-probe');
-    expect(css).toContain('.ozmux-font-probe.tf-bold');
+    expect(css).toContain('.ozmux-font-probe.tf-bold { font-family:');
   });
 });

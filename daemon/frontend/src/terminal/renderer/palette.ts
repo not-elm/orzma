@@ -9,16 +9,16 @@ import { colorToCss } from './colors';
 const STYLE_ID = 'ozmux-terminal-palette';
 
 function fontCss(): string {
-  const f = getFontConfig();
+  const font = getFontConfig();
   return [
-    `.terminal-grid { font-family: ${f.normalFamily}, monospace; font-size: ${f.size}px; }`,
-    `.terminal-grid .tf-bold { font-family: ${f.boldFamily}, monospace; }`,
-    `.terminal-grid .tf-italic { font-family: ${f.italicFamily}, monospace; }`,
-    `.terminal-grid .tf-bold-italic { font-family: ${f.boldItalicFamily}, monospace; }`,
-    `.ozmux-font-probe { font-family: ${f.normalFamily}, monospace; font-size: ${f.size}px; }`,
-    `.ozmux-font-probe.tf-bold { font-family: ${f.boldFamily}, monospace; }`,
-    `.ozmux-font-probe.tf-italic { font-family: ${f.italicFamily}, monospace; }`,
-    `.ozmux-font-probe.tf-bold-italic { font-family: ${f.boldItalicFamily}, monospace; }`,
+    `.terminal-grid { font-family: ${font.normalFamily}, monospace; font-size: ${font.size}px; }`,
+    `.terminal-grid .tf-bold { font-family: ${font.boldFamily}, monospace; }`,
+    `.terminal-grid .tf-italic { font-family: ${font.italicFamily}, monospace; }`,
+    `.terminal-grid .tf-bold-italic { font-family: ${font.boldItalicFamily}, monospace; }`,
+    `.ozmux-font-probe { font-family: ${font.normalFamily}, monospace; font-size: ${font.size}px; }`,
+    `.ozmux-font-probe.tf-bold { font-family: ${font.boldFamily}, monospace; }`,
+    `.ozmux-font-probe.tf-italic { font-family: ${font.italicFamily}, monospace; }`,
+    `.ozmux-font-probe.tf-bold-italic { font-family: ${font.boldItalicFamily}, monospace; }`,
   ].join('\n');
 }
 
