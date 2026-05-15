@@ -349,15 +349,30 @@ pub(crate) async fn run_bridge_task(
                 match ctrl {
                     None => break,
                     Some(ControlFrame::Title(raw)) => {
+                        // NOTE: shells re-emit the same OSC title on every prompt
+                        // redraw; only signal when the value actually changed so a
+                        // redraw storm cannot drive WindowView re-broadcasts.
                         let clean = sanitize_title(&raw);
-                        vt_state.lock().expect("vt_state poisoned").title = Some(clean);
-                        if let Some(wid) = &activity_window {
+                        let changed = {
+                            let mut state = vt_state.lock().expect("vt_state poisoned");
+                            let changed = state.title.as_deref() != Some(clean.as_str());
+                            if changed {
+                                state.title = Some(clean);
+                            }
+                            changed
+                        };
+                        if changed && let Some(wid) = &activity_window {
                             let _ = title_tx.send(wid.clone());
                         }
                     }
                     Some(ControlFrame::ResetTitle) => {
-                        vt_state.lock().expect("vt_state poisoned").title = None;
-                        if let Some(wid) = &activity_window {
+                        let changed = {
+                            let mut state = vt_state.lock().expect("vt_state poisoned");
+                            let changed = state.title.is_some();
+                            state.title = None;
+                            changed
+                        };
+                        if changed && let Some(wid) = &activity_window {
                             let _ = title_tx.send(wid.clone());
                         }
                     }
@@ -491,8 +506,18 @@ mod tests {
         let _ = handle.await;
     }
 
-    #[tokio::test]
-    async fn bridge_task_captures_and_sanitizes_title() {
+    struct TitleBridge {
+        control_tx: mpsc::Sender<ControlFrame>,
+        title_rx: broadcast::Receiver<ozmux_multiplexer::WindowId>,
+        vt_state: Arc<std::sync::Mutex<VtState>>,
+        wid: ozmux_multiplexer::WindowId,
+        cancel: CancellationToken,
+        handle: tokio::task::JoinHandle<()>,
+        // NOTE: kept alive so the bridge's pty_rx does not see a closed channel.
+        _pty_tx: mpsc::Sender<Bytes>,
+    }
+
+    fn spawn_title_bridge() -> TitleBridge {
         let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
         let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
         let drop_counter = Arc::new(DropCounter::new());
@@ -508,9 +533,8 @@ mod tests {
             listener,
             wire_broadcast,
         )));
-        let (_pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
-        let (title_tx, mut title_rx) =
-            broadcast::channel::<ozmux_multiplexer::WindowId>(8);
+        let (pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
+        let (title_tx, title_rx) = broadcast::channel::<ozmux_multiplexer::WindowId>(8);
         let wid = ozmux_multiplexer::WindowId::new();
         let cancel = CancellationToken::new();
         let handle = tokio::spawn(super::run_bridge_task(
@@ -522,79 +546,103 @@ mod tests {
             title_tx,
             cancel.clone(),
         ));
+        TitleBridge {
+            control_tx,
+            title_rx,
+            vt_state,
+            wid,
+            cancel,
+            handle,
+            _pty_tx: pty_tx,
+        }
+    }
 
-        control_tx
+    #[tokio::test]
+    async fn bridge_task_captures_and_sanitizes_title() {
+        let mut bridge = spawn_title_bridge();
+
+        bridge
+            .control_tx
             .send(ControlFrame::Title("hi\x07there".into()))
             .await
             .unwrap();
-        let signalled = title_rx.recv().await.unwrap();
-        assert_eq!(signalled, wid);
+        let signalled = bridge.title_rx.recv().await.unwrap();
+        assert_eq!(signalled, bridge.wid);
         assert_eq!(
-            vt_state.lock().unwrap().title.as_deref(),
+            bridge.vt_state.lock().unwrap().title.as_deref(),
             Some("hithere"),
             "control char should be stripped before storage"
         );
 
-        cancel.cancel();
-        let _ = handle.await;
+        bridge.cancel.cancel();
+        let _ = bridge.handle.await;
     }
 
     #[tokio::test]
     async fn bridge_task_reset_title_clears_stored_title() {
-        let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
-        let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
-        let drop_counter = Arc::new(DropCounter::new());
-        let listener = TermListener {
-            reply_tx,
-            control_tx: control_tx.clone(),
-            drop_counter,
-        };
-        let (wire_broadcast, _rx) = broadcast::channel::<WireMessage>(8);
-        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(
-            10,
-            3,
-            listener,
-            wire_broadcast,
-        )));
-        let (_pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
-        let (title_tx, mut title_rx) =
-            broadcast::channel::<ozmux_multiplexer::WindowId>(8);
-        let wid = ozmux_multiplexer::WindowId::new();
-        let cancel = CancellationToken::new();
-        let handle = tokio::spawn(super::run_bridge_task(
-            vt_state.clone(),
-            pty_rx,
-            reply_rx,
-            control_rx,
-            Some(wid.clone()),
-            title_tx,
-            cancel.clone(),
-        ));
+        let mut bridge = spawn_title_bridge();
 
-        control_tx
+        bridge
+            .control_tx
             .send(ControlFrame::Title("seed".into()))
             .await
             .unwrap();
-        let _ = title_rx.recv().await.unwrap();
+        let _ = bridge.title_rx.recv().await.unwrap();
         assert_eq!(
-            vt_state.lock().unwrap().title.as_deref(),
+            bridge.vt_state.lock().unwrap().title.as_deref(),
             Some("seed"),
             "initial title should be set"
         );
 
-        control_tx
+        bridge
+            .control_tx
             .send(ControlFrame::ResetTitle)
             .await
             .unwrap();
-        let _ = title_rx.recv().await.unwrap();
+        let _ = bridge.title_rx.recv().await.unwrap();
         assert_eq!(
-            vt_state.lock().unwrap().title,
+            bridge.vt_state.lock().unwrap().title,
             None,
             "title should be cleared after ResetTitle"
         );
 
-        cancel.cancel();
-        let _ = handle.await;
+        bridge.cancel.cancel();
+        let _ = bridge.handle.await;
+    }
+
+    #[tokio::test]
+    async fn bridge_task_suppresses_unchanged_title() {
+        let mut bridge = spawn_title_bridge();
+
+        bridge
+            .control_tx
+            .send(ControlFrame::Title("same".into()))
+            .await
+            .unwrap();
+        assert_eq!(bridge.title_rx.recv().await.unwrap(), bridge.wid);
+
+        bridge
+            .control_tx
+            .send(ControlFrame::Title("same".into()))
+            .await
+            .unwrap();
+        bridge
+            .control_tx
+            .send(ControlFrame::Title("different".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            bridge.title_rx.recv().await.unwrap(),
+            bridge.wid,
+            "only the changed title should be signalled; the repeat is dropped"
+        );
+        assert!(
+            bridge.title_rx.try_recv().is_err(),
+            "no extra signal for the unchanged title"
+        );
+
+        bridge.cancel.cancel();
+        let _ = bridge.handle.await;
     }
 
     #[tokio::test]

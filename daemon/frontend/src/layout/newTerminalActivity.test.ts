@@ -71,7 +71,7 @@ describe('newTerminalActivity', () => {
     await newTerminalActivity('wid-1', 'pid-1');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(console.warn).toHaveBeenCalledWith(
-      'activate new activity failed',
+      'activate activity failed',
       expect.objectContaining({
         windowId: 'wid-1',
         paneId: 'pid-1',

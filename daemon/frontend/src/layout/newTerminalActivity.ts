@@ -1,4 +1,5 @@
-import { activateActivityEndpoint, addActivityEndpoint } from '../terminal/api';
+import { addActivityEndpoint } from '../terminal/api';
+import { activateActivity } from './activateActivity';
 import type { PaneId, WindowId } from './types';
 
 export async function newTerminalActivity(windowId: WindowId, paneId: PaneId): Promise<void> {
@@ -28,24 +29,5 @@ export async function newTerminalActivity(windowId: WindowId, paneId: PaneId): P
     return;
   }
 
-  try {
-    const resp = await fetch(activateActivityEndpoint(windowId, paneId, activityId), {
-      method: 'POST',
-    });
-    if (!resp.ok) {
-      console.warn('activate new activity failed', {
-        windowId,
-        paneId,
-        activityId,
-        status: resp.status,
-      });
-    }
-  } catch (e) {
-    console.warn('activate new activity request errored', {
-      windowId,
-      paneId,
-      activityId,
-      error: e,
-    });
-  }
+  await activateActivity(windowId, paneId, activityId);
 }

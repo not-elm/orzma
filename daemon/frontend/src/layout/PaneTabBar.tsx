@@ -1,6 +1,6 @@
 import { clsx } from 'clsx';
 import type { PointerEvent } from 'react';
-import { activateActivityEndpoint } from '../terminal/api';
+import { activateActivity } from './activateActivity';
 import type { ActivityId, PaneView } from './types';
 
 interface PaneTabBarProps {
@@ -17,9 +17,7 @@ export function PaneTabBar({ windowId, pane, isActive, onActivate }: PaneTabBarP
     // Pane focus first, then the activity switch — a single defined order.
     if (!isActive) onActivate();
     if (activityId === pane.active_activity) return;
-    fetch(activateActivityEndpoint(windowId, pane.id, activityId), { method: 'POST' }).catch(
-      (err) => console.warn('failed to activate activity', err),
-    );
+    void activateActivity(windowId, pane.id, activityId);
   };
 
   return (
