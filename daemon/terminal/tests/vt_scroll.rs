@@ -161,3 +161,35 @@ async fn scroll_position_locks_during_new_output() {
 
     svc.kill(&aid).await.unwrap();
 }
+
+#[tokio::test]
+async fn snapshot_after_scroll_contains_history() {
+    let svc = TerminalService::default();
+    let aid = spawn_shell(&svc).await;
+
+    let mut cmd = String::new();
+    for i in 0..30 {
+        cmd.push_str(&format!("echo line{i}\n"));
+    }
+    svc.write(&aid, cmd.as_bytes()).await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    // NOTE: scroll back enough to bring early lines into the visible viewport.
+    svc.scroll(&aid, 25).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let snap = read_snapshot(&svc, &aid).await;
+    let visible: Vec<String> = (0..snap.rows as usize).map(|r| row_text(&snap, r)).collect();
+    let joined = visible.join("|");
+    // NOTE: after scrolling back 25 lines on a 5-row terminal with ~30 echo
+    // lines, the viewport must contain low-numbered "line<N>" entries that
+    // were previously in history.
+    assert!(
+        visible.iter().any(|row| row.contains("line0")
+            || row.contains("line1")
+            || row.contains("line2")),
+        "viewport after scroll back should expose early history; visible={joined:?}"
+    );
+
+    svc.kill(&aid).await.unwrap();
+}
