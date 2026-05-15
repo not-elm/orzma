@@ -91,14 +91,16 @@ export function applyFrame(grid: Grid, frame: RenderFrame): void {
   }
 }
 
+/**
+ * per-row content diffing. A vim page-down or terminal scroll arrives
+ * as a snapshot (Alacritty marks scroll as full damage; ozmux's bridge
+ * also promotes deltas with ≥70% dirty rows to snapshots). The naive
+ * "reset cells + bump every row" approach would force React.memo on every
+ * <Row> to re-render every frame. By comparing the new content against the
+ * previous row and preserving the cells reference + rowVersions entry when
+ * nothing changed, unchanged rows skip render entirely.
+ */
 function applySnapshot(grid: Grid, frame: FrameSnapshot): void {
-  // NOTE: per-row content diffing. A vim page-down or terminal scroll arrives
-  // as a snapshot (Alacritty marks scroll as full damage; ozmux's bridge
-  // also promotes deltas with ≥70% dirty rows to snapshots). The naive
-  // "reset cells + bump every row" approach would force React.memo on every
-  // <Row> to re-render every frame. By comparing the new content against the
-  // previous row and preserving the cells reference + rowVersions entry when
-  // nothing changed, unchanged rows skip render entirely.
   const prevCells = grid.cells;
   const prevVersions = grid.rowVersions;
   const nextCells: Cell[][] = new Array(frame.rows);
