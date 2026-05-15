@@ -92,14 +92,70 @@ impl AppState {
         pid: &PaneId,
         aid: &ActivityId,
     ) -> HttpResult {
+        let prev_active = self
+            .multiplexer
+            .with_window(wid, |w| w.pane(pid).ok().map(|p| p.active_activity.clone()))
+            .await
+            .flatten();
+
         let outcome = self
             .multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.set_active_activity(aid))
             .await?;
+
         if matches!(outcome, SetActiveOutcome::Changed) {
+            self.toggle_screencast_on_active_change(wid, pid, prev_active.as_ref(), aid)
+                .await;
             self.publish_window_layout(wid).await;
         }
         Ok(())
+    }
+
+    /// Look up the `ActivityKindDiscriminant` of `aid` within `(wid, pid)`.
+    /// Returns `None` when the activity is not present in that pane.
+    async fn activity_kind_in_pane(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> Option<ActivityKindDiscriminant> {
+        let kind = self
+            .multiplexer
+            .with_window(wid, |w| {
+                w.pane(pid).ok()?.activity(aid).map(|a| match &a.kind {
+                    ActivityKind::Terminal => ActivityKindDiscriminant::Terminal,
+                    ActivityKind::Extension { .. } => ActivityKindDiscriminant::Extension,
+                    ActivityKind::Browser { .. } => ActivityKindDiscriminant::Browser,
+                })
+            })
+            .await??;
+        Some(kind)
+    }
+
+    /// On active-activity change, pause screencast for the previous Browser
+    /// activity and resume it for the next Browser activity. Both calls are
+    /// missing-ok.
+    pub(crate) async fn toggle_screencast_on_active_change(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        prev: Option<&ActivityId>,
+        next: &ActivityId,
+    ) {
+        if let Some(prev) = prev
+            && matches!(
+                self.activity_kind_in_pane(wid, pid, prev).await,
+                Some(ActivityKindDiscriminant::Browser)
+            )
+        {
+            self.browser.pause_screencast(prev).await;
+        }
+        if matches!(
+            self.activity_kind_in_pane(wid, pid, next).await,
+            Some(ActivityKindDiscriminant::Browser)
+        ) {
+            self.browser.resume_screencast(next).await;
+        }
     }
 
     pub async fn activate_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult {
