@@ -1,0 +1,27 @@
+[package]
+name = "ozmux_browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+ozmux_multiplexer = { path = "../multiplexer" }
+ozmux_extension = { path = "../extension" }
+chromiumoxide = { version = "0.7.0", features = ["tokio-runtime"] }
+decrypt-cookies = "0.11.1"
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = { workspace = true }
