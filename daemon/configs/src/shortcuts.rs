@@ -504,6 +504,7 @@ mod tests {
         "#;
         let b: Binding = toml::from_str(toml).unwrap();
         assert_eq!(b.chord.key, Key::Char('['));
+        assert_eq!(b.chord.modifiers, Modifiers::default());
         assert!(matches!(
             b.action,
             Action::FocusActivity {
