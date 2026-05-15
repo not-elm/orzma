@@ -5,7 +5,7 @@
 //! integration tests under `daemon/terminal/tests/`.
 
 use crate::error::TerminalResult;
-use crate::pty::TerminalService;
+use crate::service::TerminalService;
 use crate::vt::frame_ring::WireMessage;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::{TermDamage, TermMode};

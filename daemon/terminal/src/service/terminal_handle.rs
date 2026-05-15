@@ -1,10 +1,13 @@
-use crate::pty::{TerminalEvent, ring_buffer::RingBuffer};
+//! Per-activity bundle of PTY master/writer, scrollback, and VT bridge state.
+
+use crate::event::TerminalEvent;
+use crate::pty::scrollback::ScrollbackBuffer;
 use crate::vt::bridge::{VtState, run_bridge_task};
 use crate::vt::frame_ring::WireMessage;
 use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 use bytes::Bytes;
 use portable_pty::{ChildKiller, MasterPty};
-use std::{io::Write, num::NonZero, sync::Arc};
+use std::{io::Write, sync::Arc};
 use tokio::sync::{
     Mutex, broadcast,
     broadcast::{Receiver, Sender},
@@ -12,59 +15,7 @@ use tokio::sync::{
 };
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Debug)]
-pub(crate) struct ScrollbackBuffer(Arc<Mutex<RingBuffer>>);
-
-impl ScrollbackBuffer {
-    const SCROLLBACK_BYTES: usize = 256 * 1024;
-    pub fn new() -> Self {
-        let capacity = NonZero::new(Self::SCROLLBACK_BYTES).unwrap();
-        Self(Arc::new(Mutex::new(RingBuffer::with_capacity(capacity))))
-    }
-
-    /// Bare push/snapshot are test-only — production code MUST use
-    /// `push_and_broadcast` and `snapshot_and_subscribe` to keep the producer
-    /// and consumer sides serialized through a single critical section.
-    #[cfg(test)]
-    #[expect(
-        dead_code,
-        reason = "test-only helper; production goes through push_and_broadcast"
-    )]
-    #[inline]
-    pub async fn push(&self, data: &[u8]) {
-        self.0.lock().await.push(data);
-    }
-
-    #[cfg(test)]
-    #[inline]
-    pub async fn snapshot(&self) -> Vec<u8> {
-        self.0.lock().await.snapshot()
-    }
-
-    /// Producer-side primitive: push a chunk and broadcast under the same lock.
-    /// Used by the PTY bridge task. Races with `snapshot_and_subscribe` are
-    /// serialized through the scrollback mutex.
-    pub async fn push_and_broadcast(&self, sender: &Sender<TerminalEvent>, chunk: Vec<u8>) {
-        let mut guard = self.0.lock().await;
-        guard.push(&chunk);
-        let _ = sender.send(TerminalEvent::Data { buffer: chunk });
-    }
-
-    /// Consumer-side primitive: take the scrollback snapshot AND subscribe to
-    /// the broadcast channel under the same lock. Used by the WS handler at
-    /// connect time. Guarantees zero duplicates and zero gaps.
-    pub async fn snapshot_and_subscribe(
-        &self,
-        sender: &Sender<TerminalEvent>,
-    ) -> (Vec<u8>, Receiver<TerminalEvent>) {
-        let guard = self.0.lock().await;
-        let snap = guard.snapshot();
-        let rx = sender.subscribe();
-        (snap, rx)
-    }
-}
-
-pub(crate) struct PtyHandle {
+pub(crate) struct TerminalHandle {
     pub master: Mutex<Box<dyn MasterPty + Send>>,
     pub writer: Mutex<Box<dyn Write + Send>>,
     pub scrollback: ScrollbackBuffer,
@@ -77,7 +28,7 @@ pub(crate) struct PtyHandle {
     /// `subscribe_frames`, `read_geometry`, and the
     /// `cfg(any(test, feature = "test-helpers"))` helpers (`inspect_row`,
     /// `inspect_damage_and_reset`, `peek_pending_user_input`) in
-    /// `pty/test_helpers.rs`.
+    /// `service/test_helpers.rs`.
     pub(crate) vt_state: Arc<std::sync::Mutex<VtState>>,
 
     /// Reply-required events from `TermListener` (unbounded; must-not-drop
@@ -120,17 +71,20 @@ pub(crate) struct PtyHandle {
     /// the bridge task after `term.resize` sets `Full` damage.
     pub(crate) vt_chunk_tx: mpsc::Sender<Bytes>,
 
-    /// Cancellation for the VT bridge task; cancelled on `PtyHandle::drop`.
+    /// Cancellation for the VT bridge task; cancelled on `TerminalHandle::drop`.
     pub(crate) vt_cancel: CancellationToken,
 }
 
-impl PtyHandle {
+impl TerminalHandle {
+    /// Construct a handle, spawning the VT bridge task on the current runtime.
+    ///
+    /// Called from `TerminalService::spawn` only.
     #[expect(
         clippy::too_many_arguments,
         reason = "constructor wires raw PTY + VT bridge resources; a builder \
                   would obscure the single call site in TerminalService::spawn"
     )]
-    pub fn new(
+    pub(crate) fn new(
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
         event_sender: Sender<TerminalEvent>,
@@ -161,7 +115,7 @@ impl PtyHandle {
         let vt_cancel = CancellationToken::new();
 
         // NOTE: the JoinHandle is intentionally discarded; cancellation via
-        // vt_cancel on PtyHandle::drop is sufficient to terminate the task.
+        // vt_cancel on TerminalHandle::drop is sufficient to terminate the task.
         tokio::spawn(run_bridge_task(
             vt_state.clone(),
             vt_chunk_rx,
@@ -188,55 +142,15 @@ impl PtyHandle {
 
     /// Thin wrapper for the WS handler. The PTY bridge task does not go through
     /// this — it holds its own (scrollback, event_sender) clones.
-    pub async fn snapshot_and_subscribe(&self) -> (Vec<u8>, Receiver<TerminalEvent>) {
+    pub(crate) async fn snapshot_and_subscribe(&self) -> (Vec<u8>, Receiver<TerminalEvent>) {
         self.scrollback
             .snapshot_and_subscribe(&self.event_sender)
             .await
     }
 }
 
-impl Drop for PtyHandle {
+impl Drop for TerminalHandle {
     fn drop(&mut self) {
         self.vt_cancel.cancel();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::pty::TerminalEvent;
-    use tokio::sync::broadcast;
-
-    #[tokio::test]
-    async fn push_and_broadcast_writes_to_scrollback_and_sends_event() {
-        let scrollback = ScrollbackBuffer::new();
-        let (tx, mut rx) = broadcast::channel(16);
-
-        scrollback.push_and_broadcast(&tx, b"hello".to_vec()).await;
-
-        assert_eq!(scrollback.snapshot().await, b"hello");
-        match rx.recv().await.unwrap() {
-            TerminalEvent::Data { buffer } => assert_eq!(buffer, b"hello"),
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn snapshot_and_subscribe_captures_prior_pushes_only_in_snapshot() {
-        let scrollback = ScrollbackBuffer::new();
-        let (tx, _) = broadcast::channel(16);
-
-        scrollback.push_and_broadcast(&tx, b"old".to_vec()).await;
-
-        let (snap, mut rx) = scrollback.snapshot_and_subscribe(&tx).await;
-        assert_eq!(snap, b"old");
-
-        scrollback.push_and_broadcast(&tx, b"new".to_vec()).await;
-
-        match rx.recv().await.unwrap() {
-            TerminalEvent::Data { buffer } => assert_eq!(buffer, b"new"),
-            other => panic!("unexpected event: {other:?}"),
-        }
-        assert!(rx.try_recv().is_err());
     }
 }
