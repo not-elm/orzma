@@ -16,10 +16,14 @@ use tokio::sync::{
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct TerminalHandle {
-    pub master: Mutex<Box<dyn MasterPty + Send>>,
-    pub writer: Mutex<Box<dyn Write + Send>>,
-    pub scrollback: ScrollbackBuffer,
-    pub event_sender: Sender<TerminalEvent>,
+    pub(super) master: Mutex<Box<dyn MasterPty + Send>>,
+    pub(super) writer: Mutex<Box<dyn Write + Send>>,
+    /// Handle-side sender for the VT fan-out channel. Used by
+    /// `TerminalService::resize` to send a synthetic empty chunk that wakes
+    /// the bridge task after `term.resize` sets `Full` damage.
+    pub(super) vt_chunk_tx: mpsc::Sender<Bytes>,
+    pub(super) event_sender: Sender<TerminalEvent>,
+    scrollback: ScrollbackBuffer,
     _child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
 
     /// Bundled VT state (Term + Parser + FrameRing + pending_user_input),
@@ -29,50 +33,33 @@ pub(crate) struct TerminalHandle {
     /// `cfg(any(test, feature = "test-helpers"))` helpers (`inspect_row`,
     /// `inspect_damage_and_reset`, `peek_pending_user_input`) in
     /// `service/test_helpers.rs`.
-    pub(crate) vt_state: Arc<std::sync::Mutex<VtState>>,
+    pub(super) vt_state: Arc<std::sync::Mutex<VtState>>,
 
     /// Reply-required events from `TermListener` (unbounded; must-not-drop
-    /// to avoid capability-query backflow regression).
-    #[expect(
-        dead_code,
-        reason = "held for the lifetime of TermListener (which owns a clone); \
-                  reply_rx is consumed by run_bridge_task"
-    )]
-    pub(crate) reply_tx: mpsc::UnboundedSender<ReplyFrame>,
+    /// to avoid capability-query backflow regression). Held only to keep
+    /// the channel open; `TermListener` owns the active clone and
+    /// `reply_rx` is consumed by `run_bridge_task`.
+    _reply_tx: mpsc::UnboundedSender<ReplyFrame>,
 
     /// Best-effort control events (bounded cap=64); try_send drops are
-    /// rate-limited via `DropCounter`.
-    #[expect(
-        dead_code,
-        reason = "held for the lifetime of TermListener (which owns a clone); \
-                  control_rx is consumed by run_bridge_task"
-    )]
-    pub(crate) control_tx: mpsc::Sender<ControlFrame>,
+    /// rate-limited via `DropCounter`. Held only to keep the channel
+    /// open; `TermListener` owns the active clone and `control_rx` is
+    /// consumed by `run_bridge_task`.
+    _control_tx: mpsc::Sender<ControlFrame>,
 
-    /// Broadcast of wire messages (Binary deltas + Text sidecars).
-    #[expect(
-        dead_code,
-        reason = "held to keep the broadcast channel open; the active Sender \
-                  lives on VtState::wire_broadcast and subscribers attach via \
-                  TerminalService::subscribe_frames"
-    )]
-    pub(crate) frame_broadcast: broadcast::Sender<WireMessage>,
+    /// Broadcast of wire messages (Binary deltas + Text sidecars). Held
+    /// only to keep the channel open; the active `Sender` lives on
+    /// `VtState::wire_broadcast` and subscribers attach via
+    /// `TerminalService::subscribe_frames`.
+    _frame_broadcast: broadcast::Sender<WireMessage>,
 
     /// Aggregated drop counter for bounded channel `try_send` failures.
-    #[expect(
-        dead_code,
-        reason = "held for the lifetime of TermListener (which owns an Arc clone) \
-                  so the counter outlives any in-flight try_send"
-    )]
-    pub(crate) drop_counter: Arc<DropCounter>,
-
-    /// Handle-side sender for the VT fan-out channel. Used by
-    /// `TerminalService::resize` to send a synthetic empty chunk that wakes
-    /// the bridge task after `term.resize` sets `Full` damage.
-    pub(crate) vt_chunk_tx: mpsc::Sender<Bytes>,
+    /// Held only to outlive any in-flight `try_send`; `TermListener` owns
+    /// an `Arc` clone.
+    _drop_counter: Arc<DropCounter>,
 
     /// Cancellation for the VT bridge task; cancelled on `TerminalHandle::drop`.
-    pub(crate) vt_cancel: CancellationToken,
+    vt_cancel: CancellationToken,
 }
 
 impl TerminalHandle {
@@ -131,10 +118,10 @@ impl TerminalHandle {
             master: Mutex::new(master),
             _child_killer: child_killer,
             vt_state,
-            reply_tx,
-            control_tx,
-            frame_broadcast,
-            drop_counter,
+            _reply_tx: reply_tx,
+            _control_tx: control_tx,
+            _frame_broadcast: frame_broadcast,
+            _drop_counter: drop_counter,
             vt_chunk_tx,
             vt_cancel,
         }
