@@ -1,14 +1,17 @@
 //! Terminal entry component — VT canvas (DOM renderer).
 
 import { clsx } from 'clsx';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { Cursor } from './overlay/Cursor';
 import { IME } from './overlay/IME';
 import { OverlayStoreContext, useOverlayState } from './overlay-store';
-import { GridStoreContext } from './renderer/grid-store';
+import { type GridStore, GridStoreContext } from './renderer/grid-store';
 import { TerminalGrid } from './renderer/TerminalGrid';
+import { ScrolledBadge } from './ScrolledBadge';
 import { StatusBanner } from './StatusBanner';
+import { TerminalScrollbar } from './TerminalScrollbar';
 import { useCanvasTerminal } from './useCanvasTerminal';
+import type { TerminalSocket } from './useTerminalSocket';
 
 interface TerminalProps {
   windowId: string;
@@ -29,6 +32,7 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
     fm,
     gridStore,
     overlayStore,
+    socket,
   } = useCanvasTerminal(windowId, paneId, activityId, isActive);
 
   const prevActiveRef = useRef(isActive);
@@ -50,6 +54,8 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
           preedit={preedit}
           hyperlinks={hyperlinks}
           fm={fm}
+          gridStore={gridStore}
+          socket={socket}
         />
       </OverlayStoreContext.Provider>
     </GridStoreContext.Provider>
@@ -64,6 +70,8 @@ interface PaneBodyProps {
   preedit: string;
   hyperlinks: ReadonlyMap<number, string>;
   fm: ReturnType<typeof useCanvasTerminal>['fm'];
+  gridStore: GridStore;
+  socket: TerminalSocket;
 }
 
 function TerminalPaneBody({
@@ -74,8 +82,21 @@ function TerminalPaneBody({
   preedit,
   hyperlinks,
   fm,
+  gridStore,
+  socket,
 }: PaneBodyProps) {
   const overlay = useOverlayState();
+  const scrollState = useSyncExternalStore(
+    gridStore.subscribe,
+    gridStore.getScrollSnapshot,
+    gridStore.getScrollSnapshot,
+  );
+  const grid = useSyncExternalStore(
+    gridStore.subscribe,
+    gridStore.getSnapshot,
+    gridStore.getSnapshot,
+  );
+  const viewportRows = grid.rows;
   return (
     <div
       ref={paneRef}
@@ -96,6 +117,15 @@ function TerminalPaneBody({
         spellCheck={false}
         // biome-ignore lint/a11y/noAutofocus: keystroke sink — invisible
         autoFocus={isActive}
+      />
+      <TerminalScrollbar
+        displayOffset={scrollState.displayOffset}
+        historySize={scrollState.historySize}
+        viewportRows={viewportRows}
+      />
+      <ScrolledBadge
+        displayOffset={scrollState.displayOffset}
+        onResume={() => socket.sendControl({ kind: 'scroll_to_bottom' })}
       />
       {status === 'disconnected' && <StatusBanner kind="disconnected" onReconnect={() => {}} />}
       {status === 'exited' && <StatusBanner kind="exited" onReconnect={() => {}} />}
