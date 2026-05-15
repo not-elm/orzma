@@ -12,6 +12,8 @@
   --tn-bg-popover: #1f2335;
   --tn-bg-muted: #292e42;
   --tn-bg-status: #16161e;
+  --tn-bg-pane-inactive: #15161f;
+  --tn-pane-inactive-overlay: rgba(15, 16, 22, 0.4);
 
   --tn-fg: #c0caf5;
   --tn-fg-muted: #9aa5ce;
@@ -65,6 +67,8 @@
 
   --color-tmux-pane-border: var(--tn-border);
   --color-tmux-pane-active: var(--tn-blue);
+  --color-tmux-pane-inactive-bg: var(--tn-bg-pane-inactive);
+  --color-tmux-pane-inactive-overlay: var(--tn-pane-inactive-overlay);
   --color-tmux-status-bar: var(--tn-bg-status);
   --color-tmux-status-bar-foreground: var(--tn-blue);
   --color-tmux-cursor: var(--tn-cursor);

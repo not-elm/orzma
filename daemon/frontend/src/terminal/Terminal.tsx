@@ -1,5 +1,6 @@
 //! Terminal entry component — VT canvas (DOM renderer).
 
+import { clsx } from 'clsx';
 import { useEffect, useRef } from 'react';
 import { Cursor } from './overlay/Cursor';
 import { IME } from './overlay/IME';
@@ -76,7 +77,13 @@ function TerminalPaneBody({
 }: PaneBodyProps) {
   const overlay = useOverlayState();
   return (
-    <div ref={paneRef} className="terminal-pane relative h-full w-full bg-background">
+    <div
+      ref={paneRef}
+      className={clsx(
+        'terminal-pane relative h-full w-full',
+        isActive ? 'bg-background' : 'bg-tmux-pane-inactive-bg',
+      )}
+    >
       <TerminalGrid fm={fm} hyperlinks={hyperlinks} />
       <Cursor cursor={overlay.cursor} isActive={isActive} fm={overlay.fm} />
       {preedit && <IME preedit={preedit} cursor={overlay.cursor} fm={overlay.fm} />}
@@ -92,6 +99,12 @@ function TerminalPaneBody({
       />
       {status === 'disconnected' && <StatusBanner kind="disconnected" onReconnect={() => {}} />}
       {status === 'exited' && <StatusBanner kind="exited" onReconnect={() => {}} />}
+      {!isActive && (
+        <div
+          className="absolute inset-0 z-10 pointer-events-none bg-tmux-pane-inactive-overlay"
+          aria-hidden="true"
+        />
+      )}
     </div>
   );
 }
