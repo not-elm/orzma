@@ -7,11 +7,9 @@ import { IME } from './overlay/IME';
 import { OverlayStoreContext, useOverlayState } from './overlay-store';
 import { type GridStore, GridStoreContext } from './renderer/grid-store';
 import { TerminalGrid } from './renderer/TerminalGrid';
-import { ScrolledBadge } from './ScrolledBadge';
 import { StatusBanner } from './StatusBanner';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { useCanvasTerminal } from './useCanvasTerminal';
-import type { TerminalSocket } from './useTerminalSocket';
 
 interface TerminalProps {
   windowId: string;
@@ -32,7 +30,6 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
     fm,
     gridStore,
     overlayStore,
-    socket,
   } = useCanvasTerminal(windowId, paneId, activityId, isActive);
 
   const prevActiveRef = useRef(isActive);
@@ -55,7 +52,6 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
           hyperlinks={hyperlinks}
           fm={fm}
           gridStore={gridStore}
-          socket={socket}
         />
       </OverlayStoreContext.Provider>
     </GridStoreContext.Provider>
@@ -71,7 +67,6 @@ interface PaneBodyProps {
   hyperlinks: ReadonlyMap<number, string>;
   fm: ReturnType<typeof useCanvasTerminal>['fm'];
   gridStore: GridStore;
-  socket: TerminalSocket;
 }
 
 function TerminalPaneBody({
@@ -83,7 +78,6 @@ function TerminalPaneBody({
   hyperlinks,
   fm,
   gridStore,
-  socket,
 }: PaneBodyProps) {
   const overlay = useOverlayState();
   const scrollState = useSyncExternalStore(
@@ -122,10 +116,6 @@ function TerminalPaneBody({
         displayOffset={scrollState.displayOffset}
         historySize={scrollState.historySize}
         viewportRows={viewportRows}
-      />
-      <ScrolledBadge
-        displayOffset={scrollState.displayOffset}
-        onResume={() => socket.sendControl({ kind: 'scroll_to_bottom' })}
       />
       {status === 'disconnected' && <StatusBanner kind="disconnected" onReconnect={() => {}} />}
       {status === 'exited' && <StatusBanner kind="exited" onReconnect={() => {}} />}
