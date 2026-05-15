@@ -25,6 +25,10 @@ name = "vt_coalescer"
 path = "tests/vt_coalescer.rs"
 required-features = ["test-helpers"]
 
+[[test]]
+name = "vt_scroll"
+path = "tests/vt_scroll.rs"
+
 [[bench]]
 name = "frame_encode"
 harness = false
