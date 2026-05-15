@@ -50,7 +50,7 @@ mod tests {
     #[tokio::test]
     async fn cycle_next_changes_active_and_publishes() {
         let state = fresh_state();
-        let (_sid, wid, pid, aid0) = bootstrap_default(&state).await;
+        let (_sid, wid, pid, _aid0) = bootstrap_default(&state).await;
         let aid1 = add_activity(&state, &wid, &pid).await;
         let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
         let (router, _state) = router_with(state);
@@ -71,7 +71,11 @@ mod tests {
             .expect("publish timed out")
             .expect("recv error");
         assert_eq!(view["id"].as_str(), Some(wid.as_ref()));
-        let _ = (aid0, aid1);
+        assert_eq!(
+            view["panes"][0]["active_activity"].as_str(),
+            Some(aid1.as_ref()),
+            "cycle_next must advance active_activity to the second activity"
+        );
     }
 
     #[tokio::test]
@@ -92,7 +96,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        let res = tokio::time::timeout(std::time::Duration::from_millis(80), rx.recv()).await;
+        let res = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
         assert!(res.is_err(), "Unchanged outcome must not publish");
     }
 
