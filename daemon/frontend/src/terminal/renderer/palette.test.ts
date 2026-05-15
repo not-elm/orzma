@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { injectTerminalPalette, removeTerminalPalette } from './palette';
-
-const STYLE_ID = 'ozmux-terminal-palette';
+import { injectTerminalPalette, removeTerminalPalette, STYLE_ID } from './palette';
 
 afterEach(() => {
   removeTerminalPalette();

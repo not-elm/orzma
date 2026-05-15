@@ -13,7 +13,7 @@ import { clsx } from 'clsx';
 import { memo } from 'react';
 import type { Color } from '../protocol/frame';
 import { colorToCss, dimColor } from './colors';
-import { measureGlyph } from './font';
+import { faceClass, measureGlyph } from './font';
 import type { Cell } from './grid';
 
 interface RowProps {
@@ -59,12 +59,7 @@ function styleClasses(style: number): string {
 }
 
 function familyClass(style: number): string {
-  const bold = (style & STYLE_BOLD) !== 0;
-  const italic = (style & STYLE_ITALIC) !== 0;
-  if (bold && italic) return 'tf-bold-italic';
-  if (bold) return 'tf-bold';
-  if (italic) return 'tf-italic';
-  return '';
+  return faceClass((style & STYLE_BOLD) !== 0, (style & STYLE_ITALIC) !== 0);
 }
 
 function colorClass(c: Color, channel: 'fg' | 'bg'): string {

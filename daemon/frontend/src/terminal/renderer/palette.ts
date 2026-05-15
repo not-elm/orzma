@@ -5,21 +5,29 @@
 
 import { getFontConfig, pointsToPx } from '../../config/font';
 import { colorToCss } from './colors';
+import { FACE_BOLD, FACE_BOLD_ITALIC, FACE_ITALIC, PROBE_CLASS } from './font';
 
-const STYLE_ID = 'ozmux-terminal-palette';
+/** Element id of the runtime terminal stylesheet. */
+export const STYLE_ID = 'ozmux-terminal-palette';
 
 function fontCss(): string {
   const font = getFontConfig();
-  return [
-    `.terminal-grid { font-family: ${font.normalFamily}, monospace; font-size: ${pointsToPx(font.size)}px; }`,
-    `.terminal-grid .tf-bold { font-family: ${font.boldFamily}, monospace; }`,
-    `.terminal-grid .tf-italic { font-family: ${font.italicFamily}, monospace; }`,
-    `.terminal-grid .tf-bold-italic { font-family: ${font.boldItalicFamily}, monospace; }`,
-    `.ozmux-font-probe { font-family: ${font.normalFamily}, monospace; font-size: ${pointsToPx(font.size)}px; }`,
-    `.ozmux-font-probe.tf-bold { font-family: ${font.boldFamily}, monospace; }`,
-    `.ozmux-font-probe.tf-italic { font-family: ${font.italicFamily}, monospace; }`,
-    `.ozmux-font-probe.tf-bold-italic { font-family: ${font.boldItalicFamily}, monospace; }`,
-  ].join('\n');
+  const sizeRule = `font-size: ${pointsToPx(font.size)}px;`;
+  // Each face: the tf-* class (empty for normal) and its resolved family.
+  const faces: ReadonlyArray<readonly [string, string]> = [
+    ['', font.normalFamily],
+    [FACE_BOLD, font.boldFamily],
+    [FACE_ITALIC, font.italicFamily],
+    [FACE_BOLD_ITALIC, font.boldItalicFamily],
+  ];
+  const rules = [`.terminal-grid { ${sizeRule} }`, `.${PROBE_CLASS} { ${sizeRule} }`];
+  for (const [face, family] of faces) {
+    const decl = `font-family: ${family}, monospace;`;
+    // Runs are descendants of `.terminal-grid`; probes carry the class directly.
+    rules.push(`.terminal-grid${face ? ` .${face}` : ''} { ${decl} }`);
+    rules.push(`.${PROBE_CLASS}${face ? `.${face}` : ''} { ${decl} }`);
+  }
+  return rules.join('\n');
 }
 
 function buildPaletteCss(): string {
