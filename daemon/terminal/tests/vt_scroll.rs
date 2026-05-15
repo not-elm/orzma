@@ -299,3 +299,28 @@ async fn clear_viewport_preserves_offset_csi_2j() {
 
     svc.kill(&aid).await.unwrap();
 }
+
+#[tokio::test]
+async fn clear_history_resets_offset_csi_3j() {
+    let svc = TerminalService::default();
+    let aid = spawn_shell(&svc).await;
+
+    let mut cmd = String::new();
+    for i in 0..30 {
+        cmd.push_str(&format!("echo line{i}\n"));
+    }
+    svc.write(&aid, cmd.as_bytes()).await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    svc.scroll(&aid, 10).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(read_display_offset(&svc, &aid).await > 0);
+
+    svc.write(&aid, b"printf '\\033[3J'\n").await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    let after = read_display_offset(&svc, &aid).await;
+    assert_eq!(after, 0, "CSI 3J must reset display_offset to 0");
+
+    svc.kill(&aid).await.unwrap();
+}
