@@ -28,8 +28,8 @@ pub(crate) struct RawShortcuts {
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `prefix` and `bindings` are independently
-    /// optional; `bindings` is full-replace. The `theme` section uses
-    /// `ThemePatch::apply_to` for per-field merge.
+    /// optional; `bindings` is full-replace. The `theme` and `font` sections use
+    /// their respective `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(raw) = self.shortcuts {
             if let Some(prefix) = raw.prefix {
@@ -66,7 +66,7 @@ pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
         }
     }
     let size = configs.font.size;
-    if !(size > 0.0 && size <= 200.0) {
+    if size <= 0.0 || size > 200.0 {
         return Err(OzmuxConfigsError::InvalidFontSize { size });
     }
     Ok(())
