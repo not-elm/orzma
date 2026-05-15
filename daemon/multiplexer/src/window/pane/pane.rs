@@ -15,9 +15,8 @@ pub enum SetActiveOutcome {
     Changed,
 }
 
-/// Direction to step the active activity within a Pane, used by
-/// `cycle_active_activity`. Serializes as `"next"` / `"prev"` so the HTTP
-/// body can deserialize it directly.
+/// Direction to step the active activity within a Pane. Serializes as
+/// kebab-case (`"next"` / `"prev"`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CycleDirection {

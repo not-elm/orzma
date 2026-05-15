@@ -25,34 +25,19 @@ pub async fn cycle_activity(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_helpers::{bootstrap_default, fresh_state, router_with};
+    use crate::test_helpers::{
+        add_activity_via_window, bootstrap_default, fresh_state, router_with,
+    };
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use ozmux_multiplexer::{Activity, ActivityId, PaneId};
+    use ozmux_multiplexer::PaneId;
     use tower::ServiceExt;
-
-    async fn add_activity(
-        state: &crate::AppState,
-        wid: &ozmux_multiplexer::WindowId,
-        pid: &PaneId,
-    ) -> ActivityId {
-        let aid = ActivityId::new();
-        state
-            .multiplexer
-            .with_window_or_404(wid, |w| {
-                w.pane_mut(pid)?
-                    .add_activity(Activity::terminal(aid.clone()))
-            })
-            .await
-            .unwrap();
-        aid
-    }
 
     #[tokio::test]
     async fn cycle_next_changes_active_and_publishes() {
         let state = fresh_state();
         let (_sid, wid, pid, _aid0) = bootstrap_default(&state).await;
-        let aid1 = add_activity(&state, &wid, &pid).await;
+        let aid1 = add_activity_via_window(&state, &wid, &pid).await;
         let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
         let (router, _state) = router_with(state);
         let resp = router
