@@ -538,7 +538,6 @@ mod tests {
 
     #[test]
     fn build_snapshot_includes_display_offset_and_history_size() {
-        use alacritty_terminal::grid::Dimensions;
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
         let cfg = Config {

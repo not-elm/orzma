@@ -39,6 +39,8 @@ fn make_snapshot_80x24() -> FrameSnapshot {
         reason: SnapshotReason::Initial,
         modes: vec![],
         hyperlinks: vec![],
+        display_offset: 0,
+        history_size: 0,
     }
 }
 
@@ -67,6 +69,7 @@ fn make_delta_4rows() -> FrameDelta {
             })
             .collect(),
         hyperlinks: vec![],
+        display_offset: 0,
     }
 }
 
