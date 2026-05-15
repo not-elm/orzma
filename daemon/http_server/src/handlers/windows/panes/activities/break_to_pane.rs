@@ -190,6 +190,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn break_to_pane_sibling_pty_stays_alive() {
+        // Spec guarantee: moving an activity must not disturb sibling PTYs in
+        // the source pane.
+        let state = fresh_state();
+        let (_sid, wid, pid, aid) = bootstrap_default(&state).await;
+        let sibling_aid = add_second_activity(&state, &wid, &pid).await;
+        for spawn_aid in [&aid, &sibling_aid] {
+            state
+                .terminal
+                .spawn(
+                    pid.clone(),
+                    spawn_aid.clone(),
+                    ozmux_terminal::SpawnOptions {
+                        cols: 80,
+                        rows: 24,
+                        shell: "/bin/sh".to_string(),
+                        cwd: None,
+                        window_id: None,
+                        session_id: None,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let terminal = state.terminal.clone();
+        let (router, _state) = router_with(state);
+        let resp = post_break(router, &wid, &pid, &aid, r#"{"orientation":"horizontal"}"#).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert!(
+            terminal.subscriber_count(&sibling_aid).await.is_some(),
+            "the sibling activity's PTY must survive the move"
+        );
+    }
+
+    #[tokio::test]
     async fn break_to_pane_new_pane_is_activatable() {
         let state = fresh_state();
         let (_sid, wid, pid, aid) = bootstrap_default(&state).await;
