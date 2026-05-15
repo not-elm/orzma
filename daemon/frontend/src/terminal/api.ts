@@ -7,6 +7,10 @@ export const windowSelectEndpoint = (wid: string) => `/windows/${wid}/select`;
 
 export const splitPaneEndpoint = (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/split`;
 export const closePaneEndpoint = (wid: string, pid: string) => `/windows/${wid}/panes/${pid}`;
+export const addActivityEndpoint = (wid: string, pid: string) =>
+  `/windows/${wid}/panes/${pid}/activities`;
+export const activateActivityEndpoint = (wid: string, pid: string, aid: string) =>
+  `/windows/${wid}/panes/${pid}/activities/${aid}/activate`;
 
 export const vtTerminalWsUrl = (
   windowId: string,

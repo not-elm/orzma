@@ -8,6 +8,7 @@ use ozmux_multiplexer::{SessionId, WindowId};
 pub mod activate;
 pub mod activities;
 pub mod close;
+pub mod spawn_terminal;
 pub mod split;
 
 pub fn router() -> Router<AppState> {

@@ -15,6 +15,8 @@ use bytes::Bytes;
 use ozmux_extension::runtime::RuntimeRoot;
 use ozmux_multiplexer::{ActivityId, PaneId};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+#[cfg(any(test, feature = "test-helpers"))]
+use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
@@ -31,6 +33,8 @@ pub mod types;
 pub struct TerminalService {
     ptys: Arc<RwLock<HashMap<ActivityId, TerminalHandle>>>,
     runtime_root: Option<Arc<RuntimeRoot>>,
+    #[cfg(any(test, feature = "test-helpers"))]
+    forced_failures: Arc<RwLock<HashSet<ActivityId>>>,
 }
 
 impl TerminalService {
@@ -40,6 +44,8 @@ impl TerminalService {
         Self {
             ptys: Arc::default(),
             runtime_root: Some(root),
+            #[cfg(any(test, feature = "test-helpers"))]
+            forced_failures: Arc::default(),
         }
     }
 
@@ -50,6 +56,17 @@ impl TerminalService {
         activity_id: ActivityId,
         opts: SpawnOptions,
     ) -> TerminalResult {
+        // NOTE: check forced_failures BEFORE the ptys lock so the two locks are
+        // never held simultaneously. Consuming the failure here also takes
+        // precedence over the dup-key short-circuit below.
+        #[cfg(any(test, feature = "test-helpers"))]
+        {
+            let mut forced = self.forced_failures.write().await;
+            if forced.remove(&activity_id) {
+                return Err(TerminalError::Pty("forced test failure".into()));
+            }
+        }
+
         let mut ptys = self.ptys.write().await;
         if ptys.contains_key(&activity_id) {
             return Ok(());
@@ -196,6 +213,14 @@ impl TerminalService {
     ) -> TerminalResult<(Vec<u8>, broadcast::Receiver<TerminalEvent>)> {
         let handle = self.read(activity).await?;
         Ok(handle.snapshot_and_subscribe().await)
+    }
+
+    /// Test-only: register `aid` so the next call to `spawn` with this id
+    /// returns `TerminalError::Pty(...)` without touching the real PTY.
+    /// Consumed on use.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn inject_spawn_failure(&self, aid: ActivityId) {
+        self.forced_failures.write().await.insert(aid);
     }
 
     /// Subscribes to wire frames for the given activity, atomically with respect
@@ -636,5 +661,28 @@ mod tests {
         .await
         .expect("spawn must succeed even with empty bin/");
         svc.kill(&activity_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn inject_spawn_failure_makes_next_spawn_fail() {
+        let svc = TerminalService::default();
+        let aid = ActivityId::new();
+        svc.inject_spawn_failure(aid.clone()).await;
+        let result = svc
+            .spawn(
+                PaneId::new(),
+                aid.clone(),
+                SpawnOptions {
+                    cols: 80,
+                    rows: 24,
+                    shell: "/bin/sh".into(),
+                    cwd: None,
+                    window_id: None,
+                    session_id: None,
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(TerminalError::Pty(_))));
+        assert!(svc.subscriber_count(&aid).await.is_none());
     }
 }

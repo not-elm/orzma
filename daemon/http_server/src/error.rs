@@ -108,6 +108,9 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::Session(MultiplexerError::PaneAlreadyPlaced(_)) => {
                 (StatusCode::CONFLICT, "PANE_ALREADY_PLACED")
             }
+            HttpError::Session(MultiplexerError::CannotRemoveLastActivity(_)) => {
+                (StatusCode::CONFLICT, "CANNOT_REMOVE_LAST_ACTIVITY")
+            }
             // MissingParentCell, SplitTargetEqualsNewCell, ActivePaneMustBelongToWindow,
             // Terminal::Pty, FailedLaunch fall through → 500
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
@@ -260,6 +263,13 @@ mod tests {
             window: WindowId::new(),
             pane: PaneId::new(),
         });
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn cannot_remove_last_activity_maps_to_409() {
+        let err = HttpError::Session(MultiplexerError::CannotRemoveLastActivity(PaneId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }

@@ -78,6 +78,9 @@ pub enum MultiplexerError {
     #[error("activity {activity} is not in pane {pane}")]
     ActivityNotInPane { pane: PaneId, activity: ActivityId },
 
+    #[error("cannot remove the only activity in pane {0}")]
+    CannotRemoveLastActivity(PaneId),
+
     #[error("pane {pane} claimed to be in window {claimed} but is actually in {actual}")]
     PaneAttachmentMismatch {
         pane: PaneId,
@@ -125,5 +128,12 @@ mod tests {
         let wid = WindowId::new();
         let err = MultiplexerError::WindowNotAttachedToSession(wid.clone());
         assert!(err.to_string().contains(wid.as_ref()));
+    }
+
+    #[test]
+    fn cannot_remove_last_activity_carries_pane_id() {
+        let pid = PaneId::new();
+        let err = MultiplexerError::CannotRemoveLastActivity(pid.clone());
+        assert!(err.to_string().contains(pid.as_ref()));
     }
 }

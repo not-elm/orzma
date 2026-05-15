@@ -9,7 +9,6 @@ use axum::{
 use ozmux_multiplexer::{
     Activity, ActivityId, ActivityKind, MultiplexerResult, PaneId, Side, SplitOrientation, WindowId,
 };
-use ozmux_terminal::SpawnOptions;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -84,14 +83,17 @@ async fn split_in_window(
             .record_pane_and_activity_owners(&new_pane_id, &new_activity_id, name);
     }
 
-    publish_window_layout(state, wid).await;
-
-    // Only Terminal activities are backed by a PTY. Extension activities live
-    // in an iframe, so spawning a shell for them creates an orphan child
-    // process whose output nothing ever reads.
+    // NOTE: PTY spawn must precede the layout publish. If published first,
+    // the frontend opens the terminal WS against an activity TerminalService
+    // doesn't know yet; `snapshot_and_subscribe` returns NotFound, the
+    // connection closes with 1011, and the new pane is stuck in a
+    // "Disconnected" state with no auto-recovery. Extension activities live
+    // in an iframe (no PTY) so they skip the spawn.
     if matches!(activity_kind, ActivityKind::Terminal) {
         spawn_pty_with_rollback(state, wid, &new_pane_id, &new_activity_id).await?;
     }
+
+    publish_window_layout(state, wid).await;
 
     Ok((
         StatusCode::CREATED,
@@ -108,30 +110,18 @@ async fn spawn_pty_with_rollback(
     new_pane_id: &PaneId,
     new_activity_id: &ActivityId,
 ) -> HttpResult<()> {
-    let session_id = super::session_owning_window(state, wid).await;
-    let spawn_result = state
-        .terminal
-        .spawn(
-            new_pane_id.clone(),
-            new_activity_id.clone(),
-            SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
-                cwd: None,
-                window_id: Some(wid.clone()),
-                session_id,
-            },
-        )
-        .await;
-    if let Err(spawn_err) = spawn_result {
+    if let Err(spawn_err) =
+        super::spawn_terminal::spawn_terminal_pty(state, wid, new_pane_id, new_activity_id).await
+    {
         rollback_split(state, wid, new_pane_id).await;
-        return Err(spawn_err.into());
+        return Err(spawn_err);
     }
     Ok(())
 }
 
 async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) {
+    // NOTE: spawn happens before publish, so the frontend never saw the new
+    // pane — no layout re-broadcast is needed on rollback.
     let closed = state
         .multiplexer
         .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
@@ -145,7 +135,6 @@ async fn rollback_split(state: &AppState, wid: &WindowId, new_pane_id: &PaneId) 
         return;
     }
     state.multiplexer.pane_owner_window.remove(new_pane_id);
-    publish_window_layout(state, wid).await;
 }
 
 #[cfg(test)]

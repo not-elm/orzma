@@ -32,8 +32,9 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
     overlayStore,
   } = useTerminal(windowId, paneId, activityId);
 
-  const prevActiveRef = useRef(isActive);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: focus/blur are stabilized by React Compiler
+  // NOTE: seeded false so an initial isActive=true mount registers as a transition.
+  const prevActiveRef = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: focus/blur are stabilized by React Compiler; adding them would re-run on every render and defeat transition-only semantics
   useEffect(() => {
     if (isActive && !prevActiveRef.current) focus();
     else if (!isActive && prevActiveRef.current) blur();

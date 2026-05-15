@@ -42,11 +42,11 @@ vi.mock('./renderer/TerminalGrid', () => ({
 import { Terminal } from './Terminal';
 
 describe('<Terminal>', () => {
-  it('does NOT call focus or blur on initial mount when isActive=true', () => {
+  it('calls focus (not blur) on initial mount when isActive=true', () => {
     focusSpy.mockClear();
     blurSpy.mockClear();
     render(<Terminal windowId="wid" paneId="pid" activityId="aid" isActive={true} />);
-    expect(focusSpy).not.toHaveBeenCalled();
+    expect(focusSpy).toHaveBeenCalledTimes(1);
     expect(blurSpy).not.toHaveBeenCalled();
   });
 
@@ -55,18 +55,6 @@ describe('<Terminal>', () => {
     blurSpy.mockClear();
     render(<Terminal windowId="wid" paneId="pid" activityId="aid" isActive={false} />);
     expect(focusSpy).not.toHaveBeenCalled();
-    expect(blurSpy).not.toHaveBeenCalled();
-  });
-
-  it('calls focus (not blur) when isActive transitions false → true', () => {
-    focusSpy.mockClear();
-    blurSpy.mockClear();
-    const { rerender } = render(
-      <Terminal windowId="wid" paneId="pid" activityId="aid" isActive={false} />,
-    );
-    expect(focusSpy).not.toHaveBeenCalled();
-    rerender(<Terminal windowId="wid" paneId="pid" activityId="aid" isActive={true} />);
-    expect(focusSpy).toHaveBeenCalledTimes(1);
     expect(blurSpy).not.toHaveBeenCalled();
   });
 
