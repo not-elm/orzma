@@ -156,17 +156,29 @@ describe('actionToHandler', () => {
     });
   });
 
-  it('maps break-activity-to-pane to a handler', () => {
-    const ctx = {
+  it('returns a handler that POSTs break-to-pane with vertical orientation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext({
       activeWindow: () => 'wid-1',
       activePane: () => 'pid-1',
       activeActivity: () => 'aid-1',
-    };
-    const handler = actionToHandler(
-      { type: 'break-activity-to-pane', direction: 'horizontal' },
-      ctx,
+    });
+    const handler = actionToHandler({ type: 'break-activity-to-pane', direction: 'vertical' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/windows/wid-1/panes/pid-1/activities/aid-1/break-to-pane',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ orientation: 'vertical' }),
+      },
     );
-    expect(handler).not.toBeNull();
   });
 
   it('close-activity handler is a no-op when active activity is null', async () => {
