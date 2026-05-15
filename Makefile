@@ -1,7 +1,7 @@
 .PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk
 
 FRONTEND_DIR := daemon/frontend
-HTTP_DIR := daemon/core/src/http
+HTTP_DIR := daemon/http_server/src/handlers
 INDEX_HTML := $(HTTP_DIR)/index.html
 OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
 
@@ -17,7 +17,7 @@ help:
 	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
 verify-out-dir:
-	@stray=$$(find $(HTTP_DIR) -mindepth 1 ! -name '*.rs' ! -name 'index.html' 2>/dev/null); \
+	@stray=$$(find $(HTTP_DIR) -mindepth 1 -type f ! -name '*.rs' ! -name 'index.html' 2>/dev/null); \
 	if [ -n "$$stray" ]; then \
 		echo "ERROR: unexpected files in $(HTTP_DIR):"; \
 		echo "$$stray"; \
@@ -32,13 +32,13 @@ build:
 	pnpm --dir $(FRONTEND_DIR) install --frozen-lockfile
 	pnpm --dir $(FRONTEND_DIR) build
 	@$(MAKE) --no-print-directory verify-out-dir
-	cargo build --release -p ozmux_core
+	cargo build --release -p daemon_bootstrap
 
 dev-frontend:
 	pnpm --dir $(FRONTEND_DIR) dev
 
 dev-backend:
-	cargo run -p ozmux_core
+	cargo run -p daemon_bootstrap
 
 dev-daemon: memo-build-sdk
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) cargo run -p daemon_bootstrap
