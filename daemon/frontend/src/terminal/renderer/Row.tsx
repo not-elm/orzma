@@ -58,6 +58,15 @@ function styleClasses(style: number): string {
   );
 }
 
+function familyClass(style: number): string {
+  const bold = (style & STYLE_BOLD) !== 0;
+  const italic = (style & STYLE_ITALIC) !== 0;
+  if (bold && italic) return 'tf-bold-italic';
+  if (bold) return 'tf-bold';
+  if (italic) return 'tf-italic';
+  return '';
+}
+
 function colorClass(c: Color, channel: 'fg' | 'bg'): string {
   if (c === null) return `${channel}-default`;
   if (typeof c === 'number') return `${channel}-${c}`;
@@ -214,7 +223,7 @@ export const Row = memo(function Row({ cells, fm, hyperlinks, probeRef }: RowPro
         const bgClass = !Array.isArray(run.bg)
           ? colorClass(run.style & STYLE_REVERSE ? run.fg : run.bg, 'bg')
           : '';
-        const attrClasses = styleClasses(run.style);
+        const attrClasses = clsx(styleClasses(run.style), familyClass(run.style));
         const inlineStyle: React.CSSProperties = colorInlineStyle(run.fg, run.bg, run.style);
         const text = swapSpacesForDecoration(run.text, run.style);
 

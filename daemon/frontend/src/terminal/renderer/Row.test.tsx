@@ -249,3 +249,43 @@ describe('Row links', () => {
     expect(out.querySelector('a')?.getAttribute('href')).toBe('https://overridden.example');
   });
 });
+
+describe('Row per-style font-family classes', () => {
+  it('applies tf-bold to a bold run', () => {
+    const cells: Cell[] = [makeCell({ text: 'A', style: 0b000001 /* STYLE_BOLD */ })];
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={noHyperlinks} probeRef={container} />,
+    );
+    const span = out.querySelector('span');
+    expect(span?.className).toContain('tf-bold');
+  });
+
+  it('applies tf-italic to an italic run', () => {
+    const cells: Cell[] = [makeCell({ text: 'B', style: 0b000010 /* STYLE_ITALIC */ })];
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={noHyperlinks} probeRef={container} />,
+    );
+    const span = out.querySelector('span');
+    expect(span?.className).toContain('tf-italic');
+  });
+
+  it('applies tf-bold-italic to a bold+italic run', () => {
+    const cells: Cell[] = [
+      makeCell({ text: 'C', style: 0b000011 /* STYLE_BOLD | STYLE_ITALIC */ }),
+    ];
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={noHyperlinks} probeRef={container} />,
+    );
+    const span = out.querySelector('span');
+    expect(span?.className).toContain('tf-bold-italic');
+  });
+
+  it('does not add a tf-* class to a plain run', () => {
+    const cells: Cell[] = [makeCell({ text: 'D', style: 0 })];
+    const { container: out } = render(
+      <Row cells={cells} version={1} fm={fakeFm} hyperlinks={noHyperlinks} probeRef={container} />,
+    );
+    const span = out.querySelector('span');
+    expect(span?.className).not.toMatch(/tf-/);
+  });
+});
