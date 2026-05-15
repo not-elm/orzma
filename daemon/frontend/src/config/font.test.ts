@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getFontConfig, loadFontConfig } from './font';
+import { getFontConfig, loadFontConfig, preloadFonts } from './font';
 
 const origFetch = globalThis.fetch;
 
@@ -37,5 +37,17 @@ describe('loadFontConfig', () => {
     await loadFontConfig();
     expect(getFontConfig().size).toBe(16);
     expect(getFontConfig().normalFamily).toContain('ui-monospace');
+  });
+});
+
+describe('preloadFonts', () => {
+  it('resolves without throwing when document.fonts is unavailable', async () => {
+    const orig = document.fonts;
+    Object.defineProperty(document, 'fonts', { value: undefined, configurable: true });
+    try {
+      await expect(preloadFonts()).resolves.toBeUndefined();
+    } finally {
+      Object.defineProperty(document, 'fonts', { value: orig, configurable: true });
+    }
   });
 });

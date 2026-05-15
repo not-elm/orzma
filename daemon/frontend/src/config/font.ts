@@ -49,7 +49,7 @@ export async function loadFontConfig(): Promise<void> {
       boldItalicFamily: str(raw.bold_italic_family, FALLBACK_STACK),
     };
   } catch (e) {
-    console.warn('loadFontConfig: fetch failed, using defaults', e);
+    console.warn('loadFontConfig: failed to load or parse font config, using defaults', e);
     current = DEFAULT_FONT_CONFIG;
   }
 }
