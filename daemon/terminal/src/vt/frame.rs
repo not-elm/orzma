@@ -58,19 +58,19 @@ pub struct Hyperlink {
 /// Style bitmask constants for [`Run::style`].
 ///
 /// Bits 64 and 128 are reserved.
-pub mod style {
+pub(super) mod style {
     /// Bold weight.
-    pub const BOLD: u8 = 1;
+    pub(in crate::vt) const BOLD: u8 = 1;
     /// Italic style.
-    pub const ITALIC: u8 = 2;
+    pub(in crate::vt) const ITALIC: u8 = 2;
     /// Underline decoration.
-    pub const UNDERLINE: u8 = 4;
+    pub(in crate::vt) const UNDERLINE: u8 = 4;
     /// Strikethrough decoration.
-    pub const STRIKE: u8 = 8;
+    pub(in crate::vt) const STRIKE: u8 = 8;
     /// Reversed foreground/background.
-    pub const REVERSE: u8 = 16;
+    pub(in crate::vt) const REVERSE: u8 = 16;
     /// Dim/faint weight.
-    pub const DIM: u8 = 32;
+    pub(in crate::vt) const DIM: u8 = 32;
 }
 
 /// A run of cells sharing identical fg/bg/style attributes.

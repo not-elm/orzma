@@ -315,7 +315,7 @@ impl TerminalService {
     }
 
     #[inline]
-    pub(crate) async fn read(
+    async fn read(
         &self,
         activity_id: &ActivityId,
     ) -> TerminalResult<RwLockReadGuard<'_, TerminalHandle>> {

@@ -32,7 +32,7 @@ pub enum DirtyRows {
 /// Reads the damage tracker and returns row indices that changed.
 ///
 /// `&mut Term` is required because `Term::damage()` takes `&mut self`.
-pub fn collect_dirty_rows<T>(term: &mut Term<T>) -> DirtyRows {
+pub(super) fn collect_dirty_rows<T>(term: &mut Term<T>) -> DirtyRows {
     match term.damage() {
         TermDamage::Full => DirtyRows::Full,
         TermDamage::Partial(iter) => DirtyRows::Rows(iter.map(|d| d.line as u16).collect()),
@@ -41,7 +41,7 @@ pub fn collect_dirty_rows<T>(term: &mut Term<T>) -> DirtyRows {
 
 /// Computes a `ModeFrame` from a `TermMode` transition. Returns `None` when
 /// no tracked flag changed.
-pub fn build_mode(prev: TermMode, curr: TermMode, seq: u32) -> Option<ModeFrame> {
+pub(super) fn build_mode(prev: TermMode, curr: TermMode, seq: u32) -> Option<ModeFrame> {
     let change = diff_mode(prev, curr);
     if change.is_empty() {
         return None;
@@ -58,7 +58,7 @@ pub fn build_mode(prev: TermMode, curr: TermMode, seq: u32) -> Option<ModeFrame>
 /// Reads the current terminal grid via shared reference, coalescing each row
 /// into runs of cells with identical attributes. Wide-char spacer cells are
 /// skipped so the wide character itself accounts for its full column width.
-pub fn build_snapshot<T>(
+pub(crate) fn build_snapshot<T>(
     term: &Term<T>,
     seq: u32,
     reason: SnapshotReason,
@@ -93,7 +93,7 @@ pub fn build_snapshot<T>(
 ///
 /// Each entry is a full-row replacement (not partial). Row ordering follows
 /// the supplied slice.
-pub fn build_delta<T>(
+pub(super) fn build_delta<T>(
     term: &Term<T>,
     seq: u32,
     rows: &[u16],
@@ -169,7 +169,7 @@ fn snapshot_modes(curr: TermMode) -> Vec<String> {
 /// `emitted_hyperlinks` accumulates `(wire_id, uri)` pairs encountered in this
 /// row — the caller merges across all coalesced rows to produce the wire
 /// `FrameSnapshot.hyperlinks` / `FrameDelta.hyperlinks`.
-pub(crate) fn coalesce_row<T>(
+fn coalesce_row<T>(
     term: &Term<T>,
     y: i32,
     interner: &mut HyperlinkInterner,

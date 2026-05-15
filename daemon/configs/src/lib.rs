@@ -9,8 +9,8 @@ use crate::theme::Theme;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 
 pub mod error;
-pub(crate) mod path;
-pub(crate) mod raw;
+mod path;
+mod raw;
 pub mod shortcuts;
 pub mod theme;
 
@@ -34,7 +34,7 @@ impl OzmuxConfigs {
         Self::load_with_env(&path::SystemEnv).await
     }
 
-    pub(crate) async fn load_with_env(env: &dyn path::Env) -> OzmuxConfigsResult<Self> {
+    async fn load_with_env(env: &dyn path::Env) -> OzmuxConfigsResult<Self> {
         let configured_path = path::resolve_config_path(env)?;
         tracing::info!(path = %configured_path.display(), "resolving ozmux config path");
 

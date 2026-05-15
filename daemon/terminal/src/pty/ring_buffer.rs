@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 /// overwrites the oldest byte, so the contents always represent the trailing
 /// window of everything that has been written.
 #[derive(Debug)]
-pub struct RingBuffer {
+pub(super) struct RingBuffer {
     buf: Box<[u8]>,
     head: usize,
     full: bool,

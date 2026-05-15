@@ -25,7 +25,7 @@ use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 /// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
 /// PTY chunk.
-pub struct VtState {
+pub(crate) struct VtState {
     /// Alacritty terminal model: grid, cursor, modes.
     pub term: Term<TermListener>,
     /// vte parser that drives `term` via `Processor::advance`.
@@ -263,7 +263,7 @@ fn emit_now(
 /// parsing risks data loss that is unrecoverable from the wire log.
 /// The Coalescer only buffers the *decision to emit*; the Term itself
 /// stays continuously up to date.
-pub async fn run_bridge_task(
+pub(crate) async fn run_bridge_task(
     vt_state: Arc<std::sync::Mutex<VtState>>,
     mut pty_rx: mpsc::Receiver<Bytes>,
     mut reply_rx: mpsc::UnboundedReceiver<ReplyFrame>,
@@ -348,8 +348,8 @@ pub async fn run_bridge_task(
 // NOTE: minimal local `Dimensions` impl since alacritty's `TermSize` is
 // `pub(crate)` inside its own crate.
 pub(crate) struct LocalDim {
-    pub(crate) cols: usize,
-    pub(crate) rows: usize,
+    cols: usize,
+    rows: usize,
 }
 
 impl Dimensions for LocalDim {
@@ -376,7 +376,7 @@ pub(crate) fn dim_for(cols: u16, rows: u16) -> LocalDim {
 }
 
 #[cfg(test)]
-pub(crate) fn test_dim(cols: u16, rows: u16) -> LocalDim {
+pub(super) fn test_dim(cols: u16, rows: u16) -> LocalDim {
     dim_for(cols, rows)
 }
 

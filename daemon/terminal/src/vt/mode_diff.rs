@@ -24,7 +24,7 @@ impl ModeChange {
 // NOTE: TermMode constant names follow alacritty_terminal 0.26 (term/mod.rs
 // bitflags definition). Only wire spec § 4.7 modes are tracked here;
 // alacritty-internal flags like LINE_WRAP are intentionally excluded.
-pub(crate) const TRACKED_MODES: &[(TermMode, &str)] = &[
+pub(super) const TRACKED_MODES: &[(TermMode, &str)] = &[
     (TermMode::ALT_SCREEN, "alt-screen"),
     (TermMode::BRACKETED_PASTE, "bracketed-paste"),
     (TermMode::APP_CURSOR, "app-cursor-keys"),

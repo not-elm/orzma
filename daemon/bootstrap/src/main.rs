@@ -1,3 +1,6 @@
+//! Daemon entry point. Sets up the runtime root, loads extensions, builds
+//! `AppState`, and runs the HTTP server until SIGINT.
+
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::registry::ExtensionRegistry;
