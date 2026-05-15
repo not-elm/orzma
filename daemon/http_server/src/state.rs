@@ -263,8 +263,8 @@ impl AppState {
             .pane_owner_window
             .insert(new_pane_id.clone(), wid.clone());
 
-        // For an Extension-kind Activity the activity->owner registry row is
-        // still valid (the ActivityId is unchanged); only the new pane->owner
+        // NOTE: For an Extension-kind Activity the activity->owner registry row
+        // is still valid (the ActivityId is unchanged); only the new pane->owner
         // row is missing. `activity_owner` returns `None` for terminal
         // activities, so this is a no-op in the common case.
         if let Some(name) = self.extensions.activity_owner(aid) {

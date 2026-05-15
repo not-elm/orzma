@@ -253,5 +253,32 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let new_pid: PaneId = serde_json::from_value(v["new_pane_id"].clone()).unwrap();
         assert_eq!(registry.pane_owner(&new_pid).as_deref(), Some("memo"));
+        assert_eq!(
+            registry.activity_owner(&ext_aid).as_deref(),
+            Some("memo"),
+            "moving an extension activity must not drop its activity->owner row"
+        );
+    }
+
+    #[tokio::test]
+    async fn break_to_pane_with_wrong_wid_returns_409() {
+        let state = fresh_state();
+        let (sid, wid_a, pid_a, aid_a) = bootstrap_default(&state).await;
+        let _second = add_second_activity(&state, &wid_a, &pid_a).await;
+        let (wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let (router, _state) = router_with(state);
+        let resp = post_break(
+            router,
+            &wid_b,
+            &pid_a,
+            &aid_a,
+            r#"{"orientation":"horizontal"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 }
