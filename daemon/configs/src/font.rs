@@ -40,6 +40,12 @@ pub(crate) struct FacePatch {
     pub family: Option<String>,
     /// Alacritty's `style` key — accepted for format compatibility and
     /// discarded (the web renderer uses CSS weight/style).
+    // NOTE: read only by `#[cfg(test)]` code; `#[allow]` (not `#[expect]`)
+    // because the lint fires under `cargo build` but not `cargo test`.
+    #[allow(
+        dead_code,
+        reason = "accepted for Alacritty [font.*] compatibility, never applied"
+    )]
     pub style: Option<String>,
 }
 
