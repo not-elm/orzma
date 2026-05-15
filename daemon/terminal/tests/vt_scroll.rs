@@ -270,3 +270,32 @@ async fn cursor_hidden_when_scrolled_off_viewport() {
 
     svc.kill(&aid).await.unwrap();
 }
+
+#[tokio::test]
+async fn clear_viewport_preserves_offset_csi_2j() {
+    let svc = TerminalService::default();
+    let aid = spawn_shell(&svc).await;
+
+    let mut cmd = String::new();
+    for i in 0..30 {
+        cmd.push_str(&format!("echo line{i}\n"));
+    }
+    svc.write(&aid, cmd.as_bytes()).await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    svc.scroll(&aid, 10).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let before = read_display_offset(&svc, &aid).await;
+    assert!(before > 0);
+
+    svc.write(&aid, b"printf '\\033[2J'\n").await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    let after = read_display_offset(&svc, &aid).await;
+    assert!(
+        after > 0,
+        "CSI 2J must keep display_offset > 0 (before={before}, after={after})"
+    );
+
+    svc.kill(&aid).await.unwrap();
+}
