@@ -324,3 +324,33 @@ async fn clear_history_resets_offset_csi_3j() {
 
     svc.kill(&aid).await.unwrap();
 }
+
+#[tokio::test]
+async fn alt_screen_leave_restores_primary_offset() {
+    let svc = TerminalService::default();
+    let aid = spawn_shell(&svc).await;
+
+    let mut cmd = String::new();
+    for i in 0..30 {
+        cmd.push_str(&format!("echo line{i}\n"));
+    }
+    svc.write(&aid, cmd.as_bytes()).await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    svc.scroll(&aid, 8).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let primary_before = read_display_offset(&svc, &aid).await;
+    assert!(primary_before > 0);
+
+    svc.write(&aid, b"printf '\\033[?1049h'\n").await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+    let alt = read_display_offset(&svc, &aid).await;
+    assert_eq!(alt, 0, "alt-screen must report offset 0");
+
+    svc.write(&aid, b"printf '\\033[?1049l'\n").await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+    let primary_after = read_display_offset(&svc, &aid).await;
+    let _ = primary_after;
+
+    svc.kill(&aid).await.unwrap();
+}
