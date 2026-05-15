@@ -31,6 +31,13 @@ pub enum DamageSnapshot {
 }
 
 impl TerminalService {
+    /// Register `aid` so the next call to `spawn` with this id
+    /// returns `TerminalError::Pty(...)` without touching the real PTY.
+    /// Consumed on use.
+    pub async fn inject_spawn_failure(&self, aid: ActivityId) {
+        self.forced_failures.write().await.insert(aid);
+    }
+
     /// Return the current broadcast subscriber count for an activity, or `None`
     /// if the activity has no PTY. Used in tests to verify task lifecycle.
     pub async fn subscriber_count(&self, activity: &ActivityId) -> Option<usize> {

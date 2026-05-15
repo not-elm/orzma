@@ -215,14 +215,6 @@ impl TerminalService {
         Ok(handle.snapshot_and_subscribe().await)
     }
 
-    /// Test-only: register `aid` so the next call to `spawn` with this id
-    /// returns `TerminalError::Pty(...)` without touching the real PTY.
-    /// Consumed on use.
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn inject_spawn_failure(&self, aid: ActivityId) {
-        self.forced_failures.write().await.insert(aid);
-    }
-
     /// Subscribes to wire frames for the given activity, atomically with respect
     /// to the bridge task's emissions — no frame is dropped or duplicated between
     /// the snapshot/replay capture and the broadcast receiver attaching.
