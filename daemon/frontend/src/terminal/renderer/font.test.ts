@@ -117,13 +117,14 @@ describe('probe classes', () => {
     }) as typeof container.appendChild;
     try {
       cellWidthOf(container);
-      expect(seen.some((c) => c.includes('ozmux-font-probe'))).toBe(true);
+      expect(seen.some((c) => c.split(' ').includes('ozmux-font-probe'))).toBe(true);
     } finally {
       document.body.removeChild(container);
     }
   });
 
   it('measureGlyph bold probe carries tf-bold', () => {
+    injectTerminalPalette();
     const container = document.createElement('div');
     document.body.appendChild(container);
     const seen: string[] = [];
@@ -134,7 +135,7 @@ describe('probe classes', () => {
     }) as typeof container.appendChild;
     try {
       measureGlyph(container, 'x', true, false);
-      expect(seen.some((c) => c.includes('tf-bold'))).toBe(true);
+      expect(seen.some((c) => c.split(' ').includes('tf-bold'))).toBe(true);
     } finally {
       document.body.removeChild(container);
     }

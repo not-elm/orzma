@@ -26,10 +26,11 @@ export function widthOfGrapheme(text: string): 0 | 1 | 2 {
  *  Used by Row.tsx for `letterSpacing = cellW - cellWidthOf(...)` to prevent
  *  sub-pixel drift on long rows (xterm.js `DomRenderer._setDefaultSpacing`).
  *
- *  NOTE: probe carries `font-mono leading-none` so the measurement matches
- *  `.terminal-grid` itself — `container` only determines where the probe is
- *  attached (so it inherits the same theme tokens / parent stacking context).
- *  The container's own font does NOT need to be monospace. */
+ *  NOTE: probe carries `font-mono ozmux-font-probe leading-none` — `ozmux-font-probe` is
+ *  what makes the probe pick up the configured terminal font/size from the runtime palette
+ *  stylesheet (`palette.ts`); `font-mono` is the pre-injection fallback. `container` only
+ *  determines where the probe is attached (so it inherits the same theme tokens / parent
+ *  stacking context). The container's own font does NOT need to be monospace. */
 export function cellWidthOf(container: HTMLElement): number {
   const probe = document.createElement('span');
   probe.style.visibility = 'hidden';
@@ -44,8 +45,11 @@ export function cellWidthOf(container: HTMLElement): number {
 }
 
 /** Measures the rendered line-height-1 height of one row in the monospace
- *  font. Mirrors `.terminal-grid` environment (font-mono + leading-none) so
- *  `cellH` matches the actual row line-box height. */
+ *  font. Mirrors `.terminal-grid` environment (font-mono ozmux-font-probe leading-none) so
+ *  `cellH` matches the actual row line-box height.
+ *
+ *  NOTE: `ozmux-font-probe` picks up the configured terminal font/size from the runtime
+ *  palette stylesheet (`palette.ts`); `font-mono` is the pre-injection fallback. */
 export function cellHeightOf(container: HTMLElement): number {
   const probe = document.createElement('span');
   probe.style.visibility = 'hidden';
