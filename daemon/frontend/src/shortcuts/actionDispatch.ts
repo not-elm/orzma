@@ -1,3 +1,4 @@
+import { breakActivityToPane } from '../layout/breakActivityToPane';
 import { closeActivity } from '../layout/closeActivity';
 import { closePane } from '../layout/closePane';
 import { newTerminalActivity } from '../layout/newTerminalActivity';
@@ -23,6 +24,11 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
     case 'split-pane': {
       const orientation = action.direction;
       return () => withActivePane(ctx, (w, p) => splitPane(w, p, orientation));
+    }
+    case 'break-activity-to-pane': {
+      const orientation = action.direction;
+      return () =>
+        withActivePaneActivity(ctx, (w, p, a) => breakActivityToPane(w, p, a, orientation));
     }
     case 'new-terminal-activity':
       return () => withActivePane(ctx, newTerminalActivity);

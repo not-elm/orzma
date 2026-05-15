@@ -166,6 +166,30 @@ impl Default for Shortcuts {
                     },
                     action: Action::CloseActivity,
                 },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('s'),
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::BreakActivityToPane {
+                        direction: SplitDirection::Horizontal,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('v'),
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::BreakActivityToPane {
+                        direction: SplitDirection::Vertical,
+                    },
+                },
             ],
         }
     }
@@ -223,6 +247,11 @@ pub enum Action {
     },
     /// Split the active pane.
     SplitPane {
+        /// Split direction.
+        direction: SplitDirection,
+    },
+    /// Split the active pane and move the active activity into the new pane.
+    BreakActivityToPane {
         /// Split direction.
         direction: SplitDirection,
     },
@@ -437,7 +466,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         assert_eq!(
             json,
-            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"}}]}"#
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"}},{"key":"s","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"vertical"}}]}"#
         );
     }
 }

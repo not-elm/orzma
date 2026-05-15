@@ -89,6 +89,54 @@ impl Window {
         Ok(())
     }
 
+    /// Split `target_pane_id` and move the Activity `aid` out of it into the
+    /// freshly-created Pane.
+    ///
+    /// The moved Activity becomes the sole Activity of the new Pane, and the
+    /// new Pane becomes `active_pane`. The Activity is *cloned* into the new
+    /// Pane first and removed from the source Pane second, so the only
+    /// fallible mutation (`split_pane`) runs before the irreversible one and
+    /// no rollback path is needed. Between those two steps the same
+    /// `ActivityId` is briefly present in both Panes; this is safe only
+    /// because the whole method runs under the per-Window lock.
+    ///
+    /// # Errors
+    ///
+    /// - `PaneIdConflict` — `new_pane_id` is already in use.
+    /// - `PaneNotFound` — `target_pane_id` is not in this Window.
+    /// - `ActivityNotInPane` — `aid` is not an Activity of the target Pane.
+    /// - `CannotRemoveLastActivity` — the target Pane holds only `aid`.
+    pub fn break_activity_to_pane(
+        &mut self,
+        target_pane_id: &PaneId,
+        aid: &ActivityId,
+        new_pane_id: PaneId,
+        side: Side,
+        orientation: SplitOrientation,
+    ) -> MultiplexerResult<()> {
+        // NOTE: `new_pane_id` is not pre-checked here — `split_pane` rejects
+        // a collision before any mutation, which preserves the rollback-free
+        // ordering and avoids a duplicate `HashMap::contains_key` lookup.
+        let target = self.pane(target_pane_id)?;
+        let moved = match target.activity(aid) {
+            Some(activity) => activity.clone(),
+            None => {
+                return Err(MultiplexerError::ActivityNotInPane {
+                    pane: target_pane_id.clone(),
+                    activity: aid.clone(),
+                });
+            }
+        };
+        if target.activities.len() == 1 {
+            return Err(MultiplexerError::CannotRemoveLastActivity(
+                target_pane_id.clone(),
+            ));
+        }
+        self.split_pane(target_pane_id, new_pane_id, moved, side, orientation)?;
+        self.pane_mut(target_pane_id)?.remove_activity(aid)?;
+        Ok(())
+    }
+
     /// Close a Pane. Returns the ids of the activities that were destroyed,
     /// so the caller can tear down PTYs and extension registry entries.
     pub fn close_pane(&mut self, pane_id: &PaneId) -> MultiplexerResult<Vec<ActivityId>> {
@@ -207,6 +255,122 @@ mod tests {
     use super::*;
     use crate::window::cells::{Side, SplitOrientation};
     use crate::window::pane::activity::{Activity, ActivityId};
+
+    fn window_with_two_activities() -> (Window, PaneId, ActivityId, ActivityId) {
+        let pid = PaneId::new();
+        let a0 = Activity::terminal(ActivityId::new());
+        let a1 = Activity::terminal(ActivityId::new());
+        let a0_id = a0.id.clone();
+        let a1_id = a1.id.clone();
+        let mut win = Window::new_with_initial(WindowId::new(), "w".into(), pid.clone(), a0);
+        win.pane_mut(&pid).unwrap().add_activity(a1).unwrap();
+        (win, pid, a0_id, a1_id)
+    }
+
+    #[test]
+    fn break_activity_moves_active_activity_into_new_pane() {
+        let (mut win, pid, a0_id, a1_id) = window_with_two_activities();
+        let _ = win
+            .pane_mut(&pid)
+            .unwrap()
+            .set_active_activity(&a1_id)
+            .unwrap();
+        let new_pid = PaneId::new();
+
+        win.break_activity_to_pane(
+            &pid,
+            &a1_id,
+            new_pid.clone(),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+
+        let src = win.pane(&pid).unwrap();
+        assert!(
+            !src.has_activity(&a1_id),
+            "moved activity left the source pane"
+        );
+        assert_eq!(
+            src.active_activity, a0_id,
+            "source active falls back to first remaining"
+        );
+
+        let new_pane = win.pane(&new_pid).unwrap();
+        assert_eq!(new_pane.activities.len(), 1);
+        assert!(new_pane.has_activity(&a1_id));
+        assert_eq!(new_pane.active_activity, a1_id);
+
+        assert_eq!(win.active_pane, new_pid, "new pane becomes active");
+    }
+
+    #[test]
+    fn break_activity_preserves_remaining_order_when_moving_non_active() {
+        let (mut win, pid, a0_id, a1_id) = window_with_two_activities();
+        win.break_activity_to_pane(
+            &pid,
+            &a1_id,
+            PaneId::new(),
+            Side::After,
+            SplitOrientation::Vertical,
+        )
+        .unwrap();
+        let src = win.pane(&pid).unwrap();
+        assert_eq!(src.activities.len(), 1);
+        assert_eq!(src.activities[0].id, a0_id);
+        assert_eq!(
+            src.active_activity, a0_id,
+            "non-active move leaves source active unchanged"
+        );
+    }
+
+    #[test]
+    fn break_activity_rejects_single_activity_pane() {
+        let pid = PaneId::new();
+        let only = Activity::terminal(ActivityId::new());
+        let only_id = only.id.clone();
+        let mut win = Window::new_with_initial(WindowId::new(), "w".into(), pid.clone(), only);
+        let err = win
+            .break_activity_to_pane(
+                &pid,
+                &only_id,
+                PaneId::new(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::CannotRemoveLastActivity(_)));
+    }
+
+    #[test]
+    fn break_activity_rejects_unknown_activity() {
+        let (mut win, pid, _a0, _a1) = window_with_two_activities();
+        let err = win
+            .break_activity_to_pane(
+                &pid,
+                &ActivityId::new(),
+                PaneId::new(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::ActivityNotInPane { .. }));
+    }
+
+    #[test]
+    fn break_activity_rejects_duplicate_new_pane_id() {
+        let (mut win, pid, _a0, a1_id) = window_with_two_activities();
+        let err = win
+            .break_activity_to_pane(
+                &pid,
+                &a1_id,
+                pid.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::PaneIdConflict(_)));
+    }
 
     fn fresh_window() -> (Window, PaneId, ActivityId) {
         let wid = WindowId::new();

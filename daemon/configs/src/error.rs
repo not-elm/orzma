@@ -35,13 +35,6 @@ pub enum OzmuxConfigsError {
         chord: crate::shortcuts::KeyChord,
     },
 
-    /// A binding declared modifier keys, which are not yet supported.
-    #[error("modifier keys are not supported yet for binding {chord:?}")]
-    UnsupportedModifier {
-        /// Chord that used modifiers.
-        chord: crate::shortcuts::KeyChord,
-    },
-
     /// The configured font size is outside the supported range.
     #[error("font size {size} is out of range (expected 0 < size <= 200)")]
     InvalidFontSize {

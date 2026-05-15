@@ -163,6 +163,25 @@ describe('parseShortcuts', () => {
     expect(out?.bindings[1].action).toEqual({ type: 'new-terminal-activity' });
   });
 
+  it('parses a break-activity-to-pane binding', () => {
+    const out = parseShortcuts({
+      ...DEFAULT_JSON,
+      bindings: [
+        {
+          key: 's',
+          modifiers: { ctrl: false, shift: true, alt: false, meta: false },
+          action: { type: 'break-activity-to-pane', direction: 'horizontal' },
+        },
+      ],
+    });
+    expect(out?.bindings).toHaveLength(1);
+    expect(out?.bindings[0].action).toEqual({
+      type: 'break-activity-to-pane',
+      direction: 'horizontal',
+    });
+    expect(out?.bindings[0].chord.modifiers.shift).toBe(true);
+  });
+
   it('parses a close-activity binding', () => {
     const withCloseActivity = {
       ...DEFAULT_JSON,

@@ -27,7 +27,11 @@ async fn empty_file_yields_defaults() {
     let configs = load_with_overrides(Some(fixture("empty.toml")), None, None)
         .await
         .unwrap();
-    assert_eq!(configs.shortcuts.bindings.len(), 1);
+    let defaults = OzmuxConfigs::default();
+    assert_eq!(
+        configs.shortcuts.bindings.len(),
+        defaults.shortcuts.bindings.len()
+    );
     assert!(matches!(
         configs.shortcuts.bindings[0].action,
         Action::ClosePane
@@ -41,7 +45,11 @@ async fn prefix_override_keeps_default_bindings() {
         .unwrap();
     assert_eq!(configs.shortcuts.prefix.chord.key, Key::Char('a'));
     assert_eq!(configs.shortcuts.prefix.timeout_ms, 3000);
-    assert_eq!(configs.shortcuts.bindings.len(), 1);
+    let defaults = OzmuxConfigs::default();
+    assert_eq!(
+        configs.shortcuts.bindings.len(),
+        defaults.shortcuts.bindings.len()
+    );
     assert!(matches!(
         configs.shortcuts.bindings[0].action,
         Action::ClosePane
@@ -83,11 +91,18 @@ async fn duplicate_binding_rejected() {
 }
 
 #[tokio::test]
-async fn modifier_binding_rejected() {
-    let err = load_with_overrides(Some(fixture("modifier_binding.toml")), None, None)
+async fn modifier_binding_accepted() {
+    let configs = load_with_overrides(Some(fixture("modifier_binding.toml")), None, None)
         .await
-        .unwrap_err();
-    assert!(matches!(err, OzmuxConfigsError::UnsupportedModifier { .. }));
+        .unwrap();
+    assert!(
+        configs
+            .shortcuts
+            .bindings
+            .iter()
+            .any(|b| b.chord.modifiers.shift),
+        "a shift-modifier binding must load successfully"
+    );
 }
 
 #[tokio::test]
