@@ -1,6 +1,7 @@
 //! Daemon entry point. Sets up the runtime root, loads extensions, builds
 //! `AppState`, and runs the HTTP server until SIGINT.
 
+use ozmux_browser::BrowserService;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::registry::ExtensionRegistry;
@@ -50,10 +51,12 @@ async fn main() -> anyhow::Result<()> {
     let registry = ExtensionRegistry::default();
     let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
 
+    let browser = BrowserService::new(Arc::clone(&runtime));
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
 
     let state = AppState::new(
+        browser,
         terminal.clone(),
         registry,
         ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),

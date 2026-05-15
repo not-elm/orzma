@@ -1021,6 +1021,7 @@ name = "daemon_bootstrap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ozmux_browser",
  "ozmux_configs",
  "ozmux_extension",
  "ozmux_http_server",
@@ -2418,6 +2419,7 @@ dependencies = [
 name = "ozmux_browser"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bytes",
  "chromiumoxide",
  "decrypt-cookies",
@@ -2485,6 +2487,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "mime_guess",
+ "ozmux_browser",
  "ozmux_configs",
  "ozmux_extension",
  "ozmux_multiplexer",

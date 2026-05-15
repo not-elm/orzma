@@ -12,6 +12,7 @@ name = "daemon_bootstrap"
 path = "src/main.rs"
 
 [dependencies]
+ozmux_browser = { path = "../browser" }
 ozmux_configs = { path = "../configs" }
 ozmux_extension = { path = "../extension" }
 ozmux_http_server = { path = "../http_server" }

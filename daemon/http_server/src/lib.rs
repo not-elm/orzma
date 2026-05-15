@@ -113,14 +113,25 @@ pub fn windows_router() -> Router<AppState> {
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
     use axum::Router;
+    use ozmux_extension::runtime::RuntimeRoot;
     use ozmux_multiplexer::{ActivityId, PaneId, SessionId, WindowId};
+    use std::sync::Arc;
 
     pub(crate) fn fresh_state() -> AppState {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            Arc::new(RuntimeRoot::new_in(tmp.path(), std::process::id()).expect("RuntimeRoot"));
+        // NOTE: keep the tempdir alive for the process lifetime so the paths
+        // inside RuntimeRoot remain valid for tests that exercise the fs paths.
+        std::mem::forget(tmp);
+        let terminal = ozmux_terminal::TerminalService::with_runtime_root(Arc::clone(&runtime));
+        let browser = ozmux_browser::BrowserService::new(Arc::clone(&runtime));
         AppState::new(
-            ozmux_terminal::TerminalService::default(),
+            browser,
+            terminal,
             ozmux_extension::ExtensionRegistry::default(),
             crate::layout_broadcast::LayoutBroadcaster::default(),
-            std::sync::Arc::new(ozmux_configs::OzmuxConfigs::default()),
+            Arc::new(ozmux_configs::OzmuxConfigs::default()),
             crate::activity_titles::ActivityTitles::default(),
         )
     }

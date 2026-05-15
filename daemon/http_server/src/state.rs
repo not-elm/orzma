@@ -3,6 +3,7 @@ use crate::layout_broadcast::LayoutBroadcaster;
 use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
+use ozmux_browser::BrowserService;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
@@ -48,6 +49,7 @@ pub struct SplitOutcome {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub browser: BrowserService,
     pub multiplexer: MultiplexerService,
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
@@ -66,6 +68,7 @@ impl AppState {
     /// whose `TerminalService`, `ExtensionRegistry`, or `LayoutBroadcaster`
     /// are detached from the daemon's runtime root.
     pub fn new(
+        browser: BrowserService,
         terminal: TerminalService,
         extensions: ExtensionRegistry,
         layout_broadcast: LayoutBroadcaster,
@@ -73,6 +76,7 @@ impl AppState {
         titles: ActivityTitles,
     ) -> Self {
         Self {
+            browser,
             multiplexer: MultiplexerService::default(),
             terminal,
             extensions,
@@ -145,8 +149,7 @@ impl AppState {
         // NOTE: PTY spawn must precede the layout publish so the frontend never
         // sees a terminal activity without a backing PTY.
         if let Err(spawn_err) =
-            crate::provision::provision_activity_runtime(self, wid, pid, &aid, &activity_kind)
-                .await
+            crate::provision::provision_activity_runtime(self, wid, pid, &aid, &activity_kind).await
         {
             if let Err(rollback_err) = self.rollback_added_activity(wid, pid, &aid).await {
                 tracing::warn!(error = %rollback_err, %wid, %pid, %aid, "rollback failed");
@@ -430,6 +433,12 @@ impl AppState {
             });
         }
         Ok(activity)
+    }
+}
+
+impl FromRef<AppState> for BrowserService {
+    fn from_ref(input: &AppState) -> Self {
+        input.browser.clone()
     }
 }
 
