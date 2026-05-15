@@ -616,7 +616,10 @@ mod tests {
     fn viewport_row_to_line_with_offset_subtracts_display_offset() {
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
-        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let cfg = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
         let mut term = make_term_with_config(cfg, 10, 24);
         for _ in 0..30 {
             install_text(&mut term, "x\r\n");
@@ -632,7 +635,10 @@ mod tests {
     fn viewport_row_to_line_at_max_offset_reaches_oldest_history() {
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
-        let cfg = Config { scrolling_history: 50, ..Config::default() };
+        let cfg = Config {
+            scrolling_history: 50,
+            ..Config::default()
+        };
         let mut term = make_term_with_config(cfg, 10, 4);
         for _ in 0..100 {
             install_text(&mut term, "x\r\n");
@@ -659,7 +665,10 @@ mod tests {
     fn coalesce_row_reads_scrollback_when_scrolled() {
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
-        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let cfg = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
         let mut term = make_term_with_config(cfg, 10, 3);
         // NOTE: push "marker" first so it ends up at the very top of history.
         install_text(&mut term, "marker\r\n");
@@ -681,7 +690,10 @@ mod tests {
     fn build_snapshot_after_scroll_contains_scrollback_content() {
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
-        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let cfg = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
         let mut term = make_term_with_config(cfg, 10, 3);
         install_text(&mut term, "alpha\r\n");
         for i in 0..20 {
@@ -705,7 +717,10 @@ mod tests {
     fn build_delta_with_offset_reads_scrollback() {
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
-        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let cfg = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
         let mut term = make_term_with_config(cfg, 10, 3);
         install_text(&mut term, "alpha\r\n");
         for i in 0..20 {
@@ -738,7 +753,10 @@ mod tests {
     fn extract_cursor_partial_scroll_keeps_visible_with_adjusted_y() {
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
-        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let cfg = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
         let mut term = make_term_with_config(cfg, 10, 5);
         install_text(&mut term, "x");
         for _ in 0..10 {
@@ -752,7 +770,10 @@ mod tests {
             assert_eq!(c.y, (live_y + 2) as u16);
             assert!(c.visible);
         } else {
-            assert!(!c.visible, "live_y={live_y} + 2 should push cursor off viewport");
+            assert!(
+                !c.visible,
+                "live_y={live_y} + 2 should push cursor off viewport"
+            );
         }
     }
 
@@ -760,7 +781,10 @@ mod tests {
     fn extract_cursor_hidden_when_scrolled_past_live_grid() {
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
-        let cfg = Config { scrolling_history: 200, ..Config::default() };
+        let cfg = Config {
+            scrolling_history: 200,
+            ..Config::default()
+        };
         let mut term = make_term_with_config(cfg, 10, 5);
         for _ in 0..50 {
             install_text(&mut term, "x\r\n");

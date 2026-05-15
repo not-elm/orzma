@@ -26,11 +26,7 @@ async fn publish_window_layout(state: &AppState, wid: &WindowId) {
 /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
 /// pane has no owner and `PaneNotInWindow` when it lives in a different
 /// Window. Used by every URL of shape `/windows/:wid/panes/:pid/*`.
-fn ensure_pane_in_window(
-    state: &AppState,
-    wid: &WindowId,
-    pid: &PaneId,
-) -> HttpResult<()> {
+fn ensure_pane_in_window(state: &AppState, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
     let actual = state.multiplexer.lookup_pane_window(pid)?;
     if &actual != wid {
         return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
