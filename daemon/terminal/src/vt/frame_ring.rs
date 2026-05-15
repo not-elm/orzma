@@ -90,20 +90,6 @@ impl FrameRing {
         Some(out)
     }
 
-    /// Returns the latest seq in the ring, or `None` if empty.
-    pub fn latest_seq(&self) -> Option<u32> {
-        self.deltas.back().map(|d| d.seq)
-    }
-
-    /// Returns the number of entries currently in the ring.
-    pub fn len(&self) -> usize {
-        self.deltas.len()
-    }
-
-    /// Returns true when the ring has no entries.
-    pub fn is_empty(&self) -> bool {
-        self.deltas.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -118,7 +104,6 @@ mod tests {
     fn empty_ring_returns_none_on_replay() {
         let r = FrameRing::new(1024);
         assert!(r.replay(0).is_none());
-        assert!(r.is_empty());
     }
 
     #[test]
@@ -129,7 +114,6 @@ mod tests {
         r.push(3, mk_bytes(10));
         let replay = r.replay(0).expect("range 1..=3 should be present");
         assert_eq!(replay.len(), 3);
-        assert_eq!(r.latest_seq(), Some(3));
     }
 
     #[test]
@@ -148,7 +132,6 @@ mod tests {
         r.push(1, mk_bytes(40));
         r.push(2, mk_bytes(40));
         r.push(3, mk_bytes(40));
-        assert_eq!(r.len(), 2);
         assert!(r.replay(0).is_none());
         assert_eq!(r.replay(1).unwrap().len(), 2);
     }

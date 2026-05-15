@@ -7,9 +7,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::vte::ansi::Rgb;
-
 /// Must-not-drop reply-required frames forwarded from `TermListener` into
 /// the bridge task. The channel must be `mpsc::UnboundedSender` so that DA/DSR/
 /// cursor-query replies never get dropped (which would silently break TUI
@@ -18,19 +15,12 @@ pub enum ReplyFrame {
     /// Bytes the Term emitted via `Event::PtyWrite` that must be written
     /// back to the PTY stdin (e.g., ANSI device-attribute responses).
     PtyWrite(Vec<u8>),
-    /// `Event::TextAreaSizeRequest`: caller closure expects a `WindowSize`
-    /// reply; bridge fills it with the current pane dimensions.
-    TextAreaSizeRequest(Arc<dyn Fn(WindowSize) -> String + Send + Sync>),
-    /// `Event::ColorRequest`: closure expects a palette `Rgb`.
-    ColorRequest(usize, Arc<dyn Fn(Rgb) -> String + Send + Sync>),
 }
 
 impl std::fmt::Debug for ReplyFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PtyWrite(b) => write!(f, "PtyWrite({} bytes)", b.len()),
-            Self::TextAreaSizeRequest(_) => write!(f, "TextAreaSizeRequest(<fn>)"),
-            Self::ColorRequest(idx, _) => write!(f, "ColorRequest({idx}, <fn>)"),
         }
     }
 }
@@ -53,9 +43,8 @@ pub enum ControlFrame {
 /// bridge task.
 ///
 /// Channel split rationale (rust-daemon-design.md § 2.2):
-///  - `reply_tx` (unbounded): reply-required events (`PtyWrite`,
-///    `TextAreaSizeRequest`, `ColorRequest`). Dropping these reproduces
-///    the capability-query backflow bug.
+///  - `reply_tx` (unbounded): reply-required events (`PtyWrite`). Dropping
+///    these reproduces the capability-query backflow bug.
 ///  - `control_tx` (bounded): best-effort (`Title`, `ResetTitle`, `Bell`,
 ///    `ClipboardStore`). Drops are tracked via `DropCounter`.
 pub struct TermListener {
@@ -84,12 +73,6 @@ impl alacritty_terminal::event::EventListener for TermListener {
             Event::PtyWrite(s) => {
                 let _ = self.reply_tx.send(ReplyFrame::PtyWrite(s.into_bytes()));
             }
-            Event::TextAreaSizeRequest(reply) => {
-                let _ = self.reply_tx.send(ReplyFrame::TextAreaSizeRequest(reply));
-            }
-            Event::ColorRequest(idx, reply) => {
-                let _ = self.reply_tx.send(ReplyFrame::ColorRequest(idx, reply));
-            }
 
             Event::Title(s) => self.send_control(ControlFrame::Title(s), "title"),
             Event::ResetTitle => self.send_control(ControlFrame::ResetTitle, "reset_title"),
@@ -102,9 +85,12 @@ impl alacritty_terminal::event::EventListener for TermListener {
                 "clipboard_store",
             ),
 
-            // NOTE: OSC 52 read is default-ignored (security policy); future
-            // opt-in would route through reply_tx.
-            Event::ClipboardLoad(_clip, _reply) => {}
+            // NOTE: TextAreaSizeRequest / ColorRequest / OSC 52 read are
+            // currently no-ops; alacritty emits them when terminal apps query
+            // state we don't track. Future opt-in would route through reply_tx.
+            Event::TextAreaSizeRequest(_)
+            | Event::ColorRequest(_, _)
+            | Event::ClipboardLoad(_, _) => {}
             // NOTE: bridge task termination is handled via the PTY EOF path.
             Event::ChildExit(_) | Event::Exit => {}
             Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {}
@@ -233,11 +219,8 @@ mod frame_envelope_tests {
 
     #[test]
     fn reply_frame_pty_write_holds_bytes() {
-        let r = ReplyFrame::PtyWrite(vec![0x1b, b'[', b'?']);
-        match r {
-            ReplyFrame::PtyWrite(bytes) => assert_eq!(bytes.len(), 3),
-            _ => panic!("variant mismatch"),
-        }
+        let ReplyFrame::PtyWrite(bytes) = ReplyFrame::PtyWrite(vec![0x1b, b'[', b'?']);
+        assert_eq!(bytes.len(), 3);
     }
 }
 
@@ -267,11 +250,8 @@ mod listener_tests {
         let listener = make_listener(reply_tx, control_tx, drop_counter);
 
         listener.send_event(Event::PtyWrite("\x1b[?6n".into()));
-        let frame = reply_rx.try_recv().expect("PtyWrite forwarded");
-        match frame {
-            ReplyFrame::PtyWrite(bytes) => assert_eq!(bytes, b"\x1b[?6n"),
-            _ => panic!("wrong variant"),
-        }
+        let ReplyFrame::PtyWrite(bytes) = reply_rx.try_recv().expect("PtyWrite forwarded");
+        assert_eq!(bytes, b"\x1b[?6n");
     }
 
     #[test]

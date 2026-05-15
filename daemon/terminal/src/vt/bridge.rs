@@ -405,7 +405,6 @@ mod tests {
     #[test]
     fn vt_state_constructs_with_dimensions() {
         let state = make_state(80, 24);
-        assert!(state.frame_ring.is_empty());
         assert!(!state.pending_user_input);
         assert_eq!(state.frame_seq, 0);
         assert!(state.first_emit);
