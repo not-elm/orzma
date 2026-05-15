@@ -235,3 +235,38 @@ async fn scrolled_view_content_locked_during_new_output() {
 
     svc.kill(&aid).await.unwrap();
 }
+
+#[tokio::test]
+async fn cursor_hidden_when_scrolled_off_viewport() {
+    let svc = TerminalService::default();
+    let aid = spawn_shell(&svc).await;
+
+    let mut cmd = String::new();
+    for i in 0..30 {
+        cmd.push_str(&format!("echo line{i}\n"));
+    }
+    svc.write(&aid, cmd.as_bytes()).await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    let live = read_snapshot(&svc, &aid).await;
+    assert_eq!(live.display_offset, 0);
+    assert!(live.cursor.visible);
+
+    svc.scroll(&aid, 25).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let scrolled = read_snapshot(&svc, &aid).await;
+    assert!(scrolled.display_offset >= scrolled.rows as u32);
+    assert!(
+        !scrolled.cursor.visible,
+        "cursor must be hidden when scrolled past the live viewport (display_offset={}, rows={})",
+        scrolled.display_offset, scrolled.rows
+    );
+
+    svc.scroll_to_bottom(&aid).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let restored = read_snapshot(&svc, &aid).await;
+    assert!(restored.cursor.visible);
+
+    svc.kill(&aid).await.unwrap();
+}
