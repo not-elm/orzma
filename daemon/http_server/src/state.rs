@@ -176,7 +176,7 @@ impl AppState {
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
             .await?;
 
-        // All three are idempotent + missing-ok; no kind dispatch required.
+        // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
         let _ = self.terminal.kill(aid).await;
         self.extensions.forget_activity(aid);
         self.browser.close(aid).await;
@@ -252,7 +252,7 @@ impl AppState {
 
         self.multiplexer.pane_owner_window.remove(pid);
         self.extensions.forget_pane(pid);
-        // All three are idempotent + missing-ok; no kind dispatch required.
+        // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
@@ -279,7 +279,7 @@ impl AppState {
         for pid in pane_ids {
             self.extensions.forget_pane(&pid);
         }
-        // All three are idempotent + missing-ok; no kind dispatch required.
+        // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
