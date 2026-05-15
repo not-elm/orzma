@@ -34,6 +34,10 @@ enum ClientControl {
         cols: u16,
         rows: u16,
     },
+    Scroll {
+        delta: i32,
+    },
+    ScrollToBottom,
     Ack {
         #[allow(dead_code, reason = "Phase 2A drains acks")]
         seq: u32,
@@ -66,6 +70,18 @@ async fn handle_client_text(
         ClientControl::Resize { cols, rows } => {
             terminal
                 .resize(aid, cols, rows)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        ClientControl::Scroll { delta } => {
+            terminal
+                .scroll(aid, delta)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        ClientControl::ScrollToBottom => {
+            terminal
+                .scroll_to_bottom(aid)
                 .await
                 .map_err(|e| e.to_string())?;
         }
