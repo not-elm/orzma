@@ -106,9 +106,7 @@ async fn handle(page: &chromiumoxide::Page, cmd: PageCommand) -> BrowserResult<(
                         .map_err(|e| BrowserError::Cdp(e.to_string()))?;
                 }
             }
-            // Other variants are dispatched to non-`Input` commands by the
-            // WS handler before reaching the actor (Nav, Resize, CopyRequest).
-            // Anything else here is a contract violation — ignore.
+            // NOTE: non-Input variants are filtered upstream by the WS handler; the catch-all here is a contract assertion.
             _ => {}
         },
         PageCommand::Nav(n) => match n {
