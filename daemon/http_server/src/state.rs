@@ -1,4 +1,5 @@
 use crate::HttpResult;
+use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::window_view::WindowView;
 use axum::extract::FromRef;
@@ -12,7 +13,7 @@ use ozmux_terminal::TerminalService;
 use std::sync::Arc;
 
 /// Input bundle for [`AppState::split_pane`].
-pub struct SplitInput {
+pub(crate) struct SplitInput {
     /// Id for the new pane (caller-supplied or server-generated).
     pub new_pane_id: PaneId,
     /// The activity to seat in the new pane.
@@ -26,7 +27,7 @@ pub struct SplitInput {
 }
 
 /// Ids produced by a successful [`AppState::split_pane`].
-pub struct SplitOutcome {
+pub(crate) struct SplitOutcome {
     /// Id of the newly-created pane.
     pub new_pane_id: PaneId,
     /// Id of the activity seated in the new pane.
@@ -106,7 +107,7 @@ impl AppState {
     /// terminal-kind activities, also spawn the backing PTY; on spawn
     /// failure the activity record is rolled back before returning the
     /// error so the frontend never sees a half-state.
-    pub async fn add_activity_to_pane(
+    pub(crate) async fn add_activity_to_pane(
         &self,
         wid: &WindowId,
         pid: &PaneId,
@@ -127,11 +128,7 @@ impl AppState {
         // NOTE: PTY spawn must precede the layout publish so the frontend never
         // sees a terminal activity without a backing PTY.
         if matches!(activity_kind, ActivityKind::Terminal)
-            && let Err(spawn_err) =
-                crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty(
-                    self, wid, pid, &aid,
-                )
-                .await
+            && let Err(spawn_err) = spawn_terminal_pty(self, wid, pid, &aid).await
         {
             if let Err(rollback_err) = self.rollback_added_activity(wid, pid, &aid).await {
                 tracing::warn!(
@@ -164,7 +161,7 @@ impl AppState {
     /// forget its extension registry entry (extension kind), then broadcast
     /// the new layout. Refuses to close the last activity via
     /// `Pane::remove_activity`'s built-in `CannotRemoveLastActivity` guard.
-    pub async fn close_activity(
+    pub(crate) async fn close_activity(
         &self,
         wid: &WindowId,
         pid: &PaneId,
@@ -190,7 +187,7 @@ impl AppState {
 
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
     /// spawn a PTY when the activity is Terminal. Rolls back on spawn failure.
-    pub async fn split_pane(
+    pub(crate) async fn split_pane(
         &self,
         wid: &WindowId,
         target_pane_id: &PaneId,
@@ -222,17 +219,10 @@ impl AppState {
         }
 
         // NOTE: PTY spawn must precede the layout publish so the frontend never
-        // sees a terminal activity without a backing PTY (mirrors the invariant
-        // in close_activity / add_activity_to_pane).
+        // sees a terminal activity without a backing PTY.
         if matches!(activity_kind, ActivityKind::Terminal)
             && let Err(spawn_err) =
-                crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty(
-                    self,
-                    wid,
-                    &new_pane_id,
-                    &new_activity_id,
-                )
-                .await
+                spawn_terminal_pty(self, wid, &new_pane_id, &new_activity_id).await
         {
             self.rollback_split(wid, &new_pane_id).await;
             return Err(spawn_err);
@@ -265,7 +255,7 @@ impl AppState {
 
     /// Close a Pane: remove it from the cell tree, tear down extension
     /// registry rows and PTYs for each activity, and broadcast the new layout.
-    pub async fn close_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
+    pub(crate) async fn close_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
         let activities = self
             .multiplexer
             .with_window_or_404(wid, |w| w.close_pane(pid))
@@ -285,7 +275,7 @@ impl AppState {
     }
 
     /// Rename a Window and broadcast the new layout.
-    pub async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
+    pub(crate) async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
         self.multiplexer.rename_window(wid, name).await?;
         self.publish_window_layout(wid).await;
         Ok(())

@@ -1,7 +1,7 @@
 //! Close a single Activity in a Pane. Refuses to close the last activity
 //! (caller should use close-pane if they want to drop the whole pane).
 
-use crate::handlers::ensure_activity_in_pane_in_window;
+use crate::handlers::ensure_pane_in_window;
 use crate::{AppState, error::HttpResult};
 use axum::{
     extract::{Path, State},
@@ -9,11 +9,15 @@ use axum::{
 };
 use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 
+/// `DELETE /windows/{wid}/panes/{pid}/activities/{aid}`. Removes the activity
+/// from its pane, tears down its PTY or extension registry entry, and
+/// broadcasts the new layout. Returns `409 Conflict` if it is the last
+/// activity in the pane (close the pane instead).
 pub async fn close_activity(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
 ) -> HttpResult<StatusCode> {
-    ensure_activity_in_pane_in_window(&state, &wid, &pid, &aid).await?;
+    ensure_pane_in_window(&state, &wid, &pid)?;
     state.close_activity(&wid, &pid, &aid).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -63,7 +67,7 @@ mod tests {
         let remaining = state
             .multiplexer
             .with_window_or_404(&wid, |w| -> ozmux_multiplexer::MultiplexerResult<usize> {
-                Ok(w.pane(&pid).map(|p| p.activities.len()).unwrap_or(0))
+                Ok(w.pane(&pid)?.activities.len())
             })
             .await
             .unwrap();
