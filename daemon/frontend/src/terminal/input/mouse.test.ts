@@ -310,10 +310,11 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
     const fmRef = { current: fakeMetrics() };
     const modesRef: { current: ReadonlySet<string> } = { current: new Set(['mouse-vt200']) };
     const send = vi.fn();
+    const sendControl = vi.fn();
     const rectRef = { current: target };
     const textareaRef: { current: HTMLTextAreaElement | null } = { current: null };
 
-    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef);
+    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef, sendControl);
 
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
@@ -360,10 +361,11 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
       current: new Set(['mouse-vt200', 'mouse-sgr-1006']),
     };
     const send = vi.fn();
+    const sendControl = vi.fn();
     const rectRef = { current: target };
     const textareaRef: { current: HTMLTextAreaElement | null } = { current: null };
 
-    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef);
+    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef, sendControl);
 
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
@@ -386,10 +388,11 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
     const fmRef = { current: fakeMetrics() };
     const modesRef: { current: ReadonlySet<string> } = { current: new Set(['mouse-vt200']) };
     const send = vi.fn();
+    const sendControl = vi.fn();
     const rectRef = { current: target };
     const textareaRef: { current: HTMLTextAreaElement | null } = { current: null };
 
-    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef);
+    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef, sendControl);
 
     target.dispatchEvent(
       new PointerEvent('pointerdown', {
@@ -432,10 +435,11 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
     const fmRef = { current: fakeMetrics() };
     const modesRef: { current: ReadonlySet<string> } = { current: new Set() };
     const send = vi.fn();
+    const sendControl = vi.fn();
     const rectRef = { current: target };
     const textareaRef: { current: HTMLTextAreaElement | null } = { current: textarea };
 
-    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef);
+    const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef, sendControl);
 
     const focusSpy = vi.spyOn(textarea, 'focus');
     target.dispatchEvent(

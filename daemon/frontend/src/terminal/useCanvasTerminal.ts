@@ -234,7 +234,7 @@ export function useCanvasTerminal(
       cleanups.push(setupComposition(ta, setPreedit, sendText, compositionState.current));
       cleanups.push(setupPaste(ta, modesRef, sendBytes));
       cleanups.push(
-        setupMouse(pane, { current: pane }, fmRefLocal, modesRef, sendBytes, textareaRef),
+        setupMouse(pane, { current: pane }, fmRefLocal, modesRef, sendBytes, textareaRef, socket.sendControl),
       );
       cleanups.push(setupFocusEvents(ta, modesRef, sendBytes));
       cleanups.push(setupCopy(ta));

@@ -2,6 +2,7 @@
 //! + pointer listener with RAF coalescing, window-level drag-release reset (C3),
 //! and textarea focus-refocus on pointerup (C4).
 
+import type { ClientControl } from '../useTerminalSocket';
 import type { FontMetrics } from '../renderer/font';
 
 /** Button enum matching `PointerEvent.button` (0=left, 1=middle, 2=right). */
@@ -118,6 +119,17 @@ export function shouldRouteToSelection(e: PointerEvent, modes: ReadonlySet<strin
   return e.shiftKey;
 }
 
+const PIXELS_PER_LINE = 40;
+
+function isScrollbackPassthrough(modes: ReadonlySet<string>): boolean {
+  return (
+    modes.has('alt-screen') ||
+    modes.has('mouse-vt200') ||
+    modes.has('mouse-btn-event') ||
+    modes.has('mouse-any-event')
+  );
+}
+
 /** Wires pointer + wheel + contextmenu listeners on `target`, translates
  *  coordinates relative to `rectRef.current`, dispatches encoded bytes, and
  *  re-focuses `textareaRef.current` on pointerup so keystrokes still reach
@@ -130,6 +142,7 @@ export function setupMouse(
   modesRef: { current: ReadonlySet<string> },
   send: (bytes: Uint8Array) => void,
   textareaRef: { current: HTMLTextAreaElement | null },
+  sendControl: (msg: ClientControl) => void,
 ): () => void {
   const heldButtons = new Set<MouseButton>();
   let currentSelectionPointer: number | null = null;
@@ -259,27 +272,46 @@ export function setupMouse(
     }
   };
 
+  let pendingDeltaY = 0;
+  let pendingScrollRaf: number | null = null;
+
+  const flushScroll = (): void => {
+    pendingScrollRaf = null;
+    const lines = Math.round(-pendingDeltaY / PIXELS_PER_LINE);
+    pendingDeltaY = 0;
+    if (lines !== 0) sendControl({ kind: 'scroll', delta: lines });
+  };
+
   const onWheel = (e: WheelEvent): void => {
-    if (!anyMode()) return;
+    const modes = modesRef.current;
     e.preventDefault();
-    const rectEl = rectRef.current;
-    if (!rectEl) return;
-    const { col, row } = pointToCell(rectEl, e, fmRef.current);
-    const button: MouseEventInput['button'] = e.deltaY < 0 ? 'wheelUp' : 'wheelDown';
-    const bytes = encodeMouseEvent(
-      {
-        kind: 'wheel',
-        button,
-        col,
-        row,
-        shift: e.shiftKey,
-        alt: e.altKey,
-        ctrl: e.ctrlKey,
-        buttonHeld: heldButtons.size > 0,
-      },
-      modesRef.current,
-    );
-    if (bytes) send(bytes);
+
+    if (isScrollbackPassthrough(modes)) {
+      const rectEl = rectRef.current;
+      if (!rectEl) return;
+      const { col, row } = pointToCell(rectEl, e, fmRef.current);
+      const button: MouseEventInput['button'] = e.deltaY < 0 ? 'wheelUp' : 'wheelDown';
+      const bytes = encodeMouseEvent(
+        {
+          kind: 'wheel',
+          button,
+          col,
+          row,
+          shift: e.shiftKey,
+          alt: e.altKey,
+          ctrl: e.ctrlKey,
+          buttonHeld: heldButtons.size > 0,
+        },
+        modes,
+      );
+      if (bytes) send(bytes);
+      return;
+    }
+
+    pendingDeltaY += e.deltaY;
+    if (pendingScrollRaf === null) {
+      pendingScrollRaf = requestAnimationFrame(flushScroll);
+    }
   };
 
   const onContextMenu = (e: Event): void => {
@@ -299,6 +331,10 @@ export function setupMouse(
     if (pendingRaf !== null) {
       cancelAnimationFrame(pendingRaf);
       pendingRaf = null;
+    }
+    if (pendingScrollRaf !== null) {
+      cancelAnimationFrame(pendingScrollRaf);
+      pendingScrollRaf = null;
     }
     heldButtons.clear();
     target.removeEventListener('pointerdown', onPointerDown);
