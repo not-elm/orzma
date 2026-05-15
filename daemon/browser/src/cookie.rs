@@ -11,6 +11,14 @@
 
 use crate::error::{BrowserError, BrowserResult};
 use chromiumoxide::cdp::browser_protocol::network::CookieParam;
+#[cfg(target_os = "macos")]
+use chromiumoxide::cdp::browser_protocol::network::{CookieSameSite, TimeSinceEpoch};
+#[cfg(target_os = "macos")]
+use decrypt_cookies::browser::cookies::SameSite;
+#[cfg(target_os = "macos")]
+use decrypt_cookies::chromium::{ChromiumCookie, GetCookies};
+#[cfg(target_os = "macos")]
+use decrypt_cookies::prelude::*;
 
 /// Read the local Chrome `Default` profile cookies (macOS only), decrypt
 /// each value, and return CDP `CookieParam`s ready to feed into
@@ -20,7 +28,10 @@ use chromiumoxide::cdp::browser_protocol::network::CookieParam;
 /// installed; returns `Err(BrowserError::Cookie)` on read/decrypt failures
 /// so the caller can decide whether to proceed without cookies (the spec
 /// calls for a non-fatal warning).
-#[expect(dead_code, reason = "called by BrowserService::spawn in a later task")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "called by BrowserService::spawn in a later task")
+)]
 pub(crate) async fn import_chrome_default_cookies() -> BrowserResult<Vec<CookieParam>> {
     #[cfg(not(target_os = "macos"))]
     {
@@ -34,9 +45,6 @@ pub(crate) async fn import_chrome_default_cookies() -> BrowserResult<Vec<CookieP
 
 #[cfg(target_os = "macos")]
 async fn import_macos_chrome_default() -> BrowserResult<Vec<CookieParam>> {
-    use decrypt_cookies::chromium::GetCookies;
-    use decrypt_cookies::prelude::*;
-
     let getter = ChromiumBuilder::<Chrome>::new()
         .build()
         .await
@@ -63,13 +71,7 @@ async fn import_macos_chrome_default() -> BrowserResult<Vec<CookieParam>> {
 /// Returns `None` if the CDP builder rejects the cookie (e.g. missing
 /// required fields).
 #[cfg(target_os = "macos")]
-fn to_cookie_param(
-    c: &decrypt_cookies::chromium::ChromiumCookie,
-    value: String,
-) -> Option<CookieParam> {
-    use chromiumoxide::cdp::browser_protocol::network::{CookieSameSite, TimeSinceEpoch};
-    use decrypt_cookies::browser::cookies::SameSite;
-
+fn to_cookie_param(c: &ChromiumCookie, value: String) -> Option<CookieParam> {
     let same_site = match c.same_site {
         SameSite::Strict => Some(CookieSameSite::Strict),
         SameSite::Lax => Some(CookieSameSite::Lax),
