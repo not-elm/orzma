@@ -279,6 +279,41 @@ impl TerminalService {
         })
     }
 
+    /// Scrolls the visible viewport by `delta` lines.
+    ///
+    /// Positive `delta` moves backward into scrollback history; negative
+    /// moves forward toward the live tail. Alacritty clamps to `[0, history_size]`.
+    ///
+    /// Triggers Full damage in alacritty when `display_offset` changes, so the
+    /// bridge emits a snapshot through the existing path. The synthetic empty
+    /// chunk wakes the bridge task if no PTY output is pending.
+    pub async fn scroll(&self, activity: &ActivityId, delta: i32) -> TerminalResult {
+        let handle = self.read(activity).await?;
+        {
+            let mut state = handle.vt_state.lock().expect("vt_state poisoned");
+            state
+                .term
+                .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
+        }
+        // NOTE: send().await (not try_send) — matches resize semantics so the
+        // wakeup survives a backpressured channel.
+        let _ = handle.vt_chunk_tx.send(Bytes::new()).await;
+        Ok(())
+    }
+
+    /// Snaps the viewport back to the live tail and resumes auto-follow.
+    pub async fn scroll_to_bottom(&self, activity: &ActivityId) -> TerminalResult {
+        let handle = self.read(activity).await?;
+        {
+            let mut state = handle.vt_state.lock().expect("vt_state poisoned");
+            state
+                .term
+                .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        }
+        let _ = handle.vt_chunk_tx.send(Bytes::new()).await;
+        Ok(())
+    }
+
     #[inline]
     pub(crate) async fn read(
         &self,
