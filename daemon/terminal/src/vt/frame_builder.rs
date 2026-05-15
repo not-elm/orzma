@@ -8,7 +8,7 @@ use crate::vt::frame::{
     Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, ModeFrame, Row,
     Run, SnapshotReason, style,
 };
-use crate::vt::hyperlink::HyperlinkInterner;
+use crate::vt::hyperlink::{HyperlinkInterner, HyperlinkUri, HyperlinkWireId};
 use crate::vt::mode_diff::{TRACKED_MODES, diff_mode};
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
@@ -66,7 +66,7 @@ pub fn build_snapshot<T>(
 ) -> FrameSnapshot {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
-    let mut emitted: HashMap<u32, String> = HashMap::new();
+    let mut emitted: HashMap<HyperlinkWireId, HyperlinkUri> = HashMap::new();
     let rows_data: Vec<Row> = (0..rows as i32)
         .map(|y| Row {
             runs: coalesce_row(term, y, interner, &mut emitted),
@@ -99,7 +99,7 @@ pub fn build_delta<T>(
     rows: &[u16],
     interner: &mut HyperlinkInterner,
 ) -> FrameDelta {
-    let mut emitted: HashMap<u32, String> = HashMap::new();
+    let mut emitted: HashMap<HyperlinkWireId, HyperlinkUri> = HashMap::new();
     let dirty_rows: Vec<DirtyRow> = rows
         .iter()
         .map(|&r| DirtyRow {
@@ -173,7 +173,7 @@ pub(crate) fn coalesce_row<T>(
     term: &Term<T>,
     y: i32,
     interner: &mut HyperlinkInterner,
-    emitted_hyperlinks: &mut HashMap<u32, String>,
+    emitted_hyperlinks: &mut HashMap<HyperlinkWireId, HyperlinkUri>,
 ) -> Vec<Run> {
     let cols = term.columns() as u16;
     let grid_row = &term.grid()[Line(y)];
@@ -193,12 +193,12 @@ pub(crate) fn coalesce_row<T>(
         {
             continue;
         }
-        // Resolve hyperlink (alac String id → wire u32 via interner).
+        // Resolve hyperlink (alac String id → HyperlinkWireId via interner).
         let hyperlink_id = cell.hyperlink().map(|h| {
             let id = interner.intern(h.id(), h.uri().as_ref());
             emitted_hyperlinks
                 .entry(id)
-                .or_insert_with(|| h.uri().to_string());
+                .or_insert_with(|| HyperlinkUri::new(h.uri().to_string()));
             id
         });
         let cell_attrs = RunAttrs::from_cell(cell, hyperlink_id);
@@ -237,11 +237,11 @@ struct RunAttrs {
     fg: Color,
     bg: Color,
     style: u8,
-    hyperlink_id: Option<u32>,
+    hyperlink_id: Option<HyperlinkWireId>,
 }
 
 impl RunAttrs {
-    fn from_cell(cell: &Cell, hyperlink_id: Option<u32>) -> Self {
+    fn from_cell(cell: &Cell, hyperlink_id: Option<HyperlinkWireId>) -> Self {
         Self {
             fg: color_from_alacritty(cell.fg),
             bg: color_from_alacritty(cell.bg),

@@ -27,7 +27,15 @@ pub enum DamageVerdict {
 /// Coalescer state. One instance per bridge task.
 #[derive(Debug, Default)]
 pub struct Coalescer {
+    /// Arrival time of the first chunk that opened the current coalesce
+    /// window. Anchors the `MAX_CAP` hard-flush deadline. Set only by the
+    /// first `arm_or_extend` call; subsequent chunks in the same window do
+    /// not move it. Cleared back to `None` by `disarm`.
     armed_at: Option<Instant>,
+    /// Arrival time of the most recent chunk in the current window. Anchors
+    /// the `IDLE` debounce deadline. Updated on every `arm_or_extend` call so
+    /// the idle timer resets whenever new input arrives. Cleared back to
+    /// `None` by `disarm`.
     last_chunk_at: Option<Instant>,
 }
 

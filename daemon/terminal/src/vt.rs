@@ -16,6 +16,6 @@ pub use frame::{
 };
 pub use frame_builder::DirtyRows;
 pub use frame_ring::{EncodedDelta, FrameRing, WireMessage};
-pub use hyperlink::HyperlinkInterner;
+pub use hyperlink::{AlacrittyHyperlinkId, HyperlinkInterner, HyperlinkUri, HyperlinkWireId};
 pub use listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 pub use mode_diff::{ModeChange, diff_mode};

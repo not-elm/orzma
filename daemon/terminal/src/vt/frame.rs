@@ -1,5 +1,6 @@
 //! Wire protocol types for snapshot/delta frames.
 
+use crate::vt::hyperlink::{HyperlinkUri, HyperlinkWireId};
 use serde::{Deserialize, Serialize};
 
 /// Foreground/background color.
@@ -49,9 +50,9 @@ pub struct Cursor {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hyperlink {
     /// Monotonic u32 wire id assigned server-side.
-    pub id: u32,
+    pub id: HyperlinkWireId,
     /// The hyperlink target URI.
-    pub uri: String,
+    pub uri: HyperlinkUri,
 }
 
 /// Style bitmask constants for [`Run::style`].
@@ -90,7 +91,7 @@ pub struct Run {
     /// grapheme cluster within the run.
     pub text: String,
     /// Hyperlink id (OSC 8); always `None` until Phase 3.
-    pub hyperlink_id: Option<u32>,
+    pub hyperlink_id: Option<HyperlinkWireId>,
 }
 
 /// A row of runs ordered left-to-right.
@@ -297,8 +298,8 @@ mod tests {
     #[test]
     fn hyperlink_round_trip() {
         let h = Hyperlink {
-            id: 42,
-            uri: "https://example.com".to_string(),
+            id: HyperlinkWireId(42),
+            uri: HyperlinkUri::new("https://example.com"),
         };
         let bytes = encode(&h).unwrap();
         let decoded: Hyperlink = rmp_serde::from_slice(&bytes).unwrap();
@@ -359,8 +360,8 @@ mod tests {
             reason: SnapshotReason::Initial,
             modes: vec![],
             hyperlinks: vec![Hyperlink {
-                id: 7,
-                uri: "https://ozmux.example".to_string(),
+                id: HyperlinkWireId(7),
+                uri: HyperlinkUri::new("https://ozmux.example"),
             }],
             display_offset: 0,
             history_size: 0,
@@ -419,8 +420,8 @@ mod tests {
             },
             dirty_rows: vec![],
             hyperlinks: vec![Hyperlink {
-                id: 1,
-                uri: "https://example.org".to_string(),
+                id: HyperlinkWireId(1),
+                uri: HyperlinkUri::new("https://example.org"),
             }],
             display_offset: 0,
         };
