@@ -2,8 +2,8 @@
 //! + pointer listener with RAF coalescing, window-level drag-release reset (C3),
 //! and textarea focus-refocus on pointerup (C4).
 
-import type { ClientControl } from '../useTerminalSocket';
 import type { FontMetrics } from '../renderer/font';
+import type { ClientControl } from '../useTerminalSocket';
 
 /** Button enum matching `PointerEvent.button` (0=left, 1=middle, 2=right). */
 export type MouseButton = 0 | 1 | 2;

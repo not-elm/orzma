@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FontMetrics } from '../renderer/font';
 import type { ClientControl } from '../useTerminalSocket';
 import { encodeMouseEvent, pointToCell, setupMouse } from './mouse';
@@ -470,9 +470,7 @@ describe('setupMouse — Shift+drag bypass full lifecycle', () => {
 // NOTE: WheelEvent dispatched on the target requires `passive: false` on the
 // listener; jsdom honours preventDefault() but does not enforce passiveness.
 function dispatchWheel(target: HTMLElement, deltaY: number): void {
-  target.dispatchEvent(
-    new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }),
-  );
+  target.dispatchEvent(new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }));
 }
 
 function flushRaf(): Promise<void> {
@@ -494,7 +492,15 @@ function makeWheelHarness(modes: ReadonlySet<string>) {
       toJSON: () => '',
     }) as DOMRect;
   document.body.appendChild(target);
-  const fmRef = { current: { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 } as FontMetrics };
+  const fmRef = {
+    current: {
+      cellW: 8,
+      cellH: 16,
+      baseline: 12,
+      fontCss: '14px monospace',
+      dpr: 1,
+    } as FontMetrics,
+  };
   const modesRef: { current: ReadonlySet<string> } = { current: modes };
   const send = vi.fn<[Uint8Array], void>();
   const sendControl = vi.fn<[ClientControl], void>();
