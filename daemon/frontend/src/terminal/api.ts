@@ -16,7 +16,7 @@ export const vtTerminalWsUrl = (
 ) => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const base = `${proto}//${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/terminal/ws`;
-  const params = new URLSearchParams({ mode: 'vt', vt_version: 'vt-1' });
+  const params = new URLSearchParams({ mode: 'vt' });
   if (typeof lastSeq === 'number') params.set('last_seq', String(lastSeq));
   return `${base}?${params.toString()}`;
 };

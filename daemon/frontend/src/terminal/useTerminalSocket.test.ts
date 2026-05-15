@@ -3,7 +3,7 @@ import { Server } from 'mock-socket';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useTerminalSocket } from './useTerminalSocket';
 
-const ENDPOINT = `ws://${location.host}/windows/w/panes/p/activities/a/terminal/ws?mode=vt&vt_version=vt-1`;
+const ENDPOINT = `ws://${location.host}/windows/w/panes/p/activities/a/terminal/ws?mode=vt`;
 
 let server: Server | null = null;
 

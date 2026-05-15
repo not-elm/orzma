@@ -246,7 +246,7 @@ mod tests {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
         let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt"
         );
         let (mut ws, _resp) = tokio_tungstenite::connect_async(&url).await.unwrap();
         let msg = ws.next().await.unwrap().unwrap();
@@ -271,7 +271,7 @@ mod tests {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
         let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt"
         );
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         // Skip hello.
@@ -297,7 +297,7 @@ mod tests {
         let (addr, state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
         let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt"
         );
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         // Skip hello + initial snapshot.
@@ -340,7 +340,7 @@ mod tests {
         let (addr, state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
         let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt"
         );
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         let _ = ws.next().await.unwrap().unwrap(); // hello
@@ -392,7 +392,7 @@ mod tests {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
         let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt"
         );
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         let _ = ws.next().await.unwrap().unwrap();
@@ -429,7 +429,7 @@ mod tests {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
         let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt"
         );
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         let _ = ws.next().await.unwrap().unwrap(); // hello

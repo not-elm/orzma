@@ -2,12 +2,10 @@ use crate::AppState;
 use crate::error::HttpError;
 use crate::handlers::ensure_activity_in_pane_in_window;
 use axum::{
-    body::Body,
     extract::{
         Path, Query, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket},
     },
-    http::{StatusCode, header},
     response::Response,
 };
 use futures_util::{
@@ -40,8 +38,6 @@ pub struct TerminalWsParams {
     #[serde(default)]
     pub mode: Option<String>,
     #[serde(default)]
-    pub vt_version: Option<String>,
-    #[serde(default)]
     pub last_seq: Option<u32>,
 }
 
@@ -61,26 +57,11 @@ pub async fn terminal_ws(
     let ws = ws.max_message_size(MAX_FRAME_BYTES);
 
     if params.mode.as_deref() == Some("vt") {
-        match params.vt_version.as_deref() {
-            Some("vt-1") => {
-                let terminal = state.terminal.clone();
-                let last_seq = params.last_seq;
-                return Ok(ws.on_upgrade(move |socket| {
-                    super::vt_ws::vt_ws_loop(socket, terminal, aid, last_seq)
-                }));
-            }
-            other => {
-                let body = serde_json::json!({ "supported_versions": ["vt-1"] }).to_string();
-                let mut builder = Response::builder()
-                    .status(StatusCode::UPGRADE_REQUIRED)
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .header("X-Ozmux-VT-Version-Server", "vt-1");
-                if let Some(client_ver) = other {
-                    builder = builder.header("X-Ozmux-VT-Version-Client", client_ver);
-                }
-                return Ok(builder.body(Body::from(body)).unwrap());
-            }
-        }
+        let terminal = state.terminal.clone();
+        let last_seq = params.last_seq;
+        return Ok(ws.on_upgrade(move |socket| {
+            super::vt_ws::vt_ws_loop(socket, terminal, aid, last_seq)
+        }));
     }
 
     let terminal = state.terminal.clone();
@@ -301,34 +282,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vt_mode_rejects_unknown_version_with_426() {
+    async fn vt_mode_upgrades() {
         let (addr, _state, wid, pid, aid) = super::super::test_support::boot_server_full().await;
         let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-99"
-        );
-        let err = tokio_tungstenite::connect_async(&url)
-            .await
-            .expect_err("expected upgrade failure with 426");
-        let tokio_tungstenite::tungstenite::Error::Http(resp) = err else {
-            panic!("expected tungstenite::Error::Http, got: {err:?}");
-        };
-        assert_eq!(resp.status().as_u16(), 426);
-        assert_eq!(
-            resp.headers()
-                .get("X-Ozmux-VT-Version-Server")
-                .and_then(|h| h.to_str().ok()),
-            Some("vt-1")
-        );
-        let body_bytes = resp.into_body().unwrap_or_default();
-        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body["supported_versions"], serde_json::json!(["vt-1"]));
-    }
-
-    #[tokio::test]
-    async fn vt_mode_upgrades_with_correct_version() {
-        let (addr, _state, wid, pid, aid) = super::super::test_support::boot_server_full().await;
-        let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt&vt_version=vt-1"
+            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws?mode=vt"
         );
         let (ws, resp) = tokio_tungstenite::connect_async(&url)
             .await
