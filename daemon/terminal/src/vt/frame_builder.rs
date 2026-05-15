@@ -728,7 +728,6 @@ mod tests {
     #[test]
     fn extract_cursor_visible_at_zero_offset_uses_live_y() {
         let mut term = make_term(10, 5);
-        // NOTE: place cursor at viewport row 2 by emitting two newlines.
         install_text(&mut term, "\r\n\r\n");
         let c = extract_cursor(&term);
         assert_eq!(c.y, 2);
