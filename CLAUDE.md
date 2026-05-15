@@ -74,6 +74,16 @@ Biome (`biome.json`) only scans `daemon/frontend/**` — it is the JS/TS/CSS lin
 - `.ozmux/` — runtime state from the e2e harness (PID file, logs); gitignored.
 - `docs/` — gitignored; safe place to drop specs/notes that should not be committed.
 
+## Comment language
+
+All in-code comments — line comments (`//`), doc comments (`///`, `//!`),
+and block comments in any language under this repo — must be written in
+English. This applies to Rust (`cli/`, `daemon/*`), TypeScript/React
+(`daemon/frontend`, `sdk/*`, `extensions/*`), CSS, shell scripts, and
+config files. Use English even when the conversation with the user is in
+another language. Identifiers and string literals are not constrained by
+this rule; only comments are.
+
 ## Styling
 
 Frontend styling (utility-first Tailwind v4, semantic tokens, no inline
