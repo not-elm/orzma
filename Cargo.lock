@@ -2426,6 +2426,7 @@ dependencies = [
  "ozmux_multiplexer",
  "rmp-serde",
  "serde",
+ "serde_bytes",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

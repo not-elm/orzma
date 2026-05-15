@@ -18,3 +18,5 @@ pub mod state;
 pub mod wire;
 
 pub use error::{BrowserError, BrowserResult};
+pub use snapshot::{BrowserSnapshot, NavState, ScreencastFrame};
+pub use wire::{BrowserClientMsg, BrowserServerMsg, KeyKind, MouseButton, MouseKind, NavCommand};
