@@ -68,14 +68,6 @@ impl Coalescer {
         self.last_chunk_at = None;
     }
 
-    /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
-    /// Returns `None` when the Coalescer is disarmed.
-    pub fn next_deadline(&self) -> Option<Instant> {
-        let armed = self.armed_at?;
-        let last = self.last_chunk_at.unwrap_or(armed);
-        Some(min(last + Self::IDLE, armed + Self::MAX_CAP))
-    }
-
     /// Future for `tokio::select!`. Resolves when the deadline elapses.
     /// When disarmed, returns a future that never resolves (`future::pending`).
     pub async fn wait_deadline(&self) {
@@ -114,6 +106,14 @@ impl Coalescer {
             return true;
         }
         false
+    }
+
+    /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
+    /// Returns `None` when the Coalescer is disarmed.
+    fn next_deadline(&self) -> Option<Instant> {
+        let armed = self.armed_at?;
+        let last = self.last_chunk_at.unwrap_or(armed);
+        Some(min(last + Self::IDLE, armed + Self::MAX_CAP))
     }
 }
 
