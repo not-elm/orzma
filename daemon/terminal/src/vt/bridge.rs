@@ -22,7 +22,7 @@ use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 
-/// All state mutated by the VT bridge task, wrapped by `PtyHandle` in
+/// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
 /// PTY chunk.
 pub struct VtState {
