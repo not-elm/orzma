@@ -220,9 +220,7 @@ impl TerminalService {
 
     /// Subscribes to window-scoped terminal title-change notifications.
     /// Each item is the `WindowId` of a window whose terminal title changed.
-    pub fn subscribe_title_changes(
-        &self,
-    ) -> broadcast::Receiver<WindowId> {
+    pub fn subscribe_title_changes(&self) -> broadcast::Receiver<WindowId> {
         self.title_tx.subscribe()
     }
 
