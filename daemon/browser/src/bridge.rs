@@ -9,11 +9,12 @@
 //! activities; the active-Activity pause/resume is wired by Task 2.8/3.5).
 //!
 //! Bridge ↔ PageActor split:
-//! - PageActor owns command-driven CDP calls (`Page.stopScreencast`, etc.).
-//! - Bridge owns the `Page.startScreencast` listener and `screencastFrameAck`.
-//! - To resume after a pause, the bridge must re-call `startScreencast`.
-//!   For Task 2.7 we expose a `restart` signal; Task 2.8's BrowserService
-//!   wires PageActor pause/resume into the bridge.
+//! - PageActor owns command-driven CDP calls (`Page.stopScreencast`,
+//!   `Page.startScreencast` for resume, etc.).
+//! - Bridge owns the initial `Page.startScreencast` and the frame listener
+//!   loop with `screencastFrameAck`.
+//! - To resume after a pause the PageActor re-issues `Page.startScreencast`;
+//!   the listener loop never dropped, so frames resume immediately.
 
 use crate::snapshot::{BrowserSnapshot, NavState, ScreencastFrame};
 use base64::Engine as _;
@@ -23,10 +24,18 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+/// Default JPEG quality for screencasting (0-100).
+pub(crate) const DEFAULT_JPEG_QUALITY: i64 = 55;
+/// Default maximum frame width in device pixels.
+pub(crate) const DEFAULT_MAX_WIDTH: i64 = 1920;
+/// Default maximum frame height in device pixels.
+pub(crate) const DEFAULT_MAX_HEIGHT: i64 = 1200;
+/// Default frame-skip factor: emit every Nth frame.
+pub(crate) const DEFAULT_EVERY_NTH_FRAME: i64 = 1;
+
 /// Screencast configuration. Conservative defaults that balance frame rate
 /// against per-frame bandwidth.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct BridgeConfig {
     /// JPEG quality (0-100). Higher = better quality, larger frame.
     pub jpeg_quality: i64,
@@ -41,10 +50,10 @@ pub(crate) struct BridgeConfig {
 impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
-            jpeg_quality: 55,
-            max_width: 1920,
-            max_height: 1200,
-            every_nth_frame: 1,
+            jpeg_quality: DEFAULT_JPEG_QUALITY,
+            max_width: DEFAULT_MAX_WIDTH,
+            max_height: DEFAULT_MAX_HEIGHT,
+            every_nth_frame: DEFAULT_EVERY_NTH_FRAME,
         }
     }
 }
@@ -53,7 +62,6 @@ impl Default for BridgeConfig {
 /// acks each one, decodes the JPEG bytes, and publishes a new
 /// `Arc<BrowserSnapshot>` through `sender`. Returns when `cancel` fires or
 /// the stream closes.
-#[allow(dead_code)]
 pub(crate) async fn run(
     page: chromiumoxide::Page,
     sender: watch::Sender<Arc<BrowserSnapshot>>,

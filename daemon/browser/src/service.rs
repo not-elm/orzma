@@ -191,9 +191,9 @@ impl BrowserService {
         }
     }
 
-    /// Resume screencast for `aid`. Phase 2 leaves this as a no-op on the
-    /// bridge side (the page actor receives the command but does not restart
-    /// screencast itself); the bridge wiring lands in Phase 3.
+    /// Resume screencast for `aid` by re-issuing `Page.startScreencast`.
+    /// `Page.startScreencast` is idempotent — the bridge task's frame listener
+    /// is still live after a pause, so the fresh start restores frame delivery.
     /// Missing-ok.
     pub async fn resume_screencast(&self, aid: &ActivityId) {
         if let Some(h) = self.pages.read().await.get(aid).cloned() {

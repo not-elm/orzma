@@ -2,6 +2,9 @@
 //! the registry lock in `BrowserService` never holds across an `await`. One
 //! actor per browser Activity.
 
+use crate::bridge::{
+    DEFAULT_EVERY_NTH_FRAME, DEFAULT_JPEG_QUALITY, DEFAULT_MAX_HEIGHT, DEFAULT_MAX_WIDTH,
+};
 use crate::error::{BrowserError, BrowserResult};
 use crate::input::{
     ime_commit_to_cdp, ime_composition_to_cdp, key_to_cdp, mouse_to_cdp, paste_to_cdp, wheel_to_cdp,
@@ -10,7 +13,6 @@ use crate::wire::{BrowserClientMsg, NavCommand};
 use tokio::sync::{mpsc, oneshot};
 
 /// Command sent to a `PageActor` via its `mpsc::Sender`.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum PageCommand {
     /// Translate a wire input message and forward it to CDP.
@@ -31,6 +33,10 @@ pub(crate) enum PageCommand {
     /// screencast directly; it signals the bridge owner.
     ResumeScreencast,
     /// Reply with the page's current selection text via `Runtime.evaluate`.
+    #[expect(
+        dead_code,
+        reason = "wired by the copy-to-clipboard WS handler, not yet merged"
+    )]
     GetSelection(oneshot::Sender<String>),
     /// Stop the actor; close the page.
     Close,
@@ -40,7 +46,6 @@ pub(crate) enum PageCommand {
 /// the actor command channel. Returns when the channel closes or a `Close`
 /// command arrives. The owning `BrowserService` task spawns this on a
 /// dedicated tokio task per Activity.
-#[allow(dead_code)]
 pub(crate) async fn run(
     page: chromiumoxide::Page,
     mut rx: mpsc::Receiver<PageCommand>,
@@ -57,7 +62,6 @@ pub(crate) async fn run(
     Ok(())
 }
 
-#[allow(dead_code)]
 async fn handle(page: &chromiumoxide::Page, cmd: PageCommand) -> BrowserResult<()> {
     use chromiumoxide::cdp::browser_protocol::emulation as cdp_em;
     use chromiumoxide::cdp::browser_protocol::page as cdp_page;
@@ -152,11 +156,16 @@ async fn handle(page: &chromiumoxide::Page, cmd: PageCommand) -> BrowserResult<(
                 .map_err(|e| BrowserError::Cdp(e.to_string()))?;
         }
         PageCommand::ResumeScreencast => {
-            // NOTE: the actor cannot restart screencast on its own — the
-            // bridge task (`bridge::run`) owns the listener loop and the
-            // ack ownership. Task 2.7 wires a signal channel from here to
-            // the bridge; for now this is a no-op so the actor compiles
-            // and the WS handler can already plumb the command.
+            let params = cdp_page::StartScreencastParams::builder()
+                .format(cdp_page::StartScreencastFormat::Jpeg)
+                .quality(DEFAULT_JPEG_QUALITY)
+                .max_width(DEFAULT_MAX_WIDTH)
+                .max_height(DEFAULT_MAX_HEIGHT)
+                .every_nth_frame(DEFAULT_EVERY_NTH_FRAME)
+                .build();
+            page.execute(params)
+                .await
+                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
         }
         PageCommand::GetSelection(reply) => {
             let v = page
@@ -179,7 +188,6 @@ async fn handle(page: &chromiumoxide::Page, cmd: PageCommand) -> BrowserResult<(
 /// because the library does not expose high-level `go_back`/`go_forward`
 /// helpers — only the raw `Page.getNavigationHistory` +
 /// `Page.navigateToHistoryEntry` pair.
-#[allow(dead_code)]
 async fn navigate_history(page: &chromiumoxide::Page, delta: i64) -> BrowserResult<()> {
     use chromiumoxide::cdp::browser_protocol::page as cdp_page;
 
