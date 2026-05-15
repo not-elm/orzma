@@ -15,7 +15,10 @@ pub mod split;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/{pane_id}/activate", post(activate::activate))
-        .route("/{pane_id}/cycle-activity", post(cycle_activity::cycle_activity))
+        .route(
+            "/{pane_id}/cycle-activity",
+            post(cycle_activity::cycle_activity),
+        )
         .route("/{pane_id}/split", post(split::split))
         .route("/{pane_id}", method_delete(close::close))
         .nest("/{pane_id}/activities", activities::router())

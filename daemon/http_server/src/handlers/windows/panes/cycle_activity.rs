@@ -40,7 +40,8 @@ mod tests {
         state
             .multiplexer
             .with_window_or_404(wid, |w| {
-                w.pane_mut(pid)?.add_activity(Activity::terminal(aid.clone()))
+                w.pane_mut(pid)?
+                    .add_activity(Activity::terminal(aid.clone()))
             })
             .await
             .unwrap();
@@ -109,7 +110,11 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/windows/{}/panes/{}/cycle-activity", wid, PaneId::new()))
+                    .uri(format!(
+                        "/windows/{}/panes/{}/cycle-activity",
+                        wid,
+                        PaneId::new()
+                    ))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"direction":"next"}"#))
                     .unwrap(),
