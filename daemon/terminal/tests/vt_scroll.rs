@@ -41,7 +41,6 @@ async fn scroll_advances_display_offset() {
     let svc = TerminalService::default();
     let aid = spawn_shell(&svc).await;
 
-    // 30 行 echo で grid を流す。
     let mut cmd = String::new();
     for i in 0..30 {
         cmd.push_str(&format!("echo line{i}\n"));
