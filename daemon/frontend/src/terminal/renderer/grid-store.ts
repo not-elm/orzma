@@ -9,10 +9,17 @@ import { createContext, useContext, useSyncExternalStore } from 'react';
 import type { Cursor } from '../protocol/frame';
 import { createGrid, type Grid } from './grid';
 
+export interface ScrollState {
+  displayOffset: number;
+  historySize: number;
+}
+
 export interface GridStore {
   setGrid(next: Grid): void;
+  setScrollState(displayOffset: number, historySize: number): void;
   subscribe(cb: () => void): () => void;
   getSnapshot(): Grid;
+  getScrollSnapshot(): ScrollState;
 }
 
 function cursorEqual(a: Cursor, b: Cursor): boolean {
@@ -38,11 +45,18 @@ function gridShallowEqual(a: Grid, b: Grid): boolean {
  *  so each hook instance owns its own state. */
 export function createGridStore(): GridStore {
   let state: Grid = createGrid({ cols: 80, rows: 24 });
+  let scrollState: ScrollState = { displayOffset: 0, historySize: 0 };
   const listeners = new Set<() => void>();
   return {
     setGrid(next: Grid): void {
       if (gridShallowEqual(state, next)) return;
       state = next;
+      for (const l of listeners) l();
+    },
+    setScrollState(displayOffset: number, historySize: number): void {
+      if (scrollState.displayOffset === displayOffset && scrollState.historySize === historySize)
+        return;
+      scrollState = { displayOffset, historySize };
       for (const l of listeners) l();
     },
     subscribe(cb: () => void): () => void {
@@ -51,6 +65,9 @@ export function createGridStore(): GridStore {
     },
     getSnapshot(): Grid {
       return state;
+    },
+    getScrollSnapshot(): ScrollState {
+      return scrollState;
     },
   };
 }
