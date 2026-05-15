@@ -315,6 +315,9 @@ impl AppState {
     /// broadcast it. Used by every handler that mutates a Window and by the
     /// title-republish task.
     pub(crate) async fn publish_window_layout(&self, wid: &WindowId) {
+        // NOTE: titles are snapshotted separately from the window state, so a
+        // published view's title can be one title-change cycle stale. This is
+        // benign — the next title change re-broadcasts the corrected view.
         let titles = self.terminal.all_titles().await;
         let _ = self
             .multiplexer

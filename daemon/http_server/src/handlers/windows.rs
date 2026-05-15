@@ -202,6 +202,7 @@ mod tests {
         let activities = panes[0]["activities"].as_array().unwrap();
         assert!(activities[0]["id"].is_string());
         assert_eq!(activities[0]["kind"].as_str(), Some("terminal"));
+        assert!(activities[0]["title"].is_string());
     }
 
     #[tokio::test]
