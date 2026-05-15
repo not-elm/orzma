@@ -1,16 +1,22 @@
-use crate::pty::{TerminalEvent, ring_buffer::RingBuffer};
-use portable_pty::{ChildKiller, MasterPty};
-use std::{io::Write, num::NonZero, sync::Arc};
+//! Bounded scrollback ring shared between the PTY reader and WS subscribers.
+
+use crate::event::TerminalEvent;
+use crate::pty::ring_buffer::RingBuffer;
+use std::{num::NonZero, sync::Arc};
 use tokio::sync::{
     Mutex,
     broadcast::{Receiver, Sender},
 };
 
+/// Fixed-capacity raw-byte scrollback shared by the PTY reader (producer)
+/// and WebSocket subscribers (consumer).
 #[derive(Clone, Debug)]
 pub(crate) struct ScrollbackBuffer(Arc<Mutex<RingBuffer>>);
 
 impl ScrollbackBuffer {
     const SCROLLBACK_BYTES: usize = 256 * 1024;
+
+    /// Allocates a new ring with the crate-wide scrollback capacity.
     pub fn new() -> Self {
         let capacity = NonZero::new(Self::SCROLLBACK_BYTES).unwrap();
         Self(Arc::new(Mutex::new(RingBuffer::with_capacity(capacity))))
@@ -20,12 +26,16 @@ impl ScrollbackBuffer {
     /// `push_and_broadcast` and `snapshot_and_subscribe` to keep the producer
     /// and consumer sides serialized through a single critical section.
     #[cfg(test)]
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "test-only helper; production goes through push_and_broadcast"
+    )]
     #[inline]
     pub async fn push(&self, data: &[u8]) {
         self.0.lock().await.push(data);
     }
 
+    /// Returns a snapshot of the current scrollback contents (test-only).
     #[cfg(test)]
     #[inline]
     pub async fn snapshot(&self) -> Vec<u8> {
@@ -55,44 +65,10 @@ impl ScrollbackBuffer {
     }
 }
 
-pub(crate) struct PtyHandle {
-    pub master: Mutex<Box<dyn MasterPty + Send>>,
-    pub writer: Mutex<Box<dyn Write + Send>>,
-    pub scrollback: ScrollbackBuffer,
-    pub event_sender: Sender<TerminalEvent>,
-    _child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
-}
-
-impl PtyHandle {
-    pub fn new(
-        master: Box<dyn MasterPty + Send>,
-        writer: Box<dyn Write + Send>,
-        event_sender: Sender<TerminalEvent>,
-        child_killer: Box<dyn ChildKiller + Send + Sync>,
-        scrollback: ScrollbackBuffer,
-    ) -> Self {
-        Self {
-            scrollback,
-            event_sender,
-            writer: Mutex::new(writer),
-            master: Mutex::new(master),
-            _child_killer: child_killer,
-        }
-    }
-
-    /// Thin wrapper for the WS handler. The PTY bridge task does not go through
-    /// this — it holds its own (scrollback, event_sender) clones.
-    pub async fn snapshot_and_subscribe(&self) -> (Vec<u8>, Receiver<TerminalEvent>) {
-        self.scrollback
-            .snapshot_and_subscribe(&self.event_sender)
-            .await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pty::TerminalEvent;
+    use crate::event::TerminalEvent;
     use tokio::sync::broadcast;
 
     #[tokio::test]
@@ -121,12 +97,10 @@ mod tests {
 
         scrollback.push_and_broadcast(&tx, b"new".to_vec()).await;
 
-        // rx receives ONLY the new bytes, not the old ones (which are in snap).
         match rx.recv().await.unwrap() {
             TerminalEvent::Data { buffer } => assert_eq!(buffer, b"new"),
             other => panic!("unexpected event: {other:?}"),
         }
-        // No more pending events.
         assert!(rx.try_recv().is_err());
     }
 }

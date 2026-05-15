@@ -12,6 +12,7 @@ pub mod add_to_pane;
 pub mod handlers_ws;
 pub mod iframe_serve;
 pub mod terminal_ws;
+mod vt_ws;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -52,7 +53,7 @@ pub enum ActivityKindInput {
 /// owning extension's name when the activity is Extension-kind. The name is
 /// not stored on `Activity` itself (the multiplexer model has no notion of an
 /// "owner"); the handler uses it to populate `ExtensionRegistry`.
-pub(crate) struct ParsedActivity {
+pub(super) struct ParsedActivity {
     pub activity: Activity,
     pub extension_name: Option<String>,
 }
@@ -60,7 +61,7 @@ pub(crate) struct ParsedActivity {
 impl ActivityInput {
     /// Convert the wire payload into a domain `Activity`, also surfacing the
     /// owning extension's name for Extension-kind activities.
-    pub(crate) fn into_parsed(self) -> ParsedActivity {
+    pub(super) fn into_parsed(self) -> ParsedActivity {
         let (kind, extension_name) = match self.kind {
             ActivityKindInput::Terminal => (ActivityKind::Terminal, None),
             ActivityKindInput::Extension {

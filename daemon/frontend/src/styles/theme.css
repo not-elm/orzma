@@ -12,6 +12,8 @@
   --tn-bg-popover: #1f2335;
   --tn-bg-muted: #292e42;
   --tn-bg-status: #16161e;
+  --tn-bg-pane-inactive: #15161f;
+  --tn-pane-inactive-overlay: rgba(15, 16, 22, 0.4);
 
   --tn-fg: #c0caf5;
   --tn-fg-muted: #9aa5ce;
@@ -23,6 +25,9 @@
   --tn-yellow: #e0af68;
   --tn-cyan: #7dcfff;
   --tn-red: #f7768e;
+  --tn-cursor: #ffffff;
+  --tn-cursor-inactive: #e5e5e5;
+  --tn-selection: rgba(122, 162, 247, 0.35);
 }
 
 /* ============================================================
@@ -62,8 +67,15 @@
 
   --color-tmux-pane-border: var(--tn-border);
   --color-tmux-pane-active: var(--tn-blue);
+  --color-tmux-pane-inactive-bg: var(--tn-bg-pane-inactive);
+  --color-tmux-pane-inactive-overlay: var(--tn-pane-inactive-overlay);
   --color-tmux-status-bar: var(--tn-bg-status);
   --color-tmux-status-bar-foreground: var(--tn-blue);
+  --color-tmux-cursor: var(--tn-cursor);
+  --color-tmux-cursor-inactive: var(--tn-cursor-inactive);
+  --color-selection: var(--tn-selection);
+
+  --animate-cursor-blink: cursor-blink 1200ms step-end infinite;
 
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -84,29 +96,16 @@
   --radius-xl: 0.5rem;
 }
 
-/* ============================================================
- * Scrollbar — terminal pane only (.xterm-viewport)
- * xterm.js exposes a native browser scrollbar on .xterm-viewport;
- * align it with the Tokyo Night palette via Layer 2 tokens.
- * ============================================================ */
-.xterm-viewport {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-border) transparent;
-}
-
-.xterm-viewport::-webkit-scrollbar {
-  width: 6px;
-}
-
-.xterm-viewport::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.xterm-viewport::-webkit-scrollbar-thumb {
-  background-color: var(--color-border);
-  border-radius: var(--radius-sm);
-}
-
-.xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background-color: var(--color-muted-foreground);
+/* Tailwind v4 keyframes — top-level (outside @theme). `step-end` is the
+ * critical timing function: opacity holds at 1 for [0, 600ms), discretely
+ * jumps to 0 at 600ms, holds until the cycle restarts at 1200ms. Matches
+ * xterm.js BLINK_INTERVAL exactly. Do not use `steps(2, ...)` — those
+ * interpolate intermediate values. */
+@keyframes cursor-blink {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }

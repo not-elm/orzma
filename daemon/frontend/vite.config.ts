@@ -25,5 +25,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
+    // NOTE: e2e/*.spec.ts files are Playwright (`pnpm test:e2e`), not vitest.
+    // Exclude them so vitest doesn't try to import the @playwright/test API.
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
 });

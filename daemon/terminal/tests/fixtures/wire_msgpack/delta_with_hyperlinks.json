@@ -1,0 +1,33 @@
+{
+  "kind": "delta",
+  "seq": 2,
+  "cursor": {
+    "x": 0,
+    "y": 0,
+    "shape": "underline",
+    "blinking": true,
+    "visible": true
+  },
+  "dirty_rows": [
+    {
+      "row": 0,
+      "runs": [
+        {
+          "cols": 5,
+          "fg": null,
+          "bg": null,
+          "style": 0,
+          "text": "world",
+          "hyperlink_id": 0
+        }
+      ]
+    }
+  ],
+  "hyperlinks": [
+    {
+      "id": 0,
+      "uri": "https://ozmux.example"
+    }
+  ],
+  "display_offset": 0
+}
