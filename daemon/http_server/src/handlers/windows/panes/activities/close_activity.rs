@@ -1,7 +1,6 @@
 //! Close a single Activity in a Pane. Refuses to close the last activity
 //! (caller should use close-pane if they want to drop the whole pane).
 
-use crate::handlers::ensure_pane_in_window;
 use crate::{AppState, error::HttpResult};
 use axum::{
     extract::{Path, State},
@@ -17,7 +16,6 @@ pub async fn close_activity(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
 ) -> HttpResult<StatusCode> {
-    ensure_pane_in_window(&state, &wid, &pid)?;
     state.close_activity(&wid, &pid, &aid).await?;
     Ok(StatusCode::NO_CONTENT)
 }

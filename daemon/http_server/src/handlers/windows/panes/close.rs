@@ -1,4 +1,3 @@
-use crate::handlers::ensure_pane_in_window;
 use crate::{AppState, error::HttpResult};
 use axum::{
     extract::{Path, State},
@@ -10,7 +9,6 @@ pub async fn close(
     State(state): State<AppState>,
     Path((wid, pane_id)): Path<(WindowId, PaneId)>,
 ) -> HttpResult<StatusCode> {
-    ensure_pane_in_window(&state, &wid, &pane_id)?;
     state.close_pane(&wid, &pane_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

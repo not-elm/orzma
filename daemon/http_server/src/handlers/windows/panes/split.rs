@@ -1,4 +1,3 @@
-use crate::handlers::ensure_pane_in_window;
 use crate::handlers::windows::panes::activities::ActivityInput;
 use crate::state::SplitInput;
 use crate::{AppState, error::HttpResult};
@@ -29,8 +28,6 @@ pub async fn split(
     Path((wid, target_pane_id)): Path<(WindowId, PaneId)>,
     Json(req): Json<SplitRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    ensure_pane_in_window(&state, &wid, &target_pane_id)?;
-
     let new_pane_id = req.new_pane_id.unwrap_or_default();
     let (new_activity, extension_name) = match req.activity {
         Some(spec) => {

@@ -1,7 +1,7 @@
-use crate::HttpResult;
 use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::window_view::WindowView;
+use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
@@ -154,6 +154,7 @@ impl AppState {
         pid: &PaneId,
         aid: &ActivityId,
     ) -> HttpResult<()> {
+        self.ensure_pane_in_window(wid, pid)?;
         let removed = self
             .multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
@@ -180,6 +181,7 @@ impl AppState {
         target_pane_id: &PaneId,
         input: SplitInput,
     ) -> HttpResult<SplitOutcome> {
+        self.ensure_pane_in_window(wid, target_pane_id)?;
         let new_pane_id = input.new_pane_id.clone();
         let new_activity_id = input.new_activity.id.clone();
         let activity_kind = input.new_activity.kind.clone();
@@ -225,6 +227,7 @@ impl AppState {
     /// Close a Pane: remove it from the cell tree, tear down extension
     /// registry rows and PTYs for each activity, and broadcast the new layout.
     pub async fn close_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
+        self.ensure_pane_in_window(wid, pid)?;
         let activities = self
             .multiplexer
             .with_window_or_404(wid, |w| w.close_pane(pid))
@@ -321,6 +324,59 @@ impl AppState {
                 Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
             })
             .await;
+    }
+
+    /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
+    /// pane has no owner and `PaneNotInWindow` when it lives in a different
+    /// Window. Used by every URL of shape `/windows/:wid/panes/:pid/*`.
+    fn ensure_pane_in_window(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
+        let actual = self.multiplexer.lookup_pane_window(pid)?;
+        if &actual != wid {
+            return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
+                window: wid.clone(),
+                pane: pid.clone(),
+            }));
+        }
+        Ok(())
+    }
+
+    /// Combined membership check for `/windows/:wid/panes/:pid/activities/:aid/*`
+    /// that also returns the resolved `Activity`. Callers like `iframe_serve`
+    /// need both the validation and the activity metadata; doing them in one
+    /// helper avoids a second Window lock acquisition.
+    pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> HttpResult<Activity> {
+        self.ensure_pane_in_window(wid, pid)?;
+        let activity = self
+            .multiplexer
+            .with_window(wid, |w| w.pane(pid).map(|p| p.activity(aid).cloned()))
+            .await
+            .ok_or_else(|| HttpError::Session(MultiplexerError::WindowNotFound(wid.clone())))??
+            .ok_or_else(|| {
+                HttpError::Session(MultiplexerError::ActivityNotInPane {
+                    pane: pid.clone(),
+                    activity: aid.clone(),
+                })
+            })?;
+        Ok(activity)
+    }
+
+    /// Membership-only variant for handlers that don't need the Activity
+    /// payload (terminal WS, handlers WS).
+    pub(crate) async fn ensure_activity_in_pane_in_window(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> HttpResult<()> {
+        let _ = self
+            .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
+            .await?;
+        Ok(())
     }
 }
 
