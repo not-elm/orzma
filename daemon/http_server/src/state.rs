@@ -1,5 +1,4 @@
 use crate::activity_titles::ActivityTitles;
-use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
@@ -145,15 +144,12 @@ impl AppState {
 
         // NOTE: PTY spawn must precede the layout publish so the frontend never
         // sees a terminal activity without a backing PTY.
-        if matches!(activity_kind, ActivityKind::Terminal)
-            && let Err(spawn_err) = spawn_terminal_pty(self, wid, pid, &aid).await
+        if let Err(spawn_err) =
+            crate::provision::provision_activity_runtime(self, wid, pid, &aid, &activity_kind)
+                .await
         {
             if let Err(rollback_err) = self.rollback_added_activity(wid, pid, &aid).await {
-                tracing::warn!(
-                    error = %rollback_err,
-                    %wid, %pid, %aid,
-                    "failed to roll back added activity after PTY spawn failure"
-                );
+                tracing::warn!(error = %rollback_err, %wid, %pid, %aid, "rollback failed");
             }
             return Err(spawn_err);
         }
@@ -228,9 +224,14 @@ impl AppState {
 
         // NOTE: PTY spawn must precede the layout publish so the frontend never
         // sees a terminal activity without a backing PTY.
-        if matches!(activity_kind, ActivityKind::Terminal)
-            && let Err(spawn_err) =
-                spawn_terminal_pty(self, wid, &new_pane_id, &new_activity_id).await
+        if let Err(spawn_err) = crate::provision::provision_activity_runtime(
+            self,
+            wid,
+            &new_pane_id,
+            &new_activity_id,
+            &activity_kind,
+        )
+        .await
         {
             self.rollback_split(wid, &new_pane_id).await;
             return Err(spawn_err);
