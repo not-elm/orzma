@@ -155,6 +155,8 @@ export function useCanvasTerminal(
       const batch = pendingFrames.splice(0);
       let hyperlinksDirty = false;
       let nextHyperlinks = latestHyperlinks;
+      let nextScrollOffset = gridStore.getScrollSnapshot().displayOffset;
+      let nextHistorySize = gridStore.getScrollSnapshot().historySize;
       for (const bytes of batch) {
         let frame: ReturnType<typeof decodeFrame>;
         try {
@@ -167,11 +169,16 @@ export function useCanvasTerminal(
         if (frame.kind === 'snapshot') {
           nextHyperlinks = new Map(frame.hyperlinks.map((h) => [h.id, h.uri]));
           hyperlinksDirty = true;
-        } else if (frame.hyperlinks.length > 0) {
-          const merged = new Map(nextHyperlinks);
-          for (const h of frame.hyperlinks) merged.set(h.id, h.uri);
-          nextHyperlinks = merged;
-          hyperlinksDirty = true;
+          nextScrollOffset = frame.display_offset ?? 0;
+          nextHistorySize = frame.history_size ?? 0;
+        } else {
+          if (frame.hyperlinks.length > 0) {
+            const merged = new Map(nextHyperlinks);
+            for (const h of frame.hyperlinks) merged.set(h.id, h.uri);
+            nextHyperlinks = merged;
+            hyperlinksDirty = true;
+          }
+          nextScrollOffset = frame.display_offset ?? nextScrollOffset;
         }
       }
       modesRef.current = gridRef.current.modes;
@@ -183,6 +190,7 @@ export function useCanvasTerminal(
         setHyperlinks(nextHyperlinks);
       }
       gridStore.setGrid(snapshotGrid(gridRef.current));
+      gridStore.setScrollState(nextScrollOffset, nextHistorySize);
       overlayStore.setOverlayState({
         cursor: gridRef.current.cursor,
         cols: gridRef.current.cols,

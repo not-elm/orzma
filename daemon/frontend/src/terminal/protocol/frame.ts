@@ -57,6 +57,8 @@ export interface FrameSnapshot {
   reason: SnapshotReason;
   modes: string[];
   hyperlinks: Hyperlink[];
+  display_offset?: number;
+  history_size?: number;
 }
 
 /** Differential frame (only dirty rows). */
@@ -66,6 +68,7 @@ export interface FrameDelta {
   cursor: Cursor;
   dirty_rows: DirtyRow[];
   hyperlinks: Hyperlink[];
+  display_offset?: number;
 }
 
 /** Render frame tagged union (matches wire spec § 4 RenderFrame discriminator). */
