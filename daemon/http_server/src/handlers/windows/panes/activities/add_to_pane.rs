@@ -206,6 +206,10 @@ mod tests {
 
     #[tokio::test]
     async fn add_to_pane_accepts_browser_kind() {
+        if std::env::var("OZMUX_TEST_REAL_CHROME").ok().as_deref() != Some("1") {
+            eprintln!("skipping; set OZMUX_TEST_REAL_CHROME=1 to run (launches real Chromium)");
+            return;
+        }
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
         let (router, _state) = test_helpers::router_with(state);
@@ -227,8 +231,6 @@ mod tests {
             )
             .await
             .unwrap();
-        // Browser activities can be created in the multiplexer even without a
-        // BrowserService yet (Phase 2). The route returns 201 on success.
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
