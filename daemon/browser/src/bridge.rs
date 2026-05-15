@@ -60,7 +60,6 @@ pub(crate) async fn run(
     cancel: CancellationToken,
     cfg: BridgeConfig,
 ) {
-    // Start screencast.
     let start_params = cdp_page::StartScreencastParams::builder()
         .format(cdp_page::StartScreencastFormat::Jpeg)
         .quality(cfg.jpeg_quality)
@@ -74,7 +73,6 @@ pub(crate) async fn run(
         return;
     }
 
-    // Subscribe to screencast frames.
     let mut frames = match page
         .event_listener::<cdp_page::EventScreencastFrame>()
         .await
@@ -86,7 +84,6 @@ pub(crate) async fn run(
         }
     };
 
-    // Subscribe to load events for nav refresh.
     let mut load_events = page
         .event_listener::<cdp_page::EventLoadEventFired>()
         .await
@@ -121,7 +118,7 @@ pub(crate) async fn run(
         }
     }
 
-    // Best-effort: stop screencast on exit. Page may already be closed.
+    // NOTE: page may have closed by now — ignore the StopScreencast error.
     let _ = page.execute(cdp_page::StopScreencastParams {}).await;
 }
 
