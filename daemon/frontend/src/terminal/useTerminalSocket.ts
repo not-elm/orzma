@@ -7,7 +7,10 @@ export type BinaryHandler = (data: Uint8Array) => void;
 export type ControlHandler = (text: string) => void;
 
 /** Client-side control messages on the VT WebSocket. */
-export type ClientControl = { kind: 'resize'; cols: number; rows: number };
+export type ClientControl =
+  | { kind: 'resize'; cols: number; rows: number }
+  | { kind: 'scroll'; delta: number }
+  | { kind: 'scroll_to_bottom' };
 
 /** Options for the socket hook. */
 export interface TerminalSocketOptions {
