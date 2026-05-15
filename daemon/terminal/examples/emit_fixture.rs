@@ -42,6 +42,8 @@ fn main() {
         reason: SnapshotReason::Initial,
         modes: vec![],
         hyperlinks: vec![],
+        display_offset: 0,
+        history_size: 0,
     };
     fs::write(dir.join("snapshot_minimal.bin"), encode(&snap).unwrap()).unwrap();
     fs::write(
@@ -135,6 +137,8 @@ fn main() {
         reason: SnapshotReason::Initial,
         modes: vec!["mouse-any-event".to_string(), "mouse-sgr-1006".to_string()],
         hyperlinks: vec![],
+        display_offset: 0,
+        history_size: 0,
     };
     fs::write(
         dir.join("snapshot_modes_mouse.bin"),
@@ -209,6 +213,8 @@ fn main() {
         reason: SnapshotReason::Initial,
         modes: vec![],
         hyperlinks: hyperlinks_sample.clone(),
+        display_offset: 0,
+        history_size: 0,
     };
     let frame = RenderFrame::Snapshot(snap);
     fs::write(
@@ -261,6 +267,8 @@ fn main() {
         reason: SnapshotReason::Initial,
         modes: vec![],
         hyperlinks: vec![],
+        display_offset: 0,
+        history_size: 0,
     };
     let frame = RenderFrame::Snapshot(snap);
     fs::write(

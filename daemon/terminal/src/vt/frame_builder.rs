@@ -84,6 +84,8 @@ pub fn build_snapshot<T>(
             .into_iter()
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
+        display_offset: 0,
+        history_size: 0,
     }
 }
 

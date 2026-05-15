@@ -125,30 +125,33 @@ pub enum SnapshotReason {
     Resize,
 }
 
-/// Full screen state snapshot.
+/// Full snapshot of the visible viewport at a given seq.
 ///
-/// Sent on connect, reconnect (no replay), lagged, or resize. The `kind`
-/// discriminant is serialized via the [`RenderFrame`] tag.
+/// Carries all data needed to render the screen without prior state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameSnapshot {
-    /// Monotonic frame sequence number.
+    /// Monotonic emission sequence; matches the encoded `seq` in the ring.
     pub seq: u32,
-    /// Terminal column count.
+    /// Visible column count.
     pub cols: u16,
-    /// Terminal row count.
+    /// Visible row count.
     pub rows: u16,
-    /// Cursor state at snapshot time.
+    /// Cursor state at emit time.
     pub cursor: Cursor,
-    /// Row contents, ordered top-to-bottom.
+    /// Row contents (length == rows).
     pub rows_data: Vec<Row>,
-    /// Why the snapshot was sent.
+    /// Why this snapshot was emitted (Initial, Reconnect, Resize, Lagged).
     pub reason: SnapshotReason,
-    /// Currently-set wire mode names (subset of TRACKED_MODES). Authoritative
-    /// for clients that missed a `mode` text sidecar.
+    /// Currently active wire modes (e.g. "alt-screen", "mouse-vt200").
     pub modes: Vec<String>,
-    /// All hyperlinks referenced by any cell in this snapshot. The client
-    /// REPLACES its cumulative Map with this list on snapshot reception.
+    /// Hyperlinks referenced by row Runs.
     pub hyperlinks: Vec<Hyperlink>,
+    /// Lines scrolled back from the live tail. `0` = at live tail.
+    #[serde(default)]
+    pub display_offset: u32,
+    /// Total scrollback history line count (upper bound for display_offset).
+    #[serde(default)]
+    pub history_size: u32,
 }
 
 /// Differential update relative to the prior frame.
@@ -328,6 +331,8 @@ mod tests {
             reason: SnapshotReason::Initial,
             modes: vec![],
             hyperlinks: vec![],
+            display_offset: 0,
+            history_size: 0,
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
@@ -354,6 +359,8 @@ mod tests {
                 id: 7,
                 uri: "https://ozmux.example".to_string(),
             }],
+            display_offset: 0,
+            history_size: 0,
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
@@ -453,6 +460,8 @@ mod tests {
             reason: SnapshotReason::Initial,
             modes: vec![],
             hyperlinks: vec![],
+            display_offset: 0,
+            history_size: 0,
         });
         let bytes = encode(&snap).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
@@ -490,9 +499,32 @@ mod tests {
             reason: SnapshotReason::Initial,
             modes: vec!["alt-screen".to_string(), "bracketed-paste".to_string()],
             hyperlinks: vec![],
+            display_offset: 0,
+            history_size: 0,
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded.modes, ["alt-screen", "bracketed-paste"]);
+    }
+
+    #[test]
+    fn snapshot_encodes_display_offset_and_history_size() {
+        let snap = FrameSnapshot {
+            seq: 1,
+            cols: 1,
+            rows: 1,
+            cursor: Cursor { x: 0, y: 0, shape: CursorShape::Block, blinking: false, visible: true },
+            rows_data: vec![],
+            reason: SnapshotReason::Initial,
+            modes: vec![],
+            hyperlinks: vec![],
+            display_offset: 5,
+            history_size: 100,
+        };
+        let bytes = encode(&RenderFrame::Snapshot(snap.clone())).unwrap();
+        let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
+        let RenderFrame::Snapshot(out) = decoded else { panic!("expected Snapshot") };
+        assert_eq!(out.display_offset, 5);
+        assert_eq!(out.history_size, 100);
     }
 }
