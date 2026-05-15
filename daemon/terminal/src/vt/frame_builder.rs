@@ -122,17 +122,27 @@ pub(super) fn build_delta<T>(
 pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
     let point = term.grid().cursor.point;
     let mut x = point.column.0 as u16;
-    let y = point.line.0 as u16;
     // NOTE: alacritty's RenderableCursor shifts x left by 1 when the cursor
     // lands on a wide-char spacer; replicate so the visible cursor aligns
-    // with the wide glyph itself.
+    // with the wide glyph itself. Use live-grid line for the spacer check —
+    // the cursor is always tracked in live-grid coordinates regardless of
+    // display_offset.
     let cell = &term.grid()[Line(point.line.0)][point.column];
     if cell.flags.contains(Flags::WIDE_CHAR_SPACER) && x > 0 {
         x -= 1;
     }
-    // DECSCUSR shape selection. `HollowBlock` (CSI 0/1 SP q in some variants)
-    // maps to Block; alacritty distinguishes them but our wire vocabulary does
-    // not — clients render the same overlay.
+    // NOTE: cursor.point.line is in live-grid coordinates (0..screen_lines).
+    // Convert to viewport coordinates by adding display_offset. When the
+    // result falls outside the visible viewport we hide the cursor, otherwise
+    // the live-tail caret would float over scrolled-out history rows.
+    let display_offset = term.grid().display_offset() as i32;
+    let screen_lines = term.screen_lines() as i32;
+    let viewport_y = point.line.0 + display_offset;
+    let in_viewport = (0..screen_lines).contains(&viewport_y);
+    let y = if in_viewport { viewport_y as u16 } else { 0 };
+    // NOTE: DECSCUSR shape selection. `HollowBlock` (CSI 0/1 SP q in some
+    // variants) maps to Block; alacritty distinguishes them but our wire
+    // vocabulary does not — clients render the same overlay.
     let style = term.cursor_style();
     let shape = match style.shape {
         alacritty_terminal::vte::ansi::CursorShape::Block
@@ -148,9 +158,12 @@ pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
         blinking: style.blinking,
         // NOTE: DECTCEM (`\033[?25l/h`) toggles `TermMode::SHOW_CURSOR` — used
         // by vim/less/fzf for cursor hiding. DECSCUSR `Hidden` shape is a
-        // separate concept. Both must gate visibility.
+        // separate concept. `in_viewport` gates visibility when the user has
+        // scrolled the cursor's line out of view. All three must hold for the
+        // cursor to render.
         visible: term.mode().contains(TermMode::SHOW_CURSOR)
-            && style.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden,
+            && style.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden
+            && in_viewport,
     }
 }
 
@@ -709,6 +722,55 @@ mod tests {
         assert!(
             row0.starts_with("alpha"),
             "delta row 0 after Scroll::Top should be oldest history line; got {row0:?}",
+        );
+    }
+
+    #[test]
+    fn extract_cursor_visible_at_zero_offset_uses_live_y() {
+        let mut term = make_term(10, 5);
+        // NOTE: place cursor at viewport row 2 by emitting two newlines.
+        install_text(&mut term, "\r\n\r\n");
+        let c = extract_cursor(&term);
+        assert_eq!(c.y, 2);
+        assert!(c.visible);
+    }
+
+    #[test]
+    fn extract_cursor_partial_scroll_keeps_visible_with_adjusted_y() {
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::Config;
+        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let mut term = make_term_with_config(cfg, 10, 5);
+        install_text(&mut term, "x");
+        for _ in 0..10 {
+            install_text(&mut term, "\r\n");
+        }
+        term.scroll_display(Scroll::Delta(2));
+        assert_eq!(term.grid().display_offset(), 2);
+        let live_y = term.grid().cursor.point.line.0;
+        let c = extract_cursor(&term);
+        if live_y + 2 < 5 {
+            assert_eq!(c.y, (live_y + 2) as u16);
+            assert!(c.visible);
+        } else {
+            assert!(!c.visible, "live_y={live_y} + 2 should push cursor off viewport");
+        }
+    }
+
+    #[test]
+    fn extract_cursor_hidden_when_scrolled_past_live_grid() {
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::Config;
+        let cfg = Config { scrolling_history: 200, ..Config::default() };
+        let mut term = make_term_with_config(cfg, 10, 5);
+        for _ in 0..50 {
+            install_text(&mut term, "x\r\n");
+        }
+        term.scroll_display(Scroll::Top);
+        let c = extract_cursor(&term);
+        assert!(
+            !c.visible,
+            "cursor should be hidden when display_offset >= screen_lines"
         );
     }
 }
