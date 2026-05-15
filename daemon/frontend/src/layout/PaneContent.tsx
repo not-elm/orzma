@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Terminal } from '../terminal/Terminal';
 import { ClickShield } from './ClickShield';
 import { PanePlaceholder } from './PanePlaceholder';
+import { PaneTabBar } from './PaneTabBar';
 import type { PaneView } from './types';
 import { useIframeKeydownBridge } from './useIframeKeydownBridge';
 
@@ -13,6 +14,17 @@ interface PaneContentProps {
 }
 
 export function PaneContent({ windowId, pane, isActive, onActivate }: PaneContentProps) {
+  return (
+    <div className="flex h-full w-full flex-col">
+      <PaneTabBar windowId={windowId} pane={pane} isActive={isActive} onActivate={onActivate} />
+      <div className="relative min-h-0 flex-1">
+        <PaneBody windowId={windowId} pane={pane} isActive={isActive} onActivate={onActivate} />
+      </div>
+    </div>
+  );
+}
+
+function PaneBody({ windowId, pane, isActive, onActivate }: PaneContentProps) {
   const activity = pane.activities.find((a) => a.id === pane.active_activity);
   if (!activity) return <PanePlaceholder paneId={pane.id} />;
 
