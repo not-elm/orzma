@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, State},
 };
 use ozmux_multiplexer::{MultiplexerService, WindowId};
+use ozmux_terminal::TerminalService;
 
 pub mod create;
 pub mod delete;
@@ -15,10 +16,12 @@ pub mod select;
 
 pub async fn get(
     State(multiplexer): State<MultiplexerService>,
+    State(terminal): State<TerminalService>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<Json<WindowView>> {
+    let titles = terminal.all_titles().await;
     let view = multiplexer
-        .with_window_or_404(&window_id, |w| WindowView::from_window(w))
+        .with_window_or_404(&window_id, |w| WindowView::from_window(w, &titles))
         .await?;
     Ok(Json(view))
 }

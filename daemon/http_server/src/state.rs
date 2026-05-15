@@ -312,11 +312,13 @@ impl AppState {
     }
 
     /// Build the current Window layout snapshot under the Window lock and
-    /// broadcast it. Used by every handler that mutates a Window.
-    async fn publish_window_layout(&self, wid: &WindowId) {
+    /// broadcast it. Used by every handler that mutates a Window and by the
+    /// title-republish task.
+    pub(crate) async fn publish_window_layout(&self, wid: &WindowId) {
+        let titles = self.terminal.all_titles().await;
         let _ = self
             .multiplexer
-            .with_window(wid, |w| match WindowView::from_window(w) {
+            .with_window(wid, |w| match WindowView::from_window(w, &titles) {
                 Ok(view) => match serde_json::to_value(&view) {
                     Ok(value) => self.layout_broadcast.publish(wid, value),
                     Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
