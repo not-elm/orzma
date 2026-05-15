@@ -148,6 +148,10 @@ mod tests {
         )
         .unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
+        assert!(
+            merged.shortcuts.bindings[0].chord.modifiers.shift,
+            "shift modifier must survive parsing and merging"
+        );
         validate(&merged).unwrap();
     }
 
