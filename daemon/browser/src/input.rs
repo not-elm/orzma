@@ -10,7 +10,6 @@ use crate::wire::{BrowserClientMsg, KeyKind, MouseButton, MouseKind};
 
 /// Translates a `BrowserClientMsg::Mouse` to CDP `dispatchMouseEvent` params.
 /// Returns `None` for any non-`Mouse` variant.
-#[cfg_attr(not(test), expect(dead_code, reason = "wired up in Task 2.6"))]
 pub(crate) fn mouse_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::DispatchMouseEventParams> {
     let BrowserClientMsg::Mouse {
         mouse_kind,
@@ -51,7 +50,6 @@ pub(crate) fn mouse_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::Dispatch
 
 /// Translates a `BrowserClientMsg::Wheel` to CDP `dispatchMouseEvent` params
 /// (CDP exposes wheel events as a `MouseWheel` event type on the same method).
-#[cfg_attr(not(test), expect(dead_code, reason = "wired up in Task 2.6"))]
 pub(crate) fn wheel_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::DispatchMouseEventParams> {
     let BrowserClientMsg::Wheel {
         x,
@@ -78,7 +76,6 @@ pub(crate) fn wheel_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::Dispatch
 }
 
 /// Translates a `BrowserClientMsg::Key` to CDP `dispatchKeyEvent` params.
-#[cfg_attr(not(test), expect(dead_code, reason = "wired up in Task 2.6"))]
 pub(crate) fn key_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::DispatchKeyEventParams> {
     let BrowserClientMsg::Key {
         key_kind,
@@ -110,7 +107,6 @@ pub(crate) fn key_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::DispatchKe
 }
 
 /// Translates a `BrowserClientMsg::Paste` to CDP `insertText` params.
-#[cfg_attr(not(test), expect(dead_code, reason = "wired up in Task 2.6"))]
 pub(crate) fn paste_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::InsertTextParams> {
     let BrowserClientMsg::Paste { text } = msg else {
         return None;
@@ -121,7 +117,6 @@ pub(crate) fn paste_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::InsertTe
 
 /// Translates a `BrowserClientMsg::ImeComposition` to CDP `imeSetComposition`
 /// params. `replacement_start` / `replacement_end` are left as `None`.
-#[cfg_attr(not(test), expect(dead_code, reason = "wired up in Task 2.6"))]
 pub(crate) fn ime_composition_to_cdp(
     msg: &BrowserClientMsg,
 ) -> Option<cdp_input::ImeSetCompositionParams> {
@@ -144,7 +139,6 @@ pub(crate) fn ime_composition_to_cdp(
 /// Translates a `BrowserClientMsg::ImeCommit` to CDP `insertText` params.
 /// CDP has no separate "commit composition" method; `insertText` is the
 /// correct path for committing composed text.
-#[cfg_attr(not(test), expect(dead_code, reason = "wired up in Task 2.6"))]
 pub(crate) fn ime_commit_to_cdp(msg: &BrowserClientMsg) -> Option<cdp_input::InsertTextParams> {
     let BrowserClientMsg::ImeCommit { text } = msg else {
         return None;
