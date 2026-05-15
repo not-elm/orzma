@@ -16,26 +16,16 @@ use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
 pub(crate) mod pty_handle;
 mod ring_buffer;
+#[cfg(any(test, feature = "test-helpers"))]
+mod test_helpers;
+
+#[cfg(any(test, feature = "test-helpers"))]
+pub use test_helpers::DamageSnapshot;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TerminalEvent {
     Data { buffer: Vec<u8> },
     Exit { code: Option<i32> },
-}
-
-/// Snapshot of the alacritty `TermDamage` state captured by the test-only
-/// [`TerminalService::inspect_damage_and_reset`] helper. Used by Phase 1
-/// PoC integration tests to characterize the damage API's observable
-/// behavior in alacritty 0.26.
-#[cfg(any(test, feature = "test-helpers"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DamageSnapshot {
-    /// `Term::damage()` returned `TermDamage::Full` — the entire viewport
-    /// is considered dirty.
-    Full,
-    /// `Term::damage()` returned `TermDamage::Partial(iter)`; `line_count`
-    /// is the number of damaged lines yielded by the iterator.
-    Partial { line_count: usize },
 }
 
 #[derive(Default, Clone)]
@@ -196,14 +186,12 @@ impl TerminalService {
     pub async fn resize(&self, activity: &ActivityId, cols: u16, rows: u16) -> TerminalResult {
         let handle = self.read(activity).await?;
 
-        // 1) Resize the alacritty Term first so the next bridge cycle sees Full damage.
         {
             let dim = crate::vt::bridge::dim_for(cols, rows);
             let mut state = handle.vt_state.lock().expect("vt_state poisoned");
             state.term.resize(dim);
         }
 
-        // 2) Resize the PTY master (existing behavior).
         handle
             .master
             .lock()
@@ -216,7 +204,6 @@ impl TerminalService {
             })
             .to_terminal_result()?;
 
-        // 3) Wake the bridge so it observes Full damage and emits a snapshot.
         // NOTE: send().await (not try_send) so a backpressured channel still
         // delivers the wakeup — otherwise the resize-induced Full damage waits
         // until the next genuine PTY chunk, which a non-TUI shell may not
@@ -274,10 +261,8 @@ impl TerminalService {
         let vt_state = handle.vt_state.clone();
         drop(handle);
 
-        // Single critical section: snapshot (or replay) AND subscribe.
         let mut state = vt_state.lock().expect("vt_state poisoned");
 
-        // Resume path: ring has the requested seq range available.
         if let Some(last) = last_seq
             && let Some(deltas) = state.frame_ring.replay(last)
         {
@@ -330,115 +315,6 @@ impl TerminalService {
             rows: state.term.screen_lines() as u16,
             cursor: crate::vt::frame_builder::extract_cursor(&state.term),
         })
-    }
-
-    /// Return the current broadcast subscriber count for an activity, or `None`
-    /// if the activity has no PTY. Used in tests to verify task lifecycle.
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn subscriber_count(&self, activity: &ActivityId) -> Option<usize> {
-        let guard = self.read(activity).await.ok()?;
-        Some(guard.event_sender.receiver_count())
-    }
-
-    /// Test-only read of the VT Term grid: returns the first `cols` characters
-    /// of the given `row` as a `String`. Returns `None` if the activity has no
-    /// PTY. The VtState lock is short-held and dropped before returning.
-    ///
-    /// Intended exclusively for integration tests that need to assert the
-    /// bridge task has applied PTY output to the in-memory `Term`. Production
-    /// code should not depend on this surface.
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn inspect_row(
-        &self,
-        activity: &ActivityId,
-        row: i32,
-        cols: usize,
-    ) -> Option<String> {
-        use alacritty_terminal::index::{Column, Line};
-        let guard = self.read(activity).await.ok()?;
-        let vt_state = guard.vt_state.clone();
-        drop(guard);
-        let state = vt_state.lock().expect("vt_state lock poisoned");
-        let term_row = &state.term.grid()[Line(row)];
-        let slice = &term_row[Column(0)..Column(cols)];
-        Some(slice.iter().map(|cell| cell.c).collect())
-    }
-
-    /// Test-only probe of the alacritty damage tracker: reads
-    /// `Term::damage()` into a [`DamageSnapshot`] and then calls
-    /// `Term::reset_damage()` under the same VT lock. Returns `None` if
-    /// the activity has no PTY.
-    ///
-    /// Used by Phase 1 PoC tests to characterize the API: whether
-    /// `Full` is sticky across resets, how many lines `Partial` reports
-    /// after typical shell output, etc.
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn inspect_damage_and_reset(&self, activity: &ActivityId) -> Option<DamageSnapshot> {
-        use alacritty_terminal::term::TermDamage;
-        let guard = self.read(activity).await.ok()?;
-        let vt_state = guard.vt_state.clone();
-        drop(guard);
-        let mut state = vt_state.lock().expect("vt_state lock poisoned");
-        let snapshot = match state.term.damage() {
-            TermDamage::Full => DamageSnapshot::Full,
-            TermDamage::Partial(iter) => {
-                let line_count = iter.count();
-                DamageSnapshot::Partial { line_count }
-            }
-        };
-        state.term.reset_damage();
-        Some(snapshot)
-    }
-
-    /// Returns the current value of `pending_user_input` for the given activity.
-    /// Test-only helper that takes the `vt_state` lock briefly.
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn peek_pending_user_input(&self, activity: &ActivityId) -> TerminalResult<bool> {
-        let handle = self.read(activity).await?;
-        let state = handle.vt_state.lock().expect("vt_state poisoned");
-        Ok(state.pending_user_input)
-    }
-
-    /// Returns a clone of the VT chunk sender for the given activity. Test-only.
-    /// Allows tests to inject bytes that go straight into the bridge's
-    /// `parser.advance`, bypassing the shell so damage timing is deterministic.
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn vt_chunk_sender_for_test(
-        &self,
-        activity: &ActivityId,
-    ) -> TerminalResult<tokio::sync::mpsc::Sender<bytes::Bytes>> {
-        let handle = self.read(activity).await?;
-        Ok(handle.vt_chunk_tx.clone())
-    }
-
-    /// Test-only: raw subscription to the wire broadcast (no atomicity guarantee).
-    /// Production paths use `subscribe_frames` (Task 13).
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn subscribe_wire_broadcast(
-        &self,
-        activity: &ActivityId,
-    ) -> Option<tokio::sync::broadcast::Receiver<crate::vt::frame_ring::WireMessage>> {
-        let guard = self.read(activity).await.ok()?;
-        let vt_state = guard.vt_state.clone();
-        drop(guard);
-        let state = vt_state.lock().expect("vt_state poisoned");
-        Some(state.wire_broadcast.subscribe())
-    }
-
-    /// Test-only probe of `TermMode::ALT_SCREEN`. Returns `Some(true)`
-    /// when the terminal is currently on the alternate screen buffer,
-    /// `Some(false)` when on the primary buffer, and `None` if the
-    /// activity has no PTY. Used by Phase 1 PoC tests to verify which
-    /// DEC private mode escapes (`?47` / `?1047` / `?1049`) toggle the
-    /// alt-screen flag in alacritty 0.26.
-    #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn inspect_alt_screen(&self, activity: &ActivityId) -> Option<bool> {
-        use alacritty_terminal::term::TermMode;
-        let guard = self.read(activity).await.ok()?;
-        let vt_state = guard.vt_state.clone();
-        drop(guard);
-        let state = vt_state.lock().expect("vt_state lock poisoned");
-        Some(state.term.mode().contains(TermMode::ALT_SCREEN))
     }
 
     #[inline]

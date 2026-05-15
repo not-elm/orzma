@@ -76,7 +76,8 @@ pub(crate) struct PtyHandle {
     /// the bridge task. Read by `TerminalService::write`, `resize`,
     /// `subscribe_frames`, `read_geometry`, and the
     /// `cfg(any(test, feature = "test-helpers"))` helpers (`inspect_row`,
-    /// `inspect_damage_and_reset`, `peek_pending_user_input`) in `pty.rs`.
+    /// `inspect_damage_and_reset`, `peek_pending_user_input`) in
+    /// `pty/test_helpers.rs`.
     pub(crate) vt_state: Arc<std::sync::Mutex<VtState>>,
 
     /// Reply-required events from `TermListener` (unbounded; must-not-drop
