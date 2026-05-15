@@ -30,7 +30,7 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
     fm,
     gridStore,
     overlayStore,
-  } = useTerminal(windowId, paneId, activityId, isActive);
+  } = useTerminal(windowId, paneId, activityId);
 
   const prevActiveRef = useRef(isActive);
   // biome-ignore lint/correctness/useExhaustiveDependencies: focus/blur are stabilized by React Compiler

@@ -17,7 +17,7 @@ import { cellHeightOf, cellWidthOf, type FontMetrics } from './renderer/font';
 import { applyFrame, createGrid, snapshotGrid } from './renderer/grid';
 import { createGridStore, type GridStore } from './renderer/grid-store';
 import { injectTerminalPalette } from './renderer/palette';
-import type { SocketStatus, TerminalSocket } from './useTerminalSocket';
+import type { SocketStatus } from './useTerminalSocket';
 import { useTerminalSocket } from './useTerminalSocket';
 
 /** Public API of the VT terminal hook (DOM renderer). */
@@ -27,7 +27,6 @@ export interface TerminalApi {
   status: SocketStatus;
   focus: () => void;
   blur: () => void;
-  socket: TerminalSocket;
   preedit: string;
   hyperlinks: ReadonlyMap<number, string>;
   fm: FontMetrics;
@@ -59,12 +58,10 @@ export function useTerminal(
   windowId: string,
   paneId: string,
   activityId: string | null,
-  isActive: boolean,
 ): TerminalApi {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const gridRef = useRef(createGrid({ cols: 80, rows: 24 }));
-  const isActiveRef = useRef(isActive);
   const [preedit, setPreedit] = useState('');
   const [hyperlinks, setHyperlinks] = useState<ReadonlyMap<number, string>>(new Map());
   const hyperlinksRef = useRef(hyperlinks);
@@ -139,10 +136,10 @@ export function useTerminal(
     ro.observe(pane);
     fitToContainer();
 
-    // H1: RAF-batch incoming frames. Vim page-down / scroll bursts produce
-    // several frames in the same animation frame; xterm.js and wterm both
-    // coalesce these into a single render to avoid flicker. We buffer the
-    // raw bytes here and flush all of them inside one requestAnimationFrame.
+    // NOTE: RAF-batch incoming frames. Vim page-down / scroll bursts produce
+    // several frames in the same animation frame; coalescing into a single
+    // render avoids flicker. We buffer the raw bytes here and flush all of
+    // them inside one requestAnimationFrame.
     const pendingFrames: Uint8Array[] = [];
     let rafScheduled = false;
     let latestHyperlinks: ReadonlyMap<number, string> = hyperlinksRef.current;
@@ -182,7 +179,7 @@ export function useTerminal(
         }
       }
       modesRef.current = gridRef.current.modes;
-      // H2': only call setState when the content actually changed —
+      // NOTE: only call setState when the content actually changed —
       // otherwise the new Map reference would invalidate React.memo on every
       // <Row> even though the cells were untouched.
       if (hyperlinksDirty && !mapsEqual(latestHyperlinks, nextHyperlinks)) {
@@ -267,17 +264,12 @@ export function useTerminal(
     };
   }, [socket, windowId, paneId, activityId]);
 
-  useEffect(() => {
-    isActiveRef.current = isActive;
-  }, [isActive]);
-
   return {
     paneRef,
     textareaRef,
     status: socket.status,
     focus: () => textareaRef.current?.focus(),
     blur: () => textareaRef.current?.blur(),
-    socket,
     preedit,
     hyperlinks,
     fm,

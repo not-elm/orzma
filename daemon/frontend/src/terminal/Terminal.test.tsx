@@ -28,7 +28,6 @@ vi.mock('./useTerminal', () => ({
     status: 'connecting' as const,
     focus: focusSpy,
     blur: blurSpy,
-    socket: socketStub,
     preedit: '',
     hyperlinks: new Map(),
     fm: { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 },

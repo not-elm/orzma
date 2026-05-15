@@ -25,6 +25,17 @@ async fn spawn_shell(svc: &TerminalService) -> ActivityId {
     aid
 }
 
+async fn spawn_shell_with_history(svc: &TerminalService) -> ActivityId {
+    let aid = spawn_shell(svc).await;
+    let mut cmd = String::new();
+    for i in 0..30 {
+        cmd.push_str(&format!("echo line{i}\n"));
+    }
+    svc.write(&aid, cmd.as_bytes()).await.unwrap();
+    pump_until_idle(svc, &aid, 1500).await;
+    aid
+}
+
 async fn pump_until_idle(svc: &TerminalService, aid: &ActivityId, ms: u64) {
     let (_, mut rx) = svc.snapshot_and_subscribe(aid).await.unwrap();
     let deadline = Instant::now() + Duration::from_millis(ms);
@@ -33,19 +44,6 @@ async fn pump_until_idle(svc: &TerminalService, aid: &ActivityId, ms: u64) {
             Ok(Ok(TerminalEvent::Data { .. })) => continue,
             Ok(Ok(TerminalEvent::Exit { .. })) | Ok(Err(_)) | Err(_) => return,
         }
-    }
-}
-
-async fn read_display_offset(svc: &TerminalService, aid: &ActivityId) -> u32 {
-    let sub = svc.subscribe_frames(aid, None).await.unwrap();
-    let snap_bytes = match sub {
-        FrameSubscription::FreshSnapshot { snapshot, .. } => snapshot,
-        FrameSubscription::ResumeReplay { .. } => panic!("expected fresh snapshot"),
-    };
-    let frame: RenderFrame = rmp_serde::from_slice(&snap_bytes).expect("decode");
-    match frame {
-        RenderFrame::Snapshot(s) => s.display_offset,
-        _ => panic!("expected Snapshot variant"),
     }
 }
 
@@ -65,6 +63,10 @@ async fn read_snapshot(
     }
 }
 
+async fn read_display_offset(svc: &TerminalService, aid: &ActivityId) -> u32 {
+    read_snapshot(svc, aid).await.display_offset
+}
+
 fn row_text(snap: &ozmux_terminal::vt::FrameSnapshot, row: usize) -> String {
     snap.rows_data[row]
         .runs
@@ -76,14 +78,7 @@ fn row_text(snap: &ozmux_terminal::vt::FrameSnapshot, row: usize) -> String {
 #[tokio::test]
 async fn scroll_advances_display_offset() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     svc.scroll(&aid, 10).await.unwrap();
     // NOTE: synthetic wakeup is already sent by scroll(); small sleep lets the
@@ -99,14 +94,7 @@ async fn scroll_advances_display_offset() {
 #[tokio::test]
 async fn scroll_to_bottom_resets_display_offset() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     svc.scroll(&aid, 10).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -122,14 +110,7 @@ async fn scroll_to_bottom_resets_display_offset() {
 #[tokio::test]
 async fn scroll_position_locks_during_new_output() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     svc.scroll(&aid, 10).await.unwrap();
     // NOTE: synthetic wakeup is already sent by scroll(); small sleep lets the
@@ -165,14 +146,7 @@ async fn scroll_position_locks_during_new_output() {
 #[tokio::test]
 async fn snapshot_after_scroll_contains_history() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     // NOTE: scroll back enough to bring early lines into the visible viewport.
     svc.scroll(&aid, 25).await.unwrap();
@@ -199,14 +173,7 @@ async fn snapshot_after_scroll_contains_history() {
 #[tokio::test]
 async fn scrolled_view_content_locked_during_new_output() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     svc.scroll(&aid, 20).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -243,14 +210,7 @@ async fn scrolled_view_content_locked_during_new_output() {
 #[tokio::test]
 async fn cursor_hidden_when_scrolled_off_viewport() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     let live = read_snapshot(&svc, &aid).await;
     assert_eq!(live.display_offset, 0);
@@ -278,14 +238,7 @@ async fn cursor_hidden_when_scrolled_off_viewport() {
 #[tokio::test]
 async fn clear_viewport_preserves_offset_csi_2j() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     svc.scroll(&aid, 10).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -307,14 +260,7 @@ async fn clear_viewport_preserves_offset_csi_2j() {
 #[tokio::test]
 async fn clear_history_resets_offset_csi_3j() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     svc.scroll(&aid, 10).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -330,16 +276,9 @@ async fn clear_history_resets_offset_csi_3j() {
 }
 
 #[tokio::test]
-async fn alt_screen_leave_restores_primary_offset() {
+async fn alt_screen_toggle_keeps_offset_coherent() {
     let svc = TerminalService::default();
-    let aid = spawn_shell(&svc).await;
-
-    let mut cmd = String::new();
-    for i in 0..30 {
-        cmd.push_str(&format!("echo line{i}\n"));
-    }
-    svc.write(&aid, cmd.as_bytes()).await.unwrap();
-    pump_until_idle(&svc, &aid, 1500).await;
+    let aid = spawn_shell_with_history(&svc).await;
 
     svc.scroll(&aid, 8).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -351,10 +290,13 @@ async fn alt_screen_leave_restores_primary_offset() {
     let alt = read_display_offset(&svc, &aid).await;
     assert_eq!(alt, 0, "alt-screen must report offset 0");
 
+    // NOTE: DECRST 1049 reflows the primary grid through whatever the shell
+    // prints next; the exact primary_after offset depends on prompt redraw.
+    // The contract verified here is "toggle does not panic and the daemon
+    // keeps reporting a coherent value", not a specific offset.
     svc.write(&aid, b"printf '\\033[?1049l'\n").await.unwrap();
     pump_until_idle(&svc, &aid, 1500).await;
-    let primary_after = read_display_offset(&svc, &aid).await;
-    let _ = primary_after;
+    let _ = read_display_offset(&svc, &aid).await;
 
     svc.kill(&aid).await.unwrap();
 }

@@ -210,14 +210,11 @@ fn snapshot_modes(curr: TermMode) -> Vec<String> {
 ///
 /// # Invariants
 /// - `y` is a viewport row in `0..screen_lines` (matches wire-protocol
-///   `row` semantics).
+///   `row` semantics); callers pass the raw viewport coordinate and the
+///   grid translation happens internally via `viewport_row_to_line`.
 /// - The returned runs reflect the grid line currently displayed at
 ///   viewport row `y`, taking the active grid's `display_offset` into
 ///   account.
-///
-/// # Preconditions
-/// - Callers must pass the raw viewport `y`; `viewport_row_to_line`
-///   performs the grid translation internally.
 fn coalesce_row<T>(
     term: &Term<T>,
     y: i32,
@@ -355,7 +352,8 @@ mod tests {
     use crate::vt::frame::SnapshotReason;
     use crate::vt::frame_ring::WireMessage;
     use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
-    use alacritty_terminal::term::TermMode;
+    use alacritty_terminal::grid::Scroll;
+    use alacritty_terminal::term::{Config, TermMode};
     use std::sync::Arc;
     use tokio::sync::{broadcast, mpsc};
 
@@ -587,8 +585,6 @@ mod tests {
 
     #[test]
     fn build_snapshot_includes_display_offset_and_history_size() {
-        use alacritty_terminal::grid::Scroll;
-        use alacritty_terminal::term::Config;
         let cfg = Config {
             scrolling_history: 100,
             ..Config::default()
@@ -614,8 +610,6 @@ mod tests {
 
     #[test]
     fn viewport_row_to_line_with_offset_subtracts_display_offset() {
-        use alacritty_terminal::grid::Scroll;
-        use alacritty_terminal::term::Config;
         let cfg = Config {
             scrolling_history: 100,
             ..Config::default()
@@ -633,8 +627,6 @@ mod tests {
 
     #[test]
     fn viewport_row_to_line_at_max_offset_reaches_oldest_history() {
-        use alacritty_terminal::grid::Scroll;
-        use alacritty_terminal::term::Config;
         let cfg = Config {
             scrolling_history: 50,
             ..Config::default()
@@ -663,8 +655,6 @@ mod tests {
 
     #[test]
     fn coalesce_row_reads_scrollback_when_scrolled() {
-        use alacritty_terminal::grid::Scroll;
-        use alacritty_terminal::term::Config;
         let cfg = Config {
             scrolling_history: 100,
             ..Config::default()
@@ -688,8 +678,6 @@ mod tests {
 
     #[test]
     fn build_snapshot_after_scroll_contains_scrollback_content() {
-        use alacritty_terminal::grid::Scroll;
-        use alacritty_terminal::term::Config;
         let cfg = Config {
             scrolling_history: 100,
             ..Config::default()
@@ -715,8 +703,6 @@ mod tests {
 
     #[test]
     fn build_delta_with_offset_reads_scrollback() {
-        use alacritty_terminal::grid::Scroll;
-        use alacritty_terminal::term::Config;
         let cfg = Config {
             scrolling_history: 100,
             ..Config::default()
@@ -751,8 +737,6 @@ mod tests {
 
     #[test]
     fn extract_cursor_partial_scroll_keeps_visible_with_adjusted_y() {
-        use alacritty_terminal::grid::Scroll;
-        use alacritty_terminal::term::Config;
         let cfg = Config {
             scrolling_history: 100,
             ..Config::default()
@@ -779,8 +763,6 @@ mod tests {
 
     #[test]
     fn extract_cursor_hidden_when_scrolled_past_live_grid() {
-        use alacritty_terminal::grid::Scroll;
-        use alacritty_terminal::term::Config;
         let cfg = Config {
             scrolling_history: 200,
             ..Config::default()
