@@ -47,6 +47,9 @@ async fn main() -> anyhow::Result<()> {
         std::process::id(),
         &longest,
     )?);
+    if let Err(e) = place_cli_shim(&runtime) {
+        tracing::warn!(error = %e, "failed to place ozmux CLI shim");
+    }
 
     let registry = ExtensionRegistry::default();
     let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
@@ -141,6 +144,35 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     drop(runtime);
+    Ok(())
+}
+
+/// Place the `ozmux` CLI binary at `runtime/bin/ozmux/ozmux` so PTY-spawned
+/// shells can invoke it directly via PATH. Best-effort: logs a warning and
+/// skips if the binary cannot be found.
+fn place_cli_shim(runtime: &RuntimeRoot) -> std::io::Result<()> {
+    let me = std::env::current_exe()?;
+    let Some(parent) = me.parent() else {
+        tracing::warn!("self exe has no parent dir; skipping ozmux CLI shim");
+        return Ok(());
+    };
+    // NOTE: the CLI binary is named `ozmux` (from cli/Cargo.toml's [[bin]] name).
+    let cli_src = parent.join("ozmux");
+    if !cli_src.exists() {
+        tracing::warn!(
+            path = %cli_src.display(),
+            "ozmux CLI binary not found next to bootstrap; `ozmux browser` will not be on PATH"
+        );
+        return Ok(());
+    }
+    let shim_dir = runtime.root().join("bin").join("ozmux");
+    std::fs::create_dir_all(&shim_dir)?;
+    let shim = shim_dir.join("ozmux");
+    let _ = std::fs::remove_file(&shim);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&cli_src, &shim)?;
+    #[cfg(not(unix))]
+    std::fs::copy(&cli_src, &shim)?;
     Ok(())
 }
 
