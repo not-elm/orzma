@@ -134,6 +134,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn close_activity_browser_close_is_missing_ok() {
+        let state = fresh_state();
+        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
+        let browser_aid = ActivityId::new();
+        state
+            .multiplexer
+            .with_window_or_404(&wid, |w| {
+                w.pane_mut(&pid)?
+                    .add_activity(Activity::browser(browser_aid.clone(), None))
+            })
+            .await
+            .unwrap();
+        assert!(
+            state.browser.watch(&browser_aid).await.is_none(),
+            "no BrowserHandle — spawn was never called"
+        );
+        state
+            .close_activity(&wid, &pid, &browser_aid)
+            .await
+            .unwrap();
+        assert!(
+            state.browser.watch(&browser_aid).await.is_none(),
+            "browser.close is missing-ok; watch entry absent after close"
+        );
+    }
+
+    #[tokio::test]
     async fn close_activity_does_not_publish_when_last_activity() {
         let state = fresh_state();
         let (_sid, wid, pid, aid) = bootstrap_default(&state).await;

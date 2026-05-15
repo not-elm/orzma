@@ -172,20 +172,14 @@ impl AppState {
         aid: &ActivityId,
     ) -> HttpResult<()> {
         self.ensure_pane_in_window(wid, pid)?;
-        let removed = self
-            .multiplexer
+        self.multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
             .await?;
 
-        match removed.kind {
-            ActivityKind::Terminal => {
-                let _ = self.terminal.kill(aid).await;
-            }
-            ActivityKind::Extension { .. } => {
-                self.extensions.forget_activity(aid);
-            }
-            ActivityKind::Browser { .. } => {}
-        }
+        // All three are idempotent + missing-ok; no kind dispatch required.
+        let _ = self.terminal.kill(aid).await;
+        self.extensions.forget_activity(aid);
+        self.browser.close(aid).await;
 
         self.publish_window_layout(wid).await;
         Ok(())
@@ -258,11 +252,11 @@ impl AppState {
 
         self.multiplexer.pane_owner_window.remove(pid);
         self.extensions.forget_pane(pid);
-        for aid in &activities {
-            self.extensions.forget_activity(aid);
-        }
+        // All three are idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
+            self.extensions.forget_activity(aid);
+            self.browser.close(aid).await;
         }
 
         self.publish_window_layout(wid).await;
@@ -285,9 +279,11 @@ impl AppState {
         for pid in pane_ids {
             self.extensions.forget_pane(&pid);
         }
+        // All three are idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
+            self.browser.close(aid).await;
         }
         self.layout_broadcast.close(wid);
         Ok(activities)
