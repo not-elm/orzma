@@ -17,9 +17,13 @@ pub async fn events(
 
 async fn handle_events_socket(socket: WebSocket, state: AppState, window_id: WindowId) {
     let (mut tx, _rx) = socket.split();
+    // NOTE: subscribe BEFORE building the snapshot so no layout/title
+    // re-broadcast can slip through the gap between snapshot and subscribe.
+    let mut receiver = state.layout_broadcast.subscribe_or_create(&window_id);
+    let titles = state.terminal.all_titles().await;
     let snapshot_and_rx = state
         .multiplexer
-        .with_window(&window_id, |w| WindowView::from_window(w))
+        .with_window(&window_id, |w| WindowView::from_window(w, &titles))
         .await;
     let Some(snapshot_result) = snapshot_and_rx else {
         close_with(&mut tx, 1011, "window_not_found").await;
@@ -41,7 +45,6 @@ async fn handle_events_socket(socket: WebSocket, state: AppState, window_id: Win
             return;
         }
     };
-    let mut receiver = state.layout_broadcast.subscribe_or_create(&window_id);
 
     if tx.send(Message::Text(snapshot_json.into())).await.is_err() {
         return;
@@ -252,7 +255,9 @@ mod tests {
                         .insert(new_pane_id.clone(), wid_.clone());
                     if let Some(view) = s
                         .multiplexer
-                        .with_window(&wid_, |w| WindowView::from_window(w))
+                        .with_window(&wid_, |w| {
+                            WindowView::from_window(w, &std::collections::HashMap::new())
+                        })
                         .await
                         && let Ok(view) = view
                         && let Ok(value) = serde_json::to_value(&view)

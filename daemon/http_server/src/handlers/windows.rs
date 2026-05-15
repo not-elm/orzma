@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, State},
 };
 use ozmux_multiplexer::{MultiplexerService, WindowId};
+use ozmux_terminal::TerminalService;
 
 pub mod create;
 pub mod delete;
@@ -15,10 +16,12 @@ pub mod select;
 
 pub async fn get(
     State(multiplexer): State<MultiplexerService>,
+    State(terminal): State<TerminalService>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<Json<WindowView>> {
+    let titles = terminal.all_titles().await;
     let view = multiplexer
-        .with_window_or_404(&window_id, |w| WindowView::from_window(w))
+        .with_window_or_404(&window_id, |w| WindowView::from_window(w, &titles))
         .await?;
     Ok(Json(view))
 }
@@ -199,6 +202,7 @@ mod tests {
         let activities = panes[0]["activities"].as_array().unwrap();
         assert!(activities[0]["id"].is_string());
         assert_eq!(activities[0]["kind"].as_str(), Some("terminal"));
+        assert!(activities[0]["title"].is_string());
     }
 
     #[tokio::test]

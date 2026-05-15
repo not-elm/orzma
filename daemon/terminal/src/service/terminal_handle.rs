@@ -6,6 +6,7 @@ use crate::vt::bridge::{VtState, run_bridge_task};
 use crate::vt::frame_ring::WireMessage;
 use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 use bytes::Bytes;
+use ozmux_multiplexer::WindowId;
 use portable_pty::{ChildKiller, MasterPty};
 use std::{io::Write, sync::Arc};
 use tokio::sync::{
@@ -81,6 +82,8 @@ impl TerminalHandle {
         rows: u16,
         vt_chunk_tx: mpsc::Sender<Bytes>,
         vt_chunk_rx: mpsc::Receiver<Bytes>,
+        window_id: Option<WindowId>,
+        title_tx: broadcast::Sender<WindowId>,
     ) -> Self {
         let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
         let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
@@ -108,6 +111,8 @@ impl TerminalHandle {
             vt_chunk_rx,
             reply_rx,
             control_rx,
+            window_id,
+            title_tx,
             vt_cancel.clone(),
         ));
 

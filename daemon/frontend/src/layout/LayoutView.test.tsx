@@ -14,7 +14,11 @@ function fakeView(overrides: Partial<WindowView> = {}): WindowView {
     root_cell: 'cid-root',
     active_pane: 'pid-1',
     panes: [
-      { id: 'pid-1', active_activity: 'aid-1', activities: [{ id: 'aid-1', kind: 'terminal' }] },
+      {
+        id: 'pid-1',
+        active_activity: 'aid-1',
+        activities: [{ id: 'aid-1', kind: 'terminal', title: 'zsh' }],
+      },
     ],
     layout: {
       type: 'root',
