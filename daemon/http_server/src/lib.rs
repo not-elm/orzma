@@ -7,6 +7,7 @@ pub mod layout_broadcast;
 pub mod layout_dto;
 pub mod state;
 pub mod window_view;
+mod title_republish;
 
 pub use error::{HttpError, HttpResult};
 pub use state::AppState;
@@ -47,6 +48,7 @@ pub async fn serve(state: AppState) -> HttpResult {
     let listener = TcpListener::bind("127.0.0.1:3200")
         .await
         .map_err(|e| HttpError::FailedLaunch(e.to_string()))?;
+    tokio::spawn(title_republish::run(state.clone()));
     axum::serve(listener, daemon_router(state))
         .await
         .map_err(|e| HttpError::FailedLaunch(e.to_string()))?;
