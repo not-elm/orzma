@@ -49,6 +49,30 @@ async fn read_display_offset(svc: &TerminalService, aid: &ActivityId) -> u32 {
     }
 }
 
+async fn read_snapshot(
+    svc: &TerminalService,
+    aid: &ActivityId,
+) -> ozmux_terminal::vt::FrameSnapshot {
+    let sub = svc.subscribe_frames(aid, None).await.unwrap();
+    let snap_bytes = match sub {
+        FrameSubscription::FreshSnapshot { snapshot, .. } => snapshot,
+        FrameSubscription::ResumeReplay { .. } => panic!("expected fresh snapshot"),
+    };
+    let frame: RenderFrame = rmp_serde::from_slice(&snap_bytes).expect("decode");
+    match frame {
+        RenderFrame::Snapshot(s) => s,
+        _ => panic!("expected Snapshot variant"),
+    }
+}
+
+fn row_text(snap: &ozmux_terminal::vt::FrameSnapshot, row: usize) -> String {
+    snap.rows_data[row]
+        .runs
+        .iter()
+        .map(|r| r.text.as_str())
+        .collect()
+}
+
 #[tokio::test]
 async fn scroll_advances_display_offset() {
     let svc = TerminalService::default();
