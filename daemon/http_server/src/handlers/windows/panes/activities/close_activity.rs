@@ -22,28 +22,13 @@ pub async fn close_activity(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_helpers::{bootstrap_default, fresh_state, router_with};
+    use crate::test_helpers::{
+        add_activity_via_window, bootstrap_default, fresh_state, router_with,
+    };
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use ozmux_multiplexer::{Activity, ActivityId, PaneId, WindowId};
+    use ozmux_multiplexer::ActivityId;
     use tower::ServiceExt;
-
-    async fn add_activity_via_window(
-        state: &crate::AppState,
-        wid: &WindowId,
-        pid: &PaneId,
-    ) -> ActivityId {
-        let new_aid = ActivityId::new();
-        state
-            .multiplexer
-            .with_window_or_404(wid, |w| {
-                w.pane_mut(pid)?
-                    .add_activity(Activity::terminal(new_aid.clone()))
-            })
-            .await
-            .unwrap();
-        new_aid
-    }
 
     #[tokio::test]
     async fn close_activity_returns_204_when_pane_has_two() {

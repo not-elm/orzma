@@ -49,7 +49,9 @@ pub async fn break_to_pane(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_helpers::{bootstrap_default, fresh_state, router_with};
+    use crate::test_helpers::{
+        add_activity_via_window, bootstrap_default, fresh_state, router_with,
+    };
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use ozmux_multiplexer::{Activity, ActivityId, PaneId, WindowId};
@@ -77,26 +79,11 @@ mod tests {
             .unwrap()
     }
 
-    async fn add_second_activity(
-        state: &crate::AppState,
-        wid: &WindowId,
-        pid: &PaneId,
-    ) -> ActivityId {
-        let activity = Activity::terminal(ActivityId::new());
-        let aid = activity.id.clone();
-        state
-            .multiplexer
-            .with_window_or_404(wid, |w| w.pane_mut(pid)?.add_activity(activity))
-            .await
-            .unwrap();
-        aid
-    }
-
     #[tokio::test]
     async fn break_to_pane_returns_201_and_new_pane_id() {
         let state = fresh_state();
         let (_sid, wid, pid, aid) = bootstrap_default(&state).await;
-        let _second = add_second_activity(&state, &wid, &pid).await;
+        let _second = add_activity_via_window(&state, &wid, &pid).await;
         let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
         let (router, _state) = router_with(state);
 
@@ -134,7 +121,7 @@ mod tests {
     async fn break_to_pane_unknown_activity_returns_404() {
         let state = fresh_state();
         let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
-        let _second = add_second_activity(&state, &wid, &pid).await;
+        let _second = add_activity_via_window(&state, &wid, &pid).await;
         let (router, _state) = router_with(state);
         let resp = post_break(
             router,
@@ -151,7 +138,7 @@ mod tests {
     async fn break_to_pane_duplicate_new_pane_id_returns_409() {
         let state = fresh_state();
         let (_sid, wid, pid, aid) = bootstrap_default(&state).await;
-        let _second = add_second_activity(&state, &wid, &pid).await;
+        let _second = add_activity_via_window(&state, &wid, &pid).await;
         let (router, _state) = router_with(state);
         let body = format!(r#"{{"orientation":"horizontal","new_pane_id":"{pid}"}}"#);
         let resp = post_break(router, &wid, &pid, &aid, &body).await;
@@ -162,7 +149,7 @@ mod tests {
     async fn break_to_pane_moved_activity_pty_is_not_respawned() {
         let state = fresh_state();
         let (_sid, wid, pid, aid) = bootstrap_default(&state).await;
-        let _second = add_second_activity(&state, &wid, &pid).await;
+        let _second = add_activity_via_window(&state, &wid, &pid).await;
         state
             .terminal
             .spawn(
@@ -191,11 +178,11 @@ mod tests {
 
     #[tokio::test]
     async fn break_to_pane_sibling_pty_stays_alive() {
-        // Spec guarantee: moving an activity must not disturb sibling PTYs in
+        // NOTE: moving an activity must not disturb sibling PTYs in
         // the source pane.
         let state = fresh_state();
         let (_sid, wid, pid, aid) = bootstrap_default(&state).await;
-        let sibling_aid = add_second_activity(&state, &wid, &pid).await;
+        let sibling_aid = add_activity_via_window(&state, &wid, &pid).await;
         for spawn_aid in [&aid, &sibling_aid] {
             state
                 .terminal
@@ -228,7 +215,7 @@ mod tests {
     async fn break_to_pane_new_pane_is_activatable() {
         let state = fresh_state();
         let (_sid, wid, pid, aid) = bootstrap_default(&state).await;
-        let _second = add_second_activity(&state, &wid, &pid).await;
+        let _second = add_activity_via_window(&state, &wid, &pid).await;
         let (router, _state) = router_with(state);
         let resp = post_break(
             router.clone(),
@@ -299,7 +286,7 @@ mod tests {
     async fn break_to_pane_with_wrong_wid_returns_409() {
         let state = fresh_state();
         let (sid, wid_a, pid_a, aid_a) = bootstrap_default(&state).await;
-        let _second = add_second_activity(&state, &wid_a, &pid_a).await;
+        let _second = add_activity_via_window(&state, &wid_a, &pid_a).await;
         let (wid_b, _, _) = state
             .multiplexer
             .create_window(Some(&sid), None)

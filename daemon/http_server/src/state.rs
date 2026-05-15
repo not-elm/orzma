@@ -245,7 +245,7 @@ impl AppState {
         input: BreakActivityInput,
     ) -> HttpResult<PaneId> {
         self.ensure_pane_in_window(wid, target_pane_id)?;
-        let new_pane_id = input.new_pane_id.clone();
+        let new_pane_id = input.new_pane_id;
 
         self.multiplexer
             .with_window_or_404(wid, |w| -> MultiplexerResult<_> {

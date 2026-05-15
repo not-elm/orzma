@@ -110,7 +110,7 @@ pub fn windows_router() -> Router<AppState> {
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
     use axum::Router;
-    use ozmux_multiplexer::{ActivityId, PaneId, SessionId, WindowId};
+    use ozmux_multiplexer::{Activity, ActivityId, PaneId, SessionId, WindowId};
 
     pub(crate) fn fresh_state() -> AppState {
         AppState::new(
@@ -155,6 +155,25 @@ pub(crate) mod test_helpers {
             .await
             .unwrap();
         (sid, wid, pid, aid)
+    }
+
+    /// Insert a fresh terminal Activity into an existing pane via the
+    /// multiplexer, bypassing PTY spawn. Returns the new ActivityId.
+    pub(crate) async fn add_activity_via_window(
+        state: &AppState,
+        wid: &WindowId,
+        pid: &PaneId,
+    ) -> ActivityId {
+        let aid = ActivityId::new();
+        state
+            .multiplexer
+            .with_window_or_404(wid, |w| {
+                w.pane_mut(pid)?
+                    .add_activity(Activity::terminal(aid.clone()))
+            })
+            .await
+            .unwrap();
+        aid
     }
 }
 

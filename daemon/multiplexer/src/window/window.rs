@@ -114,9 +114,9 @@ impl Window {
         side: Side,
         orientation: SplitOrientation,
     ) -> MultiplexerResult<()> {
-        if self.panes.contains_key(&new_pane_id) {
-            return Err(MultiplexerError::PaneIdConflict(new_pane_id));
-        }
+        // NOTE: `new_pane_id` is not pre-checked here — `split_pane` rejects
+        // a collision before any mutation, which preserves the rollback-free
+        // ordering and avoids a duplicate `HashMap::contains_key` lookup.
         let target = self.pane(target_pane_id)?;
         let moved = match target.activity(aid) {
             Some(activity) => activity.clone(),
