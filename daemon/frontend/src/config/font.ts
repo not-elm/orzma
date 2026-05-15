@@ -15,15 +15,20 @@ export interface FontConfig {
   boldItalicFamily: string;
 }
 
-const FALLBACK_STACK = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+const FALLBACK_FAMILY = 'monospace';
 
 const DEFAULT_FONT_CONFIG: FontConfig = {
-  size: 16,
-  normalFamily: FALLBACK_STACK,
-  boldFamily: FALLBACK_STACK,
-  italicFamily: FALLBACK_STACK,
-  boldItalicFamily: FALLBACK_STACK,
+  size: 11.25,
+  normalFamily: FALLBACK_FAMILY,
+  boldFamily: FALLBACK_FAMILY,
+  italicFamily: FALLBACK_FAMILY,
+  boldItalicFamily: FALLBACK_FAMILY,
 };
+
+/** Converts a points value to CSS pixels (CSS defines 1pt = 4/3 px). */
+export function pointsToPx(points: number): number {
+  return (points * 4) / 3;
+}
 
 let current: FontConfig = DEFAULT_FONT_CONFIG;
 
@@ -43,10 +48,10 @@ export async function loadFontConfig(): Promise<void> {
     const raw = (await fetchJson('/configs/font')) as Record<string, unknown>;
     current = {
       size: typeof raw.size === 'number' && raw.size > 0 ? raw.size : DEFAULT_FONT_CONFIG.size,
-      normalFamily: str(raw.normal_family, FALLBACK_STACK),
-      boldFamily: str(raw.bold_family, FALLBACK_STACK),
-      italicFamily: str(raw.italic_family, FALLBACK_STACK),
-      boldItalicFamily: str(raw.bold_italic_family, FALLBACK_STACK),
+      normalFamily: str(raw.normal_family, FALLBACK_FAMILY),
+      boldFamily: str(raw.bold_family, FALLBACK_FAMILY),
+      italicFamily: str(raw.italic_family, FALLBACK_FAMILY),
+      boldItalicFamily: str(raw.bold_italic_family, FALLBACK_FAMILY),
     };
   } catch (e) {
     console.warn('loadFontConfig: failed to load or parse font config, using defaults', e);
@@ -68,7 +73,7 @@ export async function preloadFonts(): Promise<void> {
   await Promise.all(
     [...families].map(async (family) => {
       try {
-        await document.fonts.load(`${current.size}px ${family}`);
+        await document.fonts.load(`${pointsToPx(current.size)}px ${family}`);
       } catch {
         // Unparseable / unknown family — the CSS fallback handles it.
       }

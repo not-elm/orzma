@@ -3,7 +3,7 @@
 //! issue #4445 (CSP unsafe-inline) drove this pattern; truecolor stays on
 //! inline style. Re-invocation on theme/font/options change is idempotent.
 
-import { getFontConfig } from '../../config/font';
+import { getFontConfig, pointsToPx } from '../../config/font';
 import { colorToCss } from './colors';
 
 const STYLE_ID = 'ozmux-terminal-palette';
@@ -11,11 +11,11 @@ const STYLE_ID = 'ozmux-terminal-palette';
 function fontCss(): string {
   const font = getFontConfig();
   return [
-    `.terminal-grid { font-family: ${font.normalFamily}, monospace; font-size: ${font.size}px; }`,
+    `.terminal-grid { font-family: ${font.normalFamily}, monospace; font-size: ${pointsToPx(font.size)}px; }`,
     `.terminal-grid .tf-bold { font-family: ${font.boldFamily}, monospace; }`,
     `.terminal-grid .tf-italic { font-family: ${font.italicFamily}, monospace; }`,
     `.terminal-grid .tf-bold-italic { font-family: ${font.boldItalicFamily}, monospace; }`,
-    `.ozmux-font-probe { font-family: ${font.normalFamily}, monospace; font-size: ${font.size}px; }`,
+    `.ozmux-font-probe { font-family: ${font.normalFamily}, monospace; font-size: ${pointsToPx(font.size)}px; }`,
     `.ozmux-font-probe.tf-bold { font-family: ${font.boldFamily}, monospace; }`,
     `.ozmux-font-probe.tf-italic { font-family: ${font.italicFamily}, monospace; }`,
     `.ozmux-font-probe.tf-bold-italic { font-family: ${font.boldItalicFamily}, monospace; }`,

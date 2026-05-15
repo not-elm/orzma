@@ -2,14 +2,19 @@
 
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_FAMILY: &str = "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace";
-const DEFAULT_SIZE: f32 = 16.0;
+#[cfg(target_os = "macos")]
+const DEFAULT_FAMILY: &str = "Menlo";
+#[cfg(target_os = "windows")]
+const DEFAULT_FAMILY: &str = "Consolas";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const DEFAULT_FAMILY: &str = "monospace";
+const DEFAULT_SIZE: f32 = 11.25;
 
 /// Fully-resolved font configuration for the terminal grid.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct FontConfig {
-    /// Terminal font size in CSS pixels (deliberate deviation from
-    /// Alacritty's points — the value flows straight into a CSS `font-size`).
+    /// Terminal font size in points, matching Alacritty. The frontend
+    /// converts points to CSS pixels at render time.
     pub size: f32,
     /// Font family for normal-weight cells.
     pub normal_family: String,
@@ -93,6 +98,21 @@ mod tests {
     fn empty_patch_returns_base() {
         let merged = FontPatch::default().apply_to(FontConfig::default());
         assert_eq!(merged, FontConfig::default());
+    }
+
+    #[test]
+    fn default_matches_alacritty() {
+        let d = FontConfig::default();
+        assert_eq!(d.size, 11.25);
+        #[cfg(target_os = "macos")]
+        assert_eq!(d.normal_family, "Menlo");
+        #[cfg(target_os = "windows")]
+        assert_eq!(d.normal_family, "Consolas");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert_eq!(d.normal_family, "monospace");
+        assert_eq!(d.bold_family, d.normal_family);
+        assert_eq!(d.italic_family, d.normal_family);
+        assert_eq!(d.bold_italic_family, d.normal_family);
     }
 
     #[test]

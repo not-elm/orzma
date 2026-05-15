@@ -69,7 +69,7 @@ describe('injectTerminalPalette font rules', () => {
     injectTerminalPalette();
     const css = document.getElementById(STYLE_ID)?.textContent ?? '';
     expect(css).toMatch(/\.terminal-grid\s*\{[^}]*font-family:/);
-    expect(css).toMatch(/\.terminal-grid\s*\{[^}]*font-size:\s*16px/);
+    expect(css).toMatch(/\.terminal-grid\s*\{[^}]*font-size:\s*15px/);
   });
 
   it('emits per-style family classes for runs and probes', () => {

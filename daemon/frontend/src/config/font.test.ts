@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getFontConfig, loadFontConfig, preloadFonts } from './font';
+import { getFontConfig, loadFontConfig, pointsToPx, preloadFonts } from './font';
 
 const origFetch = globalThis.fetch;
 
@@ -35,8 +35,14 @@ describe('loadFontConfig', () => {
       .fn<typeof fetch>()
       .mockResolvedValue({ ok: false, status: 500, statusText: 'err' } as Response);
     await loadFontConfig();
-    expect(getFontConfig().size).toBe(16);
-    expect(getFontConfig().normalFamily).toContain('ui-monospace');
+    expect(getFontConfig().size).toBe(11.25);
+    expect(getFontConfig().normalFamily).toBe('monospace');
+  });
+});
+
+describe('pointsToPx', () => {
+  it("converts points to CSS pixels (Alacritty's 11.25pt = 15px)", () => {
+    expect(pointsToPx(11.25)).toBe(15);
   });
 });
 
