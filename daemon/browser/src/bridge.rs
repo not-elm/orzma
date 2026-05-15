@@ -3,4 +3,4 @@
 //! snapshot frames to the client. Mirrors `daemon/terminal` bridge
 //! structure. Filled in by Task 2.8.
 
-// Subsequent tasks (2.8) populate this module.
+// TODO: Subsequent tasks (2.8) populate this module.

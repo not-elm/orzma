@@ -2,4 +2,4 @@
 //! input commands, and navigation events exchanged between the frontend and
 //! the daemon. Filled in by Task 2.2.
 
-// Subsequent tasks (2.2) populate this module.
+// TODO: Subsequent tasks (2.2) populate this module.
