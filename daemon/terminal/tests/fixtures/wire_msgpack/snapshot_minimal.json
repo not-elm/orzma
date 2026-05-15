@@ -25,5 +25,7 @@
   ],
   "reason": "initial",
   "modes": [],
-  "hyperlinks": []
+  "hyperlinks": [],
+  "display_offset": 0,
+  "history_size": 0
 }

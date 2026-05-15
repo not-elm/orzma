@@ -9,5 +9,6 @@
     "visible": true
   },
   "dirty_rows": [],
-  "hyperlinks": []
+  "hyperlinks": [],
+  "display_offset": 0
 }

@@ -31,5 +31,7 @@
       "id": 0,
       "uri": "https://ozmux.example"
     }
-  ]
+  ],
+  "display_offset": 0,
+  "history_size": 0
 }

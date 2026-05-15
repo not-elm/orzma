@@ -28,5 +28,7 @@
     "mouse-any-event",
     "mouse-sgr-1006"
   ],
-  "hyperlinks": []
+  "hyperlinks": [],
+  "display_offset": 0,
+  "history_size": 0
 }
