@@ -156,6 +156,19 @@ describe('actionToHandler', () => {
     });
   });
 
+  it('maps break-activity-to-pane to a handler', () => {
+    const ctx = {
+      activeWindow: () => 'wid-1',
+      activePane: () => 'pid-1',
+      activeActivity: () => 'aid-1',
+    };
+    const handler = actionToHandler(
+      { type: 'break-activity-to-pane', direction: 'horizontal' },
+      ctx,
+    );
+    expect(handler).not.toBeNull();
+  });
+
   it('close-activity handler is a no-op when active activity is null', async () => {
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
