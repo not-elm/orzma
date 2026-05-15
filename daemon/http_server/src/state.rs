@@ -13,7 +13,7 @@ use ozmux_terminal::TerminalService;
 use std::sync::Arc;
 
 /// Input bundle for [`AppState::split_pane`].
-pub(crate) struct SplitInput {
+pub struct SplitInput {
     /// Id for the new pane (caller-supplied or server-generated).
     pub new_pane_id: PaneId,
     /// The activity to seat in the new pane.
@@ -27,7 +27,7 @@ pub(crate) struct SplitInput {
 }
 
 /// Ids produced by a successful [`AppState::split_pane`].
-pub(crate) struct SplitOutcome {
+pub struct SplitOutcome {
     /// Id of the newly-created pane.
     pub new_pane_id: PaneId,
     /// Id of the activity seated in the new pane.
@@ -107,7 +107,7 @@ impl AppState {
     /// terminal-kind activities, also spawn the backing PTY; on spawn
     /// failure the activity record is rolled back before returning the
     /// error so the frontend never sees a half-state.
-    pub(crate) async fn add_activity_to_pane(
+    pub async fn add_activity_to_pane(
         &self,
         wid: &WindowId,
         pid: &PaneId,
@@ -144,24 +144,11 @@ impl AppState {
         Ok(aid)
     }
 
-    async fn rollback_added_activity(
-        &self,
-        wid: &WindowId,
-        pid: &PaneId,
-        aid: &ActivityId,
-    ) -> MultiplexerResult<()> {
-        self.multiplexer
-            .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
-                w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
-            })
-            .await
-    }
-
     /// Close a single Activity in a Pane: kill its PTY (terminal kind) or
     /// forget its extension registry entry (extension kind), then broadcast
     /// the new layout. Refuses to close the last activity via
     /// `Pane::remove_activity`'s built-in `CannotRemoveLastActivity` guard.
-    pub(crate) async fn close_activity(
+    pub async fn close_activity(
         &self,
         wid: &WindowId,
         pid: &PaneId,
@@ -187,7 +174,7 @@ impl AppState {
 
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
     /// spawn a PTY when the activity is Terminal. Rolls back on spawn failure.
-    pub(crate) async fn split_pane(
+    pub async fn split_pane(
         &self,
         wid: &WindowId,
         target_pane_id: &PaneId,
@@ -235,27 +222,9 @@ impl AppState {
         })
     }
 
-    async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
-        // NOTE: spawn happens before publish, so the frontend never saw the new
-        // pane — no layout re-broadcast is needed on rollback.
-        let closed = self
-            .multiplexer
-            .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
-            .await
-            .is_ok();
-        if !closed {
-            tracing::warn!(
-                %new_pane_id,
-                "split rollback failed to close pane after spawn failure"
-            );
-            return;
-        }
-        self.multiplexer.pane_owner_window.remove(new_pane_id);
-    }
-
     /// Close a Pane: remove it from the cell tree, tear down extension
     /// registry rows and PTYs for each activity, and broadcast the new layout.
-    pub(crate) async fn close_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
+    pub async fn close_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
         let activities = self
             .multiplexer
             .with_window_or_404(wid, |w| w.close_pane(pid))
@@ -275,25 +244,10 @@ impl AppState {
     }
 
     /// Rename a Window and broadcast the new layout.
-    pub(crate) async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
+    pub async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
         self.multiplexer.rename_window(wid, name).await?;
         self.publish_window_layout(wid).await;
         Ok(())
-    }
-
-    /// Build the current Window layout snapshot under the Window lock and
-    /// broadcast it. Used by every handler that mutates a Window.
-    async fn publish_window_layout(&self, wid: &WindowId) {
-        let _ = self
-            .multiplexer
-            .with_window(wid, |w| match WindowView::from_window(w) {
-                Ok(view) => match serde_json::to_value(&view) {
-                    Ok(value) => self.layout_broadcast.publish(wid, value),
-                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
-                },
-                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
-            })
-            .await;
     }
 
     /// Close a Window: tear down its Panes/Activities and run runtime
@@ -321,6 +275,52 @@ impl AppState {
             activities.extend(self.close_window(&wid).await?);
         }
         Ok(activities)
+    }
+
+    async fn rollback_added_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> MultiplexerResult<()> {
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
+                w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
+            })
+            .await
+    }
+
+    async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
+        // NOTE: spawn happens before publish, so the frontend never saw the new
+        // pane — no layout re-broadcast is needed on rollback.
+        let closed = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
+            .await
+            .is_ok();
+        if !closed {
+            tracing::warn!(
+                %new_pane_id,
+                "split rollback failed to close pane after spawn failure"
+            );
+            return;
+        }
+        self.multiplexer.pane_owner_window.remove(new_pane_id);
+    }
+
+    /// Build the current Window layout snapshot under the Window lock and
+    /// broadcast it. Used by every handler that mutates a Window.
+    async fn publish_window_layout(&self, wid: &WindowId) {
+        let _ = self
+            .multiplexer
+            .with_window(wid, |w| match WindowView::from_window(w) {
+                Ok(view) => match serde_json::to_value(&view) {
+                    Ok(value) => self.layout_broadcast.publish(wid, value),
+                    Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+                },
+                Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
+            })
+            .await;
     }
 }
 
