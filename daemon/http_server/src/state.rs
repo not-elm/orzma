@@ -1,3 +1,4 @@
+use crate::activity_titles::ActivityTitles;
 use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::window_view::WindowView;
@@ -54,6 +55,9 @@ pub struct AppState {
     pub layout_broadcast: LayoutBroadcaster,
     /// Daemon-wide configuration loaded at startup (shortcuts, etc.).
     pub configs: Arc<OzmuxConfigs>,
+    /// Kind-agnostic per-activity title map. All activity kinds (terminal,
+    /// browser, …) publish into this; consumers snapshot it for layout builds.
+    pub titles: ActivityTitles,
 }
 
 impl AppState {
@@ -67,6 +71,7 @@ impl AppState {
         extensions: ExtensionRegistry,
         layout_broadcast: LayoutBroadcaster,
         configs: Arc<OzmuxConfigs>,
+        titles: ActivityTitles,
     ) -> Self {
         Self {
             multiplexer: MultiplexerService::default(),
@@ -74,6 +79,7 @@ impl AppState {
             extensions,
             layout_broadcast,
             configs,
+            titles,
         }
     }
 
@@ -331,7 +337,7 @@ impl AppState {
         // NOTE: titles are snapshotted separately from the window state, so a
         // published view's title can be one title-change cycle stale. This is
         // benign — the next title change re-broadcasts the corrected view.
-        let titles = self.terminal.all_titles().await;
+        let titles = self.titles.snapshot().await;
         let _ = self
             .multiplexer
             .with_window(wid, |w| match WindowView::from_window(w, &titles) {

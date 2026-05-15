@@ -6,6 +6,7 @@ use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::registry::ExtensionRegistry;
 use ozmux_extension::runtime::RuntimeRoot;
 use ozmux_http_server::AppState;
+use ozmux_http_server::activity_titles::ActivityTitles;
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
 
@@ -49,12 +50,51 @@ async fn main() -> anyhow::Result<()> {
     let registry = ExtensionRegistry::default();
     let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
 
+    let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
+    let titles = ActivityTitles::default();
+
     let state = AppState::new(
-        TerminalService::with_runtime_root(Arc::clone(&runtime)),
+        terminal.clone(),
         registry,
         ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
         Arc::clone(&configs),
+        titles.clone(),
     );
+
+    // Adapter task: bridge terminal title-change notifications into ActivityTitles
+    // so that all consumers (title_republish, WindowView builder) read from the
+    // kind-agnostic map rather than directly from TerminalService.
+    let multiplexer = state.multiplexer.clone();
+    tokio::spawn(async move {
+        let mut rx = terminal.subscribe_title_changes();
+        loop {
+            let wid = match rx.recv().await {
+                Ok(wid) => wid,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            };
+            // Collect all activity ids in this window that have a terminal kind.
+            // The multiplexer lock is held only for the brief id-collection step.
+            let aids: Vec<ozmux_multiplexer::ActivityId> = multiplexer
+                .with_window(&wid, |w| {
+                    w.panes
+                        .iter()
+                        .flat_map(|(_, p)| p.activities.iter())
+                        .filter(|a| matches!(a.kind, ozmux_multiplexer::ActivityKind::Terminal))
+                        .map(|a| a.id.clone())
+                        .collect()
+                })
+                .await
+                .unwrap_or_default();
+            // Snapshot current titles from TerminalService and push into ActivityTitles.
+            let all = terminal.all_titles().await;
+            for aid in aids {
+                if let Some(title) = all.get(&aid) {
+                    titles.set(&wid, &aid, title.clone()).await;
+                }
+            }
+        }
+    });
 
     let serve = ozmux_http_server::serve(state);
     tokio::select! {

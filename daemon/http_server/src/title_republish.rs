@@ -14,7 +14,7 @@ const DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Runs until the title-change channel closes (daemon shutdown).
 pub(crate) async fn run(state: AppState) {
-    let mut rx = state.terminal.subscribe_title_changes();
+    let mut rx = state.titles.subscribe();
     loop {
         let first = match rx.recv().await {
             Ok(wid) => wid,

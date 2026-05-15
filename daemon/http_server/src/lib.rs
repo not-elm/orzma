@@ -1,5 +1,6 @@
 //! HTTP/WebSocket server: axum router, REST handlers, and PTY WS bridging.
 
+pub mod activity_titles;
 pub mod error;
 pub mod extractors;
 pub mod handlers;
@@ -119,6 +120,7 @@ pub(crate) mod test_helpers {
             ozmux_extension::ExtensionRegistry::default(),
             crate::layout_broadcast::LayoutBroadcaster::default(),
             std::sync::Arc::new(ozmux_configs::OzmuxConfigs::default()),
+            crate::activity_titles::ActivityTitles::default(),
         )
     }
 
