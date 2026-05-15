@@ -35,7 +35,7 @@ export function cellWidthOf(container: HTMLElement): number {
   probe.style.visibility = 'hidden';
   probe.style.position = 'absolute';
   probe.style.whiteSpace = 'pre';
-  probe.className = 'font-mono leading-none';
+  probe.className = 'font-mono ozmux-font-probe leading-none';
   probe.textContent = 'W';
   container.appendChild(probe);
   const width = probe.getBoundingClientRect().width;
@@ -51,7 +51,7 @@ export function cellHeightOf(container: HTMLElement): number {
   probe.style.visibility = 'hidden';
   probe.style.position = 'absolute';
   probe.style.whiteSpace = 'pre';
-  probe.className = 'font-mono leading-none';
+  probe.className = 'font-mono ozmux-font-probe leading-none';
   probe.textContent = 'W';
   container.appendChild(probe);
   const height = probe.getBoundingClientRect().height;
@@ -76,7 +76,9 @@ export function measureGlyph(
   probe.style.visibility = 'hidden';
   probe.style.position = 'absolute';
   probe.style.whiteSpace = 'pre';
-  probe.className = 'font-mono leading-none';
+  const styleClass =
+    bold && italic ? ' tf-bold-italic' : bold ? ' tf-bold' : italic ? ' tf-italic' : '';
+  probe.className = `font-mono ozmux-font-probe leading-none${styleClass}`;
   if (bold) probe.style.fontWeight = 'bold';
   if (italic) probe.style.fontStyle = 'italic';
   probe.textContent = chars;
