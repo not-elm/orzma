@@ -58,16 +58,18 @@ async fn term_grid_reflects_bash_echo_output() {
                 .expect("activity exists after spawn");
             rows_snapshot.push(row);
         }
-        if rows_snapshot
-            .iter()
-            .any(|line| line.trim_end_matches(' ').ends_with("hello") || line.contains(" hello"))
-        {
-            // Stronger check: at least one row begins exactly with "hello".
-            // This filters out the typed-input echo line "echo hello".
-            if rows_snapshot.iter().any(|line| &line[..5] == "hello") {
-                found = true;
-                break;
-            }
+        // NOTE: filter out the typed-input echo line (`echo hello`, including
+        // any prompt prefix like `$ echo hello`) and look for the actual
+        // output line. On macOS /bin/sh under PTY the output appears as
+        // bare `hello`; on Ubuntu CI it appears as `$ hello` with the
+        // interactive prompt prefix.
+        if rows_snapshot.iter().any(|line| {
+            let trimmed = line.trim_end_matches(' ');
+            !trimmed.contains("echo hello")
+                && (trimmed.ends_with("hello") || trimmed.contains(" hello"))
+        }) {
+            found = true;
+            break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
