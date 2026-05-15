@@ -1,5 +1,6 @@
 use crate::AppState;
 use crate::error::HttpError;
+use crate::state::ActivityKindDiscriminant;
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
     response::Response,
@@ -24,8 +25,8 @@ pub async fn terminal_ws(
     Query(params): Query<TerminalWsParams>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, HttpError> {
-    state
-        .ensure_activity_in_pane_in_window(&wid, &pid, &aid)
+    let _activity = state
+        .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Terminal)
         .await?;
 
     const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;

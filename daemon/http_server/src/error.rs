@@ -1,6 +1,7 @@
 //! HTTP-layer error type and axum IntoResponse mapping.
 
-use ozmux_multiplexer::MultiplexerError;
+use crate::state::ActivityKindDiscriminant;
+use ozmux_multiplexer::{ActivityId, MultiplexerError};
 use ozmux_terminal::TerminalError;
 use thiserror::Error;
 
@@ -41,6 +42,17 @@ pub enum HttpError {
 
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
+
+    /// The resolved activity's kind does not match what the route requires.
+    #[error("activity {aid} kind mismatch: want {want:?}, got {got:?}")]
+    ActivityKindMismatch {
+        /// Id of the activity whose kind was checked.
+        aid: ActivityId,
+        /// The kind the route expected.
+        want: ActivityKindDiscriminant,
+        /// The kind the activity actually has.
+        got: ActivityKindDiscriminant,
+    },
 }
 
 pub type HttpResult<T = ()> = Result<T, HttpError>;
@@ -110,6 +122,9 @@ impl axum::response::IntoResponse for HttpError {
             }
             HttpError::Session(MultiplexerError::CannotRemoveLastActivity(_)) => {
                 (StatusCode::CONFLICT, "CANNOT_REMOVE_LAST_ACTIVITY")
+            }
+            HttpError::ActivityKindMismatch { .. } => {
+                (StatusCode::CONFLICT, "ACTIVITY_KIND_MISMATCH")
             }
             // MissingParentCell, SplitTargetEqualsNewCell, ActivePaneMustBelongToWindow,
             // Terminal::Pty, FailedLaunch fall through → 500

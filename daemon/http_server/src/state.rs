@@ -12,6 +12,18 @@ use ozmux_multiplexer::{
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
 
+/// Lightweight discriminant for `ActivityKind`, used by route-kind guards
+/// to assert an Activity matches a specific kind before dispatching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityKindDiscriminant {
+    /// Terminal PTY activity.
+    Terminal,
+    /// Extension (iframe-served) activity.
+    Extension,
+    /// Browser activity.
+    Browser,
+}
+
 /// Input bundle for [`AppState::split_pane`].
 pub struct SplitInput {
     /// Id for the new pane (caller-supplied or server-generated).
@@ -384,6 +396,34 @@ impl AppState {
             .await?;
         Ok(())
     }
+
+    /// Like [`Self::ensure_activity_in_pane_in_window_and_fetch`], but also
+    /// asserts that the activity's kind matches `want`. Returns
+    /// [`HttpError::ActivityKindMismatch`] when the kinds differ.
+    pub async fn ensure_activity_kind(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+        want: ActivityKindDiscriminant,
+    ) -> HttpResult<Activity> {
+        let activity = self
+            .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
+            .await?;
+        let got = match &activity.kind {
+            ActivityKind::Terminal => ActivityKindDiscriminant::Terminal,
+            ActivityKind::Extension { .. } => ActivityKindDiscriminant::Extension,
+            ActivityKind::Browser { .. } => ActivityKindDiscriminant::Browser,
+        };
+        if got != want {
+            return Err(HttpError::ActivityKindMismatch {
+                aid: aid.clone(),
+                want,
+                got,
+            });
+        }
+        Ok(activity)
+    }
 }
 
 impl FromRef<AppState> for TerminalService {
@@ -413,5 +453,22 @@ impl FromRef<AppState> for MultiplexerService {
 impl FromRef<AppState> for Arc<OzmuxConfigs> {
     fn from_ref(input: &AppState) -> Self {
         Arc::clone(&input.configs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers;
+
+    #[tokio::test]
+    async fn ensure_activity_kind_rejects_mismatched_kind() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, term_aid) = test_helpers::bootstrap_default(&state).await;
+        let err = state
+            .ensure_activity_kind(&wid, &pid, &term_aid, ActivityKindDiscriminant::Browser)
+            .await
+            .expect_err("must reject mismatched kind");
+        assert!(matches!(err, HttpError::ActivityKindMismatch { .. }));
     }
 }

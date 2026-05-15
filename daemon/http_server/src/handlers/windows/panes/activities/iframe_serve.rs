@@ -1,5 +1,6 @@
 use crate::AppState;
 use crate::error::HttpError;
+use crate::state::ActivityKindDiscriminant;
 use axum::{
     extract::{Path, State},
     http::header::CONTENT_TYPE,
@@ -16,11 +17,8 @@ pub async fn iframe_serve(
     Path((wid, pid, aid, path)): Path<(WindowId, PaneId, ActivityId, String)>,
 ) -> Result<Response, HttpError> {
     let activity = state
-        .ensure_activity_in_pane_in_window_and_fetch(&wid, &pid, &aid)
+        .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Extension)
         .await?;
-    if !matches!(activity.kind, ActivityKind::Extension { .. }) {
-        return Err(HttpError::IframeFileNotFound(path));
-    }
     let session_id = crate::handlers::windows::panes::session_owning_window(&state, &wid).await;
     let ids = OzmuxIds {
         session_id: session_id.map(|s| s.to_string()),
