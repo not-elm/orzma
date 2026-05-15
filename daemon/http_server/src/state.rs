@@ -6,8 +6,9 @@ use axum::extract::FromRef;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
-    Activity, ActivityId, ActivityKind, MultiplexerError, MultiplexerResult, MultiplexerService,
-    PaneId, SessionId, SetActiveOutcome, SetActivePaneOutcome, Side, SplitOrientation, WindowId,
+    Activity, ActivityId, ActivityKind, CycleDirection, MultiplexerError, MultiplexerResult,
+    MultiplexerService, PaneId, SessionId, SetActiveOutcome, SetActivePaneOutcome, Side,
+    SplitOrientation, WindowId,
 };
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
@@ -84,6 +85,22 @@ impl AppState {
         let outcome = self
             .multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.set_active_activity(aid))
+            .await?;
+        if matches!(outcome, SetActiveOutcome::Changed) {
+            self.publish_window_layout(wid).await;
+        }
+        Ok(())
+    }
+
+    pub async fn cycle_active_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        direction: CycleDirection,
+    ) -> HttpResult {
+        let outcome = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.pane_mut(pid)?.cycle_active_activity(direction))
             .await?;
         if matches!(outcome, SetActiveOutcome::Changed) {
             self.publish_window_layout(wid).await;
