@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Adapter task: poll browser nav-state titles every 500 ms and push any
+    // NOTE: Adapter task polls browser nav-state titles every 500 ms and pushes any
     // changes into ActivityTitles so the tab bar shows live page titles.
     let browser_titles = titles.clone();
     let browser_svc = state.browser.clone();
@@ -126,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
                     browser_titles.set(&wid, aid, title).await;
                 }
             }
-            // Prune stale entries so `last` does not grow unbounded when
+            // NOTE: Prune stale entries so `last` does not grow unbounded when
             // activities are closed between polling ticks.
             let known_set: HashSet<_> = known.into_iter().collect();
             last.retain(|aid, _| known_set.contains(aid));
