@@ -13,7 +13,7 @@ use crate::{
 };
 use bytes::Bytes;
 use ozmux_extension::runtime::RuntimeRoot;
-use ozmux_multiplexer::{ActivityId, PaneId};
+use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(any(test, feature = "test-helpers"))]
 use std::collections::HashSet;
@@ -33,7 +33,7 @@ pub mod types;
 pub struct TerminalService {
     ptys: Arc<RwLock<HashMap<ActivityId, TerminalHandle>>>,
     runtime_root: Option<Arc<RuntimeRoot>>,
-    title_tx: broadcast::Sender<ozmux_multiplexer::WindowId>,
+    title_tx: broadcast::Sender<WindowId>,
     #[cfg(any(test, feature = "test-helpers"))]
     forced_failures: Arc<RwLock<HashSet<ActivityId>>>,
 }
@@ -222,7 +222,7 @@ impl TerminalService {
     /// Each item is the `WindowId` of a window whose terminal title changed.
     pub fn subscribe_title_changes(
         &self,
-    ) -> broadcast::Receiver<ozmux_multiplexer::WindowId> {
+    ) -> broadcast::Receiver<WindowId> {
         self.title_tx.subscribe()
     }
 

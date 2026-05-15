@@ -540,6 +540,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bridge_task_reset_title_clears_stored_title() {
+        let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
+        let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
+        let drop_counter = Arc::new(DropCounter::new());
+        let listener = TermListener {
+            reply_tx,
+            control_tx: control_tx.clone(),
+            drop_counter,
+        };
+        let (wire_broadcast, _rx) = broadcast::channel::<WireMessage>(8);
+        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(
+            10,
+            3,
+            listener,
+            wire_broadcast,
+        )));
+        let (_pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
+        let (title_tx, mut title_rx) =
+            broadcast::channel::<ozmux_multiplexer::WindowId>(8);
+        let wid = ozmux_multiplexer::WindowId::new();
+        let cancel = CancellationToken::new();
+        let handle = tokio::spawn(super::run_bridge_task(
+            vt_state.clone(),
+            pty_rx,
+            reply_rx,
+            control_rx,
+            Some(wid.clone()),
+            title_tx,
+            cancel.clone(),
+        ));
+
+        control_tx
+            .send(ControlFrame::Title("seed".into()))
+            .await
+            .unwrap();
+        let _ = title_rx.recv().await.unwrap();
+        assert_eq!(
+            vt_state.lock().unwrap().title.as_deref(),
+            Some("seed"),
+            "initial title should be set"
+        );
+
+        control_tx
+            .send(ControlFrame::ResetTitle)
+            .await
+            .unwrap();
+        let _ = title_rx.recv().await.unwrap();
+        assert_eq!(
+            vt_state.lock().unwrap().title,
+            None,
+            "title should be cleared after ResetTitle"
+        );
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
     async fn wire_broadcast_is_subscribable() {
         let (wire_broadcast, mut rx) = broadcast::channel::<WireMessage>(8);
         let state = VtState::new(10, 3, make_listener(), wire_broadcast.clone());
