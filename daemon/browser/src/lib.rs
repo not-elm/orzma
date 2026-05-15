@@ -7,7 +7,7 @@
 //! task breakdown. The public API surface listed below is intentionally
 //! sparse for Task 2.1; subsequent tasks fill it in.
 
-pub mod bridge;
+pub(crate) mod bridge;
 pub mod cookie;
 pub mod error;
 pub mod input;
