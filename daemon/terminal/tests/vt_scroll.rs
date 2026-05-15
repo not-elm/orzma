@@ -193,3 +193,45 @@ async fn snapshot_after_scroll_contains_history() {
 
     svc.kill(&aid).await.unwrap();
 }
+
+#[tokio::test]
+async fn scrolled_view_content_locked_during_new_output() {
+    let svc = TerminalService::default();
+    let aid = spawn_shell(&svc).await;
+
+    let mut cmd = String::new();
+    for i in 0..30 {
+        cmd.push_str(&format!("echo line{i}\n"));
+    }
+    svc.write(&aid, cmd.as_bytes()).await.unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    svc.scroll(&aid, 20).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let before = read_snapshot(&svc, &aid).await;
+    let before_rows: Vec<String> =
+        (0..before.rows as usize).map(|r| row_text(&before, r)).collect();
+    assert!(before.display_offset > 0, "must be scrolled");
+
+    svc.write(&aid, b"echo NEW1\necho NEW2\necho NEW3\n")
+        .await
+        .unwrap();
+    pump_until_idle(&svc, &aid, 1500).await;
+
+    let after = read_snapshot(&svc, &aid).await;
+    let after_rows: Vec<String> =
+        (0..after.rows as usize).map(|r| row_text(&after, r)).collect();
+
+    assert!(after.display_offset > 0);
+    assert!(after.display_offset >= before.display_offset);
+    assert_eq!(
+        before_rows, after_rows,
+        "scrolled viewport contents should be locked during new output"
+    );
+    assert!(
+        !after_rows.iter().any(|row| row.contains("NEW")),
+        "fresh output must not appear in scrolled viewport; got {after_rows:?}"
+    );
+
+    svc.kill(&aid).await.unwrap();
+}
