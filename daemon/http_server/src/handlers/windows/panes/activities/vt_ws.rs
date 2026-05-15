@@ -245,9 +245,7 @@ mod tests {
     async fn hello_is_first_frame_with_required_fields() {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws"
-        );
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
         let (mut ws, _resp) = tokio_tungstenite::connect_async(&url).await.unwrap();
         let msg = ws.next().await.unwrap().unwrap();
         match msg {
@@ -270,9 +268,7 @@ mod tests {
     async fn snapshot_arrives_after_hello() {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws"
-        );
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         // Skip hello.
         let _ = ws.next().await.unwrap().unwrap();
@@ -296,9 +292,7 @@ mod tests {
     async fn more_frames_flow_after_initial_snapshot() {
         let (addr, state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws"
-        );
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         // Skip hello + initial snapshot.
         let _ = ws.next().await.unwrap().unwrap();
@@ -339,9 +333,7 @@ mod tests {
 
         let (addr, state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws"
-        );
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         let _ = ws.next().await.unwrap().unwrap(); // hello
         let _ = ws.next().await.unwrap().unwrap(); // initial snapshot
@@ -391,9 +383,7 @@ mod tests {
     async fn malformed_client_text_closes_with_1011() {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws"
-        );
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         let _ = ws.next().await.unwrap().unwrap();
         let _ = ws.next().await.unwrap().unwrap();
@@ -428,9 +418,7 @@ mod tests {
 
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!(
-            "ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws"
-        );
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
         let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
         let _ = ws.next().await.unwrap().unwrap(); // hello
         let _ = ws.next().await.unwrap().unwrap(); // initial snapshot

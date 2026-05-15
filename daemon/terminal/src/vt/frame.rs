@@ -85,7 +85,7 @@ pub struct Run {
     pub fg: Color,
     /// Background color.
     pub bg: Color,
-    /// Style bitmask (see [`style`]).
+    /// Style bitmask (see the `style` module).
     pub style: u8,
     /// UTF-8 text; the client uses Unicode East Asian Width to position each
     /// grapheme cluster within the run.

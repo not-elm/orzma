@@ -13,7 +13,7 @@ pub struct EncodedDelta {
 }
 
 /// Wire-level broadcast envelope. Binary variants carry encoded MessagePack
-/// (snapshot or delta) and are stored in [`FrameRing`] for replay. Text
+/// (snapshot or delta) and are stored in `FrameRing` for replay. Text
 /// variants carry JSON (hello / mode / error / clipboard) and are not
 /// replayed — clients recover lost text sidecars via the next snapshot's
 /// `modes` field.
@@ -89,7 +89,6 @@ impl FrameRing {
         }
         Some(out)
     }
-
 }
 
 #[cfg(test)]

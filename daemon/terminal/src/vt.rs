@@ -10,5 +10,8 @@ pub(crate) mod listener;
 pub(crate) mod mode_diff;
 
 pub use coalescer::Coalescer;
-pub use frame::{FrameDelta, FrameSnapshot, RenderFrame, SnapshotReason};
+pub use frame::{
+    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, RenderFrame, Row, Run,
+    SnapshotReason, encode,
+};
 pub use frame_ring::WireMessage;

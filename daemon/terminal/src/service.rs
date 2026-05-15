@@ -27,7 +27,7 @@ pub mod types;
 
 /// Activity-keyed registry of running terminals.
 ///
-/// Each entry owns a [`TerminalHandle`] (PTY + scrollback + VT bridge) and is
+/// Each entry owns a `TerminalHandle` (PTY + scrollback + VT bridge) and is
 /// keyed by [`ActivityId`].
 #[derive(Default, Clone)]
 pub struct TerminalService {
