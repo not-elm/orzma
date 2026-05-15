@@ -3,9 +3,24 @@
 //! issue #4445 (CSP unsafe-inline) drove this pattern; truecolor stays on
 //! inline style. Re-invocation on theme/font/options change is idempotent.
 
+import { getFontConfig } from '../../config/font';
 import { colorToCss } from './colors';
 
 const STYLE_ID = 'ozmux-terminal-palette';
+
+function fontCss(): string {
+  const f = getFontConfig();
+  return [
+    `.terminal-grid { font-family: ${f.normalFamily}, monospace; font-size: ${f.size}px; }`,
+    `.terminal-grid .tf-bold { font-family: ${f.boldFamily}, monospace; }`,
+    `.terminal-grid .tf-italic { font-family: ${f.italicFamily}, monospace; }`,
+    `.terminal-grid .tf-bold-italic { font-family: ${f.boldItalicFamily}, monospace; }`,
+    `.ozmux-font-probe { font-family: ${f.normalFamily}, monospace; font-size: ${f.size}px; }`,
+    `.ozmux-font-probe.tf-bold { font-family: ${f.boldFamily}, monospace; }`,
+    `.ozmux-font-probe.tf-italic { font-family: ${f.italicFamily}, monospace; }`,
+    `.ozmux-font-probe.tf-bold-italic { font-family: ${f.boldItalicFamily}, monospace; }`,
+  ].join('\n');
+}
 
 function buildPaletteCss(): string {
   const lines: string[] = [];
@@ -29,6 +44,7 @@ function buildPaletteCss(): string {
   lines.push(`.terminal-grid span, .terminal-grid a { vertical-align: top; }`);
   // Native selection color uses theme token.
   lines.push(`.terminal-grid ::selection { background-color: var(--color-selection); }`);
+  lines.push(fontCss());
   return lines.join('\n');
 }
 

@@ -63,3 +63,22 @@ describe('injectTerminalPalette', () => {
     expect(styles.length).toBe(1);
   });
 });
+
+describe('injectTerminalPalette font rules', () => {
+  it('emits .terminal-grid font-family and font-size from the font config', () => {
+    injectTerminalPalette();
+    const css = document.getElementById(STYLE_ID)?.textContent ?? '';
+    expect(css).toMatch(/\.terminal-grid\s*\{[^}]*font-family:/);
+    expect(css).toMatch(/\.terminal-grid\s*\{[^}]*font-size:\s*16px/);
+  });
+
+  it('emits per-style family classes for runs and probes', () => {
+    injectTerminalPalette();
+    const css = document.getElementById(STYLE_ID)?.textContent ?? '';
+    expect(css).toContain('.terminal-grid .tf-bold');
+    expect(css).toContain('.terminal-grid .tf-italic');
+    expect(css).toContain('.terminal-grid .tf-bold-italic');
+    expect(css).toContain('.ozmux-font-probe');
+    expect(css).toContain('.ozmux-font-probe.tf-bold');
+  });
+});
