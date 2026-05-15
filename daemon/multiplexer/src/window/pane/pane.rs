@@ -15,6 +15,18 @@ pub enum SetActiveOutcome {
     Changed,
 }
 
+/// Direction to step the active activity within a Pane, used by
+/// `cycle_active_activity`. Serializes as `"next"` / `"prev"` so the HTTP
+/// body can deserialize it directly.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CycleDirection {
+    /// Step to the next activity in `activities` order.
+    Next,
+    /// Step to the previous activity in `activities` order.
+    Prev,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Pane {
     pub id: PaneId,
@@ -265,5 +277,13 @@ mod tests {
         let _removed = pane.remove_activity(&second_aid).unwrap();
         assert_eq!(pane.active_activity, original_aid);
         assert_eq!(pane.activities.len(), 1);
+    }
+
+    #[test]
+    fn cycle_direction_serde_kebab_case() {
+        let next = serde_json::to_string(&CycleDirection::Next).unwrap();
+        assert_eq!(next, "\"next\"");
+        let back: CycleDirection = serde_json::from_str("\"prev\"").unwrap();
+        assert!(matches!(back, CycleDirection::Prev));
     }
 }

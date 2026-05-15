@@ -4,4 +4,4 @@ pub mod activity;
 
 #[allow(clippy::module_inception)]
 mod pane;
-pub use pane::{Pane, PaneId, PaneState, SetActiveOutcome};
+pub use pane::{CycleDirection, Pane, PaneId, PaneState, SetActiveOutcome};

@@ -13,5 +13,5 @@ pub use cells::{
     SplitOrientation,
 };
 pub use pane::activity::{Activity, ActivityId, ActivityKind};
-pub use pane::{Pane, PaneId, PaneState, SetActiveOutcome};
+pub use pane::{CycleDirection, Pane, PaneId, PaneState, SetActiveOutcome};
 pub use window::{Window, WindowId, WindowState};
