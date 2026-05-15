@@ -34,6 +34,16 @@ pub struct SplitOutcome {
     pub new_activity_id: ActivityId,
 }
 
+/// Input bundle for [`AppState::break_activity_to_pane`].
+pub struct BreakActivityInput {
+    /// Id for the new pane (caller-supplied or server-generated).
+    pub new_pane_id: PaneId,
+    /// Which side of the target pane the new pane appears on.
+    pub side: Side,
+    /// Axis along which to split.
+    pub orientation: SplitOrientation,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub multiplexer: MultiplexerService,
@@ -222,6 +232,47 @@ impl AppState {
             new_pane_id,
             new_activity_id,
         })
+    }
+
+    /// Split `target_pane_id` and move the Activity `aid` from it into the
+    /// new Pane. No PTY is spawned — the moved Activity keeps its existing
+    /// one. Returns the id of the new Pane.
+    pub async fn break_activity_to_pane(
+        &self,
+        wid: &WindowId,
+        target_pane_id: &PaneId,
+        aid: &ActivityId,
+        input: BreakActivityInput,
+    ) -> HttpResult<PaneId> {
+        self.ensure_pane_in_window(wid, target_pane_id)?;
+        let new_pane_id = input.new_pane_id.clone();
+
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
+                w.break_activity_to_pane(
+                    target_pane_id,
+                    aid,
+                    new_pane_id.clone(),
+                    input.side,
+                    input.orientation,
+                )
+            })
+            .await?;
+
+        self.multiplexer
+            .pane_owner_window
+            .insert(new_pane_id.clone(), wid.clone());
+
+        // For an Extension-kind Activity the activity->owner registry row is
+        // still valid (the ActivityId is unchanged); only the new pane->owner
+        // row is missing. `activity_owner` returns `None` for terminal
+        // activities, so this is a no-op in the common case.
+        if let Some(name) = self.extensions.activity_owner(aid) {
+            self.extensions.record_pane_owner(&new_pane_id, &name);
+        }
+
+        self.publish_window_layout(wid).await;
+        Ok(new_pane_id)
     }
 
     /// Close a Pane: remove it from the cell tree, tear down extension
