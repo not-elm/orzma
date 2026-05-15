@@ -229,6 +229,9 @@ impl TerminalService {
     /// Snapshots the current sanitized title of every running terminal.
     /// Activities with no title set are omitted.
     pub async fn all_titles(&self) -> HashMap<ActivityId, String> {
+        // NOTE: ptys lock is always acquired before vt_state locks. The bridge
+        // holds vt_state only briefly and never touches ptys, so this ordering
+        // cannot deadlock.
         let ptys = self.ptys.read().await;
         ptys.iter()
             .filter_map(|(aid, handle)| {
