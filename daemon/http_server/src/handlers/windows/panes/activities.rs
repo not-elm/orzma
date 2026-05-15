@@ -52,6 +52,10 @@ pub enum ActivityKindInput {
         /// env var.
         extension_name: String,
     },
+    Browser {
+        #[serde(default)]
+        initial_url: Option<String>,
+    },
 }
 
 /// Result of parsing the wire `ActivityInput`: the domain `Activity` plus the
@@ -90,6 +94,10 @@ impl ActivityInput {
                     kind: ActivityKind::Extension { html_root },
                 },
                 extension_name: Some(extension_name),
+            },
+            ActivityKindInput::Browser { initial_url } => ParsedActivity {
+                activity: Activity::browser(self.activity_id, initial_url),
+                extension_name: None,
             },
         }
     }

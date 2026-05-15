@@ -4,7 +4,8 @@ export type ActivityId = string;
 
 export type ActivityKind =
   | { type: "terminal" }
-  | { type: "extension"; html_root: string };
+  | { type: "extension"; html_root: string; extension_name?: string }
+  | { type: "browser"; initial_url?: string };
 
 /**
  * Lightweight client-side handle to an Activity. Carries the addressing tuple

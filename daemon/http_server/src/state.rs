@@ -167,6 +167,7 @@ impl AppState {
             ActivityKind::Extension { .. } => {
                 self.extensions.forget_activity(aid);
             }
+            ActivityKind::Browser { .. } => {}
         }
 
         self.publish_window_layout(wid).await;

@@ -205,6 +205,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_to_pane_accepts_browser_kind() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
+        let (router, _state) = test_helpers::router_with(state);
+        let new_aid = ActivityId::new();
+        let body = serde_json::json!({
+            "activity": {
+                "activity_id": new_aid,
+                "kind": { "type": "browser", "initial_url": "https://example.com" }
+            }
+        });
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{wid}/panes/{pid}/activities"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Browser activities can be created in the multiplexer even without a
+        // BrowserService yet (Phase 2). The route returns 201 on success.
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
     async fn add_to_pane_rolls_back_when_spawn_fails() {
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
