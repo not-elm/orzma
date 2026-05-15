@@ -84,8 +84,8 @@ pub fn build_snapshot<T>(
             .into_iter()
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
-        display_offset: 0,
-        history_size: 0,
+        display_offset: term.grid().display_offset() as u32,
+        history_size: term.history_size() as u32,
     }
 }
 
@@ -115,7 +115,7 @@ pub fn build_delta<T>(
             .into_iter()
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
-        display_offset: 0,
+        display_offset: term.grid().display_offset() as u32,
     }
 }
 
@@ -311,6 +311,14 @@ mod tests {
     use tokio::sync::{broadcast, mpsc};
 
     fn make_term(cols: u16, rows: u16) -> Term<TermListener> {
+        make_term_with_config(alacritty_terminal::term::Config::default(), cols, rows)
+    }
+
+    fn make_term_with_config(
+        cfg: alacritty_terminal::term::Config,
+        cols: u16,
+        rows: u16,
+    ) -> Term<TermListener> {
         let (reply_tx, _) = mpsc::unbounded_channel::<ReplyFrame>();
         let (control_tx, _) = mpsc::channel::<ControlFrame>(64);
         let _ = broadcast::channel::<WireMessage>(8);
@@ -320,7 +328,7 @@ mod tests {
             drop_counter: Arc::new(DropCounter::new()),
         };
         let size = crate::vt::bridge::test_dim(cols, rows);
-        Term::new(alacritty_terminal::term::Config::default(), &size, listener)
+        Term::new(cfg, &size, listener)
     }
 
     #[test]
@@ -526,5 +534,22 @@ mod tests {
         install_text(&mut term, "\x1b[?25l\x1b[?25h");
         let c = extract_cursor(&term);
         assert!(c.visible, "DECTCEM show after hide → visible=true");
+    }
+
+    #[test]
+    fn build_snapshot_includes_display_offset_and_history_size() {
+        use alacritty_terminal::grid::Dimensions;
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::Config;
+        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let mut term = make_term_with_config(cfg, 10, 3);
+        for _ in 0..5 {
+            install_text(&mut term, "x\r\n");
+        }
+        term.scroll_display(Scroll::Delta(2));
+        let mut interner = HyperlinkInterner::new();
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
+        assert_eq!(snap.display_offset, 2);
+        assert!(snap.history_size >= 2, "history_size={}", snap.history_size);
     }
 }
