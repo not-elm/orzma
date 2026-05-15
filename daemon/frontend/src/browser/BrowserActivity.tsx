@@ -42,6 +42,7 @@ export function BrowserActivity({ windowId, paneId, activityId, isActive }: Prop
   }, [send]);
 
   // Mouse / wheel: scale coords against the current frame's viewport.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lastFrame is a new object per screencast frame; we depend on width/height only to avoid detach/reattach on every frame
   useEffect(() => {
     if (!overlayRef.current || !lastFrame) return;
     return attachMouse(
@@ -49,7 +50,7 @@ export function BrowserActivity({ windowId, paneId, activityId, isActive }: Prop
       { width: lastFrame.width, height: lastFrame.height },
       send,
     );
-  }, [send, lastFrame]);
+  }, [send, lastFrame?.width, lastFrame?.height]);
 
   // Keyboard + IME on the hidden textarea.
   useEffect(() => {
