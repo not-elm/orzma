@@ -502,8 +502,8 @@ function makeWheelHarness(modes: ReadonlySet<string>) {
     } as FontMetrics,
   };
   const modesRef: { current: ReadonlySet<string> } = { current: modes };
-  const send = vi.fn<[Uint8Array], void>();
-  const sendControl = vi.fn<[ClientControl], void>();
+  const send = vi.fn<(bytes: Uint8Array) => void>();
+  const sendControl = vi.fn<(msg: ClientControl) => void>();
   const rectRef = { current: target };
   const textareaRef: { current: HTMLTextAreaElement | null } = { current: null };
   const cleanup = setupMouse(target, rectRef, fmRef, modesRef, send, textareaRef, sendControl);

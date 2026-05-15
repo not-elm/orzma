@@ -541,7 +541,10 @@ mod tests {
         use alacritty_terminal::grid::Dimensions;
         use alacritty_terminal::grid::Scroll;
         use alacritty_terminal::term::Config;
-        let cfg = Config { scrolling_history: 100, ..Config::default() };
+        let cfg = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
         let mut term = make_term_with_config(cfg, 10, 3);
         for _ in 0..5 {
             install_text(&mut term, "x\r\n");

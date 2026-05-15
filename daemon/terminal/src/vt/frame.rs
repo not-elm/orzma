@@ -516,14 +516,22 @@ mod tests {
     fn delta_encodes_display_offset() {
         let delta = FrameDelta {
             seq: 7,
-            cursor: Cursor { x: 0, y: 0, shape: CursorShape::Block, blinking: false, visible: true },
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                blinking: false,
+                visible: true,
+            },
             dirty_rows: vec![],
             hyperlinks: vec![],
             display_offset: 12,
         };
         let bytes = encode(&RenderFrame::Delta(delta.clone())).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
-        let RenderFrame::Delta(out) = decoded else { panic!("expected Delta") };
+        let RenderFrame::Delta(out) = decoded else {
+            panic!("expected Delta")
+        };
         assert_eq!(out.display_offset, 12);
     }
 
@@ -533,7 +541,13 @@ mod tests {
             seq: 1,
             cols: 1,
             rows: 1,
-            cursor: Cursor { x: 0, y: 0, shape: CursorShape::Block, blinking: false, visible: true },
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                blinking: false,
+                visible: true,
+            },
             rows_data: vec![],
             reason: SnapshotReason::Initial,
             modes: vec![],
@@ -543,7 +557,9 @@ mod tests {
         };
         let bytes = encode(&RenderFrame::Snapshot(snap.clone())).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
-        let RenderFrame::Snapshot(out) = decoded else { panic!("expected Snapshot") };
+        let RenderFrame::Snapshot(out) = decoded else {
+            panic!("expected Snapshot")
+        };
         assert_eq!(out.display_offset, 5);
         assert_eq!(out.history_size, 100);
     }

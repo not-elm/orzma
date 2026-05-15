@@ -1,8 +1,8 @@
 //! Integration tests for scrollback navigation (TerminalService::scroll).
 
 use ozmux_multiplexer::{ActivityId, PaneId};
-use ozmux_terminal::{FrameSubscription, SpawnOptions, TerminalEvent, TerminalService};
 use ozmux_terminal::vt::RenderFrame;
+use ozmux_terminal::{FrameSubscription, SpawnOptions, TerminalEvent, TerminalService};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -63,7 +63,10 @@ async fn scroll_advances_display_offset() {
         RenderFrame::Snapshot(s) => s,
         _ => panic!("expected Snapshot variant"),
     };
-    assert!(snap.display_offset > 0, "display_offset should advance past 0");
+    assert!(
+        snap.display_offset > 0,
+        "display_offset should advance past 0"
+    );
     assert!(snap.history_size >= snap.display_offset);
 
     svc.kill(&aid).await.unwrap();
