@@ -177,6 +177,25 @@ impl BrowserService {
         }
     }
 
+    /// Ask the page actor for `aid` to pause its screencast. Used when the
+    /// activity becomes inactive in the UI so Chromium stops encoding frames
+    /// nobody is watching. Missing-ok.
+    pub async fn pause_screencast(&self, aid: &ActivityId) {
+        if let Some(h) = self.pages.read().await.get(aid).cloned() {
+            let _ = h.page_tx.send(PageCommand::PauseScreencast).await;
+        }
+    }
+
+    /// Resume screencast for `aid`. Phase 2 leaves this as a no-op on the
+    /// bridge side (the page actor receives the command but does not restart
+    /// screencast itself); the bridge wiring lands in Phase 3.
+    /// Missing-ok.
+    pub async fn resume_screencast(&self, aid: &ActivityId) {
+        if let Some(h) = self.pages.read().await.get(aid).cloned() {
+            let _ = h.page_tx.send(PageCommand::ResumeScreencast).await;
+        }
+    }
+
     /// Idempotent, missing-ok close. Stops the bridge and page actor,
     /// then decrements the Chromium refcount (possibly scheduling teardown).
     pub async fn close(&self, aid: &ActivityId) {
