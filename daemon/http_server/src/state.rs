@@ -400,7 +400,7 @@ impl AppState {
     /// Like [`Self::ensure_activity_in_pane_in_window_and_fetch`], but also
     /// asserts that the activity's kind matches `want`. Returns
     /// [`HttpError::ActivityKindMismatch`] when the kinds differ.
-    pub async fn ensure_activity_kind(
+    pub(crate) async fn ensure_activity_kind(
         &self,
         wid: &WindowId,
         pid: &PaneId,
