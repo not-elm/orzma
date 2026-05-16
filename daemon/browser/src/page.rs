@@ -2,7 +2,7 @@
 //! the registry lock in `BrowserService` never holds across an `await`. One
 //! actor per browser Activity.
 
-use crate::bridge::{DEFAULT_MAX_HEIGHT, DEFAULT_MAX_WIDTH, start_screencast_params};
+use crate::bridge::start_screencast_params;
 use crate::error::{BrowserError, BrowserResult};
 use crate::input::{
     ime_commit_to_cdp, ime_composition_to_cdp, key_to_cdp, mouse_to_cdp, paste_to_cdp, wheel_to_cdp,
@@ -48,6 +48,19 @@ struct PageState {
     viewport: Option<(u32, u32, f64)>,
 }
 
+impl PageState {
+    /// Returns the `(bitmap_width, bitmap_height)` in physical pixels for the
+    /// current viewport, or `None` if no viewport has been set yet.
+    fn bitmap_dims(&self) -> Option<(i64, i64)> {
+        self.viewport.map(|(w, h, dsf)| {
+            (
+                (w as f64 * dsf).ceil() as i64,
+                (h as f64 * dsf).ceil() as i64,
+            )
+        })
+    }
+}
+
 /// Run the actor loop. Consumes the `Page`, the `mpsc::Receiver` end of the
 /// actor command channel, and the snapshot watch sender so `Resize` can
 /// publish the updated `Viewport`. Returns when the channel closes or a
@@ -68,6 +81,28 @@ pub(crate) async fn run(
         }
     }
     let _ = page.close().await;
+    Ok(())
+}
+
+/// Stop then start the screencast so that the frame stream uses `bitmap_w` ×
+/// `bitmap_h` physical pixels. Used by `Resize`, `ResumeScreencast`, and Nav
+/// post-await to re-subscribe after a possible renderer swap.
+///
+/// # NOTE
+/// `Page.startScreencast` is idempotent w.r.t. session-id reset (Chromium
+/// `page_handler.cc`), but explicit stop+start is the documented pattern.
+async fn restart_screencast(
+    page: &chromiumoxide::Page,
+    bitmap_w: i64,
+    bitmap_h: i64,
+) -> BrowserResult<()> {
+    use chromiumoxide::cdp::browser_protocol::page as cdp_page;
+    let _ = page
+        .execute(cdp_page::StopScreencastParams::default())
+        .await;
+    page.execute(start_screencast_params(bitmap_w, bitmap_h))
+        .await
+        .map_err(|e| BrowserError::Cdp(e.to_string()))?;
     Ok(())
 }
 
@@ -127,36 +162,44 @@ async fn handle(
             // NOTE: non-Input variants are filtered upstream by the WS handler; the catch-all here is a contract assertion.
             _ => {}
         },
-        PageCommand::Nav(n) => match n {
-            NavCommand::Navigate { url } => {
-                page.goto(url.as_str())
-                    .await
-                    .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+        PageCommand::Nav(n) => {
+            match n {
+                NavCommand::Navigate { url } => {
+                    page.goto(url.as_str())
+                        .await
+                        .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+                }
+                NavCommand::Back => {
+                    navigate_history(page, -1).await?;
+                }
+                NavCommand::Forward => {
+                    navigate_history(page, 1).await?;
+                }
+                NavCommand::Reload => {
+                    page.reload()
+                        .await
+                        .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+                }
+                NavCommand::Stop => {
+                    page.execute(cdp_page::StopLoadingParams::default())
+                        .await
+                        .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+                }
             }
-            NavCommand::Back => {
-                navigate_history(page, -1).await?;
+            // NOTE: Chromium auto-reapplies setDeviceMetricsOverride across
+            // renderer swaps (emulation_handler.cc::UpdateDeviceEmulationState),
+            // so we do NOT re-issue it here. The screencast stream subscription
+            // is renderer-scoped and must be restarted so the new renderer's
+            // VideoConsumer ships frames at the emulated viewport's bitmap size.
+            if let Some((bitmap_w, bitmap_h)) = state.bitmap_dims() {
+                restart_screencast(page, bitmap_w, bitmap_h).await?;
             }
-            NavCommand::Forward => {
-                navigate_history(page, 1).await?;
-            }
-            NavCommand::Reload => {
-                page.reload()
-                    .await
-                    .map_err(|e| BrowserError::Cdp(e.to_string()))?;
-            }
-            NavCommand::Stop => {
-                page.execute(cdp_page::StopLoadingParams::default())
-                    .await
-                    .map_err(|e| BrowserError::Cdp(e.to_string()))?;
-            }
-        },
+        }
         PageCommand::Resize {
             width,
             height,
             device_scale_factor,
         } => {
-            state.viewport = Some((width, height, device_scale_factor));
-
             let metrics = cdp_em::SetDeviceMetricsOverrideParams::builder()
                 .width(width as i64)
                 .height(height as i64)
@@ -168,15 +211,9 @@ async fn handle(
                 .await
                 .map_err(|e| BrowserError::Cdp(e.to_string()))?;
 
-            page.execute(cdp_page::StopScreencastParams::default())
-                .await
-                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
-
-            let max_w = (width as f64 * device_scale_factor).ceil() as i64;
-            let max_h = (height as f64 * device_scale_factor).ceil() as i64;
-            page.execute(start_screencast_params(max_w, max_h))
-                .await
-                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+            state.viewport = Some((width, height, device_scale_factor));
+            let (bitmap_w, bitmap_h) = state.bitmap_dims().expect("just set viewport");
+            restart_screencast(page, bitmap_w, bitmap_h).await?;
 
             snapshot_tx.send_modify(|snap| {
                 Arc::make_mut(snap).viewport = Viewport { width, height };
@@ -188,16 +225,12 @@ async fn handle(
                 .map_err(|e| BrowserError::Cdp(e.to_string()))?;
         }
         PageCommand::ResumeScreencast => {
-            let (max_w, max_h) = match state.viewport {
-                Some((w, h, dsf)) => (
-                    (w as f64 * dsf).ceil() as i64,
-                    (h as f64 * dsf).ceil() as i64,
-                ),
-                None => (DEFAULT_MAX_WIDTH, DEFAULT_MAX_HEIGHT),
-            };
-            page.execute(start_screencast_params(max_w, max_h))
-                .await
-                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+            // NOTE: only resume if a viewport has been established. Otherwise
+            // the stream would start at an unknown default size; the next
+            // Resize command will start it correctly.
+            if let Some((bitmap_w, bitmap_h)) = state.bitmap_dims() {
+                restart_screencast(page, bitmap_w, bitmap_h).await?;
+            }
         }
         PageCommand::GetSelection(reply) => {
             let v = page
