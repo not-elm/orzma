@@ -1,10 +1,13 @@
-use crate::error::HttpResult;
+//! `PATCH /sessions/{session_id}` — rename a session and broadcast the
+//! updated view.
+
+use crate::{AppState, error::HttpResult};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerService, SessionId};
+use ozmux_multiplexer::SessionId;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -12,12 +15,13 @@ pub struct RenameRequest {
     name: String,
 }
 
+/// Rename a session by id and broadcast its new view.
 pub async fn rename(
-    State(multiplexer): State<MultiplexerService>,
+    State(state): State<AppState>,
     Path(session_id): Path<SessionId>,
     Json(body): Json<RenameRequest>,
 ) -> HttpResult<StatusCode> {
-    multiplexer.rename_session(&session_id, body.name).await?;
+    state.rename_session(&session_id, body.name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -67,5 +71,33 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"]["code"].as_str(), Some("SESSION_NOT_FOUND"));
+    }
+
+    #[tokio::test]
+    async fn rename_publishes_session_view() {
+        use std::time::Duration;
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(Some("orig".into())).await;
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        let (router, _) = router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/sessions/{}", sid))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"renamed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let view = tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["name"].as_str(), Some("renamed"));
     }
 }

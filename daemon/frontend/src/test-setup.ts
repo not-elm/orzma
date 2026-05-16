@@ -25,6 +25,10 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   };
 }
 
+// NOTE: jsdom does not implement scrollIntoView; stub it so any component
+// that calls element.scrollIntoView() does not throw in tests.
+Element.prototype.scrollIntoView = vi.fn();
+
 // === getBoundingClientRect stub (jsdom does not perform layout) ===
 // NOTE: DOM probe functions (cellWidthOf, measureGlyph) rely on getBoundingClientRect
 // to measure rendered glyph widths. jsdom returns all-zero DOMRects, so we stub it to

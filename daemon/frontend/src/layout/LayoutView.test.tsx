@@ -1,8 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { LayoutView } from './LayoutView';
-import type { WindowView } from './types';
-import type { DefaultWindowState } from './useDefaultWindow';
+import type { DefaultWindowState, WindowView } from './types';
 import type { LayoutState } from './useWindowLayout';
 
 const WID = 'wid-test';

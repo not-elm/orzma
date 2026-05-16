@@ -3,9 +3,8 @@ import { type PointerEventHandler, type ReactNode, useEffect, useState } from 'r
 import { cellHeightOf, cellWidthOf } from '../terminal/renderer/font';
 import { PaneContent } from './PaneContent';
 import { type Bounds, computePaneLayout } from './paneBounds';
-import type { PaneId } from './types';
+import type { DefaultWindowState, PaneId } from './types';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
-import type { DefaultWindowState } from './useDefaultWindow';
 import { useWindowDimensions } from './useWindowDimensions';
 import type { LayoutState } from './useWindowLayout';
 
@@ -61,28 +60,28 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
 
   if (def.status === 'loading') {
     return (
-      <div className="flex h-dvh w-dvw items-center justify-center text-muted-foreground">
+      <div className="flex h-full w-full items-center justify-center text-muted-foreground">
         Loading…
       </div>
     );
   }
   if (def.status === 'error') {
     return (
-      <div className="flex h-dvh w-dvw items-center justify-center p-4 text-destructive">
+      <div className="flex h-full w-full items-center justify-center p-4 text-destructive">
         Failed to discover window: {def.message}
       </div>
     );
   }
   if (layout.status === 'gone') {
     return (
-      <div className="flex h-dvh w-dvw items-center justify-center p-4 text-destructive">
+      <div className="flex h-full w-full items-center justify-center p-4 text-destructive">
         Window is gone ({layout.reason}).
       </div>
     );
   }
   if (layout.view === null) {
     return (
-      <div className="flex h-dvh w-dvw items-center justify-center text-muted-foreground">
+      <div className="flex h-full w-full items-center justify-center text-muted-foreground">
         Connecting…
       </div>
     );
@@ -99,7 +98,7 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
   };
 
   return (
-    <div ref={setContainer} className="relative h-dvh w-dvw bg-background">
+    <div ref={setContainer} className="relative h-full w-full bg-background">
       {view.panes.map((pane) => {
         const b = bounds.get(pane.id);
         if (!b) return null;
@@ -131,11 +130,6 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
           <UnknownLayoutNode type={u.type} />
         </AbsoluteBox>
       ))}
-      {layout.status === 'reconnecting' && (
-        <div className="absolute right-2 top-2 rounded bg-warning px-2 py-1 text-xs text-warning-foreground">
-          Reconnecting…
-        </div>
-      )}
     </div>
   );
 }

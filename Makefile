@@ -48,7 +48,7 @@ clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
 
 fix-lint:
-	cargo clippy --fix --allow-dirty --allow-staged
+	cargo clippy --workspace --exclude ozmux-client --fix --allow-dirty --allow-staged
 	cargo fmt
 	pnpm lint:fix
 

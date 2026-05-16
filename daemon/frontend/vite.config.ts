@@ -17,7 +17,7 @@ export default defineConfig({
       '/configs': 'http://127.0.0.1:3200',
       '/health': 'http://127.0.0.1:3200',
       '/panes': 'http://127.0.0.1:3200',
-      '/sessions': 'http://127.0.0.1:3200',
+      '/sessions': { target: 'http://127.0.0.1:3200', ws: true },
       '/windows': { target: 'http://127.0.0.1:3200', ws: true },
     },
   },

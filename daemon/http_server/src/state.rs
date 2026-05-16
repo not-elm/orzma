@@ -1,5 +1,7 @@
 use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
+use crate::session_broadcast::SessionBroadcaster;
+use crate::session_view::SessionView;
 use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
@@ -11,6 +13,7 @@ use ozmux_multiplexer::{
     Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::TerminalService;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Input bundle for [`AppState::split_pane`].
@@ -51,6 +54,8 @@ pub struct AppState {
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
     pub layout_broadcast: LayoutBroadcaster,
+    /// Per-session WS broadcaster; fed by `publish_session_view`.
+    pub session_broadcast: SessionBroadcaster,
     /// Daemon-wide configuration loaded at startup (shortcuts, etc.).
     pub configs: Arc<OzmuxConfigs>,
 }
@@ -65,6 +70,7 @@ impl AppState {
         terminal: TerminalService,
         extensions: ExtensionRegistry,
         layout_broadcast: LayoutBroadcaster,
+        session_broadcast: SessionBroadcaster,
         configs: Arc<OzmuxConfigs>,
     ) -> Self {
         Self {
@@ -72,6 +78,7 @@ impl AppState {
             terminal,
             extensions,
             layout_broadcast,
+            session_broadcast,
             configs,
         }
     }
@@ -360,10 +367,14 @@ impl AppState {
         Ok(())
     }
 
-    /// Rename a Window and broadcast the new layout.
+    /// Rename a Window. Broadcasts both the layout (window listeners)
+    /// and the parent session view (status-bar listeners).
     pub async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
         self.multiplexer.rename_window(wid, name).await?;
         self.publish_window_layout(wid).await;
+        if let Some(sid) = self.parent_session(wid).await {
+            self.publish_session_view(&sid).await;
+        }
         Ok(())
     }
 
@@ -388,9 +399,10 @@ impl AppState {
 
     /// Close a Window: tear down its Panes/Activities and run runtime
     /// cleanup. Delegates the data half to `multiplexer.close_window_data`
-    /// and then issues PTY kills, extension registry forgets, and a layout
-    /// broadcast close.
+    /// and then issues PTY kills, extension registry forgets, a layout
+    /// broadcast close, and a parent-session view publish.
     pub async fn close_window(&self, wid: &WindowId) -> MultiplexerResult<Vec<ActivityId>> {
+        let parent = self.parent_session(wid).await;
         let (activities, pane_ids) = self.multiplexer.close_window_data(wid).await?;
         for pid in pane_ids {
             self.extensions.forget_pane(&pid);
@@ -400,16 +412,22 @@ impl AppState {
             self.extensions.forget_activity(aid);
         }
         self.layout_broadcast.close(wid);
+        if let Some(sid) = parent {
+            self.publish_session_view(&sid).await;
+        }
         Ok(activities)
     }
 
-    /// Delete a Session, cascading into every Window it owns.
+    /// Delete a Session, cascading into every Window it owns, and close
+    /// its `session_broadcast` channel so any subscriber observes
+    /// `RecvError::Closed`.
     pub async fn delete_session(&self, sid: &SessionId) -> MultiplexerResult<Vec<ActivityId>> {
         let linked = self.multiplexer.take_session_windows(sid).await?;
         let mut activities = Vec::new();
         for wid in linked {
             activities.extend(self.close_window(&wid).await?);
         }
+        self.session_broadcast.close(sid);
         Ok(activities)
     }
 
@@ -462,6 +480,103 @@ impl AppState {
                 Err(e) => tracing::warn!(error = %e, %wid, "skipped layout publish"),
             })
             .await;
+    }
+
+    /// Build a JSON snapshot of the current session view without publishing.
+    /// Returns `None` if the session is missing or serialization fails.
+    pub(crate) async fn snapshot_session_view(&self, sid: &SessionId) -> Option<serde_json::Value> {
+        // NOTE: clone the session before dropping the sessions lock so we can
+        // pass `&Session` to `SessionView::from_session` later. Per-window
+        // locks must be acquired AFTER the sessions lock is released to
+        // preserve the `sessions -> windows[wid]` lock-order invariant.
+        let session = {
+            let sessions = self.multiplexer.sessions.lock().await;
+            match sessions.get(sid) {
+                Ok(s) => s.clone(),
+                Err(e) => {
+                    tracing::warn!(error = %e, %sid, "skipped session snapshot");
+                    return None;
+                }
+            }
+        };
+
+        let mut window_names: HashMap<WindowId, String> = HashMap::new();
+        for wid in &session.linked_windows {
+            if let Some(n) = self.multiplexer.with_window(wid, |w| w.name.clone()).await {
+                window_names.insert(wid.clone(), n);
+            }
+        }
+
+        let view = SessionView::from_session(&session, &window_names);
+        match serde_json::to_value(&view) {
+            Ok(value) => Some(value),
+            Err(e) => {
+                tracing::warn!(error = %e, %sid, "skipped session snapshot");
+                None
+            }
+        }
+    }
+
+    /// Build the current session snapshot and broadcast it on
+    /// `session_broadcast`. Used by every handler that mutates session-
+    /// visible state. Missing-session errors are logged and dropped.
+    pub(crate) async fn publish_session_view(&self, sid: &SessionId) {
+        if let Some(value) = self.snapshot_session_view(sid).await {
+            self.session_broadcast.publish(sid, value);
+        }
+    }
+
+    /// Promote `wid` to its session's active window and broadcast the
+    /// updated session view. Returns `WindowNotFound` /
+    /// `WindowNotAttachedToSession` from the underlying multiplexer.
+    pub async fn select_active_window(&self, wid: &WindowId) -> MultiplexerResult<()> {
+        self.multiplexer.select_active_window(wid).await?;
+        if let Some(sid) = self.parent_session(wid).await {
+            self.publish_session_view(&sid).await;
+        }
+        Ok(())
+    }
+
+    /// Create a session and broadcast the resulting view.
+    /// Returns the new session id.
+    pub async fn create_session(&self, name: Option<String>) -> SessionId {
+        let sid = self.multiplexer.create_session(name).await;
+        self.publish_session_view(&sid).await;
+        sid
+    }
+
+    /// Create a window, optionally attached to a session. When attached,
+    /// publishes the parent `SessionView` so subscribers see the new
+    /// window appear in the windows list.
+    pub async fn create_window(
+        &self,
+        session_id: Option<&SessionId>,
+        name: Option<String>,
+    ) -> MultiplexerResult<(WindowId, PaneId, ActivityId)> {
+        let triple = self.multiplexer.create_window(session_id, name).await?;
+        if let Some(sid) = session_id {
+            self.publish_session_view(sid).await;
+        }
+        Ok(triple)
+    }
+
+    /// Rename a session and broadcast the updated view.
+    pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
+        self.multiplexer.rename_session(sid, name).await?;
+        self.publish_session_view(sid).await;
+        Ok(())
+    }
+
+    /// Walk every session looking for one whose `linked_windows` contains
+    /// `wid`. Returns the owning `SessionId` if found.
+    pub(crate) async fn parent_session(&self, wid: &WindowId) -> Option<SessionId> {
+        let sessions = self.multiplexer.sessions.lock().await;
+        for (sid, session) in sessions.iter() {
+            if session.linked_windows.contains(wid) {
+                return Some(sid.clone());
+            }
+        }
+        None
     }
 
     /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
@@ -545,5 +660,122 @@ impl FromRef<AppState> for MultiplexerService {
 impl FromRef<AppState> for Arc<OzmuxConfigs> {
     fn from_ref(input: &AppState) -> Self {
         Arc::clone(&input.configs)
+    }
+}
+
+#[cfg(test)]
+mod session_publish_tests {
+    use crate::test_helpers::fresh_state;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn publish_session_view_delivers_to_subscriber() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(Some("s".into())).await;
+        let (_wid, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), Some("w".into()))
+            .await
+            .unwrap();
+
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+        state.publish_session_view(&sid).await;
+
+        let view = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["name"].as_str(), Some("s"));
+        assert_eq!(view["windows"][0]["name"].as_str(), Some("w"));
+    }
+
+    #[tokio::test]
+    async fn publish_session_view_unknown_sid_logs_warn_no_panic() {
+        let state = fresh_state();
+        state
+            .publish_session_view(&ozmux_multiplexer::SessionId::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn parent_session_finds_owner() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let (wid, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let parent = state.parent_session(&wid).await;
+        assert_eq!(parent.as_ref(), Some(&sid));
+    }
+
+    #[tokio::test]
+    async fn parent_session_returns_none_for_orphan() {
+        let state = fresh_state();
+        let (wid, _, _) = state.multiplexer.create_window(None, None).await.unwrap();
+        let parent = state.parent_session(&wid).await;
+        assert_eq!(parent, None);
+    }
+
+    #[tokio::test]
+    async fn close_window_publishes_session_view_with_window_removed() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let (wid_a, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let (_wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        state.close_window(&wid_a).await.unwrap();
+
+        let view = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["windows"].as_array().map(|a| a.len()), Some(1));
+    }
+
+    #[tokio::test]
+    async fn delete_session_closes_session_broadcast() {
+        use tokio::sync::broadcast::error::RecvError;
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        state.delete_session(&sid).await.unwrap();
+
+        let err = rx.recv().await.expect_err("expected closed");
+        assert!(matches!(err, RecvError::Closed));
+    }
+
+    #[tokio::test]
+    async fn rename_window_publishes_session_view() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let (wid, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), Some("orig".into()))
+            .await
+            .unwrap();
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        state.rename_window(&wid, "renamed".into()).await.unwrap();
+
+        // NOTE: `session_broadcast` is a separate channel from `layout_broadcast`,
+        // so this receiver only sees the session-view publish.
+        let view = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["windows"][0]["name"].as_str(), Some("renamed"));
     }
 }

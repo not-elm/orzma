@@ -312,4 +312,80 @@ describe('actionToHandler', () => {
     await Promise.resolve();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  describe('window navigation', () => {
+    function viewWithWindows(
+      active: string,
+      windows: Array<{ id: string; name: string; index: number }>,
+    ) {
+      return { id: 'sid-0', name: 's', active_window: active, windows };
+    }
+
+    it('focus-window next wraps to first', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 } as Response);
+      globalThis.fetch = fetchMock as typeof globalThis.fetch;
+      const view = viewWithWindows('wid-1', [
+        { id: 'wid-0', name: 'a', index: 0 },
+        { id: 'wid-1', name: 'b', index: 1 },
+      ]);
+      const ctx = makeShortcutContext({ activeSession: () => view });
+      const handler = actionToHandler({ type: 'focus-window', offset: 'next' }, ctx);
+      handler?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fetchMock).toHaveBeenCalledWith('/windows/wid-0/select', { method: 'POST' });
+    });
+
+    it('focus-window prev wraps to last', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 } as Response);
+      globalThis.fetch = fetchMock as typeof globalThis.fetch;
+      const view = viewWithWindows('wid-0', [
+        { id: 'wid-0', name: 'a', index: 0 },
+        { id: 'wid-1', name: 'b', index: 1 },
+      ]);
+      const ctx = makeShortcutContext({ activeSession: () => view });
+      const handler = actionToHandler({ type: 'focus-window', offset: 'prev' }, ctx);
+      handler?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/select', { method: 'POST' });
+    });
+
+    it('focus-window-number selects by index', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 } as Response);
+      globalThis.fetch = fetchMock as typeof globalThis.fetch;
+      const view = viewWithWindows('wid-0', [
+        { id: 'wid-0', name: 'a', index: 0 },
+        { id: 'wid-1', name: 'b', index: 1 },
+      ]);
+      const ctx = makeShortcutContext({ activeSession: () => view });
+      const handler = actionToHandler({ type: 'focus-window-number', index: 1 }, ctx);
+      handler?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/select', { method: 'POST' });
+    });
+
+    it('focus-window-number with out-of-range index is no-op', async () => {
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as typeof globalThis.fetch;
+      const view = viewWithWindows('wid-0', [{ id: 'wid-0', name: 'a', index: 0 }]);
+      const ctx = makeShortcutContext({ activeSession: () => view });
+      const handler = actionToHandler({ type: 'focus-window-number', index: 5 }, ctx);
+      handler?.();
+      await Promise.resolve();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('focus-window with single window is no-op', async () => {
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as typeof globalThis.fetch;
+      const view = viewWithWindows('wid-0', [{ id: 'wid-0', name: 'a', index: 0 }]);
+      const ctx = makeShortcutContext({ activeSession: () => view });
+      const handler = actionToHandler({ type: 'focus-window', offset: 'next' }, ctx);
+      handler?.();
+      await Promise.resolve();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });
