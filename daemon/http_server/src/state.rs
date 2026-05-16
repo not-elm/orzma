@@ -527,6 +527,21 @@ impl AppState {
         sid
     }
 
+    /// Create a window, optionally attached to a session. When attached,
+    /// publishes the parent `SessionView` so subscribers see the new
+    /// window appear in the windows list.
+    pub async fn create_window(
+        &self,
+        session_id: Option<&SessionId>,
+        name: Option<String>,
+    ) -> MultiplexerResult<(WindowId, PaneId, ActivityId)> {
+        let triple = self.multiplexer.create_window(session_id, name).await?;
+        if let Some(sid) = session_id {
+            self.publish_session_view(sid).await;
+        }
+        Ok(triple)
+    }
+
     /// Rename a session and broadcast the updated view.
     pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
         self.multiplexer.rename_session(sid, name).await?;

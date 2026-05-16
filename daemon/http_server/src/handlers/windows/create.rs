@@ -1,6 +1,9 @@
-use crate::error::HttpResult;
+//! `POST /windows` — create a window, optionally attached to a session,
+//! and broadcast the parent `SessionView` when attached.
+
+use crate::{AppState, error::HttpResult};
 use axum::{Json, extract::State, http::StatusCode};
-use ozmux_multiplexer::{MultiplexerService, SessionId};
+use ozmux_multiplexer::SessionId;
 use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
@@ -11,13 +14,13 @@ pub struct CreateRequest {
     name: Option<String>,
 }
 
+/// Create a window. When `session_id` is supplied, the window is
+/// attached to that session and the new `SessionView` is broadcast.
 pub async fn create(
-    State(multiplexer): State<MultiplexerService>,
+    State(state): State<AppState>,
     Json(body): Json<CreateRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    let (wid, _pid, _aid) = multiplexer
-        .create_window(body.session_id.as_ref(), body.name)
-        .await?;
+    let (wid, _pid, _aid) = state.create_window(body.session_id.as_ref(), body.name).await?;
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": wid }))))
 }
 
@@ -89,5 +92,37 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"]["code"].as_str(), Some("SESSION_NOT_FOUND"));
+    }
+
+    #[tokio::test]
+    async fn create_with_session_id_publishes_session_view() {
+        use std::time::Duration;
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(Some("s".into())).await;
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        let (router, _) = router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/windows")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"session_id":"{}","name":"w"}}"#,
+                        sid
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let view = tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["windows"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(view["windows"][0]["name"].as_str(), Some("w"));
     }
 }
