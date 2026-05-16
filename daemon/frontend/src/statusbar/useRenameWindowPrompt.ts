@@ -22,7 +22,7 @@ export interface ClosePromptOptions {
 }
 
 /** Imperative API for opening and closing the rename-window prompt. */
-export interface RenameWindowPromptApi {
+interface RenameWindowPromptApi {
   promptState: RenamePromptState;
   openPrompt: (windowId: WindowId, currentName: string) => void;
   closePrompt: (options: ClosePromptOptions) => void;
@@ -38,8 +38,8 @@ export function useRenameWindowPrompt(): RenameWindowPromptApi {
   const [promptState, setPromptState] = useState<RenamePromptState>({ open: false });
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  // Mirror open-state into the module gate; cleanup resets it so an
-  // unmount mid-prompt cannot leave the dispatcher gated.
+  // NOTE: the cleanup resets the gate so an unmount mid-prompt cannot
+  // leave the global shortcut dispatcher permanently gated.
   useEffect(() => {
     setRenamePromptOpen(promptState.open);
     return () => setRenamePromptOpen(false);

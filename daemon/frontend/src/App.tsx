@@ -18,7 +18,8 @@ export function App() {
   const sid = sessionDefault.status === 'ready' ? sessionDefault.sessionId : null;
   const sessionView = useSessionView(sid);
 
-  const wid = liveOrReconnectingView(sessionView)?.active_window ?? null;
+  const liveSession = liveOrReconnectingView(sessionView);
+  const wid = liveSession?.active_window ?? null;
 
   const layout = useWindowLayout(wid);
 
@@ -39,7 +40,6 @@ export function App() {
   activeWindowRef.current = wid;
   const activePaneObj = view?.panes.find((p) => p.id === view.active_pane);
   activeActivityRef.current = activePaneObj?.active_activity ?? null;
-  const liveSession = liveOrReconnectingView(sessionView);
   activeSessionRef.current = liveSession;
   activeWindowNameRef.current = liveSession?.windows.find((w) => w.id === wid)?.name ?? null;
 

@@ -1,3 +1,4 @@
+import { windowEndpoint } from '../terminal/api';
 import type { WindowId } from './types';
 
 /**
@@ -8,7 +9,7 @@ import type { WindowId } from './types';
  */
 export async function renameWindow(wid: WindowId, name: string): Promise<void> {
   try {
-    const resp = await fetch(`/windows/${wid}`, {
+    const resp = await fetch(windowEndpoint(wid), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name }),
