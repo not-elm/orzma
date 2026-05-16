@@ -5,6 +5,9 @@
 //! `CefCommand` is wrapped in an `ExecuteTask` whose `execute()` acquires the
 //! `BrowserPool` mutex (uncontended in practice: only the CEF UI thread locks
 //! it) and dispatches.
+//!
+//! Phase A Task A3: adds `post_quit_loop` which posts `QuitTask` to the UI
+//! thread to call `cef::quit_message_loop()`, replacing the polling-loop flag.
 
 use crate::pool::{BrowserPool, CefCommand};
 use cef::rc::Rc as _;
@@ -28,17 +31,21 @@ impl PoolHandle {
         }
     }
 
-    /// Reads `shutdown_requested` under a brief lock without holding it across
-    /// the caller's loop body.
+    /// Reads the observability flag set by a graceful `Shutdown` dispatch.
+    ///
+    /// The flag does **not** drive the message loop (that is
+    /// `cef::quit_message_loop()` since Task A3); this accessor exists so
+    /// daemon-side observers and tests can detect that shutdown was requested.
     pub fn snapshot_shutdown_requested(&self) -> bool {
         self.pool.lock().expect("pool poisoned").shutdown_requested
     }
 
-    /// Forces `shutdown_requested` without going through `post_task`.
+    /// Sets `shutdown_requested` without going through `post_task`.
     ///
-    /// Only intended as a fallback when `post_task` fails during shutdown
-    /// (i.e., CEF is already tearing down). In that case the process will exit
-    /// momentarily regardless; this just breaks the message loop promptly.
+    /// Intended as a fallback when [`post_quit_loop`] fails (CEF is already
+    /// tearing down). The process will exit shortly regardless; this only
+    /// updates the observability flag so external state machines see a
+    /// consistent "shutdown was requested" signal.
     pub fn force_shutdown(&self) {
         self.pool.lock().expect("pool poisoned").shutdown_requested = true;
     }
@@ -85,6 +92,30 @@ wrap_task! {
             }
         }
     }
+}
+
+// NOTE: no inner fields — quit_message_loop takes no arguments.
+wrap_task! {
+    struct QuitTask;
+
+    impl Task {
+        fn execute(&self) {
+            cef::quit_message_loop();
+        }
+    }
+}
+
+/// Posts a `CefQuitMessageLoop` call onto the UI thread.
+///
+/// Called by the Tokio worker when the daemon requests shutdown. Returns
+/// `Err(PostError::PostFailed)` if `cef::post_task` returns 0 (CEF already
+/// shutting down or called before `CefInitialize`).
+pub fn post_quit_loop() -> Result<(), PostError> {
+    let mut task = QuitTask::new();
+    if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+        return Err(PostError::PostFailed);
+    }
+    Ok(())
 }
 
 /// Posts `cmd` to the CEF UI thread via `cef::post_task`.

@@ -56,7 +56,12 @@ const POC_SLOT_PAYLOAD_MAX: usize = 1280 * 800 * 4 + 4096;
 /// Manages all live browser instances on the CEF UI thread.
 pub struct BrowserPool {
     browsers: HashMap<ActivityId, BrowserEntry>,
-    /// Set to true when a `Shutdown` command is received.
+    /// Observability flag: set to `true` after a `Shutdown` command is dispatched.
+    ///
+    /// Does **not** drive the message loop — `cef::quit_message_loop()` does.
+    /// Read via [`PoolHandle::snapshot_shutdown_requested`] /
+    /// [`PoolHandle::force_shutdown`] so external observers can detect that a
+    /// graceful shutdown was requested.
     pub shutdown_requested: bool,
 }
 
@@ -106,6 +111,13 @@ impl BrowserPool {
             }
             CefCommand::Shutdown => {
                 tracing::info!("Shutdown requested");
+                // NOTE: execute() always runs on the CEF UI thread (via ExecuteTask),
+                // so calling quit_message_loop() directly is safe and avoids an extra
+                // post_task round-trip that would be needed from a non-UI caller.
+                cef::quit_message_loop();
+                // NOTE: shutdown_requested is still set so snapshot_shutdown_requested
+                // observers can detect the graceful shutdown, even though it no longer
+                // drives the message loop.
                 self.shutdown_requested = true;
             }
         }
@@ -119,8 +131,9 @@ impl BrowserPool {
         tracing::info!(?aid, %initial_url, epoch, shm_fd, "BrowserCreate");
 
         let total_size = ShmWriter::required_region_size(POC_SLOT_PAYLOAD_MAX);
-        // SAFETY: shm_fd is a valid mmap-able fd (memfd_create / shm_open from the
-        // PoC trigger in main.rs). We map it shared so the daemon can read frames.
+        // SAFETY: shm_fd is a valid mmap-able fd received from the daemon side
+        // via SCM_RIGHTS in `control::handshake`. We map it shared so the
+        // daemon can read frames written by the CEF UI thread.
         let ptr = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
