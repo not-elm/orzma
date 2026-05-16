@@ -36,6 +36,14 @@ export type BrowserClientMsg =
   | { kind: 'copy_request' }
   | { kind: 'paste'; text: string };
 
+/** Snapshot of navigation state delivered by `BrowserServerMsg::Nav`. */
+export interface NavSnapshot {
+  url: string;
+  title: string;
+  can_back: boolean;
+  can_forward: boolean;
+}
+
 export interface UseBrowserSocketCefOpts {
   windowId: string;
   paneId: string;
@@ -44,6 +52,9 @@ export interface UseBrowserSocketCefOpts {
   generation: number;
   /** Last frame the renderer holds, or null to request a fresh keyframe. */
   lastKey: FrameKey | null;
+  /** Called when the daemon emits a Nav message (URL / title / can_back /
+   *  can_forward). Consumers typically hoist this into a state setter. */
+  onNav?: (nav: NavSnapshot) => void;
   /** Called when the daemon replies with MustRestart. The reason is one of
    *  `session_mismatch | epoch_mismatch | last_key_evicted`. */
   onMustRestart: (reason: string) => void;
@@ -67,7 +78,7 @@ export interface UseBrowserSocketCefReturn {
 }
 
 export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): UseBrowserSocketCefReturn {
-  const { windowId, paneId, activityId, worker, generation, lastKey, onMustRestart } = opts;
+  const { windowId, paneId, activityId, worker, generation, lastKey, onMustRestart, onNav } = opts;
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -123,6 +134,21 @@ export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): UseBrowserSo
         }
         return;
       }
+      if (kind === 'nav') {
+        try {
+          const nav = decode(new Uint8Array(ev.data)) as {
+            kind: 'nav';
+            url: string;
+            title: string;
+            can_back: boolean;
+            can_forward: boolean;
+          };
+          onNav?.(nav);
+        } catch (e) {
+          console.warn('nav decode failed', e);
+        }
+        return;
+      }
       worker.postMessage({ type: 'wsBinary', generation, buffer: ev.data }, [ev.data]);
     };
 
@@ -134,7 +160,7 @@ export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): UseBrowserSo
       wsRef.current = null;
       ws.close();
     };
-  }, [windowId, paneId, activityId, worker, generation, lastKey, onMustRestart]);
+  }, [windowId, paneId, activityId, worker, generation, lastKey, onMustRestart, onNav]);
 
   const send = (msg: BrowserClientMsg) => {
     const ws = wsRef.current;

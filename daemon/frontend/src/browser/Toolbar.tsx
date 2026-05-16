@@ -1,9 +1,22 @@
 import { useState } from 'react';
-import type { BrowserClientMsg } from './protocol/wire';
 
 interface Props {
+  /** Server-driven URL, used to seed the draft input. */
   url: string;
-  send: (m: BrowserClientMsg) => void;
+  /** `false` greys out the back button. Defaults to `true` for callers that
+   *  don't track NavStateChanged. */
+  canBack?: boolean;
+  /** Same as `canBack` for forward. */
+  canForward?: boolean;
+  /** Fires when the user clicks the back button. */
+  onBack: () => void;
+  /** Fires when the user clicks the forward button. */
+  onForward: () => void;
+  /** Fires when the user clicks the reload button. */
+  onReload: () => void;
+  /** Fires when the user presses Enter in the URL input. URL is already
+   *  normalized (scheme prepended if missing). */
+  onGo: (url: string) => void;
 }
 
 /**
@@ -12,25 +25,36 @@ interface Props {
  *
  * The draft URL state is seeded from `url` on mount and then owned by the
  * user — server-driven URL changes do not auto-reflect while the user may be
- * editing the input.
+ * editing the input. Callers decide how to translate the four callbacks to
+ * their backend's wire protocol.
  */
-export function Toolbar({ url, send }: Props) {
+export function Toolbar({
+  url,
+  canBack = true,
+  canForward = true,
+  onBack,
+  onForward,
+  onReload,
+  onGo,
+}: Props) {
   const [draft, setDraft] = useState(url);
   return (
     <div className="flex items-center gap-1 border-b border-border bg-background p-1">
       <button
         type="button"
-        className="px-2 py-1 text-foreground"
+        className="px-2 py-1 text-foreground disabled:opacity-50"
         aria-label="Back"
-        onClick={() => send({ kind: 'nav', nav: { kind: 'back' } })}
+        disabled={!canBack}
+        onClick={onBack}
       >
         ←
       </button>
       <button
         type="button"
-        className="px-2 py-1 text-foreground"
+        className="px-2 py-1 text-foreground disabled:opacity-50"
         aria-label="Forward"
-        onClick={() => send({ kind: 'nav', nav: { kind: 'forward' } })}
+        disabled={!canForward}
+        onClick={onForward}
       >
         →
       </button>
@@ -38,7 +62,7 @@ export function Toolbar({ url, send }: Props) {
         type="button"
         className="px-2 py-1 text-foreground"
         aria-label="Reload"
-        onClick={() => send({ kind: 'nav', nav: { kind: 'reload' } })}
+        onClick={onReload}
       >
         ⟳
       </button>
@@ -49,7 +73,7 @@ export function Toolbar({ url, send }: Props) {
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
-            send({ kind: 'nav', nav: { kind: 'navigate', url: normalizeUrl(draft) } });
+            onGo(normalizeUrl(draft));
           }
         }}
       />

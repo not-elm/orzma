@@ -79,7 +79,13 @@ export function BrowserActivity({ windowId, paneId, activityId, isActive }: Prop
 
   return (
     <div className="flex h-full w-full flex-col">
-      <Toolbar url={nav.url} send={send} />
+      <Toolbar
+        url={nav.url}
+        onBack={() => send({ kind: 'nav', nav: { kind: 'back' } })}
+        onForward={() => send({ kind: 'nav', nav: { kind: 'forward' } })}
+        onReload={() => send({ kind: 'nav', nav: { kind: 'reload' } })}
+        onGo={(url) => send({ kind: 'nav', nav: { kind: 'navigate', url } })}
+      />
       <div
         ref={overlayRef}
         // NOTE: role="application" marks this as an interactive widget zone;

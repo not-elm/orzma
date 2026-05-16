@@ -15,7 +15,8 @@ import { attachIme } from './input-cef/ime';
 import { attachKeyboard } from './input-cef/keyboard';
 import { attachMouse } from './input-cef/mouse';
 import { attachWheel } from './input-cef/wheel';
-import type { BrowserClientMsg } from './useBrowserSocketCef';
+import { Toolbar } from './Toolbar';
+import type { BrowserClientMsg, NavSnapshot } from './useBrowserSocketCef';
 import { useBrowserSocketCef } from './useBrowserSocketCef';
 
 interface Props {
@@ -41,6 +42,12 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
   // Bumped on SubscribeReply::MustRestart so the canvas remounts (key change)
   // and the worker is recreated (effect re-runs).
   const [restartId, setRestartId] = useState(0);
+  const [nav, setNav] = useState<NavSnapshot>({
+    url: '',
+    title: '',
+    can_back: false,
+    can_forward: false,
+  });
 
   // Stable ref to the send function so the input-attach effect does not
   // re-fire every render when `send` identity changes.
@@ -93,6 +100,10 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     setRestartId((id) => id + 1);
   }, []);
 
+  const onNav = useCallback((next: NavSnapshot) => {
+    setNav(next);
+  }, []);
+
   const { send } = useBrowserSocketCef({
     windowId,
     paneId,
@@ -103,6 +114,7 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     // most-recent FrameKey across reconnects so ResumeReplay can fire.
     lastKey: null,
     onMustRestart,
+    onNav,
   });
 
   // Keep sendRef in sync without triggering the attach effect.
@@ -147,34 +159,47 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
   }, [handle?.worker]);
 
   return (
-    <div className="bg-background text-foreground flex h-full w-full items-center justify-center">
+    <div className="bg-background text-foreground flex h-full w-full flex-col">
       {unsupported ? (
-        <div className="text-destructive">WebGPU is not available in this browser.</div>
-      ) : (
-        <div className="relative">
-          <canvas
-            key={restartId}
-            ref={canvasRef}
-            width={POC_WIDTH}
-            height={POC_HEIGHT}
-            className="block max-h-full max-w-full"
-          />
-          {/* Overlay div absorbs mouse and keyboard events for the embedded browser. */}
-          <div
-            ref={overlayRef}
-            // biome-ignore lint/a11y/noNoninteractiveTabindex: overlay must be focusable to receive keyboard events
-            tabIndex={0}
-            className="absolute inset-0 outline-none"
-          />
-          {/* Hidden textarea captures IME composition events. */}
-          <textarea
-            ref={textareaRef}
-            tabIndex={-1}
-            className="absolute inset-0 opacity-0 pointer-events-none"
-            aria-hidden="true"
-            readOnly={false}
-          />
+        <div className="text-destructive flex flex-1 items-center justify-center">
+          WebGPU is not available in this browser.
         </div>
+      ) : (
+        <>
+          <Toolbar
+            url={nav.url}
+            canBack={nav.can_back}
+            canForward={nav.can_forward}
+            onBack={() => send({ kind: 'navigate_history', delta: -1 })}
+            onForward={() => send({ kind: 'navigate_history', delta: 1 })}
+            onReload={() => send({ kind: 'navigate', url: nav.url })}
+            onGo={(url) => send({ kind: 'navigate', url })}
+          />
+          <div className="relative flex-1 flex items-center justify-center">
+            <canvas
+              key={restartId}
+              ref={canvasRef}
+              width={POC_WIDTH}
+              height={POC_HEIGHT}
+              className="block max-h-full max-w-full"
+            />
+            {/* Overlay div absorbs mouse and keyboard events for the embedded browser. */}
+            <div
+              ref={overlayRef}
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: overlay must be focusable to receive keyboard events
+              tabIndex={0}
+              className="absolute inset-0 outline-none"
+            />
+            {/* Hidden textarea captures IME composition events. */}
+            <textarea
+              ref={textareaRef}
+              tabIndex={-1}
+              className="absolute inset-0 opacity-0 pointer-events-none"
+              aria-hidden="true"
+              readOnly={false}
+            />
+          </div>
+        </>
       )}
     </div>
   );
