@@ -7,9 +7,9 @@ readme.workspace = true
 authors.workspace = true
 publish.workspace = true
 
-[[bin]]
+[lib]
 name = "daemon_bootstrap"
-path = "src/main.rs"
+path = "src/lib.rs"
 
 [dependencies]
 ozmux_configs = { path = "../configs" }
@@ -21,3 +21,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

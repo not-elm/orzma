@@ -48,12 +48,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ci"
-      - name: Stage daemon_bootstrap sidecar for tauri-build
-        run: |
-          triple=$(rustc -vV | sed -n 's/host: //p')
-          cargo build -p daemon_bootstrap
-          mkdir -p client/binaries
-          cp "target/debug/daemon_bootstrap" "client/binaries/daemon_bootstrap-${triple}"
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
@@ -80,13 +74,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ci"
-      - name: Stage daemon_bootstrap sidecar for tauri-build
-        run: |
-          triple=$(rustc -vV | sed -n 's/host: //p')
-          cargo build -p daemon_bootstrap
-          mkdir -p client/binaries
-          cp "target/debug/daemon_bootstrap" "client/binaries/daemon_bootstrap-${triple}"
-      - run: cargo test --workspace --all-targets
+      - run: cargo test --workspace --tests -- --test-threads=1
 
   doc:
     name: doc
@@ -108,12 +96,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ci"
-      - name: Stage daemon_bootstrap sidecar for tauri-build
-        run: |
-          triple=$(rustc -vV | sed -n 's/host: //p')
-          cargo build -p daemon_bootstrap
-          mkdir -p client/binaries
-          cp "target/debug/daemon_bootstrap" "client/binaries/daemon_bootstrap-${triple}"
       - run: cargo doc --workspace --no-deps
 
   deny:

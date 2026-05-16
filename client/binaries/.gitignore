@@ -1,3 +1,0 @@
-# Sidecar binaries linked or copied from the workspace target dir by `make client-link-sidecar`.
-# Tracked layout: only this .gitignore. Everything else is build-local.
-daemon_bootstrap-*

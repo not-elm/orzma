@@ -1,6 +1,5 @@
-//! Tauri launcher entry point. Probes for an existing ozmux daemon, spawns
-//! one as a sidecar if needed, waits for `/health`, and then builds the
-//! webview window pointing at the daemon's HTTP UI.
+//! Tauri launcher entry point. Ensures the ozmux daemon is running, then
+//! builds the webview window pointing at the daemon's HTTP UI.
 
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -10,10 +9,9 @@ mod daemon;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             tauri::async_runtime::block_on(async {
-                daemon::ensure_running(app.handle()).await?;
+                daemon::ensure_running().await?;
                 let url = WebviewUrl::External(daemon::DAEMON_BASE_URL.parse()?);
                 WebviewWindowBuilder::new(app, "main", url)
                     .title("ozmux")

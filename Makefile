@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk client-link-sidecar
+.PHONY: build dev-frontend dev-backend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/http_server/src/handlers
@@ -7,12 +7,11 @@ OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
 
 help:
 	@echo "Targets:"
-	@echo "  build              - Build frontend to single HTML, then build release binary"
+	@echo "  build              - Build frontend to single HTML, then build the ozmux CLI (which bundles the daemon)"
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
-	@echo "  dev-backend        - Run axum server on :3200 (debug build redirects / to :5173)"
-	@echo "  dev-daemon         - Run daemon_bootstrap with OZMUX_EXTENSION_ROOT=$(EXTENSIONS_DIR)"
-	@echo "  dev-tauri          - Build frontend + release daemon, link sidecar, then run 'cargo tauri dev' (embedded HTML, no HMR)"
-	@echo "  client-link-sidecar- Build daemon_bootstrap and copy it into client/binaries (PROFILE=debug|release)"
+	@echo "  dev-backend        - Run the daemon on :3200 via 'ozmux daemon start --foreground'"
+	@echo "  dev-daemon         - Same as dev-backend but with OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) preset"
+	@echo "  dev-tauri          - Build frontend + install ozmux on PATH, then run 'cargo tauri dev'"
 	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
 	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
@@ -34,16 +33,16 @@ build:
 	pnpm --dir $(FRONTEND_DIR) install --frozen-lockfile
 	pnpm --dir $(FRONTEND_DIR) build
 	@$(MAKE) --no-print-directory verify-out-dir
-	cargo build --release -p daemon_bootstrap
+	cargo build --release -p ozmux_cli
 
 dev-frontend:
 	pnpm --dir $(FRONTEND_DIR) dev
 
 dev-backend:
-	cargo run -p daemon_bootstrap
+	cargo run -p ozmux_cli -- daemon start --foreground
 
 dev-daemon: memo-build-sdk
-	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) cargo run -p daemon_bootstrap
+	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) cargo run -p ozmux_cli -- daemon start --foreground
 
 clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
@@ -75,18 +74,8 @@ test-wire-contract:
 	cargo run -p ozmux_terminal --example emit_fixture -- --all
 	pnpm exec tsx tools/verify-msgpack.ts daemon/terminal/tests/fixtures/wire_msgpack/
 
-PROFILE ?= debug
-
-client-link-sidecar:
-	@triple=$$(rustc -vV | sed -n 's/host: //p'); \
-	if [ -z "$$triple" ]; then echo "ERROR: could not determine host triple"; exit 1; fi; \
-	mkdir -p client/binaries; \
-	cargo build -p daemon_bootstrap $(if $(filter release,$(PROFILE)),--release,); \
-	cp -f "$(CURDIR)/target/$(PROFILE)/daemon_bootstrap" "client/binaries/daemon_bootstrap-$$triple"; \
-	echo "copied client/binaries/daemon_bootstrap-$$triple <- target/$(PROFILE)/daemon_bootstrap"
-
 dev-tauri: build
-	@$(MAKE) --no-print-directory client-link-sidecar PROFILE=release
+	cargo install --path ./cli --locked
 	@pid=$$(lsof -nP -iTCP:3200 -sTCP:LISTEN -t 2>/dev/null); \
 	if [ -n "$$pid" ]; then \
 	  echo "NOTE: existing process on :3200 (pid $$pid) will be reused by the launcher."; \
