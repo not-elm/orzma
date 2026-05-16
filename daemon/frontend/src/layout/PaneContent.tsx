@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { BrowserActivity } from '../browser';
+import { BrowserActivity, BrowserActivityCef } from '../browser';
 import { Terminal } from '../terminal/Terminal';
 import { ClickShield } from './ClickShield';
 import { PanePlaceholder } from './PanePlaceholder';
@@ -41,14 +41,21 @@ function PaneBody({ windowId, pane, isActive, onActivate }: PaneContentProps) {
     );
   }
   if (activity.kind === 'browser') {
+    // NOTE: `?cef=1` opts into the new CEF screencast pipeline; defaults to the
+    // existing chromiumoxide path while both implementations coexist.
+    const useCef = new URLSearchParams(window.location.search).get('cef') === '1';
     return (
       <>
-        <BrowserActivity
-          windowId={windowId}
-          paneId={pane.id}
-          activityId={activity.id}
-          isActive={isActive}
-        />
+        {useCef ? (
+          <BrowserActivityCef windowId={windowId} paneId={pane.id} activityId={activity.id} />
+        ) : (
+          <BrowserActivity
+            windowId={windowId}
+            paneId={pane.id}
+            activityId={activity.id}
+            isActive={isActive}
+          />
+        )}
         {!isActive && <ClickShield onActivate={onActivate} />}
       </>
     );
