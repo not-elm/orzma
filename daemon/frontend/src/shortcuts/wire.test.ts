@@ -71,7 +71,7 @@ describe('parseShortcuts', () => {
         {
           key: 'q',
           modifiers: { ctrl: false, shift: false, alt: false, meta: false },
-          action: { type: 'focus-pane', direction: 'up' },
+          action: { type: 'swap-pane', offset: 'next' },
         },
       ],
     };
@@ -80,6 +80,29 @@ describe('parseShortcuts', () => {
     expect(out?.bindings).toHaveLength(1);
     expect(out?.bindings[0].action.type).toBe('close-pane');
     expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'up',
+    'down',
+    'left',
+    'right',
+  ] as const)('parses a focus-pane binding with %s direction', (direction) => {
+    const payload = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: 'k',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'focus-pane', direction },
+        },
+      ],
+    };
+    const out = parseShortcuts(payload);
+    expect(out).not.toBeNull();
+    expect(out?.bindings).toHaveLength(2);
+    expect(out?.bindings[1].action).toEqual({ type: 'focus-pane', direction });
   });
 
   it('parses a split-pane binding with horizontal direction', () => {
