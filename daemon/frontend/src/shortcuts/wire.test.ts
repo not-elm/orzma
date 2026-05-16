@@ -358,4 +358,21 @@ describe('parseShortcuts', () => {
     const out = parseShortcuts(raw);
     expect(out?.bindings[0]?.action).toEqual({ type: 'focus-window-number', index: 0 });
   });
+
+  it('parses a rename-window binding', () => {
+    const out = parseShortcuts({
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: ',',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'rename-window' },
+          repeatable: false,
+        },
+      ],
+    });
+    expect(out?.bindings).toHaveLength(2);
+    expect(out?.bindings[1].action).toEqual({ type: 'rename-window' });
+  });
 });
