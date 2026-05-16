@@ -174,12 +174,26 @@ impl AppState {
             )
         {
             self.browser.pause_screencast(prev).await;
+            // NOTE: dual-path until Phase C drops chromiumoxide — cef_host gets
+            // the same Pause/Resume signal so its render handler can throttle.
+            let _ = self
+                .cef_host
+                .send_command(ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
+                    aid: CefActivityId(prev.to_string()),
+                })
+                .await;
         }
         if matches!(
             self.activity_kind_in_pane(wid, pid, next).await,
             Some(ActivityKindDiscriminant::Browser)
         ) {
             self.browser.resume_screencast(next).await;
+            let _ = self
+                .cef_host
+                .send_command(ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
+                    aid: CefActivityId(next.to_string()),
+                })
+                .await;
         }
     }
 
