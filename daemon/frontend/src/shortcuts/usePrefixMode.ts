@@ -28,6 +28,7 @@ export interface PrefixModeState {
 interface ChordBinding {
   chord: KeyChord;
   handler: () => void;
+  repeatable: boolean;
 }
 
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta']);
@@ -35,9 +36,12 @@ const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta']);
 interface SharedState {
   bindings: ReadonlyArray<ChordBinding>;
   prefix: Prefix;
+  repeatTimeoutMs: number;
   armed: boolean;
+  repeatMode: boolean;
   setArmed: (next: boolean) => void;
-  timer: ReturnType<typeof setTimeout> | null;
+  prefixTimer: ReturnType<typeof setTimeout> | null;
+  repeatTimer: ReturnType<typeof setTimeout> | null;
 }
 
 let shared: SharedState | null = null;
@@ -50,7 +54,8 @@ function ensureDispatcher() {
     if (!shared) return;
     if (e.isComposing) return;
 
-    if (!shared.armed) {
+    // Branch 1: not armed AND not in repeat mode.
+    if (!shared.armed && !shared.repeatMode) {
       if (e.repeat) return;
       if (!matchesChord(e, shared.prefix)) return;
       e.preventDefault();
@@ -59,7 +64,35 @@ function ensureDispatcher() {
       return;
     }
 
-    // Armed mode consumes every event so it cannot leak to xterm.js or iframes.
+    // Branch 2: in repeat sub-mode — no prefix needed for repeatable
+    // bindings; e.repeat is accepted.
+    if (shared.repeatMode) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (MODIFIER_KEYS.has(e.key)) return;
+      const match = shared.bindings.find((b) => matchesChord(e, b.chord));
+      if (match?.repeatable) {
+        match.handler();
+        if (shared.repeatTimer !== null) clearTimeout(shared.repeatTimer);
+        shared.repeatTimer = setTimeout(() => {
+          if (shared) {
+            shared.repeatMode = false;
+            shared.repeatTimer = null;
+          }
+        }, shared.repeatTimeoutMs);
+        return;
+      }
+      // Non-repeatable chord exits repeat mode without consuming further.
+      shared.repeatMode = false;
+      if (shared.repeatTimer !== null) {
+        clearTimeout(shared.repeatTimer);
+        shared.repeatTimer = null;
+      }
+      return;
+    }
+
+    // Branch 3: armed mode (prefix has just been pressed). Consume every
+    // event so it cannot leak to xterm.js or iframes.
     e.preventDefault();
     e.stopPropagation();
 
@@ -71,7 +104,23 @@ function ensureDispatcher() {
     }
 
     const match = shared.bindings.find((b) => matchesChord(e, b.chord));
-    if (match) match.handler();
+    if (match) {
+      match.handler();
+      if (match.repeatable) {
+        // Transition from armed → repeat: disarm visibly but stay
+        // listening for further repeatable chords.
+        shared.setArmed(false);
+        shared.repeatMode = true;
+        if (shared.repeatTimer !== null) clearTimeout(shared.repeatTimer);
+        shared.repeatTimer = setTimeout(() => {
+          if (shared) {
+            shared.repeatMode = false;
+            shared.repeatTimer = null;
+          }
+        }, shared.repeatTimeoutMs);
+        return;
+      }
+    }
     shared.setArmed(false);
   };
   dispatcher = createKeyDispatcher(handler);
@@ -124,22 +173,22 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
       const bindings: ChordBinding[] = [];
       for (const b of parsed.bindings) {
         const handler = actionToHandler(b.action, ctx);
-        if (handler) bindings.push({ chord: b.chord, handler });
+        if (handler) bindings.push({ chord: b.chord, handler, repeatable: b.repeatable });
       }
 
       const setArmed = (next: boolean) => {
         if (!shared) return;
-        if (shared.timer !== null) {
-          clearTimeout(shared.timer);
-          shared.timer = null;
+        if (shared.prefixTimer !== null) {
+          clearTimeout(shared.prefixTimer);
+          shared.prefixTimer = null;
         }
         shared.armed = next;
         setIsArmed(next);
         if (next) {
-          shared.timer = setTimeout(() => {
+          shared.prefixTimer = setTimeout(() => {
             if (shared) {
               shared.armed = false;
-              shared.timer = null;
+              shared.prefixTimer = null;
             }
             setIsArmed(false);
           }, parsed.prefix.timeout_ms);
@@ -149,9 +198,12 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
       shared = {
         bindings,
         prefix: parsed.prefix,
+        repeatTimeoutMs: parsed.repeat_timeout_ms,
         armed: false,
+        repeatMode: false,
         setArmed,
-        timer: null,
+        prefixTimer: null,
+        repeatTimer: null,
       };
       ensureDispatcher().attachTo(document);
       setIfAlive({ status: 'ready', prefix: parsed.prefix });
@@ -159,8 +211,9 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
 
     return () => {
       cancelled = true;
-      if (shared && shared.timer !== null) {
-        clearTimeout(shared.timer);
+      if (shared) {
+        if (shared.prefixTimer !== null) clearTimeout(shared.prefixTimer);
+        if (shared.repeatTimer !== null) clearTimeout(shared.repeatTimer);
       }
       if (dispatcher) dispatcher.detachFrom(document);
       shared = null;
@@ -175,6 +228,10 @@ if (import.meta.hot) {
   // detach the old listener so we don't accumulate duplicate keydown handlers.
   import.meta.hot.dispose(() => {
     moduleDisposed = true;
+    if (shared) {
+      if (shared.prefixTimer !== null) clearTimeout(shared.prefixTimer);
+      if (shared.repeatTimer !== null) clearTimeout(shared.repeatTimer);
+    }
     if (dispatcher) dispatcher.detachFrom(document);
     shared = null;
     dispatcher = null;

@@ -267,3 +267,115 @@ describe('usePrefixMode', () => {
     expect(result.current.isArmed).toBe(false);
   });
 });
+
+const REPEAT_PAYLOAD = {
+  prefix: {
+    key: 'b',
+    modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+    timeout_ms: 2000,
+  },
+  bindings: [
+    {
+      key: 'x',
+      modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+      action: { type: 'close-pane' },
+      repeatable: false,
+    },
+    {
+      key: 'ArrowRight',
+      modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+      action: { type: 'resize-pane', direction: 'right' },
+      repeatable: true,
+    },
+  ],
+  repeat_timeout_ms: 500,
+};
+
+describe('usePrefixMode repeat sub-mode', () => {
+  let resizeFetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+
+  beforeEach(() => {
+    // Override the configFetchMock so the test uses REPEAT_PAYLOAD.
+    configFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => REPEAT_PAYLOAD,
+    } as Response);
+    resizeFetchMock = vi.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      status: 204,
+    } as Response);
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof url === 'string' ? url : url.toString();
+      if (path.endsWith('/resize')) return resizeFetchMock(url, init);
+      return previousFetch(url, init);
+    }) as typeof globalThis.fetch;
+  });
+
+  it('fires a repeatable binding and stays listening within repeat_timeout_ms', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+    });
+    expect(result.current.isArmed).toBe(true);
+
+    act(() => {
+      press({ key: 'ArrowRight', ctrlKey: true });
+    });
+    await Promise.resolve();
+    expect(resizeFetchMock).toHaveBeenCalledTimes(1);
+
+    // Second press WITHOUT re-arming, within the 500ms repeat window.
+    act(() => {
+      press({ key: 'ArrowRight', ctrlKey: true, repeat: true });
+    });
+    await Promise.resolve();
+    expect(resizeFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('exits repeat mode when a non-repeatable chord arrives', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+      press({ key: 'ArrowRight', ctrlKey: true });
+    });
+    await Promise.resolve();
+    expect(resizeFetchMock).toHaveBeenCalledTimes(1);
+
+    // 'x' is not repeatable; pressing it must NOT fire close-pane via
+    // repeat mode (we are no longer armed; the press should leak to
+    // the terminal). The close fetch mock is the default fetch, so
+    // we just assert resizeFetchMock did not increment.
+    act(() => {
+      press({ key: 'x' });
+    });
+    await Promise.resolve();
+    expect(resizeFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('disarms after repeat_timeout_ms with no further keypresses', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+      press({ key: 'ArrowRight', ctrlKey: true });
+    });
+    await Promise.resolve();
+    expect(resizeFetchMock).toHaveBeenCalledTimes(1);
+
+    // Advance fake timers past 500ms.
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+
+    // A second repeatable press now requires re-arming via prefix.
+    act(() => {
+      press({ key: 'ArrowRight', ctrlKey: true });
+    });
+    await Promise.resolve();
+    expect(resizeFetchMock).toHaveBeenCalledTimes(1);
+  });
+});
