@@ -20,10 +20,11 @@ pub async fn run(args: Browser) -> Result<()> {
 }
 
 /// Add a default scheme to a URL-like input. Bare hosts get `https://`;
-/// inputs that already have a scheme (including `about:`) pass through.
+/// inputs that already carry any scheme (`://` present) or start with
+/// `about:` pass through unchanged. This handles `ftp://`, `chrome://`,
+/// `file://`, etc. without incorrectly prepending `https://`.
 fn normalize_url(input: &str) -> String {
-    if input.starts_with("http://") || input.starts_with("https://") || input.starts_with("about:")
-    {
+    if input.contains("://") || input.starts_with("about:") {
         input.to_string()
     } else {
         format!("https://{input}")
@@ -60,5 +61,15 @@ mod tests {
             normalize_url("example.com/path"),
             "https://example.com/path"
         );
+    }
+
+    #[test]
+    fn ftp_scheme_passes_through() {
+        assert_eq!(normalize_url("ftp://x.com"), "ftp://x.com");
+    }
+
+    #[test]
+    fn chrome_scheme_passes_through() {
+        assert_eq!(normalize_url("chrome://settings"), "chrome://settings");
     }
 }

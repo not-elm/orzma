@@ -19,4 +19,3 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 uuid = { workspace = true }
-url = { version = "2" }
