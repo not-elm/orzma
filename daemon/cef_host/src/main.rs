@@ -47,6 +47,24 @@ wrap_app! {
                 cl.append_switch(Some(&flag2));
                 let flag3 = cef::CefString::from("disable-gpu");
                 cl.append_switch(Some(&flag3));
+
+                // NOTE: Site Isolation is OFF by default to keep cef-rs 0.7 CDP
+                // sessions stable (cross-origin nav otherwise tears down the
+                // CDP session that holds viewport / input forwarding). Opt back
+                // in by setting OZMUX_BROWSER_SITE_ISOLATION=1 — the env is
+                // documented in CLAUDE.md for the chromiumoxide path and Plan 2
+                // B15 brings it to the cef path verbatim.
+                if std::env::var("OZMUX_BROWSER_SITE_ISOLATION").as_deref() != Ok("1") {
+                    let disable_features = cef::CefString::from("disable-features");
+                    let value = cef::CefString::from("IsolateOrigins,site-per-process");
+                    cl.append_switch_with_value(Some(&disable_features), Some(&value));
+                    let dsit = cef::CefString::from("disable-site-isolation-trials");
+                    cl.append_switch(Some(&dsit));
+                } else {
+                    tracing::info!(
+                        "OZMUX_BROWSER_SITE_ISOLATION=1 — Site Isolation left enabled"
+                    );
+                }
             }
         }
     }
