@@ -4,6 +4,7 @@ members = [
   "cli",
   "daemon/bootstrap",
   "daemon/browser",
+  "daemon/cef_host",
   "daemon/configs",
   "daemon/extension",
   "daemon/http_server",

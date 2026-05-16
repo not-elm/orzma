@@ -1,0 +1,14 @@
+[package]
+name = "ozmux_cef_host"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "cef_host"
+path = "src/main.rs"
+
+[dependencies]
+cef = "148.1.0+147.0.14"
+cef-dll-sys = { version = "148.1.0+147.0.14", features = ["sandbox"] }
+
+[dev-dependencies]
