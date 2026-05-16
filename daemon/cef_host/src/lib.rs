@@ -4,6 +4,7 @@
 
 pub mod control;
 pub mod handlers;
+pub mod input;
 pub mod pool;
 pub mod post_command;
 pub mod shm_writer;

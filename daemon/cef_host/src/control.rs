@@ -148,15 +148,53 @@ async fn pump(
                         }
                         continue;
                     }
-                    // NOTE: These variants are part of the Plan 2 wire schema (Task A15)
-                    // but their cef_host implementations land in later tasks (B-series).
-                    // Close any stray ancillary fd to prevent leaks.
+                    HostCommand::SendInput { aid, input } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
+                            // inside `recv_command_with_fd`. It is not aliased: we
+                            // hold the only copy, no other variable has captured it,
+                            // and this is its only close. Closing here prevents the
+                            // fd from leaking when the command does not consume it.
+                            unsafe { libc::close(stray); }
+                            tracing::warn!("stray fd on SendInput, closed");
+                        }
+                        CefCommand::SendInput { aid, event: input }
+                    }
+                    HostCommand::Navigate { aid, url } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: see above — same invariants apply.
+                            unsafe { libc::close(stray); }
+                            tracing::warn!("stray fd on Navigate, closed");
+                        }
+                        CefCommand::Navigate { aid, url }
+                    }
+                    HostCommand::NavigateHistory { aid, delta } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: see above — same invariants apply.
+                            unsafe { libc::close(stray); }
+                            tracing::warn!("stray fd on NavigateHistory, closed");
+                        }
+                        CefCommand::NavigateHistory { aid, delta }
+                    }
+                    HostCommand::PauseScreencast { aid } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: see above — same invariants apply.
+                            unsafe { libc::close(stray); }
+                            tracing::warn!("stray fd on PauseScreencast, closed");
+                        }
+                        CefCommand::PauseScreencast { aid }
+                    }
+                    HostCommand::ResumeScreencast { aid } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: see above — same invariants apply.
+                            unsafe { libc::close(stray); }
+                            tracing::warn!("stray fd on ResumeScreencast, closed");
+                        }
+                        CefCommand::ResumeScreencast { aid }
+                    }
+                    // NOTE: RecreateShm, GetSelection, SetClipboard are deferred to
+                    // later tasks. Close any stray ancillary fd to prevent leaks.
                     HostCommand::RecreateShm { .. }
-                    | HostCommand::Navigate { .. }
-                    | HostCommand::NavigateHistory { .. }
-                    | HostCommand::SendInput { .. }
-                    | HostCommand::PauseScreencast { .. }
-                    | HostCommand::ResumeScreencast { .. }
                     | HostCommand::GetSelection { .. }
                     | HostCommand::SetClipboard { .. } => {
                         if let Some(stray) = fd {

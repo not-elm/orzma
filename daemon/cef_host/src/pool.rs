@@ -10,11 +10,11 @@ use crate::handlers::lifespan::OzmuxLifeSpanHandler;
 use crate::handlers::render::{OzmuxRenderHandler, RenderHandlerState};
 use crate::shm_writer::ShmWriter;
 use cef::{
-    Browser, BrowserSettings, CefString, ImplBrowser, ImplBrowserHost, WindowInfo,
+    Browser, BrowserSettings, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, WindowInfo,
     browser_host_create_browser_sync,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
-use ozmux_browser_cef_protocol::wire::CefCookieDto;
+use ozmux_browser_cef_protocol::wire::{CefCookieDto, InputEvent};
 use std::collections::HashMap;
 use std::os::fd::RawFd;
 use std::sync::Arc;
@@ -44,6 +44,16 @@ pub enum CefCommand {
     Close { aid: ActivityId },
     /// Shut down the message loop.
     Shutdown,
+    /// Forward a user input event to the browser.
+    SendInput { aid: ActivityId, event: InputEvent },
+    /// Navigate an activity to a new URL.
+    Navigate { aid: ActivityId, url: String },
+    /// Navigate backward (`delta < 0`) or forward (`delta > 0`) in history.
+    NavigateHistory { aid: ActivityId, delta: i64 },
+    /// Pause screencast frame production for an activity.
+    PauseScreencast { aid: ActivityId },
+    /// Resume screencast frame production for an activity and force a keyframe.
+    ResumeScreencast { aid: ActivityId },
 }
 
 /// Holds the live state for one browser activity.
@@ -132,6 +142,68 @@ impl BrowserPool {
                 // observers can detect the graceful shutdown, even though it no longer
                 // drives the message loop.
                 self.shutdown_requested = true;
+            }
+            CefCommand::SendInput { aid, event } => {
+                if let Some(entry) = self.browsers.get(&aid) {
+                    crate::input::dispatch(&entry.browser, &aid, event);
+                } else {
+                    tracing::warn!(?aid, "SendInput: unknown activity");
+                }
+            }
+            CefCommand::Navigate { aid, url } => {
+                let Some(entry) = self.browsers.get(&aid) else {
+                    tracing::warn!(?aid, "Navigate: unknown activity");
+                    return;
+                };
+                let Some(frame) = entry.browser.main_frame() else {
+                    tracing::warn!(?aid, "Navigate: no main frame");
+                    return;
+                };
+                tracing::debug!(?aid, %url, "Navigate");
+                frame.load_url(Some(&CefString::from(url.as_str())));
+            }
+            CefCommand::NavigateHistory { aid, delta } => {
+                let Some(entry) = self.browsers.get(&aid) else {
+                    tracing::warn!(?aid, "NavigateHistory: unknown activity");
+                    return;
+                };
+                match delta.signum() {
+                    -1 => {
+                        tracing::debug!(?aid, "NavigateHistory back");
+                        entry.browser.go_back();
+                    }
+                    1 => {
+                        tracing::debug!(?aid, "NavigateHistory forward");
+                        entry.browser.go_forward();
+                    }
+                    _ => {
+                        tracing::warn!(?aid, delta, "NavigateHistory: delta is zero, no-op");
+                    }
+                }
+            }
+            CefCommand::PauseScreencast { aid } => {
+                let Some(entry) = self.browsers.get(&aid) else {
+                    tracing::warn!(?aid, "PauseScreencast: unknown activity");
+                    return;
+                };
+                if let Some(host) = entry.browser.host() {
+                    tracing::debug!(?aid, "PauseScreencast");
+                    host.was_hidden(1);
+                }
+            }
+            CefCommand::ResumeScreencast { aid } => {
+                let Some(entry) = self.browsers.get(&aid) else {
+                    tracing::warn!(?aid, "ResumeScreencast: unknown activity");
+                    return;
+                };
+                if let Some(host) = entry.browser.host() {
+                    tracing::debug!(?aid, "ResumeScreencast");
+                    host.was_hidden(0);
+                }
+                // NOTE: invalidate forces a fresh keyframe after the browser is
+                // marked visible again; without this the first frame may not arrive
+                // until the next scheduled repaint.
+                crate::input::invalidate_view(&entry.browser, &aid);
             }
         }
     }
