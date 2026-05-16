@@ -3,6 +3,7 @@ import { fetchJson } from '../fetchJson';
 import { actionToHandler, type ShortcutContext } from './actionDispatch';
 import { matchesChord } from './chord';
 import { createKeyDispatcher, type KeyDispatcher } from './globalKeyDispatcher';
+import { isRenamePromptOpen } from './renamePromptGate';
 import { type KeyChord, type Prefix, parseShortcuts } from './wire';
 
 /**
@@ -63,6 +64,7 @@ function ensureDispatcher() {
   const handler = (e: KeyboardEvent) => {
     if (!shared) return;
     if (e.isComposing) return;
+    if (isRenamePromptOpen()) return;
 
     if (!shared.armed && !shared.repeatMode) {
       if (e.repeat) return;
