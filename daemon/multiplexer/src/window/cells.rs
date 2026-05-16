@@ -248,6 +248,26 @@ impl LayoutCellState {
         Ok(out)
     }
 
+    /// Recursive worker for `pane_bounds`. Descends the cell subtree rooted at
+    /// `id` and pushes one `(PaneId, Rect)` per leaf into `out`, with `b` as
+    /// the rectangle allotted to this subtree.
+    ///
+    /// - `Cell::Pane` is a leaf: emit `(pane, b)`.
+    /// - `Cell::Root` passes `b` straight through to its single child.
+    /// - `Cell::Split` divides `b` along its orientation using
+    ///   `Self::split_ratio` and recurses into lhs then rhs. The trailing
+    ///   side's size is computed as `parent_size - lhs_size` (not as a
+    ///   separate multiplication) so siblings always sum exactly to the
+    ///   parent rect — `Window::pane_in_direction`'s adjacency test relies
+    ///   on this exactness.
+    ///
+    /// The lhs-before-rhs descent fixes the output as DFS left-to-right
+    /// order, matching `pane_ids_in_subtree`. `pick_best` consumes that
+    /// order to break ties on equal `active_point`.
+    ///
+    /// Each arm clones the child `CellId`s (and `orientation` for splits)
+    /// before recursing so the immutable borrow taken by `self.cell(id)?`
+    /// is released before the recursive `&self` reborrow.
     fn walk_bounds(
         &self,
         id: &CellId,
