@@ -8,6 +8,7 @@
 
 use crate::AppState;
 use crate::error::{HttpError, HttpResult};
+use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_backend::CefBackend;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_multiplexer::{ActivityId, ActivityKind, PaneId, WindowId};
@@ -34,6 +35,13 @@ pub(crate) async fn provision_activity_runtime(
         }
         ActivityKind::Extension { .. } => Ok(()),
         ActivityKind::Browser { initial_url } => {
+            if state.cef_host.is_dead() {
+                return Err(HttpError::CefHostDead(
+                    BrowserUnavailableReason::RetryExhausted {
+                        last_error: "cef_host previously crashed".into(),
+                    },
+                ));
+            }
             state
                 .browser
                 .spawn(wid, pid, aid, initial_url.clone())

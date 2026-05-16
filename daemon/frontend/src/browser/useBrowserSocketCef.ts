@@ -44,6 +44,13 @@ export interface NavSnapshot {
   can_forward: boolean;
 }
 
+/** Mirrors `BrowserUnavailableReason` in wire.rs (serde tag = "kind", snake_case). */
+export type BrowserUnavailableReason =
+  | { kind: 'retry_exhausted'; last_error: string }
+  | { kind: 'binary_not_found'; path: string }
+  | { kind: 'cef_init_failed'; exit_code: number }
+  | { kind: 'protocol_mismatch'; expected: number; got: number };
+
 export interface UseBrowserSocketCefOpts {
   windowId: string;
   paneId: string;
@@ -58,6 +65,8 @@ export interface UseBrowserSocketCefOpts {
   /** Called when the daemon replies with MustRestart. The reason is one of
    *  `session_mismatch | epoch_mismatch | last_key_evicted`. */
   onMustRestart: (reason: string) => void;
+  /** Called when the daemon broadcasts BrowserUnavailable (cef_host died). */
+  onUnavailable?: (reason: BrowserUnavailableReason) => void;
 }
 
 type SubscribeReplyMessage = {
@@ -78,7 +87,17 @@ export interface UseBrowserSocketCefReturn {
 }
 
 export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): UseBrowserSocketCefReturn {
-  const { windowId, paneId, activityId, worker, generation, lastKey, onMustRestart, onNav } = opts;
+  const {
+    windowId,
+    paneId,
+    activityId,
+    worker,
+    generation,
+    lastKey,
+    onMustRestart,
+    onNav,
+    onUnavailable,
+  } = opts;
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -149,6 +168,18 @@ export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): UseBrowserSo
         }
         return;
       }
+      if (kind === 'browser_unavailable') {
+        try {
+          const msg = decode(new Uint8Array(ev.data)) as {
+            kind: 'browser_unavailable';
+            reason: BrowserUnavailableReason;
+          };
+          onUnavailable?.(msg.reason);
+        } catch (e) {
+          console.warn('browser_unavailable decode failed', e);
+        }
+        return;
+      }
       worker.postMessage({ type: 'wsBinary', generation, buffer: ev.data }, [ev.data]);
     };
 
@@ -160,7 +191,17 @@ export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): UseBrowserSo
       wsRef.current = null;
       ws.close();
     };
-  }, [windowId, paneId, activityId, worker, generation, lastKey, onMustRestart, onNav]);
+  }, [
+    windowId,
+    paneId,
+    activityId,
+    worker,
+    generation,
+    lastKey,
+    onMustRestart,
+    onNav,
+    onUnavailable,
+  ]);
 
   const send = (msg: BrowserClientMsg) => {
     const ws = wsRef.current;

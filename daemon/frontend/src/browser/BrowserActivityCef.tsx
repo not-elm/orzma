@@ -24,7 +24,11 @@ import { attachKeyboard } from './input-cef/keyboard';
 import { attachMouse } from './input-cef/mouse';
 import { attachWheel } from './input-cef/wheel';
 import { Toolbar } from './Toolbar';
-import type { BrowserClientMsg, NavSnapshot } from './useBrowserSocketCef';
+import type {
+  BrowserClientMsg,
+  BrowserUnavailableReason,
+  NavSnapshot,
+} from './useBrowserSocketCef';
 import { useBrowserSocketCef } from './useBrowserSocketCef';
 
 interface Props {
@@ -54,6 +58,19 @@ const POC_HEIGHT = 800;
 const POPUP_CANVAS_WIDTH = 800;
 const POPUP_CANVAS_HEIGHT = 600;
 
+function reasonLabel(reason: BrowserUnavailableReason): string {
+  switch (reason.kind) {
+    case 'retry_exhausted':
+      return `cef_host crashed: ${reason.last_error}. Restart the daemon.`;
+    case 'binary_not_found':
+      return `cef_host binary not found at ${reason.path}. Reinstall ozmux.`;
+    case 'cef_init_failed':
+      return `CEF failed to start (exit code ${reason.exit_code}). Check logs.`;
+    case 'protocol_mismatch':
+      return `Protocol mismatch (expected ${reason.expected}, got ${reason.got}).`;
+  }
+}
+
 export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const popupCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -61,6 +78,7 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [handle, setHandle] = useState<WorkerHandle | null>(null);
   const [unsupported, setUnsupported] = useState(false);
+  const [unavailable, setUnavailable] = useState<BrowserUnavailableReason | null>(null);
   // Bumped on SubscribeReply::MustRestart so the canvas remounts (key change)
   // and the worker is recreated (effect re-runs).
   const [restartId, setRestartId] = useState(0);
@@ -147,6 +165,10 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     setNav(next);
   }, []);
 
+  const onUnavailable = (reason: BrowserUnavailableReason) => {
+    setUnavailable(reason);
+  };
+
   const { send } = useBrowserSocketCef({
     windowId,
     paneId,
@@ -158,6 +180,7 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     lastKey: null,
     onMustRestart,
     onNav,
+    onUnavailable,
   });
 
   // Keep sendRef in sync without triggering the attach effect.
@@ -221,7 +244,11 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
 
   return (
     <div className="bg-background text-foreground flex h-full w-full flex-col">
-      {unsupported ? (
+      {unavailable ? (
+        <div className="text-destructive flex flex-1 items-center justify-center p-4 text-center">
+          {reasonLabel(unavailable)}
+        </div>
+      ) : unsupported ? (
         <div className="text-destructive flex flex-1 items-center justify-center">
           WebGPU is not available in this browser.
         </div>
