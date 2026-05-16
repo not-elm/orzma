@@ -519,6 +519,14 @@ impl AppState {
         }
     }
 
+    /// Create a session and broadcast the resulting view.
+    /// Returns the new session id.
+    pub async fn create_session(&self, name: Option<String>) -> SessionId {
+        let sid = self.multiplexer.create_session(name).await;
+        self.publish_session_view(&sid).await;
+        sid
+    }
+
     /// Walk every session looking for one whose `linked_windows` contains
     /// `wid`. Returns the owning `SessionId` if found.
     pub(crate) async fn parent_session(&self, wid: &WindowId) -> Option<SessionId> {
