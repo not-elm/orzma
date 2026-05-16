@@ -15,6 +15,17 @@ pub enum SetActiveOutcome {
     Changed,
 }
 
+/// Direction to step the active activity within a Pane. Serializes as
+/// kebab-case (`"next"` / `"prev"`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CycleDirection {
+    /// Step to the next activity in `activities` order.
+    Next,
+    /// Step to the previous activity in `activities` order.
+    Prev,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Pane {
     pub id: PaneId,
@@ -59,6 +70,31 @@ impl Pane {
         }
         self.active_activity = aid.clone();
         Ok(SetActiveOutcome::Changed)
+    }
+
+    /// Step `active_activity` to the next or previous entry in `activities`
+    /// with wrap-around. Single-activity panes return `Unchanged`. Returns
+    /// `ActivityNotInPane` if the invariant `active_activity ∈ activities`
+    /// is broken.
+    pub fn cycle_active_activity(
+        &mut self,
+        direction: CycleDirection,
+    ) -> MultiplexerResult<SetActiveOutcome> {
+        let idx = self
+            .activities
+            .iter()
+            .position(|a| a.id == self.active_activity)
+            .ok_or_else(|| MultiplexerError::ActivityNotInPane {
+                pane: self.id.clone(),
+                activity: self.active_activity.clone(),
+            })?;
+        let len = self.activities.len();
+        let new_idx = match direction {
+            CycleDirection::Next => (idx + 1) % len,
+            CycleDirection::Prev => idx.checked_sub(1).unwrap_or(len - 1),
+        };
+        let target = self.activities[new_idx].id.clone();
+        self.set_active_activity(&target)
     }
 
     /// Remove an Activity by id and return the removed value.
@@ -265,5 +301,62 @@ mod tests {
         let _removed = pane.remove_activity(&second_aid).unwrap();
         assert_eq!(pane.active_activity, original_aid);
         assert_eq!(pane.activities.len(), 1);
+    }
+
+    #[test]
+    fn cycle_direction_serde_kebab_case() {
+        let next = serde_json::to_string(&CycleDirection::Next).unwrap();
+        assert_eq!(next, "\"next\"");
+        let back: CycleDirection = serde_json::from_str("\"prev\"").unwrap();
+        assert!(matches!(back, CycleDirection::Prev));
+    }
+
+    fn pane_with_three_activities() -> (Pane, ActivityId, ActivityId, ActivityId) {
+        let pid = PaneId::new();
+        let a1 = ActivityId::new();
+        let a2 = ActivityId::new();
+        let a3 = ActivityId::new();
+        let mut pane = Pane::new(pid, Activity::terminal(a1.clone()));
+        pane.add_activity(Activity::terminal(a2.clone())).unwrap();
+        pane.add_activity(Activity::terminal(a3.clone())).unwrap();
+        (pane, a1, a2, a3)
+    }
+
+    #[test]
+    fn cycle_next_advances_to_next_activity() {
+        let (mut pane, a1, a2, _a3) = pane_with_three_activities();
+        assert_eq!(pane.active_activity, a1);
+        let outcome = pane.cycle_active_activity(CycleDirection::Next).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Changed));
+        assert_eq!(pane.active_activity, a2);
+    }
+
+    #[test]
+    fn cycle_next_wraps_to_first() {
+        let (mut pane, a1, _a2, a3) = pane_with_three_activities();
+        let _ = pane.set_active_activity(&a3).unwrap();
+        let outcome = pane.cycle_active_activity(CycleDirection::Next).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Changed));
+        assert_eq!(pane.active_activity, a1);
+    }
+
+    #[test]
+    fn cycle_prev_wraps_to_last() {
+        let (mut pane, a1, _a2, a3) = pane_with_three_activities();
+        assert_eq!(pane.active_activity, a1);
+        let outcome = pane.cycle_active_activity(CycleDirection::Prev).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Changed));
+        assert_eq!(pane.active_activity, a3);
+    }
+
+    #[test]
+    fn cycle_single_activity_returns_unchanged() {
+        let (mut pane, aid) = fresh_pane();
+        let outcome_next = pane.cycle_active_activity(CycleDirection::Next).unwrap();
+        assert!(matches!(outcome_next, SetActiveOutcome::Unchanged));
+        assert_eq!(pane.active_activity, aid);
+        let outcome_prev = pane.cycle_active_activity(CycleDirection::Prev).unwrap();
+        assert!(matches!(outcome_prev, SetActiveOutcome::Unchanged));
+        assert_eq!(pane.active_activity, aid);
     }
 }

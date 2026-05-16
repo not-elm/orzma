@@ -34,8 +34,20 @@ const ActionSchema = z.discriminatedUnion('type', [
     type: z.literal('split-pane'),
     direction: z.enum(['horizontal', 'vertical']),
   }),
+  z.object({
+    type: z.literal('break-activity-to-pane'),
+    direction: z.enum(['horizontal', 'vertical']),
+  }),
   z.object({ type: z.literal('new-terminal-activity') }),
   z.object({ type: z.literal('close-activity') }),
+  z.object({
+    type: z.literal('focus-activity'),
+    offset: z.enum(['next', 'prev']),
+  }),
+  z.object({
+    type: z.literal('focus-pane'),
+    direction: z.enum(['up', 'down', 'left', 'right']),
+  }),
 ]);
 
 const PrefixSchema = KeyChordFieldsSchema.extend({

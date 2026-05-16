@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 pub mod activate;
 pub mod add_to_pane;
+pub mod break_to_pane;
 pub mod browser_ws;
 pub mod close_activity;
 pub mod handlers_ws;
@@ -24,6 +25,10 @@ pub fn router() -> Router<AppState> {
             method_delete(close_activity::close_activity),
         )
         .route("/{activity_id}/activate", post(activate::activate))
+        .route(
+            "/{activity_id}/break-to-pane",
+            post(break_to_pane::break_to_pane),
+        )
         .route("/{activity_id}/browser/ws", get(browser_ws::browser_ws))
         .route("/{activity_id}/terminal/ws", get(terminal_ws::terminal_ws))
         .route("/{activity_id}/handlers/ws", get(handlers_ws::handlers_ws))

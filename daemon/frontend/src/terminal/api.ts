@@ -13,6 +13,11 @@ export const activateActivityEndpoint = (wid: string, pid: string, aid: string) 
   `/windows/${wid}/panes/${pid}/activities/${aid}/activate`;
 export const closeActivityEndpoint = (wid: string, pid: string, aid: string) =>
   `/windows/${wid}/panes/${pid}/activities/${aid}`;
+export const breakActivityToPaneEndpoint = (wid: string, pid: string, aid: string) =>
+  `/windows/${wid}/panes/${pid}/activities/${aid}/break-to-pane`;
+export const cycleActivityEndpoint = (wid: string, pid: string) =>
+  `/windows/${wid}/panes/${pid}/cycle-activity`;
+export const focusPaneEndpoint = (wid: string) => `/windows/${wid}/focus-pane`;
 
 export const vtTerminalWsUrl = (
   windowId: string,

@@ -166,6 +166,84 @@ impl Default for Shortcuts {
                     },
                     action: Action::CloseActivity,
                 },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('s'),
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::BreakActivityToPane {
+                        direction: SplitDirection::Horizontal,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('v'),
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::BreakActivityToPane {
+                        direction: SplitDirection::Vertical,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char(']'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusActivity {
+                        offset: ActivityOffset::Next,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('['),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusActivity {
+                        offset: ActivityOffset::Prev,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('h'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusPane {
+                        direction: Direction::Left,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('j'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusPane {
+                        direction: Direction::Down,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('k'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusPane {
+                        direction: Direction::Up,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('l'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusPane {
+                        direction: Direction::Right,
+                    },
+                },
             ],
         }
     }
@@ -223,6 +301,11 @@ pub enum Action {
     },
     /// Split the active pane.
     SplitPane {
+        /// Split direction.
+        direction: SplitDirection,
+    },
+    /// Split the active pane and move the active activity into the new pane.
+    BreakActivityToPane {
         /// Split direction.
         direction: SplitDirection,
     },
@@ -433,11 +516,45 @@ mod tests {
     }
 
     #[test]
+    fn binding_deserializes_focus_activity_next() {
+        let toml = r#"
+            key = "]"
+            action = { type = "focus-activity", offset = "next" }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert_eq!(b.chord.key, Key::Char(']'));
+        assert_eq!(b.chord.modifiers, Modifiers::default());
+        assert!(matches!(
+            b.action,
+            Action::FocusActivity {
+                offset: ActivityOffset::Next
+            }
+        ));
+    }
+
+    #[test]
+    fn binding_deserializes_focus_activity_prev() {
+        let toml = r#"
+            key = "["
+            action = { type = "focus-activity", offset = "prev" }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert_eq!(b.chord.key, Key::Char('['));
+        assert_eq!(b.chord.modifiers, Modifiers::default());
+        assert!(matches!(
+            b.action,
+            Action::FocusActivity {
+                offset: ActivityOffset::Prev
+            }
+        ));
+    }
+
+    #[test]
     fn default_shortcuts_serializes_to_stable_json() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         assert_eq!(
             json,
-            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"}}]}"#
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"}},{"key":"s","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"vertical"}},{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"next"}},{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"prev"}},{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"left"}},{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"down"}},{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"up"}},{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"right"}}]}"#
         );
     }
 }

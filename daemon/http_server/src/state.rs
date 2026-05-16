@@ -7,8 +7,9 @@ use ozmux_browser::BrowserService;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
-    Activity, ActivityId, ActivityKind, MultiplexerError, MultiplexerResult, MultiplexerService,
-    PaneId, SessionId, SetActiveOutcome, SetActivePaneOutcome, Side, SplitOrientation, WindowId,
+    Activity, ActivityId, ActivityKind, CycleDirection, MultiplexerError, MultiplexerResult,
+    MultiplexerService, PaneDirection, PaneId, SessionId, SetActiveOutcome, SetActivePaneOutcome,
+    Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
@@ -45,6 +46,16 @@ pub struct SplitOutcome {
     pub new_pane_id: PaneId,
     /// Id of the activity seated in the new pane.
     pub new_activity_id: ActivityId,
+}
+
+/// Input bundle for [`AppState::break_activity_to_pane`].
+pub struct BreakActivityInput {
+    /// Id for the new pane (caller-supplied or server-generated).
+    pub new_pane_id: PaneId,
+    /// Which side of the target pane the new pane appears on.
+    pub side: Side,
+    /// Axis along which to split.
+    pub orientation: SplitOrientation,
 }
 
 #[derive(Clone)]
@@ -158,6 +169,22 @@ impl AppState {
         }
     }
 
+    pub async fn cycle_active_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        direction: CycleDirection,
+    ) -> HttpResult {
+        let outcome = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.pane_mut(pid)?.cycle_active_activity(direction))
+            .await?;
+        if matches!(outcome, SetActiveOutcome::Changed) {
+            self.publish_window_layout(wid).await;
+        }
+        Ok(())
+    }
+
     pub async fn activate_pane(&self, wid: &WindowId, pid: &PaneId) -> HttpResult {
         let outcome = self
             .multiplexer
@@ -175,6 +202,31 @@ impl AppState {
             })
             .await?;
         if matches!(outcome, SetActivePaneOutcome::Changed) {
+            self.publish_window_layout(wid).await;
+        }
+        Ok(())
+    }
+
+    /// Move focus from the currently active pane to its geometric neighbor in
+    /// `direction`. Resolves and activates inside one window-lock acquisition
+    /// to avoid TOCTOU between lookup and set, and broadcasts the new layout
+    /// only when the active pane actually changes.
+    pub async fn focus_pane_direction(
+        &self,
+        wid: &WindowId,
+        direction: PaneDirection,
+    ) -> HttpResult {
+        let outcome = self
+            .multiplexer
+            .with_window_or_404(wid, |window| -> MultiplexerResult<SetActiveOutcome> {
+                let from = window.active_pane.clone();
+                match window.pane_in_direction(&from, direction)? {
+                    Some(target) => window.set_active_pane(&target),
+                    None => Ok(SetActiveOutcome::Unchanged),
+                }
+            })
+            .await?;
+        if matches!(outcome, SetActiveOutcome::Changed) {
             self.publish_window_layout(wid).await;
         }
         Ok(())
@@ -295,6 +347,47 @@ impl AppState {
             new_pane_id,
             new_activity_id,
         })
+    }
+
+    /// Split `target_pane_id` and move the Activity `aid` from it into the
+    /// new Pane. No PTY is spawned — the moved Activity keeps its existing
+    /// one. Returns the id of the new Pane.
+    pub async fn break_activity_to_pane(
+        &self,
+        wid: &WindowId,
+        target_pane_id: &PaneId,
+        aid: &ActivityId,
+        input: BreakActivityInput,
+    ) -> HttpResult<PaneId> {
+        self.ensure_pane_in_window(wid, target_pane_id)?;
+        let new_pane_id = input.new_pane_id;
+
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> MultiplexerResult<_> {
+                w.break_activity_to_pane(
+                    target_pane_id,
+                    aid,
+                    new_pane_id.clone(),
+                    input.side,
+                    input.orientation,
+                )
+            })
+            .await?;
+
+        self.multiplexer
+            .pane_owner_window
+            .insert(new_pane_id.clone(), wid.clone());
+
+        // NOTE: For an Extension-kind Activity the activity->owner registry row
+        // is still valid (the ActivityId is unchanged); only the new pane->owner
+        // row is missing. `activity_owner` returns `None` for terminal
+        // activities, so this is a no-op in the common case.
+        if let Some(name) = self.extensions.activity_owner(aid) {
+            self.extensions.record_pane_owner(&new_pane_id, &name);
+        }
+
+        self.publish_window_layout(wid).await;
+        Ok(new_pane_id)
     }
 
     /// Close a Pane: remove it from the cell tree, tear down extension
