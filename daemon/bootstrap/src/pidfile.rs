@@ -35,13 +35,23 @@ pub(crate) fn remove_at(path: &Path) -> io::Result<()> {
 }
 
 /// Returns `Ok(true)` if `kill(pid, 0)` succeeds or returns `EPERM`
-/// (process exists but we can't signal it). Returns `Ok(false)` only on
-/// `ESRCH` (no such process). Any other errno is propagated.
+/// (process exists but we can't signal it). Returns `Ok(false)` on
+/// `ESRCH` (no such process) or when `pid` is not a valid `pid_t`. Any
+/// other errno is propagated.
 fn is_process_alive(pid: u32) -> io::Result<bool> {
+    // NOTE: PIDs must fit in a positive pid_t (i32). 0 and any value
+    // above i32::MAX are not valid process identifiers — kill() with
+    // those values targets process groups or broadcasts instead, which
+    // would turn a routine liveness check into a system-wide signal.
+    // Treat them as "not alive" so cleanup_if_stale removes the
+    // corrupted file rather than acting on it.
+    if pid == 0 || pid > i32::MAX as u32 {
+        return Ok(false);
+    }
     // SAFETY: libc::kill with signal 0 has no side effects and is
-    // documented as the standard liveness probe. `pid` is a u32 from
-    // either our own process or a parsed PID file; conversion to i32
-    // is a saturating noop for any reasonable PID.
+    // documented as the standard liveness probe. The guard above
+    // ensures `pid` fits in a positive pid_t, so the cast to i32 is
+    // value-preserving.
     let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
     if rc == 0 {
         return Ok(true);
@@ -191,5 +201,28 @@ mod tests {
     fn cleanup_if_stale_is_noop_when_absent() {
         let dir = TempDir::new().unwrap();
         cleanup_if_stale_under(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn cleanup_if_stale_removes_invalid_pid_zero() {
+        let dir = TempDir::new().unwrap();
+        let p = path_under(dir.path());
+        write_to(&p, 0).unwrap();
+        cleanup_if_stale_under(dir.path()).unwrap();
+        assert!(
+            !p.exists(),
+            "PID 0 should be treated as invalid and the file removed"
+        );
+    }
+
+    #[test]
+    fn cleanup_if_stale_removes_pid_above_i32_max() {
+        let dir = TempDir::new().unwrap();
+        let p = path_under(dir.path());
+        // NOTE: Any value > i32::MAX would cast to a negative pid_t and turn
+        // kill() into a broadcast — reject it before that can happen.
+        write_to(&p, (i32::MAX as u32) + 1).unwrap();
+        cleanup_if_stale_under(dir.path()).unwrap();
+        assert!(!p.exists(), "out-of-range PID should be treated as invalid");
     }
 }
