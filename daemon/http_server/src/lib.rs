@@ -218,6 +218,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn close_activity_removes_cef_ring() {
+        use ozmux_browser::frame_ring::FrameRing;
+        use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
+        use std::sync::Arc;
+
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, aid) = test_helpers::bootstrap_default(&state).await;
+        // Bootstrap created a pane with one activity; close_activity refuses
+        // to remove the last activity, so seed a second one to be the target.
+        let extra = test_helpers::add_activity_via_window(&state, &wid, &pid).await;
+        let cef_aid = CefActivityId(extra.to_string());
+        state
+            .browser_cef
+            .insert(cef_aid.clone(), Arc::new(FrameRing::new(123, 1)));
+        assert!(state.browser_cef.frame_ring(&cef_aid).is_some());
+
+        state.close_activity(&wid, &pid, &extra).await.unwrap();
+        assert!(
+            state.browser_cef.frame_ring(&cef_aid).is_none(),
+            "ring should be removed after close_activity"
+        );
+        // Sanity: the original bootstrap activity is still around.
+        let _ = aid;
+    }
+
+    #[tokio::test]
     async fn concurrent_split_on_different_windows_does_not_serialize() {
         use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation};
 

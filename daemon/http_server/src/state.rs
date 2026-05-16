@@ -4,8 +4,10 @@ use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
 use ozmux_browser::BrowserService;
+use ozmux_browser::cef_backend::CefBackend;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::cef_service::CefHostHandles;
+use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
@@ -296,13 +298,26 @@ impl AppState {
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
             .await?;
 
-        // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
+        // NOTE: every backend's close is idempotent + missing-ok; no kind dispatch required.
         let _ = self.terminal.kill(aid).await;
         self.extensions.forget_activity(aid);
         self.browser.close(aid).await;
+        self.cef_close_activity(aid).await;
 
         self.publish_window_layout(wid).await;
         Ok(())
+    }
+
+    /// Drops the per-activity cef ring (no-op if the activity was never
+    /// provisioned via cef) and tells cef_host to close its browser handle.
+    /// Failure to reach cef_host is logged but never propagated — the
+    /// chromiumoxide path is still the source of truth in Phase A/B.
+    async fn cef_close_activity(&self, aid: &ActivityId) {
+        let backend = CefBackend {
+            handles: Arc::clone(&self.cef_host),
+            registry: Arc::clone(&self.browser_cef),
+        };
+        backend.close(&CefActivityId(aid.to_string())).await;
     }
 
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
@@ -413,11 +428,12 @@ impl AppState {
 
         self.multiplexer.pane_owner_window.remove(pid);
         self.extensions.forget_pane(pid);
-        // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
+        // NOTE: every backend's close is idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
             self.browser.close(aid).await;
+            self.cef_close_activity(aid).await;
         }
 
         self.publish_window_layout(wid).await;
@@ -440,11 +456,12 @@ impl AppState {
         for pid in pane_ids {
             self.extensions.forget_pane(&pid);
         }
-        // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
+        // NOTE: every backend's close is idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
             self.browser.close(aid).await;
+            self.cef_close_activity(aid).await;
         }
         self.layout_broadcast.close(wid);
         Ok(activities)
