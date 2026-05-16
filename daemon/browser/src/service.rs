@@ -133,8 +133,9 @@ impl BrowserService {
         let bridge_page = page.clone();
         let bridge_cancel = cancel.clone();
         let page_snapshot_tx = snapshot_tx.clone();
+        let bridge_page_tx = page_tx.clone();
         tokio::spawn(async move {
-            crate::bridge::run(bridge_page, snapshot_tx, bridge_cancel).await;
+            crate::bridge::run(bridge_page, snapshot_tx, bridge_cancel, bridge_page_tx).await;
         });
 
         tokio::spawn(async move {

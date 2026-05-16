@@ -16,12 +16,13 @@
 //! - This ensures the very first frame is sized to the actual pane (not to a
 //!   hardcoded 1920×1200 default), fixing the initial-delay bug.
 
+use crate::page::PageCommand;
 use crate::snapshot::{BrowserSnapshot, NavState, ScreencastFrame};
 use base64::Engine as _;
 use chromiumoxide::cdp::browser_protocol::page as cdp_page;
 use futures_util::StreamExt;
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 /// Default JPEG quality for screencasting (0-100).
@@ -57,6 +58,7 @@ pub(crate) async fn run(
     page: chromiumoxide::Page,
     sender: watch::Sender<Arc<BrowserSnapshot>>,
     cancel: CancellationToken,
+    page_tx: mpsc::Sender<PageCommand>,
 ) {
     let mut frames = match page
         .event_listener::<cdp_page::EventScreencastFrame>()
@@ -99,6 +101,10 @@ pub(crate) async fn run(
                     snap.nav = nav;
                     let _ = sender.send(Arc::new(snap));
                 }
+                // NOTE: tell the PageActor to re-issue startScreencast for the new
+                // renderer's VideoConsumer; in-page link clicks don't go through
+                // PageCommand::Nav, so this is the only restart path for them.
+                let _ = page_tx.send(PageCommand::OnMainFrameLoaded).await;
             }
         }
     }

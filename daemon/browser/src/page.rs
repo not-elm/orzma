@@ -37,6 +37,11 @@ pub(crate) enum PageCommand {
     ResumeScreencast,
     /// Reply with the page's current selection text via `Runtime.evaluate`.
     GetSelection(oneshot::Sender<String>),
+    /// Notification from the bridge that Chromium's main frame finished loading.
+    /// Used to re-issue `startScreencast` after in-page navigations, which
+    /// don't go through the `Nav` command path but do swap renderers on
+    /// cross-origin transitions.
+    OnMainFrameLoaded,
     /// Stop the actor; close the page.
     Close,
 }
@@ -191,6 +196,11 @@ async fn handle(
             // so we do NOT re-issue it here. The screencast stream subscription
             // is renderer-scoped and must be restarted so the new renderer's
             // VideoConsumer ships frames at the emulated viewport's bitmap size.
+            if let Some((bitmap_w, bitmap_h)) = state.bitmap_dims() {
+                restart_screencast(page, bitmap_w, bitmap_h).await?;
+            }
+        }
+        PageCommand::OnMainFrameLoaded => {
             if let Some((bitmap_w, bitmap_h)) = state.bitmap_dims() {
                 restart_screencast(page, bitmap_w, bitmap_h).await?;
             }
