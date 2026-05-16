@@ -9,6 +9,7 @@
 
 pub(crate) mod bridge;
 pub(crate) mod bytes_serde;
+pub mod cef_service;
 pub mod cookie;
 pub mod error;
 pub mod input;

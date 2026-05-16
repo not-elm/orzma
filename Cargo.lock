@@ -2772,6 +2772,7 @@ dependencies = [
  "ozmux_extension",
  "ozmux_multiplexer",
  "rmp-serde",
+ "sendfd",
  "serde",
  "serde_bytes",
  "tempfile",

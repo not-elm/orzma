@@ -16,7 +16,8 @@ libc = "0.2"
 chromiumoxide = { version = "0.7.0", features = ["tokio-runtime"] }
 base64 = "0.22"
 decrypt-cookies = "0.11.1"
-tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net", "io-util", "process", "fs"] }
+sendfd = "0.4"
 tokio-util = { workspace = true }
 futures-util = { workspace = true }
 bytes = { workspace = true }
