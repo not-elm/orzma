@@ -90,8 +90,7 @@ pub(crate) async fn run(
 }
 
 /// Stop then start the screencast so that the frame stream uses `bitmap_w` ×
-/// `bitmap_h` physical pixels. Used by `Resize`, `ResumeScreencast`, and Nav
-/// post-await to re-subscribe after a possible renderer swap.
+/// `bitmap_h` physical pixels.
 ///
 /// # NOTE
 /// `Page.startScreencast` is idempotent w.r.t. session-id reset (Chromium
@@ -119,13 +118,49 @@ async fn restart_screencast(
     Ok(())
 }
 
+/// Re-apply both `Emulation.setDeviceMetricsOverride` AND the screencast
+/// subscription based on the latest cached viewport. Used after every event
+/// that may have reset Chromium's renderer state: `Resize` (user input),
+/// `Nav` (page navigation), `OnMainFrameLoaded` (in-page link click), and
+/// `ResumeScreencast` (activity reactivated).
+///
+/// # NOTE
+/// Earlier we believed Chromium's `EmulationHandler::UpdateDeviceEmulationState`
+/// auto-reapplied device metrics across renderer swaps. Empirically that does
+/// NOT happen in current Chrome (147+): after navigation the renderer reverts
+/// to its default viewport and our cached emulation is silently discarded.
+/// So we re-issue `setDeviceMetricsOverride` on every post-navigation event.
+/// This is idempotent and cheap.
+async fn apply_emulation_and_restart_screencast(
+    page: &chromiumoxide::Page,
+    state: &PageState,
+) -> BrowserResult<()> {
+    use chromiumoxide::cdp::browser_protocol::emulation as cdp_em;
+    let Some((css_w, css_h, dsf)) = state.viewport else {
+        return Ok(());
+    };
+    let metrics = cdp_em::SetDeviceMetricsOverrideParams::builder()
+        .width(css_w as i64)
+        .height(css_h as i64)
+        .device_scale_factor(dsf)
+        .mobile(false)
+        .build()
+        .map_err(BrowserError::Cdp)?;
+    page.execute(metrics)
+        .await
+        .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+    let (bitmap_w, bitmap_h) = state
+        .bitmap_dims()
+        .expect("viewport is Some — just checked");
+    restart_screencast(page, bitmap_w, bitmap_h).await
+}
+
 async fn handle(
     page: &chromiumoxide::Page,
     state: &mut PageState,
     snapshot_tx: &watch::Sender<Arc<BrowserSnapshot>>,
     cmd: PageCommand,
 ) -> BrowserResult<()> {
-    use chromiumoxide::cdp::browser_protocol::emulation as cdp_em;
     use chromiumoxide::cdp::browser_protocol::page as cdp_page;
 
     match cmd {
@@ -199,40 +234,18 @@ async fn handle(
                         .map_err(|e| BrowserError::Cdp(e.to_string()))?;
                 }
             }
-            // NOTE: Chromium auto-reapplies setDeviceMetricsOverride across
-            // renderer swaps (emulation_handler.cc::UpdateDeviceEmulationState),
-            // so we do NOT re-issue it here. The screencast stream subscription
-            // is renderer-scoped and must be restarted so the new renderer's
-            // VideoConsumer ships frames at the emulated viewport's bitmap size.
-            if let Some((bitmap_w, bitmap_h)) = state.bitmap_dims() {
-                restart_screencast(page, bitmap_w, bitmap_h).await?;
-            }
+            apply_emulation_and_restart_screencast(page, state).await?;
         }
         PageCommand::OnMainFrameLoaded => {
-            if let Some((bitmap_w, bitmap_h)) = state.bitmap_dims() {
-                restart_screencast(page, bitmap_w, bitmap_h).await?;
-            }
+            apply_emulation_and_restart_screencast(page, state).await?;
         }
         PageCommand::Resize {
             width,
             height,
             device_scale_factor,
         } => {
-            let metrics = cdp_em::SetDeviceMetricsOverrideParams::builder()
-                .width(width as i64)
-                .height(height as i64)
-                .device_scale_factor(device_scale_factor)
-                .mobile(false)
-                .build()
-                .map_err(BrowserError::Cdp)?;
-            page.execute(metrics)
-                .await
-                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
-
             state.viewport = Some((width, height, device_scale_factor));
-            let (bitmap_w, bitmap_h) = state.bitmap_dims().expect("just set viewport");
-            restart_screencast(page, bitmap_w, bitmap_h).await?;
-
+            apply_emulation_and_restart_screencast(page, state).await?;
             snapshot_tx.send_modify(|snap| {
                 Arc::make_mut(snap).viewport = Viewport { width, height };
             });
@@ -246,9 +259,7 @@ async fn handle(
             // NOTE: only resume if a viewport has been established. Otherwise
             // the stream would start at an unknown default size; the next
             // Resize command will start it correctly.
-            if let Some((bitmap_w, bitmap_h)) = state.bitmap_dims() {
-                restart_screencast(page, bitmap_w, bitmap_h).await?;
-            }
+            apply_emulation_and_restart_screencast(page, state).await?;
         }
         PageCommand::GetSelection(reply) => {
             let v = page
