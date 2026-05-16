@@ -133,6 +133,7 @@ impl BrowserService {
 
         let bridge_page = page.clone();
         let bridge_cancel = cancel.clone();
+        let page_snapshot_tx = snapshot_tx.clone();
         tokio::spawn(async move {
             crate::bridge::run(
                 bridge_page,
@@ -144,7 +145,7 @@ impl BrowserService {
         });
 
         tokio::spawn(async move {
-            let _ = crate::page::run(page, page_rx).await;
+            let _ = crate::page::run(page, page_rx, page_snapshot_tx).await;
         });
 
         let title_tx = self.chromium.title_tx.clone();
@@ -209,10 +210,25 @@ impl BrowserService {
         }
     }
 
-    /// Resize the page's emulated viewport for `aid`. Missing-ok.
-    pub async fn resize(&self, aid: &ActivityId, width: u32, height: u32) {
+    /// Resize the page's emulated viewport for `aid`, using the given
+    /// device-scale factor to compute the JPEG screencast pixel bounds.
+    /// Missing-ok.
+    pub async fn resize(
+        &self,
+        aid: &ActivityId,
+        width: u32,
+        height: u32,
+        device_scale_factor: f64,
+    ) {
         if let Some(h) = self.pages.read().await.get(aid).cloned() {
-            let _ = h.page_tx.send(PageCommand::Resize { width, height }).await;
+            let _ = h
+                .page_tx
+                .send(PageCommand::Resize {
+                    width,
+                    height,
+                    device_scale_factor,
+                })
+                .await;
         }
     }
 
