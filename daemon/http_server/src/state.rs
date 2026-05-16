@@ -1,7 +1,7 @@
 use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::session_broadcast::SessionBroadcaster;
-use crate::session_view::SessionView;
+use crate::session_view::{SessionView, SessionWindowEntry};
 use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
@@ -579,7 +579,6 @@ fn build_session_view(
     linked: &[WindowId],
     window_names: &HashMap<WindowId, String>,
 ) -> SessionView {
-    use crate::session_view::SessionWindowEntry;
     let windows = linked
         .iter()
         .enumerate()
