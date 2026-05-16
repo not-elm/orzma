@@ -33,10 +33,6 @@ pub(crate) enum PageCommand {
     /// screencast directly; it signals the bridge owner.
     ResumeScreencast,
     /// Reply with the page's current selection text via `Runtime.evaluate`.
-    #[expect(
-        dead_code,
-        reason = "wired by the copy-to-clipboard WS handler, not yet merged"
-    )]
     GetSelection(oneshot::Sender<String>),
     /// Stop the actor; close the page.
     Close,

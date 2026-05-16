@@ -201,6 +201,16 @@ impl BrowserService {
         }
     }
 
+    /// Request the page's current selection text. Returns `Some(text)` on
+    /// success, `None` if the activity is missing or the actor failed to
+    /// respond.
+    pub async fn request_selection(&self, aid: &ActivityId) -> Option<String> {
+        let h = self.pages.read().await.get(aid).cloned()?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        h.page_tx.send(PageCommand::GetSelection(tx)).await.ok()?;
+        rx.await.ok()
+    }
+
     /// Idempotent, missing-ok close. Stops the bridge and page actor,
     /// then decrements the Chromium refcount (possibly scheduling teardown).
     pub async fn close(&self, aid: &ActivityId) {
@@ -290,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_then_close_with_real_chromium() {
-        if std::env::var("OZMUX_TEST_REAL_CHROME").ok().as_deref() != Some("1") {
+        if !crate::requires_real_chrome() {
             eprintln!("skipping; set OZMUX_TEST_REAL_CHROME=1 to run");
             return;
         }
