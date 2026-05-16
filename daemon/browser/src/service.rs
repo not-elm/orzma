@@ -301,12 +301,32 @@ impl BrowserService {
     async fn launch(&self) -> BrowserResult<()> {
         let user_data = self.chromium.runtime.root().join("browser");
         std::fs::create_dir_all(&user_data)?;
-        let cfg = BrowserConfig::builder()
+
+        let mut builder = BrowserConfig::builder()
             .user_data_dir(user_data)
             // NOTE: required for screencast (Phase 0 finding).
-            .new_headless_mode()
-            .build()
-            .map_err(BrowserError::Launch)?;
+            .new_headless_mode();
+
+        // NOTE: chromiumoxide 0.7 freezes PageInner.session_id at construction
+        // time and never updates it when Chromium swaps renderers (Site
+        // Isolation). After a cross-origin navigation our `page.execute(...)`
+        // calls target a detached session and silently no-op, so resize / nav
+        // / input all break. Disable Site Isolation so renderer swaps don't
+        // happen; the trade-off is acceptable for a local single-user tool.
+        // Set OZMUX_BROWSER_SITE_ISOLATION=1 to restore the default Chromium
+        // behavior (knowing that resize/input will break after cross-origin nav
+        // until chromiumoxide grows session-resync support).
+        let site_isolation = std::env::var("OZMUX_BROWSER_SITE_ISOLATION")
+            .ok()
+            .as_deref()
+            == Some("1");
+        if !site_isolation {
+            builder = builder
+                .arg("--disable-features=IsolateOrigins,site-per-process")
+                .arg("--disable-site-isolation-trials");
+        }
+
+        let cfg = builder.build().map_err(BrowserError::Launch)?;
         let (browser, mut handler) = Browser::launch(cfg)
             .await
             .map_err(|e| BrowserError::Launch(e.to_string()))?;
