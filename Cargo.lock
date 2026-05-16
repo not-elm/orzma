@@ -2861,11 +2861,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bytes",
  "dashmap",
  "futures-util",
  "http-body-util",
  "mime_guess",
  "ozmux_browser",
+ "ozmux_browser_cef_protocol",
  "ozmux_configs",
  "ozmux_extension",
  "ozmux_multiplexer",

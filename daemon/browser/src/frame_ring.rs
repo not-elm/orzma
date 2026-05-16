@@ -22,10 +22,12 @@ pub struct FrameEnvelope {
     pub bgra: Bytes,
 }
 
-/// Subscription returned to a new WS client: the latest keyframe plus a live
-/// broadcast receiver for subsequent frames.
+/// Subscription returned to a new WS client: the latest keyframe (if any)
+/// plus a live broadcast receiver for subsequent frames. Returning both
+/// atomically prevents a frame from slipping through between a `latest`
+/// peek and a `subscribe`.
 pub struct FrameSubscription {
-    pub keyframe: Arc<FrameEnvelope>,
+    pub keyframe: Option<Arc<FrameEnvelope>>,
     pub receiver: broadcast::Receiver<Arc<FrameEnvelope>>,
 }
 
@@ -72,19 +74,14 @@ impl FrameRing {
         let _ = self.broadcast_tx.send(env);
     }
 
-    /// Returns the latest keyframe + a fresh receiver, or `None` if no
-    /// keyframe has been pushed yet.
-    pub fn subscribe(&self) -> Option<FrameSubscription> {
-        let keyframe = self
-            .inner
-            .lock()
-            .expect("frame ring poisoned")
-            .last_keyframe
-            .clone()?;
-        Some(FrameSubscription {
-            keyframe,
+    /// Atomically captures `(latest_keyframe, receiver)` under the inner lock
+    /// so a frame cannot slip in between the keyframe peek and the subscribe.
+    pub fn subscribe(&self) -> FrameSubscription {
+        let inner = self.inner.lock().expect("frame ring poisoned");
+        FrameSubscription {
+            keyframe: inner.last_keyframe.clone(),
             receiver: self.broadcast_tx.subscribe(),
-        })
+        }
     }
 }
 
@@ -107,9 +104,10 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_before_keyframe_returns_none() {
+    fn subscribe_before_keyframe_returns_no_keyframe() {
         let ring = FrameRing::new(1);
-        assert!(ring.subscribe().is_none());
+        let sub = ring.subscribe();
+        assert!(sub.keyframe.is_none());
     }
 
     #[test]
@@ -118,15 +116,16 @@ mod tests {
         ring.push(make_env(1, true));
         ring.push(make_env(2, false));
         ring.push(make_env(3, true));
-        let sub = ring.subscribe().expect("expected keyframe subscription");
-        assert_eq!(sub.keyframe.frame_seq, 3);
+        let sub = ring.subscribe();
+        let kf = sub.keyframe.expect("expected keyframe");
+        assert_eq!(kf.frame_seq, 3);
     }
 
     #[tokio::test]
     async fn pushed_frames_arrive_on_receiver() {
         let ring = FrameRing::new(1);
         ring.push(make_env(1, true));
-        let mut sub = ring.subscribe().expect("expected subscription");
+        let mut sub = ring.subscribe();
         ring.push(make_env(2, false));
         let env = sub.receiver.recv().await.expect("broadcast recv failed");
         assert_eq!(env.frame_seq, 2);
