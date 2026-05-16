@@ -367,10 +367,14 @@ impl AppState {
         Ok(())
     }
 
-    /// Rename a Window and broadcast the new layout.
+    /// Rename a Window. Broadcasts both the layout (window listeners)
+    /// and the parent session view (status-bar listeners).
     pub async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
         self.multiplexer.rename_window(wid, name).await?;
         self.publish_window_layout(wid).await;
+        if let Some(sid) = self.parent_session(wid).await {
+            self.publish_session_view(&sid).await;
+        }
         Ok(())
     }
 
@@ -395,9 +399,10 @@ impl AppState {
 
     /// Close a Window: tear down its Panes/Activities and run runtime
     /// cleanup. Delegates the data half to `multiplexer.close_window_data`
-    /// and then issues PTY kills, extension registry forgets, and a layout
-    /// broadcast close.
+    /// and then issues PTY kills, extension registry forgets, a layout
+    /// broadcast close, and a parent-session view publish.
     pub async fn close_window(&self, wid: &WindowId) -> MultiplexerResult<Vec<ActivityId>> {
+        let parent = self.parent_session(wid).await;
         let (activities, pane_ids) = self.multiplexer.close_window_data(wid).await?;
         for pid in pane_ids {
             self.extensions.forget_pane(&pid);
@@ -407,16 +412,22 @@ impl AppState {
             self.extensions.forget_activity(aid);
         }
         self.layout_broadcast.close(wid);
+        if let Some(sid) = parent {
+            self.publish_session_view(&sid).await;
+        }
         Ok(activities)
     }
 
-    /// Delete a Session, cascading into every Window it owns.
+    /// Delete a Session, cascading into every Window it owns, and close
+    /// its `session_broadcast` channel so any subscriber observes
+    /// `RecvError::Closed`.
     pub async fn delete_session(&self, sid: &SessionId) -> MultiplexerResult<Vec<ActivityId>> {
         let linked = self.multiplexer.take_session_windows(sid).await?;
         let mut activities = Vec::new();
         for wid in linked {
             activities.extend(self.close_window(&wid).await?);
         }
+        self.session_broadcast.close(sid);
         Ok(activities)
     }
 
@@ -737,5 +748,65 @@ mod session_publish_tests {
         let (wid, _, _) = state.multiplexer.create_window(None, None).await.unwrap();
         let parent = state.parent_session(&wid).await;
         assert_eq!(parent, None);
+    }
+
+    #[tokio::test]
+    async fn close_window_publishes_session_view_with_window_removed() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let (wid_a, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let (_wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        state.close_window(&wid_a).await.unwrap();
+
+        let view = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["windows"].as_array().map(|a| a.len()), Some(1));
+    }
+
+    #[tokio::test]
+    async fn delete_session_closes_session_broadcast() {
+        use tokio::sync::broadcast::error::RecvError;
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        state.delete_session(&sid).await.unwrap();
+
+        let err = rx.recv().await.expect_err("expected closed");
+        assert!(matches!(err, RecvError::Closed));
+    }
+
+    #[tokio::test]
+    async fn rename_window_publishes_session_view() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let (wid, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), Some("orig".into()))
+            .await
+            .unwrap();
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        state.rename_window(&wid, "renamed".into()).await.unwrap();
+
+        // NOTE: `session_broadcast` is a separate channel from `layout_broadcast`,
+        // so this receiver only sees the session-view publish.
+        let view = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["windows"][0]["name"].as_str(), Some("renamed"));
     }
 }
