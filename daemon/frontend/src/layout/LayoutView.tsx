@@ -1,10 +1,12 @@
 import { clsx } from 'clsx';
-import type { PointerEventHandler, ReactNode } from 'react';
+import { type PointerEventHandler, type ReactNode, useEffect, useRef, useState } from 'react';
+import { cellHeightOf, cellWidthOf } from '../terminal/renderer/font';
 import { PaneContent } from './PaneContent';
 import { type Bounds, computePaneLayout } from './paneBounds';
 import type { PaneId } from './types';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
 import type { DefaultWindowState } from './useDefaultWindow';
+import { useWindowDimensions } from './useWindowDimensions';
 import type { LayoutState } from './useWindowLayout';
 
 interface AbsoluteBoxProps {
@@ -40,6 +42,28 @@ interface LayoutViewProps {
 }
 
 export function LayoutView({ windowState: def, layoutState: layout }: LayoutViewProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [metrics, setMetrics] = useState<{ cellW: number; cellH: number } | null>(null);
+  const liveWid = layout.status !== 'gone' && layout.view !== null ? layout.view.id : null;
+
+  // Probe cell metrics from the live container once it mounts. Metrics depend
+  // on the CSS font, not on layout size, so we measure once. `liveWid` is in
+  // the dep list so the effect re-runs after the live container actually
+  // attaches the ref (the prior render returned a placeholder without the ref).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: liveWid is the signal that the live container has rendered
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || metrics !== null) return;
+    const cellW = cellWidthOf(el);
+    const cellH = cellHeightOf(el);
+    if (cellW > 0 && cellH > 0) setMetrics({ cellW, cellH });
+  }, [metrics, liveWid]);
+
+  useWindowDimensions(liveWid, containerRef.current, {
+    cellWidth: metrics?.cellW ?? 0,
+    cellHeight: metrics?.cellH ?? 0,
+  });
+
   if (def.status === 'loading') {
     return (
       <div className="flex h-dvh w-dvw items-center justify-center text-muted-foreground">
@@ -80,7 +104,7 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
   };
 
   return (
-    <div className="relative h-dvh w-dvw bg-background">
+    <div ref={containerRef} className="relative h-dvh w-dvw bg-background">
       {view.panes.map((pane) => {
         const b = bounds.get(pane.id);
         if (!b) return null;
