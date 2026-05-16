@@ -11,6 +11,12 @@
 //! Failures (Keychain locked, profile missing, etc.) return `Ok(vec![])` so
 //! the caller can continue in a degraded-but-functional state and log a
 //! warning. Phase B Task B12.
+//!
+//! Setting `OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1` short-circuits extraction to
+//! `Ok(vec![])`. On macOS the `decrypt-cookies` path reads the host Chrome's
+//! `Chrome Safe Storage` Keychain item, which raises an authorization dialog
+//! for the (differently-signed) ozmux binary on every launch — the skip flag
+//! avoids that during local development.
 
 use ozmux_browser_cef_protocol::wire::{CefCookieDto, SameSite};
 #[cfg(target_os = "macos")]
@@ -26,8 +32,13 @@ use {
 /// Returns `Ok(vec![])` on non-macOS platforms or when Chrome is not
 /// installed. Returns `Ok(vec![])` (not `Err`) on soft failures such as a
 /// locked Keychain or missing profile — the caller logs a warning and
-/// proceeds without cookies per spec §4.6.
+/// proceeds without cookies per spec §4.6. Also returns `Ok(vec![])` when
+/// `OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1` is set.
 pub async fn extract_for(initial_url: &str) -> Result<Vec<CefCookieDto>, std::io::Error> {
+    if std::env::var("OZMUX_BROWSER_SKIP_COOKIE_IMPORT").as_deref() == Ok("1") {
+        tracing::info!("OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1 — skipping Chrome cookie import");
+        return Ok(Vec::new());
+    }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = initial_url;

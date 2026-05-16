@@ -48,6 +48,14 @@ wrap_app! {
                 let flag3 = cef::CefString::from("disable-gpu");
                 cl.append_switch(Some(&flag3));
 
+                // NOTE: --use-mock-keychain makes Chromium's NetworkService use
+                // an in-memory keychain for cookie encryption instead of the
+                // macOS Keychain.  Without it, cef_host raises a "Chromium Safe
+                // Storage" authorization dialog on launch.  ozmux seeds the
+                // cookie store explicitly, so the real Keychain is never needed.
+                let flag4 = cef::CefString::from("use-mock-keychain");
+                cl.append_switch(Some(&flag4));
+
                 // NOTE: Site Isolation is OFF by default to keep cef-rs 0.7 CDP
                 // sessions stable (cross-origin nav otherwise tears down the
                 // CDP session that holds viewport / input forwarding). Opt back
