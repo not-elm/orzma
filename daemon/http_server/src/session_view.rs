@@ -3,7 +3,6 @@
 //! lookup. JSON contract: `docs/superpowers/specs/2026-05-16-status-bar-design.md` §4.1.
 
 use std::collections::HashMap;
-
 use ozmux_multiplexer::{Session, SessionId, WindowId};
 use serde::Serialize;
 
