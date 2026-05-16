@@ -186,25 +186,30 @@ impl BrowserPool {
                     tracing::warn!(?aid, "Resize: unknown activity");
                     return;
                 };
-                let device_w = (css_w as f32 * dpr).round() as u32;
-                let device_h = (css_h as f32 * dpr).round() as u32;
-                // NOTE: the shm slot is sized once for a 4K frame; clamp the
-                // viewport to that cap. A pane larger than 4K device pixels
-                // renders clipped — acceptable for a local single-user tool.
-                let clamped_w = device_w.clamp(1, MAX_VIEWPORT_W);
-                let clamped_h = device_h.clamp(1, MAX_VIEWPORT_H);
-                if clamped_w != device_w || clamped_h != device_h {
+                // NOTE: CefRenderHandler::view_rect must report DIP (CSS)
+                // pixels; CEF multiplies by device_scale_factor (the dpr we
+                // return from screen_info) to size the OnPaint buffer. So
+                // render_state stores CSS px, NOT css×dpr — passing device
+                // pixels here would double-apply the dpr.
+                let dpr = if dpr > 0.0 { dpr } else { 1.0 };
+                // The shm slot holds a 4K *physical* frame, so cap the CSS
+                // viewport such that css×dpr stays within MAX_VIEWPORT_*.
+                let max_css_w = ((MAX_VIEWPORT_W as f32 / dpr) as u32).max(1);
+                let max_css_h = ((MAX_VIEWPORT_H as f32 / dpr) as u32).max(1);
+                let view_w = css_w.clamp(1, max_css_w);
+                let view_h = css_h.clamp(1, max_css_h);
+                if view_w != css_w || view_h != css_h {
                     tracing::warn!(
                         ?aid,
-                        device_w,
-                        device_h,
-                        clamped_w,
-                        clamped_h,
-                        "Resize clamped to the 4K shm budget"
+                        css_w,
+                        css_h,
+                        view_w,
+                        view_h,
+                        "Resize clamped so css×dpr fits the 4K shm budget"
                     );
                 }
-                entry.render_state.width.set(clamped_w);
-                entry.render_state.height.set(clamped_h);
+                entry.render_state.width.set(view_w);
+                entry.render_state.height.set(view_h);
                 entry.render_state.dpr.set(dpr);
                 // Force a fresh keyframe so the renderer rebuilds at the new size.
                 entry.render_state.force_keyframe.set(true);

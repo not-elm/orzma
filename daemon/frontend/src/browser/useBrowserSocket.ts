@@ -67,6 +67,10 @@ export interface UseBrowserSocketOpts {
   onMustRestart: (reason: string) => void;
   /** Called when the daemon broadcasts BrowserUnavailable (cef_host died). */
   onUnavailable?: (reason: BrowserUnavailableReason) => void;
+  /** Called right after the socket opens and Subscribe is sent. Consumers use
+   *  it to (re-)send the current viewport size, since a Resize emitted before
+   *  the socket was open would have been dropped. */
+  onOpen?: () => void;
 }
 
 type SubscribeReplyMessage = {
@@ -97,6 +101,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
     onMustRestart,
     onNav,
     onUnavailable,
+    onOpen,
   } = opts;
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -124,6 +129,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
         last_key: lastKey,
         has_base_keyframe: lastKey !== null,
       });
+      onOpen?.();
     };
 
     ws.onmessage = (ev: MessageEvent<ArrayBuffer>) => {
@@ -201,6 +207,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
     onMustRestart,
     onNav,
     onUnavailable,
+    onOpen,
   ]);
 
   const send = (msg: BrowserClientMsg) => {

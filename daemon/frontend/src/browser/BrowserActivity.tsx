@@ -197,6 +197,21 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
     };
   }, [restartId]);
 
+  // Reports the overlay's current CSS size to cef_host. Called by the
+  // ResizeObserver on every size change and once on socket open (a Resize
+  // emitted before the socket opened would have been dropped).
+  const emitResize = () => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const r = overlay.getBoundingClientRect();
+    sendRef.current?.({
+      kind: 'resize',
+      css_w: Math.max(1, Math.round(r.width)),
+      css_h: Math.max(1, Math.round(r.height)),
+      dpr: window.devicePixelRatio,
+    });
+  };
+
   const onMustRestart = (reason: string) => {
     console.warn('SubscribeReply::MustRestart', reason);
     setRestartId((id) => id + 1);
@@ -222,12 +237,15 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
     onMustRestart,
     onNav,
     onUnavailable,
+    onOpen: emitResize,
   });
 
   // Keep sendRef in sync without triggering the attach effect.
   sendRef.current = send;
 
   // Observe overlay size and report Resize to cef_host whenever it changes.
+  // NOTE: the body only touches refs, so empty deps + the stale closure are
+  // intentional; emitResize is not used here to keep deps lint-clean.
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
@@ -304,7 +322,10 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
             onReload={() => send({ kind: 'navigate', url: nav.url })}
             onGo={(url) => send({ kind: 'navigate', url })}
           />
-          <div className="relative flex-1 flex items-center justify-center">
+          {/* `min-h-0 min-w-0` lets this flex child shrink below the canvas's
+              intrinsic 1280×800 size — without it the replaced-element
+              min-content height overflows the column and hides the Toolbar. */}
+          <div className="relative flex-1 min-h-0 min-w-0">
             {/* The backing buffer starts at POC_WIDTH×POC_HEIGHT and the
                 renderer resizes it (via the OffscreenCanvas) to each frame's
                 device-pixel size — which tracks the pane because the daemon

@@ -39,7 +39,7 @@ export function Toolbar({
 }: Props) {
   const [draft, setDraft] = useState(url);
   return (
-    <div className="flex items-center gap-1 border-b border-border bg-background p-1">
+    <div className="flex shrink-0 items-center gap-1 border-b border-border bg-background p-1">
       <button
         type="button"
         className="px-2 py-1 text-foreground disabled:opacity-50"
