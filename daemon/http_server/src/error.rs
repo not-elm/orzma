@@ -41,6 +41,9 @@ pub enum HttpError {
 
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
+
+    #[error("invalid dimensions: {field} must be >= 1")]
+    InvalidDimensions { field: &'static str },
 }
 
 pub type HttpResult<T = ()> = Result<T, HttpError>;
@@ -97,6 +100,9 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             HttpError::ServiceUnavailable(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+            }
+            HttpError::InvalidDimensions { .. } => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_DIMENSIONS")
             }
             HttpError::Session(MultiplexerError::ActivityNotFound(_))
             | HttpError::Session(MultiplexerError::ActivityNotInPane { .. }) => {
@@ -282,5 +288,12 @@ mod tests {
         let err = HttpError::Session(MultiplexerError::WindowNotMeasured(WindowId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn invalid_dimensions_maps_to_422_invalid_dimensions() {
+        let err = HttpError::InvalidDimensions { field: "cols" };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

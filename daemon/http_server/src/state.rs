@@ -346,6 +346,22 @@ impl AppState {
         Ok(())
     }
 
+    /// Update the cached cell dimensions for `wid`. Validation of
+    /// positive cols/rows is the handler's responsibility. Broadcasts a
+    /// layout update so subscribed clients observe the new geometry.
+    pub async fn set_window_dimensions(
+        &self,
+        wid: &WindowId,
+        cols: u16,
+        rows: u16,
+    ) -> HttpResult<()> {
+        self.multiplexer
+            .set_window_dimensions(wid, cols, rows)
+            .await?;
+        self.publish_window_layout(wid).await;
+        Ok(())
+    }
+
     /// Close a Window: tear down its Panes/Activities and run runtime
     /// cleanup. Delegates the data half to `multiplexer.close_window_data`
     /// and then issues PTY kills, extension registry forgets, and a layout
