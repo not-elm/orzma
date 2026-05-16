@@ -206,7 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_to_pane_accepts_browser_kind() {
-        if std::env::var("OZMUX_TEST_REAL_CHROME").ok().as_deref() != Some("1") {
+        if !crate::requires_real_chrome() {
             eprintln!("skipping; set OZMUX_TEST_REAL_CHROME=1 to run (launches real Chromium)");
             return;
         }

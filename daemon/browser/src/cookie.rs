@@ -106,7 +106,7 @@ mod tests {
     /// runs are silent.
     #[tokio::test]
     async fn import_smoke() {
-        if std::env::var("OZMUX_TEST_REAL_CHROME").ok().as_deref() != Some("1") {
+        if !crate::requires_real_chrome() {
             eprintln!("skipping; set OZMUX_TEST_REAL_CHROME=1 to run");
             return;
         }
