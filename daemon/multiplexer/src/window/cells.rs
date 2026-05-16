@@ -226,8 +226,8 @@ impl LayoutCellState {
         }
     }
 
-    /// Compute each pane's normalized rectangle. Returns leaves in DFS
-    /// left-to-right order, matching `pane_ids_in_subtree`.
+    /// Compute each pane's normalized rectangle.
+    /// Returns leaves in DFS left-to-right order, matching `pane_ids_in_subtree`.
     ///
     /// # Invariants
     ///
@@ -248,13 +248,13 @@ impl LayoutCellState {
         Ok(out)
     }
 
-    /// Recursive worker for `pane_bounds`. Descends the cell subtree rooted at
-    /// `id` and pushes one `(PaneId, Rect)` per leaf into `out`, with `b` as
-    /// the rectangle allotted to this subtree.
+    /// Recursive worker for `pane_bounds`.
+    /// Descends the cell subtree rooted at `id` and pushes one `(PaneId, Rect)` per leaf into `out`,
+    /// with `bounds` as the rectangle allotted to this subtree.
     ///
     /// - `Cell::Pane` is a leaf: emit `(pane, b)`.
-    /// - `Cell::Root` passes `b` straight through to its single child.
-    /// - `Cell::Split` divides `b` along its orientation using
+    /// - `Cell::Root` passes `bounds` straight through to its single child.
+    /// - `Cell::Split` divides `bounds` along its orientation using
     ///   `Self::split_ratio` and recurses into lhs then rhs. The trailing
     ///   side's size is computed as `parent_size - lhs_size` (not as a
     ///   separate multiplication) so siblings always sum exactly to the
@@ -271,17 +271,17 @@ impl LayoutCellState {
     fn walk_bounds(
         &self,
         id: &CellId,
-        b: Rect,
+        bounds: Rect,
         out: &mut Vec<(PaneId, Rect)>,
     ) -> MultiplexerResult<()> {
         match self.cell(id)? {
             Cell::Pane(p) => {
-                out.push((p.pane.clone(), b));
+                out.push((p.pane.clone(), bounds));
                 Ok(())
             }
             Cell::Root(r) => {
                 let child = r.child.clone();
-                self.walk_bounds(&child, b, out)
+                self.walk_bounds(&child, bounds, out)
             }
             Cell::Split(s) => {
                 let orientation = s.orientation;
@@ -290,36 +290,36 @@ impl LayoutCellState {
                 let rhs_cell = s.rhs_cell.clone();
                 match orientation {
                     SplitOrientation::Horizontal => {
-                        let lhs_w = b.w * ratio;
+                        let lhs_w = bounds.w * ratio;
                         self.walk_bounds(
                             &lhs_cell,
                             Rect {
-                                x: b.x,
-                                y: b.y,
+                                x: bounds.x,
+                                y: bounds.y,
                                 w: lhs_w,
-                                h: b.h,
+                                h: bounds.h,
                             },
                             out,
                         )?;
                         self.walk_bounds(
                             &rhs_cell,
                             Rect {
-                                x: b.x + lhs_w,
-                                y: b.y,
-                                w: b.w - lhs_w,
-                                h: b.h,
+                                x: bounds.x + lhs_w,
+                                y: bounds.y,
+                                w: bounds.w - lhs_w,
+                                h: bounds.h,
                             },
                             out,
                         )
                     }
                     SplitOrientation::Vertical => {
-                        let lhs_h = b.h * ratio;
+                        let lhs_h = bounds.h * ratio;
                         self.walk_bounds(
                             &lhs_cell,
                             Rect {
-                                x: b.x,
-                                y: b.y,
-                                w: b.w,
+                                x: bounds.x,
+                                y: bounds.y,
+                                w: bounds.w,
                                 h: lhs_h,
                             },
                             out,
@@ -327,10 +327,10 @@ impl LayoutCellState {
                         self.walk_bounds(
                             &rhs_cell,
                             Rect {
-                                x: b.x,
-                                y: b.y + lhs_h,
-                                w: b.w,
-                                h: b.h - lhs_h,
+                                x: bounds.x,
+                                y: bounds.y + lhs_h,
+                                w: bounds.w,
+                                h: bounds.h - lhs_h,
                             },
                             out,
                         )

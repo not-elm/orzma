@@ -32,30 +32,30 @@ export function computePaneLayout(
   return out;
 }
 
-function walk(node: WindowLayoutNode, b: Bounds, out: PaneLayout): void {
+function walk(node: WindowLayoutNode, bounds: Bounds, out: PaneLayout): void {
   switch (node.type) {
     case 'pane':
-      out.panes.set(node.pane_id, b);
+      out.panes.set(node.pane_id, bounds);
       return;
     case 'root':
-      walk(node.child, b, out);
+      walk(node.child, bounds, out);
       return;
     case 'split': {
       const ratio = normalizeRatio(node.split_ratio);
       if (node.orientation === 'horizontal') {
-        const lhsW = b.w * ratio;
-        walk(node.lhs, { x: b.x, y: b.y, w: lhsW, h: b.h }, out);
-        walk(node.rhs, { x: b.x + lhsW, y: b.y, w: b.w - lhsW, h: b.h }, out);
+        const lhsW = bounds.w * ratio;
+        walk(node.lhs, { x: bounds.x, y: bounds.y, w: lhsW, h: bounds.h }, out);
+        walk(node.rhs, { x: bounds.x + lhsW, y: bounds.y, w: bounds.w - lhsW, h: bounds.h }, out);
       } else {
-        const lhsH = b.h * ratio;
-        walk(node.lhs, { x: b.x, y: b.y, w: b.w, h: lhsH }, out);
-        walk(node.rhs, { x: b.x, y: b.y + lhsH, w: b.w, h: b.h - lhsH }, out);
+        const lhsH = bounds.h * ratio;
+        walk(node.lhs, { x: bounds.x, y: bounds.y, w: bounds.w, h: lhsH }, out);
+        walk(node.rhs, { x: bounds.x, y: bounds.y + lhsH, w: bounds.w, h: bounds.h - lhsH }, out);
       }
       return;
     }
     default: {
       const u = node as unknown as { type: string; cell_id: CellId };
-      out.unknown.push({ cell_id: u.cell_id, type: u.type, bounds: b });
+      out.unknown.push({ cell_id: u.cell_id, type: u.type, bounds });
       return;
     }
   }
