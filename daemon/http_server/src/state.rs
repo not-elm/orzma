@@ -527,6 +527,13 @@ impl AppState {
         sid
     }
 
+    /// Rename a session and broadcast the updated view.
+    pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
+        self.multiplexer.rename_session(sid, name).await?;
+        self.publish_session_view(sid).await;
+        Ok(())
+    }
+
     /// Walk every session looking for one whose `linked_windows` contains
     /// `wid`. Returns the owning `SessionId` if found.
     pub(crate) async fn parent_session(&self, wid: &WindowId) -> Option<SessionId> {
