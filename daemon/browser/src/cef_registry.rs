@@ -2,9 +2,10 @@
 
 use crate::frame_ring::FrameRing;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
+use ozmux_browser_cef_protocol::wire::BrowserUnavailableReason;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 /// Snapshot of the navigation state for a single browser activity.
 ///
@@ -39,6 +40,11 @@ pub struct BrowserCefEntry {
 pub struct BrowserCefRegistry {
     session_id: u64,
     entries: Mutex<HashMap<CefActivityId, BrowserCefEntry>>,
+    /// Broadcast channel for signalling that the cef backend has become
+    /// permanently unavailable. Seeded in [`new`](Self::new) with capacity 16;
+    /// sent by the crash-watcher task in bootstrap; subscribed by each
+    /// connected cef WS handler.
+    unavailable_tx: broadcast::Sender<BrowserUnavailableReason>,
 }
 
 impl BrowserCefRegistry {
@@ -50,10 +56,27 @@ impl BrowserCefRegistry {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
             .unwrap_or(1);
+        let (unavailable_tx, _) = broadcast::channel(16);
         Self {
             session_id,
             entries: Mutex::new(HashMap::new()),
+            unavailable_tx,
         }
+    }
+
+    /// Returns a new `broadcast::Receiver` that fires when the cef backend
+    /// signals permanent unavailability. Subscribe once per WS connection
+    /// before entering the main select loop.
+    pub fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableReason> {
+        self.unavailable_tx.subscribe()
+    }
+
+    /// Broadcasts a `BrowserUnavailableReason` to all current subscribers.
+    ///
+    /// A `SendError` (no receivers) is silently ignored — the reason is
+    /// informational and no subscriber is a valid steady state.
+    pub fn broadcast_unavailable(&self, reason: BrowserUnavailableReason) {
+        let _ = self.unavailable_tx.send(reason);
     }
 
     /// The session id stamped on every `SubscribeReply` / `Screencast` message

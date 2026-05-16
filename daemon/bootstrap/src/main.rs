@@ -2,6 +2,8 @@
 //! `AppState`, and runs the HTTP server until SIGINT.
 
 use ozmux_browser::BrowserService;
+use ozmux_browser::BrowserUnavailableReason;
+use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
@@ -11,6 +13,7 @@ use ozmux_http_server::AppState;
 use ozmux_http_server::activity_titles::ActivityTitles;
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -82,6 +85,12 @@ async fn main() -> anyhow::Result<()> {
     // that the cef WS handler can push BrowserServerMsg::Nav to subscribers.
     let _event_pump = spawn_event_pump(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
 
+    // Crash-watcher: awaits cef_host exit and broadcasts BrowserUnavailable to
+    // all connected WS clients. No respawn — Plan 3 territory.
+    // NOTE: Plan 2 has no graceful-shutdown signal, so every cef_host exit is
+    // treated as unexpected and triggers the unavailable broadcast.
+    spawn_cef_crash_watcher(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
+
     // Adapter task: bridge terminal title-change notifications into ActivityTitles
     // so that all consumers (title_republish, WindowView builder) read from the
     // kind-agnostic map rather than directly from TerminalService.
@@ -144,6 +153,33 @@ async fn main() -> anyhow::Result<()> {
     }
     drop(runtime);
     Ok(())
+}
+
+/// Spawns a task that watches for unexpected `cef_host` exit and notifies
+/// all connected WS clients via `BrowserCefRegistry::broadcast_unavailable`.
+///
+/// On exit the task sets `CefHostHandles::is_dead` (Release) then broadcasts
+/// `BrowserUnavailableReason::RetryExhausted` carrying the process status.
+/// No respawn is attempted — that is Plan 3 territory.
+fn spawn_cef_crash_watcher(
+    cef_host: Arc<ozmux_browser::cef_service::CefHostHandles>,
+    registry: Arc<BrowserCefRegistry>,
+) {
+    let Some(mut child) = cef_host.take_child() else {
+        tracing::warn!("cef_host child already taken; crash-watcher not started");
+        return;
+    };
+    let is_dead = cef_host.is_dead_handle();
+    tokio::spawn(async move {
+        let status = child.wait().await;
+        is_dead.store(true, Ordering::Release);
+        let last_error = match &status {
+            Ok(s) => format!("cef_host exited: {:?}", s),
+            Err(e) => format!("cef_host wait error: {}", e),
+        };
+        tracing::error!(status = ?status, "cef_host exited unexpectedly");
+        registry.broadcast_unavailable(BrowserUnavailableReason::RetryExhausted { last_error });
+    });
 }
 
 /// Place the `ozmux` CLI binary at `runtime/bin/ozmux/ozmux` so PTY-spawned

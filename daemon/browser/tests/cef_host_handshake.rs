@@ -115,5 +115,7 @@ async fn handshake_then_one_frame() {
     }
     assert!(frame_observed, "no keyframe observed in shm within 30s");
 
-    let _ = handles.child.kill().await;
+    if let Some(mut child) = handles.take_child() {
+        let _ = child.kill().await;
+    }
 }

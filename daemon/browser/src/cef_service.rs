@@ -17,6 +17,7 @@ use std::io::Write as _;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
@@ -46,10 +47,13 @@ pub struct CefHostHandles {
     /// through a shared `Arc<CefHostHandles>` at daemon startup. Tests that
     /// need raw access take it before the pump is spawned.
     pub events: StdMutex<Option<mpsc::Receiver<HostEvent>>>,
-    /// The spawned `cef_host` child. Dropping this handle does **not** kill
-    /// the child — callers that need shutdown must call
-    /// [`tokio::process::Child::kill`] (or wait on `wait()`) explicitly.
-    pub child: Child,
+    /// The spawned `cef_host` child. Wrapped in `StdMutex<Option>` so
+    /// [`take_child`](Self::take_child) can move it out exactly once into the
+    /// crash-watcher task spawned at daemon startup.
+    child: StdMutex<Option<Child>>,
+    /// Set to `true` (Release) by the crash-watcher task when `cef_host` exits
+    /// unexpectedly. Read with Acquire ordering via [`is_dead`](Self::is_dead).
+    is_dead: Arc<AtomicBool>,
     scm_tx: mpsc::Sender<ScmSend>,
 }
 
@@ -65,6 +69,33 @@ impl CefHostHandles {
             .lock()
             .expect("CefHostHandles.events poisoned")
             .take()
+    }
+
+    /// Moves the `Child` handle out of this struct exactly once.
+    ///
+    /// Returns `Some` on the first call; subsequent calls return `None`.
+    /// The crash-watcher task spawned at daemon startup calls this to obtain
+    /// the child so it can `await child.wait()` without holding the mutex
+    /// across an async boundary.
+    pub fn take_child(&self) -> Option<Child> {
+        self.child
+            .lock()
+            .expect("CefHostHandles.child poisoned")
+            .take()
+    }
+
+    /// Returns `true` if the `cef_host` child has exited unexpectedly.
+    ///
+    /// Set by the crash-watcher task via [`is_dead_handle`](Self::is_dead_handle).
+    /// Uses Acquire ordering.
+    pub fn is_dead(&self) -> bool {
+        self.is_dead.load(Ordering::Acquire)
+    }
+
+    /// Returns a clone of the `Arc<AtomicBool>` that the crash-watcher task
+    /// uses to signal unexpected exit. Callers store `true` with Release ordering.
+    pub fn is_dead_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.is_dead)
     }
 
     /// Sends a `HostCommand` without ancillary data. Returns `Err` if the
@@ -153,7 +184,8 @@ impl CefHostSupervisor {
         Ok(CefHostHandles {
             commands: cmd_tx,
             events: StdMutex::new(Some(ev_rx)),
-            child,
+            child: StdMutex::new(Some(child)),
+            is_dead: Arc::new(AtomicBool::new(false)),
             scm_tx,
         })
     }
@@ -173,7 +205,8 @@ pub fn stub_for_tests() -> CefHostHandles {
     CefHostHandles {
         commands: tx,
         events: StdMutex::new(Some(ev_rx)),
-        child,
+        child: StdMutex::new(Some(child)),
+        is_dead: Arc::new(AtomicBool::new(false)),
         scm_tx,
     }
 }

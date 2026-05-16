@@ -22,6 +22,7 @@ use ozmux_browser_cef_protocol::wire::{
 };
 use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 /// `GET /windows/{wid}/panes/{pid}/activities/{aid}/browser_cef/ws`
 ///
@@ -71,6 +72,7 @@ async fn run(
         tracing::debug!(?aid, "no cef NavState channel registered; closing");
         return;
     };
+    let mut unavailable_rx = registry.unavailable_subscribe();
     let session_id_advertised = ring.session_id();
 
     let Some(req) = wait_for_subscribe(&mut socket).await else {
@@ -192,6 +194,17 @@ async fn run(
                         // from registry). Treat as a clean close.
                         break;
                     }
+                }
+            }
+            // Outbound: forward BrowserUnavailable to the client and close.
+            unavailable_result = unavailable_rx.recv() => {
+                match unavailable_result {
+                    Ok(reason) => {
+                        send_msg(&mut socket, &BrowserServerMsg::BrowserUnavailable { reason }).await;
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
