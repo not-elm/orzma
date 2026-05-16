@@ -10,7 +10,7 @@ help:
 	@echo "  build              - Build frontend to single HTML, then build release binary"
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
 	@echo "  dev-backend        - Run axum server on :3200 (debug build redirects / to :5173)"
-	@echo "  dev-daemon         - Run daemon_bootstrap with OZMUX_EXTENSION_ROOT=$(EXTENSIONS_DIR)"
+	@echo "  dev-daemon         - Run daemon_bootstrap (extensions loaded; Chrome cookie import skipped)"
 	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
 	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
@@ -42,7 +42,9 @@ dev-backend:
 	cargo run -p daemon_bootstrap
 
 dev-daemon: memo-build-sdk
-	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) cargo run -p daemon_bootstrap
+	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) \
+	OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1 \
+	cargo run -p daemon_bootstrap
 
 clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
