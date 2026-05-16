@@ -127,6 +127,7 @@ pub(crate) mod test_helpers {
             ozmux_terminal::TerminalService::default(),
             ozmux_extension::ExtensionRegistry::default(),
             crate::layout_broadcast::LayoutBroadcaster::default(),
+            crate::session_broadcast::SessionBroadcaster::default(),
             std::sync::Arc::new(ozmux_configs::OzmuxConfigs::default()),
         )
     }

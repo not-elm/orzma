@@ -1,5 +1,7 @@
 use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
+use crate::session_broadcast::SessionBroadcaster;
+use crate::session_view::SessionView;
 use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
@@ -11,6 +13,7 @@ use ozmux_multiplexer::{
     Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::TerminalService;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Input bundle for [`AppState::split_pane`].
@@ -51,6 +54,8 @@ pub struct AppState {
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
     pub layout_broadcast: LayoutBroadcaster,
+    /// Per-session WS broadcaster; fed by `publish_session_view`.
+    pub session_broadcast: SessionBroadcaster,
     /// Daemon-wide configuration loaded at startup (shortcuts, etc.).
     pub configs: Arc<OzmuxConfigs>,
 }
@@ -65,6 +70,7 @@ impl AppState {
         terminal: TerminalService,
         extensions: ExtensionRegistry,
         layout_broadcast: LayoutBroadcaster,
+        session_broadcast: SessionBroadcaster,
         configs: Arc<OzmuxConfigs>,
     ) -> Self {
         Self {
@@ -72,6 +78,7 @@ impl AppState {
             terminal,
             extensions,
             layout_broadcast,
+            session_broadcast,
             configs,
         }
     }
@@ -464,6 +471,53 @@ impl AppState {
             .await;
     }
 
+    /// Build the current session snapshot and broadcast it on
+    /// `session_broadcast`. Used by every handler that mutates session-
+    /// visible state. Missing-session errors are logged and dropped.
+    pub(crate) async fn publish_session_view(&self, sid: &SessionId) {
+        let sessions = self.multiplexer.sessions.lock().await;
+        let session = match sessions.get(sid) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, %sid, "skipped session publish");
+                return;
+            }
+        };
+        // NOTE: snapshot values from the session then drop the sessions lock
+        // before acquiring per-window locks to preserve the
+        // `sessions -> windows[wid]` lock-order invariant.
+        let linked: Vec<WindowId> = session.linked_windows.clone();
+        let id = session.id.clone();
+        let name = session.name.clone();
+        let active_window = session.active_window.clone();
+        drop(sessions);
+
+        let mut window_names: HashMap<WindowId, String> = HashMap::new();
+        for wid in &linked {
+            if let Some(n) = self.multiplexer.with_window(wid, |w| w.name.clone()).await {
+                window_names.insert(wid.clone(), n);
+            }
+        }
+
+        let view = build_session_view(id, name, active_window, &linked, &window_names);
+        match serde_json::to_value(&view) {
+            Ok(value) => self.session_broadcast.publish(sid, value),
+            Err(e) => tracing::warn!(error = %e, %sid, "skipped session publish"),
+        }
+    }
+
+    /// Walk every session looking for one whose `linked_windows` contains
+    /// `wid`. Returns the owning `SessionId` if found.
+    pub(crate) async fn parent_session(&self, wid: &WindowId) -> Option<SessionId> {
+        let sessions = self.multiplexer.sessions.lock().await;
+        for (sid, session) in sessions.iter() {
+            if session.linked_windows.contains(wid) {
+                return Some(sid.clone());
+            }
+        }
+        None
+    }
+
     /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
     /// pane has no owner and `PaneNotInWindow` when it lives in a different
     /// Window. Used by every URL of shape `/windows/:wid/panes/:pid/*`.
@@ -518,6 +572,34 @@ impl AppState {
     }
 }
 
+fn build_session_view(
+    id: SessionId,
+    name: String,
+    active_window: Option<WindowId>,
+    linked: &[WindowId],
+    window_names: &HashMap<WindowId, String>,
+) -> SessionView {
+    use crate::session_view::SessionWindowEntry;
+    let windows = linked
+        .iter()
+        .enumerate()
+        .map(|(idx, wid)| {
+            let name = window_names.get(wid).cloned().unwrap_or_default();
+            SessionWindowEntry {
+                id: wid.clone(),
+                name,
+                index: idx as u32,
+            }
+        })
+        .collect();
+    SessionView {
+        id,
+        name,
+        active_window,
+        windows,
+    }
+}
+
 impl FromRef<AppState> for TerminalService {
     fn from_ref(input: &AppState) -> Self {
         input.terminal.clone()
@@ -545,5 +627,62 @@ impl FromRef<AppState> for MultiplexerService {
 impl FromRef<AppState> for Arc<OzmuxConfigs> {
     fn from_ref(input: &AppState) -> Self {
         Arc::clone(&input.configs)
+    }
+}
+
+#[cfg(test)]
+mod session_publish_tests {
+    use crate::test_helpers::fresh_state;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn publish_session_view_delivers_to_subscriber() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(Some("s".into())).await;
+        let (_wid, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), Some("w".into()))
+            .await
+            .unwrap();
+
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+        state.publish_session_view(&sid).await;
+
+        let view = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["name"].as_str(), Some("s"));
+        assert_eq!(view["windows"][0]["name"].as_str(), Some("w"));
+    }
+
+    #[tokio::test]
+    async fn publish_session_view_unknown_sid_logs_warn_no_panic() {
+        let state = fresh_state();
+        state
+            .publish_session_view(&ozmux_multiplexer::SessionId::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn parent_session_finds_owner() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let (wid, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let parent = state.parent_session(&wid).await;
+        assert_eq!(parent.as_ref(), Some(&sid));
+    }
+
+    #[tokio::test]
+    async fn parent_session_returns_none_for_orphan() {
+        let state = fresh_state();
+        let (wid, _, _) = state.multiplexer.create_window(None, None).await.unwrap();
+        let parent = state.parent_session(&wid).await;
+        assert_eq!(parent, None);
     }
 }
