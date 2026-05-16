@@ -15,7 +15,7 @@ pub(crate) const MIN_PANE_ROWS: u16 = 3;
 
 /// Outcome of a resize call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ResizePaneOutcome {
+pub enum ResizePaneOutcome {
     /// At least one cell of movement was applied; broadcast.
     Applied,
     /// No matching ancestor, or shrinking subtree has zero budget.

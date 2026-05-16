@@ -16,6 +16,7 @@ pub use window::{
     LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, RootCell, SetActiveOutcome,
     Side, SplitCell, SplitOrientation, Window, WindowDimensions, WindowId, WindowState,
 };
+pub use window::resize::ResizePaneOutcome;
 
 /// Backwards-compatible alias for the active-pane outcome. Use
 /// `SetActiveOutcome` directly in new code.
@@ -130,6 +131,44 @@ impl MultiplexerService {
         .await
     }
 
+    /// Run the resize-pane algorithm. The window's cached dimensions are
+    /// used as root `P`; if absent, returns `WindowNotMeasured`. A pane
+    /// id from another window returns `PaneNotInWindow`. Soft no-ops
+    /// (no matching ancestor split or shrinking budget zero) return
+    /// `Ok(NoOp)` without mutating.
+    pub async fn resize_pane(
+        &self,
+        wid: &WindowId,
+        pane: &PaneId,
+        direction: PaneDirection,
+        amount: u16,
+    ) -> MultiplexerResult<ResizePaneOutcome> {
+        let owner = self.lookup_pane_window(pane)?;
+        if &owner != wid {
+            return Err(MultiplexerError::PaneNotInWindow {
+                window: wid.clone(),
+                pane: pane.clone(),
+            });
+        }
+
+        self.with_window_or_404(wid, |w| {
+            let dims = w
+                .dimensions
+                .clone()
+                .ok_or_else(|| MultiplexerError::WindowNotMeasured(wid.clone()))?;
+            Ok(crate::window::resize::resize_split_for_pane(
+                &mut w.cells,
+                &w.pane_to_cell,
+                pane,
+                direction,
+                amount,
+                dims.cols,
+                dims.rows,
+            ))
+        })
+        .await
+    }
+
     /// Rename a Session.
     pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
         let mut state = self.sessions.lock().await;
@@ -238,5 +277,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, MultiplexerError::WindowNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn resize_pane_returns_window_not_measured_when_dimensions_unset() {
+        let svc = MultiplexerService::default();
+        let (wid, pid, _aid) = svc.create_window(None, None).await.unwrap();
+        let err = svc
+            .resize_pane(&wid, &pid, PaneDirection::Right, 1)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::WindowNotMeasured(_)));
+    }
+
+    #[tokio::test]
+    async fn resize_pane_returns_no_op_when_single_pane_window() {
+        let svc = MultiplexerService::default();
+        let (wid, pid, _aid) = svc.create_window(None, None).await.unwrap();
+        svc.set_window_dimensions(&wid, 120, 40).await.unwrap();
+        let outcome = svc
+            .resize_pane(&wid, &pid, PaneDirection::Right, 1)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, ResizePaneOutcome::NoOp));
+    }
+
+    #[tokio::test]
+    async fn resize_pane_with_pane_in_wrong_window_returns_pane_not_in_window() {
+        let svc = MultiplexerService::default();
+        let (_wid_a, pid_a, _) = svc.create_window(None, None).await.unwrap();
+        let (wid_b, _pid_b, _) = svc.create_window(None, None).await.unwrap();
+        svc.set_window_dimensions(&wid_b, 120, 40).await.unwrap();
+        let err = svc
+            .resize_pane(&wid_b, &pid_a, PaneDirection::Right, 1)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::PaneNotInWindow { .. }));
     }
 }
