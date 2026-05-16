@@ -31,6 +31,13 @@ pub struct RenderHandlerState {
     pub next_frame_seq: Cell<u64>,
     /// When true, the next paint is forced to be a keyframe regardless of damage.
     pub force_keyframe: Cell<bool>,
+    /// `true` while the popup widget (e.g. `<select>` dropdown) is visible.
+    /// Set by `on_popup_show`; cleared on `on_popup_show(false)`.
+    pub is_popup_visible: Cell<bool>,
+    /// Most recent popup rect in main-view coordinates, from `on_popup_size`.
+    /// Travels on every Screencast frame so the frontend can position the
+    /// overlay canvas without a separate event.
+    pub popup_rect: Cell<Option<ProtoRect>>,
 }
 
 impl RenderHandlerState {
@@ -44,6 +51,8 @@ impl RenderHandlerState {
             dpr: Cell::new(dpr),
             next_frame_seq: Cell::new(1),
             force_keyframe: Cell::new(true),
+            is_popup_visible: Cell::new(false),
+            popup_rect: Cell::new(None),
         }
     }
 
@@ -96,6 +105,27 @@ wrap_render_handler! {
             1
         }
 
+        fn on_popup_show(&self, _browser: Option<&mut Browser>, show: c_int) {
+            let visible = show != 0;
+            self.state.is_popup_visible.set(visible);
+            if !visible {
+                // NOTE: clearing popup_rect when the popup hides lets the frontend
+                // tear down the overlay even if no popup_size event arrives.
+                self.state.popup_rect.set(None);
+            }
+        }
+
+        fn on_popup_size(&self, _browser: Option<&mut Browser>, rect: Option<&Rect>) {
+            if let Some(r) = rect {
+                self.state.popup_rect.set(Some(ProtoRect {
+                    x: r.x as u32,
+                    y: r.y as u32,
+                    w: r.width as u32,
+                    h: r.height as u32,
+                }));
+            }
+        }
+
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         fn on_paint(
             &self,
@@ -106,10 +136,7 @@ wrap_render_handler! {
             width: c_int,
             height: c_int,
         ) {
-            // PET_POPUP is deferred to Plan 2; PoC handles PET_VIEW only.
-            if matches!(type_.as_ref(), cef_paint_element_type_t::PET_POPUP) {
-                return;
-            }
+            let is_popup = matches!(type_.as_ref(), cef_paint_element_type_t::PET_POPUP);
 
             let stride = (width * 4) as usize;
             let total_len = (height as usize) * stride;
@@ -140,7 +167,6 @@ wrap_render_handler! {
                 || self.state.force_keyframe.get();
 
             let packed_payload: Vec<u8> = if is_keyframe {
-                // Full-frame copy. CEF guarantees stride == width * 4 with no padding.
                 buf.to_vec()
             } else {
                 let cap: usize = damage.iter().map(|r| (r.w * r.h * 4) as usize).sum();
@@ -161,24 +187,38 @@ wrap_render_handler! {
                 .map(|d| d.as_micros() as u64)
                 .unwrap_or(0);
 
-            let _slot_idx = self.shm.write_slot(SlotData {
-                frame_seq,
-                captured_at_us,
-                width: width as u32,
-                height: height as u32,
-                is_keyframe,
-                damage_rects: damage,
-                is_popup: false,
-                payload: &packed_payload,
-            });
+            if is_popup {
+                self.shm.write_slot_popup(SlotData {
+                    frame_seq,
+                    captured_at_us,
+                    width: width as u32,
+                    height: height as u32,
+                    is_keyframe,
+                    damage_rects: damage,
+                    is_popup: true,
+                    payload: &packed_payload,
+                });
+            } else {
+                let _slot_idx = self.shm.write_slot(SlotData {
+                    frame_seq,
+                    captured_at_us,
+                    width: width as u32,
+                    height: height as u32,
+                    is_keyframe,
+                    damage_rects: damage,
+                    is_popup: false,
+                    payload: &packed_payload,
+                });
 
-            if is_keyframe {
-                self.state.force_keyframe.set(false);
+                if is_keyframe {
+                    self.state.force_keyframe.set(false);
+                }
             }
 
             tracing::debug!(
                 aid = %self.aid.0,
                 frame_seq,
+                is_popup,
                 is_keyframe,
                 width,
                 height,

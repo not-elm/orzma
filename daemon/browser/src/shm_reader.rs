@@ -8,8 +8,14 @@ use bytes::Bytes;
 use ozmux_browser_cef_protocol::types::Rect;
 use std::sync::atomic::Ordering;
 
-/// Number of slots in each activity's ring.
+/// Number of slots in each activity's main ring.
 pub const NUM_SLOTS: usize = 4;
+
+/// Number of popup slots (mirrors `cef_host::shm_writer::NUM_SLOTS_POPUP`).
+pub const NUM_SLOTS_POPUP: usize = 1;
+
+/// Maximum payload bytes for the popup slot (mirrors `cef_host::shm_writer::POPUP_PAYLOAD_MAX`).
+pub const POPUP_PAYLOAD_MAX: usize = 800 * 600 * 4 + 4096;
 
 /// Maximum number of damage rectangles stored per slot.
 pub const MAX_DAMAGE_RECTS: usize = 16;
@@ -97,6 +103,15 @@ impl ShmReader {
         }
     }
 
+    fn popup_slot(&self) -> *const SlotHeader {
+        // SAFETY: the popup slot lives immediately after the main ring slots.
+        unsafe {
+            self.base
+                .add(std::mem::size_of::<RingHeader>() + NUM_SLOTS * self.slot_stride)
+                as *const SlotHeader
+        }
+    }
+
     /// Returns the current absolute write counter (number of slots committed so far).
     pub fn current_lap(&self) -> u64 {
         self.ring_header().lap_count.load(Ordering::Acquire)
@@ -107,7 +122,16 @@ impl ShmReader {
     /// Returns `None` if the slot is in mid-write or the read is unstable after
     /// 3 retries.
     pub fn read_stable(&self, slot_idx: usize) -> Option<FrameSnapshot> {
-        let slot = self.slot(slot_idx);
+        self.read_slot(self.slot(slot_idx))
+    }
+
+    /// Stable read of the fixed popup slot. Retries up to 3 times if a writer
+    /// interrupts. Returns `None` when the slot is uninitialised or mid-write.
+    pub fn read_popup(&self) -> Option<FrameSnapshot> {
+        self.read_slot(self.popup_slot())
+    }
+
+    fn read_slot(&self, slot: *const SlotHeader) -> Option<FrameSnapshot> {
         for _retry in 0..3 {
             // SAFETY: slot pointer is valid by the from_mmap contract.
             let s1 = unsafe { (*slot).write_seq.load(Ordering::Acquire) };
@@ -151,8 +175,28 @@ impl ShmReader {
     }
 
     /// Returns the mmap region size (in bytes) required for the given payload capacity.
+    ///
+    /// Includes the main ring (`NUM_SLOTS` slots) and the popup slot
+    /// (`NUM_SLOTS_POPUP` slots at `POPUP_PAYLOAD_MAX` each). Must stay in
+    /// sync with `cef_host::shm_writer::ShmWriter::required_region_size`.
     pub fn required_region_size(slot_payload_max: usize) -> usize {
         std::mem::size_of::<RingHeader>()
             + NUM_SLOTS * (std::mem::size_of::<SlotHeader>() + slot_payload_max)
+            + NUM_SLOTS_POPUP * (std::mem::size_of::<SlotHeader>() + POPUP_PAYLOAD_MAX)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_region_size_grows_by_popup_slot() {
+        let slot_payload_max = 1280 * 800 * 4 + 4096;
+        let popup_extra = std::mem::size_of::<SlotHeader>() + POPUP_PAYLOAD_MAX;
+        let with_popup = ShmReader::required_region_size(slot_payload_max);
+        let without_popup = std::mem::size_of::<RingHeader>()
+            + NUM_SLOTS * (std::mem::size_of::<SlotHeader>() + slot_payload_max);
+        assert_eq!(with_popup, without_popup + popup_extra);
     }
 }

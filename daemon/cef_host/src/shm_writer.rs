@@ -17,8 +17,14 @@
 use ozmux_browser_cef_protocol::types::Rect;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering, fence};
 
-/// Number of slots in each activity's ring.
+/// Number of slots in each activity's main ring.
 pub const NUM_SLOTS: usize = 4;
+
+/// Number of popup slots (one fixed slot for the popup overlay frame).
+pub const NUM_SLOTS_POPUP: usize = 1;
+
+/// Maximum payload bytes for the popup slot: 800×600 BGRA plus metadata slack.
+pub const POPUP_PAYLOAD_MAX: usize = 800 * 600 * 4 + 4096;
 
 /// Maximum number of damage rectangles stored per slot.
 pub const MAX_DAMAGE_RECTS: usize = 16;
@@ -187,14 +193,66 @@ impl ShmWriter {
         idx as u8
     }
 
+    fn popup_slot(&self) -> *mut SlotHeader {
+        // SAFETY: the popup slot lives immediately after the main ring slots.
+        unsafe {
+            self.base
+                .add(std::mem::size_of::<RingHeader>() + NUM_SLOTS * self.slot_stride)
+                as *mut SlotHeader
+        }
+    }
+
+    /// Write a popup frame into the single fixed popup slot.
+    ///
+    /// The popup slot does not participate in the lap counter — it is a
+    /// single overwrite-in-place buffer guarded by the same seqlock pattern.
+    pub fn write_slot_popup(&self, data: SlotData) {
+        let slot = self.popup_slot();
+        // SAFETY: slot pointer is valid; we are the sole writer.
+        unsafe {
+            let s = (*slot).write_seq.load(Ordering::Relaxed);
+            (*slot)
+                .write_seq
+                .store(s.wrapping_add(1), Ordering::Release);
+
+            (*slot).frame_seq = data.frame_seq;
+            (*slot).captured_at_us = data.captured_at_us;
+            (*slot).width = data.width;
+            (*slot).height = data.height;
+            (*slot).is_keyframe = u8::from(data.is_keyframe);
+            (*slot).is_popup = u8::from(data.is_popup);
+
+            let n_rects = data.damage_rects.len().min(MAX_DAMAGE_RECTS);
+            (*slot).damage_rects_count = n_rects as u32;
+            for (i, r) in data.damage_rects.iter().take(n_rects).enumerate() {
+                (*slot).damage_rects[i] = *r;
+            }
+
+            let copy_len = data.payload.len().min(POPUP_PAYLOAD_MAX);
+            (*slot).payload_len = copy_len as u32;
+            let payload_ptr = (slot as *mut u8).add(std::mem::size_of::<SlotHeader>());
+            std::ptr::copy_nonoverlapping(data.payload.as_ptr(), payload_ptr, copy_len);
+
+            fence(Ordering::Release);
+            (*slot)
+                .write_seq
+                .store(s.wrapping_add(2), Ordering::Release);
+        }
+    }
+
     /// Returns the current absolute write counter (number of slots committed so far).
     pub fn current_lap(&self) -> u64 {
         self.ring_header().lap_count.load(Ordering::Acquire)
     }
 
     /// Returns the mmap region size (in bytes) required for the given payload capacity.
+    ///
+    /// The region contains the `RingHeader`, `NUM_SLOTS` main slots each of
+    /// `slot_payload_max` bytes, and `NUM_SLOTS_POPUP` popup slots each of
+    /// `POPUP_PAYLOAD_MAX` bytes.
     pub fn required_region_size(slot_payload_max: usize) -> usize {
         std::mem::size_of::<RingHeader>()
             + NUM_SLOTS * (std::mem::size_of::<SlotHeader>() + slot_payload_max)
+            + NUM_SLOTS_POPUP * (std::mem::size_of::<SlotHeader>() + POPUP_PAYLOAD_MAX)
     }
 }

@@ -1,6 +1,8 @@
-// CEF-backed BrowserActivity. Owns a `<canvas>` whose control is
-// transferred to a Web Worker on mount; the worker decodes msgpack
-// BrowserServerMsg frames via WebGpuRenderer.
+// CEF-backed BrowserActivity. Owns two <canvas> elements whose control is
+// transferred to a Web Worker on mount: one for the main viewport and one for
+// the popup overlay (e.g. <select> dropdowns). The worker decodes msgpack
+// BrowserServerMsg frames and dispatches each Screencast frame to the
+// appropriate renderer.
 //
 // Task A10: when the daemon answers with `SubscribeReply::MustRestart`,
 // we bump `restartId` to remount the canvas + recreate the worker + force
@@ -9,6 +11,11 @@
 // Task B7: an invisible overlay <div> absorbs mouse + keyboard events;
 // a hidden <textarea> collects IME composition. Both route through the
 // `send` function returned by useBrowserSocketCef.
+//
+// Task B16-B18: a second popup canvas is mounted always (for a stable ref
+// so transferControlToOffscreen can be called once on init). It is hidden via
+// `hidden` Tailwind utility when no popup_rect is active, and positioned via
+// inline style (biome-ignore documented) when popup_rect is set.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ContextMenu } from './ContextMenu';
@@ -31,11 +38,25 @@ interface WorkerHandle {
   generation: number;
 }
 
+interface PopupRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 const POC_WIDTH = 1280;
 const POC_HEIGHT = 800;
 
+// NOTE: popup canvas backing size matches POPUP_PAYLOAD_MAX in shm_writer.rs
+// (800×600 BGRA). For PoC the backing buffer is fixed and CSS-scaled via
+// the style width/height when the popup is larger than this.
+const POPUP_CANVAS_WIDTH = 800;
+const POPUP_CANVAS_HEIGHT = 600;
+
 export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const popupCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [handle, setHandle] = useState<WorkerHandle | null>(null);
@@ -50,6 +71,9 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     can_forward: false,
   });
   const [ctx, setCtx] = useState<{ x: number; y: number } | null>(null);
+  // Popup overlay rect, delivered by the worker when popup frames arrive.
+  // null means the popup is not visible — the canvas is hidden.
+  const [popupRect, setPopupRect] = useState<PopupRect | null>(null);
 
   // Stable ref to the send function so the input-attach effect does not
   // re-fire every render when `send` identity changes.
@@ -57,10 +81,13 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    let offscreen: OffscreenCanvas;
+    const popupCanvas = popupCanvasRef.current;
+    if (!canvas || !popupCanvas) return;
+    let mainOffscreen: OffscreenCanvas;
+    let popupOffscreen: OffscreenCanvas;
     try {
-      offscreen = canvas.transferControlToOffscreen();
+      mainOffscreen = canvas.transferControlToOffscreen();
+      popupOffscreen = popupCanvas.transferControlToOffscreen();
     } catch (e) {
       console.warn('transferControlToOffscreen failed; skipping worker init', e);
       return;
@@ -77,23 +104,28 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
         // (Task A16). Counts every successful render the worker reports.
         const w = window as unknown as { __poc_paint_done_count?: number };
         w.__poc_paint_done_count = (w.__poc_paint_done_count ?? 0) + 1;
+      } else if (ev.data.type === 'popup_rect') {
+        const msg = ev.data as { type: 'popup_rect'; rect: PopupRect | null };
+        setPopupRect(msg.rect);
       }
     };
     w.postMessage(
       {
         type: 'init',
         generation,
-        canvas: offscreen,
+        mainCanvas: mainOffscreen,
+        popupCanvas: popupOffscreen,
         width: POC_WIDTH,
         height: POC_HEIGHT,
       },
-      [offscreen],
+      [mainOffscreen, popupOffscreen],
     );
     setHandle({ worker: w, generation });
     return () => {
       w.postMessage({ type: 'dispose' });
       w.terminate();
       setHandle(null);
+      setPopupRect(null);
     };
   }, [restartId]);
 
@@ -201,6 +233,27 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
               width={POC_WIDTH}
               height={POC_HEIGHT}
               className="block max-h-full max-w-full"
+            />
+            {/* Popup overlay canvas — always mounted for a stable ref so
+                transferControlToOffscreen is called once at init.
+                Hidden via `hidden` utility when no popup is active; positioned
+                via inline style (runtime-computed CEF rect) when visible. */}
+            <canvas
+              ref={popupCanvasRef}
+              width={POPUP_CANVAS_WIDTH}
+              height={POPUP_CANVAS_HEIGHT}
+              className={popupRect ? 'absolute block' : 'absolute hidden'}
+              // biome-ignore lint/plugin: popup overlay anchored to runtime-computed CEF rect — cannot use Tailwind utilities for arbitrary x/y/w/h
+              style={
+                popupRect
+                  ? {
+                      left: popupRect.x,
+                      top: popupRect.y,
+                      width: popupRect.w,
+                      height: popupRect.h,
+                    }
+                  : undefined
+              }
             />
             {/* Overlay div absorbs mouse and keyboard events for the embedded browser. */}
             <div
