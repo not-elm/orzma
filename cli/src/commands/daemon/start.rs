@@ -9,6 +9,9 @@ pub struct StartArgs {
     foreground: bool,
 }
 
-pub async fn run(_args: StartArgs) -> anyhow::Result<()> {
-    anyhow::bail!("ozmux daemon start: not yet implemented")
+pub async fn run(args: StartArgs) -> anyhow::Result<()> {
+    if args.foreground {
+        return daemon_bootstrap::run().await;
+    }
+    anyhow::bail!("ozmux daemon start (detached mode): not yet implemented")
 }
