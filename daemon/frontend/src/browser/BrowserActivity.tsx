@@ -21,13 +21,15 @@ interface Props {
  * frontend-drawn `ContextMenu`.
  */
 export function BrowserActivity({ windowId, paneId, activityId, isActive }: Props) {
-  const { send, lastFrame, nav } = useBrowserSocket(windowId, paneId, activityId);
+  const { send, lastFrame, nav, viewport } = useBrowserSocket(windowId, paneId, activityId);
   const overlayRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [ctx, setCtx] = useState<{ x: number; y: number } | null>(null);
 
-  // Send resize when the overlay's CSS pixel size changes. The Chromium
-  // viewport is updated to match.
+  // Send a DPR-aware resize whenever the overlay's CSS pixel size changes.
+  // The Chromium viewport and screencast bounds are updated to match.
+  // Resize messages sent before the WS is open are buffered in useBrowserSocket
+  // and flushed on connect, so ResizeObserver can fire at any time.
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
@@ -35,22 +37,28 @@ export function BrowserActivity({ windowId, paneId, activityId, isActive }: Prop
       const r = el.getBoundingClientRect();
       const width = Math.max(1, Math.round(r.width));
       const height = Math.max(1, Math.round(r.height));
-      send({ kind: 'resize', width, height });
+      send({
+        kind: 'resize',
+        width,
+        height,
+        device_scale_factor: window.devicePixelRatio,
+      });
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, [send]);
 
-  // Mouse / wheel: scale coords against the current frame's viewport.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: lastFrame is a new object per screencast frame; we depend on width/height only to avoid detach/reattach on every frame
+  // Mouse / wheel: scale coords against the CSS viewport dimensions reported
+  // by the daemon, not the JPEG bitmap size (which may be viewport × DSF on
+  // HiDPI displays). Fall back to 1 until the first Viewport message arrives.
   useEffect(() => {
-    if (!overlayRef.current || !lastFrame) return;
+    if (!overlayRef.current) return;
     return attachMouse(
       overlayRef.current,
-      { width: lastFrame.width, height: lastFrame.height },
+      { width: Math.max(1, viewport.width), height: Math.max(1, viewport.height) },
       send,
     );
-  }, [send, lastFrame?.width, lastFrame?.height]);
+  }, [send, viewport.width, viewport.height]);
 
   // Keyboard + IME on the hidden textarea.
   useEffect(() => {
