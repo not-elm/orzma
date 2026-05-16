@@ -4,7 +4,6 @@
 use anyhow::{Context, Result};
 use fs2::FileExt;
 use std::fs::{File, OpenOptions};
-#[cfg(unix)]
 use std::io;
 use std::net::{SocketAddr, TcpStream};
 #[cfg(unix)]
@@ -18,6 +17,7 @@ use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
 const DAEMON_ADDR: &str = "127.0.0.1:3200";
+pub(crate) const DAEMON_BASE_URL: &str = "http://127.0.0.1:3200";
 const HEALTH_URL: &str = "http://127.0.0.1:3200/health";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);

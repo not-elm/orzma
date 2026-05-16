@@ -14,7 +14,7 @@ pub fn run() {
         .setup(|app| {
             tauri::async_runtime::block_on(async {
                 daemon::ensure_running(app.handle()).await?;
-                let url = WebviewUrl::External("http://127.0.0.1:3200".parse()?);
+                let url = WebviewUrl::External(daemon::DAEMON_BASE_URL.parse()?);
                 WebviewWindowBuilder::new(app, "main", url)
                     .title("ozmux")
                     .inner_size(1280.0, 800.0)
