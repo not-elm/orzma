@@ -22,14 +22,17 @@ pub use window::{
 pub type SetActivePaneOutcome = SetActiveOutcome;
 
 /// In-memory domain model. Owns the multiplexer's three stores (sessions,
-/// windows, pane_owner_window index). Pure data — no PTY, no extension
-/// registry, no layout broadcast. Side-effecting orchestration lives in the
-/// http_server `AppState`.
+/// windows, pane_owner_window index, activity_owner_window index). Pure data
+/// — no PTY, no extension registry, no layout broadcast. Side-effecting
+/// orchestration lives in the http_server `AppState`.
 #[derive(Clone, Default)]
 pub struct MultiplexerService {
     pub sessions: Arc<Mutex<SessionState>>,
     pub windows: Arc<DashMap<WindowId, Arc<Mutex<Window>>>>,
     pub pane_owner_window: Arc<DashMap<PaneId, WindowId>>,
+    /// O(1) index: activity id → owning window id. Maintained in parallel with
+    /// `pane_owner_window` — updated by `AppState` after every mutation.
+    pub activity_owner_window: Arc<DashMap<ActivityId, WindowId>>,
 }
 
 impl MultiplexerService {
@@ -95,6 +98,8 @@ impl MultiplexerService {
             .insert(window_id.clone(), Arc::new(Mutex::new(window)));
         self.pane_owner_window
             .insert(pane_id.clone(), window_id.clone());
+        self.activity_owner_window
+            .insert(activity_id.clone(), window_id.clone());
 
         if let Some(sid) = session_id {
             let session = session_state.get_mut(sid)?;
@@ -136,25 +141,13 @@ impl MultiplexerService {
         Err(MultiplexerError::WindowNotAttachedToSession(wid.clone()))
     }
 
-    /// Find which Window owns the given Activity by linear scan. Returns `None`
-    /// when no Window contains `aid`. O(activities) — acceptable at the 500 ms
-    /// polling cadence used by the browser-title adapter.
-    pub async fn find_window_for_activity(&self, aid: &ActivityId) -> Option<WindowId> {
-        // NOTE: collect (wid, Arc) pairs before awaiting to honour the
-        // DASHMAP-GUARD invariant: never hold a DashMap Ref across an `.await`.
-        let entries: Vec<(WindowId, Arc<Mutex<Window>>)> = self
-            .windows
-            .iter()
-            .map(|e| (e.key().clone(), e.value().clone()))
-            .collect();
-        for (wid, arc) in entries {
-            let window = arc.lock().await;
-            let found = window.panes.iter().any(|(_, p)| p.has_activity(aid));
-            if found {
-                return Some(wid);
-            }
-        }
-        None
+    /// Find which Window owns the given Activity. O(1) via the
+    /// `activity_owner_window` index. Returns `None` when `aid` is not
+    /// registered in the index.
+    pub fn find_window_for_activity(&self, aid: &ActivityId) -> Option<WindowId> {
+        self.activity_owner_window
+            .get(aid)
+            .map(|r| r.value().clone())
     }
 
     /// Resolve which Window currently owns `pid`. Returns `PaneNotFound`
@@ -201,6 +194,9 @@ impl MultiplexerService {
         for pid in &pane_ids {
             self.pane_owner_window.remove(pid);
         }
+        for aid in &activities {
+            self.activity_owner_window.remove(aid);
+        }
         Ok((activities, pane_ids))
     }
 
@@ -210,5 +206,32 @@ impl MultiplexerService {
         let mut session_state = self.sessions.lock().await;
         let session = session_state.remove(sid)?;
         Ok(session.linked_windows)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn activity_owner_window_populated_by_create_window() {
+        let svc = MultiplexerService::default();
+        let (wid, _pid, aid) = svc.create_window(None, None).await.unwrap();
+        assert_eq!(svc.find_window_for_activity(&aid), Some(wid));
+    }
+
+    #[tokio::test]
+    async fn activity_owner_window_removed_by_close_window_data() {
+        let svc = MultiplexerService::default();
+        let (wid, _pid, aid) = svc.create_window(None, None).await.unwrap();
+        svc.close_window_data(&wid).await.unwrap();
+        assert_eq!(svc.find_window_for_activity(&aid), None);
+    }
+
+    #[tokio::test]
+    async fn find_window_for_activity_returns_none_for_unknown() {
+        let svc = MultiplexerService::default();
+        let phantom = ActivityId::new();
+        assert_eq!(svc.find_window_for_activity(&phantom), None);
     }
 }

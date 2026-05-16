@@ -198,6 +198,10 @@ impl AppState {
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.add_activity(activity))
             .await?;
 
+        self.multiplexer
+            .activity_owner_window
+            .insert(aid.clone(), wid.clone());
+
         if let Some(name) = extension_name {
             self.extensions.record_activity_owner(&aid, name);
         }
@@ -231,6 +235,8 @@ impl AppState {
         self.multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
             .await?;
+
+        self.multiplexer.activity_owner_window.remove(aid);
 
         // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
         let _ = self.terminal.kill(aid).await;
@@ -269,6 +275,9 @@ impl AppState {
         self.multiplexer
             .pane_owner_window
             .insert(new_pane_id.clone(), wid.clone());
+        self.multiplexer
+            .activity_owner_window
+            .insert(new_activity_id.clone(), wid.clone());
 
         if let Some(name) = input.extension_name.as_deref() {
             self.extensions
@@ -310,6 +319,7 @@ impl AppState {
         self.extensions.forget_pane(pid);
         // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
+            self.multiplexer.activity_owner_window.remove(aid);
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
             self.browser.close(aid).await;
@@ -365,25 +375,32 @@ impl AppState {
             .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
                 w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
             })
-            .await
+            .await?;
+        self.multiplexer.activity_owner_window.remove(aid);
+        Ok(())
     }
 
     async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
         // NOTE: spawn happens before publish, so the frontend never saw the new
         // pane — no layout re-broadcast is needed on rollback.
-        let closed = self
+        let activities = self
             .multiplexer
             .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
-            .await
-            .is_ok();
-        if !closed {
-            tracing::warn!(
-                %new_pane_id,
-                "split rollback failed to close pane after spawn failure"
-            );
-            return;
+            .await;
+        match activities {
+            Ok(aids) => {
+                self.multiplexer.pane_owner_window.remove(new_pane_id);
+                for aid in &aids {
+                    self.multiplexer.activity_owner_window.remove(aid);
+                }
+            }
+            Err(_) => {
+                tracing::warn!(
+                    %new_pane_id,
+                    "split rollback failed to close pane after spawn failure"
+                );
+            }
         }
-        self.multiplexer.pane_owner_window.remove(new_pane_id);
     }
 
     /// Build the current Window layout snapshot under the Window lock and
