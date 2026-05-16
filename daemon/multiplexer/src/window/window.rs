@@ -540,7 +540,10 @@ mod tests {
         win.set_dimensions(120, 40);
         assert_eq!(
             win.dimensions,
-            Some(WindowDimensions { cols: 120, rows: 40 })
+            Some(WindowDimensions {
+                cols: 120,
+                rows: 40
+            })
         );
     }
 

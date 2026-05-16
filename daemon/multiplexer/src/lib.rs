@@ -11,12 +11,12 @@ pub mod window;
 
 pub use error::{MultiplexerError, MultiplexerResult};
 pub use session::{Session, SessionId, SessionState};
+pub use window::resize::ResizePaneOutcome;
 pub use window::{
     Activity, ActivityId, ActivityKind, Cell, CellId, CloseOutcome, CycleDirection,
     LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, RootCell, SetActiveOutcome,
     Side, SplitCell, SplitOrientation, Window, WindowDimensions, WindowId, WindowState,
 };
-pub use window::resize::ResizePaneOutcome;
 
 /// Backwards-compatible alias for the active-pane outcome. Use
 /// `SetActiveOutcome` directly in new code.
@@ -264,14 +264,15 @@ mod tests {
         let outcome = svc.set_window_dimensions(&wid, 120, 40).await.unwrap();
         assert_eq!(outcome, SetDimensionsOutcome::Applied);
         let dims = svc
-            .with_window_or_404(&wid, |w| {
-                Ok::<_, MultiplexerError>(w.dimensions.clone())
-            })
+            .with_window_or_404(&wid, |w| Ok::<_, MultiplexerError>(w.dimensions.clone()))
             .await
             .unwrap();
         assert_eq!(
             dims,
-            Some(crate::WindowDimensions { cols: 120, rows: 40 })
+            Some(crate::WindowDimensions {
+                cols: 120,
+                rows: 40
+            })
         );
     }
 
@@ -317,5 +318,4 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, ResizePaneOutcome::NoOp));
     }
-
 }
