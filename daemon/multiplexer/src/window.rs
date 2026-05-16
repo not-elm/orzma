@@ -4,6 +4,7 @@
 //! `ozmux_multiplexer::window::{Window, WindowId, PaneId, ActivityId, ...}`.
 
 pub mod cells;
+pub mod direction;
 pub mod pane;
 #[allow(clippy::module_inception)]
 mod window;
@@ -12,6 +13,7 @@ pub use cells::{
     Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, RootCell, Side, SplitCell,
     SplitOrientation,
 };
+pub use direction::PaneDirection;
 pub use pane::activity::{Activity, ActivityId, ActivityKind};
 pub use pane::{CycleDirection, Pane, PaneId, PaneState, SetActiveOutcome};
 pub use window::{Window, WindowId, WindowState};

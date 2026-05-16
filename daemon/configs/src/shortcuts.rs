@@ -208,6 +208,42 @@ impl Default for Shortcuts {
                         offset: ActivityOffset::Prev,
                     },
                 },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('h'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusPane {
+                        direction: Direction::Left,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('j'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusPane {
+                        direction: Direction::Down,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('k'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusPane {
+                        direction: Direction::Up,
+                    },
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('l'),
+                        modifiers: Modifiers::default(),
+                    },
+                    action: Action::FocusPane {
+                        direction: Direction::Right,
+                    },
+                },
             ],
         }
     }
@@ -518,7 +554,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         assert_eq!(
             json,
-            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"}},{"key":"s","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"vertical"}},{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"next"}},{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"prev"}}]}"#
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"}},{"key":"s","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"vertical"}},{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"next"}},{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"prev"}},{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"left"}},{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"down"}},{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"up"}},{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"right"}}]}"#
         );
     }
 }

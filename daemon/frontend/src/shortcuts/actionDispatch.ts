@@ -2,6 +2,7 @@ import { breakActivityToPane } from '../layout/breakActivityToPane';
 import { closeActivity } from '../layout/closeActivity';
 import { closePane } from '../layout/closePane';
 import { cycleActivity } from '../layout/cycleActivity';
+import { focusPane } from '../layout/focusPane';
 import { newTerminalActivity } from '../layout/newTerminalActivity';
 import { splitPane } from '../layout/splitPane';
 import type { ActivityId, PaneId, WindowId } from '../layout/types';
@@ -39,10 +40,19 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
       const direction = action.offset;
       return () => withActivePane(ctx, (w, p) => cycleActivity(w, p, direction));
     }
+    case 'focus-pane': {
+      const direction = action.direction;
+      return () => withActiveWindow(ctx, (w) => focusPane(w, direction));
+    }
     default:
       console.warn('actionToHandler: unsupported action', action);
       return null;
   }
+}
+
+function withActiveWindow(ctx: ShortcutContext, run: (w: WindowId) => void | Promise<void>): void {
+  const w = ctx.activeWindow();
+  if (w) void run(w);
 }
 
 function withActivePane(

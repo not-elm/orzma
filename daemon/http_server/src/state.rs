@@ -7,8 +7,8 @@ use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
     Activity, ActivityId, ActivityKind, CycleDirection, MultiplexerError, MultiplexerResult,
-    MultiplexerService, PaneId, SessionId, SetActiveOutcome, SetActivePaneOutcome, Side,
-    SplitOrientation, WindowId,
+    MultiplexerService, PaneDirection, PaneId, SessionId, SetActiveOutcome, SetActivePaneOutcome,
+    Side, SplitOrientation, WindowId,
 };
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
@@ -125,6 +125,31 @@ impl AppState {
             })
             .await?;
         if matches!(outcome, SetActivePaneOutcome::Changed) {
+            self.publish_window_layout(wid).await;
+        }
+        Ok(())
+    }
+
+    /// Move focus from the currently active pane to its geometric neighbor in
+    /// `direction`. Resolves and activates inside one window-lock acquisition
+    /// to avoid TOCTOU between lookup and set, and broadcasts the new layout
+    /// only when the active pane actually changes.
+    pub async fn focus_pane_direction(
+        &self,
+        wid: &WindowId,
+        direction: PaneDirection,
+    ) -> HttpResult {
+        let outcome = self
+            .multiplexer
+            .with_window_or_404(wid, |window| -> MultiplexerResult<SetActiveOutcome> {
+                let from = window.active_pane.clone();
+                match window.pane_in_direction(&from, direction)? {
+                    Some(target) => window.set_active_pane(&target),
+                    None => Ok(SetActiveOutcome::Unchanged),
+                }
+            })
+            .await?;
+        if matches!(outcome, SetActiveOutcome::Changed) {
             self.publish_window_layout(wid).await;
         }
         Ok(())
