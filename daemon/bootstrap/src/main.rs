@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         TerminalService::with_runtime_root(Arc::clone(&runtime)),
         registry,
         ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
+        ozmux_http_server::session_broadcast::SessionBroadcaster::from_env(),
         Arc::clone(&configs),
     );
 

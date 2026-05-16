@@ -5,6 +5,8 @@ pub mod extractors;
 pub mod handlers;
 pub mod layout_broadcast;
 pub mod layout_dto;
+pub mod session_broadcast;
+pub mod session_view;
 pub mod state;
 mod title_republish;
 pub mod window_view;
@@ -84,6 +86,10 @@ pub fn sessions_router() -> Router<AppState> {
                 .patch(handlers::sessions::rename::rename)
                 .delete(handlers::sessions::delete::delete),
         )
+        .route(
+            "/{session_id}/events",
+            get(handlers::sessions::events::events),
+        )
 }
 
 pub fn windows_router() -> Router<AppState> {
@@ -125,6 +131,7 @@ pub(crate) mod test_helpers {
             ozmux_terminal::TerminalService::default(),
             ozmux_extension::ExtensionRegistry::default(),
             crate::layout_broadcast::LayoutBroadcaster::default(),
+            crate::session_broadcast::SessionBroadcaster::default(),
             std::sync::Arc::new(ozmux_configs::OzmuxConfigs::default()),
         )
     }

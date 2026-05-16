@@ -318,4 +318,44 @@ describe('parseShortcuts', () => {
     expect(out?.bindings[0].action.type).toBe('close-pane');
     expect(console.warn).toHaveBeenCalled();
   });
+
+  it('parses focus-window action', () => {
+    const raw = {
+      prefix: {
+        key: 'b',
+        modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+        timeout_ms: 2000,
+      },
+      bindings: [
+        {
+          key: 'n',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'focus-window', offset: 'next' },
+          repeatable: true,
+        },
+      ],
+    };
+    const out = parseShortcuts(raw);
+    expect(out?.bindings[0]?.action).toEqual({ type: 'focus-window', offset: 'next' });
+  });
+
+  it('parses focus-window-number action', () => {
+    const raw = {
+      prefix: {
+        key: 'b',
+        modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+        timeout_ms: 2000,
+      },
+      bindings: [
+        {
+          key: '0',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'focus-window-number', index: 0 },
+          repeatable: false,
+        },
+      ],
+    };
+    const out = parseShortcuts(raw);
+    expect(out?.bindings[0]?.action).toEqual({ type: 'focus-window-number', index: 0 });
+  });
 });
