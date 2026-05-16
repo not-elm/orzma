@@ -4,6 +4,7 @@ import { closePane } from '../layout/closePane';
 import { cycleActivity } from '../layout/cycleActivity';
 import { focusPane } from '../layout/focusPane';
 import { newTerminalActivity } from '../layout/newTerminalActivity';
+import { resizePane } from '../layout/resizePane';
 import { splitPane } from '../layout/splitPane';
 import type { ActivityId, PaneId, WindowId } from '../layout/types';
 import type { Action } from './wire';
@@ -43,6 +44,10 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
     case 'focus-pane': {
       const direction = action.direction;
       return () => withActiveWindow(ctx, (w) => focusPane(w, direction));
+    }
+    case 'resize-pane': {
+      const direction = action.direction;
+      return () => withActivePane(ctx, (w, p) => resizePane(w, p, direction));
     }
     default:
       console.warn('actionToHandler: unsupported action', action);

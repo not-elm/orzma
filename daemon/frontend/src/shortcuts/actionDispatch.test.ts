@@ -272,4 +272,44 @@ describe('actionToHandler', () => {
     await Promise.resolve();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    'left',
+    'right',
+    'up',
+    'down',
+  ] as const)('returns a handler that POSTs resize with %s direction', async (direction) => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext({
+      activeWindow: () => 'wid-1',
+      activePane: () => 'pid-1',
+    });
+    const handler = actionToHandler({ type: 'resize-pane', direction }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/windows/wid-1/panes/pid-1/resize');
+    expect((init as RequestInit).method).toBe('POST');
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).toEqual({ direction, amount: 1 });
+  });
+
+  it('returns a no-op resize handler when context lacks an active pane', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext();
+    const handler = actionToHandler({ type: 'resize-pane', direction: 'right' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

@@ -18,6 +18,9 @@ export const breakActivityToPaneEndpoint = (wid: string, pid: string, aid: strin
 export const cycleActivityEndpoint = (wid: string, pid: string) =>
   `/windows/${wid}/panes/${pid}/cycle-activity`;
 export const focusPaneEndpoint = (wid: string) => `/windows/${wid}/focus-pane`;
+export const resizePaneEndpoint = (wid: string, pid: string) =>
+  `/windows/${wid}/panes/${pid}/resize`;
+export const windowDimensionsEndpoint = (wid: string) => `/windows/${wid}/dimensions`;
 
 export const vtTerminalWsUrl = (
   windowId: string,

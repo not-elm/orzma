@@ -155,6 +155,27 @@ impl AppState {
         Ok(())
     }
 
+    /// Run the resize-pane algorithm via the multiplexer and publish a
+    /// layout update only if the mutation was applied. Per spec §5.2,
+    /// soft no-ops return 204 with no broadcast.
+    pub async fn resize_pane(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        direction: ozmux_multiplexer::PaneDirection,
+        amount: u16,
+    ) -> HttpResult<()> {
+        self.ensure_pane_in_window(wid, pid)?;
+        let outcome = self
+            .multiplexer
+            .resize_pane(wid, pid, direction, amount)
+            .await?;
+        if matches!(outcome, ozmux_multiplexer::ResizePaneOutcome::Applied) {
+            self.publish_window_layout(wid).await;
+        }
+        Ok(())
+    }
+
     /// Add an Activity to a Pane and broadcast the new layout. For
     /// terminal-kind activities, also spawn the backing PTY; on spawn
     /// failure the activity record is rolled back before returning the
@@ -343,6 +364,25 @@ impl AppState {
     pub async fn rename_window(&self, wid: &WindowId, name: String) -> HttpResult<()> {
         self.multiplexer.rename_window(wid, name).await?;
         self.publish_window_layout(wid).await;
+        Ok(())
+    }
+
+    /// Update the cached cell dimensions for `wid`. Validation of
+    /// positive cols/rows is the handler's responsibility. Broadcasts a
+    /// layout update only when the dimensions actually change.
+    pub async fn set_window_dimensions(
+        &self,
+        wid: &WindowId,
+        cols: u16,
+        rows: u16,
+    ) -> HttpResult<()> {
+        let outcome = self
+            .multiplexer
+            .set_window_dimensions(wid, cols, rows)
+            .await?;
+        if matches!(outcome, ozmux_multiplexer::SetDimensionsOutcome::Applied) {
+            self.publish_window_layout(wid).await;
+        }
         Ok(())
     }
 

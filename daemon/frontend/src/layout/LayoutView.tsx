@@ -1,10 +1,12 @@
 import { clsx } from 'clsx';
-import type { PointerEventHandler, ReactNode } from 'react';
+import { type PointerEventHandler, type ReactNode, useEffect, useState } from 'react';
+import { cellHeightOf, cellWidthOf } from '../terminal/renderer/font';
 import { PaneContent } from './PaneContent';
 import { type Bounds, computePaneLayout } from './paneBounds';
 import type { PaneId } from './types';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
 import type { DefaultWindowState } from './useDefaultWindow';
+import { useWindowDimensions } from './useWindowDimensions';
 import type { LayoutState } from './useWindowLayout';
 
 interface AbsoluteBoxProps {
@@ -40,6 +42,23 @@ interface LayoutViewProps {
 }
 
 export function LayoutView({ windowState: def, layoutState: layout }: LayoutViewProps) {
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const [metrics, setMetrics] = useState<{ cellW: number; cellH: number } | null>(null);
+  const liveWid = layout.status !== 'gone' && layout.view !== null ? layout.view.id : null;
+
+  // NOTE: font metrics depend on CSS font, not layout size — measure once.
+  useEffect(() => {
+    if (!container || metrics !== null) return;
+    const cellW = cellWidthOf(container);
+    const cellH = cellHeightOf(container);
+    if (cellW > 0 && cellH > 0) setMetrics({ cellW, cellH });
+  }, [container, metrics]);
+
+  useWindowDimensions(liveWid, container, {
+    cellWidth: metrics?.cellW ?? 0,
+    cellHeight: metrics?.cellH ?? 0,
+  });
+
   if (def.status === 'loading') {
     return (
       <div className="flex h-dvh w-dvw items-center justify-center text-muted-foreground">
@@ -80,7 +99,7 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
   };
 
   return (
-    <div className="relative h-dvh w-dvw bg-background">
+    <div ref={setContainer} className="relative h-dvh w-dvw bg-background">
       {view.panes.map((pane) => {
         const b = bounds.get(pane.id);
         if (!b) return null;

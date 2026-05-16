@@ -111,6 +111,14 @@ pub struct Shortcuts {
     pub prefix: Prefix,
     /// Bindings dispatched while armed.
     pub bindings: Vec<Binding>,
+    /// Milliseconds during which a `repeatable` binding accepts its trigger
+    /// key without the prefix.
+    #[serde(default = "default_repeat_timeout_ms")]
+    pub repeat_timeout_ms: u64,
+}
+
+fn default_repeat_timeout_ms() -> u64 {
+    500
 }
 
 impl Default for Shortcuts {
@@ -133,6 +141,7 @@ impl Default for Shortcuts {
                         modifiers: Modifiers::default(),
                     },
                     action: Action::ClosePane,
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -142,6 +151,7 @@ impl Default for Shortcuts {
                     action: Action::SplitPane {
                         direction: SplitDirection::Horizontal,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -151,6 +161,7 @@ impl Default for Shortcuts {
                     action: Action::SplitPane {
                         direction: SplitDirection::Vertical,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -158,6 +169,7 @@ impl Default for Shortcuts {
                         modifiers: Modifiers::default(),
                     },
                     action: Action::NewTerminalActivity,
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -165,6 +177,7 @@ impl Default for Shortcuts {
                         modifiers: Modifiers::default(),
                     },
                     action: Action::CloseActivity,
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -177,6 +190,7 @@ impl Default for Shortcuts {
                     action: Action::BreakActivityToPane {
                         direction: SplitDirection::Horizontal,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -189,6 +203,7 @@ impl Default for Shortcuts {
                     action: Action::BreakActivityToPane {
                         direction: SplitDirection::Vertical,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -198,6 +213,7 @@ impl Default for Shortcuts {
                     action: Action::FocusActivity {
                         offset: ActivityOffset::Next,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -207,6 +223,7 @@ impl Default for Shortcuts {
                     action: Action::FocusActivity {
                         offset: ActivityOffset::Prev,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -216,6 +233,7 @@ impl Default for Shortcuts {
                     action: Action::FocusPane {
                         direction: Direction::Left,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -225,6 +243,7 @@ impl Default for Shortcuts {
                     action: Action::FocusPane {
                         direction: Direction::Down,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -234,6 +253,7 @@ impl Default for Shortcuts {
                     action: Action::FocusPane {
                         direction: Direction::Up,
                     },
+                    repeatable: false,
                 },
                 Binding {
                     chord: KeyChord {
@@ -243,8 +263,62 @@ impl Default for Shortcuts {
                     action: Action::FocusPane {
                         direction: Direction::Right,
                     },
+                    repeatable: false,
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::ArrowLeft,
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::ResizePane {
+                        direction: Direction::Left,
+                    },
+                    repeatable: true,
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::ArrowRight,
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::ResizePane {
+                        direction: Direction::Right,
+                    },
+                    repeatable: true,
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::ArrowUp,
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::ResizePane {
+                        direction: Direction::Up,
+                    },
+                    repeatable: true,
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::ArrowDown,
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::ResizePane {
+                        direction: Direction::Down,
+                    },
+                    repeatable: true,
                 },
             ],
+            repeat_timeout_ms: 500,
         }
     }
 }
@@ -267,6 +341,10 @@ pub struct Binding {
     pub chord: KeyChord,
     /// Action dispatched when the chord matches.
     pub action: Action,
+    /// Whether the trigger key can be repeated without the prefix within
+    /// `Shortcuts::repeat_timeout_ms` of the previous trigger.
+    #[serde(default)]
+    pub repeatable: bool,
 }
 
 /// All shortcut actions supported by ozmux v0.
@@ -550,11 +628,53 @@ mod tests {
     }
 
     #[test]
+    fn binding_deserializes_repeatable_flag() {
+        let toml = r#"
+            key = "ArrowRight"
+            modifiers = { ctrl = true }
+            repeatable = true
+            action = { type = "resize-pane", direction = "right" }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert!(b.repeatable);
+        assert!(matches!(
+            b.action,
+            Action::ResizePane {
+                direction: Direction::Right
+            }
+        ));
+    }
+
+    #[test]
+    fn binding_repeatable_defaults_false_when_omitted() {
+        let toml = r#"
+            key = "x"
+            action = { type = "close-pane" }
+        "#;
+        let b: Binding = toml::from_str(toml).unwrap();
+        assert!(!b.repeatable);
+    }
+
+    #[test]
+    fn shortcuts_repeat_timeout_ms_defaults_to_500_when_omitted() {
+        let toml = r#"
+            bindings = []
+
+            [prefix]
+            key = "b"
+            modifiers = { ctrl = true }
+            timeout_ms = 2000
+        "#;
+        let s: Shortcuts = toml::from_str(toml).unwrap();
+        assert_eq!(s.repeat_timeout_ms, 500);
+    }
+
+    #[test]
     fn default_shortcuts_serializes_to_stable_json() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         assert_eq!(
             json,
-            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"}},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"}},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"}},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"}},{"key":"s","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"horizontal"}},{"key":"v","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"vertical"}},{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"next"}},{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"prev"}},{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"left"}},{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"down"}},{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"up"}},{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"right"}}]}"#
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"},"repeatable":false},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"},"repeatable":false},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"},"repeatable":false},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"},"repeatable":false},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-activity"},"repeatable":false},{"key":"s","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"horizontal"},"repeatable":false},{"key":"v","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"vertical"},"repeatable":false},{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"next"},"repeatable":false},{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"prev"},"repeatable":false},{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"left"},"repeatable":false},{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"down"},"repeatable":false},{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"up"},"repeatable":false},{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"right"},"repeatable":false},{"key":"ArrowLeft","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"left"},"repeatable":true},{"key":"ArrowRight","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"right"},"repeatable":true},{"key":"ArrowUp","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"up"},"repeatable":true},{"key":"ArrowDown","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"down"},"repeatable":true}],"repeat_timeout_ms":500}"#
         );
     }
 }

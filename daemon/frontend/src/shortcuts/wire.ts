@@ -48,6 +48,10 @@ const ActionSchema = z.discriminatedUnion('type', [
     type: z.literal('focus-pane'),
     direction: z.enum(['up', 'down', 'left', 'right']),
   }),
+  z.object({
+    type: z.literal('resize-pane'),
+    direction: z.enum(['up', 'down', 'left', 'right']),
+  }),
 ]);
 
 const PrefixSchema = KeyChordFieldsSchema.extend({
@@ -56,11 +60,13 @@ const PrefixSchema = KeyChordFieldsSchema.extend({
 
 const BindingSchema = KeyChordFieldsSchema.extend({
   action: ActionSchema,
+  repeatable: z.boolean().default(false),
 });
 
 const ShortcutsRawSchema = z.object({
   prefix: PrefixSchema,
   bindings: z.array(z.unknown()),
+  repeat_timeout_ms: z.number().int().nonnegative().default(500),
 });
 
 export type KeyChord = z.infer<typeof KeyChordFieldsSchema>;
@@ -69,10 +75,12 @@ export type Prefix = z.infer<typeof PrefixSchema>;
 export interface Binding {
   chord: KeyChord;
   action: Action;
+  repeatable: boolean;
 }
 export interface Shortcuts {
   prefix: Prefix;
   bindings: Binding[];
+  repeat_timeout_ms: number;
 }
 
 /**
@@ -96,8 +104,12 @@ export function parseShortcuts(raw: unknown): Shortcuts | null {
       console.warn('parseShortcuts: dropping binding', { entry, issues: parsed.error.issues });
       continue;
     }
-    const { key, modifiers, action } = parsed.data;
-    bindings.push({ chord: { key, modifiers }, action });
+    const { key, modifiers, action, repeatable } = parsed.data;
+    bindings.push({ chord: { key, modifiers }, action, repeatable });
   }
-  return { prefix: top.data.prefix, bindings };
+  return {
+    prefix: top.data.prefix,
+    bindings,
+    repeat_timeout_ms: top.data.repeat_timeout_ms,
+  };
 }

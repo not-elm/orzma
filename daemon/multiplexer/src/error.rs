@@ -15,6 +15,11 @@ pub enum MultiplexerError {
     #[error("window not found window-id={0}")]
     WindowNotFound(WindowId),
 
+    #[error(
+        "window {0} has no cached dimensions; the client must PATCH /windows/{{wid}}/dimensions before resize-pane"
+    )]
+    WindowNotMeasured(WindowId),
+
     #[error("pane {pane} does not belong to window {window}")]
     PaneNotInWindow { window: WindowId, pane: PaneId },
 

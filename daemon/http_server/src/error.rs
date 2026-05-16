@@ -41,6 +41,12 @@ pub enum HttpError {
 
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
+
+    #[error("invalid dimensions: {field} must be >= 1")]
+    InvalidDimensions { field: &'static str },
+
+    #[error("invalid amount: must be >= 1")]
+    InvalidAmount,
 }
 
 pub type HttpResult<T = ()> = Result<T, HttpError>;
@@ -62,6 +68,9 @@ impl axum::response::IntoResponse for HttpError {
             }
             HttpError::Session(MultiplexerError::PaneNotInWindow { .. }) => {
                 (StatusCode::CONFLICT, "PANE_NOT_IN_WINDOW")
+            }
+            HttpError::Session(MultiplexerError::WindowNotMeasured(_)) => {
+                (StatusCode::CONFLICT, "WINDOW_NOT_MEASURED")
             }
             HttpError::Session(MultiplexerError::CellNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "CELL_NOT_FOUND")
@@ -95,6 +104,10 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::ServiceUnavailable(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
             }
+            HttpError::InvalidDimensions { .. } => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_DIMENSIONS")
+            }
+            HttpError::InvalidAmount => (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_AMOUNT"),
             HttpError::Session(MultiplexerError::ActivityNotFound(_))
             | HttpError::Session(MultiplexerError::ActivityNotInPane { .. }) => {
                 (StatusCode::NOT_FOUND, "ACTIVITY_NOT_FOUND")
@@ -272,5 +285,26 @@ mod tests {
         let err = HttpError::Session(MultiplexerError::CannotRemoveLastActivity(PaneId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn window_not_measured_maps_to_409_window_not_measured() {
+        let err = HttpError::Session(MultiplexerError::WindowNotMeasured(WindowId::new()));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn invalid_dimensions_maps_to_422_invalid_dimensions() {
+        let err = HttpError::InvalidDimensions { field: "cols" };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn invalid_amount_maps_to_422() {
+        let err = HttpError::InvalidAmount;
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

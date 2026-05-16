@@ -96,6 +96,10 @@ pub fn windows_router() -> Router<AppState> {
                 .delete(handlers::windows::delete::delete),
         )
         .route(
+            "/{window_id}/dimensions",
+            axum::routing::patch(handlers::windows::dimensions::patch_dimensions),
+        )
+        .route(
             "/{window_id}/select",
             post(handlers::windows::select::select),
         )
