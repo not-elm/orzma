@@ -6,6 +6,7 @@
 pub mod cells;
 pub mod direction;
 pub mod pane;
+pub(super) mod resize;
 #[allow(clippy::module_inception)]
 mod window;
 
