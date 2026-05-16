@@ -2800,6 +2800,9 @@ dependencies = [
  "libc",
  "nix 0.29.0",
  "ozmux_browser_cef_protocol",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
