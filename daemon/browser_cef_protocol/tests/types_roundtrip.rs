@@ -1,7 +1,8 @@
 use ozmux_browser_cef_protocol::types::{ActivityId, FrameKey, Rect};
 use ozmux_browser_cef_protocol::wire::{
-    BrowserClientMsg, BrowserServerMsg, CefCookieDto, FrameSubscriptionReply, HostCommand,
-    HostEvent, SameSite,
+    BrowserClientMsg, BrowserServerMsg, BrowserUnavailableReason, CefCookieDto,
+    FrameSubscriptionReply, HostCommand, HostEvent, ImeUnderline, InputEvent, KeyEventType,
+    MouseButton, MustRestartReason, SameSite,
 };
 
 #[test]
@@ -119,6 +120,189 @@ fn host_command_shutdown_roundtrips() {
     wire_roundtrip(HostCommand::Shutdown);
 }
 
+// --- HostCommand new variants (Task A15) ---
+
+#[test]
+fn host_command_recreate_shm_roundtrips() {
+    wire_roundtrip(HostCommand::RecreateShm {
+        aid: ActivityId("a2".into()),
+        new_epoch: 7,
+    });
+}
+
+#[test]
+fn host_command_navigate_roundtrips() {
+    wire_roundtrip(HostCommand::Navigate {
+        aid: ActivityId("a1".into()),
+        url: "https://example.com/page".into(),
+    });
+}
+
+#[test]
+fn host_command_navigate_history_roundtrips() {
+    wire_roundtrip(HostCommand::NavigateHistory {
+        aid: ActivityId("a1".into()),
+        delta: -1,
+    });
+    wire_roundtrip(HostCommand::NavigateHistory {
+        aid: ActivityId("a1".into()),
+        delta: 1,
+    });
+}
+
+#[test]
+fn host_command_send_input_mouse_roundtrips() {
+    wire_roundtrip(HostCommand::SendInput {
+        aid: ActivityId("a1".into()),
+        input: InputEvent::MouseMove {
+            x: 100,
+            y: 200,
+            modifiers: 0,
+        },
+    });
+    wire_roundtrip(HostCommand::SendInput {
+        aid: ActivityId("a1".into()),
+        input: InputEvent::MouseClick {
+            x: 50,
+            y: 60,
+            button: MouseButton::Left,
+            count: 1,
+            mouse_up: false,
+            modifiers: 0,
+        },
+    });
+    wire_roundtrip(HostCommand::SendInput {
+        aid: ActivityId("a1".into()),
+        input: InputEvent::MouseWheel {
+            x: 200,
+            y: 300,
+            delta_x: 0,
+            delta_y: -120,
+            modifiers: 0,
+        },
+    });
+    // All three button variants
+    for btn in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
+        wire_roundtrip(HostCommand::SendInput {
+            aid: ActivityId("a1".into()),
+            input: InputEvent::MouseClick {
+                x: 0,
+                y: 0,
+                button: btn,
+                count: 1,
+                mouse_up: true,
+                modifiers: 0,
+            },
+        });
+    }
+}
+
+#[test]
+fn host_command_send_input_key_roundtrips() {
+    for event_type in [
+        KeyEventType::RawKeyDown,
+        KeyEventType::KeyUp,
+        KeyEventType::Char,
+    ] {
+        wire_roundtrip(HostCommand::SendInput {
+            aid: ActivityId("a1".into()),
+            input: InputEvent::Key {
+                event_type,
+                windows_key_code: 65,
+                native_key_code: 30,
+                modifiers: 0,
+                character: b'a' as u16,
+                unmodified_character: b'a' as u16,
+                focus_on_editable_field: true,
+            },
+        });
+    }
+}
+
+#[test]
+fn host_command_send_input_ime_set_composition_roundtrips() {
+    wire_roundtrip(HostCommand::SendInput {
+        aid: ActivityId("a1".into()),
+        input: InputEvent::ImeSetComposition {
+            text: "hello".into(),
+            underlines: vec![ImeUnderline {
+                from: 0,
+                to: 5,
+                color: 0xFF000000,
+                background_color: 0x00000000,
+                thick: false,
+            }],
+            replacement_range: (-1, -1),
+            selection_range: (5, 5),
+        },
+    });
+    // Empty underlines, custom replacement_range
+    wire_roundtrip(HostCommand::SendInput {
+        aid: ActivityId("a1".into()),
+        input: InputEvent::ImeSetComposition {
+            text: "abc".into(),
+            underlines: vec![],
+            replacement_range: (2, 4),
+            selection_range: (3, 3),
+        },
+    });
+}
+
+#[test]
+fn host_command_send_input_ime_commit_roundtrips() {
+    wire_roundtrip(HostCommand::SendInput {
+        aid: ActivityId("a1".into()),
+        input: InputEvent::ImeCommit {
+            text: "confirmed".into(),
+            replacement_range: None,
+            relative_cursor_pos: 0,
+        },
+    });
+    wire_roundtrip(HostCommand::SendInput {
+        aid: ActivityId("a1".into()),
+        input: InputEvent::ImeCommit {
+            text: "xy".into(),
+            replacement_range: Some((1, 3)),
+            relative_cursor_pos: -1,
+        },
+    });
+}
+
+#[test]
+fn host_command_send_input_ime_cancel_roundtrips() {
+    wire_roundtrip(HostCommand::SendInput {
+        aid: ActivityId("a1".into()),
+        input: InputEvent::ImeCancel,
+    });
+}
+
+#[test]
+fn host_command_pause_resume_roundtrips() {
+    wire_roundtrip(HostCommand::PauseScreencast {
+        aid: ActivityId("a1".into()),
+    });
+    wire_roundtrip(HostCommand::ResumeScreencast {
+        aid: ActivityId("a1".into()),
+    });
+}
+
+#[test]
+fn host_command_get_selection_roundtrips() {
+    wire_roundtrip(HostCommand::GetSelection {
+        aid: ActivityId("a1".into()),
+        request_id: 99,
+    });
+}
+
+#[test]
+fn host_command_set_clipboard_roundtrips() {
+    wire_roundtrip(HostCommand::SetClipboard {
+        text: "hello clipboard".into(),
+    });
+}
+
+// --- HostEvent roundtrips ---
+
 #[test]
 fn host_event_frame_descriptor_roundtrips() {
     wire_roundtrip(HostEvent::FrameDescriptor {
@@ -139,6 +323,86 @@ fn host_event_frame_descriptor_roundtrips() {
 }
 
 #[test]
+fn host_event_frame_descriptor_with_popup_roundtrips() {
+    wire_roundtrip(HostEvent::FrameDescriptor {
+        aid: ActivityId("a1".into()),
+        lap: 42,
+        slot_idx: 0,
+        frame_seq: 10,
+        captured_at_us: 1_000_000,
+        is_keyframe: false,
+        damage_rects: vec![],
+        is_popup: true,
+    });
+}
+
+#[test]
+fn host_event_nav_state_changed_roundtrips() {
+    wire_roundtrip(HostEvent::NavStateChanged {
+        aid: ActivityId("a1".into()),
+        url: "https://example.com/page2".into(),
+        title: "Page 2".into(),
+        can_back: true,
+        can_forward: false,
+    });
+}
+
+#[test]
+fn host_event_title_changed_roundtrips() {
+    wire_roundtrip(HostEvent::TitleChanged {
+        aid: ActivityId("a1".into()),
+        title: "New Title".into(),
+    });
+}
+
+#[test]
+fn host_event_selection_changed_roundtrips() {
+    wire_roundtrip(HostEvent::SelectionChanged {
+        aid: ActivityId("a1".into()),
+        text: "selected text".into(),
+    });
+    // Empty selection
+    wire_roundtrip(HostEvent::SelectionChanged {
+        aid: ActivityId("a1".into()),
+        text: String::new(),
+    });
+}
+
+#[test]
+fn host_event_page_error_roundtrips() {
+    wire_roundtrip(HostEvent::PageError {
+        aid: ActivityId("a1".into()),
+        code: -6,
+        error_text: "ERR_CONNECTION_REFUSED".into(),
+    });
+}
+
+#[test]
+fn host_event_render_process_terminated_roundtrips() {
+    wire_roundtrip(HostEvent::RenderProcessTerminated {
+        aid: ActivityId("a1".into()),
+        reason: "KILLED".into(),
+    });
+}
+
+#[test]
+fn host_event_log_line_roundtrips() {
+    wire_roundtrip(HostEvent::LogLine {
+        level: "WARNING".into(),
+        text: "something suspicious".into(),
+    });
+}
+
+#[test]
+fn host_event_crashed_roundtrips() {
+    wire_roundtrip(HostEvent::Crashed {
+        reason: "SIGSEGV in renderer".into(),
+    });
+}
+
+// --- BrowserClientMsg new variants (Task A15) ---
+
+#[test]
 fn browser_client_subscribe_roundtrips() {
     wire_roundtrip(BrowserClientMsg::Subscribe {
         session_id: Some(42),
@@ -150,6 +414,44 @@ fn browser_client_subscribe_roundtrips() {
         has_base_keyframe: true,
     });
 }
+
+#[test]
+fn browser_client_msg_input_roundtrips() {
+    wire_roundtrip(BrowserClientMsg::Input {
+        event: InputEvent::MouseMove {
+            x: 10,
+            y: 20,
+            modifiers: 0,
+        },
+    });
+}
+
+#[test]
+fn browser_client_msg_navigate_roundtrips() {
+    wire_roundtrip(BrowserClientMsg::Navigate {
+        url: "https://example.com/".into(),
+    });
+}
+
+#[test]
+fn browser_client_msg_navigate_history_roundtrips() {
+    wire_roundtrip(BrowserClientMsg::NavigateHistory { delta: -2 });
+    wire_roundtrip(BrowserClientMsg::NavigateHistory { delta: 3 });
+}
+
+#[test]
+fn browser_client_msg_copy_request_roundtrips() {
+    wire_roundtrip(BrowserClientMsg::CopyRequest);
+}
+
+#[test]
+fn browser_client_msg_paste_roundtrips() {
+    wire_roundtrip(BrowserClientMsg::Paste {
+        text: "pasted content".into(),
+    });
+}
+
+// --- BrowserServerMsg new variants (Task A15) ---
 
 #[test]
 fn browser_server_screencast_with_bgra_payload_roundtrips() {
@@ -164,6 +466,32 @@ fn browser_server_screencast_with_bgra_payload_roundtrips() {
         height: 800,
         is_keyframe: true,
         damage_rects: vec![],
+        is_popup: false,
+        popup_rect: None,
+        bgra,
+    });
+}
+
+#[test]
+fn browser_server_msg_screencast_with_popup_roundtrips() {
+    use bytes::Bytes;
+    let bgra = Bytes::from(vec![0u8, 0, 0, 255]);
+    wire_roundtrip(BrowserServerMsg::Screencast {
+        session_id: 7,
+        epoch: 2,
+        frame_seq: 5,
+        captured_at_us: 999,
+        width: 200,
+        height: 150,
+        is_keyframe: true,
+        damage_rects: vec![],
+        is_popup: true,
+        popup_rect: Some(Rect {
+            x: 10,
+            y: 20,
+            w: 200,
+            h: 150,
+        }),
         bgra,
     });
 }
@@ -178,7 +506,6 @@ fn browser_server_subscribe_reply_fresh_snapshot_roundtrips() {
 
 #[test]
 fn frame_subscription_reply_all_variants_roundtrip() {
-    use ozmux_browser_cef_protocol::wire::MustRestartReason;
     for variant in [
         FrameSubscriptionReply::FreshSnapshot,
         FrameSubscriptionReply::ResumeReplay,
@@ -201,4 +528,78 @@ fn frame_subscription_reply_all_variants_roundtrip() {
             "FrameSubscriptionReply variant not roundtrip-stable"
         );
     }
+}
+
+#[test]
+fn browser_server_msg_viewport_roundtrips() {
+    wire_roundtrip(BrowserServerMsg::Viewport {
+        width: 1280,
+        height: 800,
+    });
+}
+
+#[test]
+fn browser_server_msg_nav_roundtrips() {
+    wire_roundtrip(BrowserServerMsg::Nav {
+        url: "https://example.com/".into(),
+        title: "Example".into(),
+        can_back: true,
+        can_forward: false,
+    });
+}
+
+#[test]
+fn browser_server_msg_selection_changed_roundtrips() {
+    wire_roundtrip(BrowserServerMsg::SelectionChanged {
+        text: "selected text".into(),
+    });
+    wire_roundtrip(BrowserServerMsg::SelectionChanged {
+        text: String::new(),
+    });
+}
+
+#[test]
+fn browser_server_msg_clipboard_write_roundtrips() {
+    wire_roundtrip(BrowserServerMsg::ClipboardWrite {
+        text: "clipboard content".into(),
+    });
+}
+
+#[test]
+fn browser_server_msg_page_error_roundtrips() {
+    wire_roundtrip(BrowserServerMsg::PageError {
+        code: -2,
+        error_text: "ERR_FAILED".into(),
+    });
+}
+
+#[test]
+fn browser_server_msg_renderer_terminated_roundtrips() {
+    wire_roundtrip(BrowserServerMsg::RendererTerminated {
+        reason: "OOM".into(),
+    });
+}
+
+#[test]
+fn browser_server_msg_browser_unavailable_all_reasons_roundtrips() {
+    use std::path::PathBuf;
+    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
+        reason: BrowserUnavailableReason::RetryExhausted {
+            last_error: "spawn failed".into(),
+        },
+    });
+    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
+        reason: BrowserUnavailableReason::BinaryNotFound {
+            path: PathBuf::from("/usr/local/bin/cef_host"),
+        },
+    });
+    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
+        reason: BrowserUnavailableReason::CefInitFailed { exit_code: 1 },
+    });
+    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
+        reason: BrowserUnavailableReason::ProtocolMismatch {
+            expected: 4,
+            got: 3,
+        },
+    });
 }

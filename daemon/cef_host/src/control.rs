@@ -148,6 +148,24 @@ async fn pump(
                         }
                         continue;
                     }
+                    // NOTE: These variants are part of the Plan 2 wire schema (Task A15)
+                    // but their cef_host implementations land in later tasks (B-series).
+                    // Close any stray ancillary fd to prevent leaks.
+                    HostCommand::RecreateShm { .. }
+                    | HostCommand::Navigate { .. }
+                    | HostCommand::NavigateHistory { .. }
+                    | HostCommand::SendInput { .. }
+                    | HostCommand::PauseScreencast { .. }
+                    | HostCommand::ResumeScreencast { .. }
+                    | HostCommand::GetSelection { .. }
+                    | HostCommand::SetClipboard { .. } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: see above — same invariants apply.
+                            unsafe { libc::close(stray); }
+                        }
+                        tracing::warn!("unimplemented HostCommand received; ignoring");
+                        continue;
+                    }
                 };
                 let is_shutdown = matches!(internal_cmd, CefCommand::Shutdown);
                 if let Err(e) = post_command::post(&handle, internal_cmd) {

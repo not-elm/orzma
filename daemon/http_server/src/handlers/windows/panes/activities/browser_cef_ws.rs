@@ -196,6 +196,10 @@ async fn send_envelope(socket: &mut WebSocket, env: &Arc<FrameEnvelope>) -> bool
         height: env.height,
         is_keyframe: env.is_keyframe,
         damage_rects: env.damage_rects.clone(),
+        is_popup: env.is_popup,
+        // NOTE: popup_rect routing lands in Phase B (Task B16/B18);
+        // FrameEnvelope does not carry it yet.
+        popup_rect: None,
         bgra: env.bgra.clone(),
     };
     send_msg(socket, &msg).await
