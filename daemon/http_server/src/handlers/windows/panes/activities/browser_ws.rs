@@ -67,7 +67,17 @@ async fn run(socket: WebSocket, state: AppState, aid: ActivityId) {
     {
         return;
     }
+    let viewport_msg = BrowserServerMsg::Viewport {
+        width: initial.viewport.width,
+        height: initial.viewport.height,
+    };
+    if let Ok(bin) = rmp_serde::to_vec_named(&viewport_msg)
+        && tx.send(Message::Binary(bin.into())).await.is_err()
+    {
+        return;
+    }
     let mut last_nav = Some(initial.nav.clone());
+    let mut last_viewport = Some(initial.viewport);
 
     loop {
         tokio::select! {
@@ -98,14 +108,26 @@ async fn run(socket: WebSocket, state: AppState, aid: ActivityId) {
                     }
                     last_nav = Some(s.nav.clone());
                 }
+                if Some(s.viewport) != last_viewport {
+                    let msg = BrowserServerMsg::Viewport {
+                        width: s.viewport.width,
+                        height: s.viewport.height,
+                    };
+                    if let Ok(bin) = rmp_serde::to_vec_named(&msg)
+                        && tx.send(Message::Binary(bin.into())).await.is_err()
+                    {
+                        break;
+                    }
+                    last_viewport = Some(s.viewport);
+                }
             }
             msg = rx.next() => {
                 let Some(Ok(Message::Binary(b))) = msg else { break };
                 let Ok(client) = rmp_serde::from_slice::<BrowserClientMsg>(&b) else { continue };
                 match client {
                     BrowserClientMsg::Nav { nav } => state.browser.navigate(&aid, nav).await,
-                    BrowserClientMsg::Resize { width, height } => {
-                        state.browser.resize(&aid, width, height).await;
+                    BrowserClientMsg::Resize { width, height, device_scale_factor } => {
+                        state.browser.resize(&aid, width, height, device_scale_factor).await;
                     }
                     BrowserClientMsg::CopyRequest => {
                         if let Some(text) = state.browser.request_selection(&aid).await {

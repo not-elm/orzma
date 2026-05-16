@@ -29,6 +29,15 @@ pub enum BrowserServerMsg {
         /// Current title.
         title: String,
     },
+    /// Current Chromium viewport in CSS pixels. Sent once on connect (may be
+    /// zero if no `Resize` has arrived yet) and again whenever the viewport
+    /// changes so the frontend can use it for mouse coordinate scaling.
+    Viewport {
+        /// Viewport width in CSS pixels.
+        width: u32,
+        /// Viewport height in CSS pixels.
+        height: u32,
+    },
     /// Result of a prior `CopyRequest` — the page's current selection text.
     ClipboardWrite {
         /// Selected text (`getSelection().toString()`).
@@ -104,12 +113,15 @@ pub enum BrowserClientMsg {
         /// The actual navigation command.
         nav: NavCommand,
     },
-    /// Pane resize. Device-scale-factor is fixed at 1 in MVP per the spec.
+    /// Pane resize.
     Resize {
         /// New viewport width in CSS pixels.
         width: u32,
         /// New viewport height in CSS pixels.
         height: u32,
+        /// `window.devicePixelRatio` from the frontend. Used to size the JPEG
+        /// screencast so HiDPI displays render crisply.
+        device_scale_factor: f64,
     },
     /// Paste OS-clipboard text into the page.
     Paste {
@@ -249,5 +261,43 @@ mod tests {
         let bytes = rmp_serde::to_vec_named(&msg).unwrap();
         let back: BrowserClientMsg = rmp_serde::from_slice(&bytes).unwrap();
         assert!(matches!(back, BrowserClientMsg::CopyRequest));
+    }
+
+    #[test]
+    fn client_resize_round_trips_with_dsf() {
+        let msg = BrowserClientMsg::Resize {
+            width: 1280,
+            height: 800,
+            device_scale_factor: 2.0,
+        };
+        let bytes = rmp_serde::to_vec_named(&msg).unwrap();
+        let back: BrowserClientMsg = rmp_serde::from_slice(&bytes).unwrap();
+        match back {
+            BrowserClientMsg::Resize {
+                width,
+                height,
+                device_scale_factor,
+            } => {
+                assert_eq!((width, height), (1280, 800));
+                assert!((device_scale_factor - 2.0).abs() < f64::EPSILON);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_viewport_round_trips() {
+        let msg = BrowserServerMsg::Viewport {
+            width: 1440,
+            height: 900,
+        };
+        let bytes = rmp_serde::to_vec_named(&msg).unwrap();
+        let back: BrowserServerMsg = rmp_serde::from_slice(&bytes).unwrap();
+        match back {
+            BrowserServerMsg::Viewport { width, height } => {
+                assert_eq!((width, height), (1440, 900));
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 }

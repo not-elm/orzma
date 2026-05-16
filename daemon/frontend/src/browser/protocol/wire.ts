@@ -30,6 +30,7 @@ export type NavCommand =
 export type BrowserServerMsg =
   | { kind: 'screencast'; jpeg: Uint8Array; width: number; height: number }
   | { kind: 'nav'; url: string; title: string }
+  | { kind: 'viewport'; width: number; height: number }
   | { kind: 'clipboard_write'; text: string }
   | { kind: 'page_error'; message: string };
 
@@ -63,6 +64,6 @@ export type BrowserClientMsg =
   | { kind: 'ime_composition'; text: string; selection_start: number; selection_end: number }
   | { kind: 'ime_commit'; text: string }
   | { kind: 'nav'; nav: NavCommand }
-  | { kind: 'resize'; width: number; height: number }
+  | { kind: 'resize'; width: number; height: number; device_scale_factor: number }
   | { kind: 'paste'; text: string }
   | { kind: 'copy_request' };

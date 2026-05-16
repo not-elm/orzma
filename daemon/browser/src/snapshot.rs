@@ -14,6 +14,16 @@ pub struct NavState {
     pub title: String,
 }
 
+/// Live viewport size in CSS pixels — distinct from the screencast frame's
+/// pixel dimensions, which may be `viewport × DSF` for HiDPI displays.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Viewport {
+    /// Viewport width in CSS pixels.
+    pub width: u32,
+    /// Viewport height in CSS pixels.
+    pub height: u32,
+}
+
 /// One JPEG screencast frame.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreencastFrame {
@@ -26,7 +36,7 @@ pub struct ScreencastFrame {
     pub height: u32,
 }
 
-/// Combined latest-frame + navigation snapshot. Shared via
+/// Combined latest-frame + navigation + viewport snapshot. Shared via
 /// `tokio::sync::watch::channel<Arc<BrowserSnapshot>>` — a slow client
 /// observes only the most recent value, intermediate frames are skipped.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -35,6 +45,9 @@ pub struct BrowserSnapshot {
     pub frame: Option<ScreencastFrame>,
     /// Latest navigation state.
     pub nav: NavState,
+    /// Current Chromium viewport in CSS pixels. Zero until the first `Resize`
+    /// message arrives from the frontend.
+    pub viewport: Viewport,
 }
 
 #[cfg(test)]
@@ -53,6 +66,10 @@ mod tests {
                 url: "https://example.com".into(),
                 title: "Example".into(),
             },
+            viewport: Viewport {
+                width: 1280,
+                height: 800,
+            },
         };
         let buf = rmp_serde::to_vec_named(&snap).unwrap();
         let back: BrowserSnapshot = rmp_serde::from_slice(&buf).unwrap();
@@ -60,12 +77,31 @@ mod tests {
         assert_eq!(frame.jpeg.as_ref(), &[0xFF, 0xD8, 0xFF, 0xD9]);
         assert_eq!(frame.width, 800);
         assert_eq!(back.nav.url, "https://example.com");
+        assert_eq!(
+            back.viewport,
+            Viewport {
+                width: 1280,
+                height: 800
+            }
+        );
     }
 
     #[test]
-    fn snapshot_default_has_no_frame_and_empty_nav() {
+    fn snapshot_default_has_no_frame_and_empty_nav_and_zero_viewport() {
         let s = BrowserSnapshot::default();
         assert!(s.frame.is_none());
         assert!(s.nav.url.is_empty());
+        assert_eq!(s.viewport, Viewport::default());
+    }
+
+    #[test]
+    fn viewport_round_trips_msgpack() {
+        let vp = Viewport {
+            width: 1920,
+            height: 1080,
+        };
+        let buf = rmp_serde::to_vec_named(&vp).unwrap();
+        let back: Viewport = rmp_serde::from_slice(&buf).unwrap();
+        assert_eq!(back, vp);
     }
 }
