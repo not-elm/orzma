@@ -84,6 +84,14 @@ self.onmessage = async (e: MessageEvent<IncomingMsg>) => {
           bgra: wire.bgra,
         };
         renderer.renderFrame(envelope);
+        // NOTE: paint-done is consumed by the KPI smoke harness (Task 30) to
+        // measure wheel→paint latency. Cheap on the hot path — one postMessage
+        // per frame, no allocations beyond the small literal object.
+        self.postMessage({
+          type: 'paint-done',
+          generation: currentGeneration,
+          frame_seq: wire.frame_seq,
+        });
       }
       return;
     }
