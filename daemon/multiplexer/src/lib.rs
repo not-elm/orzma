@@ -113,6 +113,23 @@ impl MultiplexerService {
         .await
     }
 
+    /// Replace the cached cell-grid dimensions for `wid`. The frontend
+    /// invokes this whenever the window-level container is measured;
+    /// the value is then read by `resize_pane` as the root `P` for the
+    /// cell algorithm.
+    pub async fn set_window_dimensions(
+        &self,
+        wid: &WindowId,
+        cols: u16,
+        rows: u16,
+    ) -> MultiplexerResult<()> {
+        self.with_window_or_404(wid, |w| {
+            w.set_dimensions(cols, rows);
+            Ok(())
+        })
+        .await
+    }
+
     /// Rename a Session.
     pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
         let mut state = self.sessions.lock().await;
@@ -189,5 +206,37 @@ impl MultiplexerService {
         let mut session_state = self.sessions.lock().await;
         let session = session_state.remove(sid)?;
         Ok(session.linked_windows)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn set_window_dimensions_stores_values() {
+        let svc = MultiplexerService::default();
+        let (wid, _, _) = svc.create_window(None, None).await.unwrap();
+        svc.set_window_dimensions(&wid, 120, 40).await.unwrap();
+        let dims = svc
+            .with_window_or_404(&wid, |w| {
+                Ok::<_, MultiplexerError>(w.dimensions.clone())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            dims,
+            Some(crate::WindowDimensions { cols: 120, rows: 40 })
+        );
+    }
+
+    #[tokio::test]
+    async fn set_window_dimensions_unknown_window_returns_window_not_found() {
+        let svc = MultiplexerService::default();
+        let err = svc
+            .set_window_dimensions(&WindowId::new(), 80, 24)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::WindowNotFound(_)));
     }
 }
