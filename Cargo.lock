@@ -2766,6 +2766,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_browser_cef_protocol"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "ozmux_cef_host"
 version = "0.1.0"
 dependencies = [

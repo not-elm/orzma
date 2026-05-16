@@ -1,0 +1,10 @@
+[package]
+name = "ozmux_browser_cef_protocol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1"
+bytes = "1"
+serde_bytes = "0.11"
