@@ -11,8 +11,15 @@ path = "src/main.rs"
 name = "cef_helper"
 path = "src/bin/cef_helper.rs"
 
+[lib]
+name = "ozmux_cef_host"
+path = "src/lib.rs"
+
 [dependencies]
 cef = "148.1.0+147.0.14"
 cef-dll-sys = { version = "148.1.0+147.0.14", features = ["sandbox"] }
+nix = { version = "0.29", features = ["mman", "fs"] }
+libc = "0.2"
+ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
 
 [dev-dependencies]

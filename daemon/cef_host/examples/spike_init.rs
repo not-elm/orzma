@@ -4,8 +4,8 @@
 
 use cef::Settings;
 use cef::args::Args;
-use cef::{App, ImplApp, ImplCommandLine, WrapApp, wrap_app};
 use cef::rc::Rc as _;
+use cef::{App, ImplApp, ImplCommandLine, WrapApp, wrap_app};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -44,6 +44,10 @@ wrap_app! {
     }
 }
 
+#[expect(
+    clippy::field_reassign_with_default,
+    reason = "macOS path fields set conditionally via cfg-guarded assignments below; struct-literal form is impractical"
+)]
 fn main() {
     // NOTE: on macOS the CEF framework must be explicitly loaded via dlopen before any
     // CEF API call. Without this step any CEF call crashes (SIGSEGV) because the
@@ -91,19 +95,20 @@ fn main() {
         let cef_dir = get_cef_dir().expect("CEF directory not found");
         // FRAMEWORK_PATH = "Chromium Embedded Framework.framework/Chromium Embedded Framework"
         // so parent() gives us the .framework bundle directory itself.
-        let framework_dylib = cef_dir.join(FRAMEWORK_PATH).canonicalize()
+        let framework_dylib = cef_dir
+            .join(FRAMEWORK_PATH)
+            .canonicalize()
             .expect("failed to resolve CEF framework dylib path");
-        let framework_dir = framework_dylib.parent()
+        let framework_dir = framework_dylib
+            .parent()
             .expect("framework dylib has no parent")
             .to_path_buf();
         let resources_dir = framework_dir.join("Resources");
 
-        settings.framework_dir_path = cef::CefString::from(
-            framework_dir.to_string_lossy().as_ref(),
-        );
-        settings.resources_dir_path = cef::CefString::from(
-            resources_dir.to_string_lossy().as_ref(),
-        );
+        settings.framework_dir_path =
+            cef::CefString::from(framework_dir.to_string_lossy().as_ref());
+        settings.resources_dir_path =
+            cef::CefString::from(resources_dir.to_string_lossy().as_ref());
         // NOTE: on macOS, locales live in <Resources>/<locale>.lproj/locale.pak, not a
         // flat locales/ subdirectory, so locales_dir_path is left at default (empty).
 
@@ -114,9 +119,8 @@ fn main() {
             .parent()
             .expect("exe has no parent dir")
             .join("cef_helper");
-        settings.browser_subprocess_path = cef::CefString::from(
-            helper_path.to_string_lossy().as_ref(),
-        );
+        settings.browser_subprocess_path =
+            cef::CefString::from(helper_path.to_string_lossy().as_ref());
 
         println!("framework_dir_path  = {}", framework_dir.display());
         println!("resources_dir_path  = {}", resources_dir.display());
