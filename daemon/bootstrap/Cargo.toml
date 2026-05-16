@@ -7,6 +7,10 @@ readme.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[lib]
+name = "daemon_bootstrap"
+path = "src/lib.rs"
+
 [[bin]]
 name = "daemon_bootstrap"
 path = "src/main.rs"
@@ -21,3 +25,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
