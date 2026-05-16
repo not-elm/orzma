@@ -4,9 +4,11 @@
 //!
 //! The registry is `Arc<RwLock<HashMap<ActivityId, BrowserHandle>>>`: the
 //! lock is held only long enough to clone or remove a handle; no CDP call
-//! ever awaits inside it. Per-Activity work runs in two tasks:
+//! ever awaits inside it. Per-Activity work runs in three tasks:
 //!  - `bridge::run` (screencast + nav refresh, owns the watch sender),
-//!  - `page::run` (actor command loop, owns the page's mpsc sender end).
+//!  - `page::run` (actor command loop, owns the page's mpsc sender end),
+//!  - title-watcher (reacts to nav title changes and emits on the service
+//!    broadcast, replacing the 500ms polling loop in `daemon_bootstrap`).
 //!
 //! Chromium lifecycle is governed by `ChromiumState` behind a `Mutex`,
 //! plus a `Notify` so concurrent `spawn` calls wait for the first launcher.
@@ -25,7 +27,7 @@ use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify, RwLock, mpsc, watch};
+use tokio::sync::{Mutex, Notify, RwLock, broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_GRACE: Duration = Duration::from_secs(30);
@@ -43,6 +45,8 @@ struct ChromiumProcess {
     notify_started: Notify,
     browser: Mutex<Option<Browser>>,
     runtime: Arc<RuntimeRoot>,
+    /// Emits `(wid, aid, title)` whenever a browser activity's page title changes.
+    title_tx: broadcast::Sender<(WindowId, ActivityId, String)>,
 }
 
 #[derive(Clone)]
@@ -57,15 +61,25 @@ impl BrowserService {
     /// services and provides the per-daemon `bin/`, `sock/`, and (here)
     /// `browser/` directory for Chromium's user-data-dir.
     pub fn new(runtime: Arc<RuntimeRoot>) -> Self {
+        let (title_tx, _) = broadcast::channel(256);
         Self {
             chromium: Arc::new(ChromiumProcess {
                 state: Mutex::new(ChromiumState::new(DEFAULT_GRACE)),
                 notify_started: Notify::new(),
                 browser: Mutex::new(None),
                 runtime,
+                title_tx,
             }),
             pages: Arc::default(),
         }
+    }
+
+    /// Subscribes to browser activity title-change notifications.
+    /// Each item carries the `(WindowId, ActivityId, title)` of the changed activity.
+    pub fn subscribe_title_changes(
+        &self,
+    ) -> broadcast::Receiver<(WindowId, ActivityId, String)> {
+        self.chromium.title_tx.subscribe()
     }
 
     /// Create a CDP page for `aid`, optionally navigate to `initial_url`,
@@ -73,7 +87,7 @@ impl BrowserService {
     /// page-creation failure so the caller's rollback can run.
     pub async fn spawn(
         &self,
-        _wid: &WindowId,
+        wid: &WindowId,
         _pid: &PaneId,
         aid: &ActivityId,
         initial_url: Option<String>,
@@ -133,6 +147,28 @@ impl BrowserService {
 
         tokio::spawn(async move {
             let _ = crate::page::run(page, page_rx).await;
+        });
+
+        let title_tx = self.chromium.title_tx.clone();
+        let watcher_wid = wid.clone();
+        let watcher_aid = aid.clone();
+        let mut watcher_rx = snapshot_rx.clone();
+        let watcher_cancel = cancel.clone();
+        tokio::spawn(async move {
+            let mut last = watcher_rx.borrow_and_update().nav.title.clone();
+            loop {
+                tokio::select! {
+                    _ = watcher_cancel.cancelled() => break,
+                    res = watcher_rx.changed() => {
+                        if res.is_err() { break; }
+                        let snap = watcher_rx.borrow_and_update();
+                        if snap.nav.title != last {
+                            last = snap.nav.title.clone();
+                            let _ = title_tx.send((watcher_wid.clone(), watcher_aid.clone(), last.clone()));
+                        }
+                    }
+                }
+            }
         });
 
         self.pages.write().await.insert(

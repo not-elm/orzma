@@ -103,36 +103,20 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // NOTE: Adapter task polls browser nav-state titles every 500 ms and pushes any
-    // changes into ActivityTitles so the tab bar shows live page titles.
+    // Adapter task: bridge browser title-change notifications into ActivityTitles
+    // so the tab bar shows live page titles without polling.
     let browser_titles = titles.clone();
     let browser_svc = state.browser.clone();
-    let browser_mux = state.multiplexer.clone();
     tokio::spawn(async move {
-        use std::collections::{HashMap, HashSet};
-        let mut last: HashMap<ozmux_multiplexer::ActivityId, String> = HashMap::new();
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut rx = browser_svc.subscribe_title_changes();
         loop {
-            interval.tick().await;
-            let known = browser_svc.known_activities().await;
-            for aid in &known {
-                let Some(mut rx) = browser_svc.watch(aid).await else {
-                    continue;
-                };
-                let title = rx.borrow_and_update().nav.title.clone();
-                if last.get(aid).map(String::as_str) == Some(title.as_str()) {
-                    continue;
+            match rx.recv().await {
+                Ok((wid, aid, title)) => {
+                    browser_titles.set(&wid, &aid, title).await;
                 }
-                last.insert(aid.clone(), title.clone());
-                if let Some(wid) = browser_mux.find_window_for_activity(aid).await {
-                    browser_titles.set(&wid, aid, title).await;
-                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             }
-            // NOTE: Prune stale entries so `last` does not grow unbounded when
-            // activities are closed between polling ticks.
-            let known_set: HashSet<_> = known.into_iter().collect();
-            last.retain(|aid, _| known_set.contains(aid));
         }
     });
 
