@@ -45,6 +45,14 @@ const ActionSchema = z.discriminatedUnion('type', [
     offset: z.enum(['next', 'prev']),
   }),
   z.object({
+    type: z.literal('focus-window'),
+    offset: z.enum(['next', 'prev']),
+  }),
+  z.object({
+    type: z.literal('focus-window-number'),
+    index: z.number().int().min(0).max(9),
+  }),
+  z.object({
     type: z.literal('focus-pane'),
     direction: z.enum(['up', 'down', 'left', 'right']),
   }),

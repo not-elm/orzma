@@ -24,6 +24,7 @@ export function App() {
     activeWindow: () => activeWindowRef.current,
     activePane: () => activePaneRef.current,
     activeActivity: () => activeActivityRef.current,
+    activeSession: () => null,
   };
 
   const { isArmed, prefix } = usePrefixMode(ctx);
