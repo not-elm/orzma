@@ -1,0 +1,27 @@
+[package]
+name = "ozmux-client"
+description = "ozmux Tauri launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+# NOTE: Tauri requires a distinct lib name to avoid colliding with the bin
+# name on Windows (rust-lang/cargo#8519). Even though we don't ship Windows
+# yet, keep the suffix so the crate stays portable.
+name = "ozmux_client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tokio = { version = "1", features = ["time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+fs2 = "0.4"
+anyhow = { workspace = true }
+libc = { workspace = true }
