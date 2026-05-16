@@ -8,14 +8,10 @@ use std::collections::HashMap;
 
 /// Axis-aligned rectangle in normalized window coordinates (`x, y, w, h` ∈ [0, 1]).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rect {
-    /// Left edge.
+pub(crate) struct Rect {
     pub x: f32,
-    /// Top edge.
     pub y: f32,
-    /// Width.
     pub w: f32,
-    /// Height.
     pub h: f32,
 }
 
@@ -237,7 +233,7 @@ impl LayoutCellState {
     ///
     /// - Siblings under one `Cell::Split` are produced contiguously and their
     ///   bounds sum to the parent rect because `rhs_size = parent_size - lhs_size`.
-    pub fn pane_bounds(&self, root: &CellId) -> MultiplexerResult<Vec<(PaneId, Rect)>> {
+    pub(crate) fn pane_bounds(&self, root: &CellId) -> MultiplexerResult<Vec<(PaneId, Rect)>> {
         let mut out = Vec::new();
         self.walk_bounds(
             root,

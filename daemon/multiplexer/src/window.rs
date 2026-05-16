@@ -10,7 +10,7 @@ pub mod pane;
 mod window;
 
 pub use cells::{
-    Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
+    Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, RootCell, Side, SplitCell,
     SplitOrientation,
 };
 pub use direction::PaneDirection;

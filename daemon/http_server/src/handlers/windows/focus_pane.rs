@@ -1,6 +1,5 @@
 //! `POST /windows/{wid}/focus-pane` — moves focus to the geometric neighbor
-//! in the requested direction. Translates `configs::Direction` to the
-//! domain-level `multiplexer::PaneDirection` at the boundary.
+//! in the requested direction.
 
 use crate::{AppState, error::HttpResult};
 use axum::{
@@ -8,7 +7,6 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_configs::shortcuts::Direction;
 use ozmux_multiplexer::{PaneDirection, WindowId};
 use serde::Deserialize;
 
@@ -16,7 +14,7 @@ use serde::Deserialize;
 /// to move focus toward, relative to the window's currently active pane.
 #[derive(Deserialize)]
 pub struct FocusPaneRequest {
-    direction: Direction,
+    direction: PaneDirection,
 }
 
 /// Move focus to the geometric neighbor of the active pane in the requested
@@ -28,18 +26,9 @@ pub async fn focus_pane(
     Json(req): Json<FocusPaneRequest>,
 ) -> HttpResult<StatusCode> {
     state
-        .focus_pane_direction(&window_id, to_domain(req.direction))
+        .focus_pane_direction(&window_id, req.direction)
         .await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-fn to_domain(d: Direction) -> PaneDirection {
-    match d {
-        Direction::Up => PaneDirection::Up,
-        Direction::Down => PaneDirection::Down,
-        Direction::Left => PaneDirection::Left,
-        Direction::Right => PaneDirection::Right,
-    }
 }
 
 #[cfg(test)]

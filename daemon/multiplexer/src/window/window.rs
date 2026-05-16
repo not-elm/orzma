@@ -462,26 +462,16 @@ mod tests {
         assert!(matches!(err, MultiplexerError::CannotCloseLastPane(_)));
     }
 
-    fn sample_window() -> Window {
-        Window::new_with_initial(
-            WindowId::new(),
-            "test".into(),
-            PaneId::new(),
-            Activity::terminal(ActivityId::new()),
-        )
-    }
-
     #[test]
     fn new_window_starts_with_empty_active_point_table() {
-        let win = sample_window();
+        let (win, _, _) = fresh_window();
         assert_eq!(win.next_active_point, 0);
         assert!(win.pane_active_points.is_empty());
     }
 
     #[test]
     fn set_active_pane_records_active_point() {
-        let mut win = sample_window();
-        let original = win.active_pane.clone();
+        let (mut win, original, _) = fresh_window();
         let other = PaneId::new();
         win.split_pane(
             &original,
@@ -507,8 +497,7 @@ mod tests {
 
     #[test]
     fn set_active_pane_unchanged_does_not_bump_counter() {
-        let mut win = sample_window();
-        let active = win.active_pane.clone();
+        let (mut win, active, _) = fresh_window();
         let before = win.next_active_point;
         assert!(matches!(
             win.set_active_pane(&active).unwrap(),
@@ -519,8 +508,7 @@ mod tests {
 
     #[test]
     fn close_pane_removes_active_point_entry() {
-        let mut win = sample_window();
-        let original = win.active_pane.clone();
+        let (mut win, original, _) = fresh_window();
         let new_pane = PaneId::new();
         win.split_pane(
             &original,

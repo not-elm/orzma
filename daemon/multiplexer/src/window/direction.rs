@@ -23,28 +23,60 @@ pub enum PaneDirection {
     Right,
 }
 
-const PANE_ADJACENCY_EPS: f32 = 1e-7;
+impl PaneDirection {
+    /// Edge of `rect` that leads in this direction (the edge you'd cross when
+    /// moving toward `self`).
+    fn primary_edge(self, rect: Rect) -> f32 {
+        match self {
+            Self::Up => rect.y,
+            Self::Down => rect.y + rect.h,
+            Self::Left => rect.x,
+            Self::Right => rect.x + rect.w,
+        }
+    }
 
-/// `true` when `other`'s opposite edge equals `edge` to within
-/// `PANE_ADJACENCY_EPS`.
-fn touches_edge(other: Rect, direction: PaneDirection, edge: f32) -> bool {
-    let other_edge = match direction {
-        PaneDirection::Up => other.y + other.h,
-        PaneDirection::Down => other.y,
-        PaneDirection::Left => other.x + other.w,
-        PaneDirection::Right => other.x,
-    };
-    (other_edge - edge).abs() < PANE_ADJACENCY_EPS
+    /// Edge of `rect` that faces away from this direction — the edge a
+    /// candidate neighbor must align with to count as adjacent.
+    fn opposite_edge(self, rect: Rect) -> f32 {
+        match self {
+            Self::Up => rect.y + rect.h,
+            Self::Down => rect.y,
+            Self::Left => rect.x + rect.w,
+            Self::Right => rect.x,
+        }
+    }
+
+    /// Perpendicular-axis range `(start, end)` of `rect` for overlap checks.
+    fn perpendicular_range(self, rect: Rect) -> (f32, f32) {
+        match self {
+            Self::Up | Self::Down => (rect.x, rect.x + rect.w),
+            Self::Left | Self::Right => (rect.y, rect.y + rect.h),
+        }
+    }
+
+    /// Window-side to fold the search edge to when the primary pass finds
+    /// nothing (wrap-around).
+    fn wrap_edge(self) -> f32 {
+        match self {
+            Self::Up | Self::Left => 1.0,
+            Self::Down | Self::Right => 0.0,
+        }
+    }
 }
 
-/// Half-open interval overlap on the perpendicular axis.
+const PANE_ADJACENCY_EPS: f32 = 1e-7;
+
+/// Returns true when `other`'s opposite-facing edge sits within
+/// `PANE_ADJACENCY_EPS` of `edge`.
+fn touches_edge(other: Rect, direction: PaneDirection, edge: f32) -> bool {
+    (direction.opposite_edge(other) - edge).abs() < PANE_ADJACENCY_EPS
+}
+
+/// Half-open interval overlap of `me` and `other` along the axis perpendicular
+/// to `direction`.
 fn overlaps_perpendicular(me: Rect, other: Rect, direction: PaneDirection) -> bool {
-    let (a0, a1, b0, b1) = match direction {
-        PaneDirection::Up | PaneDirection::Down => (me.x, me.x + me.w, other.x, other.x + other.w),
-        PaneDirection::Left | PaneDirection::Right => {
-            (me.y, me.y + me.h, other.y, other.y + other.h)
-        }
-    };
+    let (a0, a1) = direction.perpendicular_range(me);
+    let (b0, b1) = direction.perpendicular_range(other);
     a0 + PANE_ADJACENCY_EPS < b1 && b0 + PANE_ADJACENCY_EPS < a1
 }
 
@@ -88,20 +120,17 @@ fn find_in_direction<F: Fn(&PaneId) -> u64>(
     from: &PaneId,
     score: F,
 ) -> Option<PaneId> {
-    let primary_edge = match direction {
-        PaneDirection::Up => me.y,
-        PaneDirection::Down => me.y + me.h,
-        PaneDirection::Left => me.x,
-        PaneDirection::Right => me.x + me.w,
-    };
-    if let Some(p) = pick_best(panes, from, me, direction, primary_edge, &score) {
+    if let Some(p) = pick_best(
+        panes,
+        from,
+        me,
+        direction,
+        direction.primary_edge(me),
+        &score,
+    ) {
         return Some(p);
     }
-    let wrap_edge = match direction {
-        PaneDirection::Up | PaneDirection::Left => 1.0,
-        PaneDirection::Down | PaneDirection::Right => 0.0,
-    };
-    pick_best(panes, from, me, direction, wrap_edge, &score)
+    pick_best(panes, from, me, direction, direction.wrap_edge(), &score)
 }
 
 impl Window {
