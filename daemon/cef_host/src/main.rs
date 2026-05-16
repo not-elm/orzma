@@ -182,8 +182,15 @@ fn main() -> std::process::ExitCode {
         .spawn(move || {
             rt_handle.block_on(async move {
                 tracing::info!(socket = %socket_for_log.display(), "control loop starting");
-                if let Err(e) = control::run(socket_path, handle_for_control, event_rx).await {
-                    tracing::warn!(error = %e, "control loop exited (daemon UDS unavailable?)");
+                match control::run(socket_path, handle_for_control, event_rx).await {
+                    Ok(()) => tracing::info!("control loop closed normally"),
+                    Err(e) => tracing::warn!(error = %e, "control loop failed; shutting down"),
+                }
+                // NOTE: when the control loop exits — gracefully or otherwise —
+                // post a QuitTask so the main thread's CefRunMessageLoop returns
+                // instead of sitting idle waiting for the next command.
+                if let Err(e) = post_command::post_quit_loop() {
+                    tracing::warn!(error = %e, "post_quit_loop failed; main may hang until SIGINT");
                 }
             });
         })
