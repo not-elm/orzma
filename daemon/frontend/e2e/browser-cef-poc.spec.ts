@@ -6,6 +6,7 @@
 // daemon running on :3200 — are documented in CLAUDE.md alongside
 // `make dev-e2e`.
 
+import { appendFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 
 const HAS_CEF = process.platform === 'darwin' && process.env.OZMUX_TEST_REAL_CEF === '1';
@@ -198,6 +199,91 @@ test.describe('CEF PoC e2e', () => {
       afterNav + 1,
       { timeout: 30_000 },
     );
+  });
+
+  test('KPI: 10 real-wheel burst, p95 recorded', async ({ page, request }) => {
+    await page.goto('/?cef=1');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+
+    const sessionsRes = await request.get(`${DAEMON}/sessions`);
+    const sessions = (await sessionsRes.json()) as { sessions: { windows: string[] }[] };
+    const wid = sessions.sessions[0]?.windows[0];
+    if (!wid) return;
+    const windowRes = await request.get(`${DAEMON}/windows/${wid}`);
+    const win = (await windowRes.json()) as { panes: { id: string }[] };
+    const pid = win.panes[0]?.id;
+    if (!pid) return;
+
+    // Reset KPI arrays + paint counter before the POST.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __poc_paint_done_count?: number;
+        __poc_kpi?: unknown[];
+        __poc_kpi_dispatches?: unknown[];
+      };
+      w.__poc_paint_done_count = 0;
+      w.__poc_kpi = [];
+      w.__poc_kpi_dispatches = [];
+    });
+
+    const post = await request.post(`${DAEMON}/windows/${wid}/panes/${pid}/activities`, {
+      data: {
+        activity: {
+          activity_id: crypto.randomUUID(),
+          kind: { type: 'browser', initial_url: 'https://example.com/' },
+        },
+      },
+    });
+    expect([200, 201]).toContain(post.status());
+
+    await page.waitForFunction(
+      () =>
+        ((window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count ?? 0) >
+        0,
+      { timeout: 30_000 },
+    );
+
+    // Real wheel events: 10 bursts 100ms apart over the canvas.
+    await page.locator('canvas').first().hover();
+    for (let i = 0; i < 10; i++) {
+      await page.mouse.wheel(0, 300);
+      await page.waitForTimeout(100);
+    }
+    await page.waitForTimeout(500);
+
+    const result = await page.evaluate(() => {
+      const disp =
+        (window as unknown as { __poc_kpi_dispatches?: Array<{ id: number; t: number }> })
+          .__poc_kpi_dispatches ?? [];
+      const paint =
+        (
+          window as unknown as {
+            __poc_kpi?: Array<{ input_id: number; t_paint: number }>;
+          }
+        ).__poc_kpi ?? [];
+      const dispatchById = new Map(disp.map((d) => [d.id, d.t]));
+      const lats: number[] = [];
+      for (const p of paint) {
+        if (p.input_id == null) continue;
+        const t0 = dispatchById.get(p.input_id);
+        if (t0 != null) lats.push(p.t_paint - t0);
+      }
+      lats.sort((a, b) => a - b);
+      return { samples: lats, p95: lats[Math.floor(lats.length * 0.95)] ?? 0 };
+    });
+
+    console.log(`KPI samples=${result.samples.length} p95=${result.p95.toFixed(1)}ms`);
+    // Informational only — Plan 2 records, Plan 3 may gate.
+    expect(result.samples.length).toBeGreaterThan(0);
+
+    try {
+      appendFileSync(
+        'docs/superpowers/notes/2026-05-16-cef-plan2-kpi.md',
+        `\n## ${new Date().toISOString()}\np95 = ${result.p95.toFixed(1)} ms (n=${result.samples.length})\nsamples = ${JSON.stringify(result.samples)}\n`,
+      );
+    } catch (e) {
+      console.warn('docs note write failed', e);
+    }
   });
 
   test('Phase A: a Browser activity paints at least one frame', async ({ page, request }) => {
