@@ -16,14 +16,13 @@ interface RenameWindowPromptProps {
 export function RenameWindowPrompt({ promptState, closePrompt }: RenameWindowPromptProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // NOTE: select-all on open so the first keystroke replaces the
-  // prefilled name rather than appending to it.
   useEffect(() => {
     if (promptState.open) inputRef.current?.select();
   }, [promptState.open]);
 
-  // NOTE: native listener required so e.isComposing reads correctly;
-  // React synthetic events do not forward isComposing from jsdom events.
+  // NOTE: a native keydown listener is required — React's synthetic
+  // KeyboardEvent does not expose isComposing, so onKeyDown would let an
+  // IME-confirming Enter through and double-submit the rename.
   useEffect(() => {
     if (!promptState.open) return;
     const input = inputRef.current;

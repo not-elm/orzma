@@ -55,8 +55,6 @@ export function App() {
     openRenameWindow: () => {
       const w = activeWindowRef.current;
       const name = activeWindowNameRef.current;
-      // NOTE: no active window resolved yet, or its name not in the
-      // session view — nothing to rename, so do not open the prompt.
       if (w === null || name === null) return;
       openPromptRef.current(w, name);
     },
