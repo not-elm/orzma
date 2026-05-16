@@ -78,4 +78,51 @@ test.describe('CEF PoC e2e', () => {
     });
     expect([200, 201]).toContain(post.status());
   });
+
+  test('Phase A: a Browser activity paints at least one frame', async ({ page, request }) => {
+    await page.goto('/?cef=1');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+
+    const sessionsRes = await request.get(`${DAEMON}/sessions`);
+    expect(sessionsRes.status()).toBe(200);
+    const sessions = (await sessionsRes.json()) as {
+      sessions: { windows: string[] }[];
+    };
+    const wid = sessions.sessions[0]?.windows[0];
+    expect(wid).toBeTruthy();
+    if (!wid) return;
+
+    const windowRes = await request.get(`${DAEMON}/windows/${wid}`);
+    expect(windowRes.status()).toBe(200);
+    const win = (await windowRes.json()) as { panes: { id: string }[] };
+    const pid = win.panes[0]?.id;
+    expect(pid).toBeTruthy();
+    if (!pid) return;
+
+    // Reset the paint counter before issuing the POST so we measure paints
+    // from this activity, not residual ones from earlier tests in the file.
+    await page.evaluate(() => {
+      (window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count = 0;
+    });
+
+    const post = await request.post(`${DAEMON}/windows/${wid}/panes/${pid}/activities`, {
+      data: {
+        activity: {
+          activity_id: crypto.randomUUID(),
+          kind: { type: 'browser', initial_url: 'https://example.com/' },
+        },
+      },
+    });
+    expect([200, 201]).toContain(post.status());
+
+    // BrowserActivityCef wires `paint-done` into `window.__poc_paint_done_count`.
+    // We can't read getImageData on a transferred OffscreenCanvas; this counter
+    // is the closest proxy for "at least one keyframe rendered".
+    await page.waitForFunction(
+      () =>
+        ((window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count ?? 0) >
+        0,
+      { timeout: 30_000 },
+    );
+  });
 });

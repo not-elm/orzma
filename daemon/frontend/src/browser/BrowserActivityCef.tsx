@@ -52,6 +52,11 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     w.onmessage = (ev: MessageEvent<{ type: string }>) => {
       if (ev.data.type === 'unsupported') {
         setUnsupported(true);
+      } else if (ev.data.type === 'paint-done') {
+        // NOTE: exposed for the Playwright e2e in browser-cef-poc.spec.ts
+        // (Task A16). Counts every successful render the worker reports.
+        const w = window as unknown as { __poc_paint_done_count?: number };
+        w.__poc_paint_done_count = (w.__poc_paint_done_count ?? 0) + 1;
       }
     };
     w.postMessage(
