@@ -3,9 +3,8 @@ import { type PointerEventHandler, type ReactNode, useEffect, useState } from 'r
 import { cellHeightOf, cellWidthOf } from '../terminal/renderer/font';
 import { PaneContent } from './PaneContent';
 import { type Bounds, computePaneLayout } from './paneBounds';
-import type { PaneId } from './types';
+import type { DefaultWindowState, PaneId } from './types';
 import { UnknownLayoutNode } from './UnknownLayoutNode';
-import type { DefaultWindowState } from './useDefaultWindow';
 import { useWindowDimensions } from './useWindowDimensions';
 import type { LayoutState } from './useWindowLayout';
 
