@@ -80,6 +80,10 @@ pub struct BrowserEntry {
     pub shm_fd: RawFd,
     pub browser: Browser,
     pub shm: Arc<ShmWriter>,
+    /// Render-handler state — width / height / dpr / force_keyframe — shared
+    /// with the active `OzmuxRenderHandler` so `CefCommand::Resize` can
+    /// update the viewport without rebuilding the handler.
+    pub render_state: Arc<RenderHandlerState>,
 }
 
 /// The total size in bytes of the mmap region for PoC (1280×800 BGRA + slack).
@@ -171,8 +175,37 @@ impl BrowserPool {
                 css_h,
                 dpr,
             } => {
-                // NOTE: full resize (recreate browser) is Plan 2; for now just log.
-                tracing::debug!(?aid, css_w, css_h, dpr, "Resize (PoC stub)");
+                let Some(entry) = self.browsers.get(&aid) else {
+                    tracing::warn!(?aid, "Resize: unknown activity");
+                    return;
+                };
+                let device_w = (css_w as f32 * dpr).round() as u32;
+                let device_h = (css_h as f32 * dpr).round() as u32;
+                // NOTE: Plan 2 clamps device-pixel viewport to the PoC shm
+                // budget (1280×800). Plan 3 wires RecreateShm so larger
+                // viewports can grow the shm region instead of clipping.
+                let clamped_w = device_w.min(1280);
+                let clamped_h = device_h.min(800);
+                if clamped_w != device_w || clamped_h != device_h {
+                    tracing::warn!(
+                        ?aid,
+                        device_w,
+                        device_h,
+                        clamped_w,
+                        clamped_h,
+                        "Resize clamped to PoC shm budget; RecreateShm is Plan 3"
+                    );
+                }
+                entry.render_state.width.set(clamped_w);
+                entry.render_state.height.set(clamped_h);
+                entry.render_state.dpr.set(dpr);
+                // Force a fresh keyframe so the renderer rebuilds at the new size.
+                entry.render_state.force_keyframe.set(true);
+                if let Some(host) = entry.browser.host() {
+                    host.was_resized();
+                    host.notify_screen_info_changed();
+                }
+                tracing::debug!(?aid, css_w, css_h, dpr, "Resize dispatched");
             }
             CefCommand::Close { aid } => {
                 tracing::info!(?aid, "Close");
@@ -295,8 +328,9 @@ impl BrowserPool {
         // and we are the sole writer on the CEF UI thread.
         let shm = Arc::new(unsafe { ShmWriter::from_mmap(ptr as *mut u8, POC_SLOT_PAYLOAD_MAX) });
 
-        let state = Arc::new(RenderHandlerState::new(1280, 800, 1.0));
-        let render_handler = OzmuxRenderHandler::new(aid.clone(), shm.clone(), state);
+        let render_state = Arc::new(RenderHandlerState::new(1280, 800, 1.0));
+        let render_handler =
+            OzmuxRenderHandler::new(aid.clone(), shm.clone(), render_state.clone());
         let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone());
         let nav_inner = NavInner::new(aid.clone(), self.event_tx.clone());
         let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
@@ -349,6 +383,7 @@ impl BrowserPool {
                         shm_fd,
                         browser: b,
                         shm,
+                        render_state,
                     },
                 );
             }

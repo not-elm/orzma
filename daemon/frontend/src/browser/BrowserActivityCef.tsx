@@ -122,6 +122,23 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
   // Keep sendRef in sync without triggering the attach effect.
   sendRef.current = send;
 
+  // Observe overlay size and report Resize to cef_host whenever it changes.
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const ro = new ResizeObserver(() => {
+      const r = overlay.getBoundingClientRect();
+      sendRef.current?.({
+        kind: 'resize',
+        css_w: Math.max(1, Math.round(r.width)),
+        css_h: Math.max(1, Math.round(r.height)),
+        dpr: window.devicePixelRatio,
+      });
+    });
+    ro.observe(overlay);
+    return () => ro.disconnect();
+  }, []);
+
   // Wire input attach helpers when the worker is live.
   useEffect(() => {
     if (!handle?.worker) return;
