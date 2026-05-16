@@ -1,6 +1,7 @@
 import { breakActivityToPane } from '../layout/breakActivityToPane';
 import { closeActivity } from '../layout/closeActivity';
 import { closePane } from '../layout/closePane';
+import { cycleActivity } from '../layout/cycleActivity';
 import { newTerminalActivity } from '../layout/newTerminalActivity';
 import { splitPane } from '../layout/splitPane';
 import type { ActivityId, PaneId, WindowId } from '../layout/types';
@@ -34,6 +35,10 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
       return () => withActivePane(ctx, newTerminalActivity);
     case 'close-activity':
       return () => withActivePaneActivity(ctx, closeActivity);
+    case 'focus-activity': {
+      const direction = action.offset;
+      return () => withActivePane(ctx, (w, p) => cycleActivity(w, p, direction));
+    }
     default:
       console.warn('actionToHandler: unsupported action', action);
       return null;

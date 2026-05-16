@@ -197,4 +197,41 @@ describe('actionToHandler', () => {
     await Promise.resolve();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    'next',
+    'prev',
+  ] as const)('returns a handler that POSTs cycle-activity with %s direction', async (direction) => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext({
+      activeWindow: () => 'wid-1',
+      activePane: () => 'pid-1',
+    });
+    const handler = actionToHandler({ type: 'focus-activity', offset: direction }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/cycle-activity', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ direction }),
+    });
+  });
+
+  it('focus-activity handler is a no-op when active pane is null', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext();
+    const handler = actionToHandler({ type: 'focus-activity', offset: 'next' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

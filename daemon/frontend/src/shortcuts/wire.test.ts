@@ -198,4 +198,39 @@ describe('parseShortcuts', () => {
     expect(out?.bindings).toHaveLength(2);
     expect(out?.bindings[1].action).toEqual({ type: 'close-activity' });
   });
+
+  it.each(['next', 'prev'] as const)('parses a focus-activity binding with %s offset', (offset) => {
+    const withFA = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: offset === 'next' ? ']' : '[',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'focus-activity', offset },
+        },
+      ],
+    };
+    const out = parseShortcuts(withFA);
+    expect(out?.bindings).toHaveLength(2);
+    expect(out?.bindings[1].action).toEqual({ type: 'focus-activity', offset });
+  });
+
+  it('drops a focus-activity binding with an unknown offset (e.g. last)', () => {
+    const withBadOffset = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: 'l',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'focus-activity', offset: 'last' },
+        },
+      ],
+    };
+    const out = parseShortcuts(withBadOffset);
+    expect(out?.bindings).toHaveLength(1);
+    expect(out?.bindings[0].action.type).toBe('close-pane');
+    expect(console.warn).toHaveBeenCalled();
+  });
 });
