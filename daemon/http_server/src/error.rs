@@ -63,6 +63,9 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::Session(MultiplexerError::PaneNotInWindow { .. }) => {
                 (StatusCode::CONFLICT, "PANE_NOT_IN_WINDOW")
             }
+            HttpError::Session(MultiplexerError::WindowNotMeasured(_)) => {
+                (StatusCode::CONFLICT, "WINDOW_NOT_MEASURED")
+            }
             HttpError::Session(MultiplexerError::CellNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "CELL_NOT_FOUND")
             }
@@ -270,6 +273,13 @@ mod tests {
     #[test]
     fn cannot_remove_last_activity_maps_to_409() {
         let err = HttpError::Session(MultiplexerError::CannotRemoveLastActivity(PaneId::new()));
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn window_not_measured_maps_to_409_window_not_measured() {
+        let err = HttpError::Session(MultiplexerError::WindowNotMeasured(WindowId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
