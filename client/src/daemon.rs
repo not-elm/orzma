@@ -26,7 +26,7 @@ const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// This is a TCP-only check — it does not verify the listener is actually
 /// ozmux. Verifying daemon identity (e.g. by querying a version endpoint) is
 /// out of scope for the minimal launcher.
-pub fn is_running() -> bool {
+fn is_running() -> bool {
     let Ok(addr) = DAEMON_ADDR.parse::<SocketAddr>() else {
         return false;
     };
@@ -40,17 +40,21 @@ pub fn is_running() -> bool {
 /// `$TMPDIR/ozmux/launcher.lock`, re-check, spawn if still absent, and poll
 /// `GET /health` until 200 OK. The lock is held across the readiness wait so
 /// concurrent launcher invocations serialize on it instead of all spawning.
-pub async fn ensure_running(app: &AppHandle) -> Result<()> {
+pub(crate) async fn ensure_running(app: &AppHandle) -> Result<()> {
     if is_running() {
         return Ok(());
     }
 
-    let lock = acquire_launcher_lock().context("acquire launcher lock")?;
+    let lock = acquire_launcher_lock()
+        .await
+        .context("acquire launcher lock")?;
 
     if !is_running() {
         spawn_detached(app).context("spawn daemon sidecar")?;
     }
-    wait_until_ready().await.context("wait for daemon readiness")?;
+    wait_until_ready()
+        .await
+        .context("wait for daemon readiness")?;
 
     // NOTE: drop is explicit so the lock release happens after the wait, not
     // earlier due to NLL shrinking the borrow.
@@ -63,14 +67,16 @@ pub async fn ensure_running(app: &AppHandle) -> Result<()> {
 /// survives the parent (Tauri) exiting.
 ///
 /// The caller must already hold the launcher lock.
-pub fn spawn_detached(app: &AppHandle) -> Result<()> {
+fn spawn_detached(app: &AppHandle) -> Result<()> {
     let log_path = log_file_path()?;
     let log = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
         .with_context(|| format!("open daemon log at {}", log_path.display()))?;
-    let log_err = log.try_clone()?;
+    let log_err = log
+        .try_clone()
+        .with_context(|| format!("clone log file handle for {}", log_path.display()))?;
 
     let sidecar = app.shell().sidecar("daemon_bootstrap")?;
     let mut cmd: std::process::Command = sidecar.into();
@@ -110,8 +116,9 @@ async fn wait_until_ready() -> Result<()> {
             Err(e) => anyhow::Error::new(e),
         };
         if Instant::now() >= deadline {
-            return Err(last_err)
-                .context(format!("/health did not return 200 within {READY_TIMEOUT:?}"));
+            return Err(last_err).context(format!(
+                "/health did not return 200 within {READY_TIMEOUT:?}"
+            ));
         }
         tokio::time::sleep(READY_POLL_INTERVAL).await;
     }
@@ -123,7 +130,7 @@ async fn wait_until_ready() -> Result<()> {
 /// process holds the lock. We retry with `LOCK_POLL_INTERVAL` cadence until
 /// `LOCK_TIMEOUT`. The lock auto-releases on file close (i.e. when the
 /// returned `File` is dropped).
-fn acquire_launcher_lock() -> Result<File> {
+async fn acquire_launcher_lock() -> Result<File> {
     let path = lock_file_path()?;
     let file = OpenOptions::new()
         .create(true)
@@ -145,7 +152,7 @@ fn acquire_launcher_lock() -> Result<File> {
                         LOCK_TIMEOUT
                     ));
                 }
-                std::thread::sleep(LOCK_POLL_INTERVAL);
+                tokio::time::sleep(LOCK_POLL_INTERVAL).await;
             }
             Err(e) => return Err(anyhow::Error::new(e).context("acquire exclusive flock")),
         }
