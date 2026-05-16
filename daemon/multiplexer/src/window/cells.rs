@@ -252,7 +252,7 @@ impl LayoutCellState {
     /// Descends the cell subtree rooted at `id` and pushes one `(PaneId, Rect)` per leaf into `out`,
     /// with `bounds` as the rectangle allotted to this subtree.
     ///
-    /// - `Cell::Pane` is a leaf: emit `(pane, b)`.
+    /// - `Cell::Pane` is a leaf: emit `(pane, bounds)`.
     /// - `Cell::Root` passes `bounds` straight through to its single child.
     /// - `Cell::Split` divides `bounds` along its orientation using
     ///   `Self::split_ratio` and recurses into lhs then rhs. The trailing
