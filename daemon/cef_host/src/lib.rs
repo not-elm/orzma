@@ -2,6 +2,7 @@
 //! tests can exercise them. The actual binary (`bin/cef_host`) and helper
 //! (`bin/cef_helper`) use these via the crate path.
 
+pub mod handlers;
 pub mod pool;
 pub mod post_command;
 pub mod shm_writer;

@@ -51,6 +51,58 @@ wrap_app! {
     }
 }
 
+/// Allocates a shared-memory region for the PoC BrowserCreate trigger.
+///
+/// Returns a valid file descriptor on success, or -1 on failure.
+/// The caller is responsible for closing the fd when done.
+fn allocate_poc_shm() -> std::os::fd::RawFd {
+    let total = ozmux_cef_host::shm_writer::ShmWriter::required_region_size(1280 * 800 * 4 + 4096);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::IntoRawFd;
+        let name = std::ffi::CString::new("ozmux_poc").expect("valid cstring");
+        // SAFETY: memfd_create is a safe syscall; flag value is correct.
+        let fd: std::os::fd::RawFd = unsafe {
+            libc::syscall(libc::SYS_memfd_create, name.as_ptr(), libc::MFD_CLOEXEC)
+                as std::os::fd::RawFd
+        };
+        if fd < 0 {
+            return -1;
+        }
+        // SAFETY: ftruncate extends the memfd to the required size.
+        if unsafe { libc::ftruncate(fd, total as libc::off_t) } != 0 {
+            unsafe { libc::close(fd) };
+            return -1;
+        }
+        fd
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::ffi::CString::new("/ozmux_poc_18").expect("valid cstring");
+        // SAFETY: shm_unlink is idempotent if name does not exist.
+        unsafe { libc::shm_unlink(path.as_ptr()) };
+        let fd = unsafe {
+            libc::shm_open(
+                path.as_ptr(),
+                libc::O_CREAT | libc::O_RDWR | libc::O_EXCL,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return -1;
+        }
+        // SAFETY: ftruncate sets the shm object size.
+        if unsafe { libc::ftruncate(fd, total as libc::off_t) } != 0 {
+            unsafe { libc::close(fd) };
+            unsafe { libc::shm_unlink(path.as_ptr()) };
+            return -1;
+        }
+        // Unlink immediately so the name is removed; the fd retains the region.
+        unsafe { libc::shm_unlink(path.as_ptr()) };
+        fd
+    }
+}
+
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_env("OZMUX_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
@@ -183,12 +235,30 @@ fn main() -> std::process::ExitCode {
     let queue = post_command::new_queue();
     let mut pool = pool::BrowserPool::new();
 
+    // PoC Task 18: allocate a shm region and post BrowserCreate to verify the
+    // OnPaint → shm pipeline.  Task 19 removes this in favour of UDS control.
+    let shm_fd = allocate_poc_shm();
+    if shm_fd >= 0 {
+        tracing::info!(shm_fd, "PoC shm allocated");
+        post_command::post(
+            &queue,
+            pool::CefCommand::BrowserCreate {
+                aid: ozmux_browser_cef_protocol::types::ActivityId("poc-aid-1".into()),
+                initial_url: "https://example.com/".into(),
+                epoch: 1,
+                shm_fd,
+            },
+        );
+    } else {
+        tracing::warn!("PoC shm allocation failed — BrowserCreate skipped");
+    }
+
     // NOTE: 5s PoC timeout posts a Shutdown command via the queue instead of
     // using an AtomicBool.  Task 19 replaces this with real UDS control plane.
     let q2 = queue.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
-        tracing::info!("[bg] 5s elapsed, posting Shutdown via queue");
+        std::thread::sleep(Duration::from_secs(10));
+        tracing::info!("[bg] 10s elapsed, posting Shutdown via queue");
         post_command::post(&q2, pool::CefCommand::Shutdown);
     });
 
