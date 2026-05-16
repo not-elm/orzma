@@ -3,8 +3,9 @@
 //! `/.../{activity_id}/browser_cef/ws` (gated by `?cef=1` from the client).
 //!
 //! Streams `BrowserServerMsg` frames from a per-activity `FrameRing` and
-//! accepts `BrowserClientMsg::Subscribe` / `Resize` from the client. PoC scope:
-//! no last-key tracking, no Resize handling beyond logging.
+//! accepts `BrowserClientMsg::Subscribe` / `Resize` from the client. Task A9
+//! wires `last_key` / `has_base_keyframe` so reconnects use `ResumeReplay`
+//! instead of always re-sending the keyframe.
 
 use crate::error::{HttpError, HttpResult};
 use crate::state::AppState;
@@ -13,7 +14,7 @@ use axum::extract::{FromRequest, Path, State, WebSocketUpgrade};
 use axum::response::Response;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::frame_ring::{FrameEnvelope, FrameSubscription, SubscribeRequest};
-use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
+use ozmux_browser_cef_protocol::types::{ActivityId as CefActivityId, FrameKey};
 use ozmux_browser_cef_protocol::wire::{
     BrowserClientMsg, BrowserServerMsg, FrameSubscriptionReply,
 };
@@ -45,59 +46,89 @@ pub async fn browser_cef_ws(
     Ok(ws.on_upgrade(move |socket| run(socket, registry, aid)))
 }
 
+/// Captured subscribe-request shape coming off the wire.
+struct SubscribeReq {
+    session_id: Option<u64>,
+    last_key: Option<FrameKey>,
+    has_base_keyframe: bool,
+}
+
 async fn run(mut socket: WebSocket, registry: Arc<BrowserCefRegistry>, aid: ActivityId) {
     let aid_proto = CefActivityId(aid.to_string());
     let Some(ring) = registry.frame_ring(&aid_proto) else {
         tracing::debug!(?aid, "no cef FrameRing registered; closing");
         return;
     };
+    let session_id_advertised = ring.session_id();
 
-    if !wait_for_subscribe(&mut socket).await {
+    let Some(req) = wait_for_subscribe(&mut socket).await else {
         return;
-    }
+    };
 
-    // TODO: Task A9 wires last_key + MustRestart/ResumeReplay properly.
     let sub = ring.subscribe(SubscribeRequest {
-        session_id: 0, // TODO: Task A9 — read from BrowserClientMsg::Subscribe
-        last_key: None,
-        has_base_keyframe: false,
+        session_id: req.session_id.unwrap_or(0),
+        last_key: req.last_key,
+        has_base_keyframe: req.has_base_keyframe,
     });
-    let (reply_result, keyframe_to_send, mut receiver) = match sub {
+
+    // NOTE: MustRestart short-circuits — no backfill, no live stream. The
+    // frontend handles the reply by dropping its renderer state and
+    // re-subscribing with last_key=None.
+    let (reply, replay_keyframe, replay_deltas, mut rx) = match sub {
         FrameSubscription::FreshSnapshot {
             keyframe,
-            deltas: _,
+            deltas,
             receiver,
         } => (
             FrameSubscriptionReply::FreshSnapshot,
             Some(keyframe),
+            deltas,
             receiver,
         ),
-        FrameSubscription::AwaitingKeyframe { receiver } => {
-            (FrameSubscriptionReply::AwaitingKeyframe, None, receiver)
+        FrameSubscription::ResumeReplay { deltas, receiver } => {
+            (FrameSubscriptionReply::ResumeReplay, None, deltas, receiver)
         }
-        FrameSubscription::ResumeReplay { .. } | FrameSubscription::MustRestart { .. } => {
-            // TODO: Task A9 wires these properly — Phase A passes session_id=0 + last_key=None,
-            // which cannot produce these variants. If we ever land here, log + treat as
-            // AwaitingKeyframe; the broadcast receiver in this variant is still valid.
-            unreachable!("session_id=0 + last_key=None never produces these variants");
+        FrameSubscription::AwaitingKeyframe { receiver } => (
+            FrameSubscriptionReply::AwaitingKeyframe,
+            None,
+            Vec::new(),
+            receiver,
+        ),
+        FrameSubscription::MustRestart { reason } => {
+            let msg = BrowserServerMsg::SubscribeReply {
+                session_id: session_id_advertised,
+                result: FrameSubscriptionReply::MustRestart { reason },
+            };
+            let _ = send_msg(&mut socket, &msg).await;
+            return;
         }
     };
-    let reply = BrowserServerMsg::SubscribeReply {
-        session_id: registry.session_id(),
-        result: reply_result,
-    };
-    if !send_msg(&mut socket, &reply).await {
-        return;
-    }
 
-    if let Some(keyframe) = keyframe_to_send
-        && !send_envelope(&mut socket, &keyframe).await
+    if !send_msg(
+        &mut socket,
+        &BrowserServerMsg::SubscribeReply {
+            session_id: session_id_advertised,
+            result: reply,
+        },
+    )
+    .await
     {
         return;
     }
 
+    if let Some(kf) = replay_keyframe
+        && !send_envelope(&mut socket, &kf).await
+    {
+        return;
+    }
+    for delta in &replay_deltas {
+        if !send_envelope(&mut socket, delta).await {
+            return;
+        }
+    }
+
     loop {
-        match receiver.recv().await {
+        match rx.recv().await {
             Ok(env) => {
                 if !send_envelope(&mut socket, &env).await {
                     break;
@@ -112,12 +143,22 @@ async fn run(mut socket: WebSocket, registry: Arc<BrowserCefRegistry>, aid: Acti
     }
 }
 
-async fn wait_for_subscribe(socket: &mut WebSocket) -> bool {
+async fn wait_for_subscribe(socket: &mut WebSocket) -> Option<SubscribeReq> {
     loop {
         match socket.recv().await {
             Some(Ok(Message::Binary(data))) => {
                 match rmp_serde::from_slice::<BrowserClientMsg>(&data) {
-                    Ok(BrowserClientMsg::Subscribe { .. }) => return true,
+                    Ok(BrowserClientMsg::Subscribe {
+                        session_id,
+                        last_key,
+                        has_base_keyframe,
+                    }) => {
+                        return Some(SubscribeReq {
+                            session_id,
+                            last_key,
+                            has_base_keyframe,
+                        });
+                    }
                     Ok(_) => continue,
                     Err(e) => {
                         tracing::debug!(error = %e, "ignoring undecodable BrowserClientMsg");
@@ -125,11 +166,11 @@ async fn wait_for_subscribe(socket: &mut WebSocket) -> bool {
                     }
                 }
             }
-            Some(Ok(Message::Close(_))) | None => return false,
+            Some(Ok(Message::Close(_))) | None => return None,
             Some(Ok(_)) => continue,
             Some(Err(e)) => {
                 tracing::debug!(error = %e, "cef WS recv error during subscribe wait");
-                return false;
+                return None;
             }
         }
     }
