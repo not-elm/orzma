@@ -26,34 +26,47 @@ use tokio_util::sync::CancellationToken;
 
 /// Default JPEG quality for screencasting (0-100).
 pub(crate) const DEFAULT_JPEG_QUALITY: i64 = 55;
-/// Default maximum frame width in device pixels.
+/// Default maximum frame width in device pixels — fallback before the first
+/// `Resize` message arrives from the frontend.
 pub(crate) const DEFAULT_MAX_WIDTH: i64 = 1920;
-/// Default maximum frame height in device pixels.
+/// Default maximum frame height in device pixels — fallback before the first
+/// `Resize` message arrives from the frontend.
 pub(crate) const DEFAULT_MAX_HEIGHT: i64 = 1200;
 /// Default frame-skip factor: emit every Nth frame.
 pub(crate) const DEFAULT_EVERY_NTH_FRAME: i64 = 1;
+
+/// Build a `StartScreencastParams` with project-wide defaults for format,
+/// quality, and frame rate, and caller-supplied pixel bounds.
+pub(crate) fn start_screencast_params(
+    max_width: i64,
+    max_height: i64,
+) -> cdp_page::StartScreencastParams {
+    cdp_page::StartScreencastParams::builder()
+        .format(cdp_page::StartScreencastFormat::Jpeg)
+        .quality(DEFAULT_JPEG_QUALITY)
+        .max_width(max_width)
+        .max_height(max_height)
+        .every_nth_frame(DEFAULT_EVERY_NTH_FRAME)
+        .build()
+}
 
 /// Screencast configuration. Conservative defaults that balance frame rate
 /// against per-frame bandwidth.
 #[derive(Debug, Clone)]
 pub(crate) struct BridgeConfig {
-    /// JPEG quality (0-100). Higher = better quality, larger frame.
-    pub jpeg_quality: i64,
-    /// Maximum frame width in device pixels.
+    /// Initial maximum frame width in device pixels — used for the very first
+    /// screencast start before the frontend sends a `Resize`.
     pub max_width: i64,
-    /// Maximum frame height in device pixels.
+    /// Initial maximum frame height in device pixels — used for the very first
+    /// screencast start before the frontend sends a `Resize`.
     pub max_height: i64,
-    /// Emit one frame per N. Higher = lower frame rate, less CPU.
-    pub every_nth_frame: i64,
 }
 
 impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
-            jpeg_quality: DEFAULT_JPEG_QUALITY,
             max_width: DEFAULT_MAX_WIDTH,
             max_height: DEFAULT_MAX_HEIGHT,
-            every_nth_frame: DEFAULT_EVERY_NTH_FRAME,
         }
     }
 }
@@ -68,13 +81,7 @@ pub(crate) async fn run(
     cancel: CancellationToken,
     cfg: BridgeConfig,
 ) {
-    let start_params = cdp_page::StartScreencastParams::builder()
-        .format(cdp_page::StartScreencastFormat::Jpeg)
-        .quality(cfg.jpeg_quality)
-        .max_width(cfg.max_width)
-        .max_height(cfg.max_height)
-        .every_nth_frame(cfg.every_nth_frame)
-        .build();
+    let start_params = start_screencast_params(cfg.max_width, cfg.max_height);
 
     if let Err(e) = page.execute(start_params).await {
         tracing::warn!(error = %e, "startScreencast failed");

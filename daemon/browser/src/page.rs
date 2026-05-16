@@ -2,15 +2,15 @@
 //! the registry lock in `BrowserService` never holds across an `await`. One
 //! actor per browser Activity.
 
-use crate::bridge::{
-    DEFAULT_EVERY_NTH_FRAME, DEFAULT_JPEG_QUALITY, DEFAULT_MAX_HEIGHT, DEFAULT_MAX_WIDTH,
-};
+use crate::bridge::{DEFAULT_MAX_HEIGHT, DEFAULT_MAX_WIDTH, start_screencast_params};
 use crate::error::{BrowserError, BrowserResult};
 use crate::input::{
     ime_commit_to_cdp, ime_composition_to_cdp, key_to_cdp, mouse_to_cdp, paste_to_cdp, wheel_to_cdp,
 };
+use crate::snapshot::{BrowserSnapshot, Viewport};
 use crate::wire::{BrowserClientMsg, NavCommand};
-use tokio::sync::{mpsc, oneshot};
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// Command sent to a `PageActor` via its `mpsc::Sender`.
 #[derive(Debug)]
@@ -19,18 +19,21 @@ pub(crate) enum PageCommand {
     Input(BrowserClientMsg),
     /// Drive page navigation (Navigate/Back/Forward/Reload/Stop).
     Nav(NavCommand),
-    /// Update the page's emulated viewport.
+    /// Update the page's emulated viewport and restart the screencast at the
+    /// DPR-adjusted pixel dimensions.
     Resize {
         /// Viewport width in CSS pixels.
         width: u32,
         /// Viewport height in CSS pixels.
         height: u32,
+        /// `window.devicePixelRatio` from the frontend. Scales the JPEG
+        /// screencast bounds for crisp HiDPI rendering.
+        device_scale_factor: f64,
     },
     /// Pause screencast (CDP `Page.stopScreencast`).
     PauseScreencast,
-    /// Resume screencast — request the bridge task to re-arm
-    /// `Page.startScreencast`. The page actor itself does not start
-    /// screencast directly; it signals the bridge owner.
+    /// Resume screencast — re-issue `Page.startScreencast` using the last
+    /// known viewport dimensions so the frame size is correct after a pause.
     ResumeScreencast,
     /// Reply with the page's current selection text via `Runtime.evaluate`.
     GetSelection(oneshot::Sender<String>),
@@ -38,19 +41,29 @@ pub(crate) enum PageCommand {
     Close,
 }
 
-/// Run the actor loop. Consumes the `Page` and the `mpsc::Receiver` end of
-/// the actor command channel. Returns when the channel closes or a `Close`
-/// command arrives. The owning `BrowserService` task spawns this on a
+/// Persistent state maintained across actor command iterations.
+struct PageState {
+    /// Latest (css_width, css_height, device_scale_factor) received from the
+    /// frontend. `None` until the first `Resize` command arrives.
+    viewport: Option<(u32, u32, f64)>,
+}
+
+/// Run the actor loop. Consumes the `Page`, the `mpsc::Receiver` end of the
+/// actor command channel, and the snapshot watch sender so `Resize` can
+/// publish the updated `Viewport`. Returns when the channel closes or a
+/// `Close` command arrives. The owning `BrowserService` task spawns this on a
 /// dedicated tokio task per Activity.
 pub(crate) async fn run(
     page: chromiumoxide::Page,
     mut rx: mpsc::Receiver<PageCommand>,
+    snapshot_tx: watch::Sender<Arc<BrowserSnapshot>>,
 ) -> BrowserResult<()> {
+    let mut state = PageState { viewport: None };
     while let Some(cmd) = rx.recv().await {
         if matches!(cmd, PageCommand::Close) {
             break;
         }
-        if let Err(e) = handle(&page, cmd).await {
+        if let Err(e) = handle(&page, &mut state, &snapshot_tx, cmd).await {
             tracing::warn!(error = %e, "page command failed");
         }
     }
@@ -58,7 +71,12 @@ pub(crate) async fn run(
     Ok(())
 }
 
-async fn handle(page: &chromiumoxide::Page, cmd: PageCommand) -> BrowserResult<()> {
+async fn handle(
+    page: &chromiumoxide::Page,
+    state: &mut PageState,
+    snapshot_tx: &watch::Sender<Arc<BrowserSnapshot>>,
+    cmd: PageCommand,
+) -> BrowserResult<()> {
     use chromiumoxide::cdp::browser_protocol::emulation as cdp_em;
     use chromiumoxide::cdp::browser_protocol::page as cdp_page;
 
@@ -132,19 +150,37 @@ async fn handle(page: &chromiumoxide::Page, cmd: PageCommand) -> BrowserResult<(
                     .map_err(|e| BrowserError::Cdp(e.to_string()))?;
             }
         },
-        PageCommand::Resize { width, height } => {
-            // NOTE: device_scale_factor fixed at 1 per spec MVP — DPR
-            // emulation deferred (ExperimentalDeprecated CDP API).
-            let params = cdp_em::SetDeviceMetricsOverrideParams::builder()
+        PageCommand::Resize {
+            width,
+            height,
+            device_scale_factor,
+        } => {
+            state.viewport = Some((width, height, device_scale_factor));
+
+            let metrics = cdp_em::SetDeviceMetricsOverrideParams::builder()
                 .width(width as i64)
                 .height(height as i64)
-                .device_scale_factor(1.0)
+                .device_scale_factor(device_scale_factor)
                 .mobile(false)
                 .build()
                 .map_err(BrowserError::Cdp)?;
-            page.execute(params)
+            page.execute(metrics)
                 .await
                 .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+
+            page.execute(cdp_page::StopScreencastParams::default())
+                .await
+                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+
+            let max_w = (width as f64 * device_scale_factor).ceil() as i64;
+            let max_h = (height as f64 * device_scale_factor).ceil() as i64;
+            page.execute(start_screencast_params(max_w, max_h))
+                .await
+                .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+
+            snapshot_tx.send_modify(|snap| {
+                Arc::make_mut(snap).viewport = Viewport { width, height };
+            });
         }
         PageCommand::PauseScreencast => {
             page.execute(cdp_page::StopScreencastParams::default())
@@ -152,14 +188,14 @@ async fn handle(page: &chromiumoxide::Page, cmd: PageCommand) -> BrowserResult<(
                 .map_err(|e| BrowserError::Cdp(e.to_string()))?;
         }
         PageCommand::ResumeScreencast => {
-            let params = cdp_page::StartScreencastParams::builder()
-                .format(cdp_page::StartScreencastFormat::Jpeg)
-                .quality(DEFAULT_JPEG_QUALITY)
-                .max_width(DEFAULT_MAX_WIDTH)
-                .max_height(DEFAULT_MAX_HEIGHT)
-                .every_nth_frame(DEFAULT_EVERY_NTH_FRAME)
-                .build();
-            page.execute(params)
+            let (max_w, max_h) = match state.viewport {
+                Some((w, h, dsf)) => (
+                    (w as f64 * dsf).ceil() as i64,
+                    (h as f64 * dsf).ceil() as i64,
+                ),
+                None => (DEFAULT_MAX_WIDTH, DEFAULT_MAX_HEIGHT),
+            };
+            page.execute(start_screencast_params(max_w, max_h))
                 .await
                 .map_err(|e| BrowserError::Cdp(e.to_string()))?;
         }
