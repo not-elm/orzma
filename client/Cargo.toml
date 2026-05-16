@@ -1,9 +1,11 @@
 [package]
 name = "ozmux-client"
-version = "0.1.0"
 description = "ozmux Tauri launcher"
-authors = ["notelm"]
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
 
 [lib]
 # NOTE: Tauri requires a distinct lib name to avoid colliding with the bin
