@@ -471,16 +471,17 @@ impl AppState {
             .await;
     }
 
-    /// Build the current session snapshot and broadcast it on
-    /// `session_broadcast`. Used by every handler that mutates session-
-    /// visible state. Missing-session errors are logged and dropped.
-    pub(crate) async fn publish_session_view(&self, sid: &SessionId) {
+    /// Build a JSON snapshot of the current session view without publishing.
+    /// Returns `None` if the session is missing or serialization fails. Used by
+    /// the WS handler to deliver the initial frame without duplicating the
+    /// snapshot logic.
+    pub(crate) async fn snapshot_session_view(&self, sid: &SessionId) -> Option<serde_json::Value> {
         let sessions = self.multiplexer.sessions.lock().await;
         let session = match sessions.get(sid) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(error = %e, %sid, "skipped session publish");
-                return;
+                tracing::warn!(error = %e, %sid, "skipped session snapshot");
+                return None;
             }
         };
         // NOTE: snapshot values from the session then drop the sessions lock
@@ -501,8 +502,20 @@ impl AppState {
 
         let view = build_session_view(id, name, active_window, &linked, &window_names);
         match serde_json::to_value(&view) {
-            Ok(value) => self.session_broadcast.publish(sid, value),
-            Err(e) => tracing::warn!(error = %e, %sid, "skipped session publish"),
+            Ok(value) => Some(value),
+            Err(e) => {
+                tracing::warn!(error = %e, %sid, "skipped session snapshot");
+                None
+            }
+        }
+    }
+
+    /// Build the current session snapshot and broadcast it on
+    /// `session_broadcast`. Used by every handler that mutates session-
+    /// visible state. Missing-session errors are logged and dropped.
+    pub(crate) async fn publish_session_view(&self, sid: &SessionId) {
+        if let Some(value) = self.snapshot_session_view(sid).await {
+            self.session_broadcast.publish(sid, value);
         }
     }
 

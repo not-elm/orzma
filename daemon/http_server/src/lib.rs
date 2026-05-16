@@ -86,6 +86,10 @@ pub fn sessions_router() -> Router<AppState> {
                 .patch(handlers::sessions::rename::rename)
                 .delete(handlers::sessions::delete::delete),
         )
+        .route(
+            "/{session_id}/events",
+            get(handlers::sessions::events::events),
+        )
 }
 
 pub fn windows_router() -> Router<AppState> {
