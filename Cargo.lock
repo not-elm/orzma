@@ -691,11 +691,13 @@ name = "daemon_bootstrap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "ozmux_configs",
  "ozmux_extension",
  "ozmux_http_server",
  "ozmux_multiplexer",
  "ozmux_terminal",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

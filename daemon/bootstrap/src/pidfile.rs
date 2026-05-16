@@ -99,22 +99,17 @@ pub fn cleanup_if_stale() -> io::Result<()> {
     cleanup_if_stale_under(&default_parent()?)
 }
 
-/// RAII guard that removes the PID file on drop. Created by `run()` after
-/// a successful `write(pid)` to ensure cleanup on any unwind path
-/// (graceful shutdown, error propagation, panic).
+/// RAII guard that removes the PID file on drop. Created by `run()` to
+/// ensure cleanup on any unwind path (graceful shutdown, error
+/// propagation, panic).
 pub struct PidFileGuard;
 
 impl PidFileGuard {
-    /// Creates a new guard. The PID file must have already been written via
-    /// [`write`] before constructing this guard.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for PidFileGuard {
-    fn default() -> Self {
-        Self::new()
+    /// Writes `pid` to `$TMPDIR/ozmux/daemon.pid` and returns a guard that
+    /// removes the file on drop. Any I/O error from the write is propagated.
+    pub fn create(pid: u32) -> io::Result<Self> {
+        write(pid)?;
+        Ok(Self)
     }
 }
 
@@ -170,8 +165,14 @@ mod tests {
     fn cleanup_if_stale_removes_dead_pid_entry() {
         let dir = TempDir::new().unwrap();
         let p = path_under(dir.path());
-        // NOTE: PID 999_999_999 virtually never exists; avoids EPERM from signalling init.
-        write_to(&p, 999_999_999).unwrap();
+        // NOTE: i32::MAX (as u32) is the largest positive value that survives
+        // the cast to libc::pid_t (i32) and is far above any PID limit on
+        // macOS (~99k) or Linux (theoretical max ~4M), so kill(0) reliably
+        // returns ESRCH. We avoid u32::MAX because it wraps to -1, which
+        // POSIX treats as "broadcast to all processes" rather than a lookup.
+        // We also avoid small synthetic PIDs like 1 (init), which return
+        // EPERM, which our code interprets as "alive".
+        write_to(&p, i32::MAX as u32).unwrap();
         cleanup_if_stale_under(dir.path()).unwrap();
         assert!(!p.exists(), "stale PID file should have been removed");
     }
