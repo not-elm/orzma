@@ -25,10 +25,21 @@ pub struct PoolHandle {
 
 impl PoolHandle {
     /// Creates a new `PoolHandle` that takes ownership of `pool`.
+    ///
+    /// After wrapping the pool, plants a clone of `self` back into the inner
+    /// `BrowserPool::pool_handle` field so that cookie-install callbacks
+    /// (running on the CEF IO thread) can call `post_command::post` to
+    /// dispatch `CreateBrowserAfterCookies` back onto the UI thread.
+    /// The initial `lock()` here is uncontended — the Arc was just created.
     pub fn new(pool: BrowserPool) -> Self {
-        Self {
+        let me = Self {
             pool: Arc::new(Mutex::new(pool)),
-        }
+        };
+        me.pool
+            .lock()
+            .expect("pool poisoned during PoolHandle::new")
+            .pool_handle = Some(me.clone());
+        me
     }
 
     /// Reads the observability flag set by a graceful `Shutdown` dispatch.

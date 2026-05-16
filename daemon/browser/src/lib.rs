@@ -13,6 +13,7 @@ pub mod cef_backend;
 pub mod cef_registry;
 pub mod cef_service;
 pub mod cookie;
+pub mod cookie_extractor;
 pub mod error;
 pub mod frame_ring;
 pub mod input;

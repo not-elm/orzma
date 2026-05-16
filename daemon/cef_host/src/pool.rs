@@ -11,6 +11,7 @@ use crate::handlers::display::{NavInner, OzmuxDisplayHandler};
 use crate::handlers::lifespan::OzmuxLifeSpanHandler;
 use crate::handlers::load::OzmuxLoadHandler;
 use crate::handlers::render::{OzmuxRenderHandler, RenderHandlerState};
+use crate::post_command::PoolHandle;
 use crate::shm_writer::ShmWriter;
 use cef::{
     Browser, BrowserSettings, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, WindowInfo,
@@ -28,14 +29,26 @@ use tokio::sync::mpsc;
 pub enum CefCommand {
     /// Create a new windowless browser for the given activity.
     ///
-    /// `cookies` is forwarded from the wire schema; actual installation is
-    /// deferred to Task B12. `shm_fd` arrives per-BrowserCreate via SCM_RIGHTS.
+    /// On receipt, cookies are installed via `CefCookieManager::set_cookie`.
+    /// After all cookies complete, a `CreateBrowserAfterCookies` is re-posted
+    /// back to the UI thread before calling `browser_host_create_browser_sync`.
+    /// `shm_fd` arrives per-BrowserCreate via SCM_RIGHTS.
     BrowserCreate {
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
         shm_fd: RawFd,
         cookies: Vec<CefCookieDto>,
+    },
+    /// Internal: fires after all cookies from `BrowserCreate` have been
+    /// committed to `CefCookieManager`. The UI thread then calls
+    /// `browser_host_create_browser_sync` so the first navigation carries the
+    /// cookies. Posted from the CEF IO thread via `post_command::post`.
+    CreateBrowserAfterCookies {
+        aid: ActivityId,
+        initial_url: String,
+        epoch: u32,
+        shm_fd: RawFd,
     },
     /// Resize the browser viewport.
     Resize {
@@ -86,6 +99,10 @@ pub struct BrowserPool {
     /// [`PoolHandle::force_shutdown`] so external observers can detect that a
     /// graceful shutdown was requested.
     pub shutdown_requested: bool,
+    /// Back-reference to the pool's own handle, planted by `PoolHandle::new`
+    /// after construction. Used by the cookie-install callback to re-post
+    /// `CreateBrowserAfterCookies` back to the UI thread from the CEF IO thread.
+    pub(crate) pool_handle: Option<PoolHandle>,
 }
 
 impl BrowserPool {
@@ -94,11 +111,15 @@ impl BrowserPool {
     /// `event_tx` is an unbounded sender into the cef_host event channel;
     /// it is cloned into each `NavInner` so display and load handlers can
     /// emit `HostEvent::NavStateChanged` to the daemon.
+    ///
+    /// `pool_handle` is `None` here; `PoolHandle::new` plants the back-reference
+    /// after wrapping the pool so cookie-install callbacks can re-post commands.
     pub fn new(event_tx: mpsc::UnboundedSender<HostEvent>) -> Self {
         Self {
             browsers: HashMap::new(),
             event_tx,
             shutdown_requested: false,
+            pool_handle: None,
         }
     }
 
@@ -113,13 +134,35 @@ impl BrowserPool {
                 shm_fd,
                 cookies,
             } => {
-                if !cookies.is_empty() {
-                    tracing::info!(
-                        ?aid,
-                        cookie_count = cookies.len(),
-                        "BrowserCreate (Task B12 installs cookies; ignored here)"
-                    );
-                }
+                tracing::info!(
+                    ?aid,
+                    cookie_count = cookies.len(),
+                    "BrowserCreate: installing cookies"
+                );
+                let aid2 = aid.clone();
+                let pool_handle = self.pool_handle.clone().expect(
+                    "pool_handle not set; PoolHandle::new must plant it before commands arrive",
+                );
+                crate::cookies::install_cookies(cookies, move || {
+                    if let Err(e) = crate::post_command::post(
+                        &pool_handle,
+                        CefCommand::CreateBrowserAfterCookies {
+                            aid: aid2,
+                            initial_url,
+                            epoch,
+                            shm_fd,
+                        },
+                    ) {
+                        tracing::error!(error = %e, "failed to post CreateBrowserAfterCookies");
+                    }
+                });
+            }
+            CefCommand::CreateBrowserAfterCookies {
+                aid,
+                initial_url,
+                epoch,
+                shm_fd,
+            } => {
                 self.create_browser(aid, initial_url, epoch, shm_fd);
             }
             CefCommand::Resize {

@@ -35,12 +35,26 @@ impl CefBackend {
     /// registry, then dispatches `HostCommand::BrowserCreate` to cef_host with
     /// the shm fd as ancillary data via SCM_RIGHTS. Returns the epoch chosen
     /// for the ring (always 1 in Plan 2; respawn changes this in Plan 3).
+    ///
+    /// Cookies for `initial_url` are extracted from the host Chrome profile
+    /// (macOS only) and forwarded inline in `BrowserCreate`. On failure the
+    /// cookie list degrades to empty and a warning is logged so the browser
+    /// still opens in an unauthenticated state (spec §4.6).
     pub async fn provision(
         &self,
         aid: &CefActivityId,
         initial_url: &str,
-        cookies: Vec<CefCookieDto>,
+        _cookies: Vec<CefCookieDto>,
     ) -> Result<u32, CefBackendError> {
+        let cookies = crate::cookie_extractor::extract_for(initial_url)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "cookie extraction failed; provisioning with no cookies");
+                // TODO: Phase B follow-up — emit BrowserServerMsg::PageError after
+                // BrowserReady so the user sees the degraded login state.
+                Vec::new()
+            });
+
         let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, POC_SLOT_PAYLOAD_MAX)
             .map_err(CefBackendError::ShmAlloc)?;
         let epoch = 1;

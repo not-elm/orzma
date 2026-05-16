@@ -2780,6 +2780,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -2800,6 +2801,7 @@ dependencies = [
  "bytes",
  "cef",
  "cef-dll-sys",
+ "decrypt-cookies",
  "libc",
  "nix 0.29.0",
  "ozmux_browser_cef_protocol",

@@ -3,6 +3,7 @@
 //! (`bin/cef_helper`) use these via the crate path.
 
 pub mod control;
+pub mod cookies;
 pub mod handlers;
 pub mod input;
 pub mod pool;
