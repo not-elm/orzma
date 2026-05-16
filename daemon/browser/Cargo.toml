@@ -25,3 +25,5 @@ tracing = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }
+ozmux_cef_host = { path = "../cef_host" }
+uuid = { version = "1", features = ["v4"] }
