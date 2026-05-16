@@ -1,3 +1,2 @@
-// Module barrel. Component re-exports land here as Phase 5 progresses.
+// Module barrel for the cef-backed BrowserActivity.
 export { BrowserActivity } from './BrowserActivity';
-export { BrowserActivityCef } from './BrowserActivityCef';

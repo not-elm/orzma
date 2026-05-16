@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { BrowserActivityCef } from '../browser';
+import { BrowserActivity } from '../browser';
 import { Terminal } from '../terminal/Terminal';
 import { ClickShield } from './ClickShield';
 import { PanePlaceholder } from './PanePlaceholder';
@@ -43,7 +43,7 @@ function PaneBody({ windowId, pane, isActive, onActivate }: PaneContentProps) {
   if (activity.kind === 'browser') {
     return (
       <>
-        <BrowserActivityCef windowId={windowId} paneId={pane.id} activityId={activity.id} />
+        <BrowserActivity windowId={windowId} paneId={pane.id} activityId={activity.id} />
         {!isActive && <ClickShield onActivate={onActivate} />}
       </>
     );

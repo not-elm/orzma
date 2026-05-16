@@ -1,119 +1,218 @@
-import { useEffect, useRef, useState } from 'react';
-import { browserWsUrl } from './api';
-import { decode, encode } from './protocol/frame';
-import type { BrowserClientMsg, BrowserServerMsg } from './protocol/wire';
+// CEF-backed WebSocket hook. Connects to /browser_cef/ws, sends Subscribe on
+// open, and forwards every incoming binary frame to the supplied frame
+// worker as a transferable ArrayBuffer.
+//
+// Peeks each incoming message's `kind` field on the main thread:
+// SubscribeReply frames are consumed here (and dispatch MustRestart to the
+// caller); all other frames are forwarded to the worker as transferable
+// ArrayBuffers so decode stays off the main thread.
+//
+// Returns `{ send }` so callers can push BrowserClientMsg frames on the same
+// socket the hook subscribed on (e.g. for input forwarding).
 
-/** Latest frame received from the daemon (decoded JPEG bytes + dimensions). */
-export interface LastFrame {
-  jpeg: Uint8Array;
-  width: number;
-  height: number;
-}
+import { decode, encode } from 'msgpackr';
+import { useEffect, useRef } from 'react';
+import type { InputEvent } from './protocol/input';
 
-/** Latest navigation state. */
-export interface NavState {
-  url: string;
-  title: string;
-}
-
-/** Snapshot of the live browser activity exposed by `useBrowserSocket`. */
-export interface BrowserSocketState {
-  send: (msg: BrowserClientMsg) => void;
-  lastFrame: LastFrame | null;
-  nav: NavState;
-  viewport: { width: number; height: number };
-}
-
-const INITIAL_NAV: NavState = {
-  url: '',
-  title: '',
+export type FrameKey = {
+  session_id: bigint;
+  epoch: number;
+  frame_seq: bigint;
 };
 
-const INITIAL_VIEWPORT = { width: 0, height: 0 };
+/** Discriminated union of messages the frontend sends to the daemon over the
+ *  cef WebSocket. Mirrors `BrowserClientMsg` in wire.rs (spec §5). */
+export type BrowserClientMsg =
+  | {
+      kind: 'subscribe';
+      session_id: bigint | null;
+      last_key: FrameKey | null;
+      has_base_keyframe: boolean;
+    }
+  | { kind: 'resize'; css_w: number; css_h: number; dpr: number }
+  | { kind: 'input'; event: InputEvent }
+  | { kind: 'navigate'; url: string }
+  | { kind: 'navigate_history'; delta: number }
+  | { kind: 'copy_request' }
+  | { kind: 'paste'; text: string };
 
-/**
- * React hook that maintains a WebSocket to the daemon's browser stream for
- * one Activity. Decodes msgpack server frames into `lastFrame` / `nav` /
- * `viewport` and exposes a `send` callback for client messages.
- *
- * Resize messages sent before the socket is open are buffered (latest-only)
- * and flushed on `onopen`. All other messages are dropped while the socket is
- * not in the OPEN state.
- */
-export function useBrowserSocket(
-  windowId: string,
-  paneId: string,
-  activityId: string,
-): BrowserSocketState {
+/** Snapshot of navigation state delivered by `BrowserServerMsg::Nav`. */
+export interface NavSnapshot {
+  url: string;
+  title: string;
+  can_back: boolean;
+  can_forward: boolean;
+}
+
+/** Mirrors `BrowserUnavailableReason` in wire.rs (serde tag = "kind", snake_case). */
+export type BrowserUnavailableReason =
+  | { kind: 'retry_exhausted'; last_error: string }
+  | { kind: 'binary_not_found'; path: string }
+  | { kind: 'cef_init_failed'; exit_code: number }
+  | { kind: 'protocol_mismatch'; expected: number; got: number };
+
+export interface UseBrowserSocketOpts {
+  windowId: string;
+  paneId: string;
+  activityId: string;
+  worker: Worker | null;
+  generation: number;
+  /** Last frame the renderer holds, or null to request a fresh keyframe. */
+  lastKey: FrameKey | null;
+  /** Called when the daemon emits a Nav message (URL / title / can_back /
+   *  can_forward). Consumers typically hoist this into a state setter. */
+  onNav?: (nav: NavSnapshot) => void;
+  /** Called when the daemon replies with MustRestart. The reason is one of
+   *  `session_mismatch | epoch_mismatch | last_key_evicted`. */
+  onMustRestart: (reason: string) => void;
+  /** Called when the daemon broadcasts BrowserUnavailable (cef_host died). */
+  onUnavailable?: (reason: BrowserUnavailableReason) => void;
+}
+
+type SubscribeReplyMessage = {
+  kind: 'subscribe_reply';
+  session_id: bigint;
+  result:
+    | { kind: 'fresh_snapshot' }
+    | { kind: 'resume_replay' }
+    | { kind: 'must_restart'; reason: string }
+    | { kind: 'awaiting_keyframe' };
+};
+
+/** Return value of `useBrowserSocket`. The `send` function pushes a
+ *  `BrowserClientMsg` on the live socket; it no-ops when the socket is not
+ *  yet open or has closed. */
+export interface UseBrowserSocketReturn {
+  send: (msg: BrowserClientMsg) => void;
+}
+
+export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketReturn {
+  const {
+    windowId,
+    paneId,
+    activityId,
+    worker,
+    generation,
+    lastKey,
+    onMustRestart,
+    onNav,
+    onUnavailable,
+  } = opts;
   const wsRef = useRef<WebSocket | null>(null);
-  const pendingResize = useRef<BrowserClientMsg | null>(null);
-  const [lastFrame, setLastFrame] = useState<LastFrame | null>(null);
-  const [nav, setNav] = useState<NavState>(INITIAL_NAV);
-  const [viewport, setViewport] = useState<{ width: number; height: number }>(INITIAL_VIEWPORT);
 
   useEffect(() => {
-    const ws = new WebSocket(browserWsUrl(windowId, paneId, activityId));
+    if (!worker) return;
+    const url = `ws://${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/browser_cef/ws`;
+    const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
-    ws.onopen = () => {
-      if (pendingResize.current) {
-        const encoded = encode(pendingResize.current);
-        ws.send(
-          encoded.buffer.slice(
-            encoded.byteOffset,
-            encoded.byteOffset + encoded.byteLength,
-          ) as ArrayBuffer,
-        );
-        pendingResize.current = null;
-      }
+    const sendMsg = (msg: BrowserClientMsg) => {
+      if (ws.readyState !== ws.OPEN) return;
+      const payload = encode(msg);
+      const buf = payload.buffer.slice(
+        payload.byteOffset,
+        payload.byteOffset + payload.byteLength,
+      ) as ArrayBuffer;
+      ws.send(buf);
     };
 
-    ws.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-      const msg: BrowserServerMsg = decode(e.data);
-      switch (msg.kind) {
-        case 'screencast':
-          setLastFrame({ jpeg: msg.jpeg, width: msg.width, height: msg.height });
-          break;
-        case 'nav':
-          setNav({ url: msg.url, title: msg.title });
-          break;
-        case 'viewport':
-          setViewport({ width: msg.width, height: msg.height });
-          break;
-        case 'clipboard_write':
-          navigator.clipboard.writeText(msg.text).catch(() => {});
-          break;
-        case 'page_error':
-          // NOTE: future "sad tab" UI; ignore for now.
-          break;
+    ws.onopen = () => {
+      sendMsg({
+        kind: 'subscribe',
+        session_id: lastKey?.session_id ?? null,
+        last_key: lastKey,
+        has_base_keyframe: lastKey !== null,
+      });
+    };
+
+    ws.onmessage = (ev: MessageEvent<ArrayBuffer>) => {
+      // NOTE: peek up to the first 256 bytes to recognise SubscribeReply.
+      // Screencast frames may carry large BGRA blobs; we don't want to
+      // decode them on the main thread or copy them unnecessarily.
+      const peekLen = Math.min(ev.data.byteLength, 256);
+      const head = new Uint8Array(ev.data, 0, peekLen);
+      let kind: string | undefined;
+      try {
+        kind = (decode(head) as { kind?: string }).kind;
+      } catch {
+        // NOTE: decode of a truncated head may fail; if so assume the message
+        // is a screencast and let the worker handle it.
       }
+
+      if (kind === 'subscribe_reply') {
+        let reply: SubscribeReplyMessage | null = null;
+        try {
+          reply = decode(new Uint8Array(ev.data)) as SubscribeReplyMessage;
+        } catch (e) {
+          console.warn('subscribe_reply decode failed', e);
+          return;
+        }
+        if (reply.result.kind === 'must_restart') {
+          onMustRestart(reply.result.reason);
+        }
+        return;
+      }
+      if (kind === 'nav') {
+        try {
+          const nav = decode(new Uint8Array(ev.data)) as {
+            kind: 'nav';
+            url: string;
+            title: string;
+            can_back: boolean;
+            can_forward: boolean;
+          };
+          onNav?.(nav);
+        } catch (e) {
+          console.warn('nav decode failed', e);
+        }
+        return;
+      }
+      if (kind === 'browser_unavailable') {
+        try {
+          const msg = decode(new Uint8Array(ev.data)) as {
+            kind: 'browser_unavailable';
+            reason: BrowserUnavailableReason;
+          };
+          onUnavailable?.(msg.reason);
+        } catch (e) {
+          console.warn('browser_unavailable decode failed', e);
+        }
+        return;
+      }
+      worker.postMessage({ type: 'wsBinary', generation, buffer: ev.data }, [ev.data]);
     };
+
+    ws.onerror = (ev) => {
+      console.warn('cef browser ws error', ev);
+    };
+
     return () => {
-      ws.close();
       wsRef.current = null;
+      ws.close();
     };
-  }, [windowId, paneId, activityId]);
+  }, [
+    windowId,
+    paneId,
+    activityId,
+    worker,
+    generation,
+    lastKey,
+    onMustRestart,
+    onNav,
+    onUnavailable,
+  ]);
 
   const send = (msg: BrowserClientMsg) => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      // NOTE: buffer the latest resize so it flushes on open; drop everything else.
-      if (msg.kind === 'resize') {
-        pendingResize.current = msg;
-      }
-      return;
-    }
-    const encoded = encode(msg);
-    // NOTE: slice the exact byteOffset/byteLength range. msgpackr uses a pooled
-    // buffer and returns a subarray view, so passing encoded.buffer directly
-    // would transmit the entire 8192-byte pool rather than just the message.
-    ws.send(
-      encoded.buffer.slice(
-        encoded.byteOffset,
-        encoded.byteOffset + encoded.byteLength,
-      ) as ArrayBuffer,
-    );
+    if (!ws || ws.readyState !== ws.OPEN) return;
+    const payload = encode(msg);
+    const buf = payload.buffer.slice(
+      payload.byteOffset,
+      payload.byteOffset + payload.byteLength,
+    ) as ArrayBuffer;
+    ws.send(buf);
   };
-  return { send, lastFrame, nav, viewport };
+
+  return { send };
 }

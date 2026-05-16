@@ -15,9 +15,9 @@ const DAEMON = 'http://localhost:3200';
 test.describe('CEF PoC e2e', () => {
   test.skip(!HAS_CEF, 'OZMUX_TEST_REAL_CEF=1 required (launches real CEF cef_host)');
 
-  test('?cef=1 mounts BrowserActivityCef canvas', async ({ page }) => {
+  test('?cef=1 mounts BrowserActivity canvas', async ({ page }) => {
     await page.goto('/?cef=1');
-    // Wait for any canvas to appear; BrowserActivityCef renders one immediately.
+    // Wait for any canvas to appear; BrowserActivity renders one immediately.
     await page.waitForSelector('canvas', { timeout: 10_000 });
     const count = await page.locator('canvas').count();
     expect(count).toBeGreaterThan(0);
@@ -322,7 +322,7 @@ test.describe('CEF PoC e2e', () => {
     });
     expect([200, 201]).toContain(post.status());
 
-    // BrowserActivityCef wires `paint-done` into `window.__poc_paint_done_count`.
+    // BrowserActivity wires `paint-done` into `window.__poc_paint_done_count`.
     // We can't read getImageData on a transferred OffscreenCanvas; this counter
     // is the closest proxy for "at least one keyframe rendered".
     await page.waitForFunction(
