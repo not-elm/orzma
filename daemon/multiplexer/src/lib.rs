@@ -22,6 +22,15 @@ pub use window::resize::ResizePaneOutcome;
 /// `SetActiveOutcome` directly in new code.
 pub type SetActivePaneOutcome = SetActiveOutcome;
 
+/// Outcome of `set_window_dimensions`: whether the cached value changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetDimensionsOutcome {
+    /// New value differed from the previous one.
+    Applied,
+    /// Same as before; caller can skip side effects.
+    Unchanged,
+}
+
 /// In-memory domain model. Owns the multiplexer's three stores (sessions,
 /// windows, pane_owner_window index). Pure data — no PTY, no extension
 /// registry, no layout broadcast. Side-effecting orchestration lives in the
@@ -123,19 +132,23 @@ impl MultiplexerService {
         wid: &WindowId,
         cols: u16,
         rows: u16,
-    ) -> MultiplexerResult<()> {
+    ) -> MultiplexerResult<SetDimensionsOutcome> {
         self.with_window_or_404(wid, |w| {
+            let next = WindowDimensions { cols, rows };
+            if w.dimensions.as_ref() == Some(&next) {
+                return Ok(SetDimensionsOutcome::Unchanged);
+            }
             w.set_dimensions(cols, rows);
-            Ok(())
+            Ok(SetDimensionsOutcome::Applied)
         })
         .await
     }
 
     /// Run the resize-pane algorithm. The window's cached dimensions are
-    /// used as root `P`; if absent, returns `WindowNotMeasured`. A pane
-    /// id from another window returns `PaneNotInWindow`. Soft no-ops
-    /// (no matching ancestor split or shrinking budget zero) return
-    /// `Ok(NoOp)` without mutating.
+    /// used as root `P`; if absent, returns `WindowNotMeasured`. Soft
+    /// no-ops (no matching ancestor split or shrinking budget zero)
+    /// return `Ok(NoOp)` without mutating. Pane-ownership validation is
+    /// the caller's responsibility (see `AppState::resize_pane`).
     pub async fn resize_pane(
         &self,
         wid: &WindowId,
@@ -143,14 +156,6 @@ impl MultiplexerService {
         direction: PaneDirection,
         amount: u16,
     ) -> MultiplexerResult<ResizePaneOutcome> {
-        let owner = self.lookup_pane_window(pane)?;
-        if &owner != wid {
-            return Err(MultiplexerError::PaneNotInWindow {
-                window: wid.clone(),
-                pane: pane.clone(),
-            });
-        }
-
         self.with_window_or_404(wid, |w| {
             let dims = w
                 .dimensions
@@ -256,7 +261,8 @@ mod tests {
     async fn set_window_dimensions_stores_values() {
         let svc = MultiplexerService::default();
         let (wid, _, _) = svc.create_window(None, None).await.unwrap();
-        svc.set_window_dimensions(&wid, 120, 40).await.unwrap();
+        let outcome = svc.set_window_dimensions(&wid, 120, 40).await.unwrap();
+        assert_eq!(outcome, SetDimensionsOutcome::Applied);
         let dims = svc
             .with_window_or_404(&wid, |w| {
                 Ok::<_, MultiplexerError>(w.dimensions.clone())
@@ -267,6 +273,16 @@ mod tests {
             dims,
             Some(crate::WindowDimensions { cols: 120, rows: 40 })
         );
+    }
+
+    #[tokio::test]
+    async fn set_window_dimensions_returns_unchanged_when_same_value() {
+        let svc = MultiplexerService::default();
+        let (wid, _, _) = svc.create_window(None, None).await.unwrap();
+        let first = svc.set_window_dimensions(&wid, 120, 40).await.unwrap();
+        assert_eq!(first, SetDimensionsOutcome::Applied);
+        let second = svc.set_window_dimensions(&wid, 120, 40).await.unwrap();
+        assert_eq!(second, SetDimensionsOutcome::Unchanged);
     }
 
     #[tokio::test]
@@ -302,16 +318,4 @@ mod tests {
         assert!(matches!(outcome, ResizePaneOutcome::NoOp));
     }
 
-    #[tokio::test]
-    async fn resize_pane_with_pane_in_wrong_window_returns_pane_not_in_window() {
-        let svc = MultiplexerService::default();
-        let (_wid_a, pid_a, _) = svc.create_window(None, None).await.unwrap();
-        let (wid_b, _pid_b, _) = svc.create_window(None, None).await.unwrap();
-        svc.set_window_dimensions(&wid_b, 120, 40).await.unwrap();
-        let err = svc
-            .resize_pane(&wid_b, &pid_a, PaneDirection::Right, 1)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, MultiplexerError::PaneNotInWindow { .. }));
-    }
 }

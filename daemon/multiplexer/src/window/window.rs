@@ -16,9 +16,7 @@ pub struct WindowId(String);
 /// **not** mirrored here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowDimensions {
-    /// Number of cells along the LEFTRIGHT axis.
     pub cols: u16,
-    /// Number of cells along the TOPBOTTOM axis.
     pub rows: u16,
 }
 

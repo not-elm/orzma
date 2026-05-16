@@ -48,13 +48,22 @@ let shared: SharedState | null = null;
 let dispatcher: KeyDispatcher | null = null;
 let moduleDisposed = false;
 
+function armRepeatTimer(state: SharedState) {
+  if (state.repeatTimer !== null) clearTimeout(state.repeatTimer);
+  state.repeatTimer = setTimeout(() => {
+    if (shared) {
+      shared.repeatMode = false;
+      shared.repeatTimer = null;
+    }
+  }, state.repeatTimeoutMs);
+}
+
 function ensureDispatcher() {
   if (dispatcher) return dispatcher;
   const handler = (e: KeyboardEvent) => {
     if (!shared) return;
     if (e.isComposing) return;
 
-    // Branch 1: not armed AND not in repeat mode.
     if (!shared.armed && !shared.repeatMode) {
       if (e.repeat) return;
       if (!matchesChord(e, shared.prefix)) return;
@@ -64,27 +73,17 @@ function ensureDispatcher() {
       return;
     }
 
-    // Branch 2: in repeat sub-mode — no prefix needed for repeatable
-    // bindings; e.repeat is accepted.
     if (shared.repeatMode) {
-      // Modifier-only keypress is ignored; don't consume.
       if (MODIFIER_KEYS.has(e.key)) return;
       const match = shared.bindings.find((b) => matchesChord(e, b.chord));
       if (match?.repeatable) {
         e.preventDefault();
         e.stopPropagation();
         match.handler();
-        if (shared.repeatTimer !== null) clearTimeout(shared.repeatTimer);
-        shared.repeatTimer = setTimeout(() => {
-          if (shared) {
-            shared.repeatMode = false;
-            shared.repeatTimer = null;
-          }
-        }, shared.repeatTimeoutMs);
+        armRepeatTimer(shared);
         return;
       }
-      // Non-repeatable / no-match chord exits repeat mode and is NOT
-      // consumed — falls through to the terminal as a normal key.
+      // NOTE: no preventDefault here — the chord must reach the terminal.
       shared.repeatMode = false;
       if (shared.repeatTimer !== null) {
         clearTimeout(shared.repeatTimer);
@@ -93,8 +92,7 @@ function ensureDispatcher() {
       return;
     }
 
-    // Branch 3: armed mode (prefix has just been pressed). Consume every
-    // event so it cannot leak to xterm.js or iframes.
+    // NOTE: in armed mode consume every event so it cannot leak to xterm.js or iframes.
     e.preventDefault();
     e.stopPropagation();
 
@@ -109,17 +107,9 @@ function ensureDispatcher() {
     if (match) {
       match.handler();
       if (match.repeatable) {
-        // Transition from armed → repeat: disarm visibly but stay
-        // listening for further repeatable chords.
         shared.setArmed(false);
         shared.repeatMode = true;
-        if (shared.repeatTimer !== null) clearTimeout(shared.repeatTimer);
-        shared.repeatTimer = setTimeout(() => {
-          if (shared) {
-            shared.repeatMode = false;
-            shared.repeatTimer = null;
-          }
-        }, shared.repeatTimeoutMs);
+        armRepeatTimer(shared);
         return;
       }
     }
@@ -226,8 +216,7 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
 }
 
 if (import.meta.hot) {
-  // Vite HMR replaces this module without re-running consumers' effects;
-  // detach the old listener so we don't accumulate duplicate keydown handlers.
+  // NOTE: detach the old listener on HMR dispose so we don't accumulate duplicate keydown handlers.
   import.meta.hot.dispose(() => {
     moduleDisposed = true;
     if (shared) {

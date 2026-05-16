@@ -165,6 +165,7 @@ impl AppState {
         direction: ozmux_multiplexer::PaneDirection,
         amount: u16,
     ) -> HttpResult<()> {
+        self.ensure_pane_in_window(wid, pid)?;
         let outcome = self
             .multiplexer
             .resize_pane(wid, pid, direction, amount)
@@ -368,17 +369,20 @@ impl AppState {
 
     /// Update the cached cell dimensions for `wid`. Validation of
     /// positive cols/rows is the handler's responsibility. Broadcasts a
-    /// layout update so subscribed clients observe the new geometry.
+    /// layout update only when the dimensions actually change.
     pub async fn set_window_dimensions(
         &self,
         wid: &WindowId,
         cols: u16,
         rows: u16,
     ) -> HttpResult<()> {
-        self.multiplexer
+        let outcome = self
+            .multiplexer
             .set_window_dimensions(wid, cols, rows)
             .await?;
-        self.publish_window_layout(wid).await;
+        if matches!(outcome, ozmux_multiplexer::SetDimensionsOutcome::Applied) {
+            self.publish_window_layout(wid).await;
+        }
         Ok(())
     }
 

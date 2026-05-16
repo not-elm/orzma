@@ -16,7 +16,7 @@ export async function resizePane(
       body: JSON.stringify({ direction, amount }),
     });
     if (resp.status === 409) {
-      // Backend clamped the resize at a layout edge; this is expected.
+      // NOTE: 409 = WINDOW_NOT_MEASURED (page-load race) or PANE_NOT_IN_WINDOW (stale active pane). Drop quietly — user retries on next keypress.
       console.debug('resizePane: 409', await resp.text());
       return;
     }

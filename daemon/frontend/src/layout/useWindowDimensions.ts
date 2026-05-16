@@ -4,9 +4,9 @@ import type { WindowId } from './types';
 
 /** Options for `useWindowDimensions`. */
 export interface UseWindowDimensionsOptions {
-  /** Cell width in pixels (from the font-metrics probe). */
+  /** From the font-metrics probe. */
   cellWidth: number;
-  /** Cell height in pixels (from the font-metrics probe). */
+  /** From the font-metrics probe. */
   cellHeight: number;
   /** Debounce window for non-initial measurements (default 50ms). */
   debounceMs?: number;
