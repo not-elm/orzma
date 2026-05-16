@@ -80,8 +80,7 @@ fn overlaps_perpendicular(me: Rect, other: Rect, direction: PaneDirection) -> bo
     a0 + PANE_ADJACENCY_EPS < b1 && b0 + PANE_ADJACENCY_EPS < a1
 }
 
-/// Pick the candidate with the largest `score`. Ties are broken by first
-/// occurrence in `panes`, mirroring tmux's `window_pane_choose_best`.
+/// Pick the candidate with the largest `score`.
 fn pick_best<F: Fn(&PaneId) -> u64>(
     panes: &[(PaneId, Rect)],
     from: &PaneId,
@@ -91,20 +90,16 @@ fn pick_best<F: Fn(&PaneId) -> u64>(
     score: &F,
 ) -> Option<PaneId> {
     let mut best: Option<(&PaneId, u64)> = None;
-    for (pid, b) in panes {
-        if pid == from {
-            continue;
-        }
-        if !touches_edge(*b, direction, edge) {
-            continue;
-        }
-        if !overlaps_perpendicular(me, *b, direction) {
-            continue;
-        }
-        let s = score(pid);
+    for (pid, _) in panes
+        .iter()
+        .filter(|(pid, _)| pid != from)
+        .filter(|(_, rect)| touches_edge(*rect, direction, edge))
+        .filter(|(_, rect)| overlaps_perpendicular(me, *rect, direction))
+    {
+        let score = score(pid);
         best = match best {
-            None => Some((pid, s)),
-            Some((_, bs)) if s > bs => Some((pid, s)),
+            None => Some((pid, score)),
+            Some((_, bs)) if score > bs => Some((pid, score)),
             Some(prev) => Some(prev),
         };
     }
