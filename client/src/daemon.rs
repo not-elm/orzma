@@ -4,13 +4,17 @@
 use anyhow::{Context, Result};
 use fs2::FileExt;
 use std::fs::{File, OpenOptions};
+#[cfg(unix)]
 use std::io;
 use std::net::{SocketAddr, TcpStream};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+#[cfg(unix)]
 use tauri_plugin_shell::ShellExt;
 
 const DAEMON_ADDR: &str = "127.0.0.1:3200";
@@ -67,6 +71,7 @@ pub(crate) async fn ensure_running(app: &AppHandle) -> Result<()> {
 /// survives the parent (Tauri) exiting.
 ///
 /// The caller must already hold the launcher lock.
+#[cfg(unix)]
 fn spawn_detached(app: &AppHandle) -> Result<()> {
     let log_path = log_file_path()?;
     let log = OpenOptions::new()
@@ -100,6 +105,14 @@ fn spawn_detached(app: &AppHandle) -> Result<()> {
     // NOTE: Drop the child handle without waiting — the daemon is intentionally
     // orphaned. init/launchd will adopt it.
     Ok(())
+}
+
+#[cfg(not(unix))]
+fn spawn_detached(_app: &AppHandle) -> Result<()> {
+    // NOTE: setsid-based detach is Unix-only. Windows would need
+    // CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS via std::os::windows
+    // CommandExt — out of scope for this launcher.
+    anyhow::bail!("ozmux-client requires a Unix platform; daemon spawn is unsupported here")
 }
 
 async fn wait_until_ready() -> Result<()> {
