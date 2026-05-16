@@ -7,10 +7,11 @@
 //! no last-key tracking, no Resize handling beyond logging.
 
 use crate::error::{HttpError, HttpResult};
-use crate::state::{AppState, BrowserCefRegistry};
+use crate::state::AppState;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{FromRequest, Path, State, WebSocketUpgrade};
 use axum::response::Response;
+use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::frame_ring::FrameEnvelope;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_browser_cef_protocol::wire::{
