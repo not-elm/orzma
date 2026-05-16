@@ -1,6 +1,7 @@
 use ozmux_browser_cef_protocol::types::{ActivityId, FrameKey, Rect};
 use ozmux_browser_cef_protocol::wire::{
-    BrowserClientMsg, BrowserServerMsg, FrameSubscriptionReply, HostCommand, HostEvent,
+    BrowserClientMsg, BrowserServerMsg, CefCookieDto, FrameSubscriptionReply, HostCommand,
+    HostEvent, SameSite,
 };
 
 #[test]
@@ -52,6 +53,64 @@ fn host_command_browser_create_roundtrips() {
         aid: ActivityId("a1".into()),
         initial_url: "https://example.com/".into(),
         epoch: 1,
+        cookies: vec![],
+    });
+}
+
+#[test]
+fn host_command_browser_create_with_cookies_roundtrips() {
+    // Covers every SameSite variant, both expires_utc Some+None, multi-cookie payload.
+    let cookies = vec![
+        CefCookieDto {
+            url: "https://example.com/".into(),
+            name: "session".into(),
+            value: "tok123".into(),
+            domain: "example.com".into(),
+            path: "/".into(),
+            secure: true,
+            http_only: true,
+            expires_utc: Some(1_700_000_000_000_000.0),
+            same_site: SameSite::Lax,
+        },
+        CefCookieDto {
+            url: "https://example.com/api".into(),
+            name: "csrf".into(),
+            value: "abc".into(),
+            domain: "example.com".into(),
+            path: "/api".into(),
+            secure: true,
+            http_only: false,
+            expires_utc: None,
+            same_site: SameSite::Strict,
+        },
+        CefCookieDto {
+            url: "https://other.example/".into(),
+            name: "embed".into(),
+            value: "1".into(),
+            domain: "other.example".into(),
+            path: "/".into(),
+            secure: false,
+            http_only: false,
+            expires_utc: None,
+            same_site: SameSite::None,
+        },
+        CefCookieDto {
+            url: "https://example.com/".into(),
+            name: "pref".into(),
+            value: "dark".into(),
+            domain: "example.com".into(),
+            path: "/".into(),
+            secure: false,
+            http_only: false,
+            expires_utc: Some(0.0),
+            same_site: SameSite::Unspecified,
+        },
+    ];
+    wire_roundtrip(HostCommand::BrowserCreate {
+        aid: ActivityId("a1".into()),
+        initial_url: "https://example.com/".into(),
+        epoch: 1,
+        cookies,
     });
 }
 

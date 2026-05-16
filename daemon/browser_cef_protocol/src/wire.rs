@@ -58,11 +58,13 @@ pub enum HostCommand {
     Ready {
         runtime_root: String,
     },
-    /// Create a new BrowserActivity. The shm fd is passed out-of-band via SCM_RIGHTS.
+    /// Create a new BrowserActivity. The shm fd is passed out-of-band via SCM_RIGHTS;
+    /// cookies are forwarded inline so cef_host can seed the cookie store (Task B12).
     BrowserCreate {
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
+        cookies: Vec<CefCookieDto>,
     },
     Resize {
         aid: ActivityId,

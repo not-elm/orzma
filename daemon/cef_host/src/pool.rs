@@ -14,6 +14,7 @@ use cef::{
     browser_host_create_browser_sync,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
+use ozmux_browser_cef_protocol::wire::CefCookieDto;
 use std::collections::HashMap;
 use std::os::fd::RawFd;
 use std::sync::Arc;
@@ -22,11 +23,15 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub enum CefCommand {
     /// Create a new windowless browser for the given activity.
+    ///
+    /// `cookies` is forwarded from the wire schema; actual installation is
+    /// deferred to Task B12. `shm_fd` arrives per-BrowserCreate via SCM_RIGHTS.
     BrowserCreate {
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
         shm_fd: RawFd,
+        cookies: Vec<CefCookieDto>,
     },
     /// Resize the browser viewport.
     Resize {
@@ -83,7 +88,15 @@ impl BrowserPool {
                 initial_url,
                 epoch,
                 shm_fd,
+                cookies,
             } => {
+                if !cookies.is_empty() {
+                    tracing::info!(
+                        ?aid,
+                        cookie_count = cookies.len(),
+                        "BrowserCreate (Task B12 installs cookies; ignored here)"
+                    );
+                }
                 self.create_browser(aid, initial_url, epoch, shm_fd);
             }
             CefCommand::Resize {
@@ -132,8 +145,9 @@ impl BrowserPool {
 
         let total_size = ShmWriter::required_region_size(POC_SLOT_PAYLOAD_MAX);
         // SAFETY: shm_fd is a valid mmap-able fd received from the daemon side
-        // via SCM_RIGHTS in `control::handshake`. We map it shared so the
-        // daemon can read frames written by the CEF UI thread.
+        // via SCM_RIGHTS in `control::recv_command_with_fd` (per-BrowserCreate
+        // since Task A5). We map it shared so the daemon can read frames
+        // written by the CEF UI thread.
         let ptr = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),

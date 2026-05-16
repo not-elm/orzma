@@ -6,12 +6,14 @@
 //! Handshake (Task 19 / Task 20):
 //!   1. cef_host connects, sends `HostEvent::Hello`.
 //!   2. daemon replies with `HostCommand::Ready`.
-//!   3. daemon sends a single shm fd via SCM_RIGHTS (PoC simplification — one
-//!      shm region per cef_host child; Plan 2 negotiates per-activity).
 //!
-//! The handshake runs synchronously on a blocking task so that SCM_RIGHTS
-//! recvmsg can sit on the same fd without racing the Tokio reactor. Once the
-//! shm fd is in hand, the stream is registered with Tokio and the
+//! Per-BrowserCreate shm fds arrive via SCM_RIGHTS on the sendmsg carrying
+//! the `BrowserCreate` body (Task A5). The hello-time single-fd hack from
+//! Plan 1 has been removed.
+//!
+//! The handshake runs synchronously on a blocking task so that the sync I/O
+//! path can sit on the same fd without racing the Tokio reactor. Once the
+//! handshake is complete the stream is registered with Tokio and the
 //! bidirectional command/event loop takes over.
 
 use crate::pool::CefCommand;
@@ -19,7 +21,7 @@ use crate::post_command::{self, PoolHandle};
 use ozmux_browser_cef_protocol::wire::{HostCommand, HostEvent};
 use sendfd::RecvWithFd;
 use std::io::{Read, Write};
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,7 +30,7 @@ use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, mpsc};
 
-/// Connects to the daemon UDS, performs the Hello / Ready / shm-fd handshake,
+/// Connects to the daemon UDS, performs the Hello / Ready handshake,
 /// then forwards `HostCommand`s into the CEF command queue and pumps outgoing
 /// events back to the daemon.
 pub async fn run(
@@ -36,20 +38,20 @@ pub async fn run(
     handle: PoolHandle,
     events_rx: mpsc::UnboundedReceiver<HostEvent>,
 ) -> std::io::Result<()> {
-    let (std_stream, shm_fd) = tokio::task::spawn_blocking(move || handshake(&socket_path))
+    let std_stream = tokio::task::spawn_blocking(move || handshake(&socket_path))
         .await
         .map_err(std::io::Error::other)??;
-    tracing::info!(shm_fd, "handshake complete");
+    tracing::info!("handshake complete");
 
     let stream = UnixStream::from_std(std_stream)?;
     let (rd, wr) = stream.into_split();
     let rd = Arc::new(Mutex::new(rd));
     let wr = Arc::new(Mutex::new(wr));
 
-    pump(rd, wr, handle, events_rx, shm_fd).await
+    pump(rd, wr, handle, events_rx).await
 }
 
-fn handshake(socket_path: &Path) -> std::io::Result<(StdUnixStream, RawFd)> {
+fn handshake(socket_path: &Path) -> std::io::Result<StdUnixStream> {
     let mut stream = StdUnixStream::connect(socket_path)?;
 
     let hello = HostEvent::Hello {
@@ -72,18 +74,8 @@ fn handshake(socket_path: &Path) -> std::io::Result<(StdUnixStream, RawFd)> {
         }
     }
 
-    let mut byte = [0u8; 1];
-    let mut fds = [0i32; 1];
-    let (n_bytes, n_fds) = stream.recv_with_fd(&mut byte, &mut fds)?;
-    if n_fds == 0 {
-        return Err(std::io::Error::other(
-            "shm fd handshake: no ancillary fd received",
-        ));
-    }
-    tracing::debug!(n_bytes, n_fds, "received shm fd");
-
     stream.set_nonblocking(true)?;
-    Ok((stream, fds[0]))
+    Ok(stream)
 }
 
 async fn pump(
@@ -91,37 +83,71 @@ async fn pump(
     wr: Arc<Mutex<OwnedWriteHalf>>,
     handle: PoolHandle,
     mut events_rx: mpsc::UnboundedReceiver<HostEvent>,
-    handshake_shm_fd: RawFd,
 ) -> std::io::Result<()> {
-    // NOTE: PoC supports a single shm region delivered at handshake time. The
-    // fd is taken by the first BrowserCreate; subsequent BrowserCreate commands
-    // before Plan 2 lands will be rejected with shm_fd = -1 (pool logs + skips).
-    let mut pending_shm_fd: Option<RawFd> = Some(handshake_shm_fd);
-
     loop {
         tokio::select! {
-            cmd = recv_msg::<HostCommand>(&rd) => {
-                let cmd = match cmd {
-                    Ok(c) => c,
+            cmd = recv_command_with_fd(&rd) => {
+                let (cmd, fd) = match cmd {
+                    Ok(pair) => pair,
                     Err(e) => {
                         tracing::warn!(error = %e, "recv failed; closing control loop");
                         break;
                     }
                 };
                 let internal_cmd = match cmd {
-                    HostCommand::BrowserCreate { aid, initial_url, epoch } => {
-                        let shm_fd = pending_shm_fd.take().unwrap_or(-1);
+                    HostCommand::BrowserCreate { aid, initial_url, epoch, cookies } => {
+                        let shm_fd = fd.unwrap_or(-1);
                         if shm_fd < 0 {
-                            tracing::warn!(?aid, "BrowserCreate with no pending shm fd; pool will skip");
+                            tracing::warn!(?aid, "BrowserCreate without ancillary shm_fd");
                         }
-                        CefCommand::BrowserCreate { aid, initial_url, epoch, shm_fd }
+                        CefCommand::BrowserCreate { aid, initial_url, epoch, shm_fd, cookies }
                     }
                     HostCommand::Resize { aid, css_w, css_h, dpr } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
+                            // inside `recv_command_with_fd`. It is not aliased: we
+                            // hold the only copy, no other variable has captured it,
+                            // and this is its only close. Closing here prevents the
+                            // fd from leaking when the command does not consume it.
+                            unsafe { libc::close(stray); }
+                            tracing::warn!("stray fd on Resize, closed");
+                        }
                         CefCommand::Resize { aid, css_w, css_h, dpr }
                     }
-                    HostCommand::Close { aid } => CefCommand::Close { aid },
-                    HostCommand::Shutdown => CefCommand::Shutdown,
-                    HostCommand::Ready { .. } => continue,
+                    HostCommand::Close { aid } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
+                            // inside `recv_command_with_fd`. It is not aliased: we
+                            // hold the only copy, no other variable has captured it,
+                            // and this is its only close. Closing here prevents the
+                            // fd from leaking when the command does not consume it.
+                            unsafe { libc::close(stray); }
+                            tracing::warn!("stray fd on Close, closed");
+                        }
+                        CefCommand::Close { aid }
+                    }
+                    HostCommand::Shutdown => {
+                        if let Some(stray) = fd {
+                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
+                            // inside `recv_command_with_fd`. It is not aliased: we
+                            // hold the only copy, no other variable has captured it,
+                            // and this is its only close. Closing here prevents the
+                            // fd from leaking when the command does not consume it.
+                            unsafe { libc::close(stray); }
+                        }
+                        CefCommand::Shutdown
+                    }
+                    HostCommand::Ready { .. } => {
+                        if let Some(stray) = fd {
+                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
+                            // inside `recv_command_with_fd`. It is not aliased: we
+                            // hold the only copy, no other variable has captured it,
+                            // and this is its only close. Closing here prevents the
+                            // fd from leaking when the command does not consume it.
+                            unsafe { libc::close(stray); }
+                        }
+                        continue;
+                    }
                 };
                 let is_shutdown = matches!(internal_cmd, CefCommand::Shutdown);
                 if let Err(e) = post_command::post(&handle, internal_cmd) {
@@ -142,6 +168,73 @@ async fn pump(
         }
     }
     Ok(())
+}
+
+/// Receives one `HostCommand` plus an optional ancillary `RawFd`.
+///
+/// The 4-byte length prefix is read asynchronously; the body and any
+/// SCM_RIGHTS fd are received via `spawn_blocking` + `sendfd::RecvWithFd`
+/// because `tokio::net::unix::OwnedReadHalf` does not expose `recvmsg`.
+async fn recv_command_with_fd(
+    rd: &Arc<Mutex<OwnedReadHalf>>,
+) -> std::io::Result<(HostCommand, Option<RawFd>)> {
+    let mut len_buf = [0u8; 4];
+    {
+        let mut g = rd.lock().await;
+        g.read_exact(&mut len_buf).await?;
+    }
+    let len = u32::from_be_bytes(len_buf) as usize;
+
+    // NOTE: the read half is only consumed by this function (pump's
+    // sole reader), so re-acquiring `rd.lock()` after dropping it for the
+    // async `read_exact` is race-free even though a small gap exists between
+    // the two acquisitions. If a second reader is ever added, this needs to
+    // be one continuous lock scope.
+    let raw = {
+        let g = rd.lock().await;
+        g.as_ref().as_raw_fd()
+    };
+
+    let (payload, fd) =
+        tokio::task::spawn_blocking(move || -> std::io::Result<(Vec<u8>, Option<RawFd>)> {
+            // SAFETY: `raw` is the underlying fd of the tokio `OwnedReadHalf` and
+            // remains valid for this blocking task: the caller holds the
+            // `Arc<Mutex<OwnedReadHalf>>` alive across the `spawn_blocking().await`
+            // (the OwnedReadHalf is never moved out, never dropped, and is not
+            // aliased from any other writer). We construct a temporary std handle
+            // to call `recv_with_fd`, then `mem::forget` it below so the std Drop
+            // does not close the fd that tokio still owns. The tokio runtime
+            // retains exclusive ownership of the fd before and after this call.
+            let s = unsafe { StdUnixStream::from_raw_fd(raw) };
+            // NOTE: set blocking mode for `recv_with_fd` so the syscall completes
+            // synchronously inside this blocking task; the fd is restored to
+            // non-blocking before returning so the tokio reactor can resume
+            // async I/O on the same fd next iteration. Failing to restore would
+            // stall the reactor on the next async `read_exact` (Plan 2 A5
+            // code-review finding).
+            s.set_nonblocking(false).ok();
+            let mut payload = vec![0u8; len];
+            let mut fds_buf = [0i32; 1];
+            let recv_res = s.recv_with_fd(&mut payload, &mut fds_buf);
+            // Restore non-blocking *before* `mem::forget`, regardless of recv outcome,
+            // so the tokio reactor never sees a blocking fd.
+            let _ = s.set_nonblocking(true);
+            std::mem::forget(s);
+            let (bytes, n_fds) = recv_res?;
+            if bytes != payload.len() {
+                return Err(std::io::Error::other(format!(
+                    "short read: expected {} got {bytes}",
+                    payload.len()
+                )));
+            }
+            let fd = if n_fds > 0 { Some(fds_buf[0]) } else { None };
+            Ok((payload, fd))
+        })
+        .await
+        .map_err(std::io::Error::other)??;
+
+    let cmd: HostCommand = rmp_serde::from_slice(&payload).map_err(std::io::Error::other)?;
+    Ok((cmd, fd))
 }
 
 fn write_msg<T: serde::Serialize>(stream: &mut StdUnixStream, msg: &T) -> std::io::Result<()> {
@@ -175,16 +268,4 @@ async fn send_msg<T: serde::Serialize>(
     wr.write_all(&payload).await?;
     wr.flush().await?;
     Ok(())
-}
-
-async fn recv_msg<T: serde::de::DeserializeOwned>(
-    rd: &Arc<Mutex<OwnedReadHalf>>,
-) -> std::io::Result<T> {
-    let mut len_buf = [0u8; 4];
-    let mut rd = rd.lock().await;
-    rd.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-    let mut payload = vec![0u8; len];
-    rd.read_exact(&mut payload).await?;
-    rmp_serde::from_slice(&payload).map_err(std::io::Error::other)
 }
