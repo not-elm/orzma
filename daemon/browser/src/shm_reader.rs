@@ -6,6 +6,7 @@
 
 use bytes::Bytes;
 use ozmux_browser_cef_protocol::types::Rect;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::Ordering;
 
 /// Number of slots in each activity's main ring.
@@ -183,6 +184,67 @@ impl ShmReader {
         std::mem::size_of::<RingHeader>()
             + NUM_SLOTS * (std::mem::size_of::<SlotHeader>() + slot_payload_max)
             + NUM_SLOTS_POPUP * (std::mem::size_of::<SlotHeader>() + POPUP_PAYLOAD_MAX)
+    }
+}
+
+/// A [`ShmReader`] that owns its `mmap` region and unmaps it on drop.
+///
+/// `ShmReader::from_mmap` borrows a raw base pointer it does not own;
+/// `OwnedShmReader` pairs the reader with the mapping so the region stays
+/// valid for the reader's lifetime and is released when the activity closes.
+pub struct OwnedShmReader {
+    base: *mut std::ffi::c_void,
+    len: usize,
+    reader: ShmReader,
+}
+
+// SAFETY: the mapping is `PROT_READ` shared memory; `ShmReader` already
+// guarantees thread-safe reads, and `munmap` on drop touches the region only
+// once no reader remains.
+unsafe impl Send for OwnedShmReader {}
+unsafe impl Sync for OwnedShmReader {}
+
+impl OwnedShmReader {
+    /// Maps `fd` read-only and wraps a [`ShmReader`] over the mapping.
+    ///
+    /// `fd` is only borrowed for the `mmap` call — the mapping outlives the
+    /// descriptor, so the caller may move `fd` elsewhere (e.g. send it to
+    /// cef_host) afterwards.
+    pub fn map(fd: &OwnedFd, slot_payload_max: usize) -> std::io::Result<Self> {
+        let len = ShmReader::required_region_size(slot_payload_max);
+        // SAFETY: `fd` is a valid shm descriptor sized to at least `len` bytes
+        // by `shm_alloc::create_shm_for_activity`.
+        let base = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        if base == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `base` is a valid mmap region of `len` bytes laid out per the
+        // shared shm_writer / shm_reader contract for `slot_payload_max`.
+        let reader = unsafe { ShmReader::from_mmap(base as *const u8, slot_payload_max) };
+        Ok(Self { base, len, reader })
+    }
+
+    /// Returns the wrapped reader.
+    pub fn reader(&self) -> &ShmReader {
+        &self.reader
+    }
+}
+
+impl Drop for OwnedShmReader {
+    fn drop(&mut self) {
+        // SAFETY: `base` / `len` came from this struct's own `mmap` call.
+        unsafe {
+            libc::munmap(self.base, self.len);
+        }
     }
 }
 

@@ -6,6 +6,7 @@ use crate::cef_registry::BrowserCefRegistry;
 use crate::cef_service::CefHostHandles;
 use crate::frame_ring::FrameRing;
 use crate::shm_alloc::{self, POC_SLOT_PAYLOAD_MAX};
+use crate::shm_reader::OwnedShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_browser_cef_protocol::wire::{CefCookieDto, HostCommand};
 use std::sync::Arc;
@@ -16,6 +17,9 @@ pub enum CefBackendError {
     /// `shm_alloc::create_shm_for_activity` failed.
     #[error("shm allocation failed: {0}")]
     ShmAlloc(std::io::Error),
+    /// Mapping the shm region for daemon-side reading failed.
+    #[error("shm mmap failed: {0}")]
+    ShmMap(std::io::Error),
     /// `CefHostHandles::request_browser_create` reported a closed control channel.
     #[error("cef_host control channel closed: {0}")]
     ControlSendFailed(std::io::Error),
@@ -57,11 +61,17 @@ impl CefBackend {
 
         let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, POC_SLOT_PAYLOAD_MAX)
             .map_err(CefBackendError::ShmAlloc)?;
+        // Map a read-only view before handing the fd to cef_host; the mapping
+        // outlives the descriptor, so `shm_fd` can still be moved into the
+        // SCM_RIGHTS send below. The event pump reads frames through this.
+        let reader = Arc::new(
+            OwnedShmReader::map(&shm_fd, POC_SLOT_PAYLOAD_MAX).map_err(CefBackendError::ShmMap)?,
+        );
         let epoch = 1;
         let ring = Arc::new(FrameRing::new(self.registry.session_id(), epoch));
         // NOTE: the returned nav receiver is discarded here; WS handlers subscribe
         // independently via registry.nav_subscribe() after BrowserCreate completes.
-        let _nav_rx = self.registry.insert(aid.clone(), ring);
+        let _nav_rx = self.registry.insert(aid.clone(), ring, reader);
 
         self.handles
             .request_browser_create(aid.clone(), initial_url.to_string(), epoch, cookies, shm_fd)

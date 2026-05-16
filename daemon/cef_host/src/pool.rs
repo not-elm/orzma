@@ -329,8 +329,12 @@ impl BrowserPool {
         let shm = Arc::new(unsafe { ShmWriter::from_mmap(ptr as *mut u8, POC_SLOT_PAYLOAD_MAX) });
 
         let render_state = Arc::new(RenderHandlerState::new(1280, 800, 1.0));
-        let render_handler =
-            OzmuxRenderHandler::new(aid.clone(), shm.clone(), render_state.clone());
+        let render_handler = OzmuxRenderHandler::new(
+            aid.clone(),
+            shm.clone(),
+            render_state.clone(),
+            self.event_tx.clone(),
+        );
         let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone());
         let nav_inner = NavInner::new(aid.clone(), self.event_tx.clone());
         let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());

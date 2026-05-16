@@ -1,6 +1,7 @@
 //! Per-process registry of cef-backed BrowserActivity rings and nav state.
 
 use crate::frame_ring::FrameRing;
+use crate::shm_reader::OwnedShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_browser_cef_protocol::wire::BrowserUnavailableReason;
 use std::collections::HashMap;
@@ -24,13 +25,17 @@ pub struct NavState {
     pub can_forward: bool,
 }
 
-/// One entry in the registry, owning both the frame ring and the nav state channel.
+/// One entry in the registry, owning the frame ring, the nav state channel,
+/// and the read-only mapping of the activity's shm region.
 pub struct BrowserCefEntry {
-    /// Shared frame ring filled by the shm reader task.
+    /// Shared frame ring the event pump fills from `reader` on `FrameDescriptor`.
     pub ring: Arc<FrameRing>,
     /// Per-activity nav state sender. The pump task updates this; each WS
     /// subscriber holds a `Receiver` and pushes `BrowserServerMsg::Nav` on change.
     pub nav_tx: watch::Sender<NavState>,
+    /// Read-only view of the shm region cef_host writes BGRA frames into. The
+    /// event pump calls `read_stable` / `read_popup` on `FrameDescriptor`.
+    pub reader: Arc<OwnedShmReader>,
 }
 
 /// PoC scope: holds a single `session_id` for the process and a
@@ -85,13 +90,23 @@ impl BrowserCefRegistry {
         self.session_id
     }
 
-    /// Registers a ring for `aid`, creating a fresh `NavState` watch channel.
+    /// Registers a ring + shm reader for `aid`, creating a fresh `NavState`
+    /// watch channel.
     ///
     /// Returns the `watch::Receiver<NavState>` for the caller; also accessible
     /// later via [`nav_subscribe`](Self::nav_subscribe).
-    pub fn insert(&self, aid: CefActivityId, ring: Arc<FrameRing>) -> watch::Receiver<NavState> {
+    pub fn insert(
+        &self,
+        aid: CefActivityId,
+        ring: Arc<FrameRing>,
+        reader: Arc<OwnedShmReader>,
+    ) -> watch::Receiver<NavState> {
         let (nav_tx, nav_rx) = watch::channel(NavState::default());
-        let entry = BrowserCefEntry { ring, nav_tx };
+        let entry = BrowserCefEntry {
+            ring,
+            nav_tx,
+            reader,
+        };
         self.entries
             .lock()
             .expect("browser_cef entries poisoned")
@@ -106,6 +121,19 @@ impl BrowserCefRegistry {
             .expect("browser_cef entries poisoned")
             .get(aid)
             .map(|e| Arc::clone(&e.ring))
+    }
+
+    /// Looks up the `(ring, reader)` pair for `aid`, if registered. The event
+    /// pump uses this on `FrameDescriptor` to read a shm slot into the ring.
+    pub fn ring_and_reader(
+        &self,
+        aid: &CefActivityId,
+    ) -> Option<(Arc<FrameRing>, Arc<OwnedShmReader>)> {
+        self.entries
+            .lock()
+            .expect("browser_cef entries poisoned")
+            .get(aid)
+            .map(|e| (Arc::clone(&e.ring), Arc::clone(&e.reader)))
     }
 
     /// Returns a new `watch::Receiver<NavState>` that tracks nav state for `aid`.

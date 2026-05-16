@@ -10,6 +10,7 @@
 //! `send_with_fd(body, &[fd])` pair.
 
 use crate::cef_registry::{BrowserCefRegistry, NavState};
+use crate::frame_ring::FrameEnvelope;
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::{CefCookieDto, HostCommand, HostEvent};
 use sendfd::SendWithFd;
@@ -384,12 +385,45 @@ async fn event_pump_loop(mut events: mpsc::Receiver<HostEvent>, registry: Arc<Br
                     }
                 }
             }
-            // NOTE: FrameDescriptor, BrowserReady, Hello — not routed by the pump.
-            // BrowserReady is consumed by integration tests via direct receiver access;
-            // FrameDescriptor is posted directly into the shm ring by the cef_host writer.
-            HostEvent::FrameDescriptor { .. }
-            | HostEvent::BrowserReady { .. }
-            | HostEvent::Hello { .. } => {}
+            // On each frame cef_host writes to shm and emits a FrameDescriptor;
+            // the pump reads the named slot and publishes it into the ring so
+            // WS subscribers receive a Screencast.
+            HostEvent::FrameDescriptor {
+                aid,
+                slot_idx,
+                is_popup,
+                ..
+            } => {
+                let Some((ring, reader)) = registry.ring_and_reader(&aid) else {
+                    tracing::debug!(aid = %aid.0, "FrameDescriptor: aid not in registry");
+                    continue;
+                };
+                let snapshot = if is_popup {
+                    reader.reader().read_popup()
+                } else {
+                    reader.reader().read_stable(slot_idx as usize)
+                };
+                match snapshot {
+                    Some(s) => ring.push(Arc::new(FrameEnvelope {
+                        session_id: ring.session_id(),
+                        epoch: ring.epoch(),
+                        frame_seq: s.frame_seq,
+                        captured_at_us: s.captured_at_us,
+                        width: s.width,
+                        height: s.height,
+                        is_keyframe: s.is_keyframe,
+                        damage_rects: s.damage_rects,
+                        is_popup: s.is_popup,
+                        bgra: s.payload,
+                    })),
+                    None => {
+                        tracing::debug!(aid = %aid.0, slot_idx, "FrameDescriptor: shm slot unstable")
+                    }
+                }
+            }
+            // NOTE: BrowserReady is consumed by integration tests via direct
+            // receiver access; Hello is handled during the handshake.
+            HostEvent::BrowserReady { .. } | HostEvent::Hello { .. } => {}
             // NOTE: remaining variants are informational or deferred to later tasks.
             HostEvent::SelectionChanged { .. }
             | HostEvent::PageError { .. }

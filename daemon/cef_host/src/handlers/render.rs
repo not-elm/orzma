@@ -8,9 +8,11 @@ use cef::{
 };
 use cef_dll_sys::cef_paint_element_type_t;
 use ozmux_browser_cef_protocol::types::{ActivityId, Rect as ProtoRect};
+use ozmux_browser_cef_protocol::wire::HostEvent;
 use std::cell::Cell;
 use std::os::raw::c_int;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 /// Per-browser render state.
 ///
@@ -75,6 +77,9 @@ wrap_render_handler! {
         // the CEF UI thread; wrapping in Arc provides the Clone bound the macro needs.
         shm: Arc<ShmWriter>,
         state: Arc<RenderHandlerState>,
+        // NOTE: after each shm write the handler emits a HostEvent::FrameDescriptor
+        // so the daemon's event pump reads the slot into its FrameRing.
+        event_tx: mpsc::UnboundedSender<HostEvent>,
     }
 
     impl RenderHandler {
@@ -187,7 +192,9 @@ wrap_render_handler! {
                 .map(|d| d.as_micros() as u64)
                 .unwrap_or(0);
 
-            if is_popup {
+            // NOTE: damage is moved into SlotData; clone for the descriptor.
+            let descriptor_damage = damage.clone();
+            let (lap, slot_idx) = if is_popup {
                 self.shm.write_slot_popup(SlotData {
                     frame_seq,
                     captured_at_us,
@@ -198,8 +205,12 @@ wrap_render_handler! {
                     is_popup: true,
                     payload: &packed_payload,
                 });
+                // NOTE: the popup slot is fixed; the daemon reads it via
+                // read_popup, so lap / slot_idx carry no meaning here.
+                (0u64, 0u8)
             } else {
-                let _slot_idx = self.shm.write_slot(SlotData {
+                let lap = self.shm.current_lap();
+                let slot_idx = self.shm.write_slot(SlotData {
                     frame_seq,
                     captured_at_us,
                     width: width as u32,
@@ -213,7 +224,21 @@ wrap_render_handler! {
                 if is_keyframe {
                     self.state.force_keyframe.set(false);
                 }
-            }
+                (lap, slot_idx)
+            };
+
+            // Notify the daemon that a frame is ready in shm. A send error
+            // means the control channel closed (daemon gone) — nothing to do.
+            let _ = self.event_tx.send(HostEvent::FrameDescriptor {
+                aid: self.aid.clone(),
+                lap,
+                slot_idx,
+                frame_seq,
+                captured_at_us,
+                is_keyframe,
+                damage_rects: descriptor_damage,
+                is_popup,
+            });
 
             tracing::debug!(
                 aid = %self.aid.0,
