@@ -16,4 +16,4 @@ pub use cells::{
 pub use direction::PaneDirection;
 pub use pane::activity::{Activity, ActivityId, ActivityKind};
 pub use pane::{CycleDirection, Pane, PaneId, PaneState, SetActiveOutcome};
-pub use window::{Window, WindowId, WindowState};
+pub use window::{Window, WindowDimensions, WindowId, WindowState};

@@ -14,7 +14,7 @@ pub use session::{Session, SessionId, SessionState};
 pub use window::{
     Activity, ActivityId, ActivityKind, Cell, CellId, CloseOutcome, CycleDirection,
     LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, RootCell, SetActiveOutcome,
-    Side, SplitCell, SplitOrientation, Window, WindowId, WindowState,
+    Side, SplitCell, SplitOrientation, Window, WindowDimensions, WindowId, WindowState,
 };
 
 /// Backwards-compatible alias for the active-pane outcome. Use

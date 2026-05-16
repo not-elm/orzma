@@ -10,6 +10,18 @@ use std::collections::HashMap;
 #[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct WindowId(String);
 
+/// Cell-grid dimensions of a Window's outer container, as reported by
+/// the client. Used as the root `P` for the resize-pane algorithm.
+/// Per-activity cell dimensions live in `TerminalService` and are
+/// **not** mirrored here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WindowDimensions {
+    /// Number of cells along the LEFTRIGHT axis.
+    pub cols: u16,
+    /// Number of cells along the TOPBOTTOM axis.
+    pub rows: u16,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Window {
     pub id: WindowId,
@@ -21,6 +33,11 @@ pub struct Window {
     pub active_pane: PaneId,
     pub(crate) pane_active_points: HashMap<PaneId, u64>,
     pub(crate) next_active_point: u64,
+    /// Cell-grid dimensions reported by the client (root `P` for
+    /// resize-pane). `None` until the client first measures and sends
+    /// `PATCH /windows/{wid}/dimensions`.
+    #[serde(default)]
+    pub dimensions: Option<WindowDimensions>,
 }
 
 impl Window {
@@ -49,7 +66,14 @@ impl Window {
             active_pane: initial_pane_id,
             pane_active_points: HashMap::new(),
             next_active_point: 0,
+            dimensions: None,
         }
+    }
+
+    /// Replace the cached dimensions. Set on first client measurement
+    /// and updated on subsequent container resizes.
+    pub fn set_dimensions(&mut self, cols: u16, rows: u16) {
+        self.dimensions = Some(WindowDimensions { cols, rows });
     }
 
     /// Bump the per-window counter and record it as the new active pane's
@@ -504,6 +528,22 @@ mod tests {
             SetActiveOutcome::Unchanged,
         ));
         assert_eq!(win.next_active_point, before);
+    }
+
+    #[test]
+    fn new_window_starts_with_unset_dimensions() {
+        let (win, _, _) = fresh_window();
+        assert!(win.dimensions.is_none());
+    }
+
+    #[test]
+    fn window_set_dimensions_stores_cols_and_rows() {
+        let (mut win, _, _) = fresh_window();
+        win.set_dimensions(120, 40);
+        assert_eq!(
+            win.dimensions,
+            Some(WindowDimensions { cols: 120, rows: 40 })
+        );
     }
 
     #[test]
