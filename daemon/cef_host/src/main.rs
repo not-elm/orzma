@@ -15,7 +15,9 @@ use cef::Settings;
 use cef::args::Args;
 use cef::rc::Rc as _;
 use cef::{App, ImplApp, ImplCommandLine, WrapApp, wrap_app};
-use ozmux_cef_host::{pool, post_command};
+use ozmux_browser_cef_protocol::wire::HostEvent;
+use ozmux_cef_host::{control, pool, post_command};
+use std::path::PathBuf;
 use std::time::Duration;
 
 // NOTE: BrowserApp injects --single-process + --no-sandbox + --disable-gpu at command-line
@@ -208,32 +210,38 @@ fn main() -> std::process::ExitCode {
     assert_eq!(ok, 1, "CefInitialize failed (return value: {ok})");
     tracing::info!("CefInitialize OK");
 
-    // ⑤ Tokio runtime on a background thread (placeholder for control plane, Task 19)
+    // ⑤ Command queue + Tokio worker hosting the UDS control plane.
+    let queue = post_command::new_queue();
+    let mut pool = pool::BrowserPool::new();
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .thread_name("cef-host-tokio")
         .build()
         .expect("build tokio runtime");
-    // NOTE: shutdown_tx signals the idle placeholder task to exit cleanly before
-    // the runtime is dropped.  Task 19 replaces the oneshot with a proper control loop.
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let rt_handle = rt.handle().clone();
+
+    let socket_path: PathBuf = std::env::var("OZMUX_CEF_HOST_SOCKET")
+        .map(Into::into)
+        .unwrap_or_else(|_| "/tmp/ozmux_cef_host.sock".into());
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
+    // NOTE: event_tx is parked in main for now; handlers will obtain a clone via
+    // BrowserPool in a follow-up task so OnPaint can emit FrameDescriptor events.
+    let _event_tx = event_tx;
+    let queue_for_control = queue.clone();
+    let socket_for_log = socket_path.clone();
     std::thread::Builder::new()
         .name("cef-host-tokio".into())
         .spawn(move || {
-            rt_handle.block_on(async {
-                tracing::info!("tokio worker started (idle until Task 19 wires UDS)");
-                // NOTE: Idle — Task 19 replaces this with control::run().
-                let _ = shutdown_rx.await;
-                tracing::info!("tokio worker stopping");
+            rt_handle.block_on(async move {
+                tracing::info!(socket = %socket_for_log.display(), "control loop starting");
+                if let Err(e) = control::run(socket_path, queue_for_control, event_rx).await {
+                    tracing::warn!(error = %e, "control loop exited (daemon UDS unavailable?)");
+                }
             });
         })
         .expect("spawn tokio thread");
-
-    // ⑥ Message loop with CefCommand queue drain.
-    let queue = post_command::new_queue();
-    let mut pool = pool::BrowserPool::new();
 
     // PoC Task 18: allocate a shm region and post BrowserCreate to verify the
     // OnPaint → shm pipeline.  Task 19 removes this in favour of UDS control.
@@ -274,8 +282,8 @@ fn main() -> std::process::ExitCode {
     cef::shutdown();
     tracing::info!("CefShutdown OK");
 
-    // Signal the idle tokio task to exit before dropping the runtime.
-    let _ = shutdown_tx.send(());
+    // NOTE: dropping the runtime here cancels the control loop task; the
+    // event_tx parked in main is dropped just after, closing the event channel.
     drop(rt);
     std::process::ExitCode::SUCCESS
 }

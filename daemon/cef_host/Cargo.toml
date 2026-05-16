@@ -21,7 +21,11 @@ cef-dll-sys = { version = "148.1.0+147.0.14", features = ["sandbox"] }
 nix = { version = "0.29", features = ["mman", "fs"] }
 libc = "0.2"
 ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
+sendfd = "0.4"
+rmp-serde = "1"
+serde = { version = "1", features = ["derive"] }
+bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
