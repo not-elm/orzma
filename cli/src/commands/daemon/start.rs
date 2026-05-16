@@ -6,7 +6,7 @@ use clap::Args;
 pub struct StartArgs {
     /// Run the daemon attached to this terminal instead of detaching.
     #[arg(long)]
-    pub foreground: bool,
+    foreground: bool,
 }
 
 pub async fn run(_args: StartArgs) -> anyhow::Result<()> {
