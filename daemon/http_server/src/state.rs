@@ -519,6 +519,17 @@ impl AppState {
         }
     }
 
+    /// Promote `wid` to its session's active window and broadcast the
+    /// updated session view. Returns `WindowNotFound` /
+    /// `WindowNotAttachedToSession` from the underlying multiplexer.
+    pub async fn select_active_window(&self, wid: &WindowId) -> MultiplexerResult<()> {
+        self.multiplexer.select_active_window(wid).await?;
+        if let Some(sid) = self.parent_session(wid).await {
+            self.publish_session_view(&sid).await;
+        }
+        Ok(())
+    }
+
     /// Create a session and broadcast the resulting view.
     /// Returns the new session id.
     pub async fn create_session(&self, name: Option<String>) -> SessionId {
