@@ -15,8 +15,8 @@ const DAEMON = 'http://localhost:3200';
 test.describe('CEF PoC e2e', () => {
   test.skip(!HAS_CEF, 'OZMUX_TEST_REAL_CEF=1 required (launches real CEF cef_host)');
 
-  test('?cef=1 mounts BrowserActivity canvas', async ({ page }) => {
-    await page.goto('/?cef=1');
+  test('BrowserActivity mounts a canvas', async ({ page }) => {
+    await page.goto('/');
     // Wait for any canvas to appear; BrowserActivity renders one immediately.
     await page.waitForSelector('canvas', { timeout: 10_000 });
     const count = await page.locator('canvas').count();
@@ -24,7 +24,7 @@ test.describe('CEF PoC e2e', () => {
   });
 
   test('PoC KPI smoke — 10 simulated wheel events, p95 < 500ms', async ({ page }) => {
-    await page.goto('/?cef=1');
+    await page.goto('/');
     await page.waitForSelector('canvas', { timeout: 10_000 });
 
     // Smoke: dispatch 10 wheel events with ~100ms spacing and measure round-trip
@@ -81,7 +81,7 @@ test.describe('CEF PoC e2e', () => {
   });
 
   test('Phase B: Toolbar URL bar navigates', async ({ page, request }) => {
-    await page.goto('/?cef=1');
+    await page.goto('/');
     await page.waitForSelector('canvas', { timeout: 10_000 });
 
     const sessionsRes = await request.get(`${DAEMON}/sessions`);
@@ -130,7 +130,7 @@ test.describe('CEF PoC e2e', () => {
   });
 
   test('Phase B feature parity: scroll, nav, back', async ({ page, request }) => {
-    await page.goto('/?cef=1');
+    await page.goto('/');
     await page.waitForSelector('canvas', { timeout: 10_000 });
 
     const sessionsRes = await request.get(`${DAEMON}/sessions`);
@@ -202,7 +202,7 @@ test.describe('CEF PoC e2e', () => {
   });
 
   test('KPI: 10 real-wheel burst, p95 recorded', async ({ page, request }) => {
-    await page.goto('/?cef=1');
+    await page.goto('/');
     await page.waitForSelector('canvas', { timeout: 10_000 });
 
     const sessionsRes = await request.get(`${DAEMON}/sessions`);
@@ -287,7 +287,7 @@ test.describe('CEF PoC e2e', () => {
   });
 
   test('Phase A: a Browser activity paints at least one frame', async ({ page, request }) => {
-    await page.goto('/?cef=1');
+    await page.goto('/');
     await page.waitForSelector('canvas', { timeout: 10_000 });
 
     const sessionsRes = await request.get(`${DAEMON}/sessions`);
