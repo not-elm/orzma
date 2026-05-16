@@ -138,6 +138,7 @@ pub(crate) mod test_helpers {
         std::mem::forget(tmp);
         let terminal = ozmux_terminal::TerminalService::with_runtime_root(Arc::clone(&runtime));
         let browser = ozmux_browser::BrowserService::new(Arc::clone(&runtime));
+        let cef_host = Arc::new(ozmux_browser::cef_service::stub_for_tests());
         AppState::new(
             browser,
             terminal,
@@ -145,6 +146,7 @@ pub(crate) mod test_helpers {
             crate::layout_broadcast::LayoutBroadcaster::default(),
             Arc::new(ozmux_configs::OzmuxConfigs::default()),
             crate::activity_titles::ActivityTitles::default(),
+            cef_host,
         )
     }
 
@@ -209,8 +211,8 @@ mod tests {
     use super::*;
     use ozmux_multiplexer::WindowId;
 
-    #[test]
-    fn app_state_default_includes_layout_broadcaster() {
+    #[tokio::test]
+    async fn app_state_default_includes_layout_broadcaster() {
         let state = test_helpers::fresh_state();
         let _ = state.layout_broadcast.subscribe_or_create(&WindowId::new());
     }

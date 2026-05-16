@@ -9,6 +9,47 @@ use crate::types::{ActivityId, FrameKey, Rect};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+/// SameSite policy for a cookie transferred to cef_host at BrowserCreate time.
+/// Task A5 reads these from the `decrypt-cookies` crate output and forwards
+/// them so cef_host can seed the embedded browser's cookie store.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SameSite {
+    /// Strict SameSite policy.
+    Strict,
+    /// Lax SameSite policy.
+    Lax,
+    /// No SameSite restriction.
+    None,
+    /// SameSite not specified by the origin server.
+    Unspecified,
+}
+
+/// A single cookie entry forwarded to cef_host via BrowserCreate ancillary
+/// data. Placeholder for Task A5; the full plumbing (SCM_RIGHTS + cookie
+/// bootstrap in cef_host) is wired there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CefCookieDto {
+    /// The URL the cookie is scoped to.
+    pub url: String,
+    /// Cookie name.
+    pub name: String,
+    /// Cookie value.
+    pub value: String,
+    /// Domain attribute.
+    pub domain: String,
+    /// Path attribute.
+    pub path: String,
+    /// Secure flag.
+    pub secure: bool,
+    /// HttpOnly flag.
+    pub http_only: bool,
+    /// Expiry as Windows FILETIME microseconds, or `None` for session cookies.
+    pub expires_utc: Option<f64>,
+    /// SameSite policy.
+    pub same_site: SameSite,
+}
+
 /// daemon → cef_host. PoC subset.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

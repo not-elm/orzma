@@ -2,6 +2,7 @@
 //! `AppState`, and runs the HTTP server until SIGINT.
 
 use ozmux_browser::BrowserService;
+use ozmux_browser::cef_service::CefHostSupervisor;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::registry::ExtensionRegistry;
@@ -58,6 +59,14 @@ async fn main() -> anyhow::Result<()> {
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
 
+    let cef_host_socket = runtime.sock_dir().join("cef_host.sock");
+    let supervisor = CefHostSupervisor::new(cef_host_socket);
+    let cef_host_handles = supervisor.spawn_and_handshake().await.map_err(|e| {
+        tracing::error!(error = %e, "cef_host spawn_and_handshake failed");
+        e
+    })?;
+    let cef_host = Arc::new(cef_host_handles);
+
     let state = AppState::new(
         browser,
         terminal.clone(),
@@ -65,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
         Arc::clone(&configs),
         titles.clone(),
+        cef_host,
     );
 
     // Adapter task: bridge terminal title-change notifications into ActivityTitles

@@ -4,6 +4,7 @@ use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
 use ozmux_browser::BrowserService;
+use ozmux_browser::cef_service::CefHostHandles;
 use ozmux_browser::frame_ring::FrameRing;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_configs::OzmuxConfigs;
@@ -140,6 +141,10 @@ pub struct AppState {
     /// CEF-backed BrowserActivity registry (PoC: lives alongside `browser`
     /// until cef path replaces chromiumoxide path).
     pub browser_cef: Arc<BrowserCefRegistry>,
+    /// Handle to the cef_host child process and its command/event channels.
+    /// Spawned once at daemon startup; Task A5 uses this to issue BrowserCreate
+    /// commands per-activity.
+    pub cef_host: Arc<CefHostHandles>,
 }
 
 impl AppState {
@@ -155,6 +160,7 @@ impl AppState {
         layout_broadcast: LayoutBroadcaster,
         configs: Arc<OzmuxConfigs>,
         titles: ActivityTitles,
+        cef_host: Arc<CefHostHandles>,
     ) -> Self {
         Self {
             browser,
@@ -165,6 +171,7 @@ impl AppState {
             configs,
             titles,
             browser_cef: Arc::new(BrowserCefRegistry::new()),
+            cef_host,
         }
     }
 
@@ -694,6 +701,12 @@ impl FromRef<AppState> for Arc<OzmuxConfigs> {
 impl FromRef<AppState> for Arc<BrowserCefRegistry> {
     fn from_ref(input: &AppState) -> Self {
         Arc::clone(&input.browser_cef)
+    }
+}
+
+impl FromRef<AppState> for Arc<CefHostHandles> {
+    fn from_ref(input: &AppState) -> Self {
+        Arc::clone(&input.cef_host)
     }
 }
 
