@@ -23,8 +23,8 @@ pub enum DaemonCommand {
 impl CommandExecute for DaemonCommand {
     async fn run(self) -> anyhow::Result<()> {
         match self {
-            Self::Start(a) => a.run().await,
-            Self::Stop(a) => stop::run(a).await,
+            Self::Start(args) => args.run().await,
+            Self::Stop(args) => args.run().await,
             Self::Status => status::run().await,
         }
     }

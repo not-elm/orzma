@@ -3,10 +3,10 @@
 use anyhow::Context;
 use clap::Args;
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -118,6 +118,22 @@ async fn acquire_lock() -> anyhow::Result<File> {
 
 fn spawn_detached() -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("resolve current executable")?;
+    let (log, log_err) = open_daemon_log_pair()?;
+
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["daemon", "start", "--foreground"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err));
+    detach_from_session(&mut cmd);
+
+    cmd.spawn().context("fork detached daemon")?;
+    // NOTE: drop the child handle without waiting; the daemon is intentionally
+    // orphaned and init/launchd will adopt it.
+    Ok(())
+}
+
+fn open_daemon_log_pair() -> anyhow::Result<(File, File)> {
     let log_path = runtime_dir()?.join("daemon.log");
     let log = OpenOptions::new()
         .create(true)
@@ -127,13 +143,10 @@ fn spawn_detached() -> anyhow::Result<()> {
     let log_err = log
         .try_clone()
         .with_context(|| format!("clone log file handle for {}", log_path.display()))?;
+    Ok((log, log_err))
+}
 
-    let mut cmd = std::process::Command::new(exe);
-    cmd.args(["daemon", "start", "--foreground"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err));
-
+fn detach_from_session(cmd: &mut std::process::Command) {
     // SAFETY: setsid is async-signal-safe (POSIX.1-2008 Table 2-5) and the
     // closure runs between fork and exec where no Rust destructors fire.
     unsafe {
@@ -144,11 +157,6 @@ fn spawn_detached() -> anyhow::Result<()> {
             Ok(())
         });
     }
-
-    cmd.spawn().context("fork detached daemon")?;
-    // NOTE: drop the child handle without waiting; the daemon is intentionally
-    // orphaned and init/launchd will adopt it.
-    Ok(())
 }
 
 async fn wait_until_ready() -> anyhow::Result<()> {
@@ -177,23 +185,23 @@ async fn wait_until_ready() -> anyhow::Result<()> {
 fn print_log_tail() {
     let Ok(parent) = runtime_dir() else { return };
     let path = parent.join("daemon.log");
-    let Ok(mut f) = std::fs::File::open(&path) else {
+    let Ok(tail) = read_log_tail_bytes(&path) else {
         return;
     };
-    let Ok(meta) = f.metadata() else { return };
-    let seek_to = meta.len().saturating_sub(LOG_TAIL_BYTES);
-    if std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(seek_to)).is_err() {
-        return;
-    }
-    let mut buf = Vec::with_capacity(LOG_TAIL_BYTES as usize);
-    if std::io::Read::read_to_end(&mut f, &mut buf).is_err() {
-        return;
-    }
-    let text = String::from_utf8_lossy(&buf);
-    eprintln!("--- last {LOG_TAIL_LINES} lines of {} ---", path.display());
+    let text = String::from_utf8_lossy(&tail);
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(LOG_TAIL_LINES);
+    eprintln!("--- last {LOG_TAIL_LINES} lines of {} ---", path.display());
     for line in &lines[start..] {
         eprintln!("{line}");
     }
+}
+
+fn read_log_tail_bytes(path: &Path) -> io::Result<Vec<u8>> {
+    let mut f = File::open(path)?;
+    let len = f.metadata()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(LOG_TAIL_BYTES)))?;
+    let mut buf = Vec::with_capacity(LOG_TAIL_BYTES as usize);
+    f.read_to_end(&mut buf)?;
+    Ok(buf)
 }

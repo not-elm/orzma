@@ -4,6 +4,8 @@ use clap::Args;
 use std::io;
 use std::time::{Duration, Instant};
 
+use crate::commands::CommandExecute;
+
 const SIGTERM_WAIT: Duration = Duration::from_secs(10);
 const SIGKILL_WAIT: Duration = Duration::from_secs(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -16,18 +18,37 @@ pub(crate) struct StopArgs {
     force: bool,
 }
 
-pub(crate) async fn run(args: StopArgs) -> anyhow::Result<()> {
-    let Some(pid) = daemon_bootstrap::pidfile::read()? else {
-        eprintln!("ozmux daemon not running");
-        return Ok(());
-    };
+impl CommandExecute for StopArgs {
+    async fn run(self) -> anyhow::Result<()> {
+        let Some(pid) = daemon_bootstrap::pidfile::read()? else {
+            eprintln!("ozmux daemon not running");
+            return Ok(());
+        };
 
+        if try_graceful_stop(pid).await? {
+            return Ok(());
+        }
+
+        if !self.force {
+            anyhow::bail!(
+                "ozmux daemon (pid {pid}) did not exit within {SIGTERM_WAIT:?}; rerun with --force to SIGKILL"
+            );
+        }
+
+        force_kill(pid).await
+    }
+}
+
+/// Sends SIGTERM and waits up to `SIGTERM_WAIT` for the process to exit.
+/// Returns `Ok(true)` if the process is gone (either it never existed or
+/// it exited in time), `Ok(false)` if it is still alive after the wait.
+async fn try_graceful_stop(pid: u32) -> anyhow::Result<bool> {
     match send_signal(pid, libc::SIGTERM) {
-        Ok(()) => {}
+        Ok(()) => Ok(wait_for_exit(pid, SIGTERM_WAIT).await),
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
             eprintln!("ozmux daemon not running (stale PID {pid})");
             daemon_bootstrap::pidfile::remove()?;
-            return Ok(());
+            Ok(true)
         }
         Err(e) if e.raw_os_error() == Some(libc::EPERM) => {
             anyhow::bail!("permission denied sending SIGTERM to pid {pid}");
@@ -35,26 +56,19 @@ pub(crate) async fn run(args: StopArgs) -> anyhow::Result<()> {
         Err(e) if e.kind() == io::ErrorKind::InvalidInput => {
             eprintln!("ozmux daemon not running (corrupted PID file: {pid})");
             daemon_bootstrap::pidfile::remove()?;
-            return Ok(());
+            Ok(true)
         }
-        Err(e) => return Err(e.into()),
+        Err(e) => Err(e.into()),
     }
+}
 
-    if wait_for_exit(pid, SIGTERM_WAIT).await {
-        return Ok(());
-    }
-
-    if !args.force {
-        anyhow::bail!(
-            "ozmux daemon (pid {pid}) did not exit within {:?}; rerun with --force to SIGKILL",
-            SIGTERM_WAIT
-        );
-    }
-
+/// Sends SIGKILL and waits for the process to actually exit, then clears
+/// the stale PID file. Errors if the process refuses to die.
+async fn force_kill(pid: u32) -> anyhow::Result<()> {
     match send_signal(pid, libc::SIGKILL) {
         Ok(()) => {}
+        // NOTE: it died between SIGTERM timeout and SIGKILL; treat as success.
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => {
-            // NOTE: it died between SIGTERM timeout and SIGKILL; treat as success.
             daemon_bootstrap::pidfile::remove()?;
             return Ok(());
         }
@@ -68,7 +82,6 @@ pub(crate) async fn run(args: StopArgs) -> anyhow::Result<()> {
         daemon_bootstrap::pidfile::remove()?;
         return Ok(());
     }
-
     anyhow::bail!("process did not die even after SIGKILL (pid {pid})")
 }
 
