@@ -57,15 +57,12 @@ fn find_matching_ancestor(
 
 /// Apply §7.4: for parent axis length `p` and a same-axis split with
 /// weights `lhs_w` / `rhs_w`, return `(lhs_cells, rhs_cells)`. The pair
-/// sums to exactly `p`. Zero total falls back to a 50/50 split,
-/// mirroring `split_ratio` at `cells.rs:218-226`.
+/// sums to exactly `p`. Zero total falls back to a 50/50 split via
+/// `LayoutCellState::split_ratio`.
 fn split_cells(p: u16, lhs_w: f32, rhs_w: f32) -> (u16, u16) {
-    let total = lhs_w + rhs_w;
-    let ratio = if total == 0.0 { 0.5 } else { lhs_w / total };
-    let lhs = (p as f32 * ratio).round_ties_even() as u16;
-    let lhs = lhs.min(p);
-    let rhs = p - lhs;
-    (lhs, rhs)
+    let ratio = LayoutCellState::split_ratio(lhs_w, rhs_w);
+    let lhs = ((p as f32 * ratio).round_ties_even() as u16).min(p);
+    (lhs, p - lhs)
 }
 
 /// Walk from root to `target`, applying §7.4 at each same-axis split.
@@ -205,9 +202,6 @@ pub(crate) fn resize_split_for_pane(
     let new_lhs_cells: u16 =
         ((current_lhs as i32) + (signed_delta as i32)).clamp(0, p_ancestor as i32) as u16;
     let new_rhs_cells = p_ancestor - new_lhs_cells;
-    if p_ancestor == 0 {
-        return ResizePaneOutcome::NoOp;
-    }
     let new_lhs_w = new_lhs_cells as f32 / p_ancestor as f32;
     let new_rhs_w = new_rhs_cells as f32 / p_ancestor as f32;
 
