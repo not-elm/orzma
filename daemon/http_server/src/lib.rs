@@ -100,6 +100,10 @@ pub fn windows_router() -> Router<AppState> {
             post(handlers::windows::select::select),
         )
         .route(
+            "/{window_id}/focus-pane",
+            post(handlers::windows::focus_pane::focus_pane),
+        )
+        .route(
             "/{window_id}/events",
             get(handlers::windows::events::events),
         )
