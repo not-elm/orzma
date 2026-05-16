@@ -17,6 +17,8 @@ export interface ShortcutContext {
   activeActivity: () => ActivityId | null;
   /** Latest session snapshot or `null` while loading. */
   activeSession: () => SessionView | null;
+  /** Opens the rename-window prompt for the active window. */
+  openRenameWindow: () => void;
 }
 
 /**
@@ -28,6 +30,8 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
   switch (action.type) {
     case 'close-pane':
       return () => withActivePane(ctx, closePane);
+    case 'rename-window':
+      return () => ctx.openRenameWindow();
     case 'split-pane': {
       const orientation = action.direction;
       return () => withActivePane(ctx, (w, p) => splitPane(w, p, orientation));

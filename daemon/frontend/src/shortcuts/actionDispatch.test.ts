@@ -388,4 +388,15 @@ describe('actionToHandler', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
+
+  it('returns a handler that calls openRenameWindow on rename-window', () => {
+    const openRenameWindow = vi.fn();
+    const ctx = makeShortcutContext({ openRenameWindow });
+    const handler = actionToHandler({ type: 'rename-window' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    expect(openRenameWindow).toHaveBeenCalledTimes(1);
+  });
 });

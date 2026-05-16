@@ -13,7 +13,7 @@ Non-JSDoc line comments are restricted. The only permitted forms:
 | Form | Use |
 | --- | --- |
 | `// TODO: <text>` | Work to address later |
-| `// NOTE: <text>` | A non-obvious invariant, race, or warning to the reader |
+| `// NOTE: <text>` | A **critical caveat** — only when overlooking it causes real harm; see the bar below |
 | `// biome-ignore <rule>: <text>` | Required justification on every biome suppression (already enforced) |
 | `// @ts-expect-error <text>` / `// @ts-ignore <text>` | Required justification on every TypeScript suppression |
 
@@ -24,15 +24,22 @@ Forbidden:
 | Plain narrative comments | `// increments counter` | What the code does belongs in identifiers |
 | Block comments | `/* ... */` (non-JSDoc) | Same |
 | Commented-out code | `// const x = oldImpl();` | History lives in git |
-| `// NOTE:` with no concrete non-obvious info | `// NOTE: this is the handler` | Promote to identifier rename or delete |
+| `// NOTE:` for merely non-obvious or "good to know" info | `// NOTE: this is the handler` | NOTE is for critical caveats only — rename the identifier or delete |
 
 Note: `/** ... */` JSDoc is **not** a "line comment" for this rule — see the next section.
 
 The principle is the same as `rust.md`: if a comment is just restating
 what the code does, the code or its names need to do the work instead.
-A `// NOTE:` earns its keep only when it captures something a careful
-reader would otherwise miss (e.g. a race, a workaround for a specific
-upstream bug, an invariant that the surrounding code relies on).
+
+A `// NOTE:` is reserved for a **critical caveat**: something that, if a
+reader overlooks it, leads to a bug, a crash, data loss, a security
+issue, or a violated invariant. "Non-obvious" or "good to know" is not
+enough — the test is concrete harm on the line that misses it.
+Qualifying examples: a race condition, a workaround for a specific
+upstream bug, an ordering requirement the surrounding code silently
+relies on, an invariant a later mutation must preserve. If overlooking
+the comment causes no real failure, do not write it — rename an
+identifier so the code carries the meaning, or delete it.
 
 ## JSDoc
 

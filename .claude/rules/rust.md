@@ -23,7 +23,7 @@ Non-doc line comments are restricted. The only permitted forms:
 | Form | Use |
 | --- | --- |
 | `// TODO: <text>` | Work to address later |
-| `// NOTE: <text>` | A non-obvious invariant or warning to the reader |
+| `// NOTE: <text>` | A **critical caveat** — only when overlooking it causes real harm; see the bar below |
 | `// SAFETY: <text>` | Required justification for any `unsafe { ... }` block (rustc / clippy idiom) |
 
 Forbidden:
@@ -33,6 +33,17 @@ Forbidden:
 | Plain narrative comments | `// increments counter` | What the code does belongs in identifiers |
 | Block comments | `/* ... */` | Same |
 | Commented-out code | `// let x = old_impl();` | History lives in git |
+| `// NOTE:` for merely non-obvious or "good to know" info | `// NOTE: this is the handler` | NOTE is for critical caveats only — rename the identifier or delete |
+
+A `// NOTE:` is reserved for a **critical caveat**: something that, if a
+reader overlooks it, leads to a bug, a crash, data loss, a security
+issue, or a violated invariant. "Non-obvious" or "good to know" is not
+enough — the test is concrete harm on the line that misses it.
+Qualifying examples: a race condition, a workaround for a specific
+upstream bug, an ordering requirement the surrounding code silently
+relies on, an invariant a later mutation must preserve. If overlooking
+the comment causes no real failure, do not write it — rename an
+identifier so the code carries the meaning, or delete it.
 
 Note: `///` and `//!` are **doc comments**, not "line comments" for this rule — see the next section.
 

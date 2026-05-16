@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeShortcutContext } from './__test-helpers';
+import { setRenamePromptOpen } from './renamePromptGate';
 import { usePrefixMode } from './usePrefixMode';
 
 const DEFAULT_PAYLOAD = {
@@ -265,6 +266,20 @@ describe('usePrefixMode', () => {
       press({ key: 'b', ctrlKey: true });
     });
     expect(result.current.isArmed).toBe(false);
+  });
+
+  it('does not arm while the rename prompt gate is open', async () => {
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    setRenamePromptOpen(true);
+    try {
+      act(() => {
+        press({ key: 'b', ctrlKey: true });
+      });
+      expect(result.current.isArmed).toBe(false);
+    } finally {
+      setRenamePromptOpen(false);
+    }
   });
 });
 
