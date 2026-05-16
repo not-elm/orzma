@@ -47,4 +47,3 @@ bytes = "1"
 tokio-util = "0.7"
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-fs4 = "1"
