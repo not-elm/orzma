@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk
+.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/http_server/src/handlers
@@ -14,6 +14,7 @@ help:
 	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
 	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
+	@echo "  kill-daemon        - Kill the daemon listening on :3200 and any stray cef_host"
 	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
 verify-out-dir:
@@ -59,6 +60,20 @@ dev-e2e: memo-build-sdk
 
 dev-e2e-stop:
 	./scripts/dev-e2e.sh stop
+
+kill-daemon:
+	@pids=$$(lsof -nP -iTCP:3200 -sTCP:LISTEN -t 2>/dev/null); \
+	if [ -n "$$pids" ]; then \
+		echo "killing daemon on :3200 (pid $$pids)"; \
+		kill $$pids 2>/dev/null || true; \
+	else \
+		echo "no daemon listening on :3200"; \
+	fi; \
+	cef_pids=$$(pgrep -x cef_host 2>/dev/null); \
+	if [ -n "$$cef_pids" ]; then \
+		echo "killing stray cef_host (pid $$cef_pids)"; \
+		kill $$cef_pids 2>/dev/null || true; \
+	fi
 
 test-frontend:
 	pnpm --dir $(FRONTEND_DIR) exec vitest run
