@@ -1,22 +1,17 @@
-//! WebSocket handler for browser activities. Streams `BrowserServerMsg`s to
-//! the frontend and receives `BrowserClientMsg`s. Uses a `watch::Receiver`
-//! (latest-frame semantics) for the server-push side instead of the replay
-//! ring used by the terminal VT handler.
+//! Legacy chromiumoxide WebSocket handler stub. Replaced in Task C8 by the
+//! cef-backed handler (browser_cef_ws → browser_ws rename). This file now
+//! only exists so the route table compiles while both modules are still
+//! declared; it is deleted in the C8 commit.
 
 use crate::error::{HttpError, HttpResult};
 use crate::state::{ActivityKindDiscriminant, AppState};
-use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{FromRequest, Path, State, WebSocketUpgrade};
 use axum::response::Response;
-use futures_util::{SinkExt, StreamExt};
-use ozmux_browser::{BrowserClientMsg, BrowserServerMsg};
 use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 
 /// `GET /windows/{wid}/panes/{pid}/activities/{aid}/browser/ws`
 ///
-/// Validates origin and activity kind, then upgrades to WebSocket and starts
-/// the browser frame bridge. Sends the current snapshot immediately on
-/// connect, then streams subsequent snapshots as they arrive.
+/// Stub — returns 501 until C8 renames `browser_cef_ws` over this file.
 pub async fn browser_ws(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
@@ -33,115 +28,12 @@ pub async fn browser_ws(
     let _activity = state
         .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Browser)
         .await?;
-    let ws = WebSocketUpgrade::from_request(req, &())
+    let _ws = WebSocketUpgrade::from_request(req, &())
         .await
         .map_err(|e| HttpError::Forbidden(e.to_string()))?;
-    Ok(ws.on_upgrade(move |socket| run(socket, state, aid)))
-}
-
-async fn run(socket: WebSocket, state: AppState, aid: ActivityId) {
-    let Some(mut snapshot_rx) = state.browser.watch(&aid).await else {
-        return;
-    };
-    let (mut tx, mut rx) = socket.split();
-
-    let initial = snapshot_rx.borrow().clone();
-    if let Some(frame) = &initial.frame {
-        let msg = BrowserServerMsg::Screencast {
-            jpeg: frame.jpeg.clone(),
-            width: frame.width,
-            height: frame.height,
-        };
-        if let Ok(bin) = rmp_serde::to_vec_named(&msg)
-            && tx.send(Message::Binary(bin.into())).await.is_err()
-        {
-            return;
-        }
-    }
-    let nav_msg = BrowserServerMsg::Nav {
-        url: initial.nav.url.clone(),
-        title: initial.nav.title.clone(),
-    };
-    if let Ok(bin) = rmp_serde::to_vec_named(&nav_msg)
-        && tx.send(Message::Binary(bin.into())).await.is_err()
-    {
-        return;
-    }
-    let viewport_msg = BrowserServerMsg::Viewport {
-        width: initial.viewport.width,
-        height: initial.viewport.height,
-    };
-    if let Ok(bin) = rmp_serde::to_vec_named(&viewport_msg)
-        && tx.send(Message::Binary(bin.into())).await.is_err()
-    {
-        return;
-    }
-    let mut last_nav = Some(initial.nav.clone());
-    let mut last_viewport = Some(initial.viewport);
-
-    loop {
-        tokio::select! {
-            res = snapshot_rx.changed() => {
-                if res.is_err() { break; }
-                let s = snapshot_rx.borrow_and_update().clone();
-                if let Some(f) = &s.frame {
-                    let msg = BrowserServerMsg::Screencast {
-                        jpeg: f.jpeg.clone(),
-                        width: f.width,
-                        height: f.height,
-                    };
-                    if let Ok(bin) = rmp_serde::to_vec_named(&msg)
-                        && tx.send(Message::Binary(bin.into())).await.is_err()
-                    {
-                        break;
-                    }
-                }
-                if Some(&s.nav) != last_nav.as_ref() {
-                    let msg = BrowserServerMsg::Nav {
-                        url: s.nav.url.clone(),
-                        title: s.nav.title.clone(),
-                    };
-                    if let Ok(bin) = rmp_serde::to_vec_named(&msg)
-                        && tx.send(Message::Binary(bin.into())).await.is_err()
-                    {
-                        break;
-                    }
-                    last_nav = Some(s.nav.clone());
-                }
-                if Some(s.viewport) != last_viewport {
-                    let msg = BrowserServerMsg::Viewport {
-                        width: s.viewport.width,
-                        height: s.viewport.height,
-                    };
-                    if let Ok(bin) = rmp_serde::to_vec_named(&msg)
-                        && tx.send(Message::Binary(bin.into())).await.is_err()
-                    {
-                        break;
-                    }
-                    last_viewport = Some(s.viewport);
-                }
-            }
-            msg = rx.next() => {
-                let Some(Ok(Message::Binary(b))) = msg else { break };
-                let Ok(client) = rmp_serde::from_slice::<BrowserClientMsg>(&b) else { continue };
-                match client {
-                    BrowserClientMsg::Nav { nav } => state.browser.navigate(&aid, nav).await,
-                    BrowserClientMsg::Resize { width, height, device_scale_factor } => {
-                        state.browser.resize(&aid, width, height, device_scale_factor).await;
-                    }
-                    BrowserClientMsg::CopyRequest => {
-                        if let Some(text) = state.browser.request_selection(&aid).await {
-                            let msg = BrowserServerMsg::ClipboardWrite { text };
-                            if let Ok(bin) = rmp_serde::to_vec_named(&msg) {
-                                let _ = tx.send(Message::Binary(bin.into())).await;
-                            }
-                        }
-                    }
-                    other => state.browser.send_input(&aid, other).await,
-                }
-            }
-        }
-    }
+    Err(HttpError::Internal(
+        "browser_ws: stub — use browser_cef/ws until C8 is committed".into(),
+    ))
 }
 
 #[cfg(test)]

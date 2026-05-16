@@ -3,7 +3,6 @@ use crate::layout_broadcast::LayoutBroadcaster;
 use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
-use ozmux_browser::BrowserService;
 use ozmux_browser::cef_backend::CefBackend;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::cef_service::CefHostHandles;
@@ -64,7 +63,6 @@ pub struct BreakActivityInput {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub browser: BrowserService,
     pub multiplexer: MultiplexerService,
     pub terminal: TerminalService,
     pub extensions: ExtensionRegistry,
@@ -74,12 +72,9 @@ pub struct AppState {
     /// Kind-agnostic per-activity title map. All activity kinds (terminal,
     /// browser, …) publish into this; consumers snapshot it for layout builds.
     pub titles: ActivityTitles,
-    /// CEF-backed BrowserActivity registry (PoC: lives alongside `browser`
-    /// until cef path replaces chromiumoxide path).
+    /// CEF-backed BrowserActivity registry.
     pub browser_cef: Arc<BrowserCefRegistry>,
     /// Handle to the cef_host child process and its command/event channels.
-    /// Spawned once at daemon startup; Task A5 uses this to issue BrowserCreate
-    /// commands per-activity.
     pub cef_host: Arc<CefHostHandles>,
 }
 
@@ -90,7 +85,6 @@ impl AppState {
     /// whose `TerminalService`, `ExtensionRegistry`, or `LayoutBroadcaster`
     /// are detached from the daemon's runtime root.
     pub fn new(
-        browser: BrowserService,
         terminal: TerminalService,
         extensions: ExtensionRegistry,
         layout_broadcast: LayoutBroadcaster,
@@ -99,7 +93,6 @@ impl AppState {
         cef_host: Arc<CefHostHandles>,
     ) -> Self {
         Self {
-            browser,
             multiplexer: MultiplexerService::default(),
             terminal,
             extensions,
@@ -173,9 +166,6 @@ impl AppState {
                 Some(ActivityKindDiscriminant::Browser)
             )
         {
-            self.browser.pause_screencast(prev).await;
-            // NOTE: dual-path until Phase C drops chromiumoxide — cef_host gets
-            // the same Pause/Resume signal so its render handler can throttle.
             let _ = self
                 .cef_host
                 .send_command(ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
@@ -187,7 +177,6 @@ impl AppState {
             self.activity_kind_in_pane(wid, pid, next).await,
             Some(ActivityKindDiscriminant::Browser)
         ) {
-            self.browser.resume_screencast(next).await;
             let _ = self
                 .cef_host
                 .send_command(ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
@@ -315,7 +304,6 @@ impl AppState {
         // NOTE: every backend's close is idempotent + missing-ok; no kind dispatch required.
         let _ = self.terminal.kill(aid).await;
         self.extensions.forget_activity(aid);
-        self.browser.close(aid).await;
         self.cef_close_activity(aid).await;
 
         self.publish_window_layout(wid).await;
@@ -324,8 +312,7 @@ impl AppState {
 
     /// Drops the per-activity cef ring (no-op if the activity was never
     /// provisioned via cef) and tells cef_host to close its browser handle.
-    /// Failure to reach cef_host is logged but never propagated — the
-    /// chromiumoxide path is still the source of truth in Phase A/B.
+    /// Failure to reach cef_host is logged but never propagated.
     async fn cef_close_activity(&self, aid: &ActivityId) {
         let backend = CefBackend {
             handles: Arc::clone(&self.cef_host),
@@ -446,7 +433,6 @@ impl AppState {
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
-            self.browser.close(aid).await;
             self.cef_close_activity(aid).await;
         }
 
@@ -474,7 +460,6 @@ impl AppState {
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
-            self.browser.close(aid).await;
             self.cef_close_activity(aid).await;
         }
         self.layout_broadcast.close(wid);
@@ -624,12 +609,6 @@ impl AppState {
             });
         }
         Ok(activity)
-    }
-}
-
-impl FromRef<AppState> for BrowserService {
-    fn from_ref(input: &AppState) -> Self {
-        input.browser.clone()
     }
 }
 

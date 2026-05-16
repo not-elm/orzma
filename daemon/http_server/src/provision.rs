@@ -42,26 +42,15 @@ pub(crate) async fn provision_activity_runtime(
                     },
                 ));
             }
-            state
-                .browser
-                .spawn(wid, pid, aid, initial_url.clone())
-                .await
-                .map_err(|e| HttpError::Internal(format!("browser spawn failed: {e}")))?;
-
-            // NOTE: Phase A/B dual-provision — cef path runs alongside the
-            // chromiumoxide path so `?cef=1` in the frontend can render via the
-            // new pipeline. Phase C deletes the chromiumoxide branch entirely.
             let backend = CefBackend {
                 handles: Arc::clone(&state.cef_host),
                 registry: Arc::clone(&state.browser_cef),
             };
             let cef_aid = CefActivityId(aid.to_string());
             let url = initial_url.as_deref().unwrap_or("about:blank");
-            // NOTE: real cookies wired in Plan 2 Task B12; empty Vec is correct
-            // for Phase A — cookie harvesting in cef_backend is deferred.
-            if let Err(e) = backend.provision(&cef_aid, url, Vec::new()).await {
-                tracing::warn!(?aid, error = %e, "cef provisioning failed; chromiumoxide path continues");
-            }
+            backend.provision(&cef_aid, url, Vec::new()).await.map_err(
+                |e| HttpError::Internal(format!("cef browser provision failed: {e}")),
+            )?;
             Ok(())
         }
     }

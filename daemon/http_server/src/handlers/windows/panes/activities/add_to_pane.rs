@@ -275,9 +275,8 @@ mod tests {
         assert!(recv.is_err(), "no broadcast must be sent on rollback");
     }
 
-    // TODO: add a Browser-spawn rollback test once BrowserService exposes a
+    // TODO: add a Browser-provision rollback test once CefBackend exposes a
     // fault-injection helper (similar to terminal.inject_spawn_failure).
     // For now, the rollback path is structurally identical to the Terminal
-    // path tested above and is exercised end-to-end by the Playwright test
-    // in Phase 6.
+    // path tested above and is exercised end-to-end by the Playwright test.
 }

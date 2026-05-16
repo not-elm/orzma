@@ -1,7 +1,6 @@
 //! Daemon entry point. Sets up the runtime root, loads extensions, builds
 //! `AppState`, and runs the HTTP server until SIGINT.
 
-use ozmux_browser::BrowserService;
 use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
@@ -58,7 +57,6 @@ async fn main() -> anyhow::Result<()> {
     let registry = ExtensionRegistry::default();
     let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
 
-    let browser = BrowserService::new(Arc::clone(&runtime));
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
 
@@ -71,7 +69,6 @@ async fn main() -> anyhow::Result<()> {
     let cef_host = Arc::new(cef_host_handles);
 
     let state = AppState::new(
-        browser,
         terminal.clone(),
         registry,
         ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
@@ -123,23 +120,6 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(title) = all.get(&aid) {
                     terminal_titles.set(&wid, &aid, title.clone()).await;
                 }
-            }
-        }
-    });
-
-    // Adapter task: bridge browser title-change notifications into ActivityTitles
-    // so the tab bar shows live page titles without polling.
-    let browser_titles = titles.clone();
-    let browser_svc = state.browser.clone();
-    tokio::spawn(async move {
-        let mut rx = browser_svc.subscribe_title_changes();
-        loop {
-            match rx.recv().await {
-                Ok((wid, aid, title)) => {
-                    browser_titles.set(&wid, &aid, title).await;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             }
         }
     });

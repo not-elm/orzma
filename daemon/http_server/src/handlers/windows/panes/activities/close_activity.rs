@@ -120,6 +120,8 @@ mod tests {
 
     #[tokio::test]
     async fn close_activity_browser_close_is_missing_ok() {
+        use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
+
         let state = fresh_state();
         let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
         let browser_aid = ActivityId::new();
@@ -131,17 +133,16 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(
-            state.browser.watch(&browser_aid).await.is_none(),
-            "no BrowserHandle — spawn was never called"
-        );
+        let cef_aid = CefActivityId(browser_aid.to_string());
+        // NOTE: cef ring is absent (activity was never provisioned); close must succeed anyway.
+        assert!(state.browser_cef.frame_ring(&cef_aid).is_none());
         state
             .close_activity(&wid, &pid, &browser_aid)
             .await
             .unwrap();
         assert!(
-            state.browser.watch(&browser_aid).await.is_none(),
-            "browser.close is missing-ok; watch entry absent after close"
+            state.browser_cef.frame_ring(&cef_aid).is_none(),
+            "cef close is missing-ok; ring remains absent after close"
         );
     }
 
