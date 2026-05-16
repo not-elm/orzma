@@ -12,6 +12,7 @@ pub(crate) mod bytes_serde;
 pub mod cef_service;
 pub mod cookie;
 pub mod error;
+pub mod frame_ring;
 pub mod input;
 pub mod page;
 pub mod service;
