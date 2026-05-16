@@ -102,12 +102,20 @@ async fn restart_screencast(
     bitmap_h: i64,
 ) -> BrowserResult<()> {
     use chromiumoxide::cdp::browser_protocol::page as cdp_page;
-    let _ = page
+    if let Err(e) = page
         .execute(cdp_page::StopScreencastParams::default())
-        .await;
+        .await
+    {
+        // NOTE: stop is best-effort — if there is no active stream, Chromium
+        // returns an error. Log at debug so a real CDP failure is still visible.
+        tracing::debug!(error = %e, "stopScreencast failed (likely no active stream)");
+    }
     page.execute(start_screencast_params(bitmap_w, bitmap_h))
         .await
-        .map_err(|e| BrowserError::Cdp(e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, bitmap_w, bitmap_h, "startScreencast failed");
+            BrowserError::Cdp(e.to_string())
+        })?;
     Ok(())
 }
 

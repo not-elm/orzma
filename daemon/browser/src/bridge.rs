@@ -89,22 +89,29 @@ pub(crate) async fn run(
                 snap.frame = Some(ScreencastFrame { jpeg: bytes::Bytes::from(jpeg), width, height });
                 let _ = sender.send(Arc::new(snap));
             }
-            _ = async {
-                if let Some(s) = load_events.as_mut() {
-                    let _ = s.next().await;
-                } else {
-                    futures_util::future::pending::<()>().await
+            evt = async {
+                match load_events.as_mut() {
+                    Some(s) => s.next().await,
+                    None => futures_util::future::pending().await,
                 }
             } => {
-                if let Some(nav) = refresh_nav(&page).await {
-                    let mut snap = sender.borrow().as_ref().clone();
-                    snap.nav = nav;
-                    let _ = sender.send(Arc::new(snap));
+                match evt {
+                    Some(_) => {
+                        if let Some(nav) = refresh_nav(&page).await {
+                            let mut snap = sender.borrow().as_ref().clone();
+                            snap.nav = nav;
+                            let _ = sender.send(Arc::new(snap));
+                        }
+                        // NOTE: tell the PageActor to re-issue startScreencast for the new
+                        // renderer's VideoConsumer; in-page link clicks don't go through
+                        // PageCommand::Nav, so this is the only restart path for them.
+                        let _ = page_tx.send(PageCommand::OnMainFrameLoaded).await;
+                    }
+                    None => {
+                        tracing::warn!(target_id = ?page.target_id(), "load_event stream closed");
+                        load_events = None;
+                    }
                 }
-                // NOTE: tell the PageActor to re-issue startScreencast for the new
-                // renderer's VideoConsumer; in-page link clicks don't go through
-                // PageCommand::Nav, so this is the only restart path for them.
-                let _ = page_tx.send(PageCommand::OnMainFrameLoaded).await;
             }
         }
     }
