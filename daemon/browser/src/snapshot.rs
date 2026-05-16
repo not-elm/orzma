@@ -5,23 +5,6 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-/// Serde helper: serialize/deserialize `bytes::Bytes` as a compact msgpack
-/// binary using `serde_bytes`, which emits a bin format cell instead of a
-/// sequence of integers.
-mod bytes_serde {
-    use bytes::Bytes;
-    use serde::{Deserializer, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(v: &Bytes, s: S) -> Result<S::Ok, S::Error> {
-        serde_bytes::serialize(v.as_ref(), s)
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Bytes, D::Error> {
-        let buf: Vec<u8> = serde_bytes::deserialize(d)?;
-        Ok(Bytes::from(buf))
-    }
-}
-
 /// Page navigation state captured from CDP events.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NavState {
@@ -29,19 +12,13 @@ pub struct NavState {
     pub url: String,
     /// Current document title.
     pub title: String,
-    /// Whether a navigation is in flight.
-    pub loading: bool,
-    /// Whether the browser can navigate back.
-    pub can_go_back: bool,
-    /// Whether the browser can navigate forward.
-    pub can_go_forward: bool,
 }
 
 /// One JPEG screencast frame.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreencastFrame {
     /// Raw JPEG bytes as emitted by Chromium's `Page.startScreencast`.
-    #[serde(with = "bytes_serde")]
+    #[serde(with = "crate::bytes_serde")]
     pub jpeg: Bytes,
     /// Frame width in device pixels.
     pub width: u32,
@@ -75,9 +52,6 @@ mod tests {
             nav: NavState {
                 url: "https://example.com".into(),
                 title: "Example".into(),
-                loading: false,
-                can_go_back: false,
-                can_go_forward: false,
             },
         };
         let buf = rmp_serde::to_vec_named(&snap).unwrap();
@@ -93,6 +67,5 @@ mod tests {
         let s = BrowserSnapshot::default();
         assert!(s.frame.is_none());
         assert!(s.nav.url.is_empty());
-        assert!(!s.nav.loading);
     }
 }

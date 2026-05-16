@@ -53,8 +53,6 @@ pub(crate) struct ChromiumState {
     grace: Duration,
 }
 
-// NOTE: methods are unused until BrowserService wires this up in Task 2.8.
-#[cfg_attr(not(test), allow(dead_code))]
 impl ChromiumState {
     /// Create a fresh state machine with the given idle-grace duration.
     pub(crate) fn new(grace: Duration) -> Self {

@@ -8,23 +8,6 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-/// Serde helper: serialize/deserialize `bytes::Bytes` as a compact msgpack
-/// binary using `serde_bytes`, which emits a bin format cell instead of a
-/// sequence of integers.
-mod bytes_serde {
-    use bytes::Bytes;
-    use serde::{Deserializer, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(v: &Bytes, s: S) -> Result<S::Ok, S::Error> {
-        serde_bytes::serialize(v.as_ref(), s)
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Bytes, D::Error> {
-        let buf: Vec<u8> = serde_bytes::deserialize(d)?;
-        Ok(Bytes::from(buf))
-    }
-}
-
 /// Server-to-client message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -32,7 +15,7 @@ pub enum BrowserServerMsg {
     /// One JPEG screencast frame.
     Screencast {
         /// Raw JPEG bytes.
-        #[serde(with = "bytes_serde")]
+        #[serde(with = "crate::bytes_serde")]
         jpeg: Bytes,
         /// Frame width in device pixels.
         width: u32,
@@ -45,12 +28,6 @@ pub enum BrowserServerMsg {
         url: String,
         /// Current title.
         title: String,
-        /// Whether a navigation is in flight.
-        loading: bool,
-        /// Back-history availability.
-        can_go_back: bool,
-        /// Forward-history availability.
-        can_go_forward: bool,
     },
     /// Result of a prior `CopyRequest` — the page's current selection text.
     ClipboardWrite {
@@ -225,15 +202,10 @@ mod tests {
         let msg = BrowserServerMsg::Nav {
             url: "https://x.com".into(),
             title: "X".into(),
-            loading: true,
-            can_go_back: false,
-            can_go_forward: true,
         };
         let bytes = rmp_serde::to_vec_named(&msg).unwrap();
         let back: BrowserServerMsg = rmp_serde::from_slice(&bytes).unwrap();
-        assert!(
-            matches!(back, BrowserServerMsg::Nav { ref url, loading: true, can_go_forward: true, .. } if url == "https://x.com")
-        );
+        assert!(matches!(back, BrowserServerMsg::Nav { ref url, .. } if url == "https://x.com"));
     }
 
     #[test]

@@ -22,7 +22,6 @@ serde_bytes = "0.11"
 rmp-serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-url = "2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
