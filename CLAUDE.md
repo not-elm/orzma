@@ -8,9 +8,10 @@ ozmux is a terminal multiplexer with a web UI. It is a hybrid Rust + TypeScript 
 
 ### Rust workspace (`Cargo.toml`)
 
-Members live under `cli/` and `daemon/*`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
+Members live under `cli/`, `daemon/*`, and `client/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
 
 - `cli` (`ozmux`) — placeholder binary; no subcommands yet.
+- `client` (`ozmux-client`, lib name `ozmux_client_lib`) — Tauri 2 launcher. Bundles `daemon_bootstrap` as a sidecar (copied into `client/binaries/daemon_bootstrap-<host-triple>` by `make client-link-sidecar`) and launches it detached, with the launcher acting as a thin frame around the daemon's embedded UI. Reuses an existing daemon on `:3200` if one is already listening.
 - `daemon/bootstrap` (`daemon_bootstrap` binary) — process entry point. Sets up tracing, creates a per-PID runtime root under `$TMPDIR/ozmux/<pid>/{bin,sock}` (0700), loads extensions, wires `AppState`, and runs `ozmux_http_server::serve` until SIGINT.
 - `daemon/http_server` (`ozmux_http_server`) — axum router on `127.0.0.1:3200`. `AppState` aggregates `MultiplexerState` (`Arc<Mutex<MultiplexerService>>`), `TerminalService`, and `ExtensionRegistry`, each wired in via `FromRef`. Top-level REST nests are `/sessions`, `/windows`, `/configs`; panes and activities are nested under windows (e.g. `/windows/{wid}/panes/{pid}/activities/{aid}/...`). Per-activity endpoints include a terminal WebSocket (`/.../terminal/ws`, msgpack `WireMessage` frames), an extension handlers WebSocket (`/.../handlers/ws`), and an iframe passthrough (`/.../iframe/{*path}`). `serve` bootstraps one session/window/pane/activity and spawns its PTY before the listener binds. The embedded `index.html` lives at `src/handlers/index.html`, where `vite build` writes it.
 - `daemon/multiplexer` (`ozmux_multiplexer`) — pure in-memory domain model. `MultiplexerService` owns five stores (`SessionState`, `WindowState`, `PaneState`, `LayoutCellState`, `ActivityState`) plus a `pane_to_cell` index. The Session → Window → Pane → Activity hierarchy is layered with a separate cell tree (`Cell::Root` / `Cell::Pane` / split nodes) that drives layout; mutations like `split_pane` and `close_pane` keep the indices and `active_pane` consistent transactionally. No I/O — terminal lifecycle is delegated.
@@ -44,6 +45,8 @@ Members live under `cli/` and `daemon/*`. Edition 2024, toolchain pinned to `1.9
 | Build everything | `cargo build` |
 | Build the daemon binary | `cargo build -p daemon_bootstrap` |
 | Run the daemon (with extensions) | `make dev-daemon` (sets `OZMUX_EXTENSION_ROOT=$PWD/extensions`) |
+| Build + launch the Tauri client | `make dev-tauri` (release-builds the daemon, links it as a sidecar, then runs `cargo tauri dev`; no Vite HMR — UI is the embedded `index.html`) |
+| Link the daemon as Tauri sidecar | `make client-link-sidecar` (defaults to `PROFILE=debug`; use `PROFILE=release` for shipping) |
 | Run a single test | `cargo test -p ozmux_multiplexer close_pane_after_split_fully_reverts_state` |
 | Run one crate's tests | `cargo test -p ozmux_http_server` |
 | Lint + format (Rust) | `cargo clippy --fix --allow-dirty --allow-staged && cargo fmt` |
