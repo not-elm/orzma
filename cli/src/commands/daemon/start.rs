@@ -38,7 +38,10 @@ pub(crate) async fn run(args: StartArgs) -> anyhow::Result<()> {
 
 async fn start_detached() -> anyhow::Result<()> {
     if is_running() {
-        eprintln!("ozmux daemon already running on {}", daemon_bootstrap::HTTP_ADDR);
+        eprintln!(
+            "ozmux daemon already running on {}",
+            daemon_bootstrap::HTTP_ADDR
+        );
         return Ok(());
     }
 
@@ -47,7 +50,10 @@ async fn start_detached() -> anyhow::Result<()> {
         .context("acquire daemon launcher lock")?;
 
     if is_running() {
-        eprintln!("ozmux daemon already running on {}", daemon_bootstrap::HTTP_ADDR);
+        eprintln!(
+            "ozmux daemon already running on {}",
+            daemon_bootstrap::HTTP_ADDR
+        );
         drop(lock);
         return Ok(());
     }
@@ -170,7 +176,9 @@ async fn wait_until_ready() -> anyhow::Result<()> {
 fn print_log_tail() {
     let Ok(parent) = runtime_dir() else { return };
     let path = parent.join("daemon.log");
-    let Ok(mut f) = std::fs::File::open(&path) else { return };
+    let Ok(mut f) = std::fs::File::open(&path) else {
+        return;
+    };
     let Ok(meta) = f.metadata() else { return };
     let seek_to = meta.len().saturating_sub(LOG_TAIL_BYTES);
     if std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(seek_to)).is_err() {
