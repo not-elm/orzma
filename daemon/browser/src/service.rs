@@ -13,7 +13,6 @@
 //! Chromium lifecycle is governed by `ChromiumState` behind a `Mutex`,
 //! plus a `Notify` so concurrent `spawn` calls wait for the first launcher.
 
-use crate::bridge::BridgeConfig;
 use crate::cookie::import_chrome_default_cookies;
 use crate::error::{BrowserError, BrowserResult};
 use crate::page::PageCommand;
@@ -135,13 +134,7 @@ impl BrowserService {
         let bridge_cancel = cancel.clone();
         let page_snapshot_tx = snapshot_tx.clone();
         tokio::spawn(async move {
-            crate::bridge::run(
-                bridge_page,
-                snapshot_tx,
-                bridge_cancel,
-                BridgeConfig::default(),
-            )
-            .await;
+            crate::bridge::run(bridge_page, snapshot_tx, bridge_cancel).await;
         });
 
         tokio::spawn(async move {

@@ -1,6 +1,6 @@
-//! Per-Activity bridge task. Owns the screencast subscription on a
-//! `chromiumoxide::Page` and publishes `BrowserSnapshot`s to a shared
-//! `watch::Sender`.
+//! Per-Activity bridge task. Pure frame listener: subscribes to
+//! `Page.screencastFrame`, immediately acks each one, decodes the JPEG bytes,
+//! and publishes `BrowserSnapshot`s to a shared `watch::Sender`.
 //!
 //! Acks every CDP frame immediately on receipt so Chromium's memory never
 //! grows with unacked frames (puppeteer#11062 confirms immediate ack bounds
@@ -9,12 +9,12 @@
 //! activities; the active-Activity pause/resume is wired by Task 2.8/3.5).
 //!
 //! Bridge ↔ PageActor split:
-//! - PageActor owns command-driven CDP calls (`Page.stopScreencast`,
-//!   `Page.startScreencast` for resume, etc.).
-//! - Bridge owns the initial `Page.startScreencast` and the frame listener
-//!   loop with `screencastFrameAck`.
-//! - To resume after a pause the PageActor re-issues `Page.startScreencast`;
-//!   the listener loop never dropped, so frames resume immediately.
+//! - PageActor owns ALL `Page.startScreencast` / `Page.stopScreencast` calls
+//!   (initial start, resize restart, navigation restart, pause, resume).
+//! - Bridge is a pure listener: registers the `EventScreencastFrame` handler
+//!   and acks + publishes each frame. It never starts or stops the screencast.
+//! - This ensures the very first frame is sized to the actual pane (not to a
+//!   hardcoded 1920×1200 default), fixing the initial-delay bug.
 
 use crate::snapshot::{BrowserSnapshot, NavState, ScreencastFrame};
 use base64::Engine as _;
@@ -26,12 +26,6 @@ use tokio_util::sync::CancellationToken;
 
 /// Default JPEG quality for screencasting (0-100).
 pub(crate) const DEFAULT_JPEG_QUALITY: i64 = 55;
-/// Default maximum frame width in device pixels — fallback before the first
-/// `Resize` message arrives from the frontend.
-pub(crate) const DEFAULT_MAX_WIDTH: i64 = 1920;
-/// Default maximum frame height in device pixels — fallback before the first
-/// `Resize` message arrives from the frontend.
-pub(crate) const DEFAULT_MAX_HEIGHT: i64 = 1200;
 /// Default frame-skip factor: emit every Nth frame.
 pub(crate) const DEFAULT_EVERY_NTH_FRAME: i64 = 1;
 
@@ -50,44 +44,20 @@ pub(crate) fn start_screencast_params(
         .build()
 }
 
-/// Screencast configuration. Conservative defaults that balance frame rate
-/// against per-frame bandwidth.
-#[derive(Debug, Clone)]
-pub(crate) struct BridgeConfig {
-    /// Initial maximum frame width in device pixels — used for the very first
-    /// screencast start before the frontend sends a `Resize`.
-    pub max_width: i64,
-    /// Initial maximum frame height in device pixels — used for the very first
-    /// screencast start before the frontend sends a `Resize`.
-    pub max_height: i64,
-}
-
-impl Default for BridgeConfig {
-    fn default() -> Self {
-        Self {
-            max_width: DEFAULT_MAX_WIDTH,
-            max_height: DEFAULT_MAX_HEIGHT,
-        }
-    }
-}
-
 /// Run the bridge task. Subscribes to `Page.screencastFrame`, immediately
 /// acks each one, decodes the JPEG bytes, and publishes a new
 /// `Arc<BrowserSnapshot>` through `sender`. Returns when `cancel` fires or
 /// the stream closes.
+///
+/// # NOTE
+/// The bridge never calls `Page.startScreencast` or `Page.stopScreencast`.
+/// `PageActor` owns that lifecycle so the very first frame is sized to the
+/// actual pane viewport, not to a hardcoded default.
 pub(crate) async fn run(
     page: chromiumoxide::Page,
     sender: watch::Sender<Arc<BrowserSnapshot>>,
     cancel: CancellationToken,
-    cfg: BridgeConfig,
 ) {
-    let start_params = start_screencast_params(cfg.max_width, cfg.max_height);
-
-    if let Err(e) = page.execute(start_params).await {
-        tracing::warn!(error = %e, "startScreencast failed");
-        return;
-    }
-
     let mut frames = match page
         .event_listener::<cdp_page::EventScreencastFrame>()
         .await
@@ -132,9 +102,6 @@ pub(crate) async fn run(
             }
         }
     }
-
-    // NOTE: page may have closed by now — ignore the StopScreencast error.
-    let _ = page.execute(cdp_page::StopScreencastParams {}).await;
 }
 
 /// Decode a `EventScreencastFrame.data` into raw JPEG bytes.
