@@ -1,13 +1,15 @@
 import type { ReactNode } from 'react';
 import { useEffect } from 'react';
-import { pasteFromOs, requestCopy } from './input/clipboard';
-import type { BrowserClientMsg } from './protocol/wire';
 
 interface Props {
   x: number;
   y: number;
-  send: (m: BrowserClientMsg) => void;
   onClose: () => void;
+  onBack: () => void;
+  onForward: () => void;
+  onReload: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
 }
 
 /**
@@ -17,7 +19,16 @@ interface Props {
  * `.claude/rules/styling.md` (runtime-computed pointer coordinates cannot be
  * expressed as static Tailwind utilities).
  */
-export function ContextMenu({ x, y, send, onClose }: Props) {
+export function ContextMenu({
+  x,
+  y,
+  onClose,
+  onBack,
+  onForward,
+  onReload,
+  onCopy,
+  onPaste,
+}: Props) {
   useEffect(() => {
     const dismiss = () => onClose();
     document.addEventListener('click', dismiss);
@@ -30,12 +41,12 @@ export function ContextMenu({ x, y, send, onClose }: Props) {
       // biome-ignore lint/plugin: anchored to runtime-computed pointer coordinates — cannot use static Tailwind utilities for arbitrary x/y position
       style={{ left: x, top: y }}
     >
-      <Item onClick={() => send({ kind: 'nav', nav: { kind: 'back' } })}>Back</Item>
-      <Item onClick={() => send({ kind: 'nav', nav: { kind: 'forward' } })}>Forward</Item>
-      <Item onClick={() => send({ kind: 'nav', nav: { kind: 'reload' } })}>Reload</Item>
+      <Item onClick={onBack}>Back</Item>
+      <Item onClick={onForward}>Forward</Item>
+      <Item onClick={onReload}>Reload</Item>
       <hr className="border-border" />
-      <Item onClick={() => requestCopy(send)}>Copy</Item>
-      <Item onClick={() => pasteFromOs(send)}>Paste</Item>
+      <Item onClick={onCopy}>Copy</Item>
+      <Item onClick={onPaste}>Paste</Item>
     </div>
   );
 }

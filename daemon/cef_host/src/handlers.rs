@@ -4,6 +4,7 @@
 //! ref-counted vtable to Rust `Impl*` traits.
 
 pub mod client;
+pub mod context_menu;
 pub mod display;
 pub mod lifespan;
 pub mod load;

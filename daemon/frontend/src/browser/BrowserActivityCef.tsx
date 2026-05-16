@@ -11,6 +11,7 @@
 // `send` function returned by useBrowserSocketCef.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ContextMenu } from './ContextMenu';
 import { attachIme } from './input-cef/ime';
 import { attachKeyboard } from './input-cef/keyboard';
 import { attachMouse } from './input-cef/mouse';
@@ -48,6 +49,7 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     can_back: false,
     can_forward: false,
   });
+  const [ctx, setCtx] = useState<{ x: number; y: number } | null>(null);
 
   // Stable ref to the send function so the input-attach effect does not
   // re-fire every render when `send` identity changes.
@@ -186,9 +188,18 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
             {/* Overlay div absorbs mouse and keyboard events for the embedded browser. */}
             <div
               ref={overlayRef}
+              // NOTE: role="application" marks this as an interactive widget zone;
+              // required because onContextMenu would otherwise violate the
+              // a11y/noStaticElementInteractions lint rule.
+              role="application"
+              aria-label="Browser viewport"
               // biome-ignore lint/a11y/noNoninteractiveTabindex: overlay must be focusable to receive keyboard events
               tabIndex={0}
               className="absolute inset-0 outline-none"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setCtx({ x: e.clientX, y: e.clientY });
+              }}
             />
             {/* Hidden textarea captures IME composition events. */}
             <textarea
@@ -198,6 +209,26 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
               aria-hidden="true"
               readOnly={false}
             />
+            {ctx && (
+              <ContextMenu
+                x={ctx.x}
+                y={ctx.y}
+                onClose={() => setCtx(null)}
+                onBack={() => send({ kind: 'navigate_history', delta: -1 })}
+                onForward={() => send({ kind: 'navigate_history', delta: 1 })}
+                onReload={() => send({ kind: 'navigate', url: nav.url })}
+                // TODO: Plan 3 wires the full clipboard round-trip for the CEF path.
+                onCopy={() => send({ kind: 'copy_request' })}
+                onPaste={() => {
+                  navigator.clipboard.readText().then(
+                    (t) => send({ kind: 'paste', text: t }),
+                    () => {
+                      // NOTE: clipboard read may be denied (permissions, focus) — ignore.
+                    },
+                  );
+                }}
+              />
+            )}
           </div>
         </>
       )}

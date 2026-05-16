@@ -6,6 +6,7 @@
 //! the UI thread under the `PoolHandle` mutex.
 
 use crate::handlers::client::OzmuxClient;
+use crate::handlers::context_menu::OzmuxContextMenuHandler;
 use crate::handlers::display::{NavInner, OzmuxDisplayHandler};
 use crate::handlers::lifespan::OzmuxLifeSpanHandler;
 use crate::handlers::load::OzmuxLoadHandler;
@@ -257,11 +258,13 @@ impl BrowserPool {
         let nav_inner = NavInner::new(aid.clone(), self.event_tx.clone());
         let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
         let load_handler = OzmuxLoadHandler::new(nav_inner);
+        let context_menu_handler = OzmuxContextMenuHandler::new();
         let mut client = OzmuxClient::new(
             render_handler,
             life_span_handler,
             display_handler,
             load_handler,
+            context_menu_handler,
         );
 
         let mut window_info = WindowInfo::default();

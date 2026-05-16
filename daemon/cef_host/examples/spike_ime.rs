@@ -31,6 +31,7 @@ use cef::{
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::HostEvent;
 use ozmux_cef_host::handlers::client::OzmuxClient;
+use ozmux_cef_host::handlers::context_menu::OzmuxContextMenuHandler;
 use ozmux_cef_host::handlers::display::{NavInner, OzmuxDisplayHandler};
 use ozmux_cef_host::handlers::lifespan::OzmuxLifeSpanHandler;
 use ozmux_cef_host::handlers::load::OzmuxLoadHandler;
@@ -206,11 +207,13 @@ fn create_browser() -> cef::Browser {
     let nav_inner = NavInner::new(aid, event_tx);
     let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
     let load_handler = OzmuxLoadHandler::new(nav_inner);
+    let context_menu_handler = OzmuxContextMenuHandler::new();
     let mut client = OzmuxClient::new(
         render_handler,
         life_span_handler,
         display_handler,
         load_handler,
+        context_menu_handler,
     );
 
     let mut window_info = WindowInfo::default();

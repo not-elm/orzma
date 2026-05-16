@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ContextMenu } from './ContextMenu';
+import { pasteFromOs, requestCopy } from './input/clipboard';
 import { attachComposition } from './input/composition';
 import { attachKeyboard } from './input/keyboard';
 import { attachMouse } from './input/mouse';
@@ -109,7 +110,18 @@ export function BrowserActivity({ windowId, paneId, activityId, isActive }: Prop
           ref={taRef}
           className="absolute inset-0 resize-none border-0 bg-transparent text-transparent caret-transparent outline-none pointer-events-none"
         />
-        {ctx && <ContextMenu x={ctx.x} y={ctx.y} send={send} onClose={() => setCtx(null)} />}
+        {ctx && (
+          <ContextMenu
+            x={ctx.x}
+            y={ctx.y}
+            onClose={() => setCtx(null)}
+            onBack={() => send({ kind: 'nav', nav: { kind: 'back' } })}
+            onForward={() => send({ kind: 'nav', nav: { kind: 'forward' } })}
+            onReload={() => send({ kind: 'nav', nav: { kind: 'reload' } })}
+            onCopy={() => requestCopy(send)}
+            onPaste={() => pasteFromOs(send)}
+          />
+        )}
       </div>
     </div>
   );

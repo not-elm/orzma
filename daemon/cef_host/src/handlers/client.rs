@@ -1,10 +1,11 @@
 //! CEF ClientHandler aggregator — exposes RenderHandler, LifeSpanHandler,
-//! DisplayHandler, and LoadHandler to a `browser_host_create_browser_sync` call.
+//! DisplayHandler, LoadHandler, and ContextMenuHandler to a
+//! `browser_host_create_browser_sync` call.
 
 use cef::rc::Rc as _;
 use cef::{
-    Client, DisplayHandler, ImplClient, LifeSpanHandler, LoadHandler, RenderHandler, WrapClient,
-    wrap_client,
+    Client, ContextMenuHandler, DisplayHandler, ImplClient, LifeSpanHandler, LoadHandler,
+    RenderHandler, WrapClient, wrap_client,
 };
 
 wrap_client! {
@@ -13,6 +14,7 @@ wrap_client! {
         life_span: LifeSpanHandler,
         display: DisplayHandler,
         load: LoadHandler,
+        context_menu: ContextMenuHandler,
     }
 
     impl Client {
@@ -30,6 +32,10 @@ wrap_client! {
 
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(self.load.clone())
+        }
+
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(self.context_menu.clone())
         }
     }
 }
