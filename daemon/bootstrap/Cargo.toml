@@ -11,10 +11,6 @@ publish.workspace = true
 name = "daemon_bootstrap"
 path = "src/lib.rs"
 
-[[bin]]
-name = "daemon_bootstrap"
-path = "src/main.rs"
-
 [dependencies]
 ozmux_configs = { path = "../configs" }
 ozmux_extension = { path = "../extension" }
