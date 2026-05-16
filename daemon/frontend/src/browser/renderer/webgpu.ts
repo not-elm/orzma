@@ -91,6 +91,10 @@ export class WebGpuRenderer implements FrameRenderer {
   }
 
   private recreateBackingTexture(w: number, h: number): void {
+    // Resize the OffscreenCanvas so the drawing buffer matches the frame; the
+    // configured context adopts the new size on the next getCurrentTexture().
+    this.ctx.canvas.width = w;
+    this.ctx.canvas.height = h;
     this.backingTexture?.destroy();
     this.backingTexture = this.device.createTexture({
       size: { width: w, height: h, depthOrArrayLayers: 1 },

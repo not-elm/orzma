@@ -86,8 +86,15 @@ pub struct BrowserEntry {
     pub render_state: Arc<RenderHandlerState>,
 }
 
-/// The total size in bytes of the mmap region for PoC (1280×800 BGRA + slack).
-const POC_SLOT_PAYLOAD_MAX: usize = 1280 * 800 * 4 + 4096;
+/// Per-slot payload budget: a 4K (3840×2160) BGRA frame + 4 KiB slack.
+/// MUST stay byte-identical to `ozmux_browser::shm_alloc::POC_SLOT_PAYLOAD_MAX`.
+const POC_SLOT_PAYLOAD_MAX: usize = 3840 * 2160 * 4 + 4096;
+
+/// Maximum viewport the fixed shm slot can hold, in device pixels. The Resize
+/// handler clamps to this; a pane larger than 4K device pixels renders clipped.
+const MAX_VIEWPORT_W: u32 = 3840;
+/// Maximum viewport height in device pixels. See [`MAX_VIEWPORT_W`].
+const MAX_VIEWPORT_H: u32 = 2160;
 
 /// Manages all live browser instances on the CEF UI thread.
 pub struct BrowserPool {
@@ -181,11 +188,11 @@ impl BrowserPool {
                 };
                 let device_w = (css_w as f32 * dpr).round() as u32;
                 let device_h = (css_h as f32 * dpr).round() as u32;
-                // NOTE: Plan 2 clamps device-pixel viewport to the PoC shm
-                // budget (1280×800). Plan 3 wires RecreateShm so larger
-                // viewports can grow the shm region instead of clipping.
-                let clamped_w = device_w.min(1280);
-                let clamped_h = device_h.min(800);
+                // NOTE: the shm slot is sized once for a 4K frame; clamp the
+                // viewport to that cap. A pane larger than 4K device pixels
+                // renders clipped — acceptable for a local single-user tool.
+                let clamped_w = device_w.clamp(1, MAX_VIEWPORT_W);
+                let clamped_h = device_h.clamp(1, MAX_VIEWPORT_H);
                 if clamped_w != device_w || clamped_h != device_h {
                     tracing::warn!(
                         ?aid,
@@ -193,7 +200,7 @@ impl BrowserPool {
                         device_h,
                         clamped_w,
                         clamped_h,
-                        "Resize clamped to PoC shm budget; RecreateShm is Plan 3"
+                        "Resize clamped to the 4K shm budget"
                     );
                 }
                 entry.render_state.width.set(clamped_w);

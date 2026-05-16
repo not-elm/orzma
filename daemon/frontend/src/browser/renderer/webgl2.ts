@@ -71,6 +71,9 @@ export class WebGl2Renderer implements FrameRenderer {
     if (isReset) {
       if (!f.is_keyframe) return;
       const gl = this.gl;
+      // Resize the OffscreenCanvas drawing buffer to match the frame.
+      gl.canvas.width = f.width;
+      gl.canvas.height = f.height;
       gl.bindTexture(gl.TEXTURE_2D, this.backingTex);
       gl.texImage2D(
         gl.TEXTURE_2D,

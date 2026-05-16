@@ -6,10 +6,14 @@
 use crate::shm_reader::ShmReader;
 use std::os::fd::OwnedFd;
 
-/// Default PoC payload budget: 1280×800 BGRA + 4 KiB slack for damage rects /
-/// metadata. Larger viewports go through the same constant in this PoC and
-/// get clipped on the writer side.
-pub const POC_SLOT_PAYLOAD_MAX: usize = 1280 * 800 * 4 + 4096;
+/// Per-slot payload budget: a 4K (3840×2160) BGRA frame + 4 KiB slack for
+/// damage-rect metadata. The shm region is sized to this cap once at activity
+/// creation; the cef_host viewport is clamped to it, so any pane up to 4K
+/// device pixels is covered without ever re-allocating the region. Pages are
+/// demand-faulted, so a small pane only commits its actual frame size.
+///
+/// MUST stay byte-identical to `ozmux_cef_host::pool::POC_SLOT_PAYLOAD_MAX`.
+pub const POC_SLOT_PAYLOAD_MAX: usize = 3840 * 2160 * 4 + 4096;
 
 /// Creates a shm fd sized for one activity's screencast ring.
 pub fn create_shm_for_activity(aid: &str, slot_payload_max: usize) -> std::io::Result<OwnedFd> {

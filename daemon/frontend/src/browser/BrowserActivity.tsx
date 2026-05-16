@@ -305,12 +305,17 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
             onGo={(url) => send({ kind: 'navigate', url })}
           />
           <div className="relative flex-1 flex items-center justify-center">
+            {/* The backing buffer starts at POC_WIDTH×POC_HEIGHT and the
+                renderer resizes it (via the OffscreenCanvas) to each frame's
+                device-pixel size — which tracks the pane because the daemon
+                clamps the cef viewport to css×dpr. `h-full w-full` fills the
+                pane; aspect matches since the cef viewport matches the pane. */}
             <canvas
               key={`main-${restartId}`}
               ref={canvasRef}
               width={POC_WIDTH}
               height={POC_HEIGHT}
-              className="block max-h-full max-w-full"
+              className="block h-full w-full"
             />
             {/* Popup overlay canvas — keyed on restartId so a MustRestart
                 produces a fresh DOM node; transferControlToOffscreen is
