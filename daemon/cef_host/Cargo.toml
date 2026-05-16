@@ -26,6 +26,7 @@ sendfd = "0.4"
 rmp-serde = "1"
 serde = { version = "1", features = ["derive"] }
 bytes = "1"
+thiserror = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

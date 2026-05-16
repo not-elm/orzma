@@ -2805,6 +2805,7 @@ dependencies = [
  "rmp-serde",
  "sendfd",
  "serde",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -8,7 +8,7 @@
 //!   5. Wrap a minimal BrowserApp that injects single-process flags
 //!   6. CefInitialize
 //!   7. Spawn Tokio runtime on a background thread (placeholder for control plane, Task 19)
-//!   8. Message loop with CefCommand queue drain; real shutdown via Task 19 / pool.shutdown_requested
+//!   8. Message loop polls do_message_loop_work; commands reach the pool via post_task
 //!   9. CefShutdown
 
 use cef::Settings;
@@ -210,9 +210,8 @@ fn main() -> std::process::ExitCode {
     assert_eq!(ok, 1, "CefInitialize failed (return value: {ok})");
     tracing::info!("CefInitialize OK");
 
-    // ⑤ Command queue + Tokio worker hosting the UDS control plane.
-    let queue = post_command::new_queue();
-    let mut pool = pool::BrowserPool::new();
+    // ⑤ PoolHandle + Tokio worker hosting the UDS control plane.
+    let handle = post_command::PoolHandle::new(pool::BrowserPool::new());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -229,14 +228,14 @@ fn main() -> std::process::ExitCode {
     // NOTE: event_tx is parked in main for now; handlers will obtain a clone via
     // BrowserPool in a follow-up task so OnPaint can emit FrameDescriptor events.
     let _event_tx = event_tx;
-    let queue_for_control = queue.clone();
+    let handle_for_control = handle.clone();
     let socket_for_log = socket_path.clone();
     std::thread::Builder::new()
         .name("cef-host-tokio".into())
         .spawn(move || {
             rt_handle.block_on(async move {
                 tracing::info!(socket = %socket_for_log.display(), "control loop starting");
-                if let Err(e) = control::run(socket_path, queue_for_control, event_rx).await {
+                if let Err(e) = control::run(socket_path, handle_for_control, event_rx).await {
                     tracing::warn!(error = %e, "control loop exited (daemon UDS unavailable?)");
                 }
             });
@@ -249,34 +248,37 @@ fn main() -> std::process::ExitCode {
     if shm_fd >= 0 {
         tracing::info!(shm_fd, "PoC shm allocated");
         post_command::post(
-            &queue,
+            &handle,
             pool::CefCommand::BrowserCreate {
                 aid: ozmux_browser_cef_protocol::types::ActivityId("poc-aid-1".into()),
                 initial_url: "https://example.com/".into(),
                 epoch: 1,
                 shm_fd,
             },
-        );
+        )
+        .expect("PoC post BrowserCreate");
     } else {
         tracing::warn!("PoC shm allocation failed — BrowserCreate skipped");
     }
 
-    // NOTE: 5s PoC timeout posts a Shutdown command via the queue instead of
-    // using an AtomicBool.  Task 19 replaces this with real UDS control plane.
-    let q2 = queue.clone();
+    // NOTE: 10s PoC timeout posts a Shutdown command. Task 19 replaces this with
+    // real UDS control plane.
+    let handle_for_shutdown = handle.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(10));
-        tracing::info!("[bg] 10s elapsed, posting Shutdown via queue");
-        post_command::post(&q2, pool::CefCommand::Shutdown);
+        tracing::info!("[bg] 10s elapsed, posting Shutdown via post_task");
+        if let Err(e) = post_command::post(&handle_for_shutdown, pool::CefCommand::Shutdown) {
+            tracing::warn!(error = %e, "Shutdown post_task failed; forcing flag directly");
+            handle_for_shutdown.force_shutdown();
+        }
     });
 
     tracing::info!("message loop start");
-    while !pool.shutdown_requested {
-        post_command::drain(&queue, &mut pool);
+    while !handle.snapshot_shutdown_requested() {
         cef::do_message_loop_work();
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(5));
     }
-    tracing::info!("message loop exited (pool.shutdown_requested=true)");
+    tracing::info!("message loop exited (shutdown_requested=true)");
 
     // ⑦ CefShutdown
     cef::shutdown();

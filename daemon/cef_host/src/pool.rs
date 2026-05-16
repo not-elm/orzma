@@ -1,8 +1,9 @@
 //! `BrowserPool` — owns CEF browser instances on the CEF UI thread (main).
 //!
 //! `BrowserPool` is `!Send` because it holds raw CEF objects. The Tokio worker
-//! thread enqueues `CefCommand`s via the shared queue; the main thread drains
-//! and executes them between `do_message_loop_work()` calls.
+//! thread posts `CefCommand`s to the CEF UI thread via
+//! `cef::post_task(ThreadId::UI, ExecuteTask)`; `BrowserPool::execute` runs on
+//! the UI thread under the `PoolHandle` mutex.
 
 use crate::handlers::client::OzmuxClient;
 use crate::handlers::lifespan::OzmuxLifeSpanHandler;

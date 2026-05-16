@@ -15,7 +15,7 @@
 //! bidirectional command/event loop takes over.
 
 use crate::pool::CefCommand;
-use crate::post_command::{self, CommandQueue};
+use crate::post_command::{self, PoolHandle};
 use ozmux_browser_cef_protocol::wire::{HostCommand, HostEvent};
 use sendfd::RecvWithFd;
 use std::io::{Read, Write};
@@ -33,7 +33,7 @@ use tokio::sync::{Mutex, mpsc};
 /// events back to the daemon.
 pub async fn run(
     socket_path: PathBuf,
-    queue: CommandQueue,
+    handle: PoolHandle,
     events_rx: mpsc::UnboundedReceiver<HostEvent>,
 ) -> std::io::Result<()> {
     let (std_stream, shm_fd) = tokio::task::spawn_blocking(move || handshake(&socket_path))
@@ -46,7 +46,7 @@ pub async fn run(
     let rd = Arc::new(Mutex::new(rd));
     let wr = Arc::new(Mutex::new(wr));
 
-    pump(rd, wr, queue, events_rx, shm_fd).await
+    pump(rd, wr, handle, events_rx, shm_fd).await
 }
 
 fn handshake(socket_path: &Path) -> std::io::Result<(StdUnixStream, RawFd)> {
@@ -89,7 +89,7 @@ fn handshake(socket_path: &Path) -> std::io::Result<(StdUnixStream, RawFd)> {
 async fn pump(
     rd: Arc<Mutex<OwnedReadHalf>>,
     wr: Arc<Mutex<OwnedWriteHalf>>,
-    queue: CommandQueue,
+    handle: PoolHandle,
     mut events_rx: mpsc::UnboundedReceiver<HostEvent>,
     handshake_shm_fd: RawFd,
 ) -> std::io::Result<()> {
@@ -124,7 +124,10 @@ async fn pump(
                     HostCommand::Ready { .. } => continue,
                 };
                 let is_shutdown = matches!(internal_cmd, CefCommand::Shutdown);
-                post_command::post(&queue, internal_cmd);
+                if let Err(e) = post_command::post(&handle, internal_cmd) {
+                    tracing::warn!(error = %e, "post_task failed; CEF shutting down?");
+                    break;
+                }
                 if is_shutdown {
                     break;
                 }
