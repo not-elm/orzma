@@ -76,9 +76,7 @@ impl BrowserService {
 
     /// Subscribes to browser activity title-change notifications.
     /// Each item carries the `(WindowId, ActivityId, title)` of the changed activity.
-    pub fn subscribe_title_changes(
-        &self,
-    ) -> broadcast::Receiver<(WindowId, ActivityId, String)> {
+    pub fn subscribe_title_changes(&self) -> broadcast::Receiver<(WindowId, ActivityId, String)> {
         self.chromium.title_tx.subscribe()
     }
 
