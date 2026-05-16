@@ -1,6 +1,7 @@
 //! Per-session WS broadcaster. Each session has at most one
-//! `broadcast::Sender`, created on first subscribe. Senders carry full
-//! `SessionView` JSON snapshots.
+//! `broadcast::Sender`, created on first subscribe. Senders carry
+//! `serde_json::Value` snapshots of the session view; the concrete
+//! `SessionView` shape lives elsewhere.
 
 use ozmux_multiplexer::SessionId;
 use serde_json::Value;
@@ -125,9 +126,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn multiple_subscribers_each_receive() {
+        let bc = SessionBroadcaster::new(8);
+        let sid = fresh_sid();
+        let mut rx_a = bc.subscribe_or_create(&sid);
+        let mut rx_b = bc.subscribe_or_create(&sid);
+        bc.publish(&sid, json!({ "n": 7 }));
+        let a = rx_a.recv().await.unwrap();
+        let b = rx_b.recv().await.unwrap();
+        assert_eq!(a["n"].as_u64(), Some(7));
+        assert_eq!(b["n"].as_u64(), Some(7));
+    }
+
+    #[tokio::test]
     async fn from_env_uses_default_when_unset() {
-        // SAFETY: env mutation is process-global; this test is best-effort
-        // when other tests touch the same var. None currently do.
+        // SAFETY: std::env::remove_var is `unsafe` because concurrent
+        // env access from any thread in the process is UB. This test
+        // is the sole reader/writer of OZMUX_SESSION_BROADCAST_CAPACITY
+        // in this test binary, and tokio's `#[tokio::test]` does not
+        // spawn additional env-reading threads, so the call is sound.
         unsafe {
             std::env::remove_var("OZMUX_SESSION_BROADCAST_CAPACITY");
         }
