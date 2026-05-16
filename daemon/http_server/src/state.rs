@@ -198,10 +198,6 @@ impl AppState {
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.add_activity(activity))
             .await?;
 
-        self.multiplexer
-            .activity_owner_window
-            .insert(aid.clone(), wid.clone());
-
         if let Some(name) = extension_name {
             self.extensions.record_activity_owner(&aid, name);
         }
@@ -235,8 +231,6 @@ impl AppState {
         self.multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
             .await?;
-
-        self.multiplexer.activity_owner_window.remove(aid);
 
         // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
         let _ = self.terminal.kill(aid).await;
@@ -275,9 +269,6 @@ impl AppState {
         self.multiplexer
             .pane_owner_window
             .insert(new_pane_id.clone(), wid.clone());
-        self.multiplexer
-            .activity_owner_window
-            .insert(new_activity_id.clone(), wid.clone());
 
         if let Some(name) = input.extension_name.as_deref() {
             self.extensions
@@ -319,7 +310,6 @@ impl AppState {
         self.extensions.forget_pane(pid);
         // NOTE: all three are idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
-            self.multiplexer.activity_owner_window.remove(aid);
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
             self.browser.close(aid).await;
@@ -376,7 +366,6 @@ impl AppState {
                 w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
             })
             .await?;
-        self.multiplexer.activity_owner_window.remove(aid);
         Ok(())
     }
 
@@ -388,11 +377,8 @@ impl AppState {
             .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
             .await;
         match activities {
-            Ok(aids) => {
+            Ok(_aids) => {
                 self.multiplexer.pane_owner_window.remove(new_pane_id);
-                for aid in &aids {
-                    self.multiplexer.activity_owner_window.remove(aid);
-                }
             }
             Err(_) => {
                 tracing::warn!(
