@@ -175,3 +175,30 @@ fn browser_server_subscribe_reply_fresh_snapshot_roundtrips() {
         result: FrameSubscriptionReply::FreshSnapshot,
     });
 }
+
+#[test]
+fn frame_subscription_reply_all_variants_roundtrip() {
+    use ozmux_browser_cef_protocol::wire::MustRestartReason;
+    for variant in [
+        FrameSubscriptionReply::FreshSnapshot,
+        FrameSubscriptionReply::ResumeReplay,
+        FrameSubscriptionReply::MustRestart {
+            reason: MustRestartReason::SessionMismatch,
+        },
+        FrameSubscriptionReply::MustRestart {
+            reason: MustRestartReason::EpochMismatch,
+        },
+        FrameSubscriptionReply::MustRestart {
+            reason: MustRestartReason::LastKeyEvicted,
+        },
+        FrameSubscriptionReply::AwaitingKeyframe,
+    ] {
+        let bytes = rmp_serde::to_vec_named(&variant).expect("serialize");
+        let back: FrameSubscriptionReply = rmp_serde::from_slice(&bytes).expect("deserialize");
+        let bytes2 = rmp_serde::to_vec_named(&back).expect("re-serialize");
+        assert_eq!(
+            bytes, bytes2,
+            "FrameSubscriptionReply variant not roundtrip-stable"
+        );
+    }
+}

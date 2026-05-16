@@ -147,12 +147,34 @@ pub enum BrowserServerMsg {
     },
 }
 
-/// Result of subscribe_frames inside SubscribeReply.
+/// Result of subscribe_frames inside SubscribeReply (wire mirror of
+/// `daemon/browser::frame_ring::FrameSubscription`; spec §5 + parent §15).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FrameSubscriptionReply {
-    /// Keyframe + new broadcast stream — subsequent Screencast messages follow.
+    /// Keyframe + (optional) replay deltas + live stream follow.
     FreshSnapshot,
-    /// No keyframe yet — waiting for first paint.
+    /// Replay deltas + live stream follow; frontend already holds a keyframe.
+    ResumeReplay,
+    /// Subscription rejected. Frontend must drop state and re-subscribe with
+    /// `last_key=None`.
+    MustRestart {
+        /// Why the daemon refused the resume request.
+        reason: MustRestartReason,
+    },
+    /// Ring not warm yet — frontend waits for the first keyframe to arrive
+    /// on the live broadcast.
     AwaitingKeyframe,
+}
+
+/// Reason `FrameSubscriptionReply::MustRestart` was returned.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MustRestartReason {
+    /// Client's `session_id` does not match the daemon's session.
+    SessionMismatch,
+    /// `last_key.epoch` does not match the ring's current epoch.
+    EpochMismatch,
+    /// `last_key` was once present in the ring but has been evicted.
+    LastKeyEvicted,
 }

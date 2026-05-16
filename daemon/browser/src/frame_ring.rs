@@ -7,6 +7,7 @@
 
 use bytes::Bytes;
 use ozmux_browser_cef_protocol::types::{FrameKey, Rect};
+pub use ozmux_browser_cef_protocol::wire::MustRestartReason;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
@@ -52,17 +53,6 @@ impl FrameEnvelope {
             frame_seq: self.frame_seq,
         }
     }
-}
-
-/// Reason `subscribe` returned `MustRestart`.
-#[derive(Debug, Clone, Copy)]
-pub enum MustRestartReason {
-    /// The requested `session_id` does not match the ring's session.
-    SessionMismatch,
-    /// The `last_key` epoch does not match the ring's current epoch.
-    EpochMismatch,
-    /// The `last_key` frame has been evicted from the ring.
-    LastKeyEvicted,
 }
 
 /// Inputs to `FrameRing::subscribe`.
