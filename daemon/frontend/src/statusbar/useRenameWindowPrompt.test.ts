@@ -28,7 +28,6 @@ describe('useRenameWindowPrompt', () => {
       open: true,
       windowId: 'wid-1',
       initialName: 'old-name',
-      returnFocus: prior,
     });
     expect(isRenamePromptOpen()).toBe(true);
   });

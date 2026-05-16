@@ -9,7 +9,6 @@ export type RenamePromptState =
       open: true;
       windowId: WindowId;
       initialName: string;
-      returnFocus: HTMLElement | null;
     };
 
 /** Options for {@link RenameWindowPromptApi.closePrompt}. */
@@ -50,9 +49,8 @@ export function useRenameWindowPrompt(): RenameWindowPromptApi {
     // NOTE: capture the focused element before the prompt input mounts;
     // callers must invoke openPrompt before that, or returnFocus would
     // capture the prompt's own input.
-    const returnFocus = document.activeElement as HTMLElement | null;
-    returnFocusRef.current = returnFocus;
-    setPromptState({ open: true, windowId, initialName: currentName, returnFocus });
+    returnFocusRef.current = document.activeElement as HTMLElement | null;
+    setPromptState({ open: true, windowId, initialName: currentName });
   };
 
   const closePrompt = (options: ClosePromptOptions) => {

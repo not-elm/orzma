@@ -8,7 +8,6 @@ const openState: RenamePromptState = {
   open: true,
   windowId: 'wid-1',
   initialName: 'old-name',
-  returnFocus: null,
 };
 
 let renameSpy: ReturnType<typeof vi.spyOn>;
