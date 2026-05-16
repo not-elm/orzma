@@ -19,6 +19,8 @@ pub struct Window {
     pub pane_to_cell: HashMap<PaneId, CellId>,
     pub root_cell: CellId,
     pub active_pane: PaneId,
+    pub(crate) pane_active_points: HashMap<PaneId, u64>,
+    pub(crate) next_active_point: u64,
 }
 
 impl Window {
@@ -45,7 +47,19 @@ impl Window {
             pane_to_cell,
             root_cell,
             active_pane: initial_pane_id,
+            pane_active_points: HashMap::new(),
+            next_active_point: 0,
         }
+    }
+
+    /// Bump the per-window counter and record it as the new active pane's
+    /// activation point. The tiebreak in `Window::pane_in_direction` reads
+    /// from `pane_active_points`; a missing entry is treated as `0`, so we
+    /// only need to insert when a pane actually becomes active.
+    fn record_active_point(&mut self, pane_id: &PaneId) {
+        self.next_active_point += 1;
+        self.pane_active_points
+            .insert(pane_id.clone(), self.next_active_point);
     }
 
     pub fn rename(&mut self, name: impl Into<String>) {
@@ -85,7 +99,8 @@ impl Window {
         self.pane_to_cell.insert(new_pane_id.clone(), new_cell_id);
         let pane = Pane::new(new_pane_id.clone(), new_activity);
         self.panes.insert(pane);
-        self.active_pane = new_pane_id;
+        self.active_pane = new_pane_id.clone();
+        self.record_active_point(&new_pane_id);
         Ok(())
     }
 
@@ -151,10 +166,12 @@ impl Window {
         let outcome = self.cells.close_cell(&cell_id)?;
         let survivor_pane_id = self.cells.leftmost_pane(outcome.survivor())?.clone();
         if &self.active_pane == pane_id {
-            self.active_pane = survivor_pane_id;
+            self.active_pane = survivor_pane_id.clone();
+            self.record_active_point(&survivor_pane_id);
         }
         let pane = self.panes.remove(pane_id)?;
         self.pane_to_cell.remove(pane_id);
+        self.pane_active_points.remove(pane_id);
         Ok(pane.activities.into_iter().map(|a| a.id).collect())
     }
 
@@ -168,6 +185,7 @@ impl Window {
             return Ok(SetActiveOutcome::Unchanged);
         }
         self.active_pane = pane_id.clone();
+        self.record_active_point(pane_id);
         Ok(SetActiveOutcome::Changed)
     }
 
@@ -442,5 +460,72 @@ mod tests {
         let (mut win, pid, _) = fresh_window();
         let err = win.close_pane(&pid).unwrap_err();
         assert!(matches!(err, MultiplexerError::CannotCloseLastPane(_)));
+    }
+
+    fn sample_window() -> Window {
+        Window::new_with_initial(
+            WindowId::new(),
+            "test".into(),
+            PaneId::new(),
+            Activity::terminal(ActivityId::new()),
+        )
+    }
+
+    #[test]
+    fn new_window_starts_with_empty_active_point_table() {
+        let win = sample_window();
+        assert_eq!(win.next_active_point, 0);
+        assert!(win.pane_active_points.is_empty());
+    }
+
+    #[test]
+    fn set_active_pane_records_active_point() {
+        let mut win = sample_window();
+        let original = win.active_pane.clone();
+        let other = PaneId::new();
+        win.split_pane(
+            &original,
+            other.clone(),
+            Activity::terminal(ActivityId::new()),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        let first_point = *win.pane_active_points.get(&other).unwrap();
+        assert!(first_point >= 1);
+
+        win.set_active_pane(&original).unwrap();
+        let original_point = *win.pane_active_points.get(&original).unwrap();
+        assert!(
+            original_point > first_point,
+            "switching back must increment past the previous max",
+        );
+    }
+
+    #[test]
+    fn set_active_pane_unchanged_does_not_bump_counter() {
+        let mut win = sample_window();
+        let active = win.active_pane.clone();
+        let before = win.next_active_point;
+        win.set_active_pane(&active).unwrap();
+        assert_eq!(win.next_active_point, before);
+    }
+
+    #[test]
+    fn close_pane_removes_active_point_entry() {
+        let mut win = sample_window();
+        let original = win.active_pane.clone();
+        let new_pane = PaneId::new();
+        win.split_pane(
+            &original,
+            new_pane.clone(),
+            Activity::terminal(ActivityId::new()),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        assert!(win.pane_active_points.contains_key(&new_pane));
+        win.close_pane(&new_pane).unwrap();
+        assert!(!win.pane_active_points.contains_key(&new_pane));
     }
 }
