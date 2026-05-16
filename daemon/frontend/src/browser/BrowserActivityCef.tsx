@@ -1,16 +1,21 @@
-// CEF-backed BrowserActivity (PoC). Owns a `<canvas>` whose control is
+// CEF-backed BrowserActivity. Owns a `<canvas>` whose control is
 // transferred to a Web Worker on mount; the worker decodes msgpack
 // BrowserServerMsg frames via WebGpuRenderer.
-//
-// PoC scope: no toolbar, no input forwarding, fixed 1280×800 viewport.
-// The full toolbar / input / IME story lands in Plan 2 alongside the
-// matching cef_host input plumbing.
 //
 // Task A10: when the daemon answers with `SubscribeReply::MustRestart`,
 // we bump `restartId` to remount the canvas + recreate the worker + force
 // a fresh subscription (with `last_key=null`).
+//
+// Task B7: an invisible overlay <div> absorbs mouse + keyboard events;
+// a hidden <textarea> collects IME composition. Both route through the
+// `send` function returned by useBrowserSocketCef.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { attachIme } from './input-cef/ime';
+import { attachKeyboard } from './input-cef/keyboard';
+import { attachMouse } from './input-cef/mouse';
+import { attachWheel } from './input-cef/wheel';
+import type { BrowserClientMsg } from './useBrowserSocketCef';
 import { useBrowserSocketCef } from './useBrowserSocketCef';
 
 interface Props {
@@ -29,11 +34,17 @@ const POC_HEIGHT = 800;
 
 export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [handle, setHandle] = useState<WorkerHandle | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   // Bumped on SubscribeReply::MustRestart so the canvas remounts (key change)
   // and the worker is recreated (effect re-runs).
   const [restartId, setRestartId] = useState(0);
+
+  // Stable ref to the send function so the input-attach effect does not
+  // re-fire every render when `send` identity changes.
+  const sendRef = useRef<((msg: BrowserClientMsg) => void) | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -82,7 +93,7 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     setRestartId((id) => id + 1);
   }, []);
 
-  useBrowserSocketCef({
+  const { send } = useBrowserSocketCef({
     windowId,
     paneId,
     activityId,
@@ -94,18 +105,76 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
     onMustRestart,
   });
 
+  // Keep sendRef in sync without triggering the attach effect.
+  sendRef.current = send;
+
+  // Wire input attach helpers when the worker is live.
+  useEffect(() => {
+    if (!handle?.worker) return;
+    const overlay = overlayRef.current;
+    const textarea = textareaRef.current;
+    if (!overlay || !textarea) return;
+
+    const inputSink = (ev: import('./protocol/input').InputEvent) => {
+      sendRef.current?.({ kind: 'input', event: ev });
+    };
+
+    const detachMouse = attachMouse({
+      send: inputSink,
+      element: overlay,
+      dpr: () => window.devicePixelRatio,
+    });
+    const detachWheel = attachWheel({
+      send: inputSink,
+      element: overlay,
+      dpr: () => window.devicePixelRatio,
+    });
+    const detachKeyboard = attachKeyboard({
+      send: inputSink,
+      element: overlay,
+      focusOnEditable: () => document.activeElement === textarea,
+    });
+    const detachIme = attachIme({ send: inputSink, textarea });
+
+    overlay.focus();
+
+    return () => {
+      detachMouse();
+      detachWheel();
+      detachKeyboard();
+      detachIme();
+    };
+  }, [handle?.worker]);
+
   return (
     <div className="bg-background text-foreground flex h-full w-full items-center justify-center">
       {unsupported ? (
         <div className="text-destructive">WebGPU is not available in this browser.</div>
       ) : (
-        <canvas
-          key={restartId}
-          ref={canvasRef}
-          width={POC_WIDTH}
-          height={POC_HEIGHT}
-          className="block max-h-full max-w-full"
-        />
+        <div className="relative">
+          <canvas
+            key={restartId}
+            ref={canvasRef}
+            width={POC_WIDTH}
+            height={POC_HEIGHT}
+            className="block max-h-full max-w-full"
+          />
+          {/* Overlay div absorbs mouse and keyboard events for the embedded browser. */}
+          <div
+            ref={overlayRef}
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: overlay must be focusable to receive keyboard events
+            tabIndex={0}
+            className="absolute inset-0 outline-none"
+          />
+          {/* Hidden textarea captures IME composition events. */}
+          <textarea
+            ref={textareaRef}
+            tabIndex={-1}
+            className="absolute inset-0 opacity-0 pointer-events-none"
+            aria-hidden="true"
+            readOnly={false}
+          />
+        </div>
       )}
     </div>
   );

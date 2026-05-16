@@ -3,9 +3,10 @@
 //! `/.../{activity_id}/browser_cef/ws` (gated by `?cef=1` from the client).
 //!
 //! Streams `BrowserServerMsg` frames from a per-activity `FrameRing` and
-//! accepts `BrowserClientMsg::Subscribe` / `Resize` from the client. Task A9
-//! wires `last_key` / `has_base_keyframe` so reconnects use `ResumeReplay`
-//! instead of always re-sending the keyframe.
+//! accepts `BrowserClientMsg::Subscribe` / `Resize` / `Input` / `Navigate` /
+//! `NavigateHistory` from the client. Task B7 adds a concurrent `select!` arm
+//! that drains inbound `BrowserClientMsg` frames and forwards them to
+//! `CefHostHandles::send_command`.
 
 use crate::error::{HttpError, HttpResult};
 use crate::state::AppState;
@@ -13,10 +14,11 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{FromRequest, Path, State, WebSocketUpgrade};
 use axum::response::Response;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
+use ozmux_browser::cef_service::CefHostHandles;
 use ozmux_browser::frame_ring::{FrameEnvelope, FrameSubscription, SubscribeRequest};
 use ozmux_browser_cef_protocol::types::{ActivityId as CefActivityId, FrameKey};
 use ozmux_browser_cef_protocol::wire::{
-    BrowserClientMsg, BrowserServerMsg, FrameSubscriptionReply,
+    BrowserClientMsg, BrowserServerMsg, FrameSubscriptionReply, HostCommand,
 };
 use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 use std::sync::Arc;
@@ -43,7 +45,8 @@ pub async fn browser_cef_ws(
         .await
         .map_err(|e| HttpError::Forbidden(e.to_string()))?;
     let registry = Arc::clone(&state.browser_cef);
-    Ok(ws.on_upgrade(move |socket| run(socket, registry, aid)))
+    let cef_host = Arc::clone(&state.cef_host);
+    Ok(ws.on_upgrade(move |socket| run(socket, registry, cef_host, aid)))
 }
 
 /// Captured subscribe-request shape coming off the wire.
@@ -53,7 +56,12 @@ struct SubscribeReq {
     has_base_keyframe: bool,
 }
 
-async fn run(mut socket: WebSocket, registry: Arc<BrowserCefRegistry>, aid: ActivityId) {
+async fn run(
+    mut socket: WebSocket,
+    registry: Arc<BrowserCefRegistry>,
+    cef_host: Arc<CefHostHandles>,
+    aid: ActivityId,
+) {
     let aid_proto = CefActivityId(aid.to_string());
     let Some(ring) = registry.frame_ring(&aid_proto) else {
         tracing::debug!(?aid, "no cef FrameRing registered; closing");
@@ -127,19 +135,81 @@ async fn run(mut socket: WebSocket, registry: Arc<BrowserCefRegistry>, aid: Acti
         }
     }
 
+    // Drive both outbound (broadcast frames) and inbound (client messages)
+    // concurrently from a single select! loop, keeping one WebSocket handle.
     loop {
-        match rx.recv().await {
-            Ok(env) => {
-                if !send_envelope(&mut socket, &env).await {
-                    break;
+        tokio::select! {
+            // Outbound: deliver the next screencast frame to the client.
+            recv_result = rx.recv() => {
+                match recv_result {
+                    Ok(env) => {
+                        if !send_envelope(&mut socket, &env).await {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(?aid, lagged = n, "cef WS subscriber lagged");
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!(?aid, lagged = n, "cef WS subscriber lagged");
-                continue;
+            // Inbound: read further BrowserClientMsg frames and forward to cef_host.
+            ws_result = socket.recv() => {
+                match ws_result {
+                    Some(Ok(Message::Binary(data))) => {
+                        forward_client_msg(&data, &aid_proto, &cef_host).await;
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        tracing::debug!(error = %e, "cef WS recv error in main loop");
+                        break;
+                    }
+                }
             }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
+    }
+}
+
+/// Decode a raw binary frame received after the initial Subscribe and forward
+/// the corresponding `HostCommand` to cef_host. Unrecognised or irrelevant
+/// variants are silently ignored.
+async fn forward_client_msg(data: &[u8], aid_proto: &CefActivityId, cef_host: &CefHostHandles) {
+    let cm = match rmp_serde::from_slice::<BrowserClientMsg>(data) {
+        Ok(cm) => cm,
+        Err(e) => {
+            tracing::debug!(error = %e, "ignoring undecodable BrowserClientMsg");
+            return;
+        }
+    };
+    let cmd = match cm {
+        BrowserClientMsg::Input { event } => HostCommand::SendInput {
+            aid: aid_proto.clone(),
+            input: event,
+        },
+        BrowserClientMsg::Navigate { url } => HostCommand::Navigate {
+            aid: aid_proto.clone(),
+            url,
+        },
+        BrowserClientMsg::NavigateHistory { delta } => HostCommand::NavigateHistory {
+            aid: aid_proto.clone(),
+            delta,
+        },
+        BrowserClientMsg::Resize { css_w, css_h, dpr } => HostCommand::Resize {
+            aid: aid_proto.clone(),
+            css_w,
+            css_h,
+            dpr,
+        },
+        // Subscribe is handled before the main loop; CopyRequest and Paste
+        // require a separate channel not yet plumbed in Phase B.
+        BrowserClientMsg::Subscribe { .. }
+        | BrowserClientMsg::CopyRequest
+        | BrowserClientMsg::Paste { .. } => return,
+    };
+    if let Err(e) = cef_host.send_command(cmd).await {
+        tracing::debug!(error = %e, "cef_host send_command failed");
     }
 }
 

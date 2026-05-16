@@ -6,15 +6,35 @@
 // SubscribeReply frames are consumed here (and dispatch MustRestart to the
 // caller); all other frames are forwarded to the worker as transferable
 // ArrayBuffers so decode stays off the main thread.
+//
+// Returns `{ send }` so callers can push BrowserClientMsg frames on the same
+// socket the hook subscribed on (e.g. for input forwarding).
 
 import { decode, encode } from 'msgpackr';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import type { InputEvent } from './protocol/input';
 
 export type FrameKey = {
   session_id: bigint;
   epoch: number;
   frame_seq: bigint;
 };
+
+/** Discriminated union of messages the frontend sends to the daemon over the
+ *  cef WebSocket. Mirrors `BrowserClientMsg` in wire.rs (spec §5). */
+export type BrowserClientMsg =
+  | {
+      kind: 'subscribe';
+      session_id: bigint | null;
+      last_key: FrameKey | null;
+      has_base_keyframe: boolean;
+    }
+  | { kind: 'resize'; css_w: number; css_h: number; dpr: number }
+  | { kind: 'input'; event: InputEvent }
+  | { kind: 'navigate'; url: string }
+  | { kind: 'navigate_history'; delta: number }
+  | { kind: 'copy_request' }
+  | { kind: 'paste'; text: string };
 
 export interface UseBrowserSocketCefOpts {
   windowId: string;
@@ -39,26 +59,41 @@ type SubscribeReplyMessage = {
     | { kind: 'awaiting_keyframe' };
 };
 
-export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): void {
+/** Return value of `useBrowserSocketCef`. The `send` function pushes a
+ *  `BrowserClientMsg` on the live socket; it no-ops when the socket is not
+ *  yet open or has closed. */
+export interface UseBrowserSocketCefReturn {
+  send: (msg: BrowserClientMsg) => void;
+}
+
+export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): UseBrowserSocketCefReturn {
   const { windowId, paneId, activityId, worker, generation, lastKey, onMustRestart } = opts;
+  const wsRef = useRef<WebSocket | null>(null);
+
   useEffect(() => {
     if (!worker) return;
     const url = `ws://${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/browser_cef/ws`;
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
+    wsRef.current = ws;
 
-    ws.onopen = () => {
-      const payload = encode({
-        kind: 'subscribe',
-        session_id: lastKey?.session_id ?? null,
-        last_key: lastKey,
-        has_base_keyframe: lastKey !== null,
-      });
+    const sendMsg = (msg: BrowserClientMsg) => {
+      if (ws.readyState !== ws.OPEN) return;
+      const payload = encode(msg);
       const buf = payload.buffer.slice(
         payload.byteOffset,
         payload.byteOffset + payload.byteLength,
       ) as ArrayBuffer;
       ws.send(buf);
+    };
+
+    ws.onopen = () => {
+      sendMsg({
+        kind: 'subscribe',
+        session_id: lastKey?.session_id ?? null,
+        last_key: lastKey,
+        has_base_keyframe: lastKey !== null,
+      });
     };
 
     ws.onmessage = (ev: MessageEvent<ArrayBuffer>) => {
@@ -96,7 +131,21 @@ export function useBrowserSocketCef(opts: UseBrowserSocketCefOpts): void {
     };
 
     return () => {
+      wsRef.current = null;
       ws.close();
     };
   }, [windowId, paneId, activityId, worker, generation, lastKey, onMustRestart]);
+
+  const send = (msg: BrowserClientMsg) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== ws.OPEN) return;
+    const payload = encode(msg);
+    const buf = payload.buffer.slice(
+      payload.byteOffset,
+      payload.byteOffset + payload.byteLength,
+    ) as ArrayBuffer;
+    ws.send(buf);
+  };
+
+  return { send };
 }
