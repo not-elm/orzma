@@ -9,6 +9,7 @@
 //! a `spawn_blocking` arm in the pump that issues the `write_all(len)` +
 //! `send_with_fd(body, &[fd])` pair.
 
+use crate::cef_registry::{BrowserCefRegistry, NavState};
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::{CefCookieDto, HostCommand, HostEvent};
 use sendfd::SendWithFd;
@@ -16,7 +17,7 @@ use std::io::Write as _;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -40,11 +41,11 @@ pub struct CefHostHandles {
     /// independently push `HostCommand`s. The pump forwards each command to
     /// the `cef_host` child in arrival order.
     pub commands: mpsc::Sender<HostCommand>,
-    /// Single-consumer mpsc out of the pump task. Not `Clone`; once consumed
-    /// by `recv()` an event is gone. Daemon-side fan-out (per-activity event
-    /// routing) happens by draining this receiver in one place and
-    /// re-broadcasting downstream.
-    pub events: mpsc::Receiver<HostEvent>,
+    /// Single-consumer mpsc out of the pump task. Wrapped in `StdMutex<Option>`
+    /// so [`events_take`](Self::events_take) can move it out exactly once
+    /// through a shared `Arc<CefHostHandles>` at daemon startup. Tests that
+    /// need raw access take it before the pump is spawned.
+    pub events: StdMutex<Option<mpsc::Receiver<HostEvent>>>,
     /// The spawned `cef_host` child. Dropping this handle does **not** kill
     /// the child — callers that need shutdown must call
     /// [`tokio::process::Child::kill`] (or wait on `wait()`) explicitly.
@@ -53,6 +54,19 @@ pub struct CefHostHandles {
 }
 
 impl CefHostHandles {
+    /// Moves the event receiver out of this handle.
+    ///
+    /// Returns `Some` on the first call; subsequent calls return `None`. The
+    /// event pump spawned at daemon startup calls this exactly once through an
+    /// `Arc<CefHostHandles>`. Integration tests that need raw access to events
+    /// may call this before the pump starts.
+    pub fn events_take(&self) -> Option<mpsc::Receiver<HostEvent>> {
+        self.events
+            .lock()
+            .expect("CefHostHandles.events poisoned")
+            .take()
+    }
+
     /// Sends a `HostCommand` without ancillary data. Returns `Err` if the
     /// internal mpsc to the pump task has been closed (cef_host died or the
     /// supervisor was dropped).
@@ -138,7 +152,7 @@ impl CefHostSupervisor {
 
         Ok(CefHostHandles {
             commands: cmd_tx,
-            events: ev_rx,
+            events: StdMutex::new(Some(ev_rx)),
             child,
             scm_tx,
         })
@@ -158,7 +172,7 @@ pub fn stub_for_tests() -> CefHostHandles {
         .expect("`true` should always spawn");
     CefHostHandles {
         commands: tx,
-        events: ev_rx,
+        events: StdMutex::new(Some(ev_rx)),
         child,
         scm_tx,
     }
@@ -282,4 +296,75 @@ async fn recv_msg_arc<T: serde::de::DeserializeOwned>(
     let mut payload = vec![0u8; len];
     g.read_exact(&mut payload).await?;
     rmp_serde::from_slice(&payload).map_err(std::io::Error::other)
+}
+
+/// Spawns a task that drains `HostEvent`s from the cef_host channel and routes
+/// them to per-activity sinks on `BrowserCefRegistry`.
+///
+/// Takes the event receiver out of `handles` via [`CefHostHandles::events_take`]
+/// exactly once. Returns the `JoinHandle` so the caller (daemon_bootstrap) can
+/// hold it for the process lifetime; dropping the handle cancels the task.
+///
+/// # Panics
+///
+/// Panics if `handles.events_take()` returns `None` (i.e. the receiver was
+/// already consumed by a previous call or by a test).
+pub fn spawn_event_pump(
+    handles: Arc<CefHostHandles>,
+    registry: Arc<BrowserCefRegistry>,
+) -> tokio::task::JoinHandle<()> {
+    let events = handles.events_take().expect(
+        "spawn_event_pump: events receiver already consumed; call this function exactly once",
+    );
+    tokio::spawn(event_pump_loop(events, registry))
+}
+
+async fn event_pump_loop(mut events: mpsc::Receiver<HostEvent>, registry: Arc<BrowserCefRegistry>) {
+    loop {
+        let Some(ev) = events.recv().await else {
+            tracing::debug!("cef_host event channel closed; pump exiting");
+            break;
+        };
+        match ev {
+            HostEvent::NavStateChanged {
+                aid,
+                url,
+                title,
+                can_back,
+                can_forward,
+            } => {
+                let next = NavState {
+                    url,
+                    title,
+                    can_back,
+                    can_forward,
+                };
+                if let Err(e) = registry.nav_publish(&aid, next) {
+                    tracing::debug!(error = %e, "nav_publish: aid not in registry");
+                }
+            }
+            HostEvent::TitleChanged { aid, title } => {
+                if let Some(mut current) = registry.nav_current(&aid) {
+                    current.title = title;
+                    if let Err(e) = registry.nav_publish(&aid, current) {
+                        tracing::debug!(error = %e, "nav_publish (TitleChanged): aid not in registry");
+                    }
+                }
+            }
+            // NOTE: FrameDescriptor, BrowserReady, Hello — not routed by the pump.
+            // BrowserReady is consumed by integration tests via direct receiver access;
+            // FrameDescriptor is posted directly into the shm ring by the cef_host writer.
+            HostEvent::FrameDescriptor { .. }
+            | HostEvent::BrowserReady { .. }
+            | HostEvent::Hello { .. } => {}
+            // NOTE: remaining variants are informational or deferred to later tasks.
+            HostEvent::SelectionChanged { .. }
+            | HostEvent::PageError { .. }
+            | HostEvent::RenderProcessTerminated { .. }
+            | HostEvent::LogLine { .. }
+            | HostEvent::Crashed { .. } => {
+                tracing::debug!(?ev, "event pump: unhandled HostEvent variant");
+            }
+        }
+    }
 }

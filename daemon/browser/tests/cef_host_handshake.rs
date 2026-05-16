@@ -67,12 +67,18 @@ async fn handshake_then_one_frame() {
         .expect("request_browser_create");
 
     // Wait for BrowserReady matching our aid.
+    // NOTE: events is now Option-wrapped inside a Mutex so spawn_event_pump can
+    // take it at daemon startup without needing &mut CefHostHandles. Tests that
+    // need raw access take the receiver here before any pump is spawned.
+    let mut events_rx = handles
+        .events_take()
+        .expect("events receiver not available");
     let ready_deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if Instant::now() > ready_deadline {
             panic!("BrowserReady never arrived in 20s");
         }
-        match tokio::time::timeout(Duration::from_millis(500), handles.events.recv()).await {
+        match tokio::time::timeout(Duration::from_millis(500), events_rx.recv()).await {
             Ok(Some(HostEvent::BrowserReady {
                 aid: ev_aid,
                 ok_or_err,

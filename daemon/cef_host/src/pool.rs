@@ -6,7 +6,9 @@
 //! the UI thread under the `PoolHandle` mutex.
 
 use crate::handlers::client::OzmuxClient;
+use crate::handlers::display::{NavInner, OzmuxDisplayHandler};
 use crate::handlers::lifespan::OzmuxLifeSpanHandler;
+use crate::handlers::load::OzmuxLoadHandler;
 use crate::handlers::render::{OzmuxRenderHandler, RenderHandlerState};
 use crate::shm_writer::ShmWriter;
 use cef::{
@@ -14,10 +16,11 @@ use cef::{
     browser_host_create_browser_sync,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
-use ozmux_browser_cef_protocol::wire::{CefCookieDto, InputEvent};
+use ozmux_browser_cef_protocol::wire::{CefCookieDto, HostEvent, InputEvent};
 use std::collections::HashMap;
 use std::os::fd::RawFd;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 /// A command from the Tokio worker thread to the CEF UI thread.
 #[derive(Debug)]
@@ -71,6 +74,10 @@ const POC_SLOT_PAYLOAD_MAX: usize = 1280 * 800 * 4 + 4096;
 /// Manages all live browser instances on the CEF UI thread.
 pub struct BrowserPool {
     browsers: HashMap<ActivityId, BrowserEntry>,
+    /// Sender into the cef_host → daemon event channel. Each created browser
+    /// receives a clone so it can emit `HostEvent::NavStateChanged` from
+    /// `DisplayHandler` and `LoadHandler` callbacks.
+    event_tx: mpsc::UnboundedSender<HostEvent>,
     /// Observability flag: set to `true` after a `Shutdown` command is dispatched.
     ///
     /// Does **not** drive the message loop — `cef::quit_message_loop()` does.
@@ -82,9 +89,14 @@ pub struct BrowserPool {
 
 impl BrowserPool {
     /// Creates an empty pool.
-    pub fn new() -> Self {
+    ///
+    /// `event_tx` is an unbounded sender into the cef_host event channel;
+    /// it is cloned into each `NavInner` so display and load handlers can
+    /// emit `HostEvent::NavStateChanged` to the daemon.
+    pub fn new(event_tx: mpsc::UnboundedSender<HostEvent>) -> Self {
         Self {
             browsers: HashMap::new(),
+            event_tx,
             shutdown_requested: false,
         }
     }
@@ -242,7 +254,15 @@ impl BrowserPool {
         let state = Arc::new(RenderHandlerState::new(1280, 800, 1.0));
         let render_handler = OzmuxRenderHandler::new(aid.clone(), shm.clone(), state);
         let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone());
-        let mut client = OzmuxClient::new(render_handler, life_span_handler);
+        let nav_inner = NavInner::new(aid.clone(), self.event_tx.clone());
+        let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
+        let load_handler = OzmuxLoadHandler::new(nav_inner);
+        let mut client = OzmuxClient::new(
+            render_handler,
+            life_span_handler,
+            display_handler,
+            load_handler,
+        );
 
         let mut window_info = WindowInfo::default();
         // NOTE: windowless_rendering_enabled = 1 enables OSR (off-screen rendering),
@@ -297,11 +317,5 @@ impl BrowserPool {
     /// Returns the number of active browsers.
     pub fn browser_count(&self) -> usize {
         self.browsers.len()
-    }
-}
-
-impl Default for BrowserPool {
-    fn default() -> Self {
-        Self::new()
     }
 }

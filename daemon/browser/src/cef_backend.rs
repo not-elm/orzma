@@ -45,7 +45,9 @@ impl CefBackend {
             .map_err(CefBackendError::ShmAlloc)?;
         let epoch = 1;
         let ring = Arc::new(FrameRing::new(self.registry.session_id(), epoch));
-        self.registry.insert(aid.clone(), ring);
+        // NOTE: the returned nav receiver is discarded here; WS handlers subscribe
+        // independently via registry.nav_subscribe() after BrowserCreate completes.
+        let _nav_rx = self.registry.insert(aid.clone(), ring);
 
         self.handles
             .request_browser_create(aid.clone(), initial_url.to_string(), epoch, cookies, shm_fd)

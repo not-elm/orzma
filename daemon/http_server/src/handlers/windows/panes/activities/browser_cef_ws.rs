@@ -13,7 +13,7 @@ use crate::state::AppState;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{FromRequest, Path, State, WebSocketUpgrade};
 use axum::response::Response;
-use ozmux_browser::cef_registry::BrowserCefRegistry;
+use ozmux_browser::cef_registry::{BrowserCefRegistry, NavState};
 use ozmux_browser::cef_service::CefHostHandles;
 use ozmux_browser::frame_ring::{FrameEnvelope, FrameSubscription, SubscribeRequest};
 use ozmux_browser_cef_protocol::types::{ActivityId as CefActivityId, FrameKey};
@@ -65,6 +65,10 @@ async fn run(
     let aid_proto = CefActivityId(aid.to_string());
     let Some(ring) = registry.frame_ring(&aid_proto) else {
         tracing::debug!(?aid, "no cef FrameRing registered; closing");
+        return;
+    };
+    let Some(mut nav_rx) = registry.nav_subscribe(&aid_proto) else {
+        tracing::debug!(?aid, "no cef NavState channel registered; closing");
         return;
     };
     let session_id_advertised = ring.session_id();
@@ -135,8 +139,8 @@ async fn run(
         }
     }
 
-    // Drive both outbound (broadcast frames) and inbound (client messages)
-    // concurrently from a single select! loop, keeping one WebSocket handle.
+    // Drive outbound (screencast frames + nav updates) and inbound (client
+    // messages) concurrently from a single select! loop, keeping one socket.
     loop {
         tokio::select! {
             // Outbound: deliver the next screencast frame to the client.
@@ -164,6 +168,28 @@ async fn run(
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
                         tracing::debug!(error = %e, "cef WS recv error in main loop");
+                        break;
+                    }
+                }
+            }
+            // Outbound: push a Nav message whenever nav state changes.
+            nav_result = nav_rx.changed() => {
+                match nav_result {
+                    Ok(()) => {
+                        let state: NavState = nav_rx.borrow().clone();
+                        let msg = BrowserServerMsg::Nav {
+                            url: state.url,
+                            title: state.title,
+                            can_back: state.can_back,
+                            can_forward: state.can_forward,
+                        };
+                        if !send_msg(&mut socket, &msg).await {
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        // NOTE: Err means the watch::Sender was dropped (activity removed
+                        // from registry). Treat as a clean close.
                         break;
                     }
                 }

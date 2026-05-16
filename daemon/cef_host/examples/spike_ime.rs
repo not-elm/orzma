@@ -29,8 +29,11 @@ use cef::{
     browser_host_create_browser_sync, post_task, wrap_app, wrap_task,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
+use ozmux_browser_cef_protocol::wire::HostEvent;
 use ozmux_cef_host::handlers::client::OzmuxClient;
+use ozmux_cef_host::handlers::display::{NavInner, OzmuxDisplayHandler};
 use ozmux_cef_host::handlers::lifespan::OzmuxLifeSpanHandler;
+use ozmux_cef_host::handlers::load::OzmuxLoadHandler;
 use ozmux_cef_host::handlers::render::{OzmuxRenderHandler, RenderHandlerState};
 use std::os::raw::c_int;
 use std::sync::Arc;
@@ -197,9 +200,18 @@ fn create_browser() -> cef::Browser {
         ozmux_cef_host::shm_writer::ShmWriter::from_mmap(ptr as *mut u8, 1280 * 800 * 4 + 4096)
     });
 
+    let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
     let render_handler = OzmuxRenderHandler::new(aid.clone(), shm, state);
-    let life_span_handler = OzmuxLifeSpanHandler::new(aid);
-    let mut client = OzmuxClient::new(render_handler, life_span_handler);
+    let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone());
+    let nav_inner = NavInner::new(aid, event_tx);
+    let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
+    let load_handler = OzmuxLoadHandler::new(nav_inner);
+    let mut client = OzmuxClient::new(
+        render_handler,
+        life_span_handler,
+        display_handler,
+        load_handler,
+    );
 
     let mut window_info = WindowInfo::default();
     window_info.windowless_rendering_enabled = 1;

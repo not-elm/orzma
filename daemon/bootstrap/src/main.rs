@@ -2,7 +2,7 @@
 //! `AppState`, and runs the HTTP server until SIGINT.
 
 use ozmux_browser::BrowserService;
-use ozmux_browser::cef_service::CefHostSupervisor;
+use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::registry::ExtensionRegistry;
@@ -76,6 +76,11 @@ async fn main() -> anyhow::Result<()> {
         titles.clone(),
         cef_host,
     );
+
+    // Drain HostEvents from cef_host and route NavStateChanged / TitleChanged
+    // into per-activity watch::Sender<NavState> on the BrowserCefRegistry so
+    // that the cef WS handler can push BrowserServerMsg::Nav to subscribers.
+    let _event_pump = spawn_event_pump(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
 
     // Adapter task: bridge terminal title-change notifications into ActivityTitles
     // so that all consumers (title_republish, WindowView builder) read from the

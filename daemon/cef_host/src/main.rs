@@ -158,7 +158,11 @@ fn main() -> std::process::ExitCode {
     tracing::info!("CefInitialize OK");
 
     // ⑤ PoolHandle + Tokio worker hosting the UDS control plane.
-    let handle = post_command::PoolHandle::new(pool::BrowserPool::new());
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
+    // NOTE: event_tx is cloned into each BrowserPool entry's NavInner so that
+    // DisplayHandler / LoadHandler can emit HostEvent::NavStateChanged to the
+    // daemon without acquiring the pool lock.
+    let handle = post_command::PoolHandle::new(pool::BrowserPool::new(event_tx));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -171,10 +175,6 @@ fn main() -> std::process::ExitCode {
     let socket_path: PathBuf = std::env::var("OZMUX_CEF_HOST_SOCKET")
         .map(Into::into)
         .unwrap_or_else(|_| "/tmp/ozmux_cef_host.sock".into());
-    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
-    // NOTE: event_tx is parked in main for now; handlers will obtain a clone via
-    // BrowserPool in a follow-up task so OnPaint can emit FrameDescriptor events.
-    let _event_tx = event_tx;
     let handle_for_control = handle.clone();
     let socket_for_log = socket_path.clone();
     std::thread::Builder::new()
