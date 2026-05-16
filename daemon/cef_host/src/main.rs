@@ -8,15 +8,14 @@
 //!   5. Wrap a minimal BrowserApp that injects single-process flags
 //!   6. CefInitialize
 //!   7. Spawn Tokio runtime on a background thread (placeholder for control plane, Task 19)
-//!   8. Main thread runs message loop with 5s PoC timeout (real shutdown in Task 19)
+//!   8. Message loop with CefCommand queue drain; real shutdown via Task 19 / pool.shutdown_requested
 //!   9. CefShutdown
 
 use cef::Settings;
 use cef::args::Args;
 use cef::rc::Rc as _;
 use cef::{App, ImplApp, ImplCommandLine, WrapApp, wrap_app};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use ozmux_cef_host::{pool, post_command};
 use std::time::Duration;
 
 // NOTE: BrowserApp injects --single-process + --no-sandbox + --disable-gpu at command-line
@@ -180,20 +179,26 @@ fn main() -> std::process::ExitCode {
         })
         .expect("spawn tokio thread");
 
-    // ⑥ Message loop with 5s PoC timeout; real shutdown signal handling deferred to Task 19.
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop2 = stop.clone();
+    // ⑥ Message loop with CefCommand queue drain.
+    let queue = post_command::new_queue();
+    let mut pool = pool::BrowserPool::new();
+
+    // NOTE: 5s PoC timeout posts a Shutdown command via the queue instead of
+    // using an AtomicBool.  Task 19 replaces this with real UDS control plane.
+    let q2 = queue.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
-        stop2.store(true, Ordering::Release);
-        tracing::info!("[bg] 5s elapsed, requesting quit");
+        tracing::info!("[bg] 5s elapsed, posting Shutdown via queue");
+        post_command::post(&q2, pool::CefCommand::Shutdown);
     });
+
     tracing::info!("message loop start");
-    while !stop.load(Ordering::Acquire) {
+    while !pool.shutdown_requested {
+        post_command::drain(&queue, &mut pool);
         cef::do_message_loop_work();
         std::thread::sleep(Duration::from_millis(10));
     }
-    tracing::info!("message loop exited");
+    tracing::info!("message loop exited (pool.shutdown_requested=true)");
 
     // ⑦ CefShutdown
     cef::shutdown();
