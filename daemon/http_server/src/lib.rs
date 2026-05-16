@@ -5,6 +5,7 @@ pub mod extractors;
 pub mod handlers;
 pub mod layout_broadcast;
 pub mod session_broadcast;
+pub mod session_view;
 pub mod layout_dto;
 pub mod state;
 mod title_republish;
