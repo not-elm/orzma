@@ -126,11 +126,11 @@ self.onmessage = async (e: MessageEvent<IncomingMsg>) => {
           });
         } else {
           mainRenderer?.renderFrame(envelope);
-          // NOTE: paint-done is consumed by the KPI smoke harness (Task 30) to
-          // measure wheel→paint latency. Cheap on the hot path — one postMessage
-          // per frame, no allocations beyond the small literal object.
-          // correlate_to / t allow the main thread to join paint timestamps
-          // with input dispatch timestamps for p95 latency computation (Task C2).
+          // NOTE: correlate_to lets the main thread join this paint to the
+          // input that triggered it. lastInputId is cleared right after so
+          // only the FIRST paint following an input is counted — otherwise
+          // every idle screencast frame would attribute to a stale input and
+          // inflate the wheel→paint p95.
           self.postMessage({
             type: 'paint-done',
             generation: currentGeneration,
@@ -138,6 +138,7 @@ self.onmessage = async (e: MessageEvent<IncomingMsg>) => {
             correlate_to: lastInputId,
             t: performance.now(),
           });
+          lastInputId = null;
         }
       }
       return;

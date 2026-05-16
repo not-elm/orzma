@@ -304,8 +304,8 @@ async fn send_envelope(socket: &mut WebSocket, env: &Arc<FrameEnvelope>) -> bool
         is_keyframe: env.is_keyframe,
         damage_rects: env.damage_rects.clone(),
         is_popup: env.is_popup,
-        // NOTE: popup_rect routing lands in Phase B (Task B16/B18);
-        // FrameEnvelope does not carry it yet.
+        // NOTE: FrameEnvelope does not carry popup_rect — the daemon event
+        // pump does not yet read popup frames from shm and route them.
         popup_rect: None,
         bgra: env.bgra.clone(),
     };

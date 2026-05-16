@@ -17,7 +17,7 @@
 // `hidden` Tailwind utility when no popup_rect is active, and positioned via
 // inline style (biome-ignore documented) when popup_rect is set.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ContextMenu } from './ContextMenu';
 import { attachIme } from './input/ime';
 import { attachKeyboard } from './input/keyboard';
@@ -152,14 +152,14 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
     };
   }, [restartId]);
 
-  const onMustRestart = useCallback((reason: string) => {
+  const onMustRestart = (reason: string) => {
     console.warn('SubscribeReply::MustRestart', reason);
     setRestartId((id) => id + 1);
-  }, []);
+  };
 
-  const onNav = useCallback((next: NavSnapshot) => {
+  const onNav = (next: NavSnapshot) => {
     setNav(next);
-  }, []);
+  };
 
   const onUnavailable = (reason: BrowserUnavailableReason) => {
     setUnavailable(reason);

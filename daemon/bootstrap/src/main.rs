@@ -154,8 +154,8 @@ fn spawn_cef_crash_watcher(
         let status = child.wait().await;
         is_dead.store(true, Ordering::Release);
         let last_error = match &status {
-            Ok(s) => format!("cef_host exited: {:?}", s),
-            Err(e) => format!("cef_host wait error: {}", e),
+            Ok(s) => format!("cef_host exited: {s:?}"),
+            Err(e) => format!("cef_host wait error: {e}"),
         };
         tracing::error!(status = ?status, "cef_host exited unexpectedly");
         registry.broadcast_unavailable(BrowserUnavailableReason::RetryExhausted { last_error });
