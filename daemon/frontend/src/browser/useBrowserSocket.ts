@@ -1,6 +1,6 @@
-// CEF-backed WebSocket hook. Connects to /browser_cef/ws, sends Subscribe on
-// open, and forwards every incoming binary frame to the supplied frame
-// worker as a transferable ArrayBuffer.
+// Browser WebSocket hook. Connects to /browser/ws, sends Subscribe on open,
+// and forwards every incoming binary frame to the supplied frame worker as a
+// transferable ArrayBuffer.
 //
 // Peeks each incoming message's `kind` field on the main thread:
 // SubscribeReply frames are consumed here (and dispatch MustRestart to the
@@ -102,7 +102,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
 
   useEffect(() => {
     if (!worker) return;
-    const url = `ws://${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/browser_cef/ws`;
+    const url = `ws://${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/browser/ws`;
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
