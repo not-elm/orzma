@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use crate::commands::CommandExecute;
+
 const PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -26,14 +28,13 @@ pub(crate) struct StartArgs {
     foreground: bool,
 }
 
-/// Starts the ozmux daemon. If `--foreground` is set, runs in-process;
-/// otherwise spawns a detached child, waits for `/health` to respond, and
-/// prints the spawned PID to stdout.
-pub(crate) async fn run(args: StartArgs) -> anyhow::Result<()> {
-    if args.foreground {
-        return daemon_bootstrap::run().await;
+impl CommandExecute for StartArgs {
+    async fn run(self) -> anyhow::Result<()> {
+        if self.foreground {
+            return daemon_bootstrap::run().await;
+        }
+        start_detached().await
     }
-    start_detached().await
 }
 
 async fn start_detached() -> anyhow::Result<()> {

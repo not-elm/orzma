@@ -3,7 +3,15 @@
 
 use clap::{Parser, Subcommand};
 
+use crate::commands::{CommandExecute, daemon::DaemonCommand};
+
 mod commands;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    cli.command.run().await
+}
 
 #[derive(Parser)]
 #[command(name = "ozmux", version, about = "ozmux terminal multiplexer CLI")]
@@ -15,13 +23,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Daemon lifecycle commands.
-    Daemon(commands::daemon::DaemonArgs),
+    #[command(subcommand)]
+    Daemon(DaemonCommand),
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::Daemon(args) => commands::daemon::run(args).await,
+impl CommandExecute for Command {
+    async fn run(self) -> anyhow::Result<()> {
+        match self {
+            Self::Daemon(command) => command.run().await,
+        }
     }
 }
