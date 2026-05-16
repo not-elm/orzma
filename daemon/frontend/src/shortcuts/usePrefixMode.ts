@@ -67,11 +67,12 @@ function ensureDispatcher() {
     // Branch 2: in repeat sub-mode — no prefix needed for repeatable
     // bindings; e.repeat is accepted.
     if (shared.repeatMode) {
-      e.preventDefault();
-      e.stopPropagation();
+      // Modifier-only keypress is ignored; don't consume.
       if (MODIFIER_KEYS.has(e.key)) return;
       const match = shared.bindings.find((b) => matchesChord(e, b.chord));
       if (match?.repeatable) {
+        e.preventDefault();
+        e.stopPropagation();
         match.handler();
         if (shared.repeatTimer !== null) clearTimeout(shared.repeatTimer);
         shared.repeatTimer = setTimeout(() => {
@@ -82,7 +83,8 @@ function ensureDispatcher() {
         }, shared.repeatTimeoutMs);
         return;
       }
-      // Non-repeatable chord exits repeat mode without consuming further.
+      // Non-repeatable / no-match chord exits repeat mode and is NOT
+      // consumed — falls through to the terminal as a normal key.
       shared.repeatMode = false;
       if (shared.repeatTimer !== null) {
         clearTimeout(shared.repeatTimer);

@@ -335,9 +335,11 @@ describe('usePrefixMode repeat sub-mode', () => {
     expect(resizeFetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('exits repeat mode when a non-repeatable chord arrives', async () => {
+  it('exits repeat mode when a non-repeatable chord arrives and forwards it to the terminal', async () => {
     const { result } = renderHook(() => usePrefixMode(makeCtx()));
     await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    // Enter repeat mode via prefix + repeatable chord.
     act(() => {
       press({ key: 'b', ctrlKey: true });
       press({ key: 'ArrowRight', ctrlKey: true });
@@ -345,15 +347,20 @@ describe('usePrefixMode repeat sub-mode', () => {
     await Promise.resolve();
     expect(resizeFetchMock).toHaveBeenCalledTimes(1);
 
-    // 'x' is not repeatable; pressing it must NOT fire close-pane via
-    // repeat mode (we are no longer armed; the press should leak to
-    // the terminal). The close fetch mock is the default fetch, so
-    // we just assert resizeFetchMock did not increment.
+    // Press 'x' (close-pane, NOT repeatable). It must NOT increment
+    // the repeatable handler AND must NOT be consumed (defaultPrevented
+    // stays false so the terminal receives it).
+    const xEvent = new KeyboardEvent('keydown', {
+      key: 'x',
+      bubbles: true,
+      cancelable: true,
+    });
     act(() => {
-      press({ key: 'x' });
+      document.dispatchEvent(xEvent);
     });
     await Promise.resolve();
     expect(resizeFetchMock).toHaveBeenCalledTimes(1);
+    expect(xEvent.defaultPrevented).toBe(false);
   });
 
   it('disarms after repeat_timeout_ms with no further keypresses', async () => {
