@@ -39,7 +39,7 @@ use tokio::signal::unix::{SignalKind, signal};
 ///
 /// Writes the daemon PID to `$TMPDIR/ozmux/daemon.pid` before entering the
 /// serve loop and removes it on any exit path — graceful shutdown, error
-/// propagation, or panic — via a [`PidFileGuard`](pidfile::PidFileGuard).
+/// propagation, or panic — via a `PidFileGuard` RAII helper.
 pub async fn run() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
