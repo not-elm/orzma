@@ -7,6 +7,10 @@ edition = "2024"
 name = "cef_host"
 path = "src/main.rs"
 
+[[bin]]
+name = "cef_helper"
+path = "src/bin/cef_helper.rs"
+
 [dependencies]
 cef = "148.1.0+147.0.14"
 cef-dll-sys = { version = "148.1.0+147.0.14", features = ["sandbox"] }
