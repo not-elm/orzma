@@ -129,6 +129,7 @@ export class WebGl2Renderer implements FrameRenderer {
   private draw(): void {
     const gl = this.gl;
     gl.viewport(0, 0, this.size.w, this.size.h);
+    // biome-ignore lint/correctness/useHookAtTopLevel: gl.useProgram is a WebGL2 API, not a React hook
     gl.useProgram(this.program);
     gl.bindTexture(gl.TEXTURE_2D, this.backingTex);
     gl.drawArrays(gl.TRIANGLES, 0, 6);

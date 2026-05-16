@@ -128,6 +128,78 @@ test.describe('CEF PoC e2e', () => {
     );
   });
 
+  test('Phase B feature parity: scroll, nav, back', async ({ page, request }) => {
+    await page.goto('/?cef=1');
+    await page.waitForSelector('canvas', { timeout: 10_000 });
+
+    const sessionsRes = await request.get(`${DAEMON}/sessions`);
+    const sessions = (await sessionsRes.json()) as { sessions: { windows: string[] }[] };
+    const wid = sessions.sessions[0]?.windows[0];
+    if (!wid) return;
+    const windowRes = await request.get(`${DAEMON}/windows/${wid}`);
+    const win = (await windowRes.json()) as { panes: { id: string }[] };
+    const pid = win.panes[0]?.id;
+    if (!pid) return;
+
+    await page.evaluate(() => {
+      (window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count = 0;
+    });
+    const post = await request.post(`${DAEMON}/windows/${wid}/panes/${pid}/activities`, {
+      data: {
+        activity: {
+          activity_id: crypto.randomUUID(),
+          kind: { type: 'browser', initial_url: 'https://example.com/' },
+        },
+      },
+    });
+    expect([200, 201]).toContain(post.status());
+
+    await page.waitForFunction(
+      () =>
+        ((window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count ?? 0) >
+        0,
+      { timeout: 30_000 },
+    );
+    const initialCount = (await page.evaluate(
+      () => (window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count ?? 0,
+    )) as number;
+
+    // Wheel-scroll: dispatch real wheel events over the canvas; expect paints.
+    await page.locator('canvas').first().hover();
+    for (let i = 0; i < 5; i++) {
+      await page.mouse.wheel(0, 300);
+      await page.waitForTimeout(150);
+    }
+    const afterScroll = (await page.evaluate(
+      () => (window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count ?? 0,
+    )) as number;
+    expect(afterScroll).toBeGreaterThan(initialCount);
+
+    // URL bar Nav: example.com → google.com triggers further paints.
+    await page.fill('input[type="text"]', 'https://www.google.com/');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(
+      (threshold) =>
+        ((window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count ?? 0) >
+        threshold,
+      afterScroll + 3,
+      { timeout: 30_000 },
+    );
+    const afterNav = (await page.evaluate(
+      () => (window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count ?? 0,
+    )) as number;
+
+    // Back button must produce paints from the prior page.
+    await page.click('button[aria-label="Back"]');
+    await page.waitForFunction(
+      (threshold) =>
+        ((window as unknown as { __poc_paint_done_count?: number }).__poc_paint_done_count ?? 0) >
+        threshold,
+      afterNav + 1,
+      { timeout: 30_000 },
+    );
+  });
+
   test('Phase A: a Browser activity paints at least one frame', async ({ page, request }) => {
     await page.goto('/?cef=1');
     await page.waitForSelector('canvas', { timeout: 10_000 });
