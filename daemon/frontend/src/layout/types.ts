@@ -9,6 +9,8 @@ export type SessionId = string;
 
 export type SplitOrientation = 'horizontal' | 'vertical';
 
+export type PaneDirection = 'up' | 'down' | 'left' | 'right';
+
 export type WindowLayoutNode =
   | { type: 'root'; cell_id: CellId; child: WindowLayoutNode }
   | {
