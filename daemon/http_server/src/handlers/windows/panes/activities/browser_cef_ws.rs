@@ -12,7 +12,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{FromRequest, Path, State, WebSocketUpgrade};
 use axum::response::Response;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
-use ozmux_browser::frame_ring::FrameEnvelope;
+use ozmux_browser::frame_ring::{FrameEnvelope, FrameSubscription, SubscribeRequest};
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_browser_cef_protocol::wire::{
     BrowserClientMsg, BrowserServerMsg, FrameSubscriptionReply,
@@ -56,27 +56,48 @@ async fn run(mut socket: WebSocket, registry: Arc<BrowserCefRegistry>, aid: Acti
         return;
     }
 
-    let mut sub = ring.subscribe();
+    // TODO: Task A9 wires last_key + MustRestart/ResumeReplay properly.
+    let sub = ring.subscribe(SubscribeRequest {
+        session_id: 0, // TODO: Task A9 — read from BrowserClientMsg::Subscribe
+        last_key: None,
+        has_base_keyframe: false,
+    });
+    let (reply_result, keyframe_to_send, mut receiver) = match sub {
+        FrameSubscription::FreshSnapshot {
+            keyframe,
+            deltas: _,
+            receiver,
+        } => (
+            FrameSubscriptionReply::FreshSnapshot,
+            Some(keyframe),
+            receiver,
+        ),
+        FrameSubscription::AwaitingKeyframe { receiver } => {
+            (FrameSubscriptionReply::AwaitingKeyframe, None, receiver)
+        }
+        FrameSubscription::ResumeReplay { .. } | FrameSubscription::MustRestart { .. } => {
+            // TODO: Task A9 wires these properly — Phase A passes session_id=0 + last_key=None,
+            // which cannot produce these variants. If we ever land here, log + treat as
+            // AwaitingKeyframe; the broadcast receiver in this variant is still valid.
+            unreachable!("session_id=0 + last_key=None never produces these variants");
+        }
+    };
     let reply = BrowserServerMsg::SubscribeReply {
         session_id: registry.session_id(),
-        result: if sub.keyframe.is_some() {
-            FrameSubscriptionReply::FreshSnapshot
-        } else {
-            FrameSubscriptionReply::AwaitingKeyframe
-        },
+        result: reply_result,
     };
     if !send_msg(&mut socket, &reply).await {
         return;
     }
 
-    if let Some(keyframe) = sub.keyframe.take()
+    if let Some(keyframe) = keyframe_to_send
         && !send_envelope(&mut socket, &keyframe).await
     {
         return;
     }
 
     loop {
-        match sub.receiver.recv().await {
+        match receiver.recv().await {
             Ok(env) => {
                 if !send_envelope(&mut socket, &env).await {
                     break;

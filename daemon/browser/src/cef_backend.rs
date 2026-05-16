@@ -44,7 +44,7 @@ impl CefBackend {
         let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, POC_SLOT_PAYLOAD_MAX)
             .map_err(CefBackendError::ShmAlloc)?;
         let epoch = 1;
-        let ring = Arc::new(FrameRing::new(epoch));
+        let ring = Arc::new(FrameRing::new(self.registry.session_id(), epoch));
         self.registry.insert(aid.clone(), ring);
 
         self.handles
