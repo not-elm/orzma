@@ -20,7 +20,9 @@ pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateRequest>,
 ) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
-    let (wid, _pid, _aid) = state.create_window(body.session_id.as_ref(), body.name).await?;
+    let (wid, _pid, _aid) = state
+        .create_window(body.session_id.as_ref(), body.name)
+        .await?;
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": wid }))))
 }
 

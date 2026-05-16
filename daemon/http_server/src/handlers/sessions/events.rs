@@ -96,10 +96,7 @@ mod tests {
     #[tokio::test]
     async fn events_ws_sends_initial_snapshot() {
         let state = fresh_state();
-        let sid = state
-            .multiplexer
-            .create_session(Some("hello".into()))
-            .await;
+        let sid = state.multiplexer.create_session(Some("hello".into())).await;
         state
             .multiplexer
             .create_window(Some(&sid), Some("w".into()))
@@ -137,10 +134,7 @@ mod tests {
     #[tokio::test]
     async fn events_ws_sends_frame_after_external_publish() {
         let state = fresh_state();
-        let sid = state
-            .multiplexer
-            .create_session(Some("orig".into()))
-            .await;
+        let sid = state.multiplexer.create_session(Some("orig".into())).await;
         let addr = spawn_server(state.clone()).await;
         let url = format!("ws://{}/sessions/{}/events", addr, sid);
         let (mut ws, _) = connect_async(&url).await.unwrap();

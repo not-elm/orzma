@@ -88,9 +88,18 @@ mod tests {
     async fn from_session_indexes_linked_windows_in_order() {
         let mp = MultiplexerService::default();
         let sid = mp.create_session(Some("s".into())).await;
-        let (w0, _, _) = mp.create_window(Some(&sid), Some("alpha".into())).await.unwrap();
-        let (w1, _, _) = mp.create_window(Some(&sid), Some("beta".into())).await.unwrap();
-        let (w2, _, _) = mp.create_window(Some(&sid), Some("gamma".into())).await.unwrap();
+        let (w0, _, _) = mp
+            .create_window(Some(&sid), Some("alpha".into()))
+            .await
+            .unwrap();
+        let (w1, _, _) = mp
+            .create_window(Some(&sid), Some("beta".into()))
+            .await
+            .unwrap();
+        let (w2, _, _) = mp
+            .create_window(Some(&sid), Some("gamma".into()))
+            .await
+            .unwrap();
 
         let sessions = mp.sessions.lock().await;
         let session = sessions.get(&sid).unwrap();
@@ -101,16 +110,40 @@ mod tests {
         assert_eq!(view.name, "s");
         assert_eq!(view.active_window.as_ref(), Some(&w0));
         assert_eq!(view.windows.len(), 3);
-        assert_eq!(view.windows[0], SessionWindowEntry { id: w0, name: "alpha".into(), index: 0 });
-        assert_eq!(view.windows[1], SessionWindowEntry { id: w1, name: "beta".into(),  index: 1 });
-        assert_eq!(view.windows[2], SessionWindowEntry { id: w2, name: "gamma".into(), index: 2 });
+        assert_eq!(
+            view.windows[0],
+            SessionWindowEntry {
+                id: w0,
+                name: "alpha".into(),
+                index: 0
+            }
+        );
+        assert_eq!(
+            view.windows[1],
+            SessionWindowEntry {
+                id: w1,
+                name: "beta".into(),
+                index: 1
+            }
+        );
+        assert_eq!(
+            view.windows[2],
+            SessionWindowEntry {
+                id: w2,
+                name: "gamma".into(),
+                index: 2
+            }
+        );
     }
 
     #[tokio::test]
     async fn serializes_to_expected_json_shape() {
         let mp = MultiplexerService::default();
         let sid = mp.create_session(Some("ozmux".into())).await;
-        let (wid, _, _) = mp.create_window(Some(&sid), Some("main".into())).await.unwrap();
+        let (wid, _, _) = mp
+            .create_window(Some(&sid), Some("main".into()))
+            .await
+            .unwrap();
         let sessions = mp.sessions.lock().await;
         let session = sessions.get(&sid).unwrap();
         let names = collect_window_names(&mp, session).await;
@@ -126,7 +159,10 @@ mod tests {
     async fn missing_window_name_degrades_to_empty_string() {
         let mp = MultiplexerService::default();
         let sid = mp.create_session(None).await;
-        let (_wid, _, _) = mp.create_window(Some(&sid), Some("present".into())).await.unwrap();
+        let (_wid, _, _) = mp
+            .create_window(Some(&sid), Some("present".into()))
+            .await
+            .unwrap();
         let sessions = mp.sessions.lock().await;
         let session = sessions.get(&sid).unwrap();
         let empty_names: HashMap<WindowId, String> = HashMap::new();
