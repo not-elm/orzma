@@ -141,10 +141,10 @@ impl AppState {
     ) -> HttpResult {
         let outcome = self
             .multiplexer
-            .with_window_or_404(wid, |w| -> MultiplexerResult<SetActiveOutcome> {
-                let from = w.active_pane.clone();
-                match w.pane_in_direction(&from, direction)? {
-                    Some(target) => w.set_active_pane(&target),
+            .with_window_or_404(wid, |window| -> MultiplexerResult<SetActiveOutcome> {
+                let from = window.active_pane.clone();
+                match window.pane_in_direction(&from, direction)? {
+                    Some(target) => window.set_active_pane(&target),
                     None => Ok(SetActiveOutcome::Unchanged),
                 }
             })
