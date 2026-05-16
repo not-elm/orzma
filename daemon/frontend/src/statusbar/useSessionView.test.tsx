@@ -116,8 +116,6 @@ describe('useSessionView', () => {
       server.on('connection', (sock) => {
         connectionCount++;
         if (connectionCount <= 3) {
-          // NOTE: send a frame so onmessage handler exists, then close immediately.
-          // Don't wait — close on the same tick.
           sock.close({ code: 1011, reason: 'internal_error', wasClean: true });
         } else {
           sock.send(JSON.stringify(fakeView()));

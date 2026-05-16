@@ -9,6 +9,13 @@ export type SessionViewState =
   | { status: 'reconnecting'; view: SessionView | null; retryInSec: number }
   | { status: 'gone'; reason: 'session_not_found' | 'session_closed' };
 
+/** Returns the last-known view when the hook is live or reconnecting, else null. */
+export function liveOrReconnectingView(s: SessionViewState): SessionView | null {
+  if (s.status === 'live') return s.view;
+  if (s.status === 'reconnecting') return s.view;
+  return null;
+}
+
 const RECONNECT_RECOVERABLE_CODES = new Set([1006]);
 const RECONNECT_RECOVERABLE_REASONS = new Set(['lagged', 'internal_error']);
 const TERMINAL_REASONS = new Set(['session_not_found', 'session_closed']);

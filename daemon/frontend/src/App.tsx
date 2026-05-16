@@ -8,24 +8,15 @@ import { usePrefixMode } from './shortcuts/usePrefixMode';
 import { StatusBar } from './statusbar/StatusBar';
 import type { SessionView } from './statusbar/types';
 import { useDefaultSession } from './statusbar/useDefaultSession';
-import { type SessionViewState, useSessionView } from './statusbar/useSessionView';
+import { liveOrReconnectingView, useSessionView } from './statusbar/useSessionView';
 import { windowSelect } from './statusbar/windowSelect';
-
-function currentSessionView(s: SessionViewState): SessionView | null {
-  if (s.status === 'live') return s.view;
-  if (s.status === 'reconnecting') return s.view;
-  return null;
-}
 
 export function App() {
   const sessionDefault = useDefaultSession();
   const sid = sessionDefault.status === 'ready' ? sessionDefault.sessionId : null;
   const sessionView = useSessionView(sid);
 
-  const wid =
-    sessionView.status === 'live' || sessionView.status === 'reconnecting'
-      ? (sessionView.view?.active_window ?? null)
-      : null;
+  const wid = liveOrReconnectingView(sessionView)?.active_window ?? null;
 
   const layout = useWindowLayout(wid);
 
@@ -45,7 +36,7 @@ export function App() {
   activeWindowRef.current = wid;
   const activePaneObj = view?.panes.find((p) => p.id === view.active_pane);
   activeActivityRef.current = activePaneObj?.active_activity ?? null;
-  activeSessionRef.current = currentSessionView(sessionView);
+  activeSessionRef.current = liveOrReconnectingView(sessionView);
 
   const ctx: ShortcutContext = {
     activeWindow: () => activeWindowRef.current,

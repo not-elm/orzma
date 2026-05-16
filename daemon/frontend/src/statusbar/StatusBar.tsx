@@ -2,7 +2,7 @@ import type { WindowId } from '../layout/types';
 import { ClockSegment } from './ClockSegment';
 import { ReconnectPill } from './ReconnectPill';
 import { SessionSegment, type SessionSegmentState } from './SessionSegment';
-import type { SessionViewState } from './useSessionView';
+import { liveOrReconnectingView, type SessionViewState } from './useSessionView';
 import { WindowListSegment } from './WindowListSegment';
 
 interface StatusBarProps {
@@ -13,8 +13,7 @@ interface StatusBarProps {
 
 function deriveSegmentState(s: SessionViewState): SessionSegmentState {
   if (s.status === 'gone') return { status: 'gone', reason: s.reason };
-  const view =
-    s.status === 'live' || s.status === 'reconnecting' || s.status === 'connecting' ? s.view : null;
+  const view = s.status === 'connecting' ? s.view : liveOrReconnectingView(s);
   if (!view) return { status: 'loading' };
   return { status: 'ready', name: view.name };
 }
@@ -27,14 +26,9 @@ function deriveSegmentState(s: SessionViewState): SessionSegmentState {
  */
 export function StatusBar({ sessionState, windowReconnecting, onSelectWindow }: StatusBarProps) {
   const segmentState = deriveSegmentState(sessionState);
-  const windows =
-    sessionState.status === 'live' || sessionState.status === 'reconnecting'
-      ? (sessionState.view?.windows ?? [])
-      : [];
-  const activeWindowId =
-    sessionState.status === 'live' || sessionState.status === 'reconnecting'
-      ? (sessionState.view?.active_window ?? null)
-      : null;
+  const liveView = liveOrReconnectingView(sessionState);
+  const windows = liveView?.windows ?? [];
+  const activeWindowId = liveView?.active_window ?? null;
   const reconnecting = windowReconnecting || sessionState.status === 'reconnecting';
 
   return (

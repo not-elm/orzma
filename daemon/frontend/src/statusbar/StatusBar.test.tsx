@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { StatusBar } from './StatusBar';
 import type { SessionViewState } from './useSessionView';
 
-function liveState(): SessionViewState {
+function liveState(): Extract<SessionViewState, { status: 'live' }> {
   return {
     status: 'live',
     view: {
@@ -36,11 +36,9 @@ describe('StatusBar', () => {
   });
 
   it('shows the pill when sessionReconnecting', () => {
-    const s = liveState();
-    const reconnectingView = s.status === 'live' ? s.view : null;
     render(
       <StatusBar
-        sessionState={{ status: 'reconnecting', view: reconnectingView, retryInSec: 0 }}
+        sessionState={{ status: 'reconnecting', view: liveState().view, retryInSec: 0 }}
         windowReconnecting={false}
         onSelectWindow={vi.fn()}
       />,

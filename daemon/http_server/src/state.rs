@@ -1,7 +1,7 @@
 use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::session_broadcast::SessionBroadcaster;
-use crate::session_view::{SessionView, SessionWindowEntry};
+use crate::session_view::SessionView;
 use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
@@ -483,35 +483,31 @@ impl AppState {
     }
 
     /// Build a JSON snapshot of the current session view without publishing.
-    /// Returns `None` if the session is missing or serialization fails. Used by
-    /// the WS handler to deliver the initial frame without duplicating the
-    /// snapshot logic.
+    /// Returns `None` if the session is missing or serialization fails.
     pub(crate) async fn snapshot_session_view(&self, sid: &SessionId) -> Option<serde_json::Value> {
-        let sessions = self.multiplexer.sessions.lock().await;
-        let session = match sessions.get(sid) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, %sid, "skipped session snapshot");
-                return None;
+        // NOTE: clone the session before dropping the sessions lock so we can
+        // pass `&Session` to `SessionView::from_session` later. Per-window
+        // locks must be acquired AFTER the sessions lock is released to
+        // preserve the `sessions -> windows[wid]` lock-order invariant.
+        let session = {
+            let sessions = self.multiplexer.sessions.lock().await;
+            match sessions.get(sid) {
+                Ok(s) => s.clone(),
+                Err(e) => {
+                    tracing::warn!(error = %e, %sid, "skipped session snapshot");
+                    return None;
+                }
             }
         };
-        // NOTE: snapshot values from the session then drop the sessions lock
-        // before acquiring per-window locks to preserve the
-        // `sessions -> windows[wid]` lock-order invariant.
-        let linked: Vec<WindowId> = session.linked_windows.clone();
-        let id = session.id.clone();
-        let name = session.name.clone();
-        let active_window = session.active_window.clone();
-        drop(sessions);
 
         let mut window_names: HashMap<WindowId, String> = HashMap::new();
-        for wid in &linked {
+        for wid in &session.linked_windows {
             if let Some(n) = self.multiplexer.with_window(wid, |w| w.name.clone()).await {
                 window_names.insert(wid.clone(), n);
             }
         }
 
-        let view = build_session_view(id, name, active_window, &linked, &window_names);
+        let view = SessionView::from_session(&session, &window_names);
         match serde_json::to_value(&view) {
             Ok(value) => Some(value),
             Err(e) => {
@@ -634,33 +630,6 @@ impl AppState {
             .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
             .await?;
         Ok(())
-    }
-}
-
-fn build_session_view(
-    id: SessionId,
-    name: String,
-    active_window: Option<WindowId>,
-    linked: &[WindowId],
-    window_names: &HashMap<WindowId, String>,
-) -> SessionView {
-    let windows = linked
-        .iter()
-        .enumerate()
-        .map(|(idx, wid)| {
-            let name = window_names.get(wid).cloned().unwrap_or_default();
-            SessionWindowEntry {
-                id: wid.clone(),
-                name,
-                index: idx as u32,
-            }
-        })
-        .collect();
-    SessionView {
-        id,
-        name,
-        active_window,
-        windows,
     }
 }
 

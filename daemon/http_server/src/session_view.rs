@@ -1,10 +1,11 @@
 //! Serialisable snapshot of a session and the windows it owns. Built
 //! from `ozmux_multiplexer::Session` plus a caller-supplied window-name
-//! lookup. JSON contract: `docs/superpowers/specs/2026-05-16-status-bar-design.md` §4.1.
+//! lookup; emitted as the JSON payload on the `/sessions/{sid}/events`
+//! WebSocket.
 
-use std::collections::HashMap;
 use ozmux_multiplexer::{Session, SessionId, WindowId};
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// One entry in `SessionView.windows`.
 #[derive(Serialize, Debug, PartialEq, Eq)]
