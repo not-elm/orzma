@@ -9,7 +9,7 @@ members = [
   "daemon/terminal",
   "daemon/multiplexer",
   "daemon/http_server",
-  "client/src",
+  "client",
 ]
 
 [workspace.package]
