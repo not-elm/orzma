@@ -98,6 +98,14 @@ doc-comment policy, import discipline) are governed by
 [`.claude/rules/rust.md`](.claude/rules/rust.md). Applies to all crates
 under `cli/` and `daemon/*`.
 
+## TypeScript Coding Rules
+
+TypeScript style and conventions (restricted comment taxonomy, JSDoc on
+exports, export-visibility minimization, justified suppressions) are
+governed by [`.claude/rules/typescript.md`](.claude/rules/typescript.md).
+Applies to `daemon/frontend`, `sdk/*`, `extensions/*`, `tools/*.ts`, and
+`biome-plugins/`.
+
 ## UI verification workflow
 
 Use this when you have changed anything under `daemon/frontend/src/**`, the showcase, theme tokens, pane layout, or daemon-side endpoints that the UI consumes. Skip it for purely backend-internal changes that the UI does not exercise.
