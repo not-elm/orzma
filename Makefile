@@ -11,7 +11,7 @@ help:
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
 	@echo "  dev-backend        - Run axum server on :3200 (debug build redirects / to :5173)"
 	@echo "  dev-daemon         - Run daemon_bootstrap with OZMUX_EXTENSION_ROOT=$(EXTENSIONS_DIR)"
-	@echo "  client-link-sidecar- Build daemon_bootstrap and symlink it into client/binaries (PROFILE=debug|release)"
+	@echo "  client-link-sidecar- Build daemon_bootstrap and copy it into client/binaries (PROFILE=debug|release)"
 	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
 	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
@@ -81,5 +81,5 @@ client-link-sidecar:
 	if [ -z "$$triple" ]; then echo "ERROR: could not determine host triple"; exit 1; fi; \
 	mkdir -p client/binaries; \
 	cargo build -p daemon_bootstrap $(if $(filter release,$(PROFILE)),--release,); \
-	ln -sf "$(CURDIR)/target/$(PROFILE)/daemon_bootstrap" "client/binaries/daemon_bootstrap-$$triple"; \
-	echo "linked client/binaries/daemon_bootstrap-$$triple -> target/$(PROFILE)/daemon_bootstrap"
+	cp -f "$(CURDIR)/target/$(PROFILE)/daemon_bootstrap" "client/binaries/daemon_bootstrap-$$triple"; \
+	echo "copied client/binaries/daemon_bootstrap-$$triple <- target/$(PROFILE)/daemon_bootstrap"
