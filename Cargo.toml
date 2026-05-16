@@ -45,3 +45,6 @@ rmp-serde = "1"
 unicode-width = "0.2"
 bytes = "1"
 tokio-util = "0.7"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+fs2 = "0.4"
