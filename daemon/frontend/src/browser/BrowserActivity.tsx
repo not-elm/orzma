@@ -93,62 +93,107 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
   // re-fire every render when `send` identity changes.
   const sendRef = useRef<((msg: BrowserClientMsg) => void) | null>(null);
 
+  // Worker session, keyed by the canvas DOM element it transferred control
+  // from. transferControlToOffscreen is one-shot per element, so the session
+  // must survive React StrictMode's setup→cleanup→setup double-invoke (same
+  // DOM node) and is only rebuilt when restartId bumps (fresh canvas node).
+  const sessionRef = useRef<{
+    canvas: HTMLCanvasElement;
+    worker: Worker;
+    generation: number;
+  } | null>(null);
+  const teardownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const popupCanvas = popupCanvasRef.current;
     if (!canvas || !popupCanvas) return;
-    let mainOffscreen: OffscreenCanvas;
-    let popupOffscreen: OffscreenCanvas;
-    try {
-      mainOffscreen = canvas.transferControlToOffscreen();
-      popupOffscreen = popupCanvas.transferControlToOffscreen();
-    } catch (e) {
-      console.warn('transferControlToOffscreen failed; skipping worker init', e);
-      return;
+
+    // A StrictMode re-setup (or a restartId change) runs synchronously after
+    // the previous cleanup — cancel its deferred teardown so the worker lives.
+    if (teardownTimerRef.current !== null) {
+      clearTimeout(teardownTimerRef.current);
+      teardownTimerRef.current = null;
     }
-    const w = new Worker(new URL('./worker/frame-worker.ts', import.meta.url), {
-      type: 'module',
-    });
-    const generation = restartId + 1;
-    w.onmessage = (ev: MessageEvent<{ type: string }>) => {
-      if (ev.data.type === 'unsupported') {
-        setUnsupported(true);
-      } else if (ev.data.type === 'paint-done') {
-        // NOTE: exposed for the Playwright e2e in browser-cef-poc.spec.ts
-        // (Task A16). Counts every successful render the worker reports.
-        const w = window as unknown as { __poc_paint_done_count?: number };
-        w.__poc_paint_done_count = (w.__poc_paint_done_count ?? 0) + 1;
-        // Append KPI entry when the paint is correlated to a wheel dispatch.
-        const paintMsg = ev.data as { type: string; correlate_to: number | null; t: number };
-        if (paintMsg.correlate_to != null) {
-          const kpiWindow = window as unknown as {
-            __poc_kpi?: Array<{ input_id: number; t_paint: number }>;
-          };
-          kpiWindow.__poc_kpi ??= [];
-          kpiWindow.__poc_kpi.push({ input_id: paintMsg.correlate_to, t_paint: paintMsg.t });
-        }
-      } else if (ev.data.type === 'popup_rect') {
-        const msg = ev.data as { type: 'popup_rect'; rect: PopupRect | null };
-        setPopupRect(msg.rect);
+
+    // A session bound to a different canvas element means restartId bumped and
+    // the old canvas DOM node was retired — tear that worker down for real.
+    let session = sessionRef.current;
+    if (session && session.canvas !== canvas) {
+      session.worker.postMessage({ type: 'dispose' });
+      session.worker.terminate();
+      session = null;
+      sessionRef.current = null;
+    }
+
+    if (!session) {
+      let mainOffscreen: OffscreenCanvas;
+      let popupOffscreen: OffscreenCanvas;
+      try {
+        mainOffscreen = canvas.transferControlToOffscreen();
+        popupOffscreen = popupCanvas.transferControlToOffscreen();
+      } catch (e) {
+        console.warn('transferControlToOffscreen failed; skipping worker init', e);
+        return;
       }
-    };
-    w.postMessage(
-      {
-        type: 'init',
-        generation,
-        mainCanvas: mainOffscreen,
-        popupCanvas: popupOffscreen,
-        width: POC_WIDTH,
-        height: POC_HEIGHT,
-      },
-      [mainOffscreen, popupOffscreen],
-    );
-    setHandle({ worker: w, generation });
+      const w = new Worker(new URL('./worker/frame-worker.ts', import.meta.url), {
+        type: 'module',
+      });
+      const generation = restartId + 1;
+      w.onmessage = (ev: MessageEvent<{ type: string }>) => {
+        if (ev.data.type === 'unsupported') {
+          setUnsupported(true);
+        } else if (ev.data.type === 'paint-done') {
+          // NOTE: exposed for the Playwright e2e in browser-cef-poc.spec.ts
+          // (Task A16). Counts every successful render the worker reports.
+          const win = window as unknown as { __poc_paint_done_count?: number };
+          win.__poc_paint_done_count = (win.__poc_paint_done_count ?? 0) + 1;
+          // Append KPI entry when the paint is correlated to a wheel dispatch.
+          const paintMsg = ev.data as { type: string; correlate_to: number | null; t: number };
+          if (paintMsg.correlate_to != null) {
+            const kpiWindow = window as unknown as {
+              __poc_kpi?: Array<{ input_id: number; t_paint: number }>;
+            };
+            kpiWindow.__poc_kpi ??= [];
+            kpiWindow.__poc_kpi.push({ input_id: paintMsg.correlate_to, t_paint: paintMsg.t });
+          }
+        } else if (ev.data.type === 'popup_rect') {
+          const msg = ev.data as { type: 'popup_rect'; rect: PopupRect | null };
+          setPopupRect(msg.rect);
+        }
+      };
+      w.postMessage(
+        {
+          type: 'init',
+          generation,
+          mainCanvas: mainOffscreen,
+          popupCanvas: popupOffscreen,
+          width: POC_WIDTH,
+          height: POC_HEIGHT,
+        },
+        [mainOffscreen, popupOffscreen],
+      );
+      session = { canvas, worker: w, generation };
+      sessionRef.current = session;
+    }
+
+    setHandle({ worker: session.worker, generation: session.generation });
+
     return () => {
-      w.postMessage({ type: 'dispose' });
-      w.terminate();
-      setHandle(null);
-      setPopupRect(null);
+      // Defer teardown by one macrotask. A StrictMode re-setup (or a restartId
+      // change) runs synchronously next and cancels this timer, keeping the
+      // worker alive. A real unmount has no follow-up setup, so it fires.
+      teardownTimerRef.current = setTimeout(() => {
+        const s = sessionRef.current;
+        if (s) {
+          s.worker.postMessage({ type: 'dispose' });
+          s.worker.terminate();
+          sessionRef.current = null;
+        }
+        teardownTimerRef.current = null;
+        setHandle(null);
+        setPopupRect(null);
+      }, 0);
     };
   }, [restartId]);
 
@@ -267,11 +312,13 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
               height={POC_HEIGHT}
               className="block max-h-full max-w-full"
             />
-            {/* Popup overlay canvas — always mounted for a stable ref so
-                transferControlToOffscreen is called once at init.
-                Hidden via `hidden` utility when no popup is active; positioned
-                via inline style (runtime-computed CEF rect) when visible. */}
+            {/* Popup overlay canvas — keyed on restartId so a MustRestart
+                produces a fresh DOM node; transferControlToOffscreen is
+                one-shot per element. Hidden via `hidden` utility when no popup
+                is active; positioned via inline style (runtime-computed CEF
+                rect) when visible. */}
             <canvas
+              key={restartId}
               ref={popupCanvasRef}
               width={POPUP_CANVAS_WIDTH}
               height={POPUP_CANVAS_HEIGHT}
