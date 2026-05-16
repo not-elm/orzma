@@ -10,6 +10,9 @@ publish.workspace = true
 [dependencies]
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_extension = { path = "../extension" }
+ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
+nix = { version = "0.29", features = ["mman", "fs"] }
+libc = "0.2"
 chromiumoxide = { version = "0.7.0", features = ["tokio-runtime"] }
 base64 = "0.22"
 decrypt-cookies = "0.11.1"
@@ -26,3 +29,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }
+ozmux_cef_host = { path = "../cef_host" }

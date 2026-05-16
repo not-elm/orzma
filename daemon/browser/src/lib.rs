@@ -14,6 +14,7 @@ pub mod error;
 pub mod input;
 pub mod page;
 pub mod service;
+pub mod shm_reader;
 pub mod snapshot;
 pub mod state;
 pub mod wire;
