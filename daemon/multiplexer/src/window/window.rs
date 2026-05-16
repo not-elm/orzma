@@ -494,7 +494,10 @@ mod tests {
         let first_point = *win.pane_active_points.get(&other).unwrap();
         assert!(first_point >= 1);
 
-        win.set_active_pane(&original).unwrap();
+        assert!(matches!(
+            win.set_active_pane(&original).unwrap(),
+            SetActiveOutcome::Changed,
+        ));
         let original_point = *win.pane_active_points.get(&original).unwrap();
         assert!(
             original_point > first_point,
@@ -507,7 +510,10 @@ mod tests {
         let mut win = sample_window();
         let active = win.active_pane.clone();
         let before = win.next_active_point;
-        win.set_active_pane(&active).unwrap();
+        assert!(matches!(
+            win.set_active_pane(&active).unwrap(),
+            SetActiveOutcome::Unchanged,
+        ));
         assert_eq!(win.next_active_point, before);
     }
 
