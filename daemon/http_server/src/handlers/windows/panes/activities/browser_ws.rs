@@ -67,6 +67,7 @@ async fn run(socket: WebSocket, state: AppState, aid: ActivityId) {
     {
         return;
     }
+    let mut last_nav = Some(initial.nav.clone());
 
     loop {
         tokio::select! {
@@ -85,14 +86,17 @@ async fn run(socket: WebSocket, state: AppState, aid: ActivityId) {
                         break;
                     }
                 }
-                let msg = BrowserServerMsg::Nav {
-                    url: s.nav.url.clone(),
-                    title: s.nav.title.clone(),
-                };
-                if let Ok(bin) = rmp_serde::to_vec_named(&msg)
-                    && tx.send(Message::Binary(bin.into())).await.is_err()
-                {
-                    break;
+                if Some(&s.nav) != last_nav.as_ref() {
+                    let msg = BrowserServerMsg::Nav {
+                        url: s.nav.url.clone(),
+                        title: s.nav.title.clone(),
+                    };
+                    if let Ok(bin) = rmp_serde::to_vec_named(&msg)
+                        && tx.send(Message::Binary(bin.into())).await.is_err()
+                    {
+                        break;
+                    }
+                    last_nav = Some(s.nav.clone());
                 }
             }
             msg = rx.next() => {
