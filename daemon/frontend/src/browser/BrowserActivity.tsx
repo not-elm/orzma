@@ -306,7 +306,7 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
           />
           <div className="relative flex-1 flex items-center justify-center">
             <canvas
-              key={restartId}
+              key={`main-${restartId}`}
               ref={canvasRef}
               width={POC_WIDTH}
               height={POC_HEIGHT}
@@ -318,7 +318,7 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
                 is active; positioned via inline style (runtime-computed CEF
                 rect) when visible. */}
             <canvas
-              key={restartId}
+              key={`popup-${restartId}`}
               ref={popupCanvasRef}
               width={POPUP_CANVAS_WIDTH}
               height={POPUP_CANVAS_HEIGHT}
