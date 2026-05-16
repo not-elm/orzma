@@ -30,14 +30,24 @@ export interface WheelAttachOpts {
   element: HTMLElement;
   /** Returns the current device pixel ratio. */
   dpr: () => number;
+  /** Frame worker to notify of each dispatched input id for KPI correlation. */
+  worker?: Worker | null;
 }
 
 /** Attaches a wheel listener and returns a detach closure. */
-export function attachWheel({ send, element, dpr }: WheelAttachOpts): () => void {
+export function attachWheel({ send, element, dpr, worker }: WheelAttachOpts): () => void {
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     const id = nextInputId++;
+    const t = performance.now();
     performance.mark('input-dispatch', { detail: id });
+    (
+      window as unknown as { __poc_kpi_dispatches?: Array<{ id: number; t: number }> }
+    ).__poc_kpi_dispatches ??= [];
+    (
+      window as unknown as { __poc_kpi_dispatches: Array<{ id: number; t: number }> }
+    ).__poc_kpi_dispatches.push({ id, t });
+    worker?.postMessage({ type: 'last_input_id', id });
     const r = element.getBoundingClientRect();
     const scale = dpr();
     send({

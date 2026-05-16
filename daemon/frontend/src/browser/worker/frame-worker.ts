@@ -33,7 +33,12 @@ type DisposeMsg = {
   type: 'dispose';
 };
 
-type IncomingMsg = InitMsg | WsBinaryMsg | DisposeMsg;
+type LastInputIdMsg = {
+  type: 'last_input_id';
+  id: number;
+};
+
+type IncomingMsg = InitMsg | WsBinaryMsg | DisposeMsg | LastInputIdMsg;
 
 type WireRect = { x: number; y: number; w: number; h: number };
 
@@ -58,6 +63,7 @@ const POPUP_CANVAS_HEIGHT = 600;
 let currentGeneration = -1;
 let mainRenderer: FrameRenderer | null = null;
 let popupRenderer: FrameRenderer | null = null;
+let lastInputId: number | null = null;
 
 self.onmessage = async (e: MessageEvent<IncomingMsg>) => {
   const msg = e.data;
@@ -67,6 +73,11 @@ self.onmessage = async (e: MessageEvent<IncomingMsg>) => {
     await popupRenderer?.destroy();
     mainRenderer = null;
     popupRenderer = null;
+    return;
+  }
+
+  if (msg.type === 'last_input_id') {
+    lastInputId = msg.id;
     return;
   }
 
@@ -118,10 +129,14 @@ self.onmessage = async (e: MessageEvent<IncomingMsg>) => {
           // NOTE: paint-done is consumed by the KPI smoke harness (Task 30) to
           // measure wheel→paint latency. Cheap on the hot path — one postMessage
           // per frame, no allocations beyond the small literal object.
+          // correlate_to / t allow the main thread to join paint timestamps
+          // with input dispatch timestamps for p95 latency computation (Task C2).
           self.postMessage({
             type: 'paint-done',
             generation: currentGeneration,
             frame_seq: wire.frame_seq,
+            correlate_to: lastInputId,
+            t: performance.now(),
           });
         }
       }

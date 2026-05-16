@@ -104,6 +104,15 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
         // (Task A16). Counts every successful render the worker reports.
         const w = window as unknown as { __poc_paint_done_count?: number };
         w.__poc_paint_done_count = (w.__poc_paint_done_count ?? 0) + 1;
+        // Append KPI entry when the paint is correlated to a wheel dispatch.
+        const paintMsg = ev.data as { type: string; correlate_to: number | null; t: number };
+        if (paintMsg.correlate_to != null) {
+          const kpiWindow = window as unknown as {
+            __poc_kpi?: Array<{ input_id: number; t_paint: number }>;
+          };
+          kpiWindow.__poc_kpi ??= [];
+          kpiWindow.__poc_kpi.push({ input_id: paintMsg.correlate_to, t_paint: paintMsg.t });
+        }
       } else if (ev.data.type === 'popup_rect') {
         const msg = ev.data as { type: 'popup_rect'; rect: PopupRect | null };
         setPopupRect(msg.rect);
@@ -191,6 +200,7 @@ export function BrowserActivityCef({ windowId, paneId, activityId }: Props) {
       send: inputSink,
       element: overlay,
       dpr: () => window.devicePixelRatio,
+      worker: handle.worker,
     });
     const detachKeyboard = attachKeyboard({
       send: inputSink,
