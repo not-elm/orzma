@@ -14,9 +14,6 @@ export interface LastFrame {
 export interface NavState {
   url: string;
   title: string;
-  loading: boolean;
-  canGoBack: boolean;
-  canGoForward: boolean;
 }
 
 /** Snapshot of the live browser activity exposed by `useBrowserSocket`. */
@@ -29,9 +26,6 @@ export interface BrowserSocketState {
 const INITIAL_NAV: NavState = {
   url: '',
   title: '',
-  loading: false,
-  canGoBack: false,
-  canGoForward: false,
 };
 
 /**
@@ -54,20 +48,20 @@ export function useBrowserSocket(
     wsRef.current = ws;
     ws.onmessage = (e: MessageEvent<ArrayBuffer>) => {
       const msg: BrowserServerMsg = decode(e.data);
-      if (msg.kind === 'screencast') {
-        setLastFrame({ jpeg: msg.jpeg, width: msg.width, height: msg.height });
-      } else if (msg.kind === 'nav') {
-        setNav({
-          url: msg.url,
-          title: msg.title,
-          loading: msg.loading,
-          canGoBack: msg.can_go_back,
-          canGoForward: msg.can_go_forward,
-        });
-      } else if (msg.kind === 'clipboard_write') {
-        navigator.clipboard.writeText(msg.text).catch(() => {});
+      switch (msg.kind) {
+        case 'screencast':
+          setLastFrame({ jpeg: msg.jpeg, width: msg.width, height: msg.height });
+          break;
+        case 'nav':
+          setNav({ url: msg.url, title: msg.title });
+          break;
+        case 'clipboard_write':
+          navigator.clipboard.writeText(msg.text).catch(() => {});
+          break;
+        case 'page_error':
+          // NOTE: future "sad tab" UI; ignore for now.
+          break;
       }
-      // page_error is shaped for future "sad tab" UI; ignore for now.
     };
     return () => {
       ws.close();

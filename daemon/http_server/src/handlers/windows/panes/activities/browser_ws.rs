@@ -61,9 +61,6 @@ async fn run(socket: WebSocket, state: AppState, aid: ActivityId) {
     let nav_msg = BrowserServerMsg::Nav {
         url: initial.nav.url.clone(),
         title: initial.nav.title.clone(),
-        loading: initial.nav.loading,
-        can_go_back: initial.nav.can_go_back,
-        can_go_forward: initial.nav.can_go_forward,
     };
     if let Ok(bin) = rmp_serde::to_vec_named(&nav_msg)
         && tx.send(Message::Binary(bin.into())).await.is_err()
@@ -91,9 +88,6 @@ async fn run(socket: WebSocket, state: AppState, aid: ActivityId) {
                 let msg = BrowserServerMsg::Nav {
                     url: s.nav.url.clone(),
                     title: s.nav.title.clone(),
-                    loading: s.nav.loading,
-                    can_go_back: s.nav.can_go_back,
-                    can_go_forward: s.nav.can_go_forward,
                 };
                 if let Ok(bin) = rmp_serde::to_vec_named(&msg)
                     && tx.send(Message::Binary(bin.into())).await.is_err()
@@ -110,7 +104,12 @@ async fn run(socket: WebSocket, state: AppState, aid: ActivityId) {
                         state.browser.resize(&aid, width, height).await;
                     }
                     BrowserClientMsg::CopyRequest => {
-                        // TODO: round-trip GetSelection → ClipboardWrite; deferred to a follow-up.
+                        if let Some(text) = state.browser.request_selection(&aid).await {
+                            let msg = BrowserServerMsg::ClipboardWrite { text };
+                            if let Ok(bin) = rmp_serde::to_vec_named(&msg) {
+                                let _ = tx.send(Message::Binary(bin.into())).await;
+                            }
+                        }
                     }
                     other => state.browser.send_input(&aid, other).await,
                 }

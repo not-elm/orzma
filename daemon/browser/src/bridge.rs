@@ -159,11 +159,5 @@ fn frame_dimensions(frame: &cdp_page::EventScreencastFrame) -> (u32, u32) {
 async fn refresh_nav(page: &chromiumoxide::Page) -> Option<NavState> {
     let url = page.url().await.ok().flatten().unwrap_or_default();
     let title = page.get_title().await.ok().flatten().unwrap_or_default();
-    Some(NavState {
-        url,
-        title,
-        loading: false,
-        can_go_back: false,
-        can_go_forward: false,
-    })
+    Some(NavState { url, title })
 }

@@ -29,14 +29,7 @@ export type NavCommand =
  */
 export type BrowserServerMsg =
   | { kind: 'screencast'; jpeg: Uint8Array; width: number; height: number }
-  | {
-      kind: 'nav';
-      url: string;
-      title: string;
-      loading: boolean;
-      can_go_back: boolean;
-      can_go_forward: boolean;
-    }
+  | { kind: 'nav'; url: string; title: string }
   | { kind: 'clipboard_write'; text: string }
   | { kind: 'page_error'; message: string };
 
