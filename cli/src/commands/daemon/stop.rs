@@ -9,14 +9,14 @@ const SIGKILL_WAIT: Duration = Duration::from_secs(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Args)]
-pub struct StopArgs {
+pub(crate) struct StopArgs {
     /// If the daemon does not exit within 10s of SIGTERM, escalate to
     /// SIGKILL and remove the PID file.
     #[arg(long)]
     force: bool,
 }
 
-pub async fn run(args: StopArgs) -> anyhow::Result<()> {
+pub(crate) async fn run(args: StopArgs) -> anyhow::Result<()> {
     let Some(pid) = daemon_bootstrap::pidfile::read()? else {
         eprintln!("ozmux daemon not running");
         return Ok(());

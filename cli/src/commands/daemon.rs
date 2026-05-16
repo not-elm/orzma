@@ -3,12 +3,12 @@
 
 use clap::{Args, Subcommand};
 
-pub mod start;
-pub mod status;
-pub mod stop;
+pub(crate) mod start;
+pub(crate) mod status;
+pub(crate) mod stop;
 
 #[derive(Args)]
-pub struct DaemonArgs {
+pub(crate) struct DaemonArgs {
     #[command(subcommand)]
     command: DaemonCommand,
 }
@@ -24,7 +24,7 @@ enum DaemonCommand {
     Status,
 }
 
-pub async fn run(args: DaemonArgs) -> anyhow::Result<()> {
+pub(crate) async fn run(args: DaemonArgs) -> anyhow::Result<()> {
     match args.command {
         DaemonCommand::Start(a) => start::run(a).await,
         DaemonCommand::Stop(a) => stop::run(a).await,

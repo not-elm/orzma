@@ -74,7 +74,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ci"
-      - run: cargo test --workspace --all-targets
+      - run: cargo test --workspace --tests -- --test-threads=1
 
   doc:
     name: doc

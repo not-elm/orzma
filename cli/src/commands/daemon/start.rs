@@ -20,7 +20,7 @@ const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Arguments for the `daemon start` subcommand.
 #[derive(Args)]
-pub struct StartArgs {
+pub(crate) struct StartArgs {
     /// Run the daemon attached to this terminal instead of detaching.
     #[arg(long)]
     foreground: bool,
@@ -29,7 +29,7 @@ pub struct StartArgs {
 /// Starts the ozmux daemon. If `--foreground` is set, runs in-process;
 /// otherwise spawns a detached child, waits for `/health` to respond, and
 /// prints the spawned PID to stdout.
-pub async fn run(args: StartArgs) -> anyhow::Result<()> {
+pub(crate) async fn run(args: StartArgs) -> anyhow::Result<()> {
     if args.foreground {
         return daemon_bootstrap::run().await;
     }

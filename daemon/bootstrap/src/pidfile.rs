@@ -34,11 +34,12 @@ pub(crate) fn remove_at(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Returns `Ok(true)` if `kill(pid, 0)` succeeds or returns `EPERM`
-/// (process exists but we can't signal it). Returns `Ok(false)` on
-/// `ESRCH` (no such process) or when `pid` is not a valid `pid_t`. Any
-/// other errno is propagated.
-fn is_process_alive(pid: u32) -> io::Result<bool> {
+/// Returns `Ok(true)` if `kill(pid, 0)` confirms the process exists
+/// (including EPERM, which means "exists but we can't signal it").
+/// `Ok(false)` for ESRCH or for PIDs outside the valid pid_t range
+/// (0 or > `i32::MAX`, which would otherwise turn `kill` into a
+/// process-group or broadcast signal).
+pub fn is_process_alive(pid: u32) -> io::Result<bool> {
     // NOTE: PIDs must fit in a positive pid_t (i32). 0 and any value
     // above i32::MAX are not valid process identifiers — kill() with
     // those values targets process groups or broadcasts instead, which
@@ -83,12 +84,12 @@ fn default_parent() -> io::Result<PathBuf> {
 
 /// Returns `$TMPDIR/ozmux/daemon.pid`, creating the parent directory if
 /// needed.
-pub fn path() -> io::Result<PathBuf> {
+pub(crate) fn path() -> io::Result<PathBuf> {
     Ok(path_under(&default_parent()?))
 }
 
 /// Writes the current daemon's PID to `$TMPDIR/ozmux/daemon.pid`.
-pub fn write(pid: u32) -> io::Result<()> {
+pub(crate) fn write(pid: u32) -> io::Result<()> {
     write_to(&path()?, pid)
 }
 
@@ -105,19 +106,19 @@ pub fn remove() -> io::Result<()> {
 
 /// Removes the PID file if it references a process that no longer
 /// exists. Called by `run()` at startup.
-pub fn cleanup_if_stale() -> io::Result<()> {
+pub(crate) fn cleanup_if_stale() -> io::Result<()> {
     cleanup_if_stale_under(&default_parent()?)
 }
 
 /// RAII guard that removes the PID file on drop. Created by `run()` to
 /// ensure cleanup on any unwind path (graceful shutdown, error
 /// propagation, panic).
-pub struct PidFileGuard;
+pub(crate) struct PidFileGuard;
 
 impl PidFileGuard {
     /// Writes `pid` to `$TMPDIR/ozmux/daemon.pid` and returns a guard that
     /// removes the file on drop. Any I/O error from the write is propagated.
-    pub fn create(pid: u32) -> io::Result<Self> {
+    pub(crate) fn create(pid: u32) -> io::Result<Self> {
         write(pid)?;
         Ok(Self)
     }
