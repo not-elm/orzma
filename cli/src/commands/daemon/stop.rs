@@ -81,8 +81,7 @@ fn send_signal(pid: u32, sig: libc::c_int) -> io::Result<()> {
     }
     // SAFETY: libc::kill is documented as MT-safe; the guard above
     // ensures pid is in (0, i32::MAX], so the cast to pid_t (i32)
-    // preserves the value. Signal 0 (used by wait_for_exit) has no
-    // side effects beyond the errno return.
+    // preserves the value.
     let rc = unsafe { libc::kill(pid as libc::pid_t, sig) };
     if rc == 0 {
         Ok(())
@@ -94,10 +93,8 @@ fn send_signal(pid: u32, sig: libc::c_int) -> io::Result<()> {
 async fn wait_for_exit(pid: u32, total: Duration) -> bool {
     let deadline = Instant::now() + total;
     loop {
-        match send_signal(pid, 0) {
-            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return true,
-            Err(e) if e.kind() == io::ErrorKind::InvalidInput => return true,
-            _ => {}
+        if !daemon_bootstrap::pidfile::is_process_alive(pid).unwrap_or(false) {
+            return true;
         }
         if Instant::now() >= deadline {
             return false;

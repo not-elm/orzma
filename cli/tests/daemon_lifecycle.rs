@@ -11,7 +11,6 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::{Instant, sleep};
 
-const HEALTH_URL: &str = "http://127.0.0.1:3200/health";
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(200);
@@ -59,7 +58,7 @@ async fn wait_for_health() {
         .unwrap();
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
-        if let Ok(r) = client.get(HEALTH_URL).send().await
+        if let Ok(r) = client.get(daemon_bootstrap::HEALTH_URL).send().await
             && r.status().is_success()
         {
             return;

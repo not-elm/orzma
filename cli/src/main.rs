@@ -1,5 +1,5 @@
-//! ozmux CLI entry point. Currently exposes only the `daemon` subcommand
-//! group; further verbs from Issue #31 will be added in follow-up PRs.
+//! ozmux CLI entry point. Exposes the `daemon` subcommand group; new
+//! subcommands are added under `commands/`.
 
 use clap::{Parser, Subcommand};
 

@@ -2,9 +2,7 @@
 
 use std::time::Duration;
 
-const HEALTH_URL: &str = "http://127.0.0.1:3200/health";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
-const LISTEN_ADDR: &str = "127.0.0.1:3200";
 
 /// Prints daemon status to stdout and exits with code 0 (healthy), 3
 /// (not running / stale PID), or 4 (running but unhealthy).
@@ -27,7 +25,7 @@ async fn run_status() -> anyhow::Result<i32> {
     let healthy = check_health().await;
 
     println!("pid:       {pid}");
-    println!("listening: {LISTEN_ADDR}");
+    println!("listening: {}", daemon_bootstrap::HTTP_ADDR);
     println!("health:    {}", if healthy { "ok" } else { "unhealthy" });
 
     Ok(if healthy { 0 } else { 4 })
@@ -37,5 +35,5 @@ async fn check_health() -> bool {
     let Ok(client) = reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build() else {
         return false;
     };
-    matches!(client.get(HEALTH_URL).send().await, Ok(r) if r.status().is_success())
+    matches!(client.get(daemon_bootstrap::HEALTH_URL).send().await, Ok(r) if r.status().is_success())
 }

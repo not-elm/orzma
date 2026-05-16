@@ -76,16 +76,10 @@ pub(crate) fn cleanup_if_stale_under(parent: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn default_parent() -> io::Result<PathBuf> {
-    let dir = std::env::temp_dir().join("ozmux");
-    fs::create_dir_all(&dir)?;
-    Ok(dir)
-}
-
 /// Returns `$TMPDIR/ozmux/daemon.pid`, creating the parent directory if
 /// needed.
 pub(crate) fn path() -> io::Result<PathBuf> {
-    Ok(path_under(&default_parent()?))
+    Ok(path_under(&crate::runtime_dir()?))
 }
 
 /// Writes the current daemon's PID to `$TMPDIR/ozmux/daemon.pid`.
@@ -107,7 +101,7 @@ pub fn remove() -> io::Result<()> {
 /// Removes the PID file if it references a process that no longer
 /// exists. Called by `run()` at startup.
 pub(crate) fn cleanup_if_stale() -> io::Result<()> {
-    cleanup_if_stale_under(&default_parent()?)
+    cleanup_if_stale_under(&crate::runtime_dir()?)
 }
 
 /// RAII guard that removes the PID file on drop. Created by `run()` to

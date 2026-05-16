@@ -3,7 +3,26 @@
 //! (currently the `ozmux` CLI's `daemon start --foreground` command) drive
 //! the tokio runtime themselves and call `run().await`.
 
+/// PID file management for the daemon process: write/read/remove plus
+/// `is_process_alive` and a `PidFileGuard` RAII helper.
 pub mod pidfile;
+
+/// Address the daemon's HTTP server binds to.
+pub const HTTP_ADDR: &str = "127.0.0.1:3200";
+
+/// Base URL of the daemon's HTTP server.
+pub const HTTP_BASE_URL: &str = "http://127.0.0.1:3200";
+
+/// `/health` endpoint URL used by the CLI and Tauri client to confirm readiness.
+pub const HEALTH_URL: &str = "http://127.0.0.1:3200/health";
+
+/// Returns the ozmux runtime directory (`$TMPDIR/ozmux`), creating it if
+/// it does not already exist.
+pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join("ozmux");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
 
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
@@ -49,8 +68,7 @@ pub async fn run() -> anyhow::Result<()> {
         }
     };
 
-    let parent = std::env::temp_dir().join("ozmux");
-    std::fs::create_dir_all(&parent)?;
+    let parent = runtime_dir()?;
     RuntimeRoot::gc_stale(&parent)?;
     let longest = longest_extension_name()?;
     let runtime = Arc::new(RuntimeRoot::resolve_in(

@@ -10,13 +10,13 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-const DAEMON_ADDR: &str = "127.0.0.1:3200";
-const HEALTH_URL: &str = "http://127.0.0.1:3200/health";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(20);
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const LOG_TAIL_BYTES: u64 = 8192;
+const LOG_TAIL_LINES: usize = 20;
 
 /// Arguments for the `daemon start` subcommand.
 #[derive(Args)]
@@ -38,7 +38,7 @@ pub(crate) async fn run(args: StartArgs) -> anyhow::Result<()> {
 
 async fn start_detached() -> anyhow::Result<()> {
     if is_running() {
-        eprintln!("ozmux daemon already running on {DAEMON_ADDR}");
+        eprintln!("ozmux daemon already running on {}", daemon_bootstrap::HTTP_ADDR);
         return Ok(());
     }
 
@@ -47,7 +47,7 @@ async fn start_detached() -> anyhow::Result<()> {
         .context("acquire daemon launcher lock")?;
 
     if is_running() {
-        eprintln!("ozmux daemon already running on {DAEMON_ADDR}");
+        eprintln!("ozmux daemon already running on {}", daemon_bootstrap::HTTP_ADDR);
         drop(lock);
         return Ok(());
     }
@@ -67,17 +67,15 @@ async fn start_detached() -> anyhow::Result<()> {
 }
 
 fn is_running() -> bool {
-    let Ok(addr) = DAEMON_ADDR.parse::<SocketAddr>() else {
+    let Ok(addr) = daemon_bootstrap::HTTP_ADDR.parse::<SocketAddr>() else {
         return false;
     };
     TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).is_ok()
 }
 
 fn runtime_dir() -> anyhow::Result<PathBuf> {
-    let dir = std::env::temp_dir().join("ozmux");
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("create runtime dir at {}", dir.display()))?;
-    Ok(dir)
+    daemon_bootstrap::runtime_dir()
+        .with_context(|| "create runtime dir at $TMPDIR/ozmux".to_string())
 }
 
 async fn acquire_lock() -> anyhow::Result<File> {
@@ -154,7 +152,7 @@ async fn wait_until_ready() -> anyhow::Result<()> {
 
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
-        let last_err = match client.get(HEALTH_URL).send().await {
+        let last_err = match client.get(daemon_bootstrap::HEALTH_URL).send().await {
             Ok(resp) if resp.status().is_success() => return Ok(()),
             Ok(resp) => anyhow::anyhow!("HTTP {}", resp.status()),
             Err(e) => anyhow::Error::new(e),
@@ -172,12 +170,20 @@ async fn wait_until_ready() -> anyhow::Result<()> {
 fn print_log_tail() {
     let Ok(parent) = runtime_dir() else { return };
     let path = parent.join("daemon.log");
-    let Ok(contents) = std::fs::read_to_string(&path) else {
+    let Ok(mut f) = std::fs::File::open(&path) else { return };
+    let Ok(meta) = f.metadata() else { return };
+    let seek_to = meta.len().saturating_sub(LOG_TAIL_BYTES);
+    if std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(seek_to)).is_err() {
         return;
-    };
-    eprintln!("--- last 20 lines of {} ---", path.display());
-    let lines: Vec<&str> = contents.lines().collect();
-    let start = lines.len().saturating_sub(20);
+    }
+    let mut buf = Vec::with_capacity(LOG_TAIL_BYTES as usize);
+    if std::io::Read::read_to_end(&mut f, &mut buf).is_err() {
+        return;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    eprintln!("--- last {LOG_TAIL_LINES} lines of {} ---", path.display());
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(LOG_TAIL_LINES);
     for line in &lines[start..] {
         eprintln!("{line}");
     }
