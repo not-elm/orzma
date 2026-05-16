@@ -9,7 +9,7 @@ pub mod pane;
 mod window;
 
 pub use cells::{
-    Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, RootCell, Side, SplitCell,
+    Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
     SplitOrientation,
 };
 pub use pane::activity::{Activity, ActivityId, ActivityKind};

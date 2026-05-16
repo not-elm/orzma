@@ -6,6 +6,19 @@ use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Axis-aligned rectangle in normalized window coordinates (`x, y, w, h` ∈ [0, 1]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    /// Left edge.
+    pub x: f32,
+    /// Top edge.
+    pub y: f32,
+    /// Width.
+    pub w: f32,
+    /// Height.
+    pub h: f32,
+}
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutCellState(HashMap<CellId, Cell>);
 
@@ -204,6 +217,111 @@ impl LayoutCellState {
             Cell::Pane(p) => out.push(p.pane.clone()),
         }
         Ok(())
+    }
+
+    /// Normalize `lhs_weight` / `rhs_weight` into a 0..1 ratio. Returns `0.5`
+    /// when both weights are zero so callers do not need to special-case it.
+    pub fn split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
+        let total = lhs_weight + rhs_weight;
+        if total == 0.0 {
+            0.5
+        } else {
+            lhs_weight / total
+        }
+    }
+
+    /// Compute each pane's normalized rectangle. Returns leaves in DFS
+    /// left-to-right order, matching `pane_ids_in_subtree`.
+    ///
+    /// # Invariants
+    ///
+    /// - Siblings under one `Cell::Split` are produced contiguously and their
+    ///   bounds sum to the parent rect because `rhs_size = parent_size - lhs_size`.
+    pub fn pane_bounds(&self, root: &CellId) -> MultiplexerResult<Vec<(PaneId, Rect)>> {
+        let mut out = Vec::new();
+        self.walk_bounds(
+            root,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            &mut out,
+        )?;
+        Ok(out)
+    }
+
+    fn walk_bounds(
+        &self,
+        id: &CellId,
+        b: Rect,
+        out: &mut Vec<(PaneId, Rect)>,
+    ) -> MultiplexerResult<()> {
+        match self.cell(id)? {
+            Cell::Pane(p) => {
+                out.push((p.pane.clone(), b));
+                Ok(())
+            }
+            Cell::Root(r) => {
+                let child = r.child.clone();
+                self.walk_bounds(&child, b, out)
+            }
+            Cell::Split(s) => {
+                let orientation = s.orientation;
+                let ratio = Self::split_ratio(s.lhs_weight, s.rhs_weight);
+                let lhs_cell = s.lhs_cell.clone();
+                let rhs_cell = s.rhs_cell.clone();
+                match orientation {
+                    SplitOrientation::Horizontal => {
+                        let lhs_w = b.w * ratio;
+                        self.walk_bounds(
+                            &lhs_cell,
+                            Rect {
+                                x: b.x,
+                                y: b.y,
+                                w: lhs_w,
+                                h: b.h,
+                            },
+                            out,
+                        )?;
+                        self.walk_bounds(
+                            &rhs_cell,
+                            Rect {
+                                x: b.x + lhs_w,
+                                y: b.y,
+                                w: b.w - lhs_w,
+                                h: b.h,
+                            },
+                            out,
+                        )
+                    }
+                    SplitOrientation::Vertical => {
+                        let lhs_h = b.h * ratio;
+                        self.walk_bounds(
+                            &lhs_cell,
+                            Rect {
+                                x: b.x,
+                                y: b.y,
+                                w: b.w,
+                                h: lhs_h,
+                            },
+                            out,
+                        )?;
+                        self.walk_bounds(
+                            &rhs_cell,
+                            Rect {
+                                x: b.x,
+                                y: b.y + lhs_h,
+                                w: b.w,
+                                h: b.h - lhs_h,
+                            },
+                            out,
+                        )
+                    }
+                }
+            }
+        }
     }
 
     /// Drop every cell in `start`'s subtree (including `start` itself).
@@ -627,6 +745,131 @@ mod tests {
         expected.sort();
         assert_eq!(ids, expected);
         let _ = outer;
+    }
+
+    #[test]
+    fn pane_bounds_single_pane_fills_unit_rect() {
+        let mut state = LayoutCellState::default();
+        let p = pid();
+        let (root_id, _) = state.new_window_layout(p.clone());
+
+        let bounds = state.pane_bounds(&root_id).unwrap();
+        assert_eq!(bounds.len(), 1);
+        assert_eq!(bounds[0].0, p);
+        assert_eq!(
+            bounds[0].1,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0
+            }
+        );
+    }
+
+    #[test]
+    fn pane_bounds_horizontal_split_returns_left_then_right_halves() {
+        let mut state = LayoutCellState::default();
+        let (root_id, lhs) = state.new_window_layout(pid());
+        let rhs = state.new_pane(pid(), None);
+        state
+            .split_cell(
+                lhs.clone(),
+                rhs.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap();
+
+        let bounds = state.pane_bounds(&root_id).unwrap();
+        assert_eq!(bounds.len(), 2);
+        let lhs_pane = match state.cell(&lhs).unwrap() {
+            Cell::Pane(p) => p.pane.clone(),
+            _ => unreachable!(),
+        };
+        let rhs_pane = match state.cell(&rhs).unwrap() {
+            Cell::Pane(p) => p.pane.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            bounds[0],
+            (
+                lhs_pane,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 0.5,
+                    h: 1.0
+                }
+            )
+        );
+        assert_eq!(
+            bounds[1],
+            (
+                rhs_pane,
+                Rect {
+                    x: 0.5,
+                    y: 0.0,
+                    w: 0.5,
+                    h: 1.0
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn pane_bounds_vertical_split_stacks_top_then_bottom() {
+        let mut state = LayoutCellState::default();
+        let (root_id, top) = state.new_window_layout(pid());
+        let bottom = state.new_pane(pid(), None);
+        state
+            .split_cell(
+                top.clone(),
+                bottom.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
+            .unwrap();
+
+        let bounds = state.pane_bounds(&root_id).unwrap();
+        let top_pane = match state.cell(&top).unwrap() {
+            Cell::Pane(p) => p.pane.clone(),
+            _ => unreachable!(),
+        };
+        let bottom_pane = match state.cell(&bottom).unwrap() {
+            Cell::Pane(p) => p.pane.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            bounds[0],
+            (
+                top_pane,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 0.5
+                }
+            )
+        );
+        assert_eq!(
+            bounds[1],
+            (
+                bottom_pane,
+                Rect {
+                    x: 0.0,
+                    y: 0.5,
+                    w: 1.0,
+                    h: 0.5
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn split_ratio_normalizes_zero_total_to_half() {
+        assert_eq!(LayoutCellState::split_ratio(0.0, 0.0), 0.5);
+        assert_eq!(LayoutCellState::split_ratio(1.0, 3.0), 0.25);
     }
 
     #[test]

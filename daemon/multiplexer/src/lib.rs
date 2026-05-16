@@ -13,7 +13,7 @@ pub use error::{MultiplexerError, MultiplexerResult};
 pub use session::{Session, SessionId, SessionState};
 pub use window::{
     Activity, ActivityId, ActivityKind, Cell, CellId, CloseOutcome, CycleDirection,
-    LayoutCellState, Pane, PaneCell, PaneId, PaneState, RootCell, SetActiveOutcome, Side,
+    LayoutCellState, Pane, PaneCell, PaneId, PaneState, Rect, RootCell, SetActiveOutcome, Side,
     SplitCell, SplitOrientation, Window, WindowId, WindowState,
 };
 

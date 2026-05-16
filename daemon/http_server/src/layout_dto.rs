@@ -40,7 +40,7 @@ fn build_node(cell_id: &CellId, cells: &LayoutCellState) -> MultiplexerResult<Wi
             })
         }
         Cell::Split(s) => {
-            let split_ratio = compute_split_ratio(s.lhs_weight, s.rhs_weight);
+            let split_ratio = LayoutCellState::split_ratio(s.lhs_weight, s.rhs_weight);
             let lhs = build_node(&s.lhs_cell, cells)?;
             let rhs = build_node(&s.rhs_cell, cells)?;
             Ok(WindowLayoutNode::Split {
@@ -55,15 +55,6 @@ fn build_node(cell_id: &CellId, cells: &LayoutCellState) -> MultiplexerResult<Wi
             cell_id: cell_id.clone(),
             pane_id: p.pane.clone(),
         }),
-    }
-}
-
-fn compute_split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
-    let total = lhs_weight + rhs_weight;
-    if total == 0.0 {
-        0.5
-    } else {
-        lhs_weight / total
     }
 }
 
@@ -156,12 +147,12 @@ mod tests {
 
     #[test]
     fn compute_split_ratio_handles_zero_sum_with_half() {
-        assert_eq!(compute_split_ratio(0.0, 0.0), 0.5);
+        assert_eq!(LayoutCellState::split_ratio(0.0, 0.0), 0.5);
     }
 
     #[test]
     fn compute_split_ratio_normalizes_unbalanced_weights() {
-        let r = compute_split_ratio(3.0, 1.0);
+        let r = LayoutCellState::split_ratio(3.0, 1.0);
         assert!((r - 0.75).abs() < f32::EPSILON);
     }
 }
