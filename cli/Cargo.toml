@@ -12,5 +12,10 @@ name = "ozmux"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time", "process"] }
 anyhow = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+fs4 = { workspace = true }
+libc = { workspace = true }
+daemon_bootstrap = { path = "../daemon/bootstrap" }
