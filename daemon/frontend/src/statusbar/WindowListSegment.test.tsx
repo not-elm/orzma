@@ -30,7 +30,8 @@ describe('WindowListSegment', () => {
 
   it('calls scrollIntoView on the active chip when activeWindowId changes', () => {
     const scrollSpy = vi.fn();
-    Element.prototype.scrollIntoView = scrollSpy as unknown as typeof Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView =
+      scrollSpy as unknown as typeof Element.prototype.scrollIntoView;
     const { rerender } = render(
       <WindowListSegment windows={WINDOWS} activeWindowId="wid-0" onSelect={vi.fn()} />,
     );

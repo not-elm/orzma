@@ -16,15 +16,13 @@ interface WindowListSegmentProps {
 export function WindowListSegment({ windows, activeWindowId, onSelect }: WindowListSegmentProps) {
   const activeRef = useRef<HTMLButtonElement | null>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeWindowId is the trigger — when it changes the ref has been re-assigned to the new active button, so the effect must re-run to scroll it into view
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeWindowId]);
 
   return (
-    <nav
-      aria-label="Windows"
-      className="flex flex-1 items-center gap-4 overflow-x-auto"
-    >
+    <nav aria-label="Windows" className="flex flex-1 items-center gap-4 overflow-x-auto">
       {windows.map((w) => {
         const isActive = w.id === activeWindowId;
         return (

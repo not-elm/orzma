@@ -15,11 +15,7 @@ interface SessionSegmentProps {
 export function SessionSegment({ state }: SessionSegmentProps) {
   switch (state.status) {
     case 'loading':
-      return (
-        <span className="max-w-56 truncate italic text-muted-foreground">
-          Loading…
-        </span>
-      );
+      return <span className="max-w-56 truncate italic text-muted-foreground">Loading…</span>;
     case 'ready':
       return (
         <span className="max-w-56 truncate font-semibold text-tmux-status-bar-foreground">
@@ -28,9 +24,7 @@ export function SessionSegment({ state }: SessionSegmentProps) {
       );
     case 'gone':
       return (
-        <span className="max-w-56 truncate text-destructive">
-          Session is gone ({state.reason})
-        </span>
+        <span className="max-w-56 truncate text-destructive">Session is gone ({state.reason})</span>
       );
   }
 }
