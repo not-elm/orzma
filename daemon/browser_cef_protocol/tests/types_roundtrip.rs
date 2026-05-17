@@ -1,8 +1,8 @@
 use ozmux_browser_cef_protocol::types::{ActivityId, FrameKey, Rect};
 use ozmux_browser_cef_protocol::wire::{
-    BrowserClientMsg, BrowserServerMsg, BrowserUnavailableReason, CefCookieDto, CursorKind,
-    FrameSubscriptionReply, HostCommand, HostEvent, ImeUnderline, InputEvent, KeyEventType,
-    MouseButton, MustRestartReason, SameSite,
+    BrowserClientMsg, BrowserProfileWire, BrowserServerMsg, BrowserUnavailableReason, CefCookieDto,
+    CursorKind, FrameSubscriptionReply, HostCommand, HostEvent, ImeUnderline, InputEvent,
+    KeyEventType, MouseButton, MustRestartReason, SameSite,
 };
 
 #[test]
@@ -55,6 +55,7 @@ fn host_command_browser_create_roundtrips() {
         initial_url: "https://example.com/".into(),
         epoch: 1,
         cookies: vec![],
+        profile: BrowserProfileWire::Named { name: "default".into() },
     });
 }
 
@@ -112,6 +113,7 @@ fn host_command_browser_create_with_cookies_roundtrips() {
         initial_url: "https://example.com/".into(),
         epoch: 1,
         cookies,
+        profile: BrowserProfileWire::Named { name: "default".into() },
     });
 }
 
@@ -616,5 +618,27 @@ fn browser_server_msg_browser_unavailable_all_reasons_roundtrips() {
             expected: 4,
             got: 3,
         },
+    });
+}
+
+#[test]
+fn host_command_browser_create_roundtrips_with_named_profile() {
+    wire_roundtrip(HostCommand::BrowserCreate {
+        aid: ActivityId("a1".into()),
+        initial_url: "https://example.com".into(),
+        epoch: 1,
+        cookies: vec![],
+        profile: BrowserProfileWire::Named { name: "work".into() },
+    });
+}
+
+#[test]
+fn host_command_browser_create_roundtrips_incognito() {
+    wire_roundtrip(HostCommand::BrowserCreate {
+        aid: ActivityId("a2".into()),
+        initial_url: "about:blank".into(),
+        epoch: 1,
+        cookies: vec![],
+        profile: BrowserProfileWire::Incognito,
     });
 }

@@ -92,6 +92,19 @@ pub struct CefCookieDto {
     pub same_site: SameSite,
 }
 
+/// Wire representation of a Browser Activity storage profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BrowserProfileWire {
+    /// Disk-persistent named profile.
+    Named {
+        /// Profile name; resolved to a cache directory by cef_host.
+        name: String,
+    },
+    /// Ephemeral in-memory profile.
+    Incognito,
+}
+
 /// daemon → cef_host commands (spec §5).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -113,6 +126,8 @@ pub enum HostCommand {
         epoch: u32,
         /// Cookies to seed into the browser's cookie store.
         cookies: Vec<CefCookieDto>,
+        /// Storage profile for this activity's browser.
+        profile: BrowserProfileWire,
     },
     /// Replace the shm ring for an existing activity (e.g. after a cef_host
     /// respawn). The new shm fd is passed via SCM_RIGHTS.
