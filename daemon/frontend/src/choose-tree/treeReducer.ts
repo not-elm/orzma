@@ -18,7 +18,14 @@ export type TreeAction =
   | { type: 'set-cursor'; cursor: TreeCursor }
   | { type: 'tree-reloaded'; tree: SessionTreeNode[]; attachedSessionId: SessionId | null };
 
-function rowMatches(row: VisibleRow, cursor: TreeCursor): boolean {
+/**
+ * Tests whether a visible row matches the given cursor. Exported so the
+ * `TreeView` selection rendering uses the same predicate the reducer
+ * relies on for navigation; keeping both call sites in lockstep avoids
+ * a class of "selected row does not match the row the cursor lands on"
+ * bugs if the cursor shape ever grows.
+ */
+export function rowMatches(row: VisibleRow, cursor: TreeCursor): boolean {
   if (cursor.kind === 'session')
     return row.kind === 'session' && row.sessionId === cursor.sessionId;
   return (
@@ -45,10 +52,7 @@ function resolveInitialCursor(
     return { kind: 'session', sessionId: attached.id };
   }
   const firstSession = tree[0];
-  if (!firstSession) {
-    // NOTE: the overlay refuses to open on an empty tree; callers must guard.
-    return { kind: 'session', sessionId: '' as SessionId };
-  }
+  if (!firstSession) return { kind: 'session', sessionId: '' as SessionId };
   return { kind: 'session', sessionId: firstSession.id };
 }
 
@@ -107,7 +111,10 @@ export function treeReducer(
         : resolveInitialCursor(action.tree, action.attachedSessionId);
       return { cursor, expanded };
     }
-    default:
+    default: {
+      const _exhaustive: never = action;
+      void _exhaustive;
       return state;
+    }
   }
 }

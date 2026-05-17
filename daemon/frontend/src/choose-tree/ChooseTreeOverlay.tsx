@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { SessionId, WindowId } from '../layout/types';
 import { windowSelect } from '../statusbar/windowSelect';
+import { flattenVisibleRows } from './flattenVisibleRows';
 import { activeRowKey, TreeView } from './TreeView';
 import { keyToAction } from './treeKeymap';
 import {
@@ -33,9 +34,6 @@ export function ChooseTreeOverlay({
   const treeState = useSessionTree(true);
   const tree: SessionTreeNode[] = treeState.status === 'ready' ? treeState.tree : [];
 
-  // NOTE: refs track the latest values without re-running the keydown effect;
-  // useReducer captures its reducer at mount, so the reducer reads `tree` and
-  // friends through these refs instead of a stale closure.
   const treeRef = useRef<SessionTreeNode[]>(tree);
   treeRef.current = tree;
 
@@ -59,7 +57,6 @@ export function ChooseTreeOverlay({
   const setAttachedSessionRef = useRef(setAttachedSession);
   setAttachedSessionRef.current = setAttachedSession;
 
-  // Capture previously focused element so we can restore on close.
   const returnFocusRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     returnFocusRef.current =
@@ -70,8 +67,6 @@ export function ChooseTreeOverlay({
     };
   }, []);
 
-  // When the tree finishes loading or reloads, normalise the cursor against
-  // the new tree. Also guard against the empty-tree case (M4).
   useEffect(() => {
     if (treeState.status === 'ready') {
       if (treeState.tree.length === 0) {
@@ -92,7 +87,6 @@ export function ChooseTreeOverlay({
     if (sid !== attachedSessionIdRef.current) setAttachedSessionRef.current(sid);
     const ok = await windowSelect(wid);
     if (ok) onCloseRef.current();
-    // NOTE: on failure leave the overlay open so the user can retry.
   }, []);
 
   const confirmCursor = useCallback(
@@ -142,7 +136,8 @@ export function ChooseTreeOverlay({
     return () => root.removeEventListener('keydown', handler);
   }, [confirmCursor]);
 
-  const activeId = activeRowKey(tree, state.expanded, state.cursor);
+  const rows = flattenVisibleRows(tree, state.expanded);
+  const activeId = activeRowKey(rows, state.cursor);
 
   return (
     // biome-ignore lint/a11y/useAriaPropsSupportedByRole: dialog manages focus on behalf of the tree; aria-activedescendant here is the correct ARIA 1.2 pattern for a focus-managing container
@@ -168,8 +163,7 @@ export function ChooseTreeOverlay({
         )}
         {treeState.status === 'ready' && (
           <TreeView
-            tree={tree}
-            expanded={state.expanded}
+            rows={rows}
             cursor={state.cursor}
             onRowClick={(cursor) => dispatch({ type: 'set-cursor', cursor })}
           />

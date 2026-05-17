@@ -1,11 +1,8 @@
-import type { SessionId } from '../layout/types';
-import { flattenVisibleRows, type VisibleRow } from './flattenVisibleRows';
-import type { TreeCursor } from './treeReducer';
-import type { SessionTreeNode } from './types';
+import type { VisibleRow } from './flattenVisibleRows';
+import { rowMatches, type TreeCursor } from './treeReducer';
 
 interface TreeViewProps {
-  tree: SessionTreeNode[];
-  expanded: ReadonlySet<SessionId>;
+  rows: VisibleRow[];
   cursor: TreeCursor;
   onRowClick: (cursor: TreeCursor) => void;
 }
@@ -15,25 +12,13 @@ function rowKey(row: VisibleRow): string {
   return `window:${row.sessionId}:${row.windowId}`;
 }
 
-function rowMatchesCursor(row: VisibleRow, cursor: TreeCursor): boolean {
-  if (cursor.kind === 'session')
-    return row.kind === 'session' && row.sessionId === cursor.sessionId;
-  return (
-    row.kind === 'window' && row.sessionId === cursor.sessionId && row.windowId === cursor.windowId
-  );
-}
-
 /**
- * Computes the DOM id for the row that the cursor currently points at,
- * or `undefined` when no matching row is visible.
+ * Returns the DOM id of the visible row the cursor points at, or
+ * `undefined` when no matching row is visible (e.g. cursor sits under a
+ * collapsed session).
  */
-export function activeRowKey(
-  tree: SessionTreeNode[],
-  expanded: ReadonlySet<SessionId>,
-  cursor: TreeCursor,
-): string | undefined {
-  const rows = flattenVisibleRows(tree, expanded);
-  const activeRow = rows.find((r) => rowMatchesCursor(r, cursor));
+export function activeRowKey(rows: VisibleRow[], cursor: TreeCursor): string | undefined {
+  const activeRow = rows.find((r) => rowMatches(r, cursor));
   return activeRow ? rowKey(activeRow) : undefined;
 }
 
@@ -43,13 +28,12 @@ export function activeRowKey(
  * `window:${sid}:${wid}` so React reconciliation stays stable across
  * expand / collapse and tree reloads.
  */
-export function TreeView({ tree, expanded, cursor, onRowClick }: TreeViewProps) {
-  const rows = flattenVisibleRows(tree, expanded);
+export function TreeView({ rows, cursor, onRowClick }: TreeViewProps) {
   return (
     <div role="tree" className="font-mono text-sm">
       {rows.map((row) => {
         const id = rowKey(row);
-        const selected = rowMatchesCursor(row, cursor);
+        const selected = rowMatches(row, cursor);
         if (row.kind === 'session') {
           const sessionCursor: TreeCursor = { kind: 'session', sessionId: row.sessionId };
           return (

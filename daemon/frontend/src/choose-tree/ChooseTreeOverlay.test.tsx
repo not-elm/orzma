@@ -146,7 +146,6 @@ describe('ChooseTreeOverlay', () => {
     );
     await screen.findByRole('tree');
     const dialog = screen.getByRole('dialog');
-    // Wait for the tree-reloaded state update so the cursor is on the window row.
     await waitFor(() =>
       expect(dialog).toHaveAttribute('aria-activedescendant', 'window:sid-a:wid-a0'),
     );
@@ -170,8 +169,6 @@ describe('ChooseTreeOverlay', () => {
     );
     await screen.findByRole('tree');
     const dialog = screen.getByRole('dialog');
-    // NOTE: aria-activedescendant is set after the tree-reloaded dispatch resolves;
-    // waitFor lets the effect flush before asserting.
     await waitFor(() =>
       expect(dialog).toHaveAttribute('aria-activedescendant', 'window:sid-a:wid-a0'),
     );

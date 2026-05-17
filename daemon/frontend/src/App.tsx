@@ -53,9 +53,6 @@ export function App() {
   const openChooseTreeRef = useRef(chooseTree.open);
   openChooseTreeRef.current = chooseTree.open;
 
-  const attachedRef = useRef(attached);
-  attachedRef.current = attached;
-
   const ctx: ShortcutContext = {
     activeWindow: () => activeWindowRef.current,
     activePane: () => activePaneRef.current,
@@ -68,10 +65,7 @@ export function App() {
       openPromptRef.current(w, name);
     },
     openChooseTree: () => {
-      if (attachedRef.current.status !== 'ready') {
-        console.warn('choose-tree: attached session still loading; ignoring open');
-        return;
-      }
+      if (attached.status !== 'ready') return;
       openChooseTreeRef.current();
     },
   };
