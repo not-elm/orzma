@@ -64,9 +64,6 @@ impl CefBackend {
 
         let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, SLOT_PAYLOAD_MAX)
             .map_err(CefBackendError::ShmAlloc)?;
-        // Map a read-only view before handing the fd to cef_host; the mapping
-        // outlives the descriptor, so `shm_fd` can still be moved into the
-        // SCM_RIGHTS send below. The event pump reads frames through this.
         let reader = Arc::new(
             OwnedShmReader::map(&shm_fd, SLOT_PAYLOAD_MAX).map_err(CefBackendError::ShmMap)?,
         );
