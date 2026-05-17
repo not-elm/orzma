@@ -6,8 +6,6 @@
 //! zero the `on_done` closure fires. The caller (pool.rs) wraps `on_done` as
 //! a `post_command::post` call back to the UI thread so `CreateBrowserSync`
 //! only runs after all cookies have been committed.
-//!
-//! Phase B Task B12.
 
 use cef::rc::Rc as _;
 use cef::{
@@ -20,13 +18,26 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+/// One-shot completion closure, shared across the per-cookie callbacks and
+/// taken by whichever caller observes the pending counter reach zero.
+type OnDone = Arc<Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>>;
+
+/// Decrements `pending`; fires `on_done` exactly once when it hits zero.
+fn settle(pending: &AtomicUsize, on_done: &OnDone) {
+    if pending.fetch_sub(1, Ordering::AcqRel) == 1
+        && let Some(f) = on_done.lock().expect("on_done poisoned").take()
+    {
+        f();
+    }
+}
+
 // NOTE: wrap_set_cookie_callback! must appear at module scope (not inside a
 // function) because it emits a struct definition. We define one reusable type
 // here and pass per-cookie state through the Arc fields.
 wrap_set_cookie_callback! {
     struct PendingCookieCallback {
         pending: Arc<AtomicUsize>,
-        on_done: Arc<Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>>,
+        on_done: OnDone,
     }
 
     impl SetCookieCallback {
@@ -34,12 +45,7 @@ wrap_set_cookie_callback! {
             if success == 0 {
                 tracing::warn!("set_cookie callback reported failure");
             }
-            let remaining = self.pending.fetch_sub(1, Ordering::AcqRel);
-            if remaining == 1 {
-                if let Some(f) = self.on_done.lock().expect("on_done poisoned").take() {
-                    f();
-                }
-            }
+            settle(&self.pending, &self.on_done);
         }
     }
 }
@@ -66,8 +72,7 @@ pub fn install_cookies(cookies: Vec<CefCookieDto>, on_done: impl FnOnce() + Send
 
     let total = cookies.len();
     let pending = Arc::new(AtomicUsize::new(total));
-    let on_done_slot: Arc<Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>> =
-        Arc::new(Mutex::new(Some(Box::new(on_done))));
+    let on_done_slot: OnDone = Arc::new(Mutex::new(Some(Box::new(on_done))));
 
     for dto in cookies {
         let url = cef::CefString::from(dto.url.as_str());
@@ -77,14 +82,9 @@ pub fn install_cookies(cookies: Vec<CefCookieDto>, on_done: impl FnOnce() + Send
         let ret = mgr.set_cookie(Some(&url), Some(&cookie), Some(&mut cb));
         if ret == 0 {
             tracing::warn!(url = %dto.url, "set_cookie returned 0 (failed to enqueue)");
-            // NOTE: Decrement the counter ourselves so the overall pending count
-            // stays consistent and on_done fires correctly even if some cookies fail.
-            let remaining = pending.fetch_sub(1, Ordering::AcqRel);
-            if remaining == 1 {
-                if let Some(f) = on_done_slot.lock().expect("on_done poisoned").take() {
-                    f();
-                }
-            }
+            // NOTE: the callback will never fire for this cookie, so settle its
+            // slot here to keep the pending count consistent.
+            settle(&pending, &on_done_slot);
         }
     }
 }
@@ -105,8 +105,9 @@ fn build_cef_cookie(dto: &CefCookieDto) -> Cookie {
         secure: dto.secure as i32,
         httponly: dto.http_only as i32,
         same_site,
-        // TODO: Plan 3 — wire real expiry via cef::Basetime when a reliable
-        // Windows FILETIME → Basetime conversion helper is available.
+        // TODO: wire real expiry via cef::Basetime once a reliable Windows
+        // FILETIME → Basetime conversion helper exists; cookies are
+        // session-only until then.
         has_expires: 0,
         ..Cookie::default()
     }

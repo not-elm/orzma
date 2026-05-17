@@ -8,7 +8,7 @@
 //! binary and a working CEF framework on disk; CI does not run it.
 
 use ozmux_browser::cef_service::CefHostSupervisor;
-use ozmux_browser::shm_alloc::{self, POC_SLOT_PAYLOAD_MAX};
+use ozmux_browser::shm_alloc::{self, SLOT_PAYLOAD_MAX};
 use ozmux_browser::shm_reader::ShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::HostEvent;
@@ -33,13 +33,13 @@ async fn handshake_then_one_frame() {
             .expect("handshake failed");
 
     let aid = ActivityId(format!("test-{}", uuid::Uuid::new_v4()));
-    let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, POC_SLOT_PAYLOAD_MAX)
+    let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, SLOT_PAYLOAD_MAX)
         .expect("shm_alloc::create_shm_for_activity");
     // dup the fd so we can mmap a reader-side view while sending the original
     // to cef_host via SCM_RIGHTS. The reader copy is dropped at test end.
     let shm_for_read = shm_fd.try_clone().expect("OwnedFd::try_clone");
 
-    let len = ShmReader::required_region_size(POC_SLOT_PAYLOAD_MAX);
+    let len = ShmReader::required_region_size(SLOT_PAYLOAD_MAX);
     // SAFETY: shm_for_read is a valid mmap-able fd. We map READ-only because
     // the cef_host writer side will be the only mutator. The pointer is held
     // for the duration of the test; we leak the munmap on exit since the
@@ -57,9 +57,9 @@ async fn handshake_then_one_frame() {
         p as *const u8
     };
     // SAFETY: `base` is a valid mmap region of `len` bytes laid out per
-    // shm_writer / shm_reader's shared layout (same POC_SLOT_PAYLOAD_MAX on
+    // shm_writer / shm_reader's shared layout (same SLOT_PAYLOAD_MAX on
     // both sides).
-    let reader = unsafe { ShmReader::from_mmap(base, POC_SLOT_PAYLOAD_MAX) };
+    let reader = unsafe { ShmReader::from_mmap(base, SLOT_PAYLOAD_MAX) };
 
     handles
         .request_browser_create(aid.clone(), "about:blank".into(), 1, Vec::new(), shm_fd)

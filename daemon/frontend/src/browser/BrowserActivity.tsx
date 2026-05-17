@@ -73,8 +73,8 @@ interface PopupRect {
   h: number;
 }
 
-const POC_WIDTH = 1280;
-const POC_HEIGHT = 800;
+const INITIAL_CANVAS_WIDTH = 1280;
+const INITIAL_CANVAS_HEIGHT = 800;
 
 // NOTE: popup canvas backing size matches POPUP_PAYLOAD_MAX in shm_writer.rs
 // (800×600 BGRA). For PoC the backing buffer is fixed and CSS-scaled via
@@ -198,8 +198,8 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
           generation,
           mainCanvas: mainOffscreen,
           popupCanvas: popupOffscreen,
-          width: POC_WIDTH,
-          height: POC_HEIGHT,
+          width: INITIAL_CANVAS_WIDTH,
+          height: INITIAL_CANVAS_HEIGHT,
         },
         [mainOffscreen, popupOffscreen],
       );
@@ -361,7 +361,7 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
               intrinsic 1280×800 size — without it the replaced-element
               min-content height overflows the column and hides the Toolbar. */}
           <div className="relative flex-1 min-h-0 min-w-0">
-            {/* The backing buffer starts at POC_WIDTH×POC_HEIGHT and the
+            {/* The backing buffer starts at INITIAL_CANVAS_WIDTH×INITIAL_CANVAS_HEIGHT and the
                 renderer resizes it (via the OffscreenCanvas) to each frame's
                 device-pixel size — which tracks the pane because the daemon
                 clamps the cef viewport to css×dpr. `h-full w-full` fills the
@@ -369,8 +369,8 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
             <canvas
               key={`main-${restartId}`}
               ref={canvasRef}
-              width={POC_WIDTH}
-              height={POC_HEIGHT}
+              width={INITIAL_CANVAS_WIDTH}
+              height={INITIAL_CANVAS_HEIGHT}
               className="block h-full w-full"
             />
             {/* Popup overlay canvas — keyed on restartId so a MustRestart

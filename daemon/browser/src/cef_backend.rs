@@ -5,7 +5,7 @@
 use crate::cef_registry::BrowserCefRegistry;
 use crate::cef_service::CefHostHandles;
 use crate::frame_ring::FrameRing;
-use crate::shm_alloc::{self, POC_SLOT_PAYLOAD_MAX};
+use crate::shm_alloc::{self, SLOT_PAYLOAD_MAX};
 use crate::shm_reader::OwnedShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_browser_cef_protocol::wire::{CefCookieDto, HostCommand};
@@ -59,13 +59,13 @@ impl CefBackend {
                 Vec::new()
             });
 
-        let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, POC_SLOT_PAYLOAD_MAX)
+        let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, SLOT_PAYLOAD_MAX)
             .map_err(CefBackendError::ShmAlloc)?;
         // Map a read-only view before handing the fd to cef_host; the mapping
         // outlives the descriptor, so `shm_fd` can still be moved into the
         // SCM_RIGHTS send below. The event pump reads frames through this.
         let reader = Arc::new(
-            OwnedShmReader::map(&shm_fd, POC_SLOT_PAYLOAD_MAX).map_err(CefBackendError::ShmMap)?,
+            OwnedShmReader::map(&shm_fd, SLOT_PAYLOAD_MAX).map_err(CefBackendError::ShmMap)?,
         );
         let epoch = 1;
         let ring = Arc::new(FrameRing::new(self.registry.session_id(), epoch));

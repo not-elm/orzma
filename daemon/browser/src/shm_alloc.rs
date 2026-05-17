@@ -12,8 +12,8 @@ use std::os::fd::OwnedFd;
 /// device pixels is covered without ever re-allocating the region. Pages are
 /// demand-faulted, so a small pane only commits its actual frame size.
 ///
-/// MUST stay byte-identical to `ozmux_cef_host::pool::POC_SLOT_PAYLOAD_MAX`.
-pub const POC_SLOT_PAYLOAD_MAX: usize = 3840 * 2160 * 4 + 4096;
+/// MUST stay byte-identical to `ozmux_cef_host::pool::SLOT_PAYLOAD_MAX`.
+pub const SLOT_PAYLOAD_MAX: usize = 3840 * 2160 * 4 + 4096;
 
 /// Creates a shm fd sized for one activity's screencast ring.
 pub fn create_shm_for_activity(aid: &str, slot_payload_max: usize) -> std::io::Result<OwnedFd> {
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn create_shm_returns_valid_fd() {
-        let fd = create_shm_for_activity("test-aid", POC_SLOT_PAYLOAD_MAX)
+        let fd = create_shm_for_activity("test-aid", SLOT_PAYLOAD_MAX)
             .expect("create_shm_for_activity failed");
         assert!(fd.as_raw_fd() >= 0);
     }

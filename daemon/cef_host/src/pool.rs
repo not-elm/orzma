@@ -87,8 +87,8 @@ pub struct BrowserEntry {
 }
 
 /// Per-slot payload budget: a 4K (3840×2160) BGRA frame + 4 KiB slack.
-/// MUST stay byte-identical to `ozmux_browser::shm_alloc::POC_SLOT_PAYLOAD_MAX`.
-const POC_SLOT_PAYLOAD_MAX: usize = 3840 * 2160 * 4 + 4096;
+/// MUST stay byte-identical to `ozmux_browser::shm_alloc::SLOT_PAYLOAD_MAX`.
+const SLOT_PAYLOAD_MAX: usize = 3840 * 2160 * 4 + 4096;
 
 /// Maximum viewport the fixed shm slot can hold, in device pixels. The Resize
 /// handler clamps to this; a pane larger than 4K device pixels renders clipped.
@@ -326,7 +326,7 @@ impl BrowserPool {
     fn create_browser(&mut self, aid: ActivityId, initial_url: String, epoch: u32, shm_fd: RawFd) {
         tracing::info!(?aid, %initial_url, epoch, shm_fd, "BrowserCreate");
 
-        let total_size = ShmWriter::required_region_size(POC_SLOT_PAYLOAD_MAX);
+        let total_size = ShmWriter::required_region_size(SLOT_PAYLOAD_MAX);
         // SAFETY: shm_fd is a valid mmap-able fd received from the daemon side
         // via SCM_RIGHTS in `control::recv_command_with_fd` (per-BrowserCreate
         // since Task A5). We map it shared so the daemon can read frames
@@ -348,7 +348,7 @@ impl BrowserPool {
 
         // SAFETY: ptr is a valid mmap region of total_size bytes, writable,
         // and we are the sole writer on the CEF UI thread.
-        let shm = Arc::new(unsafe { ShmWriter::from_mmap(ptr as *mut u8, POC_SLOT_PAYLOAD_MAX) });
+        let shm = Arc::new(unsafe { ShmWriter::from_mmap(ptr as *mut u8, SLOT_PAYLOAD_MAX) });
 
         let render_state = Arc::new(RenderHandlerState::new(1280, 800, 1.0));
         let render_handler = OzmuxRenderHandler::new(
