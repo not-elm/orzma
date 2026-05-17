@@ -8,11 +8,13 @@ const BASE_URL: &str = "http://127.0.0.1:3200";
 
 /// Create a new Browser Activity in the given pane. Returns the
 /// freshly-generated `activity_id`. The caller must subsequently activate
-/// it (`POST .../activate`) to bring it foreground.
+/// it (`POST .../activate`) to bring it foreground. The `profile` JSON
+/// (named or incognito) is embedded in the activity `kind`.
 pub(crate) async fn create_browser_activity(
     wid: &str,
     pid: &str,
     initial_url: Option<&str>,
+    profile: serde_json::Value,
 ) -> Result<String> {
     let aid = Uuid::new_v4().to_string();
     let body = json!({
@@ -21,6 +23,7 @@ pub(crate) async fn create_browser_activity(
             "kind": {
                 "type": "browser",
                 "initial_url": initial_url,
+                "profile": profile,
             }
         }
     });

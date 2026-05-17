@@ -23,4 +23,10 @@ pub enum Command {
 pub struct Browser {
     /// URL to open. Schemes are added automatically: `foo.com` → `https://foo.com`.
     pub url: Option<String>,
+    /// Named storage profile to use. Defaults to `default`.
+    #[arg(long, conflicts_with = "incognito")]
+    pub profile: Option<String>,
+    /// Open in an ephemeral in-memory profile (no disk persistence).
+    #[arg(long)]
+    pub incognito: bool,
 }
