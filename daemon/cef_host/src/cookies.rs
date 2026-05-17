@@ -32,12 +32,6 @@ fn settle(pending: &AtomicUsize, on_done: &OnDone) {
     }
 }
 
-// NOTE: wrap_set_cookie_callback! must appear at module scope (not inside a
-// function) because it emits a struct definition. We define one reusable type
-// here and pass per-cookie state through the Arc fields. `cookie_id` carries
-// per-call identity (name/domain/url) into the async callback so a rejection
-// can be attributed to the offending cookie — CEF discards Chromium's
-// `CookieInclusionStatus`, so the boolean is all we get from the callback.
 wrap_set_cookie_callback! {
     struct PendingCookieCallback {
         pending: Arc<AtomicUsize>,
@@ -60,8 +54,11 @@ wrap_set_cookie_callback! {
     }
 }
 
-/// Per-cookie identity carried through `set_cookie`'s async callback for
-/// diagnostic logging.
+/// Per-cookie identity carried through `set_cookie`'s async callback so a
+/// rejection can be attributed to the offending cookie. CEF discards
+/// Chromium's `CookieInclusionStatus` (its `SetCookieInternal` passes
+/// `status=nullptr`), so the boolean we get from the callback is the only
+/// signal — without these fields the warning is unattributable.
 struct CookieId {
     name: String,
     domain: String,
@@ -111,9 +108,9 @@ pub fn install_cookies(
         let url = cef::CefString::from(dto.url.as_str());
         let cookie = build_cef_cookie(&dto);
         let cookie_id = Arc::new(CookieId {
-            name: dto.name.clone(),
-            domain: dto.domain.clone(),
-            url: dto.url.clone(),
+            name: dto.name,
+            domain: dto.domain,
+            url: dto.url,
         });
         let mut cb = PendingCookieCallback::new(
             Arc::clone(&pending),
@@ -129,8 +126,9 @@ pub fn install_cookies(
                 url = %cookie_id.url,
                 "set_cookie returned 0 (failed to enqueue)"
             );
-            // NOTE: the callback will never fire for this cookie, so settle its
-            // slot here to keep the pending count consistent.
+            // NOTE: the callback will never fire for this cookie, so settle here
+            // to keep the pending count consistent — otherwise `on_done` never
+            // resolves and `CreateBrowserAfterCookies` is never posted.
             settle(&pending, &on_done_slot);
         }
     }

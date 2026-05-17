@@ -92,10 +92,19 @@ async fn extract_macos(initial_url: &str) -> Result<Vec<CefCookieDto>, std::io::
 /// - Host-only cookie (no leading dot): `host` must equal `host_key` exactly.
 fn cookie_applies_to_host(host: &str, host_key: &str) -> bool {
     if let Some(domain) = host_key.strip_prefix('.') {
-        host == domain || host.ends_with(&format!(".{domain}"))
+        host == domain || is_subdomain_of(host, domain)
     } else {
         host == host_key
     }
+}
+
+/// Returns `true` when `host` ends in `.{parent}` — i.e. is a strict subdomain
+/// of `parent`. Avoids the `format!(".{parent}")` allocation used by a naive
+/// `ends_with` and explicitly rejects the same-host case.
+fn is_subdomain_of(host: &str, parent: &str) -> bool {
+    host.len() > parent.len() + 1
+        && host.as_bytes()[host.len() - parent.len() - 1] == b'.'
+        && host.ends_with(parent)
 }
 
 /// Extracts the registrable host from a URL for use as the `cookies_by_host`
@@ -133,8 +142,6 @@ fn to_cookie_dto(c: &ChromiumCookie, value: String) -> CefCookieDto {
         path: c.path.clone(),
         secure: c.is_secure,
         http_only: c.is_httponly,
-        // NOTE: expires_utc as Option<f64> (Windows FILETIME microseconds since
-        // 1601-01-01) is not currently wired — plan 3 will add the conversion.
         expires_utc: c.expires_utc.map(|dt| dt.timestamp() as f64),
         same_site,
     }
