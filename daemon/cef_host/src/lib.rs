@@ -6,7 +6,7 @@ pub mod control;
 pub mod cookies;
 pub mod handlers;
 pub mod input;
-mod profile;
+pub mod profile;
 pub mod pool;
 pub mod post_command;
 pub mod shm_writer;

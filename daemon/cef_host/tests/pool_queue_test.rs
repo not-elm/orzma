@@ -19,7 +19,7 @@ fn pool_handle_shutdown_flag_visible_after_set() {
     // The event_tx receiver is dropped immediately; that's fine for this test
     // since no NavStateChanged events will be emitted.
     let (event_tx, _event_rx) = mpsc::unbounded_channel::<HostEvent>();
-    let handle = PoolHandle::new(BrowserPool::new(event_tx));
+    let handle = PoolHandle::new(BrowserPool::new(event_tx, std::env::temp_dir(), false));
     handle.with_pool_mut_for_tests(|p| p.shutdown_requested = true);
     assert!(handle.snapshot_shutdown_requested());
 }

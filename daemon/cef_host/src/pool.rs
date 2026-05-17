@@ -130,6 +130,9 @@ pub struct BrowserPool {
     named_refcounts: HashMap<String, usize>,
     /// Absolute CEF `root_cache_path` (parent of every named profile dir).
     root_cache_path: PathBuf,
+    /// Whether this daemon owns the data-root lock. When `false`, another
+    /// daemon holds it, so named profiles are demoted to incognito storage.
+    persistent_profiles_enabled: bool,
 }
 
 impl BrowserPool {
@@ -144,7 +147,14 @@ impl BrowserPool {
     ///
     /// `root_cache_path` is the absolute parent directory under which named
     /// profiles get their disk-persistent `RequestContext` cache directories.
-    pub fn new(event_tx: mpsc::UnboundedSender<HostEvent>, root_cache_path: PathBuf) -> Self {
+    ///
+    /// `persistent_profiles_enabled` is `false` when another daemon holds the
+    /// data-root lock; named profiles are then demoted to incognito storage.
+    pub fn new(
+        event_tx: mpsc::UnboundedSender<HostEvent>,
+        root_cache_path: PathBuf,
+        persistent_profiles_enabled: bool,
+    ) -> Self {
         Self {
             browsers: HashMap::new(),
             event_tx,
@@ -153,6 +163,7 @@ impl BrowserPool {
             named_contexts: HashMap::new(),
             named_refcounts: HashMap::new(),
             root_cache_path,
+            persistent_profiles_enabled,
         }
     }
 
@@ -359,6 +370,12 @@ impl BrowserPool {
     ) {
         tracing::info!(?aid, %initial_url, epoch, shm_fd, "BrowserCreate");
 
+        // NOTE: when persistence is disabled a Named profile behaves exactly
+        // like Incognito. The effective profile is what gets refcounted and
+        // stored in BrowserEntry so retain/release stay consistent with the
+        // contexts actually cached in `named_contexts`.
+        let effective_profile = self.effective_profile(&profile);
+
         let total_size = ShmWriter::required_region_size(SLOT_PAYLOAD_MAX);
         // SAFETY: shm_fd is a valid mmap-able fd received from the daemon side
         // via SCM_RIGHTS in `control::recv_command_with_fd` (per-BrowserCreate
@@ -446,7 +463,7 @@ impl BrowserPool {
                     host.was_hidden(0);
                     host.notify_screen_info_changed();
                 }
-                self.retain_profile(&profile);
+                self.retain_profile(&effective_profile);
                 self.browsers.insert(
                     aid.clone(),
                     BrowserEntry {
@@ -456,7 +473,7 @@ impl BrowserPool {
                         browser: b,
                         shm,
                         render_state,
-                        profile,
+                        profile: effective_profile,
                     },
                 );
             }
@@ -466,7 +483,7 @@ impl BrowserPool {
                 unsafe { libc::munmap(ptr, total_size) };
                 // SAFETY: shm_fd was duped from the daemon side; no BrowserEntry owns it on this path.
                 unsafe { libc::close(shm_fd) };
-                self.discard_unretained_context(&profile);
+                self.discard_unretained_context(&effective_profile);
             }
         }
     }
@@ -488,6 +505,10 @@ impl BrowserPool {
         };
         match profile {
             BrowserProfileWire::Named { name } => {
+                if !self.persistent_profiles_enabled {
+                    tracing::warn!(profile = %name, "persistence disabled; using incognito");
+                    return create_request_context(None);
+                }
                 if let Some(ctx) = self.named_contexts.get(name) {
                     return Some(ctx.clone());
                 }
@@ -501,6 +522,18 @@ impl BrowserPool {
                 Some(ctx)
             }
             BrowserProfileWire::Incognito => create_request_context(None),
+        }
+    }
+
+    /// Resolves the profile a browser is effectively created with. A `Named`
+    /// profile is demoted to `Incognito` when persistence is disabled; every
+    /// other case clones the requested profile unchanged.
+    fn effective_profile(&self, requested: &BrowserProfileWire) -> BrowserProfileWire {
+        match requested {
+            BrowserProfileWire::Named { .. } if !self.persistent_profiles_enabled => {
+                BrowserProfileWire::Incognito
+            }
+            other => other.clone(),
         }
     }
 

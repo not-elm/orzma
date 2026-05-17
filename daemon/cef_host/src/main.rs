@@ -125,8 +125,21 @@ fn main() -> std::process::ExitCode {
     );
 
     // ③ CefSettings with paths
+    let browser_data_root = ozmux_cef_host::profile::browser_data_root();
+    let data_root_lock = ozmux_cef_host::profile::acquire_data_root_lock(&browser_data_root)
+        .expect("create browser data root");
+    if data_root_lock.is_none() {
+        tracing::warn!(
+            root = %browser_data_root.display(),
+            "another daemon holds the browser data root; named profiles disabled — \
+             all Browser Activities will use incognito storage"
+        );
+    }
+
     let mut settings = Settings::default();
     settings.windowless_rendering_enabled = 1;
+    settings.root_cache_path =
+        cef::CefString::from(browser_data_root.to_string_lossy().as_ref());
     settings.no_sandbox = 1;
     settings.multi_threaded_message_loop = 0;
     settings.external_message_pump = 0;
@@ -187,11 +200,14 @@ fn main() -> std::process::ExitCode {
     // NOTE: event_tx is cloned into each BrowserPool entry's NavInner so that
     // DisplayHandler / LoadHandler can emit HostEvent::NavStateChanged to the
     // daemon without acquiring the pool lock.
-    // TODO: Task 9 wires the real browser data root here.
     let handle = post_command::PoolHandle::new(pool::BrowserPool::new(
         event_tx,
-        std::env::temp_dir(),
+        browser_data_root.clone(),
+        data_root_lock.is_some(),
     ));
+    // NOTE: keep the data-root lock alive for the whole of main — it releases
+    // on drop, so it must outlive run_message_loop() below.
+    let _data_root_lock = data_root_lock;
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
