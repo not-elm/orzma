@@ -27,7 +27,7 @@ mod tests {
     };
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use ozmux_multiplexer::{Activity, ActivityId};
+    use ozmux_multiplexer::{Activity, ActivityId, BrowserProfile};
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -129,7 +129,7 @@ mod tests {
             .multiplexer
             .with_window_or_404(&wid, |w| {
                 w.pane_mut(&pid)?
-                    .add_activity(Activity::browser(browser_aid.clone(), None))
+                    .add_activity(Activity::browser(browser_aid.clone(), None, BrowserProfile::default()))
             })
             .await
             .unwrap();

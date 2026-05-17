@@ -102,7 +102,7 @@ mod tests {
 
     #[tokio::test]
     async fn activate_browser_activity_does_not_error() {
-        use ozmux_multiplexer::Activity;
+        use ozmux_multiplexer::{Activity, BrowserProfile};
 
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, _term_aid) = test_helpers::bootstrap_default(&state).await;
@@ -111,7 +111,7 @@ mod tests {
             .multiplexer
             .with_window_or_404(&wid, |w| {
                 w.pane_mut(&pid)?
-                    .add_activity(Activity::browser(browser_aid.clone(), None))
+                    .add_activity(Activity::browser(browser_aid.clone(), None, BrowserProfile::default()))
             })
             .await
             .unwrap();

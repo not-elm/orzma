@@ -14,6 +14,6 @@ pub use cells::{
     SplitOrientation,
 };
 pub use direction::PaneDirection;
-pub use pane::activity::{Activity, ActivityId, ActivityKind};
+pub use pane::activity::{Activity, ActivityId, ActivityKind, BrowserProfile};
 pub use pane::{CycleDirection, Pane, PaneId, PaneState, SetActiveOutcome};
 pub use window::{Window, WindowId, WindowState};

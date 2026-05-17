@@ -34,7 +34,7 @@ pub(crate) async fn provision_activity_runtime(
             .await
         }
         ActivityKind::Extension { .. } => Ok(()),
-        ActivityKind::Browser { initial_url } => {
+        ActivityKind::Browser { initial_url, .. } => {
             if state.cef_host.is_dead() {
                 return Err(HttpError::CefHostDead(
                     BrowserUnavailableReason::RetryExhausted {

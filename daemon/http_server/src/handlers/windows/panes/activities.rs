@@ -3,7 +3,7 @@ use axum::{
     Router,
     routing::{delete as method_delete, get, post},
 };
-use ozmux_multiplexer::{Activity, ActivityId, ActivityKind};
+use ozmux_multiplexer::{Activity, ActivityId, ActivityKind, BrowserProfile};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -103,7 +103,7 @@ impl ActivityInput {
                 extension_name: Some(extension_name),
             },
             ActivityKindInput::Browser { initial_url } => ParsedActivity {
-                activity: Activity::browser(self.activity_id, initial_url),
+                activity: Activity::browser(self.activity_id, initial_url, BrowserProfile::default()),
                 extension_name: None,
             },
         }

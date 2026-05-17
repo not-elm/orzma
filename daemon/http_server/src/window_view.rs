@@ -107,7 +107,7 @@ impl ActivityView {
                     wid, pid, activity.id
                 ),
             },
-            ActivityKind::Browser { initial_url } => Self::Browser {
+            ActivityKind::Browser { initial_url, .. } => Self::Browser {
                 id: activity.id.clone(),
                 title: activity.name.clone(),
                 url: initial_url.clone(),
