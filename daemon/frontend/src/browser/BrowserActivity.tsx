@@ -31,6 +31,7 @@ import type {
   NavSnapshot,
 } from './useBrowserSocket';
 import { useBrowserSocket } from './useBrowserSocket';
+import FrameWorker from './worker/frame-worker.ts?worker&inline';
 
 // CursorKind → Tailwind cursor utility. Full literal class strings so the
 // Tailwind content scanner picks them up. `.claude/rules/styling.md`: these
@@ -166,9 +167,7 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
         console.warn('transferControlToOffscreen failed; skipping worker init', e);
         return;
       }
-      const w = new Worker(new URL('./worker/frame-worker.ts', import.meta.url), {
-        type: 'module',
-      });
+      const w = new FrameWorker();
       const generation = restartId + 1;
       w.onmessage = (ev: MessageEvent<{ type: string }>) => {
         if (ev.data.type === 'unsupported') {
