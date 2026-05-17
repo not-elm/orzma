@@ -545,19 +545,42 @@ impl AppState {
         sid
     }
 
-    /// Create a window, optionally attached to a session. When attached,
-    /// publishes the parent `SessionView` so subscribers see the new
-    /// window appear in the windows list.
+    /// Create a window attached to `session_id` (when given), spawn the
+    /// PTY for its bootstrap terminal activity, make it the active
+    /// window, and publish the parent `SessionView`.
+    ///
+    /// On PTY spawn failure the half-created window is rolled back via
+    /// `close_window` and the spawn error is returned. A failing
+    /// rollback is logged and the original spawn error still wins.
     pub async fn create_window(
         &self,
         session_id: Option<&SessionId>,
         name: Option<String>,
-    ) -> MultiplexerResult<(WindowId, PaneId, ActivityId)> {
-        let triple = self.multiplexer.create_window(session_id, name).await?;
-        if let Some(sid) = session_id {
-            self.publish_session_view(sid).await;
+    ) -> HttpResult<(WindowId, PaneId, ActivityId)> {
+        let (wid, pid, aid) = self.multiplexer.create_window(session_id, name).await?;
+        if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid).await {
+            if let Err(rollback_err) = self.close_window(&wid).await {
+                tracing::warn!(
+                    error = %rollback_err,
+                    %wid,
+                    "failed to roll back window after PTY spawn failure"
+                );
+            }
+            return Err(spawn_err);
         }
-        Ok(triple)
+        if session_id.is_some()
+            && let Err(select_err) = self.select_active_window(&wid).await
+        {
+            if let Err(rollback_err) = self.close_window(&wid).await {
+                tracing::warn!(
+                    error = %rollback_err,
+                    %wid,
+                    "failed to roll back window after active-window selection failure"
+                );
+            }
+            return Err(select_err.into());
+        }
+        Ok((wid, pid, aid))
     }
 
     /// Rename a session and broadcast the updated view.
@@ -777,5 +800,46 @@ mod session_publish_tests {
             .expect("publish timed out")
             .expect("recv error");
         assert_eq!(view["windows"][0]["name"].as_str(), Some("renamed"));
+    }
+}
+
+#[cfg(test)]
+mod create_window_tests {
+    use crate::test_helpers::fresh_state;
+
+    #[tokio::test]
+    async fn create_window_spawns_pty_and_activates_window() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let (wid, _pid, aid) = state.create_window(Some(&sid), None).await.unwrap();
+        assert!(
+            state.terminal.subscriber_count(&aid).await.is_some(),
+            "a PTY must be spawned for the new window's bootstrap activity"
+        );
+        let sessions = state.multiplexer.sessions.lock().await;
+        assert_eq!(
+            sessions.get(&sid).unwrap().active_window.as_ref(),
+            Some(&wid),
+            "the new window must become the active window"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_window_rolls_back_on_pty_spawn_failure() {
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        state.terminal.inject_next_spawn_failure();
+        let result = state.create_window(Some(&sid), None).await;
+        assert!(result.is_err(), "PTY spawn failure must propagate as Err");
+        assert_eq!(
+            state.multiplexer.windows.len(),
+            0,
+            "the half-created window must be rolled back"
+        );
+        let sessions = state.multiplexer.sessions.lock().await;
+        assert!(
+            sessions.get(&sid).unwrap().linked_windows.is_empty(),
+            "the rolled-back window must be detached from the session"
+        );
     }
 }
