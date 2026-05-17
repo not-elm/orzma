@@ -33,12 +33,23 @@ wrap_app! {
             command_line: Option<&mut cef::CommandLine>,
         ) {
             // NOTE: process_type is empty string "" for the browser process and non-empty
-            // for helper processes (renderer, gpu, etc.).  Only modify the browser process
-            // command line here.
+            // (e.g. "renderer", "gpu-process", "utility") for helper processes.
             let is_browser = process_type
                 .map(|s| s.to_string().is_empty())
                 .unwrap_or(true);
-            if let (Some(cl), true) = (command_line, is_browser) {
+            let Some(cl) = command_line else {
+                return;
+            };
+
+            // NOTE: --use-mock-keychain must reach EVERY process. CEF does not always
+            // propagate it from the browser command line to helpers, so the Network Service
+            // utility (which performs cookie encryption) ends up invoking the real macOS
+            // Keychain and raises a "Chromium Safe Storage" authorization dialog. Inject it
+            // unconditionally to keep cookie crypto fully in-memory.
+            let mock_kc = cef::CefString::from("use-mock-keychain");
+            cl.append_switch(Some(&mock_kc));
+
+            if is_browser {
                 // NOTE: helper processes (GPU, Renderer, Network) run out-of-process via the
                 // cef_helper binary.  Per-browser CefRequestContext objects are honored only
                 // in this multi-process mode; --single-process made CEF ignore them.
@@ -46,14 +57,6 @@ wrap_app! {
                 cl.append_switch(Some(&flag2));
                 let flag3 = cef::CefString::from("disable-gpu");
                 cl.append_switch(Some(&flag3));
-
-                // NOTE: --use-mock-keychain makes Chromium's NetworkService use
-                // an in-memory keychain for cookie encryption instead of the
-                // macOS Keychain.  Without it, cef_host raises a "Chromium Safe
-                // Storage" authorization dialog on launch.  ozmux seeds the
-                // cookie store explicitly, so the real Keychain is never needed.
-                let flag4 = cef::CefString::from("use-mock-keychain");
-                cl.append_switch(Some(&flag4));
 
                 // NOTE: Site Isolation is OFF by default to keep cef-rs 0.7 CDP
                 // sessions stable (cross-origin nav otherwise tears down the
