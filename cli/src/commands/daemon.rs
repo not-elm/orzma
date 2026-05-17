@@ -3,6 +3,7 @@
 
 use anyhow::Context;
 use clap::Subcommand;
+use std::time::Duration;
 
 use crate::commands::CommandExecute;
 
@@ -63,4 +64,13 @@ pub(crate) async fn ensure_running() -> anyhow::Result<DaemonStartOutcome> {
     drop(lock);
 
     Ok(DaemonStartOutcome::Started)
+}
+
+/// Builds a `reqwest` client for HTTP requests to the local daemon, with the
+/// given per-request timeout.
+pub(crate) fn http_client(timeout: Duration) -> anyhow::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("build reqwest client")
 }

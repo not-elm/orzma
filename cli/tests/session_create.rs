@@ -9,12 +9,12 @@
 //! scenarios in sequence to avoid in-binary parallelism, and a drop guard
 //! stops the daemon even if an assertion panics partway through.
 
+use daemon_bootstrap::HTTP_ADDR as DAEMON_ADDR;
 use std::net::{SocketAddr, TcpStream};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
-const DAEMON_ADDR: &str = "127.0.0.1:3200";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 
 struct DaemonStopGuard {

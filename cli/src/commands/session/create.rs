@@ -39,10 +39,7 @@ impl CommandExecute for CreateArgs {
 }
 
 async fn create_session(name: Option<String>) -> anyhow::Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(CREATE_TIMEOUT)
-        .build()
-        .context("build reqwest client")?;
+    let client = daemon::http_client(CREATE_TIMEOUT)?;
     let url = format!("{}/sessions", daemon_bootstrap::HTTP_BASE_URL);
     let response = client
         .post(&url)

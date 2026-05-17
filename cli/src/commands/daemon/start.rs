@@ -137,10 +137,7 @@ fn detach_from_session(cmd: &mut std::process::Command) {
 }
 
 pub(super) async fn wait_until_ready() -> anyhow::Result<()> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(1))
-        .build()
-        .context("build reqwest client")?;
+    let client = super::http_client(Duration::from_secs(1))?;
 
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
