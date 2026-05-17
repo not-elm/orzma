@@ -208,6 +208,49 @@ describe('useSessionView', () => {
     expect(connectionCount).toBeLessThanOrEqual(2);
   });
 
+  it('resets view to null and closes previous WS when sid changes', async () => {
+    const SID_A = 'sid-a';
+    const SID_B = 'sid-b';
+    const URL_A = `ws://${location.host}/sessions/${SID_A}/events`;
+    const URL_B = `ws://${location.host}/sessions/${SID_B}/events`;
+    const serverA = new Server(URL_A);
+    const serverB = new Server(URL_B);
+
+    let sidASocket: WebSocket | null = null;
+    serverA.on('connection', (sock) => {
+      sidASocket = sock as unknown as WebSocket;
+      sock.send(JSON.stringify(fakeView({ id: SID_A })));
+    });
+    serverB.on('connection', (sock) => {
+      sock.send(JSON.stringify(fakeView({ id: SID_B })));
+    });
+
+    const { result, rerender } = renderHook(({ id }: { id: string | null }) => useSessionView(id), {
+      initialProps: { id: SID_A as string | null },
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(result.current.status).toBe('live');
+
+    rerender({ id: SID_B });
+
+    expect(result.current.status).toBe('connecting');
+    expect((result.current as { view: SessionView | null }).view).toBeNull();
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(result.current.status).toBe('live');
+    expect((result.current as { view: SessionView }).view.id).toBe(SID_B);
+    expect(sidASocket).not.toBeNull();
+    expect((sidASocket as unknown as WebSocket).readyState).toBe(WebSocket.CLOSED);
+
+    serverA.stop();
+    serverB.stop();
+  });
+
   it('pauses reconnect when document.hidden is true', async () => {
     let connectionCount = 0;
     server.on('connection', (sock) => {
