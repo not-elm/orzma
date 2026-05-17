@@ -391,4 +391,26 @@ describe('parseShortcuts', () => {
     expect(out?.bindings).toHaveLength(1);
     expect(out?.bindings[0].action).toEqual({ type: 'new-window' });
   });
+
+  it('parses a choose-tree action binding', () => {
+    const result = parseShortcuts({
+      prefix: {
+        key: 'b',
+        modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+        timeout_ms: 2000,
+      },
+      bindings: [
+        {
+          key: 'w',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'choose-tree' },
+          repeatable: false,
+        },
+      ],
+      repeat_timeout_ms: 500,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.bindings).toHaveLength(1);
+    expect(result?.bindings[0]?.action).toEqual({ type: 'choose-tree' });
+  });
 });

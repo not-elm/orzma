@@ -1,4 +1,6 @@
 import { useRef } from 'react';
+import { ChooseTreeOverlay } from './choose-tree/ChooseTreeOverlay';
+import { useChooseTree } from './choose-tree/useChooseTree';
 import { LayoutView } from './layout/LayoutView';
 import type { DefaultWindowState } from './layout/types';
 import { useWindowLayout } from './layout/useWindowLayout';
@@ -8,14 +10,14 @@ import { usePrefixMode } from './shortcuts/usePrefixMode';
 import { RenameWindowPrompt } from './statusbar/RenameWindowPrompt';
 import { StatusBar } from './statusbar/StatusBar';
 import type { SessionView } from './statusbar/types';
-import { useDefaultSession } from './statusbar/useDefaultSession';
+import { useAttachedSession } from './statusbar/useAttachedSession';
 import { useRenameWindowPrompt } from './statusbar/useRenameWindowPrompt';
 import { liveOrReconnectingView, useSessionView } from './statusbar/useSessionView';
 import { windowSelect } from './statusbar/windowSelect';
 
 export function App() {
-  const sessionDefault = useDefaultSession();
-  const sid = sessionDefault.status === 'ready' ? sessionDefault.sessionId : null;
+  const attached = useAttachedSession();
+  const sid = attached.status === 'ready' ? attached.sessionId : null;
   const sessionView = useSessionView(sid);
 
   const liveSession = liveOrReconnectingView(sessionView);
@@ -26,8 +28,8 @@ export function App() {
   const def: DefaultWindowState =
     wid !== null
       ? { status: 'ready', windowId: wid }
-      : sessionDefault.status === 'error'
-        ? { status: 'error', message: sessionDefault.message }
+      : attached.status === 'error'
+        ? { status: 'error', message: attached.message }
         : { status: 'loading' };
 
   const view = layout.status === 'gone' ? null : layout.view;
@@ -47,6 +49,18 @@ export function App() {
   const openPromptRef = useRef(openPrompt);
   openPromptRef.current = openPrompt;
 
+  const chooseTree = useChooseTree();
+  const openChooseTreeRef = useRef(chooseTree.open);
+  openChooseTreeRef.current = chooseTree.open;
+
+  // NOTE: usePrefixMode caches the shortcut handlers at mount with `useEffect([])`,
+  // so the `ctx.openChooseTree` closure runs forever against the values it captured
+  // on first render. attached.status is 'loading' at first render — without this
+  // ref the guard below permanently early-returns and the picker never opens in
+  // production (Vite HMR masks the bug in dev).
+  const attachedRef = useRef(attached);
+  attachedRef.current = attached;
+
   const ctx: ShortcutContext = {
     activeWindow: () => activeWindowRef.current,
     activePane: () => activePaneRef.current,
@@ -58,6 +72,10 @@ export function App() {
       if (w === null || name === null) return;
       openPromptRef.current(w, name);
     },
+    openChooseTree: () => {
+      if (attachedRef.current.status !== 'ready') return;
+      openChooseTreeRef.current();
+    },
   };
 
   const { isArmed, prefix } = usePrefixMode(ctx);
@@ -68,6 +86,13 @@ export function App() {
         <LayoutView windowState={def} layoutState={layout} />
       </div>
       <RenameWindowPrompt promptState={promptState} closePrompt={closePrompt} />
+      {chooseTree.state.open && attached.status === 'ready' && (
+        <ChooseTreeOverlay
+          onClose={chooseTree.close}
+          attachedSessionId={attached.sessionId}
+          setAttachedSession={attached.setSession}
+        />
+      )}
       <StatusBar
         sessionState={sessionView}
         windowReconnecting={layout.status === 'reconnecting'}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isChooseTreeOpen } from '../choose-tree/chooseTreeGate';
 import type { WindowId } from '../layout/types';
 import { setRenamePromptOpen } from '../shortcuts/renamePromptGate';
 
@@ -46,6 +47,7 @@ export function useRenameWindowPrompt(): RenameWindowPromptApi {
   }, [promptState.open]);
 
   const openPrompt = (windowId: WindowId, currentName: string) => {
+    if (isChooseTreeOpen()) return;
     // NOTE: capture the focused element before the prompt input mounts;
     // callers must invoke openPrompt before that, or returnFocus would
     // capture the prompt's own input.

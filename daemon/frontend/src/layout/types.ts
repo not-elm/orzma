@@ -46,7 +46,7 @@ export interface WindowView {
 }
 
 /**
- * Public state of `useDefaultSession` / `useDefaultWindow`-style hooks
+ * Public state of `useAttachedSession` / `useDefaultWindow`-style hooks
  * — historical shape preserved here because `LayoutView` still consumes it.
  */
 export type DefaultWindowState =

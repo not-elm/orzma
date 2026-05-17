@@ -37,9 +37,12 @@ export function useSessionView(sid: string | null): SessionViewState {
       setState({ status: 'connecting', view: null });
       return;
     }
+    setState({ status: 'connecting', view: null });
+    lastViewRef.current = null;
     const myGen = ++generationRef.current;
     attemptRef.current = 0;
 
+    let activeWs: WebSocket | null = null;
     let pendingTimer: ReturnType<typeof setTimeout> | null = null;
     let resumeListener: (() => void) | null = null;
 
@@ -70,6 +73,7 @@ export function useSessionView(sid: string | null): SessionViewState {
 
     const connect = () => {
       const ws = new WebSocket(sessionEventsWsUrl(sid));
+      activeWs = ws;
       ws.onmessage = (ev) => {
         if (generationRef.current !== myGen) return;
         try {
@@ -130,6 +134,10 @@ export function useSessionView(sid: string | null): SessionViewState {
         document.removeEventListener('visibilitychange', resumeListener);
         resumeListener = null;
       }
+      if (activeWs && activeWs.readyState !== WebSocket.CLOSED) {
+        activeWs.close();
+      }
+      activeWs = null;
     };
   }, [sid]);
 
