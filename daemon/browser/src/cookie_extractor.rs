@@ -85,10 +85,20 @@ fn host_from_url(url: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn to_cookie_dto(c: &ChromiumCookie, value: String, initial_url: &str) -> CefCookieDto {
+    // NOTE: Chrome's SQLite `samesite` column has four states (-1 unspecified,
+    // 0 None, 1 Lax, 2 Strict) but `decrypt-cookies` 0.11.1 collapses everything
+    // that isn't 1/2 into `SameSite::None`. Forwarding that to CEF as
+    // `NO_RESTRICTION` makes Chromium reject every cookie whose stored value
+    // was actually `unspecified` and that lacks `Secure` — `SameSite=None`
+    // without `Secure` is a CookieMonster rejection in modern Chromium. We
+    // can't recover the original i32 through the public API, so remap `None`
+    // to `Unspecified`: insecure cookies are then accepted (the common case),
+    // and legitimate `SameSite=None; Secure` cookies degrade to Lax-by-default
+    // (acceptable for the local single-user embedded browser).
     let same_site = match c.same_site {
         DcSameSite::Strict => SameSite::Strict,
         DcSameSite::Lax => SameSite::Lax,
-        DcSameSite::None => SameSite::None,
+        DcSameSite::None => SameSite::Unspecified,
     };
     let cookie_url = if c.host_key.starts_with('.') {
         format!("https://{}{}", c.host_key.trim_start_matches('.'), c.path)
