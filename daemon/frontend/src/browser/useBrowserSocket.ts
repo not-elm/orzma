@@ -51,6 +51,26 @@ export type BrowserUnavailableReason =
   | { kind: 'cef_init_failed'; exit_code: number }
   | { kind: 'protocol_mismatch'; expected: number; got: number };
 
+/** Mirrors `CursorKind` in wire.rs (serde snake_case). */
+export type CursorKind =
+  | 'default'
+  | 'pointer'
+  | 'text'
+  | 'crosshair'
+  | 'wait'
+  | 'progress'
+  | 'help'
+  | 'move'
+  | 'not_allowed'
+  | 'grab'
+  | 'grabbing'
+  | 'col_resize'
+  | 'row_resize'
+  | 'nesw_resize'
+  | 'nwse_resize'
+  | 'zoom_in'
+  | 'zoom_out';
+
 export interface UseBrowserSocketOpts {
   windowId: string;
   paneId: string;
@@ -67,6 +87,8 @@ export interface UseBrowserSocketOpts {
   onMustRestart: (reason: string) => void;
   /** Called when the daemon broadcasts BrowserUnavailable (cef_host died). */
   onUnavailable?: (reason: BrowserUnavailableReason) => void;
+  /** Called when the embedded page's mouse cursor changes. */
+  onCursor?: (cursor: CursorKind) => void;
   /** Called right after the socket opens and Subscribe is sent. Consumers use
    *  it to (re-)send the current viewport size, since a Resize emitted before
    *  the socket was open would have been dropped. */
@@ -102,6 +124,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
     onNav,
     onUnavailable,
     onOpen,
+    onCursor,
   } = opts;
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -186,6 +209,15 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
         }
         return;
       }
+      if (kind === 'cursor') {
+        try {
+          const msg = decode(new Uint8Array(ev.data)) as { kind: 'cursor'; cursor: CursorKind };
+          onCursor?.(msg.cursor);
+        } catch (e) {
+          console.warn('cursor decode failed', e);
+        }
+        return;
+      }
       worker.postMessage({ type: 'wsBinary', generation, buffer: ev.data }, [ev.data]);
     };
 
@@ -208,6 +240,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
     onNav,
     onUnavailable,
     onOpen,
+    onCursor,
   ]);
 
   const send = (msg: BrowserClientMsg) => {

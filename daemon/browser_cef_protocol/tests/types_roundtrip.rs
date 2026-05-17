@@ -1,6 +1,6 @@
 use ozmux_browser_cef_protocol::types::{ActivityId, FrameKey, Rect};
 use ozmux_browser_cef_protocol::wire::{
-    BrowserClientMsg, BrowserServerMsg, BrowserUnavailableReason, CefCookieDto,
+    BrowserClientMsg, BrowserServerMsg, BrowserUnavailableReason, CefCookieDto, CursorKind,
     FrameSubscriptionReply, HostCommand, HostEvent, ImeUnderline, InputEvent, KeyEventType,
     MouseButton, MustRestartReason, SameSite,
 };
@@ -356,6 +356,14 @@ fn host_event_title_changed_roundtrips() {
 }
 
 #[test]
+fn host_event_cursor_changed_roundtrips() {
+    wire_roundtrip(HostEvent::CursorChanged {
+        aid: ActivityId("a1".into()),
+        cursor: CursorKind::Pointer,
+    });
+}
+
+#[test]
 fn host_event_selection_changed_roundtrips() {
     wire_roundtrip(HostEvent::SelectionChanged {
         aid: ActivityId("a1".into()),
@@ -545,6 +553,13 @@ fn browser_server_msg_nav_roundtrips() {
         title: "Example".into(),
         can_back: true,
         can_forward: false,
+    });
+}
+
+#[test]
+fn browser_server_msg_cursor_roundtrips() {
+    wire_roundtrip(BrowserServerMsg::Cursor {
+        cursor: CursorKind::Text,
     });
 }
 

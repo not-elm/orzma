@@ -70,6 +70,10 @@ async fn run(
         tracing::debug!(?aid, "no cef NavState channel registered; closing");
         return;
     };
+    let Some(mut cursor_rx) = registry.cursor_subscribe(&aid_proto) else {
+        tracing::debug!(?aid, "no cef cursor channel registered; closing");
+        return;
+    };
     let mut unavailable_rx = registry.unavailable_subscribe();
     let session_id_advertised = ring.session_id();
 
@@ -192,6 +196,18 @@ async fn run(
                         // from registry). Treat as a clean close.
                         break;
                     }
+                }
+            }
+            // Outbound: push a Cursor message whenever the page cursor changes.
+            cursor_result = cursor_rx.changed() => {
+                match cursor_result {
+                    Ok(()) => {
+                        let cursor = *cursor_rx.borrow();
+                        if !send_msg(&mut socket, &BrowserServerMsg::Cursor { cursor }).await {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
             // Outbound: forward BrowserUnavailable to the client and close.

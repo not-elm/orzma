@@ -24,6 +24,49 @@ pub enum SameSite {
     Unspecified,
 }
 
+/// Semantic mouse-cursor kind the embedded page requests, mapped from CEF's
+/// `cef_cursor_type_t` and rendered by the frontend as a Tailwind `cursor-*`
+/// utility on the browser overlay. Custom cursor images are not represented —
+/// `cef_host` falls back to `Default` for those.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorKind {
+    /// The default arrow pointer.
+    Default,
+    /// Hand / link pointer (hovering a clickable element).
+    Pointer,
+    /// I-beam text-selection cursor.
+    Text,
+    /// Crosshair cursor.
+    Crosshair,
+    /// Busy / wait cursor.
+    Wait,
+    /// In-progress cursor (arrow with a spinner).
+    Progress,
+    /// Help / question-mark cursor.
+    Help,
+    /// Move cursor.
+    Move,
+    /// Action-not-allowed cursor.
+    NotAllowed,
+    /// Open-hand grab cursor.
+    Grab,
+    /// Closed-hand grabbing cursor.
+    Grabbing,
+    /// Horizontal column-resize cursor.
+    ColResize,
+    /// Vertical row-resize cursor.
+    RowResize,
+    /// Diagonal NE↔SW resize cursor.
+    NeswResize,
+    /// Diagonal NW↔SE resize cursor.
+    NwseResize,
+    /// Zoom-in cursor.
+    ZoomIn,
+    /// Zoom-out cursor.
+    ZoomOut,
+}
+
 /// A single cookie entry forwarded to cef_host via BrowserCreate ancillary
 /// data. Placeholder for Task A5; the full plumbing (SCM_RIGHTS + cookie
 /// bootstrap in cef_host) is wired there.
@@ -201,6 +244,14 @@ pub enum HostEvent {
         aid: ActivityId,
         /// New page title.
         title: String,
+    },
+    /// The mouse cursor the embedded page requests changed (e.g. a link
+    /// hover switching to the hand pointer).
+    CursorChanged {
+        /// Activity identifier.
+        aid: ActivityId,
+        /// New cursor kind.
+        cursor: CursorKind,
     },
     /// Reply to `HostCommand::GetSelection`.
     SelectionChanged {
@@ -468,6 +519,12 @@ pub enum BrowserServerMsg {
         can_back: bool,
         /// `true` if forward navigation is available.
         can_forward: bool,
+    },
+    /// The mouse cursor the embedded page requests changed. The frontend
+    /// applies the matching `cursor-*` utility to the browser overlay.
+    Cursor {
+        /// New cursor kind.
+        cursor: CursorKind,
     },
     /// Current text selection, sent in reply to `BrowserClientMsg::CopyRequest`.
     SelectionChanged {

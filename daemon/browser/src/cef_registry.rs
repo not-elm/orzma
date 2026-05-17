@@ -3,7 +3,7 @@
 use crate::frame_ring::FrameRing;
 use crate::shm_reader::OwnedShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
-use ozmux_browser_cef_protocol::wire::BrowserUnavailableReason;
+use ozmux_browser_cef_protocol::wire::{BrowserUnavailableReason, CursorKind};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, watch};
@@ -33,6 +33,10 @@ pub struct BrowserCefEntry {
     /// Per-activity nav state sender. The pump task updates this; each WS
     /// subscriber holds a `Receiver` and pushes `BrowserServerMsg::Nav` on change.
     pub nav_tx: watch::Sender<NavState>,
+    /// Per-activity cursor-kind sender. The pump task updates this on
+    /// `HostEvent::CursorChanged`; each WS subscriber pushes
+    /// `BrowserServerMsg::Cursor` on change.
+    pub cursor_tx: watch::Sender<CursorKind>,
     /// Read-only view of the shm region cef_host writes BGRA frames into. The
     /// event pump calls `read_stable` / `read_popup` on `FrameDescriptor`.
     pub reader: Arc<OwnedShmReader>,
@@ -102,9 +106,11 @@ impl BrowserCefRegistry {
         reader: Arc<OwnedShmReader>,
     ) -> watch::Receiver<NavState> {
         let (nav_tx, nav_rx) = watch::channel(NavState::default());
+        let (cursor_tx, _) = watch::channel(CursorKind::Default);
         let entry = BrowserCefEntry {
             ring,
             nav_tx,
+            cursor_tx,
             reader,
         };
         self.entries
@@ -154,6 +160,30 @@ impl BrowserCefRegistry {
         match guard.get(aid) {
             Some(e) => {
                 e.nav_tx.send_replace(state);
+                Ok(())
+            }
+            None => Err(format!("no registry entry for aid={}", aid.0)),
+        }
+    }
+
+    /// Returns a new `watch::Receiver<CursorKind>` tracking the cursor for `aid`.
+    ///
+    /// Returns `None` if no entry for `aid` is registered.
+    pub fn cursor_subscribe(&self, aid: &CefActivityId) -> Option<watch::Receiver<CursorKind>> {
+        self.entries
+            .lock()
+            .expect("browser_cef entries poisoned")
+            .get(aid)
+            .map(|e| e.cursor_tx.subscribe())
+    }
+
+    /// Replaces the cursor kind for `aid`. Returns an error string if no entry
+    /// is registered for `aid`.
+    pub fn cursor_publish(&self, aid: &CefActivityId, cursor: CursorKind) -> Result<(), String> {
+        let guard = self.entries.lock().expect("browser_cef entries poisoned");
+        match guard.get(aid) {
+            Some(e) => {
+                e.cursor_tx.send_replace(cursor);
                 Ok(())
             }
             None => Err(format!("no registry entry for aid={}", aid.0)),

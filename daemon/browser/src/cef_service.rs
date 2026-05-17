@@ -385,6 +385,11 @@ async fn event_pump_loop(mut events: mpsc::Receiver<HostEvent>, registry: Arc<Br
                     }
                 }
             }
+            HostEvent::CursorChanged { aid, cursor } => {
+                if let Err(e) = registry.cursor_publish(&aid, cursor) {
+                    tracing::debug!(error = %e, "cursor_publish: aid not in registry");
+                }
+            }
             // On each frame cef_host writes to shm and emits a FrameDescriptor;
             // the pump reads the named slot and publishes it into the ring so
             // WS subscribers receive a Screencast.

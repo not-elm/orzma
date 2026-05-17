@@ -7,13 +7,49 @@
 
 use cef::rc::Rc as _;
 use cef::{
-    Browser, CefString, DisplayHandler, Frame, ImplDisplayHandler, WrapDisplayHandler,
-    wrap_display_handler,
+    Browser, CefString, CursorInfo, CursorType, DisplayHandler, Frame, ImplDisplayHandler,
+    WrapDisplayHandler, wrap_display_handler,
 };
+use cef_dll_sys::cef_cursor_type_t;
 use ozmux_browser_cef_protocol::types::ActivityId;
-use ozmux_browser_cef_protocol::wire::HostEvent;
+use ozmux_browser_cef_protocol::wire::{CursorKind, HostEvent};
+use std::os::raw::c_int;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+
+/// Maps a CEF `cef_cursor_type_t` to the semantic [`CursorKind`] the frontend
+/// renders. Custom cursor images and rarely-seen kinds fall back to `Default`.
+fn cursor_kind_from(type_: &cef_cursor_type_t) -> CursorKind {
+    match type_ {
+        cef_cursor_type_t::CT_HAND => CursorKind::Pointer,
+        cef_cursor_type_t::CT_IBEAM | cef_cursor_type_t::CT_VERTICALTEXT => CursorKind::Text,
+        cef_cursor_type_t::CT_CROSS => CursorKind::Crosshair,
+        cef_cursor_type_t::CT_WAIT => CursorKind::Wait,
+        cef_cursor_type_t::CT_PROGRESS => CursorKind::Progress,
+        cef_cursor_type_t::CT_HELP => CursorKind::Help,
+        cef_cursor_type_t::CT_MOVE => CursorKind::Move,
+        cef_cursor_type_t::CT_NOTALLOWED | cef_cursor_type_t::CT_NODROP => CursorKind::NotAllowed,
+        cef_cursor_type_t::CT_GRAB => CursorKind::Grab,
+        cef_cursor_type_t::CT_GRABBING => CursorKind::Grabbing,
+        cef_cursor_type_t::CT_EASTRESIZE
+        | cef_cursor_type_t::CT_WESTRESIZE
+        | cef_cursor_type_t::CT_EASTWESTRESIZE
+        | cef_cursor_type_t::CT_COLUMNRESIZE => CursorKind::ColResize,
+        cef_cursor_type_t::CT_NORTHRESIZE
+        | cef_cursor_type_t::CT_SOUTHRESIZE
+        | cef_cursor_type_t::CT_NORTHSOUTHRESIZE
+        | cef_cursor_type_t::CT_ROWRESIZE => CursorKind::RowResize,
+        cef_cursor_type_t::CT_NORTHEASTRESIZE
+        | cef_cursor_type_t::CT_SOUTHWESTRESIZE
+        | cef_cursor_type_t::CT_NORTHEASTSOUTHWESTRESIZE => CursorKind::NeswResize,
+        cef_cursor_type_t::CT_NORTHWESTRESIZE
+        | cef_cursor_type_t::CT_SOUTHEASTRESIZE
+        | cef_cursor_type_t::CT_NORTHWESTSOUTHEASTRESIZE => CursorKind::NwseResize,
+        cef_cursor_type_t::CT_ZOOMIN => CursorKind::ZoomIn,
+        cef_cursor_type_t::CT_ZOOMOUT => CursorKind::ZoomOut,
+        _ => CursorKind::Default,
+    }
+}
 
 /// Shared navigation state cache, updated by both the display and load handlers.
 ///
@@ -89,6 +125,23 @@ wrap_display_handler! {
             let new_url = url.map(|u| u.to_string()).unwrap_or_default();
             *self.inner.url.lock().expect("NavInner.url poisoned") = new_url;
             self.inner.emit();
+        }
+
+        fn on_cursor_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            _cursor: *mut u8,
+            type_: CursorType,
+            _custom_cursor_info: Option<&CursorInfo>,
+        ) -> c_int {
+            let cursor = cursor_kind_from(type_.as_ref());
+            let _ = self.inner.event_tx.send(HostEvent::CursorChanged {
+                aid: self.inner.aid.clone(),
+                cursor,
+            });
+            // NOTE: windowless rendering — there is no OS cursor to set here;
+            // 0 lets CEF apply its default handling.
+            0
         }
     }
 }

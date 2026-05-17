@@ -24,8 +24,36 @@ import { attachKeyboard } from './input/keyboard';
 import { attachMouse } from './input/mouse';
 import { attachWheel } from './input/wheel';
 import { Toolbar } from './Toolbar';
-import type { BrowserClientMsg, BrowserUnavailableReason, NavSnapshot } from './useBrowserSocket';
+import type {
+  BrowserClientMsg,
+  BrowserUnavailableReason,
+  CursorKind,
+  NavSnapshot,
+} from './useBrowserSocket';
 import { useBrowserSocket } from './useBrowserSocket';
+
+// CursorKind → Tailwind cursor utility. Full literal class strings so the
+// Tailwind content scanner picks them up. `.claude/rules/styling.md`: these
+// are standard semantic utilities, not arbitrary values.
+const CURSOR_CLASS: Record<CursorKind, string> = {
+  default: 'cursor-default',
+  pointer: 'cursor-pointer',
+  text: 'cursor-text',
+  crosshair: 'cursor-crosshair',
+  wait: 'cursor-wait',
+  progress: 'cursor-progress',
+  help: 'cursor-help',
+  move: 'cursor-move',
+  not_allowed: 'cursor-not-allowed',
+  grab: 'cursor-grab',
+  grabbing: 'cursor-grabbing',
+  col_resize: 'cursor-col-resize',
+  row_resize: 'cursor-row-resize',
+  nesw_resize: 'cursor-nesw-resize',
+  nwse_resize: 'cursor-nwse-resize',
+  zoom_in: 'cursor-zoom-in',
+  zoom_out: 'cursor-zoom-out',
+};
 
 interface Props {
   windowId: string;
@@ -75,6 +103,8 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
   const [handle, setHandle] = useState<WorkerHandle | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [unavailable, setUnavailable] = useState<BrowserUnavailableReason | null>(null);
+  // Tailwind cursor utility for the overlay, driven by the embedded page.
+  const [cursorClass, setCursorClass] = useState('cursor-default');
   // Bumped on SubscribeReply::MustRestart so the canvas remounts (key change)
   // and the worker is recreated (effect re-runs).
   const [restartId, setRestartId] = useState(0);
@@ -225,6 +255,10 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
     setUnavailable(reason);
   };
 
+  const onCursor = (cursor: CursorKind) => {
+    setCursorClass(CURSOR_CLASS[cursor] ?? 'cursor-default');
+  };
+
   const { send } = useBrowserSocket({
     windowId,
     paneId,
@@ -238,6 +272,7 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
     onNav,
     onUnavailable,
     onOpen: emitResize,
+    onCursor,
   });
 
   // Keep sendRef in sync without triggering the attach effect.
@@ -371,7 +406,7 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
               aria-label="Browser viewport"
               // biome-ignore lint/a11y/noNoninteractiveTabindex: overlay must be focusable to receive keyboard events
               tabIndex={0}
-              className="absolute inset-0 outline-none"
+              className={`absolute inset-0 outline-none ${cursorClass}`}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setCtx({ x: e.clientX, y: e.clientY });
