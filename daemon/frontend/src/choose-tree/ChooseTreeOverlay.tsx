@@ -139,6 +139,9 @@ export function ChooseTreeOverlay({
   const rows = flattenVisibleRows(tree, state.expanded);
   const activeId = activeRowKey(rows, state.cursor);
 
+  const sessionCount = tree.length;
+  const windowCount = tree.reduce((acc, s) => acc + s.windows.length, 0);
+
   return (
     // biome-ignore lint/a11y/useAriaPropsSupportedByRole: dialog manages focus on behalf of the tree; aria-activedescendant here is the correct ARIA 1.2 pattern for a focus-managing container
     <div
@@ -148,27 +151,67 @@ export function ChooseTreeOverlay({
       aria-activedescendant={activeId}
       ref={rootRef}
       tabIndex={-1}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 outline-none"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 outline-none backdrop-blur-sm"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onCloseRef.current();
       }}
     >
       {/* biome-ignore lint/plugin: modal sizing must be viewport-relative; no semantic token exists */}
-      <div className="max-h-[75vh] w-[70vw] max-w-3xl overflow-auto rounded-md border border-border bg-popover p-3 shadow-xl">
-        {treeState.status === 'loading' && (
-          <div className="p-2 text-muted-foreground">Loading…</div>
-        )}
-        {treeState.status === 'error' && (
-          <div className="p-2 text-destructive">Failed to load sessions: {treeState.message}</div>
-        )}
-        {treeState.status === 'ready' && (
-          <TreeView
-            rows={rows}
-            cursor={state.cursor}
-            onRowClick={(cursor) => dispatch({ type: 'set-cursor', cursor })}
-          />
-        )}
+      <div className="flex max-h-[75vh] w-[70vw] max-w-3xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl ring-1 ring-primary/20">
+        <header className="flex shrink-0 items-center justify-between border-b border-border bg-tmux-status-bar px-3 py-1.5 font-mono text-xs">
+          <span className="text-tmux-status-bar-foreground">(choose-tree)</span>
+          <span className="text-muted-foreground">
+            {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'} · {windowCount}{' '}
+            {windowCount === 1 ? 'window' : 'windows'}
+          </span>
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto">
+          {treeState.status === 'loading' && (
+            <div className="p-3 font-mono text-sm text-muted-foreground">Loading sessions…</div>
+          )}
+          {treeState.status === 'error' && (
+            <div className="p-3 font-mono text-sm text-destructive">
+              Failed to load sessions: {treeState.message}
+            </div>
+          )}
+          {treeState.status === 'ready' && (
+            <TreeView
+              rows={rows}
+              cursor={state.cursor}
+              onRowClick={(cursor) => dispatch({ type: 'set-cursor', cursor })}
+            />
+          )}
+        </div>
+        <footer className="flex shrink-0 items-center gap-4 border-t border-border bg-tmux-status-bar px-3 py-1.5 font-mono text-xs text-muted-foreground">
+          <KeyHint keys={['↑', '↓']} label="navigate" />
+          <KeyHint keys={['→', '↵']} label="select" />
+          <KeyHint keys={['←']} label="collapse" />
+          <KeyHint keys={['esc']} label="cancel" />
+        </footer>
       </div>
     </div>
+  );
+}
+
+interface KeyHintProps {
+  keys: string[];
+  label: string;
+}
+
+function KeyHint({ keys, label }: KeyHintProps) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="flex items-center gap-0.5">
+        {keys.map((k) => (
+          <kbd
+            key={k}
+            className="rounded border border-border bg-background px-1.5 py-0 text-tmux-status-bar-foreground"
+          >
+            {k}
+          </kbd>
+        ))}
+      </span>
+      <span>{label}</span>
+    </span>
   );
 }

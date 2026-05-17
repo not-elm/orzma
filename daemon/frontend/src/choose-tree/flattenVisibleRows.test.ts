@@ -36,4 +36,15 @@ describe('flattenVisibleRows', () => {
     const rows = flattenVisibleRows(tree, new Set(['sid-a', 'sid-b']));
     expect(rows.map((r) => r.kind)).toEqual(['session', 'window', 'window', 'session', 'window']);
   });
+
+  it('marks the active window of each session with isActive=true', () => {
+    const rows = flattenVisibleRows(tree, new Set(['sid-a', 'sid-b']));
+    const windowRows = rows.filter(
+      (r): r is Extract<VisibleRow, { kind: 'window' }> => r.kind === 'window',
+    );
+    const byId = new Map(windowRows.map((w) => [w.windowId, w.isActive]));
+    expect(byId.get('wid-a0')).toBe(false);
+    expect(byId.get('wid-a1')).toBe(true);
+    expect(byId.get('wid-b0')).toBe(false);
+  });
 });

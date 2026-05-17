@@ -3,11 +3,22 @@ import type { SessionTreeNode } from './types';
 
 export type VisibleRow =
   | { kind: 'session'; sessionId: SessionId; name: string; expanded: boolean; windowCount: number }
-  | { kind: 'window'; sessionId: SessionId; windowId: WindowId; name: string; index: number };
+  | {
+      kind: 'window';
+      sessionId: SessionId;
+      windowId: WindowId;
+      name: string;
+      index: number;
+      isActive: boolean;
+    };
 
 /**
  * Builds the linear list of rows that the picker actually renders, in
  * top-to-bottom order. Pure function: no React state, no DOM.
+ *
+ * Window rows carry `isActive = (session.active_window === windowId)` so
+ * the view can render the tmux-style "active window" marker without
+ * threading the parent session down.
  */
 export function flattenVisibleRows(
   tree: SessionTreeNode[],
@@ -31,6 +42,7 @@ export function flattenVisibleRows(
           windowId: w.id,
           name: w.name,
           index: w.index,
+          isActive: session.active_window === w.id,
         });
       }
     }
