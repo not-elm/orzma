@@ -46,7 +46,7 @@ describe('TreeView', () => {
 
   it('renders a blinking block cursor on the selected row', () => {
     const rows = flattenVisibleRows(tree, new Set(['sid-a']));
-    const { container } = render(
+    render(
       <TreeView
         rows={rows}
         cursor={{ kind: 'window', sessionId: 'sid-a', windowId: 'wid-a0' }}
@@ -67,6 +67,5 @@ describe('TreeView', () => {
     for (const row of unselected) {
       expect(row.querySelector('.animate-cursor-blink')).toBeNull();
     }
-    expect(container).toBeInTheDocument();
   });
 });
