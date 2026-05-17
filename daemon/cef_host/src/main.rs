@@ -5,7 +5,7 @@
 //!   2. Parse args + helper detection via CefExecuteProcess
 //!   3. cef::api_hash (required when passing a CefApp to initialize)
 //!   4. Build CefSettings with framework/resources/subprocess paths
-//!   5. Wrap a minimal BrowserApp that injects single-process flags
+//!   5. Wrap a minimal BrowserApp that injects no-sandbox / disable-gpu flags
 //!   6. CefInitialize
 //!   7. Spawn Tokio runtime on a background thread hosting the UDS control plane
 //!   8. cef::run_message_loop() — blocks until QuitTask calls quit_message_loop()
@@ -19,9 +19,10 @@ use ozmux_browser_cef_protocol::wire::HostEvent;
 use ozmux_cef_host::{control, pool, post_command};
 use std::path::PathBuf;
 
-// NOTE: BrowserApp injects --single-process + --no-sandbox + --disable-gpu at command-line
-// processing time.  Without a proper .app bundle layout the GPU / Renderer helper processes
-// crash immediately (icudtl.dat not found); --single-process avoids spawning them entirely.
+// NOTE: BrowserApp injects --no-sandbox + --disable-gpu at command-line processing time.
+// CEF runs multi-process: helper processes (renderer, gpu, network) are spawned from the
+// cef_helper binary that sits next to cef_host (see browser_subprocess_path below).
+// Multi-process is required for per-browser CefRequestContext objects to take effect.
 wrap_app! {
     struct BrowserApp;
 
@@ -38,11 +39,9 @@ wrap_app! {
                 .map(|s| s.to_string().is_empty())
                 .unwrap_or(true);
             if let (Some(cl), true) = (command_line, is_browser) {
-                // NOTE: --single-process collapses all helper processes (GPU, Renderer,
-                // Network) into the browser process, avoiding subprocess bundle requirements
-                // on macOS.  Required for running without a proper .app bundle layout.
-                let flag = cef::CefString::from("single-process");
-                cl.append_switch(Some(&flag));
+                // NOTE: helper processes (GPU, Renderer, Network) run out-of-process via the
+                // cef_helper binary.  Per-browser CefRequestContext objects are honored only
+                // in this multi-process mode; --single-process made CEF ignore them.
                 let flag2 = cef::CefString::from("no-sandbox");
                 cl.append_switch(Some(&flag2));
                 let flag3 = cef::CefString::from("disable-gpu");

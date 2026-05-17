@@ -72,9 +72,11 @@ kill-daemon:
 		echo "no daemon listening on :3200"; \
 	fi; \
 	cef_pids=$$(pgrep -x cef_host 2>/dev/null); \
-	if [ -n "$$cef_pids" ]; then \
-		echo "killing stray cef_host (pid $$cef_pids)"; \
-		kill $$cef_pids 2>/dev/null || true; \
+	helper_pids=$$(pgrep -x cef_helper 2>/dev/null); \
+	all_pids="$$cef_pids $$helper_pids"; \
+	if [ -n "$$(echo $$all_pids | tr -d ' ')" ]; then \
+		echo "killing stray cef_host/cef_helper (pid $$all_pids)"; \
+		kill $$all_pids 2>/dev/null || true; \
 	fi
 
 test-frontend:
