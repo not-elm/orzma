@@ -198,8 +198,7 @@ fn apply_macos_settings(settings: &mut Settings) {
     // flat locales/ subdirectory, so locales_dir_path is left at default (empty).
 
     let helper_path = resolve_browser_subprocess_path();
-    settings.browser_subprocess_path =
-        cef::CefString::from(helper_path.to_string_lossy().as_ref());
+    settings.browser_subprocess_path = cef::CefString::from(helper_path.to_string_lossy().as_ref());
 
     tracing::info!("framework_dir_path = {}", framework_dir.display());
     tracing::info!("resources_dir_path = {}", resources_dir.display());

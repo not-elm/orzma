@@ -38,7 +38,10 @@ fn close_stray_fd(fd: RawFd, command: &str) {
     unsafe {
         libc::close(fd);
     }
-    tracing::warn!(command, "stray fd received on non-BrowserCreate command, closed");
+    tracing::warn!(
+        command,
+        "stray fd received on non-BrowserCreate command, closed"
+    );
 }
 
 /// Connects to the daemon UDS, performs the Hello / Ready handshake,
