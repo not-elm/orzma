@@ -69,7 +69,7 @@ async fn extract_macos(initial_url: &str) -> Result<Vec<CefCookieDto>, std::io::
         let Some(ref value) = c.decrypted_value else {
             continue;
         };
-        out.push(to_cookie_dto(c, value.clone(), initial_url));
+        out.push(to_cookie_dto(c, value.clone()));
     }
     Ok(out)
 }
@@ -84,7 +84,7 @@ fn host_from_url(url: &str) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn to_cookie_dto(c: &ChromiumCookie, value: String, initial_url: &str) -> CefCookieDto {
+fn to_cookie_dto(c: &ChromiumCookie, value: String) -> CefCookieDto {
     // NOTE: Chrome's SQLite `samesite` column has four states (-1 unspecified,
     // 0 None, 1 Lax, 2 Strict) but `decrypt-cookies` 0.11.1 collapses everything
     // that isn't 1/2 into `SameSite::None`. Forwarding that to CEF as
@@ -100,16 +100,12 @@ fn to_cookie_dto(c: &ChromiumCookie, value: String, initial_url: &str) -> CefCoo
         DcSameSite::Lax => SameSite::Lax,
         DcSameSite::None => SameSite::Unspecified,
     };
-    let cookie_url = if c.host_key.starts_with('.') {
-        format!("https://{}{}", c.host_key.trim_start_matches('.'), c.path)
-    } else {
-        initial_url.to_owned()
-    };
+    let (cookie_url, cookie_domain) = build_url_and_domain(&c.host_key, &c.path);
     CefCookieDto {
         url: cookie_url,
         name: c.name.clone(),
         value,
-        domain: c.host_key.clone(),
+        domain: cookie_domain,
         path: c.path.clone(),
         secure: c.is_secure,
         http_only: c.is_httponly,
@@ -120,9 +116,62 @@ fn to_cookie_dto(c: &ChromiumCookie, value: String, initial_url: &str) -> CefCoo
     }
 }
 
+/// Builds the `(url, domain)` pair forwarded to `CefCookieManager::set_cookie`
+/// for a Chrome-stored cookie. Two conventions matter for Chromium's
+/// `CanonicalCookie::CreateSanitizedCookie`:
+///
+/// - A `host_key` beginning with `.` is a domain cookie (set with the
+///   `Domain` attribute). CEF expects the `Domain` attribute carried verbatim
+///   (leading dot included) and a URL whose host lies within that domain.
+/// - A `host_key` without a leading dot is a host-only cookie (no `Domain`
+///   attribute). CEF expects an empty `domain` and a URL whose host is
+///   exactly `host_key`. This is also the only shape that satisfies the
+///   `__Host-` cookie prefix invariants — sending a non-empty `domain` for
+///   such a cookie fires Chromium's `EXCLUDE_INVALID_PREFIX`.
+///
+/// The URL scheme is always `https`. That works for `secure=true` cookies
+/// (required) and `secure=false` cookies (accepted), and avoids
+/// `EXCLUDE_SECURE_ONLY` rejections that would fire when setting a
+/// secure cookie via an `http://` URL.
+#[cfg(target_os = "macos")]
+fn build_url_and_domain(host_key: &str, path: &str) -> (String, String) {
+    let path = if path.is_empty() { "/" } else { path };
+    if let Some(host) = host_key.strip_prefix('.') {
+        (format!("https://{host}{path}"), host_key.to_owned())
+    } else {
+        (format!("https://{host_key}{path}"), String::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn build_url_and_domain_domain_cookie_keeps_dot_and_strips_for_url() {
+        let (url, domain) = build_url_and_domain(".example.com", "/path");
+        assert_eq!(url, "https://example.com/path");
+        assert_eq!(domain, ".example.com");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn build_url_and_domain_host_only_clears_domain_for_host_cookie() {
+        let (url, domain) = build_url_and_domain("mail.google.com", "/");
+        assert_eq!(url, "https://mail.google.com/");
+        assert!(
+            domain.is_empty(),
+            "host-only cookies must use an empty Domain attribute so __Host- prefixed cookies pass Chromium's prefix validation"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn build_url_and_domain_empty_path_defaults_to_root() {
+        let (url, _) = build_url_and_domain("example.com", "");
+        assert_eq!(url, "https://example.com/");
+    }
 
     #[tokio::test]
     async fn extract_for_non_macos_or_no_env_returns_empty() {
