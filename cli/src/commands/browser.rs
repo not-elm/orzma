@@ -17,6 +17,10 @@ pub struct Browser {
     /// Open in an ephemeral in-memory profile (no disk persistence).
     #[arg(long)]
     pub incognito: bool,
+    /// Split the current pane and open the Browser Activity in the new pane
+    /// instead of seating it inside the current pane.
+    #[arg(long, short = 's', value_enum)]
+    pub split: Option<SplitDirection>,
 }
 
 /// Direction the new pane is placed relative to the current pane when
@@ -40,10 +44,6 @@ pub enum SplitDirection {
 /// daemon's `POST .../split` endpoint expects. Strings match the serde
 /// representation of `ozmux_multiplexer::{SplitOrientation, Side}`
 /// (lowercase).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Wired by Task 3 when `--split` flag is added to Browser::run()")
-)]
 fn split_direction_to_wire(d: SplitDirection) -> (&'static str, &'static str) {
     match d {
         SplitDirection::Right => ("horizontal", "after"),
@@ -60,8 +60,8 @@ impl CommandExecute for Browser {
 }
 
 /// Run the `ozmux browser` subcommand. Reads the current pane/window from
-/// PTY-injected env vars, asks the daemon to create the activity, then
-/// activates it.
+/// PTY-injected env vars, then either splits the pane (when `--split` is
+/// given) or creates the activity in the current pane and activates it.
 pub async fn run(args: Browser) -> Result<()> {
     let wid = std::env::var("OZMUX_WINDOW_ID")
         .context("OZMUX_WINDOW_ID not set (are you running inside an ozmux pane?)")?;
@@ -69,9 +69,26 @@ pub async fn run(args: Browser) -> Result<()> {
         .context("OZMUX_PANE_ID not set (are you running inside an ozmux pane?)")?;
     let url = args.url.as_deref().map(normalize_url);
     let profile = resolve_profile(args.profile.as_deref(), args.incognito);
-    let aid = daemon_client::create_browser_activity(&wid, &pid, url.as_deref(), profile).await?;
-    daemon_client::activate(&wid, &pid, &aid).await?;
-    Ok(())
+
+    match args.split {
+        Some(direction) => {
+            let (orientation, side) = split_direction_to_wire(direction);
+            daemon_client::split_browser_activity(
+                &wid,
+                &pid,
+                orientation,
+                side,
+                url.as_deref(),
+                profile,
+            )
+            .await
+        }
+        None => {
+            let aid =
+                daemon_client::create_browser_activity(&wid, &pid, url.as_deref(), profile).await?;
+            daemon_client::activate(&wid, &pid, &aid).await
+        }
+    }
 }
 
 /// Build the JSON `profile` object for the create-activity request.

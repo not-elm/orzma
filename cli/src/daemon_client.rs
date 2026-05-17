@@ -67,7 +67,6 @@ pub(crate) async fn activate(wid: &str, pid: &str, aid: &str) -> Result<()> {
 /// and `Side` (`"before"`/`"after"`) serde shapes. The daemon's split
 /// handler already marks the new pane active, so no follow-up activate
 /// call is needed.
-#[expect(dead_code, reason = "Wired by Task 3 when --split flag is added to Browser::run()")]
 pub(crate) async fn split_browser_activity(
     wid: &str,
     target_pid: &str,
