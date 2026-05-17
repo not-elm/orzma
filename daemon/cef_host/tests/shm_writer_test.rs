@@ -5,11 +5,39 @@
 
 use ozmux_browser_cef_protocol::types::Rect;
 use ozmux_cef_host::shm_writer::{NUM_SLOTS, ShmWriter, SlotData};
+use std::alloc::{Layout, alloc_zeroed, dealloc};
 
 const SLOT_PAYLOAD_MAX: usize = 4 * 1024; // 4 KiB per slot, plenty for the test
 
-fn region() -> Vec<u8> {
-    vec![0u8; ShmWriter::required_region_size(SLOT_PAYLOAD_MAX)]
+// NOTE: `SlotHeader` is `#[repr(C, align(64))]`; `Vec<u8>` only guarantees
+// 1-byte alignment and derefs through it panic in debug mode on Linux with
+// "misaligned pointer dereference: address must be a multiple of 0x40".
+// Back the in-process region with an explicit 64-byte-aligned allocation.
+struct AlignedRegion {
+    ptr: *mut u8,
+    layout: Layout,
+}
+
+impl AlignedRegion {
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr
+    }
+}
+
+impl Drop for AlignedRegion {
+    fn drop(&mut self) {
+        // SAFETY: ptr was returned by alloc_zeroed with the same layout.
+        unsafe { dealloc(self.ptr, self.layout) };
+    }
+}
+
+fn region() -> AlignedRegion {
+    let layout =
+        Layout::from_size_align(ShmWriter::required_region_size(SLOT_PAYLOAD_MAX), 64).unwrap();
+    // SAFETY: layout has non-zero size and a valid power-of-two alignment.
+    let ptr = unsafe { alloc_zeroed(layout) };
+    assert!(!ptr.is_null(), "alloc_zeroed returned null");
+    AlignedRegion { ptr, layout }
 }
 
 #[test]
