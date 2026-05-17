@@ -1,4 +1,6 @@
 import { useRef } from 'react';
+import { ChooseTreeOverlay } from './choose-tree/ChooseTreeOverlay';
+import { useChooseTree } from './choose-tree/useChooseTree';
 import { LayoutView } from './layout/LayoutView';
 import type { DefaultWindowState } from './layout/types';
 import { useWindowLayout } from './layout/useWindowLayout';
@@ -47,6 +49,10 @@ export function App() {
   const openPromptRef = useRef(openPrompt);
   openPromptRef.current = openPrompt;
 
+  const chooseTree = useChooseTree();
+  const openChooseTreeRef = useRef(chooseTree.open);
+  openChooseTreeRef.current = chooseTree.open;
+
   const ctx: ShortcutContext = {
     activeWindow: () => activeWindowRef.current,
     activePane: () => activePaneRef.current,
@@ -58,7 +64,7 @@ export function App() {
       if (w === null || name === null) return;
       openPromptRef.current(w, name);
     },
-    openChooseTree: () => {},
+    openChooseTree: () => openChooseTreeRef.current(),
   };
 
   const { isArmed, prefix } = usePrefixMode(ctx);
@@ -69,6 +75,13 @@ export function App() {
         <LayoutView windowState={def} layoutState={layout} />
       </div>
       <RenameWindowPrompt promptState={promptState} closePrompt={closePrompt} />
+      {chooseTree.state.open && attached.status === 'ready' && (
+        <ChooseTreeOverlay
+          onClose={chooseTree.close}
+          attachedSessionId={attached.sessionId}
+          setAttachedSession={attached.setSession}
+        />
+      )}
       <StatusBar
         sessionState={sessionView}
         windowReconnecting={layout.status === 'reconnecting'}
