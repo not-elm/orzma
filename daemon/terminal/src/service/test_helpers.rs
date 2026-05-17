@@ -11,6 +11,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::{TermDamage, TermMode};
 use bytes::Bytes;
 use ozmux_multiplexer::ActivityId;
+use std::sync::atomic::Ordering;
 use tokio::sync::{broadcast, mpsc};
 
 /// Snapshot of the alacritty `TermDamage` state captured by the test-only
@@ -36,6 +37,14 @@ impl TerminalService {
     /// Consumed on use.
     pub async fn inject_spawn_failure(&self, aid: ActivityId) {
         self.forced_failures.write().await.insert(aid);
+    }
+
+    /// Arm the next call to `spawn` so it returns `TerminalError::Pty(...)`
+    /// without touching the real PTY, regardless of the activity id.
+    /// Consumed on use. Lets tests exercise spawn-failure paths where the
+    /// activity id is generated internally and not known up front.
+    pub fn inject_next_spawn_failure(&self) {
+        self.next_spawn_fails.store(true, Ordering::SeqCst);
     }
 
     /// Return the current broadcast subscriber count for an activity, or `None`
