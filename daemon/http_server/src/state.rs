@@ -560,28 +560,29 @@ impl AppState {
     ) -> HttpResult<(WindowId, PaneId, ActivityId)> {
         let (wid, pid, aid) = self.multiplexer.create_window(session_id, name).await?;
         if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid).await {
-            if let Err(rollback_err) = self.close_window(&wid).await {
-                tracing::warn!(
-                    error = %rollback_err,
-                    %wid,
-                    "failed to roll back window after PTY spawn failure"
-                );
-            }
+            self.rollback_window(&wid, "PTY spawn failure").await;
             return Err(spawn_err);
         }
         if session_id.is_some()
             && let Err(select_err) = self.select_active_window(&wid).await
         {
-            if let Err(rollback_err) = self.close_window(&wid).await {
-                tracing::warn!(
-                    error = %rollback_err,
-                    %wid,
-                    "failed to roll back window after active-window selection failure"
-                );
-            }
+            self.rollback_window(&wid, "active-window selection failure").await;
             return Err(select_err.into());
         }
         Ok((wid, pid, aid))
+    }
+
+    /// Tear down a half-created window after a `create_window` step failed.
+    /// A failing teardown is logged; the caller still returns the original
+    /// error.
+    async fn rollback_window(&self, wid: &WindowId, context: &str) {
+        if let Err(rollback_err) = self.close_window(wid).await {
+            tracing::warn!(
+                error = %rollback_err,
+                %wid,
+                "failed to roll back window after {context}"
+            );
+        }
     }
 
     /// Rename a session and broadcast the updated view.
