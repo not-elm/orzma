@@ -64,11 +64,7 @@ cmd_start() {
   printf '%s\n' "${vite_pid}" > "${PID_FILE}"
 
   echo "start: launching daemon (logs: ${daemon_log})" >&2
-  # NOTE: OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1 mirrors `make dev-daemon`. Without it,
-  # cookie_extractor reads the host Chrome `Chrome Safe Storage` Keychain item and
-  # raises an authorization dialog on every Browser Activity create.
   (cd "${REPO_ROOT}" && exec env OZMUX_EXTENSION_ROOT="${REPO_ROOT}/extensions" \
-    OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1 \
     cargo run -p ozmux_cli -- daemon start --foreground) \
     >"${daemon_log}" 2>&1 &
   local daemon_pid=$!

@@ -17,7 +17,7 @@ help:
 	@echo "  build              - Build frontend to single HTML, then build the ozmux CLI (which bundles the daemon)"
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
 	@echo "  dev-backend        - Run the daemon on :3200 via 'ozmux daemon start --foreground'"
-	@echo "  dev-daemon         - Same as dev-backend but with OZMUX_EXTENSION_ROOT preset and Chrome cookie import skipped"
+	@echo "  dev-daemon         - Same as dev-backend but with OZMUX_EXTENSION_ROOT preset"
 	@echo "  dev-tauri          - Build frontend + install ozmux on PATH, then run 'cargo tauri dev'"
 	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
@@ -56,7 +56,6 @@ bundle-cef-host:
 
 dev-daemon: memo-build-sdk $(BUNDLE_CEF_HOST_DEP)
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) \
-	OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1 \
 	cargo run -p ozmux_cli -- daemon start --foreground
 
 clean:
