@@ -15,8 +15,8 @@ use crate::post_command::PoolHandle;
 use crate::profile::resolve_cache_path;
 use crate::shm_writer::ShmWriter;
 use cef::{
-    Browser, BrowserSettings, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, RequestContext,
-    RequestContextSettings, WindowInfo, browser_host_create_browser_sync,
+    Browser, BrowserSettings, CefString, Client, ImplBrowser, ImplBrowserHost, ImplFrame,
+    RequestContext, RequestContextSettings, WindowInfo, browser_host_create_browser_sync,
     request_context_create_context,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
@@ -414,10 +414,6 @@ impl BrowserPool {
         crate::input::invalidate_view(&entry.browser, &aid);
     }
 
-    #[expect(
-        clippy::field_reassign_with_default,
-        reason = "WindowInfo::default() uses unsafe zeroed() with size field; struct-literal form is impractical due to raw pointer fields"
-    )]
     fn create_browser(
         &mut self,
         aid: ActivityId,
@@ -431,25 +427,10 @@ impl BrowserPool {
         let effective_profile = self.effective_profile(&profile);
 
         let total_size = ShmWriter::required_region_size(SLOT_PAYLOAD_MAX);
-        // SAFETY: shm_fd is a valid mmap-able fd received from the daemon side
-        // via SCM_RIGHTS in `control::recv_command_with_fd` (per-BrowserCreate
-        // since Task A5). We map it shared so the daemon can read frames
-        // written by the CEF UI thread.
-        let ptr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                total_size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                shm_fd,
-                0,
-            )
-        };
-        if ptr == libc::MAP_FAILED {
+        let Some(ptr) = map_shm_region(shm_fd, total_size) else {
             tracing::error!(?aid, "mmap failed for shm_fd={shm_fd}");
             return;
-        }
-
+        };
         // SAFETY: ptr is a valid mmap region of total_size bytes, writable,
         // and we are the sole writer on the CEF UI thread.
         let shm = Arc::new(unsafe { ShmWriter::from_mmap(ptr as *mut u8, SLOT_PAYLOAD_MAX) });
@@ -461,43 +442,21 @@ impl BrowserPool {
                     ?aid,
                     "pending RequestContext evicted by Close; aborting BrowserCreate"
                 );
-                // SAFETY: ptr was mmap'd above; unmap before bailing.
-                unsafe { libc::munmap(ptr, total_size) };
-                // SAFETY: shm_fd was duped from the daemon side and is owned here.
-                unsafe { libc::close(shm_fd) };
+                unmap_and_close(ptr, total_size, shm_fd);
                 self.discard_unretained_context(&effective_profile);
                 return;
             }
         };
 
         let render_state = Arc::new(RenderHandlerState::new(1280, 800, 1.0));
-        let render_handler = OzmuxRenderHandler::new(
+        let mut client = build_client(
             aid.clone(),
-            shm.clone(),
-            render_state.clone(),
             self.event_tx.clone(),
+            Arc::clone(&shm),
+            Arc::clone(&render_state),
         );
-        let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone());
-        let nav_inner = NavInner::new(aid.clone(), self.event_tx.clone());
-        let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
-        let load_handler = OzmuxLoadHandler::new(nav_inner);
-        let context_menu_handler = OzmuxContextMenuHandler::new();
-        let mut client = OzmuxClient::new(
-            render_handler,
-            life_span_handler,
-            display_handler,
-            load_handler,
-            context_menu_handler,
-        );
-
-        let mut window_info = WindowInfo::default();
-        window_info.windowless_rendering_enabled = 1;
-
-        let browser_settings = BrowserSettings {
-            // TODO: expose windowless_frame_rate via daemon config.
-            windowless_frame_rate: 30,
-            ..BrowserSettings::default()
-        };
+        let window_info = build_window_info();
+        let browser_settings = build_browser_settings();
         let url_str = CefString::from(initial_url.as_str());
 
         let browser = browser_host_create_browser_sync(
@@ -532,10 +491,7 @@ impl BrowserPool {
             }
             None => {
                 tracing::error!(?aid, "browser_host_create_browser_sync returned None");
-                // SAFETY: ptr was mmap'd above; we own it and no BrowserEntry took it.
-                unsafe { libc::munmap(ptr, total_size) };
-                // SAFETY: shm_fd was duped from the daemon side; no BrowserEntry owns it on this path.
-                unsafe { libc::close(shm_fd) };
+                unmap_and_close(ptr, total_size, shm_fd);
                 self.discard_unretained_context(&effective_profile);
             }
         }
@@ -623,6 +579,83 @@ impl BrowserPool {
     /// Returns the number of active browsers.
     pub fn browser_count(&self) -> usize {
         self.browsers.len()
+    }
+}
+
+/// Maps `shm_fd` into the process for `total_size` bytes. Returns `None` on
+/// `MAP_FAILED`; the caller still owns `shm_fd` in that case.
+fn map_shm_region(shm_fd: RawFd, total_size: usize) -> Option<*mut libc::c_void> {
+    // SAFETY: shm_fd is a valid mmap-able fd received from the daemon side
+    // via SCM_RIGHTS in `control::recv_command_with_fd` (per-BrowserCreate
+    // since Task A5). We map it shared so the daemon can read frames
+    // written by the CEF UI thread.
+    let ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            total_size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            shm_fd,
+            0,
+        )
+    };
+    if ptr == libc::MAP_FAILED {
+        None
+    } else {
+        Some(ptr)
+    }
+}
+
+/// Unmaps `ptr` (of `total_size` bytes) and closes `shm_fd`. Used by every
+/// `create_browser` error path to release the region the daemon dup'd over.
+fn unmap_and_close(ptr: *mut libc::c_void, total_size: usize, shm_fd: RawFd) {
+    // SAFETY: ptr came from a successful libc::mmap of total_size bytes; no
+    // BrowserEntry took ownership on this path.
+    unsafe { libc::munmap(ptr, total_size) };
+    // SAFETY: shm_fd was duped from the daemon side via SCM_RIGHTS; no
+    // BrowserEntry owns it on this path.
+    unsafe { libc::close(shm_fd) };
+}
+
+/// Builds the `OzmuxClient` wrapping every per-browser handler.
+fn build_client(
+    aid: ActivityId,
+    event_tx: mpsc::UnboundedSender<HostEvent>,
+    shm: Arc<ShmWriter>,
+    render_state: Arc<RenderHandlerState>,
+) -> Client {
+    let render_handler = OzmuxRenderHandler::new(aid.clone(), shm, render_state, event_tx.clone());
+    let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone());
+    let nav_inner = NavInner::new(aid, event_tx);
+    let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
+    let load_handler = OzmuxLoadHandler::new(nav_inner);
+    let context_menu_handler = OzmuxContextMenuHandler::new();
+    OzmuxClient::new(
+        render_handler,
+        life_span_handler,
+        display_handler,
+        load_handler,
+        context_menu_handler,
+    )
+}
+
+/// Builds the `WindowInfo` for a windowless (offscreen-rendered) browser.
+#[expect(
+    clippy::field_reassign_with_default,
+    reason = "WindowInfo::default() uses unsafe zeroed() with size field; struct-literal form is impractical due to raw pointer fields"
+)]
+fn build_window_info() -> WindowInfo {
+    let mut window_info = WindowInfo::default();
+    window_info.windowless_rendering_enabled = 1;
+    window_info
+}
+
+/// Builds the `BrowserSettings` applied to every CEF browser this host owns.
+fn build_browser_settings() -> BrowserSettings {
+    BrowserSettings {
+        // TODO: expose windowless_frame_rate via daemon config.
+        windowless_frame_rate: 30,
+        ..BrowserSettings::default()
     }
 }
 
