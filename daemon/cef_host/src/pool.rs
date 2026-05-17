@@ -138,8 +138,15 @@ pub struct BrowserPool {
     pending_contexts: HashMap<ActivityId, RequestContext>,
     /// Absolute CEF `root_cache_path` (parent of every named profile dir).
     root_cache_path: PathBuf,
-    /// Whether this daemon owns the data-root lock. When `false`, another
-    /// daemon holds it, so named profiles are demoted to incognito storage.
+    /// Whether this daemon owns the data-root lock. Currently unused —
+    /// `effective_profile` and `create_request_context` ignore it because
+    /// disk persistence is disabled pool-wide. Kept so the lock signal stays
+    /// wired for the future Chrome profile-naming work.
+    #[allow(
+        dead_code,
+        reason = "Persistence demotion is paused until Chrome profile-naming is fixed; \
+                  the flag stays so the lock plumbing does not need re-introduction later."
+    )]
     persistent_profiles_enabled: bool,
 }
 
@@ -540,32 +547,23 @@ impl BrowserPool {
     /// Returns `None` if context creation fails — the caller MUST treat this
     /// as a `BrowserCreate` failure and NOT fall back to the global context.
     fn request_context_for(&mut self, profile: &BrowserProfileWire) -> Option<RequestContext> {
-        let cache_path = match resolve_cache_path(&self.root_cache_path, profile) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!(error = %e, "invalid browser profile; rejecting BrowserCreate");
-                return None;
-            }
-        };
+        // NOTE: validate the profile name even though we ignore the resolved
+        // cache_path — keeps untrusted input checks active and surfaces a
+        // failure early if a malformed Named arrives over the wire.
+        if let Err(e) = resolve_cache_path(&self.root_cache_path, profile) {
+            tracing::error!(error = %e, "invalid browser profile; rejecting BrowserCreate");
+            return None;
+        }
         match profile {
             BrowserProfileWire::Named { name } => {
-                if !self.persistent_profiles_enabled {
-                    tracing::warn!(profile = %name, "persistence disabled; using incognito");
-                    return create_request_context(None);
-                }
                 if let Some(ctx) = self.named_contexts.get(name) {
                     return Some(ctx.clone());
                 }
-                let dir = cache_path.expect("named profile yields Some cache_path");
-                if let Err(e) = std::fs::create_dir_all(&dir) {
-                    tracing::error!(error = %e, dir = %dir.display(), "create profile dir failed");
-                    return None;
-                }
-                let ctx = create_request_context(Some(&dir))?;
+                let ctx = create_request_context()?;
                 self.named_contexts.insert(name.clone(), ctx.clone());
                 Some(ctx)
             }
-            BrowserProfileWire::Incognito => create_request_context(None),
+            BrowserProfileWire::Incognito => create_request_context(),
         }
     }
 
@@ -576,16 +574,14 @@ impl BrowserPool {
         self.pending_contexts.remove(aid)
     }
 
-    /// Resolves the profile a browser is effectively created with. A `Named`
-    /// profile is demoted to `Incognito` when persistence is disabled; every
-    /// other case clones the requested profile unchanged.
+    /// Resolves the profile a browser is effectively created with. Currently a
+    /// no-op clone: with disk persistence disabled across the pool, Named and
+    /// Incognito differ only in whether the in-memory `RequestContext` is
+    /// shared by name across activities — there is no on-disk state to gate
+    /// behind `persistent_profiles_enabled`. The hook stays for future
+    /// re-enablement once Chrome profile-naming is solved.
     fn effective_profile(&self, requested: &BrowserProfileWire) -> BrowserProfileWire {
-        match requested {
-            BrowserProfileWire::Named { .. } if !self.persistent_profiles_enabled => {
-                BrowserProfileWire::Incognito
-            }
-            other => other.clone(),
-        }
+        requested.clone()
     }
 
     /// Increments the live-activity refcount for a named profile.
@@ -595,8 +591,9 @@ impl BrowserPool {
         }
     }
 
-    /// Decrements the refcount; drops the cached `RequestContext` at zero.
-    /// The on-disk directory is left in place (persistent).
+    /// Decrements the refcount; drops the cached in-memory `RequestContext`
+    /// at zero. No on-disk state to clean up — disk persistence is currently
+    /// disabled (see `create_request_context`).
     fn release_profile(&mut self, profile: &BrowserProfileWire) {
         if let BrowserProfileWire::Named { name } = profile
             && let Some(c) = self.named_refcounts.get_mut(name)
@@ -627,18 +624,20 @@ impl BrowserPool {
     }
 }
 
-/// Creates a `RequestContext`. `cache_dir = Some` → disk-persistent;
-/// `None` → empty `cache_path`, i.e. CEF in-memory ("incognito") mode.
-fn create_request_context(cache_dir: Option<&std::path::Path>) -> Option<RequestContext> {
-    // NOTE: RequestContextSettings::default() already sets `size` to
-    // size_of::<_cef_request_context_settings_t>(); no manual sizing needed.
-    let mut settings = RequestContextSettings::default();
-    if let Some(dir) = cache_dir {
-        settings.cache_path = CefString::from(dir.to_string_lossy().as_ref());
-        // NOTE: persist_session_cookies = 1 so imported host-Chrome session
-        // cookies survive a daemon restart.
-        settings.persist_session_cookies = 1;
-    }
+/// Creates a fresh in-memory `RequestContext` (empty `cache_path`, CEF
+/// "incognito" storage). Per-activity isolation works via the distinct
+/// `RequestContext` objects regardless of disk persistence.
+//
+// NOTE: disk persistence via `RequestContextSettings.cache_path` is intentionally
+// disabled. Setting a per-RequestContext `cache_path` under `CefSettings.root_cache_path`
+// caused CEF's Chrome runtime to log `Cannot create profile at path .../profiles/<name>`
+// and silently funnel storage back to the shared `<root>/Default/` directory, defeating
+// per-activity isolation. Re-enabling persistence needs Chrome's profile-naming convention
+// (`Default`/`Profile N` registered in `Local State`) — tracked as a future task.
+// `RequestContextSettings::default()` populates `size` to
+// `size_of::<_cef_request_context_settings_t>()`; no manual sizing needed.
+fn create_request_context() -> Option<RequestContext> {
+    let settings = RequestContextSettings::default();
     let ctx = request_context_create_context(Some(&settings), None);
     if ctx.is_none() {
         tracing::error!("request_context_create_context returned None");
