@@ -8,7 +8,7 @@ use crate::frame_ring::FrameRing;
 use crate::shm_alloc::{self, SLOT_PAYLOAD_MAX};
 use crate::shm_reader::OwnedShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
-use ozmux_browser_cef_protocol::wire::{CefCookieDto, HostCommand};
+use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, HostCommand};
 use std::sync::Arc;
 
 /// Errors returned by the cef provisioning hook.
@@ -44,11 +44,14 @@ impl CefBackend {
     /// (macOS only) and forwarded inline in `BrowserCreate`. On failure the
     /// cookie list degrades to empty and a warning is logged so the browser
     /// still opens in an unauthenticated state (spec §4.6).
+    ///
+    /// `profile` is forwarded verbatim to `HostCommand::BrowserCreate` and
+    /// selects the embedded browser's storage profile.
     pub async fn provision(
         &self,
         aid: &CefActivityId,
         initial_url: &str,
-        _cookies: Vec<CefCookieDto>,
+        profile: BrowserProfileWire,
     ) -> Result<u32, CefBackendError> {
         let cookies = crate::cookie_extractor::extract_for(initial_url)
             .await
@@ -74,7 +77,7 @@ impl CefBackend {
         let _nav_rx = self.registry.insert(aid.clone(), ring, reader);
 
         self.handles
-            .request_browser_create(aid.clone(), initial_url.to_string(), epoch, cookies, shm_fd)
+            .request_browser_create(aid.clone(), initial_url.to_string(), epoch, cookies, profile, shm_fd)
             .await
             .map_err(CefBackendError::ControlSendFailed)?;
 

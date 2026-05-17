@@ -11,7 +11,7 @@ use ozmux_browser::cef_service::CefHostSupervisor;
 use ozmux_browser::shm_alloc::{self, SLOT_PAYLOAD_MAX};
 use ozmux_browser::shm_reader::ShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId;
-use ozmux_browser_cef_protocol::wire::HostEvent;
+use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, HostEvent};
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
@@ -62,7 +62,14 @@ async fn handshake_then_one_frame() {
     let reader = unsafe { ShmReader::from_mmap(base, SLOT_PAYLOAD_MAX) };
 
     handles
-        .request_browser_create(aid.clone(), "about:blank".into(), 1, Vec::new(), shm_fd)
+        .request_browser_create(
+            aid.clone(),
+            "about:blank".into(),
+            1,
+            Vec::new(),
+            BrowserProfileWire::Named { name: "default".into() },
+            shm_fd,
+        )
         .await
         .expect("request_browser_create");
 

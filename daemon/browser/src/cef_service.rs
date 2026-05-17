@@ -12,7 +12,7 @@
 use crate::cef_registry::{BrowserCefRegistry, NavState};
 use crate::frame_ring::FrameEnvelope;
 use ozmux_browser_cef_protocol::types::ActivityId;
-use ozmux_browser_cef_protocol::wire::{CefCookieDto, HostCommand, HostEvent};
+use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, CefCookieDto, HostCommand, HostEvent};
 use sendfd::SendWithFd;
 use std::io::Write as _;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -111,13 +111,15 @@ impl CefHostHandles {
 
     /// Sends a `HostCommand::BrowserCreate` with `shm_fd` as ancillary data
     /// via `sendmsg_with_fds`. The fd arrives at cef_host paired with the
-    /// same recvmsg that delivers the serialised body.
+    /// same recvmsg that delivers the serialised body. `profile` is carried
+    /// inside the command and selects the embedded browser's storage profile.
     pub async fn request_browser_create(
         &self,
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
         cookies: Vec<CefCookieDto>,
+        profile: BrowserProfileWire,
         shm_fd: OwnedFd,
     ) -> std::io::Result<()> {
         let cmd = HostCommand::BrowserCreate {
@@ -125,6 +127,7 @@ impl CefHostHandles {
             initial_url,
             epoch,
             cookies,
+            profile,
         };
         let payload = rmp_serde::to_vec_named(&cmd).map_err(std::io::Error::other)?;
         self.scm_tx
