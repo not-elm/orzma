@@ -18,7 +18,7 @@ use cef::{
     browser_host_create_browser_sync,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
-use ozmux_browser_cef_protocol::wire::{CefCookieDto, HostEvent, InputEvent};
+use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, CefCookieDto, HostEvent, InputEvent};
 use std::collections::HashMap;
 use std::os::fd::RawFd;
 use std::sync::Arc;
@@ -39,6 +39,7 @@ pub enum CefCommand {
         epoch: u32,
         shm_fd: RawFd,
         cookies: Vec<CefCookieDto>,
+        profile: BrowserProfileWire,
     },
     /// Internal: fires after all cookies from `BrowserCreate` have been
     /// committed to `CefCookieManager`. The UI thread then calls
@@ -49,6 +50,7 @@ pub enum CefCommand {
         initial_url: String,
         epoch: u32,
         shm_fd: RawFd,
+        profile: BrowserProfileWire,
     },
     /// Resize the browser viewport.
     Resize {
@@ -144,6 +146,7 @@ impl BrowserPool {
                 epoch,
                 shm_fd,
                 cookies,
+                profile,
             } => {
                 tracing::info!(
                     ?aid,
@@ -162,6 +165,7 @@ impl BrowserPool {
                             initial_url,
                             epoch,
                             shm_fd,
+                            profile,
                         },
                     ) {
                         tracing::error!(error = %e, "failed to post CreateBrowserAfterCookies");
@@ -173,7 +177,10 @@ impl BrowserPool {
                 initial_url,
                 epoch,
                 shm_fd,
+                profile,
             } => {
+                // TODO: Task 8 passes profile to create_browser; placeholder keeps it bound until then.
+                let _ = &profile;
                 self.create_browser(aid, initial_url, epoch, shm_fd);
             }
             CefCommand::Resize {

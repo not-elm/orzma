@@ -95,12 +95,12 @@ async fn pump(
                     }
                 };
                 let internal_cmd = match cmd {
-                    HostCommand::BrowserCreate { aid, initial_url, epoch, cookies } => {
+                    HostCommand::BrowserCreate { aid, initial_url, epoch, cookies, profile } => {
                         let shm_fd = fd.unwrap_or(-1);
                         if shm_fd < 0 {
                             tracing::warn!(?aid, "BrowserCreate without ancillary shm_fd");
                         }
-                        CefCommand::BrowserCreate { aid, initial_url, epoch, shm_fd, cookies }
+                        CefCommand::BrowserCreate { aid, initial_url, epoch, shm_fd, cookies, profile }
                     }
                     HostCommand::Resize { aid, css_w, css_h, dpr } => {
                         if let Some(stray) = fd {
