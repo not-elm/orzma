@@ -24,6 +24,20 @@ function rowMatchesCursor(row: VisibleRow, cursor: TreeCursor): boolean {
 }
 
 /**
+ * Computes the DOM id for the row that the cursor currently points at,
+ * or `undefined` when no matching row is visible.
+ */
+export function activeRowKey(
+  tree: SessionTreeNode[],
+  expanded: ReadonlySet<SessionId>,
+  cursor: TreeCursor,
+): string | undefined {
+  const rows = flattenVisibleRows(tree, expanded);
+  const activeRow = rows.find((r) => rowMatchesCursor(r, cursor));
+  return activeRow ? rowKey(activeRow) : undefined;
+}
+
+/**
  * Renders the visible rows as a flat list of `role="treeitem"`s under a
  * single `role="tree"`. Row identity comes from `session:${sid}` /
  * `window:${sid}:${wid}` so React reconciliation stays stable across
@@ -31,16 +45,8 @@ function rowMatchesCursor(row: VisibleRow, cursor: TreeCursor): boolean {
  */
 export function TreeView({ tree, expanded, cursor, onRowClick }: TreeViewProps) {
   const rows = flattenVisibleRows(tree, expanded);
-  const activeRow = rows.find((r) => rowMatchesCursor(r, cursor));
-  const activeId = activeRow ? rowKey(activeRow) : undefined;
   return (
-    <div
-      role="tree"
-      aria-label="Sessions and windows"
-      aria-activedescendant={activeId}
-      tabIndex={0}
-      className="font-mono text-sm"
-    >
+    <div role="tree" className="font-mono text-sm">
       {rows.map((row) => {
         const id = rowKey(row);
         const selected = rowMatchesCursor(row, cursor);

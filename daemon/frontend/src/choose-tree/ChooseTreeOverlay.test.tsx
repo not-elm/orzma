@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChooseTreeOverlay } from './ChooseTreeOverlay';
 
@@ -109,5 +109,90 @@ describe('ChooseTreeOverlay', () => {
       dialog.dispatchEvent(ev);
     });
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('pressing l on a window row acts as confirm (I1)', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/sessions/tree') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              sessions: [
+                {
+                  id: 'sid-a',
+                  name: 'work',
+                  active_window: 'wid-a0',
+                  windows: [{ id: 'wid-a0', name: 'build', index: 0 }],
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (typeof url === 'string' && url.startsWith('/windows/') && init?.method === 'POST') {
+        return Promise.resolve(new Response(null, { status: 200 }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const onClose = vi.fn();
+    render(
+      <ChooseTreeOverlay
+        onClose={onClose}
+        attachedSessionId="sid-a"
+        setAttachedSession={() => {}}
+      />,
+    );
+    await screen.findByRole('tree');
+    const dialog = screen.getByRole('dialog');
+    // Wait for the tree-reloaded state update so the cursor is on the window row.
+    await waitFor(() =>
+      expect(dialog).toHaveAttribute('aria-activedescendant', 'window:sid-a:wid-a0'),
+    );
+    act(() => {
+      dialog.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'l', bubbles: true, cancelable: true }),
+      );
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledWith('/windows/wid-a0/select', { method: 'POST' });
+  });
+
+  it('aria-activedescendant on the dialog points at the cursor row (I2)', async () => {
+    mockTree();
+    render(
+      <ChooseTreeOverlay
+        onClose={() => {}}
+        attachedSessionId="sid-a"
+        setAttachedSession={() => {}}
+      />,
+    );
+    await screen.findByRole('tree');
+    const dialog = screen.getByRole('dialog');
+    // NOTE: aria-activedescendant is set after the tree-reloaded dispatch resolves;
+    // waitFor lets the effect flush before asserting.
+    await waitFor(() =>
+      expect(dialog).toHaveAttribute('aria-activedescendant', 'window:sid-a:wid-a0'),
+    );
+  });
+
+  it('closes immediately when the tree is empty (M4)', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ sessions: [] }), { status: 200 }),
+      ) as typeof globalThis.fetch;
+    const onClose = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(
+      <ChooseTreeOverlay
+        onClose={onClose}
+        attachedSessionId={null}
+        setAttachedSession={() => {}}
+      />,
+    );
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(warn).toHaveBeenCalledWith('choose-tree: no sessions available; closing picker');
   });
 });

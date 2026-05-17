@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { SessionId, WindowId } from '../layout/types';
 import { windowSelect } from '../statusbar/windowSelect';
-import { TreeView } from './TreeView';
+import { activeRowKey, TreeView } from './TreeView';
 import { keyToAction } from './treeKeymap';
 import {
   initialTreeState,
@@ -71,9 +71,14 @@ export function ChooseTreeOverlay({
   }, []);
 
   // When the tree finishes loading or reloads, normalise the cursor against
-  // the new tree.
+  // the new tree. Also guard against the empty-tree case (M4).
   useEffect(() => {
     if (treeState.status === 'ready') {
+      if (treeState.tree.length === 0) {
+        console.warn('choose-tree: no sessions available; closing picker');
+        onCloseRef.current();
+        return;
+      }
       dispatch({ type: 'tree-reloaded', tree: treeState.tree, attachedSessionId });
     }
   }, [treeState, attachedSessionId]);
@@ -123,7 +128,11 @@ export function ChooseTreeOverlay({
         onCloseRef.current();
         return;
       }
-      if (resolved.type === 'confirm') {
+      const isExpandActingAsConfirm =
+        resolved.type === 'expand' &&
+        (stateRef.current.cursor.kind === 'window' ||
+          stateRef.current.expanded.has(stateRef.current.cursor.sessionId));
+      if (resolved.type === 'confirm' || isExpandActingAsConfirm) {
         void confirmCursor(stateRef.current.cursor);
         return;
       }
@@ -133,11 +142,15 @@ export function ChooseTreeOverlay({
     return () => root.removeEventListener('keydown', handler);
   }, [confirmCursor]);
 
+  const activeId = activeRowKey(tree, state.expanded, state.cursor);
+
   return (
+    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: dialog manages focus on behalf of the tree; aria-activedescendant here is the correct ARIA 1.2 pattern for a focus-managing container
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Sessions and windows"
+      aria-activedescendant={activeId}
       ref={rootRef}
       tabIndex={-1}
       className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 outline-none"

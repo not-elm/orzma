@@ -98,10 +98,14 @@ export function treeReducer(
     case 'set-cursor':
       return { ...state, cursor: action.cursor };
     case 'tree-reloaded': {
-      const rows = flattenVisibleRows(action.tree, state.expanded);
+      const newSessions = action.tree.map((s) => s.id);
+      const expanded = new Set([...state.expanded, ...newSessions]);
+      const rows = flattenVisibleRows(action.tree, expanded);
       const stillExists = rows.some((r) => rowMatches(r, state.cursor));
-      if (stillExists) return state;
-      return { ...state, cursor: resolveInitialCursor(action.tree, action.attachedSessionId) };
+      const cursor = stillExists
+        ? state.cursor
+        : resolveInitialCursor(action.tree, action.attachedSessionId);
+      return { cursor, expanded };
     }
     default:
       return state;
