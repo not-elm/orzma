@@ -70,15 +70,24 @@ function withProbe<T>(
 
 /** Measures the rendered width of "W" in the terminal font. Used by Row.tsx
  *  for `letterSpacing = cellW - cellWidthOf(...)` to prevent sub-pixel drift
- *  on long rows (xterm.js `DomRenderer._setDefaultSpacing`). */
+ *  on long rows (xterm.js `DomRenderer._setDefaultSpacing`).
+ *
+ *  Rounded to integer CSS px: `getBoundingClientRect()` returns sub-pixel
+ *  floats which cascade into row `height`/`line-height`/cursor coordinates
+ *  and cause text to render against fractional pixel boundaries — glyphs
+ *  end up rasterised across two device pixels and look softer than
+ *  Alacritty's CoreText output. xterm.js #985 fixed the same class of
+ *  blur by quantising the cell box.
+ */
 export function cellWidthOf(container: HTMLElement): number {
-  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => r.width);
+  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => Math.round(r.width));
 }
 
 /** Measures the line-height-1 height of one row in the terminal font, so
- *  `cellH` matches the actual row line-box height. */
+ *  `cellH` matches the actual row line-box height. Rounded to integer CSS px
+ *  for the same reason as [`cellWidthOf`]. */
 export function cellHeightOf(container: HTMLElement): number {
-  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => r.height);
+  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => Math.round(r.height));
 }
 
 // NOTE: keyed by (chars, bold, italic) only — must be cleared if the font

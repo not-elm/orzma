@@ -45,6 +45,15 @@ function buildPaletteCss(): string {
   // Combined font-kerning selector — container alone doesn't inherit to
   // inline children on every browser engine.
   lines.push(`.terminal-grid, .terminal-grid span { font-kerning: none; }`);
+  // NOTE: WebKit/Chromium default to subpixel antialiasing on macOS, which
+  // renders glyphs visibly thicker than Alacritty's grayscale-AA CoreText
+  // output. Force grayscale AA so Terminal Activity glyphs match the
+  // reference (and match every other macOS app — Apple itself disabled
+  // system-wide subpixel AA in Mojave). Also applied to the probe so the
+  // measurement matches what users see.
+  lines.push(
+    `.terminal-grid, .terminal-grid span, .terminal-grid a, .${PROBE_CLASS} { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }`,
+  );
   // Lock inline-block run alignment to the top of the row's line-box.
   // Default `vertical-align: baseline` lets glyphs of mixed metrics (bold,
   // italic, link, etc.) drift vertically — the absolute-positioned Cursor
