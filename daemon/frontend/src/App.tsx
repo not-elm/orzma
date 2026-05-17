@@ -8,14 +8,14 @@ import { usePrefixMode } from './shortcuts/usePrefixMode';
 import { RenameWindowPrompt } from './statusbar/RenameWindowPrompt';
 import { StatusBar } from './statusbar/StatusBar';
 import type { SessionView } from './statusbar/types';
-import { useDefaultSession } from './statusbar/useDefaultSession';
+import { useAttachedSession } from './statusbar/useAttachedSession';
 import { useRenameWindowPrompt } from './statusbar/useRenameWindowPrompt';
 import { liveOrReconnectingView, useSessionView } from './statusbar/useSessionView';
 import { windowSelect } from './statusbar/windowSelect';
 
 export function App() {
-  const sessionDefault = useDefaultSession();
-  const sid = sessionDefault.status === 'ready' ? sessionDefault.sessionId : null;
+  const attached = useAttachedSession();
+  const sid = attached.status === 'ready' ? attached.sessionId : null;
   const sessionView = useSessionView(sid);
 
   const liveSession = liveOrReconnectingView(sessionView);
@@ -26,8 +26,8 @@ export function App() {
   const def: DefaultWindowState =
     wid !== null
       ? { status: 'ready', windowId: wid }
-      : sessionDefault.status === 'error'
-        ? { status: 'error', message: sessionDefault.message }
+      : attached.status === 'error'
+        ? { status: 'error', message: attached.message }
         : { status: 'loading' };
 
   const view = layout.status === 'gone' ? null : layout.view;
