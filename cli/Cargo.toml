@@ -16,6 +16,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "
 anyhow = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true }
 libc = { workspace = true }
 daemon_bootstrap = { path = "../daemon/bootstrap" }
 

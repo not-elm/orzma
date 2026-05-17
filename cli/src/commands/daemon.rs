@@ -1,7 +1,9 @@
 //! `ozmux daemon` subcommand dispatcher. Each sibling module implements one
-//! verb (start/stop/status).
+//! verb (start/stop/status), plus the shared `ensure_running` helper.
 
+use anyhow::Context;
 use clap::Subcommand;
+use std::time::Duration;
 
 use crate::commands::CommandExecute;
 
@@ -28,4 +30,47 @@ impl CommandExecute for DaemonCommand {
             Self::Status => status::run().await,
         }
     }
+}
+
+/// Whether `ensure_running` found the daemon already up or started it.
+pub(crate) enum DaemonStartOutcome {
+    AlreadyRunning,
+    Started,
+}
+
+/// Ensures the ozmux daemon is running, spawning it detached if it is not.
+///
+/// Writes nothing to stdout or stderr on the success path, so callers with
+/// their own stdout contract (e.g. `session create`) get a clean stream.
+/// Spawn-failure diagnostics may still reach stderr.
+pub(crate) async fn ensure_running() -> anyhow::Result<DaemonStartOutcome> {
+    if start::is_running() {
+        return Ok(DaemonStartOutcome::AlreadyRunning);
+    }
+
+    let lock = start::acquire_lock()
+        .await
+        .context("acquire daemon launcher lock")?;
+
+    if start::is_running() {
+        drop(lock);
+        return Ok(DaemonStartOutcome::AlreadyRunning);
+    }
+
+    start::spawn_detached().context("spawn ozmux daemon")?;
+    start::wait_until_ready()
+        .await
+        .context("daemon did not become ready in time")?;
+    drop(lock);
+
+    Ok(DaemonStartOutcome::Started)
+}
+
+/// Builds a `reqwest` client for HTTP requests to the local daemon, with the
+/// given per-request timeout.
+pub(crate) fn http_client(timeout: Duration) -> anyhow::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("build reqwest client")
 }

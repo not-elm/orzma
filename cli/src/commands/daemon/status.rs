@@ -32,7 +32,7 @@ async fn run_status() -> anyhow::Result<i32> {
 }
 
 async fn check_health() -> bool {
-    let Ok(client) = reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build() else {
+    let Ok(client) = super::http_client(HEALTH_TIMEOUT) else {
         return false;
     };
     matches!(client.get(daemon_bootstrap::HEALTH_URL).send().await, Ok(r) if r.status().is_success())
