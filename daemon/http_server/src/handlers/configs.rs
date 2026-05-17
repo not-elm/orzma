@@ -3,6 +3,7 @@
 use crate::AppState;
 use axum::{Router, routing::get};
 
+pub mod browser;
 pub mod font;
 pub mod shortcuts;
 
@@ -11,4 +12,5 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/shortcuts", get(shortcuts::get))
         .route("/font", get(font::get))
+        .route("/browser", get(browser::get))
 }
