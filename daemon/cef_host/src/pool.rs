@@ -194,176 +194,224 @@ impl BrowserPool {
                 shm_fd,
                 cookies,
                 profile,
-            } => {
-                tracing::info!(
-                    ?aid,
-                    cookie_count = cookies.len(),
-                    "BrowserCreate: installing cookies"
-                );
-                let aid2 = aid.clone();
-                let pool_handle = self.pool_handle.clone().expect(
-                    "pool_handle not set; PoolHandle::new must plant it before commands arrive",
-                );
-                let Some(ctx) = self.request_context_for(&profile) else {
-                    tracing::error!(?aid, "RequestContext unavailable; aborting BrowserCreate");
-                    // SAFETY: shm_fd was duped from the daemon side via
-                    // SCM_RIGHTS and is owned here; close it before bailing.
-                    unsafe { libc::close(shm_fd) };
-                    return;
-                };
-                self.pending_contexts.insert(aid.clone(), ctx.clone());
-                crate::cookies::install_cookies(cookies, &ctx, move || {
-                    if let Err(e) = crate::post_command::post(
-                        &pool_handle,
-                        CefCommand::CreateBrowserAfterCookies {
-                            aid: aid2,
-                            initial_url,
-                            epoch,
-                            shm_fd,
-                            profile,
-                        },
-                    ) {
-                        tracing::error!(error = %e, "failed to post CreateBrowserAfterCookies");
-                        // TODO: on post() failure both shm_fd and the
-                        // pending_contexts[aid] entry leak until process exit;
-                        // cleaning up requires re-entering the pool from this
-                        // closure (e.g. another post_command::post of a cleanup
-                        // command). Out of scope for the cookie-context wiring.
-                    }
-                });
-            }
+            } => self.handle_browser_create(aid, initial_url, epoch, shm_fd, cookies, profile),
             CefCommand::CreateBrowserAfterCookies {
                 aid,
                 initial_url,
                 epoch,
                 shm_fd,
                 profile,
-            } => {
-                self.create_browser(aid, initial_url, epoch, shm_fd, profile);
-            }
+            } => self.handle_create_after_cookies(aid, initial_url, epoch, shm_fd, profile),
             CefCommand::Resize {
                 aid,
                 css_w,
                 css_h,
                 dpr,
-            } => {
-                let Some(entry) = self.browsers.get(&aid) else {
-                    tracing::warn!(?aid, "Resize: unknown activity");
-                    return;
-                };
-                let dpr = if dpr > 0.0 { dpr } else { 1.0 };
-                let max_css_w = ((MAX_VIEWPORT_W as f32 / dpr) as u32).max(1);
-                let max_css_h = ((MAX_VIEWPORT_H as f32 / dpr) as u32).max(1);
-                let view_w = css_w.clamp(1, max_css_w);
-                let view_h = css_h.clamp(1, max_css_h);
-                if view_w != css_w || view_h != css_h {
-                    tracing::warn!(
-                        ?aid,
-                        css_w,
-                        css_h,
-                        view_w,
-                        view_h,
-                        "Resize clamped so css×dpr fits the 4K shm budget"
-                    );
-                }
-                entry.render_state.width.set(view_w);
-                entry.render_state.height.set(view_h);
-                entry.render_state.dpr.set(dpr);
-                entry.render_state.force_keyframe.set(true);
-                if let Some(host) = entry.browser.host() {
-                    host.was_resized();
-                    host.notify_screen_info_changed();
-                }
-                tracing::debug!(?aid, css_w, css_h, dpr, "Resize dispatched");
-            }
-            CefCommand::Close { aid } => {
-                tracing::info!(?aid, "Close");
-                self.pending_contexts.remove(&aid);
-                if let Some(entry) = self.browsers.remove(&aid) {
-                    let host = entry.browser.host();
-                    if let Some(h) = host {
-                        h.close_browser(1);
-                    }
-                    // SAFETY: shm_fd was duped from the daemon side and is owned here.
-                    unsafe {
-                        libc::close(entry.shm_fd);
-                    }
-                    self.release_profile(&entry.profile);
-                }
-            }
-            CefCommand::Shutdown => {
-                tracing::info!("Shutdown requested");
-                cef::quit_message_loop();
-                self.shutdown_requested = true;
-            }
-            CefCommand::SendInput { aid, event } => {
-                if let Some(entry) = self.browsers.get(&aid) {
-                    crate::input::dispatch(&entry.browser, &aid, event);
-                } else {
-                    tracing::warn!(?aid, "SendInput: unknown activity");
-                }
-            }
-            CefCommand::Navigate { aid, url } => {
-                let Some(entry) = self.browsers.get(&aid) else {
-                    tracing::warn!(?aid, "Navigate: unknown activity");
-                    return;
-                };
-                let Some(frame) = entry.browser.main_frame() else {
-                    tracing::warn!(?aid, "Navigate: no main frame");
-                    return;
-                };
-                tracing::debug!(?aid, %url, "Navigate");
-                frame.load_url(Some(&CefString::from(url.as_str())));
-            }
+            } => self.handle_resize(aid, css_w, css_h, dpr),
+            CefCommand::Close { aid } => self.handle_close(aid),
+            CefCommand::Shutdown => self.handle_shutdown(),
+            CefCommand::SendInput { aid, event } => self.handle_send_input(aid, event),
+            CefCommand::Navigate { aid, url } => self.handle_navigate(aid, url),
             CefCommand::NavigateHistory { aid, delta } => {
-                let Some(entry) = self.browsers.get(&aid) else {
-                    tracing::warn!(?aid, "NavigateHistory: unknown activity");
-                    return;
-                };
-                match delta.signum() {
-                    -1 => {
-                        if entry.browser.can_go_back() != 0 {
-                            tracing::debug!(?aid, "NavigateHistory back");
-                            entry.browser.go_back();
-                        } else {
-                            tracing::debug!(?aid, "NavigateHistory back: no back history");
-                        }
-                    }
-                    1 => {
-                        if entry.browser.can_go_forward() != 0 {
-                            tracing::debug!(?aid, "NavigateHistory forward");
-                            entry.browser.go_forward();
-                        } else {
-                            tracing::debug!(?aid, "NavigateHistory forward: no forward history");
-                        }
-                    }
-                    _ => {
-                        tracing::warn!(?aid, delta, "NavigateHistory: delta is zero, no-op");
-                    }
+                self.handle_navigate_history(aid, delta);
+            }
+            CefCommand::PauseScreencast { aid } => self.handle_pause_screencast(aid),
+            CefCommand::ResumeScreencast { aid } => self.handle_resume_screencast(aid),
+        }
+    }
+
+    /// Handles `CefCommand::BrowserCreate` by seeding cookies and posting `CreateBrowserAfterCookies`.
+    fn handle_browser_create(
+        &mut self,
+        aid: ActivityId,
+        initial_url: String,
+        epoch: u32,
+        shm_fd: RawFd,
+        cookies: Vec<CefCookieDto>,
+        profile: BrowserProfileWire,
+    ) {
+        tracing::info!(
+            ?aid,
+            cookie_count = cookies.len(),
+            "BrowserCreate: installing cookies"
+        );
+        let aid2 = aid.clone();
+        let pool_handle = self
+            .pool_handle
+            .clone()
+            .expect("pool_handle not set; PoolHandle::new must plant it before commands arrive");
+        let Some(ctx) = self.request_context_for(&profile) else {
+            tracing::error!(?aid, "RequestContext unavailable; aborting BrowserCreate");
+            // SAFETY: shm_fd was duped from the daemon side via
+            // SCM_RIGHTS and is owned here; close it before bailing.
+            unsafe { libc::close(shm_fd) };
+            return;
+        };
+        self.pending_contexts.insert(aid.clone(), ctx.clone());
+        crate::cookies::install_cookies(cookies, &ctx, move || {
+            if let Err(e) = crate::post_command::post(
+                &pool_handle,
+                CefCommand::CreateBrowserAfterCookies {
+                    aid: aid2,
+                    initial_url,
+                    epoch,
+                    shm_fd,
+                    profile,
+                },
+            ) {
+                tracing::error!(error = %e, "failed to post CreateBrowserAfterCookies");
+                // TODO: on post() failure both shm_fd and the
+                // pending_contexts[aid] entry leak until process exit;
+                // cleaning up requires re-entering the pool from this
+                // closure (e.g. another post_command::post of a cleanup
+                // command). Out of scope for the cookie-context wiring.
+            }
+        });
+    }
+
+    /// Handles `CefCommand::CreateBrowserAfterCookies` by delegating to `create_browser`.
+    fn handle_create_after_cookies(
+        &mut self,
+        aid: ActivityId,
+        initial_url: String,
+        epoch: u32,
+        shm_fd: RawFd,
+        profile: BrowserProfileWire,
+    ) {
+        self.create_browser(aid, initial_url, epoch, shm_fd, profile);
+    }
+
+    /// Handles `CefCommand::Resize` by clamping to `MAX_VIEWPORT_W`/`MAX_VIEWPORT_H` and updating render state.
+    fn handle_resize(&mut self, aid: ActivityId, css_w: u32, css_h: u32, dpr: f32) {
+        let Some(entry) = self.browsers.get(&aid) else {
+            tracing::warn!(?aid, "Resize: unknown activity");
+            return;
+        };
+        let dpr = if dpr > 0.0 { dpr } else { 1.0 };
+        let max_css_w = ((MAX_VIEWPORT_W as f32 / dpr) as u32).max(1);
+        let max_css_h = ((MAX_VIEWPORT_H as f32 / dpr) as u32).max(1);
+        let view_w = css_w.clamp(1, max_css_w);
+        let view_h = css_h.clamp(1, max_css_h);
+        if view_w != css_w || view_h != css_h {
+            tracing::warn!(
+                ?aid,
+                css_w,
+                css_h,
+                view_w,
+                view_h,
+                "Resize clamped so css×dpr fits the 4K shm budget"
+            );
+        }
+        entry.render_state.width.set(view_w);
+        entry.render_state.height.set(view_h);
+        entry.render_state.dpr.set(dpr);
+        entry.render_state.force_keyframe.set(true);
+        if let Some(host) = entry.browser.host() {
+            host.was_resized();
+            host.notify_screen_info_changed();
+        }
+        tracing::debug!(?aid, css_w, css_h, dpr, "Resize dispatched");
+    }
+
+    /// Handles `CefCommand::Close` by tearing down the browser and releasing its profile refcount.
+    fn handle_close(&mut self, aid: ActivityId) {
+        tracing::info!(?aid, "Close");
+        self.pending_contexts.remove(&aid);
+        if let Some(entry) = self.browsers.remove(&aid) {
+            let host = entry.browser.host();
+            if let Some(h) = host {
+                h.close_browser(1);
+            }
+            // SAFETY: shm_fd was duped from the daemon side and is owned here.
+            unsafe {
+                libc::close(entry.shm_fd);
+            }
+            self.release_profile(&entry.profile);
+        }
+    }
+
+    /// Handles `CefCommand::Shutdown` by quitting the CEF message loop.
+    fn handle_shutdown(&mut self) {
+        tracing::info!("Shutdown requested");
+        cef::quit_message_loop();
+        self.shutdown_requested = true;
+    }
+
+    /// Handles `CefCommand::SendInput` by dispatching the event to the target browser.
+    fn handle_send_input(&self, aid: ActivityId, event: InputEvent) {
+        if let Some(entry) = self.browsers.get(&aid) {
+            crate::input::dispatch(&entry.browser, &aid, event);
+        } else {
+            tracing::warn!(?aid, "SendInput: unknown activity");
+        }
+    }
+
+    /// Handles `CefCommand::Navigate` by loading `url` in the browser's main frame.
+    fn handle_navigate(&self, aid: ActivityId, url: String) {
+        let Some(entry) = self.browsers.get(&aid) else {
+            tracing::warn!(?aid, "Navigate: unknown activity");
+            return;
+        };
+        let Some(frame) = entry.browser.main_frame() else {
+            tracing::warn!(?aid, "Navigate: no main frame");
+            return;
+        };
+        tracing::debug!(?aid, %url, "Navigate");
+        frame.load_url(Some(&CefString::from(url.as_str())));
+    }
+
+    /// Handles `CefCommand::NavigateHistory` by going back or forward based on `delta`'s sign.
+    fn handle_navigate_history(&self, aid: ActivityId, delta: i64) {
+        let Some(entry) = self.browsers.get(&aid) else {
+            tracing::warn!(?aid, "NavigateHistory: unknown activity");
+            return;
+        };
+        match delta.signum() {
+            -1 => {
+                if entry.browser.can_go_back() != 0 {
+                    tracing::debug!(?aid, "NavigateHistory back");
+                    entry.browser.go_back();
+                } else {
+                    tracing::debug!(?aid, "NavigateHistory back: no back history");
                 }
             }
-            CefCommand::PauseScreencast { aid } => {
-                let Some(entry) = self.browsers.get(&aid) else {
-                    tracing::warn!(?aid, "PauseScreencast: unknown activity");
-                    return;
-                };
-                if let Some(host) = entry.browser.host() {
-                    tracing::debug!(?aid, "PauseScreencast");
-                    host.was_hidden(1);
+            1 => {
+                if entry.browser.can_go_forward() != 0 {
+                    tracing::debug!(?aid, "NavigateHistory forward");
+                    entry.browser.go_forward();
+                } else {
+                    tracing::debug!(?aid, "NavigateHistory forward: no forward history");
                 }
             }
-            CefCommand::ResumeScreencast { aid } => {
-                let Some(entry) = self.browsers.get(&aid) else {
-                    tracing::warn!(?aid, "ResumeScreencast: unknown activity");
-                    return;
-                };
-                if let Some(host) = entry.browser.host() {
-                    tracing::debug!(?aid, "ResumeScreencast");
-                    host.was_hidden(0);
-                }
-                crate::input::invalidate_view(&entry.browser, &aid);
+            _ => {
+                tracing::warn!(?aid, delta, "NavigateHistory: delta is zero, no-op");
             }
         }
+    }
+
+    /// Handles `CefCommand::PauseScreencast` by hiding the browser so CEF stops producing frames.
+    fn handle_pause_screencast(&self, aid: ActivityId) {
+        let Some(entry) = self.browsers.get(&aid) else {
+            tracing::warn!(?aid, "PauseScreencast: unknown activity");
+            return;
+        };
+        if let Some(host) = entry.browser.host() {
+            tracing::debug!(?aid, "PauseScreencast");
+            host.was_hidden(1);
+        }
+    }
+
+    /// Handles `CefCommand::ResumeScreencast` by un-hiding the browser and forcing a keyframe.
+    fn handle_resume_screencast(&self, aid: ActivityId) {
+        let Some(entry) = self.browsers.get(&aid) else {
+            tracing::warn!(?aid, "ResumeScreencast: unknown activity");
+            return;
+        };
+        if let Some(host) = entry.browser.host() {
+            tracing::debug!(?aid, "ResumeScreencast");
+            host.was_hidden(0);
+        }
+        crate::input::invalidate_view(&entry.browser, &aid);
     }
 
     #[expect(
