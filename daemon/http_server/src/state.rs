@@ -566,7 +566,8 @@ impl AppState {
         if session_id.is_some()
             && let Err(select_err) = self.select_active_window(&wid).await
         {
-            self.rollback_window(&wid, "active-window selection failure").await;
+            self.rollback_window(&wid, "active-window selection failure")
+                .await;
             return Err(select_err.into());
         }
         Ok((wid, pid, aid))
