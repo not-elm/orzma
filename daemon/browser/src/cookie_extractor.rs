@@ -18,7 +18,9 @@
 //! for the (differently-signed) ozmux binary on every launch — the skip flag
 //! avoids that during local development.
 
-use ozmux_browser_cef_protocol::wire::{CefCookieDto, SameSite};
+use ozmux_browser_cef_protocol::wire::CefCookieDto;
+#[cfg(target_os = "macos")]
+use ozmux_browser_cef_protocol::wire::SameSite;
 #[cfg(target_os = "macos")]
 use {
     decrypt_cookies::browser::cookies::SameSite as DcSameSite,
@@ -42,7 +44,7 @@ pub async fn extract_for(initial_url: &str) -> Result<Vec<CefCookieDto>, std::io
     #[cfg(not(target_os = "macos"))]
     {
         let _ = initial_url;
-        return Ok(Vec::new());
+        Ok(Vec::new())
     }
     #[cfg(target_os = "macos")]
     {
