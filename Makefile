@@ -119,6 +119,8 @@ ifeq ($(UNAME_S),Darwin)
 	@echo "installing cef_host.app to $(CARGO_BIN_DIR)"
 	@rm -rf "$(CARGO_BIN_DIR)/cef_host.app"
 	@cp -R target/release/cef_host.app "$(CARGO_BIN_DIR)/"
+	@echo "ad-hoc re-signing $(CARGO_BIN_DIR)/cef_host.app (helpers crash with Code Signature Invalid otherwise)"
+	@codesign --force --deep --sign - "$(CARGO_BIN_DIR)/cef_host.app"
 endif
 	@pid=$$(lsof -nP -iTCP:3200 -sTCP:LISTEN -t 2>/dev/null); \
 	if [ -n "$$pid" ]; then \

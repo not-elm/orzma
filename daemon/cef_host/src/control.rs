@@ -30,6 +30,12 @@ use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, mpsc};
 
+/// Hard cap on a single inbound control frame. Anything larger almost certainly
+/// indicates protocol corruption or a malicious sender, and unbounded
+/// `vec![0u8; len]` allocations have shown up in `cef-host-tokio` crash
+/// stacks where CEF's macOS allocator shim trips on outsized requests.
+const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
 /// Closes a stray ancillary fd received with a non-`BrowserCreate` command.
 /// Logs a warning naming the carrier so spurious SCM_RIGHTS bugs are visible.
 fn close_stray_fd(fd: RawFd, command: &str) {
@@ -219,6 +225,11 @@ async fn recv_command_with_fd(
         g.read_exact(&mut len_buf).await?;
     }
     let len = u32::from_be_bytes(len_buf) as usize;
+    if len > MAX_CONTROL_FRAME_BYTES {
+        return Err(std::io::Error::other(format!(
+            "control frame length {len} exceeds cap of {MAX_CONTROL_FRAME_BYTES} bytes"
+        )));
+    }
 
     // NOTE: the read half is only consumed by this function (pump's
     // sole reader), so re-acquiring `rd.lock()` after dropping it for the
