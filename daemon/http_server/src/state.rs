@@ -431,37 +431,6 @@ impl AppState {
         Ok(activities)
     }
 
-    async fn rollback_added_activity(
-        &self,
-        wid: &WindowId,
-        pid: &PaneId,
-        aid: &ActivityId,
-    ) -> MultiplexerResult<()> {
-        self.multiplexer
-            .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
-                w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
-            })
-            .await
-    }
-
-    async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
-        // NOTE: spawn happens before publish, so the frontend never saw the new
-        // pane — no layout re-broadcast is needed on rollback.
-        let closed = self
-            .multiplexer
-            .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
-            .await
-            .is_ok();
-        if !closed {
-            tracing::warn!(
-                %new_pane_id,
-                "split rollback failed to close pane after spawn failure"
-            );
-            return;
-        }
-        self.multiplexer.pane_owner_window.remove(new_pane_id);
-    }
-
     /// Build the current Window layout snapshot under the Window lock and
     /// broadcast it. Used by every handler that mutates a Window and by the
     /// title-republish task.
@@ -573,19 +542,6 @@ impl AppState {
         Ok((wid, pid, aid))
     }
 
-    /// Tear down a half-created window after a `create_window` step failed.
-    /// A failing teardown is logged; the caller still returns the original
-    /// error.
-    async fn rollback_window(&self, wid: &WindowId, context: &str) {
-        if let Err(rollback_err) = self.close_window(wid).await {
-            tracing::warn!(
-                error = %rollback_err,
-                %wid,
-                "failed to roll back window after {context}"
-            );
-        }
-    }
-
     /// Rename a session and broadcast the updated view.
     pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
         self.multiplexer.rename_session(sid, name).await?;
@@ -603,20 +559,6 @@ impl AppState {
             }
         }
         None
-    }
-
-    /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
-    /// pane has no owner and `PaneNotInWindow` when it lives in a different
-    /// Window. Used by every URL of shape `/windows/:wid/panes/:pid/*`.
-    fn ensure_pane_in_window(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
-        let actual = self.multiplexer.lookup_pane_window(pid)?;
-        if &actual != wid {
-            return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
-                window: wid.clone(),
-                pane: pid.clone(),
-            }));
-        }
-        Ok(())
     }
 
     /// Combined membership check for `/windows/:wid/panes/:pid/activities/:aid/*`
@@ -655,6 +597,64 @@ impl AppState {
         let _ = self
             .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
             .await?;
+        Ok(())
+    }
+
+    async fn rollback_added_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> MultiplexerResult<()> {
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
+                w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
+            })
+            .await
+    }
+
+    async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
+        // NOTE: spawn happens before publish, so the frontend never saw the new
+        // pane — no layout re-broadcast is needed on rollback.
+        let closed = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
+            .await
+            .is_ok();
+        if !closed {
+            tracing::warn!(
+                %new_pane_id,
+                "split rollback failed to close pane after spawn failure"
+            );
+            return;
+        }
+        self.multiplexer.pane_owner_window.remove(new_pane_id);
+    }
+
+    /// Tear down a half-created window after a `create_window` step failed.
+    /// A failing teardown is logged; the caller still returns the original
+    /// error.
+    async fn rollback_window(&self, wid: &WindowId, context: &str) {
+        if let Err(rollback_err) = self.close_window(wid).await {
+            tracing::warn!(
+                error = %rollback_err,
+                %wid,
+                "failed to roll back window after {context}"
+            );
+        }
+    }
+
+    /// Validate that `pid` lives inside `wid`. Returns `PaneNotFound` when the
+    /// pane has no owner and `PaneNotInWindow` when it lives in a different
+    /// Window. Used by every URL of shape `/windows/:wid/panes/:pid/*`.
+    fn ensure_pane_in_window(&self, wid: &WindowId, pid: &PaneId) -> HttpResult<()> {
+        let actual = self.multiplexer.lookup_pane_window(pid)?;
+        if &actual != wid {
+            return Err(HttpError::Session(MultiplexerError::PaneNotInWindow {
+                window: wid.clone(),
+                pane: pid.clone(),
+            }));
+        }
         Ok(())
     }
 }
