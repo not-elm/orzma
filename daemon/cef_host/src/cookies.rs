@@ -34,21 +34,38 @@ fn settle(pending: &AtomicUsize, on_done: &OnDone) {
 
 // NOTE: wrap_set_cookie_callback! must appear at module scope (not inside a
 // function) because it emits a struct definition. We define one reusable type
-// here and pass per-cookie state through the Arc fields.
+// here and pass per-cookie state through the Arc fields. `cookie_id` carries
+// per-call identity (name/domain/url) into the async callback so a rejection
+// can be attributed to the offending cookie — CEF discards Chromium's
+// `CookieInclusionStatus`, so the boolean is all we get from the callback.
 wrap_set_cookie_callback! {
     struct PendingCookieCallback {
         pending: Arc<AtomicUsize>,
         on_done: OnDone,
+        cookie_id: Arc<CookieId>,
     }
 
     impl SetCookieCallback {
         fn on_complete(&self, success: ::std::os::raw::c_int) {
             if success == 0 {
-                tracing::warn!("set_cookie callback reported failure");
+                tracing::warn!(
+                    name = %self.cookie_id.name,
+                    domain = %self.cookie_id.domain,
+                    url = %self.cookie_id.url,
+                    "set_cookie callback reported failure"
+                );
             }
             settle(&self.pending, &self.on_done);
         }
     }
+}
+
+/// Per-cookie identity carried through `set_cookie`'s async callback for
+/// diagnostic logging.
+struct CookieId {
+    name: String,
+    domain: String,
+    url: String,
 }
 
 /// Installs `cookies` into `request_context`'s cookie manager, then calls
@@ -93,11 +110,25 @@ pub fn install_cookies(
     for dto in cookies {
         let url = cef::CefString::from(dto.url.as_str());
         let cookie = build_cef_cookie(&dto);
-        let mut cb = PendingCookieCallback::new(Arc::clone(&pending), Arc::clone(&on_done_slot));
+        let cookie_id = Arc::new(CookieId {
+            name: dto.name.clone(),
+            domain: dto.domain.clone(),
+            url: dto.url.clone(),
+        });
+        let mut cb = PendingCookieCallback::new(
+            Arc::clone(&pending),
+            Arc::clone(&on_done_slot),
+            Arc::clone(&cookie_id),
+        );
 
         let ret = mgr.set_cookie(Some(&url), Some(&cookie), Some(&mut cb));
         if ret == 0 {
-            tracing::warn!(url = %dto.url, "set_cookie returned 0 (failed to enqueue)");
+            tracing::warn!(
+                name = %cookie_id.name,
+                domain = %cookie_id.domain,
+                url = %cookie_id.url,
+                "set_cookie returned 0 (failed to enqueue)"
+            );
             // NOTE: the callback will never fire for this cookie, so settle its
             // slot here to keep the pending count consistent.
             settle(&pending, &on_done_slot);
