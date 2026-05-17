@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isRenamePromptOpen, setRenamePromptOpen } from '../shortcuts/renamePromptGate';
+import { setRenamePromptOpen } from '../shortcuts/renamePromptGate';
 import { isChooseTreeOpen, setChooseTreeOpen } from './chooseTreeGate';
 import { useChooseTree } from './useChooseTree';
 

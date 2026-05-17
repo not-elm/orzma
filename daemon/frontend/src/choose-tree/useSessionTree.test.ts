@@ -34,7 +34,9 @@ describe('useSessionTree', () => {
   });
 
   it('returns error on non-OK', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 500 })) as typeof globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 500 })) as typeof globalThis.fetch;
     const { result } = renderHook(() => useSessionTree(true));
     await waitFor(() => expect(result.current.status).toBe('error'));
   });
