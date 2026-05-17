@@ -192,8 +192,7 @@ async fn pump(
                         }
                         CefCommand::ResumeScreencast { aid }
                     }
-                    // NOTE: RecreateShm, GetSelection, SetClipboard are deferred to
-                    // later tasks. Close any stray ancillary fd to prevent leaks.
+                    // TODO: implement RecreateShm, GetSelection, SetClipboard.
                     HostCommand::RecreateShm { .. }
                     | HostCommand::GetSelection { .. }
                     | HostCommand::SetClipboard { .. } => {

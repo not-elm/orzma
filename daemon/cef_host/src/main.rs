@@ -19,10 +19,6 @@ use ozmux_browser_cef_protocol::wire::HostEvent;
 use ozmux_cef_host::{control, pool, post_command};
 use std::path::PathBuf;
 
-// NOTE: BrowserApp injects --no-sandbox + --disable-gpu at command-line processing time.
-// CEF runs multi-process: helper processes (renderer, gpu, network) are spawned from the
-// cef_helper binary that sits next to cef_host (see browser_subprocess_path below).
-// Multi-process is required for per-browser CefRequestContext objects to take effect.
 wrap_app! {
     struct BrowserApp;
 
@@ -32,8 +28,6 @@ wrap_app! {
             process_type: Option<&cef::CefString>,
             command_line: Option<&mut cef::CommandLine>,
         ) {
-            // NOTE: process_type is empty string "" for the browser process and non-empty
-            // (e.g. "renderer", "gpu-process", "utility") for helper processes.
             let is_browser = process_type
                 .map(|s| s.to_string().is_empty())
                 .unwrap_or(true);
@@ -50,20 +44,11 @@ wrap_app! {
             cl.append_switch(Some(&mock_kc));
 
             if is_browser {
-                // NOTE: helper processes (GPU, Renderer, Network) run out-of-process via the
-                // cef_helper binary.  Per-browser CefRequestContext objects are honored only
-                // in this multi-process mode; --single-process made CEF ignore them.
                 let flag2 = cef::CefString::from("no-sandbox");
                 cl.append_switch(Some(&flag2));
                 let flag3 = cef::CefString::from("disable-gpu");
                 cl.append_switch(Some(&flag3));
 
-                // NOTE: Site Isolation is OFF by default to keep cef-rs 0.7 CDP
-                // sessions stable (cross-origin nav otherwise tears down the
-                // CDP session that holds viewport / input forwarding). Opt back
-                // in by setting OZMUX_BROWSER_SITE_ISOLATION=1 — the env is
-                // documented in CLAUDE.md for the chromiumoxide path and Plan 2
-                // B15 brings it to the cef path verbatim.
                 if std::env::var("OZMUX_BROWSER_SITE_ISOLATION").as_deref() != Ok("1") {
                     let disable_features = cef::CefString::from("disable-features");
                     let value = cef::CefString::from("IsolateOrigins,site-per-process");
@@ -86,9 +71,6 @@ wrap_app! {
 fn in_bundle_helper() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let macos_dir = exe.parent()?;
-    // NOTE: bundled cef_host lives at `<app>/Contents/MacOS/cef_host`; if our
-    // parent directory isn't named `MacOS`, we are not running from inside the
-    // .app and the caller should fall back to the OUT_DIR copy.
     if macos_dir.file_name()?.to_str()? != "MacOS" {
         return None;
     }
@@ -134,11 +116,6 @@ fn main() -> std::process::ExitCode {
     {
         use cef_dll_sys::{FRAMEWORK_PATH, get_cef_dir};
         use std::os::unix::ffi::OsStrExt;
-        // NOTE: when cef_host runs from inside cef_host.app/Contents/MacOS, the
-        // CEF framework lives next to us at ../Frameworks/Chromium Embedded
-        // Framework.framework — prefer that copy so the running process sees the
-        // same framework as the helper sub-bundles. Fall back to the build-time
-        // OUT_DIR copy via get_cef_dir() for non-bundled debug runs.
         let framework = in_bundle_framework_dylib()
             .or_else(|| {
                 let cef_dir = get_cef_dir()?;
@@ -190,15 +167,9 @@ fn main() -> std::process::ExitCode {
     settings.multi_threaded_message_loop = 0;
     settings.external_message_pump = 0;
 
-    // NOTE: on macOS, CefInitialize requires explicit paths to the framework and its resources.
-    // Without these, CEF fails immediately with "icudtl.dat not found in bundle".
     #[cfg(target_os = "macos")]
     {
         use cef_dll_sys::{FRAMEWORK_PATH, get_cef_dir};
-        // NOTE: prefer the framework copy inside cef_host.app/Contents/Frameworks/
-        // so the running browser process matches the helper sub-bundles.
-        // FRAMEWORK_PATH = "Chromium Embedded Framework.framework/Chromium Embedded Framework";
-        // parent() of the dylib gives us the .framework directory itself.
         let framework_dylib = in_bundle_framework_dylib()
             .or_else(|| {
                 let cef_dir = get_cef_dir()?;
@@ -251,16 +222,14 @@ fn main() -> std::process::ExitCode {
 
     // ⑤ PoolHandle + Tokio worker hosting the UDS control plane.
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
-    // NOTE: event_tx is cloned into each BrowserPool entry's NavInner so that
-    // DisplayHandler / LoadHandler can emit HostEvent::NavStateChanged to the
-    // daemon without acquiring the pool lock.
     let handle = post_command::PoolHandle::new(pool::BrowserPool::new(
         event_tx,
         browser_data_root.clone(),
         data_root_lock.is_some(),
     ));
     // NOTE: keep the data-root lock alive for the whole of main — it releases
-    // on drop, so it must outlive run_message_loop() below.
+    // on drop, so it must outlive run_message_loop() below. Dropping early
+    // releases the OS lock; concurrent daemons would then corrupt the data root.
     let _data_root_lock = data_root_lock;
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -285,9 +254,6 @@ fn main() -> std::process::ExitCode {
                     Ok(()) => tracing::info!("control loop closed normally"),
                     Err(e) => tracing::warn!(error = %e, "control loop failed; shutting down"),
                 }
-                // NOTE: when the control loop exits — gracefully or otherwise —
-                // post a QuitTask so the main thread's CefRunMessageLoop returns
-                // instead of sitting idle waiting for the next command.
                 if let Err(e) = post_command::post_quit_loop() {
                     tracing::warn!(error = %e, "post_quit_loop failed; main may hang until SIGINT");
                 }
@@ -303,8 +269,6 @@ fn main() -> std::process::ExitCode {
     cef::shutdown();
     tracing::info!("CefShutdown OK");
 
-    // NOTE: dropping the runtime here cancels the control loop task; the
-    // event_tx parked in main is dropped just after, closing the event channel.
     drop(rt);
     std::process::ExitCode::SUCCESS
 }

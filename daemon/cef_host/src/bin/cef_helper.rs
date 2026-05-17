@@ -1,14 +1,16 @@
 //! cef_host helper binary — runs in CEF subprocesses (GPU / Renderer / Plugin / Utility).
 //! Must call CefExecuteProcess and exit immediately with the returned code.
+//!
+//! Registering an `App` in the helper exists solely so
+//! `on_before_command_line_processing` can inject `--use-mock-keychain` into
+//! every helper process. CEF does not propagate that switch from the browser
+//! command line, so without this the Network Service utility falls back to the
+//! real macOS Keychain and pops a "Chromium Safe Storage" authorization dialog.
 
 use cef::args::Args;
 use cef::rc::Rc as _;
 use cef::{App, ImplApp, ImplCommandLine, WrapApp, wrap_app};
 
-// NOTE: registering an App in the helper exists solely so `on_before_command_line_processing`
-// can inject `--use-mock-keychain` into every helper process. CEF does not propagate that
-// switch from the browser command line, so without this the Network Service utility falls
-// back to the real macOS Keychain and pops a "Chromium Safe Storage" authorization dialog.
 wrap_app! {
     struct HelperApp;
 
@@ -34,10 +36,6 @@ fn main() {
     {
         use cef_dll_sys::{FRAMEWORK_PATH, get_cef_dir};
         use std::os::unix::ffi::OsStrExt;
-        // NOTE: prefer the in-bundle framework so a helper launched from
-        // <app>/Contents/Frameworks/cef_host Helper.app/Contents/MacOS picks up
-        // the framework copy sitting alongside it; fall back to the cef-dll-sys
-        // OUT_DIR copy for any out-of-bundle dev invocation.
         let exe = std::env::current_exe().expect("current_exe");
         let in_bundle = exe
             .parent()
@@ -64,8 +62,6 @@ fn main() {
             std::ffi::CString::new(framework.as_os_str().as_bytes()).expect("invalid path bytes");
         let ok = unsafe { cef_dll_sys::cef_load_library(path.as_ptr().cast()) };
         if ok != 1 {
-            // NOTE: helper cannot safely print to stderr once CEF intercepts the process,
-            // but we try before any CEF initialisation.
             eprintln!("cef_load_library failed — framework missing?");
             std::process::exit(1);
         }

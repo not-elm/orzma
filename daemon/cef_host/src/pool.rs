@@ -251,14 +251,7 @@ impl BrowserPool {
                     tracing::warn!(?aid, "Resize: unknown activity");
                     return;
                 };
-                // NOTE: CefRenderHandler::view_rect must report DIP (CSS)
-                // pixels; CEF multiplies by device_scale_factor (the dpr we
-                // return from screen_info) to size the OnPaint buffer. So
-                // render_state stores CSS px, NOT css×dpr — passing device
-                // pixels here would double-apply the dpr.
                 let dpr = if dpr > 0.0 { dpr } else { 1.0 };
-                // The shm slot holds a 4K *physical* frame, so cap the CSS
-                // viewport such that css×dpr stays within MAX_VIEWPORT_*.
                 let max_css_w = ((MAX_VIEWPORT_W as f32 / dpr) as u32).max(1);
                 let max_css_h = ((MAX_VIEWPORT_H as f32 / dpr) as u32).max(1);
                 let view_w = css_w.clamp(1, max_css_w);
@@ -276,7 +269,6 @@ impl BrowserPool {
                 entry.render_state.width.set(view_w);
                 entry.render_state.height.set(view_h);
                 entry.render_state.dpr.set(dpr);
-                // Force a fresh keyframe so the renderer rebuilds at the new size.
                 entry.render_state.force_keyframe.set(true);
                 if let Some(host) = entry.browser.host() {
                     host.was_resized();
@@ -286,16 +278,8 @@ impl BrowserPool {
             }
             CefCommand::Close { aid } => {
                 tracing::info!(?aid, "Close");
-                // NOTE: drop any context stashed by a still-in-flight
-                // BrowserCreate whose CreateBrowserAfterCookies has not fired
-                // yet. Evicting the stash makes the late CreateBrowserAfterCookies
-                // observe `None` from `take_pending_context` and abort cleanly.
-                // No `release_profile` is needed for the in-flight case:
-                // `retain_profile` only fires inside `create_browser` after the
-                // `BrowserEntry` is inserted, which has not happened yet here.
                 self.pending_contexts.remove(&aid);
                 if let Some(entry) = self.browsers.remove(&aid) {
-                    // NOTE: CloseBrowser triggers OnBeforeClose which drops the CEF handle.
                     let host = entry.browser.host();
                     if let Some(h) = host {
                         h.close_browser(1);
@@ -309,13 +293,7 @@ impl BrowserPool {
             }
             CefCommand::Shutdown => {
                 tracing::info!("Shutdown requested");
-                // NOTE: execute() always runs on the CEF UI thread (via ExecuteTask),
-                // so calling quit_message_loop() directly is safe and avoids an extra
-                // post_task round-trip that would be needed from a non-UI caller.
                 cef::quit_message_loop();
-                // NOTE: shutdown_requested is still set so snapshot_shutdown_requested
-                // observers can detect the graceful shutdown, even though it no longer
-                // drives the message loop.
                 self.shutdown_requested = true;
             }
             CefCommand::SendInput { aid, event } => {
@@ -344,8 +322,6 @@ impl BrowserPool {
                 };
                 match delta.signum() {
                     -1 => {
-                        // NOTE: guard on can_go_back — calling go_back with no
-                        // back entry is a wasted round-trip into Chromium.
                         if entry.browser.can_go_back() != 0 {
                             tracing::debug!(?aid, "NavigateHistory back");
                             entry.browser.go_back();
@@ -385,9 +361,6 @@ impl BrowserPool {
                     tracing::debug!(?aid, "ResumeScreencast");
                     host.was_hidden(0);
                 }
-                // NOTE: invalidate forces a fresh keyframe after the browser is
-                // marked visible again; without this the first frame may not arrive
-                // until the next scheduled repaint.
                 crate::input::invalidate_view(&entry.browser, &aid);
             }
         }
@@ -407,10 +380,6 @@ impl BrowserPool {
     ) {
         tracing::info!(?aid, %initial_url, epoch, shm_fd, "BrowserCreate");
 
-        // NOTE: when persistence is disabled a Named profile behaves exactly
-        // like Incognito. The effective profile is what gets refcounted and
-        // stored in BrowserEntry so retain/release stay consistent with the
-        // contexts actually cached in `named_contexts`.
         let effective_profile = self.effective_profile(&profile);
 
         let total_size = ShmWriter::required_region_size(SLOT_PAYLOAD_MAX);
@@ -440,11 +409,6 @@ impl BrowserPool {
         let mut request_context = match self.take_pending_context(&aid) {
             Some(c) => c,
             None => {
-                // NOTE: stash absent means `Close` arrived while cookies were
-                // installing and evicted `pending_contexts[aid]`. The activity
-                // is being torn down — abort browser creation cleanly instead
-                // of minting a fresh context that would produce a ghost
-                // browser nothing tracks.
                 tracing::info!(
                     ?aid,
                     "pending RequestContext evicted by Close; aborting BrowserCreate"
@@ -453,11 +417,6 @@ impl BrowserPool {
                 unsafe { libc::munmap(ptr, total_size) };
                 // SAFETY: shm_fd was duped from the daemon side and is owned here.
                 unsafe { libc::close(shm_fd) };
-                // NOTE: if this BrowserCreate cached a fresh named-profile
-                // RequestContext in `named_contexts` that no other activity
-                // has retained, drop it here. `discard_unretained_context`
-                // is a no-op for Incognito and for already-retained Named
-                // profiles, so this is safe to call unconditionally.
                 self.discard_unretained_context(&effective_profile);
                 return;
             }
@@ -484,13 +443,10 @@ impl BrowserPool {
         );
 
         let mut window_info = WindowInfo::default();
-        // NOTE: windowless_rendering_enabled = 1 enables OSR (off-screen rendering),
-        // which is required for on_paint callbacks to fire without a native window.
         window_info.windowless_rendering_enabled = 1;
 
         let browser_settings = BrowserSettings {
-            // NOTE: windowless_frame_rate tells CEF how often to schedule OnPaint callbacks.
-            // 30 fps is sufficient for the PoC; Plan 2 will expose this as a config option.
+            // TODO: expose windowless_frame_rate via daemon config.
             windowless_frame_rate: 30,
             ..BrowserSettings::default()
         };
@@ -508,8 +464,6 @@ impl BrowserPool {
         match browser {
             Some(b) => {
                 tracing::info!(?aid, "browser created successfully");
-                // NOTE: In OSR mode, CEF starts hidden. Call was_hidden(0) to mark the browser
-                // visible and trigger the first OnPaint once the page loads.
                 if let Some(host) = b.host() {
                     host.was_hidden(0);
                     host.notify_screen_info_changed();
@@ -627,15 +581,17 @@ impl BrowserPool {
 /// Creates a fresh in-memory `RequestContext` (empty `cache_path`, CEF
 /// "incognito" storage). Per-activity isolation works via the distinct
 /// `RequestContext` objects regardless of disk persistence.
-//
-// NOTE: disk persistence via `RequestContextSettings.cache_path` is intentionally
-// disabled. Setting a per-RequestContext `cache_path` under `CefSettings.root_cache_path`
-// caused CEF's Chrome runtime to log `Cannot create profile at path .../profiles/<name>`
-// and silently funnel storage back to the shared `<root>/Default/` directory, defeating
-// per-activity isolation. Re-enabling persistence needs Chrome's profile-naming convention
-// (`Default`/`Profile N` registered in `Local State`) — tracked as a future task.
-// `RequestContextSettings::default()` populates `size` to
-// `size_of::<_cef_request_context_settings_t>()`; no manual sizing needed.
+///
+/// Disk persistence via `RequestContextSettings.cache_path` is intentionally
+/// disabled. Setting a per-`RequestContext` `cache_path` under
+/// `CefSettings.root_cache_path` caused CEF's Chrome runtime to log
+/// `Cannot create profile at path .../profiles/<name>` and silently funnel
+/// storage back to the shared `<root>/Default/` directory, defeating
+/// per-activity isolation. Re-enabling persistence needs Chrome's
+/// profile-naming convention (`Default`/`Profile N` registered in
+/// `Local State`) — tracked as a future task.
+/// `RequestContextSettings::default()` populates `size` to
+/// `size_of::<_cef_request_context_settings_t>()`; no manual sizing needed.
 fn create_request_context() -> Option<RequestContext> {
     let settings = RequestContextSettings::default();
     let ctx = request_context_create_context(Some(&settings), None);

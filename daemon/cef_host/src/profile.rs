@@ -85,12 +85,13 @@ pub fn browser_data_root_from(xdg_data_home: Option<&str>, home: &str) -> PathBu
 }
 
 /// Resolves the browser data root from the process environment.
+///
+/// `HOME` is effectively always set for cef_host (it is launched inside a user
+/// session). The `/tmp` fallback is a last resort so the process does not
+/// panic on a degenerate environment; storage there is world-readable and
+/// reboot-cleared, which is acceptable only because `HOME` being unset is a
+/// pathological case.
 pub fn browser_data_root() -> PathBuf {
-    // NOTE: HOME is effectively always set for cef_host (it is launched inside
-    // a user session). The /tmp fallback is a last resort so the process does
-    // not panic on a degenerate environment; storage there is world-readable
-    // and reboot-cleared, which is acceptable only because HOME being unset is
-    // a pathological case.
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     browser_data_root_from(std::env::var("XDG_DATA_HOME").ok().as_deref(), &home)
 }
@@ -98,8 +99,6 @@ pub fn browser_data_root() -> PathBuf {
 /// An exclusive lock on the browser data root, held for the daemon's life.
 /// While held, this daemon owns disk-persistent profiles.
 pub struct DataRootLock {
-    // NOTE: held only for its Drop side-effect — closing the file releases the
-    // fs2 advisory lock.
     _file: File,
 }
 

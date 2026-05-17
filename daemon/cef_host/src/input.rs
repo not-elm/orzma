@@ -60,8 +60,6 @@ pub fn dispatch(browser: &cef::Browser, aid: &ActivityId, event: InputEvent) {
             let ev = MouseEvent { x, y, modifiers };
             let btn = wire_button_to_cef(button);
             let up: c_int = if mouse_up { 1 } else { 0 };
-            // NOTE: click_count is u32 on the wire; saturating cast to c_int is safe
-            // because realistic click counts are well within i32 range.
             let click_count = count.min(i32::MAX as u32) as c_int;
             host.send_mouse_click_event(Some(&ev), btn, up, click_count);
         }
@@ -90,8 +88,6 @@ pub fn dispatch(browser: &cef::Browser, aid: &ActivityId, event: InputEvent) {
                 modifiers,
                 windows_key_code,
                 native_key_code,
-                // NOTE: character and unmodified_character are u16 on the wire
-                // and char16_t (u16) in cef-rs 148 — direct assignment is correct.
                 character,
                 unmodified_character,
                 focus_on_editable_field: if focus_on_editable_field { 1 } else { 0 },
@@ -108,10 +104,7 @@ pub fn dispatch(browser: &cef::Browser, aid: &ActivityId, event: InputEvent) {
             let cef_text = CefString::from(text.as_str());
             let replacement = wire_range_to_cef(replacement_range);
             let selection = wire_range_to_cef(selection_range);
-            // NOTE: underlines are passed as empty for now; Plan 3 maps
-            // ImeUnderline wire structs to CompositionUnderline with correct
-            // size (confirmed by A12 spike: CompositionUnderline::default()
-            // sets the required sizeof(_cef_composition_underline_t)).
+            // TODO: forward ImeUnderline wire structs.
             let underlines: &[CompositionUnderline] = &[];
             host.ime_set_composition(
                 Some(&cef_text),
@@ -127,8 +120,6 @@ pub fn dispatch(browser: &cef::Browser, aid: &ActivityId, event: InputEvent) {
         } => {
             let cef_text = CefString::from(text.as_str());
             let replacement = replacement_range.and_then(wire_range_to_cef);
-            // NOTE: A12 spike confirmed ime_commit_text is the correct call
-            // for ImeCommit (not ime_finish_composing_text).
             host.ime_commit_text(
                 Some(&cef_text),
                 replacement.as_ref(),

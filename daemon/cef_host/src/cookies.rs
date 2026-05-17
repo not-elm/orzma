@@ -74,6 +74,19 @@ struct CookieId {
 /// completed. Must be called from the CEF UI thread.
 ///
 /// The empty-list fast path is synchronous and safe to call from any context.
+///
+/// # Design note
+///
+/// The ready-callback path (`cookie_manager(Some(&mut cb))` + waiting for the
+/// `CompletionCallback` before seeding) is deliberately NOT used here. We pass
+/// `None` and seed immediately, relying on CEF internally queueing
+/// `set_cookie` calls against the context's storage initialization. This is
+/// acceptable because named-profile cache directories are `create_dir_all`'d
+/// before the context is created (`pool.rs`), and CEF queues `set_cookie`
+/// against storage init in practice. Risk: a freshly-created context's very
+/// first `set_cookie` batch could in principle race storage init; if cookie
+/// loss is ever observed here, switch to the `wrap_completion_callback!`
+/// ready-callback approach.
 pub fn install_cookies(
     cookies: Vec<CefCookieDto>,
     request_context: &RequestContext,
@@ -84,16 +97,6 @@ pub fn install_cookies(
         return;
     }
 
-    // NOTE: the ready-callback path (`cookie_manager(Some(&mut cb))` + waiting
-    // for the CompletionCallback before seeding) is deliberately NOT used here.
-    // We pass `None` and seed immediately, relying on CEF internally queueing
-    // `set_cookie` calls against the context's storage initialization. This is
-    // acceptable because named-profile cache directories are `create_dir_all`'d
-    // before the context is created (pool.rs), and CEF queues `set_cookie`
-    // against storage init in practice. Risk: a freshly-created context's very
-    // first `set_cookie` batch could in principle race storage init; if cookie
-    // loss is ever observed here, switch to the `wrap_completion_callback!`
-    // ready-callback approach.
     let Some(mgr) = request_context.cookie_manager(None) else {
         tracing::warn!("CookieManager unavailable; proceeding without cookies");
         on_done();

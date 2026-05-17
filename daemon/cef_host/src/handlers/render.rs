@@ -73,12 +73,8 @@ unsafe impl Sync for RenderHandlerState {}
 wrap_render_handler! {
     pub struct OzmuxRenderHandler {
         aid: ActivityId,
-        // NOTE: ShmWriter has `unsafe impl Send + Sync` but we only call it from
-        // the CEF UI thread; wrapping in Arc provides the Clone bound the macro needs.
         shm: Arc<ShmWriter>,
         state: Arc<RenderHandlerState>,
-        // NOTE: after each shm write the handler emits a HostEvent::FrameDescriptor
-        // so the daemon's event pump reads the slot into its FrameRing.
         event_tx: mpsc::UnboundedSender<HostEvent>,
     }
 
@@ -102,9 +98,6 @@ wrap_render_handler! {
             i.depth = 24;
             i.depth_per_component = 8;
             i.is_monochrome = 0;
-            // NOTE: `rect` / `available_rect` describe the monitor in virtual-screen
-            // coords per CEF (cef_types.h). For HiDPI quality only device_scale_factor
-            // matters — leave rects at defaults.
             i.rect = Rect::default();
             i.available_rect = Rect::default();
             1
@@ -114,8 +107,6 @@ wrap_render_handler! {
             let visible = show != 0;
             self.state.is_popup_visible.set(visible);
             if !visible {
-                // NOTE: clearing popup_rect when the popup hides lets the frontend
-                // tear down the overlay even if no popup_size event arrives.
                 self.state.popup_rect.set(None);
             }
         }
@@ -192,7 +183,6 @@ wrap_render_handler! {
                 .map(|d| d.as_micros() as u64)
                 .unwrap_or(0);
 
-            // NOTE: damage is moved into SlotData; clone for the descriptor.
             let descriptor_damage = damage.clone();
             let (lap, slot_idx) = if is_popup {
                 self.shm.write_slot_popup(SlotData {
