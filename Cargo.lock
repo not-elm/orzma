@@ -2755,6 +2755,7 @@ dependencies = [
  "daemon_bootstrap",
  "libc",
  "reqwest",
+ "serde",
  "tokio",
 ]
 
