@@ -69,9 +69,33 @@ async fn extract_macos(initial_url: &str) -> Result<Vec<CefCookieDto>, std::io::
         let Some(ref value) = c.decrypted_value else {
             continue;
         };
+        // NOTE: `decrypt-cookies`' `cookies_by_host` is a SQL `LIKE %host%`
+        // substring filter, so for `host = "google.com"` it returns rows
+        // whose `host_key` merely *contains* the string (mail.google.com,
+        // accounts.google.com, notgoogle.com, …). Drop any cookie that
+        // would not legitimately apply to `initial_url` under Chromium's
+        // domain-match rules — forwarding them to CEF would produce
+        // `EXCLUDE_INVALID_DOMAIN` rejections and warning noise.
+        if !cookie_applies_to_host(&host, &c.host_key) {
+            continue;
+        }
         out.push(to_cookie_dto(c, value.clone()));
     }
     Ok(out)
+}
+
+/// Returns `true` when a Chrome-stored cookie with `host_key` would be sent on
+/// a navigation to `host` per Chromium's cookie domain-match rules:
+///
+/// - Domain cookie (`host_key` starts with `.`): `host` must equal the bare
+///   domain or be a subdomain of it.
+/// - Host-only cookie (no leading dot): `host` must equal `host_key` exactly.
+fn cookie_applies_to_host(host: &str, host_key: &str) -> bool {
+    if let Some(domain) = host_key.strip_prefix('.') {
+        host == domain || host.ends_with(&format!(".{domain}"))
+    } else {
+        host == host_key
+    }
 }
 
 /// Extracts the registrable host from a URL for use as the `cookies_by_host`
@@ -171,6 +195,29 @@ mod tests {
     fn build_url_and_domain_empty_path_defaults_to_root() {
         let (url, _) = build_url_and_domain("example.com", "");
         assert_eq!(url, "https://example.com/");
+    }
+
+    #[test]
+    fn cookie_applies_to_host_domain_cookie_matches_self_and_subdomain() {
+        assert!(cookie_applies_to_host("github.com", ".github.com"));
+        assert!(cookie_applies_to_host("api.github.com", ".github.com"));
+        assert!(cookie_applies_to_host(
+            "deep.api.github.com",
+            ".github.com"
+        ));
+    }
+
+    #[test]
+    fn cookie_applies_to_host_domain_cookie_rejects_unrelated() {
+        assert!(!cookie_applies_to_host("notgithub.com", ".github.com"));
+        assert!(!cookie_applies_to_host("github.example.com", ".github.com"));
+    }
+
+    #[test]
+    fn cookie_applies_to_host_host_only_requires_exact_match() {
+        assert!(cookie_applies_to_host("github.com", "github.com"));
+        assert!(!cookie_applies_to_host("api.github.com", "github.com"));
+        assert!(!cookie_applies_to_host("github.com", "api.github.com"));
     }
 
     #[tokio::test]
