@@ -17,6 +17,18 @@ use std::os::raw::c_int;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
+// NOTE: cef-rs declares `on_cursor_change`'s `cursor` parameter with a
+// different concrete type per platform — `*mut u8` on macOS (NSCursor*),
+// `c_ulong` on Linux (X cursor XID), `*mut c_void` on Windows. Alias the
+// platform-specific shape so the `wrap_display_handler!` macro receives a
+// single type token that matches the trait it implements.
+#[cfg(target_os = "macos")]
+type CefCursorHandle = *mut u8;
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+type CefCursorHandle = ::std::os::raw::c_ulong;
+#[cfg(target_os = "windows")]
+type CefCursorHandle = *mut ::std::os::raw::c_void;
+
 /// Maps a CEF `cef_cursor_type_t` to the semantic [`CursorKind`] the frontend
 /// renders. Custom cursor images and rarely-seen kinds fall back to `Default`.
 fn cursor_kind_from(type_: &cef_cursor_type_t) -> CursorKind {
@@ -130,7 +142,7 @@ wrap_display_handler! {
         fn on_cursor_change(
             &self,
             _browser: Option<&mut Browser>,
-            _cursor: *mut u8,
+            _cursor: CefCursorHandle,
             type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> c_int {
