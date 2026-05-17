@@ -80,6 +80,7 @@ pub fn sessions_router() -> Router<AppState> {
             "/",
             get(handlers::sessions::list::list).post(handlers::sessions::create::create),
         )
+        .route("/tree", get(handlers::sessions::tree::tree))
         .route(
             "/{session_id}",
             get(handlers::sessions::get::get)
