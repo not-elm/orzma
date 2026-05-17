@@ -93,18 +93,30 @@ pub async fn run() -> anyhow::Result<()> {
 
     let cef_host_socket = runtime.sock_dir().join("cef_host.sock");
     let supervisor = CefHostSupervisor::new(cef_host_socket);
-    let cef_host_handles = match supervisor.spawn_and_handshake().await {
-        Ok(handles) => handles,
-        Err(e) => {
-            // NOTE: a missing/broken cef_host (CI without CEF runtime deps, dev
-            // box that never ran `make bundle-cef-host`, hostile sandbox) must
-            // NOT block daemon startup — terminal and extension activities are
-            // independent of the browser path. Fall back to a pre-`is_dead`
-            // handle so every Browser Activity request short-circuits with
-            // `BrowserUnavailable` via the existing checks.
+    // NOTE: cef_host startup can hang (binary missing → no UDS connect ever;
+    // missing CEF runtime libs → CefInitialize blocks). `spawn_and_handshake`
+    // only resolves once the child sends Hello, so we cap the wait — past it
+    // we proceed with the browser backend disabled rather than block the
+    // entire daemon (`/health` would never come up).
+    const CEF_HOST_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    let cef_host_handles = match tokio::time::timeout(
+        CEF_HOST_HANDSHAKE_TIMEOUT,
+        supervisor.spawn_and_handshake(),
+    )
+    .await
+    {
+        Ok(Ok(handles)) => handles,
+        Ok(Err(e)) => {
             tracing::error!(
                 error = %e,
                 "cef_host spawn_and_handshake failed; continuing with browser backend disabled"
+            );
+            ozmux_browser::cef_service::dead_handles_after_spawn_failure()
+        }
+        Err(_elapsed) => {
+            tracing::error!(
+                timeout_s = CEF_HOST_HANDSHAKE_TIMEOUT.as_secs(),
+                "cef_host did not handshake in time; continuing with browser backend disabled"
             );
             ozmux_browser::cef_service::dead_handles_after_spawn_failure()
         }
