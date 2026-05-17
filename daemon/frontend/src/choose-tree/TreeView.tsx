@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from 'react';
 import type { VisibleRow } from './flattenVisibleRows';
 import { rowMatches, type TreeCursor } from './treeReducer';
 
@@ -6,6 +7,9 @@ interface TreeViewProps {
   cursor: TreeCursor;
   onRowClick: (cursor: TreeCursor) => void;
 }
+
+type SessionVisibleRow = Extract<VisibleRow, { kind: 'session' }>;
+type WindowVisibleRow = Extract<VisibleRow, { kind: 'window' }>;
 
 function rowKey(row: VisibleRow): string {
   if (row.kind === 'session') return `session:${row.sessionId}`;
@@ -37,6 +41,83 @@ function BlinkingCursor() {
   );
 }
 
+function activateOnEnterOrSpace(select: () => void) {
+  return (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') select();
+  };
+}
+
+interface SessionRowProps {
+  row: SessionVisibleRow;
+  selected: boolean;
+  onSelect: (cursor: TreeCursor) => void;
+}
+
+function SessionRow({ row, selected, onSelect }: SessionRowProps) {
+  const select = () => onSelect({ kind: 'session', sessionId: row.sessionId });
+  return (
+    <div
+      id={rowKey(row)}
+      role="treeitem"
+      aria-level={1}
+      aria-expanded={row.expanded}
+      aria-selected={selected}
+      tabIndex={-1}
+      onClick={select}
+      onKeyDown={activateOnEnterOrSpace(select)}
+      className={`${ROW_BASE} gap-2 py-1.5 pr-3 pl-7 ${selected ? ROW_SELECTED : ROW_HOVER}`}
+    >
+      {selected && <BlinkingCursor />}
+      <span
+        aria-hidden="true"
+        className={`w-4 text-xs ${selected ? 'text-primary' : 'text-muted-foreground'}`}
+      >
+        {row.expanded ? '▼' : '▶'}
+      </span>
+      <span className={`font-semibold tracking-wide ${selected ? 'text-info' : 'text-foreground'}`}>
+        {row.name}
+      </span>
+      <span className="text-muted-foreground text-xs">
+        {row.windowCount} {row.windowCount === 1 ? 'window' : 'windows'}
+      </span>
+    </div>
+  );
+}
+
+interface WindowRowProps {
+  row: WindowVisibleRow;
+  selected: boolean;
+  onSelect: (cursor: TreeCursor) => void;
+}
+
+function WindowRow({ row, selected, onSelect }: WindowRowProps) {
+  const select = () =>
+    onSelect({ kind: 'window', sessionId: row.sessionId, windowId: row.windowId });
+  return (
+    <div
+      id={rowKey(row)}
+      role="treeitem"
+      aria-level={2}
+      aria-selected={selected}
+      tabIndex={-1}
+      onClick={select}
+      onKeyDown={activateOnEnterOrSpace(select)}
+      className={`${ROW_BASE} gap-3 py-1 pr-3 pl-10 ${selected ? ROW_SELECTED : ROW_HOVER}`}
+    >
+      {selected && <BlinkingCursor />}
+      <span
+        aria-hidden="true"
+        className={`w-3 text-center text-xs ${row.isActive ? 'text-warning' : 'opacity-0'}`}
+        title={row.isActive ? 'Active window in its session' : undefined}
+      >
+        ★
+      </span>
+      <span className="text-muted-foreground tabular-nums">{row.index}</span>
+      <span className={selected ? 'text-info' : 'text-foreground'}>{row.name}</span>
+    </div>
+  );
+}
+
 /**
  * Renders the visible rows as a flat list of `role="treeitem"`s under a
  * single `role="tree"`. Row identity comes from `session:${sid}` /
@@ -52,73 +133,12 @@ export function TreeView({ rows, cursor, onRowClick }: TreeViewProps) {
   return (
     <div role="tree" className="py-1 text-sm">
       {rows.map((row) => {
-        const id = rowKey(row);
         const selected = rowMatches(row, cursor);
-        if (row.kind === 'session') {
-          const sessionCursor: TreeCursor = { kind: 'session', sessionId: row.sessionId };
-          return (
-            <div
-              key={id}
-              id={id}
-              role="treeitem"
-              aria-level={1}
-              aria-expanded={row.expanded}
-              aria-selected={selected}
-              tabIndex={-1}
-              onClick={() => onRowClick(sessionCursor)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') onRowClick(sessionCursor);
-              }}
-              className={`${ROW_BASE} gap-2 py-1.5 pr-3 pl-7 ${selected ? ROW_SELECTED : ROW_HOVER}`}
-            >
-              {selected && <BlinkingCursor />}
-              <span
-                aria-hidden="true"
-                className={`w-4 text-xs ${selected ? 'text-primary' : 'text-muted-foreground'}`}
-              >
-                {row.expanded ? '▼' : '▶'}
-              </span>
-              <span
-                className={`font-semibold tracking-wide ${selected ? 'text-info' : 'text-foreground'}`}
-              >
-                {row.name}
-              </span>
-              <span className="text-muted-foreground text-xs">
-                {row.windowCount} {row.windowCount === 1 ? 'window' : 'windows'}
-              </span>
-            </div>
-          );
-        }
-        const windowCursor: TreeCursor = {
-          kind: 'window',
-          sessionId: row.sessionId,
-          windowId: row.windowId,
-        };
-        return (
-          <div
-            key={id}
-            id={id}
-            role="treeitem"
-            aria-level={2}
-            aria-selected={selected}
-            tabIndex={-1}
-            onClick={() => onRowClick(windowCursor)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') onRowClick(windowCursor);
-            }}
-            className={`${ROW_BASE} gap-3 py-1 pr-3 pl-10 ${selected ? ROW_SELECTED : ROW_HOVER}`}
-          >
-            {selected && <BlinkingCursor />}
-            <span
-              aria-hidden="true"
-              className={`w-3 text-center text-xs ${row.isActive ? 'text-warning' : 'opacity-0'}`}
-              title={row.isActive ? 'Active window in its session' : undefined}
-            >
-              ★
-            </span>
-            <span className="text-muted-foreground tabular-nums">{row.index}</span>
-            <span className={selected ? 'text-info' : 'text-foreground'}>{row.name}</span>
-          </div>
+        const key = rowKey(row);
+        return row.kind === 'session' ? (
+          <SessionRow key={key} row={row} selected={selected} onSelect={onRowClick} />
+        ) : (
+          <WindowRow key={key} row={row} selected={selected} onSelect={onRowClick} />
         );
       })}
     </div>
