@@ -77,6 +77,13 @@ export interface KeyboardAttachOpts {
 /** Attaches keydown/keyup listeners and returns a detach closure. */
 export function attachKeyboard({ send, element, focusOnEditable }: KeyboardAttachOpts): () => void {
   const onKey = (eventType: 'raw_key_down' | 'key_up') => (e: KeyboardEvent) => {
+    // NOTE: capture-phase consumers (the global prefix dispatcher in
+    // `shortcuts/usePrefixMode.ts`) signal "do not forward to CEF" via
+    // `preventDefault()`; `isComposing` keystrokes belong to the IME path
+    // (`browser/input/ime.ts`) and would double-emit if we forwarded them.
+    // Skipping both keeps prefix shortcuts and IME composition from leaking
+    // into the embedded browser.
+    if (e.defaultPrevented || e.isComposing) return;
     send({
       kind: 'key',
       event_type: eventType,
