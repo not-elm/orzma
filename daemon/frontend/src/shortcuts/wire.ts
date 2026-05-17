@@ -42,6 +42,7 @@ const ActionSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('new-terminal-activity') }),
   z.object({ type: z.literal('close-activity') }),
+  z.object({ type: z.literal('choose-tree') }),
   z.object({
     type: z.literal('focus-activity'),
     offset: z.enum(['next', 'prev']),
