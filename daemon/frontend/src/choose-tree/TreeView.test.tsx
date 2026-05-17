@@ -43,4 +43,30 @@ describe('TreeView', () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toHaveAttribute('aria-expanded', 'false');
   });
+
+  it('renders a blinking block cursor on the selected row', () => {
+    const rows = flattenVisibleRows(tree, new Set(['sid-a']));
+    const { container } = render(
+      <TreeView
+        rows={rows}
+        cursor={{ kind: 'window', sessionId: 'sid-a', windowId: 'wid-a0' }}
+        onRowClick={() => {}}
+      />,
+    );
+    const selectedRow = screen
+      .getAllByRole('treeitem')
+      .find((el) => el.getAttribute('aria-selected') === 'true');
+    expect(selectedRow).toBeDefined();
+    expect(selectedRow?.querySelector('.animate-cursor-blink')).not.toBeNull();
+    expect(selectedRow?.querySelector('.animate-cursor-blink')?.getAttribute('aria-hidden')).toBe(
+      'true',
+    );
+    const unselected = screen
+      .getAllByRole('treeitem')
+      .filter((el) => el.getAttribute('aria-selected') !== 'true');
+    for (const row of unselected) {
+      expect(row.querySelector('.animate-cursor-blink')).toBeNull();
+    }
+    expect(container).toBeInTheDocument();
+  });
 });
