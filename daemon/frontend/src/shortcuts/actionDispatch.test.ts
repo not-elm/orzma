@@ -399,4 +399,36 @@ describe('actionToHandler', () => {
     handler();
     expect(openRenameWindow).toHaveBeenCalledTimes(1);
   });
+
+  it('returns a handler that POSTs /windows with the active session id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const view = { id: 'sid-0', name: 's', active_window: 'wid-0', windows: [] };
+    const ctx = makeShortcutContext({ activeSession: () => view });
+    const handler = actionToHandler({ type: 'new-window' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith('/windows', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: 'sid-0' }),
+    });
+  });
+
+  it('new-window handler is a no-op when there is no active session', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const ctx = makeShortcutContext();
+    const handler = actionToHandler({ type: 'new-window' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
