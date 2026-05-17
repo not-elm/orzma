@@ -31,6 +31,7 @@ const KeyChordFieldsSchema = z.object({
 const ActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('close-pane') }),
   z.object({ type: z.literal('rename-window') }),
+  z.object({ type: z.literal('new-window') }),
   z.object({
     type: z.literal('split-pane'),
     direction: z.enum(['horizontal', 'vertical']),

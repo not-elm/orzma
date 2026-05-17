@@ -17,6 +17,8 @@ use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(any(test, feature = "test-helpers"))]
 use std::collections::HashSet;
+#[cfg(any(test, feature = "test-helpers"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
@@ -36,6 +38,8 @@ pub struct TerminalService {
     title_tx: broadcast::Sender<WindowId>,
     #[cfg(any(test, feature = "test-helpers"))]
     forced_failures: Arc<RwLock<HashSet<ActivityId>>>,
+    #[cfg(any(test, feature = "test-helpers"))]
+    next_spawn_fails: Arc<AtomicBool>,
 }
 
 impl Default for TerminalService {
@@ -46,6 +50,8 @@ impl Default for TerminalService {
             title_tx: broadcast::channel(256).0,
             #[cfg(any(test, feature = "test-helpers"))]
             forced_failures: Arc::default(),
+            #[cfg(any(test, feature = "test-helpers"))]
+            next_spawn_fails: Arc::default(),
         }
     }
 }
@@ -72,6 +78,13 @@ impl TerminalService {
         // precedence over the dup-key short-circuit below.
         #[cfg(any(test, feature = "test-helpers"))]
         {
+            // NOTE: this check returns before the forced_failures check below.
+            // Arming both inject_next_spawn_failure() and inject_spawn_failure()
+            // for the same spawn leaves the forced_failures entry unconsumed,
+            // which would fail a later unrelated spawn.
+            if self.next_spawn_fails.swap(false, Ordering::SeqCst) {
+                return Err(TerminalError::Pty("forced test failure".into()));
+            }
             let mut forced = self.forced_failures.write().await;
             if forced.remove(&activity_id) {
                 return Err(TerminalError::Pty("forced test failure".into()));
@@ -715,5 +728,43 @@ mod tests {
             .await;
         assert!(matches!(result, Err(TerminalError::Pty(_))));
         assert!(svc.subscriber_count(&aid).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn inject_next_spawn_failure_fails_one_spawn_unconditionally() {
+        let svc = TerminalService::default();
+        svc.inject_next_spawn_failure();
+        let result = svc
+            .spawn(
+                PaneId::new(),
+                ActivityId::new(),
+                SpawnOptions {
+                    cols: 80,
+                    rows: 24,
+                    shell: "/bin/sh".to_string(),
+                    cwd: None,
+                    window_id: None,
+                    session_id: None,
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(TerminalError::Pty(_))));
+
+        let second_id = ActivityId::new();
+        svc.spawn(
+            PaneId::new(),
+            second_id.clone(),
+            SpawnOptions {
+                cols: 80,
+                rows: 24,
+                shell: "/bin/sh".to_string(),
+                cwd: None,
+                window_id: None,
+                session_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        svc.kill(&second_id).await.unwrap();
     }
 }

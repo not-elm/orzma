@@ -375,4 +375,20 @@ describe('parseShortcuts', () => {
     expect(out?.bindings).toHaveLength(2);
     expect(out?.bindings[1].action).toEqual({ type: 'rename-window' });
   });
+
+  it('parses a new-window binding', () => {
+    const out = parseShortcuts({
+      ...DEFAULT_JSON,
+      bindings: [
+        {
+          key: 'c',
+          modifiers: { ctrl: false, shift: true, alt: false, meta: false },
+          action: { type: 'new-window' },
+          repeatable: false,
+        },
+      ],
+    });
+    expect(out?.bindings).toHaveLength(1);
+    expect(out?.bindings[0].action).toEqual({ type: 'new-window' });
+  });
 });

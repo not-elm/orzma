@@ -1,6 +1,7 @@
 import { breakActivityToPane } from '../layout/breakActivityToPane';
 import { closeActivity } from '../layout/closeActivity';
 import { closePane } from '../layout/closePane';
+import { createWindow } from '../layout/createWindow';
 import { cycleActivity } from '../layout/cycleActivity';
 import { focusPane } from '../layout/focusPane';
 import { newTerminalActivity } from '../layout/newTerminalActivity';
@@ -32,6 +33,11 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
       return () => withActivePane(ctx, closePane);
     case 'rename-window':
       return () => ctx.openRenameWindow();
+    case 'new-window':
+      return () => {
+        const view = ctx.activeSession();
+        if (view) void createWindow(view.id);
+      };
     case 'split-pane': {
       const orientation = action.direction;
       return () => withActivePane(ctx, (w, p) => splitPane(w, p, orientation));
