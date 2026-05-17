@@ -69,7 +69,7 @@ export function TreeView({ rows, cursor, onRowClick }: TreeViewProps) {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') onRowClick(sessionCursor);
               }}
-              className={`${ROW_BASE} gap-2 px-3 py-1.5 ${selected ? ROW_SELECTED : ROW_HOVER}`}
+              className={`${ROW_BASE} gap-2 py-1.5 pr-3 pl-7 ${selected ? ROW_SELECTED : ROW_HOVER}`}
             >
               {selected && <BlinkingCursor />}
               <span
@@ -78,7 +78,9 @@ export function TreeView({ rows, cursor, onRowClick }: TreeViewProps) {
               >
                 {row.expanded ? '▼' : '▶'}
               </span>
-              <span className={`font-semibold tracking-wide ${selected ? 'text-info' : ''}`}>
+              <span
+                className={`font-semibold tracking-wide ${selected ? 'text-info' : 'text-foreground'}`}
+              >
                 {row.name}
               </span>
               <span className="text-muted-foreground text-xs">
@@ -115,7 +117,7 @@ export function TreeView({ rows, cursor, onRowClick }: TreeViewProps) {
               ★
             </span>
             <span className="text-muted-foreground tabular-nums">{row.index}</span>
-            <span className={selected ? 'text-info' : ''}>{row.name}</span>
+            <span className={selected ? 'text-info' : 'text-foreground'}>{row.name}</span>
           </div>
         );
       })}
