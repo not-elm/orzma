@@ -24,13 +24,29 @@ export function activeRowKey(rows: VisibleRow[], cursor: TreeCursor): string | u
 
 const ROW_BASE = 'group relative flex cursor-pointer items-center font-mono transition-colors';
 const ROW_HOVER = 'hover:bg-muted/40';
-const ROW_SELECTED = 'bg-primary text-primary-foreground';
+const ROW_SELECTED = 'bg-primary/15';
+
+function BlinkingCursor() {
+  return (
+    <span
+      aria-hidden="true"
+      className="-translate-y-1/2 absolute top-1/2 left-2 animate-cursor-blink text-primary"
+    >
+      ▌
+    </span>
+  );
+}
 
 /**
  * Renders the visible rows as a flat list of `role="treeitem"`s under a
  * single `role="tree"`. Row identity comes from `session:${sid}` /
  * `window:${sid}:${wid}` so React reconciliation stays stable across
  * expand / collapse and tree reloads.
+ *
+ * Selection follows a Neovim-style pattern: a soft `bg-primary/15` tint
+ * plus a blinking `▌` block cursor pinned to the row's left edge.
+ * Selected names switch to `text-info` (Tokyo Night cyan) for contrast
+ * against the tinted background.
  */
 export function TreeView({ rows, cursor, onRowClick }: TreeViewProps) {
   return (
@@ -55,20 +71,17 @@ export function TreeView({ rows, cursor, onRowClick }: TreeViewProps) {
               }}
               className={`${ROW_BASE} gap-2 px-3 py-1.5 ${selected ? ROW_SELECTED : ROW_HOVER}`}
             >
-              {selected && (
-                <span
-                  aria-hidden="true"
-                  className="absolute left-0 top-0 bottom-0 w-1 bg-primary-foreground"
-                />
-              )}
+              {selected && <BlinkingCursor />}
               <span
                 aria-hidden="true"
-                className={`w-4 text-xs ${selected ? 'opacity-80' : 'text-muted-foreground'}`}
+                className={`w-4 text-xs ${selected ? 'text-primary' : 'text-muted-foreground'}`}
               >
                 {row.expanded ? '▼' : '▶'}
               </span>
-              <span className="font-semibold tracking-wide">{row.name}</span>
-              <span className={`text-xs ${selected ? 'opacity-70' : 'text-muted-foreground'}`}>
+              <span className={`font-semibold tracking-wide ${selected ? 'text-info' : ''}`}>
+                {row.name}
+              </span>
+              <span className="text-muted-foreground text-xs">
                 {row.windowCount} {row.windowCount === 1 ? 'window' : 'windows'}
               </span>
             </div>
@@ -91,27 +104,18 @@ export function TreeView({ rows, cursor, onRowClick }: TreeViewProps) {
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') onRowClick(windowCursor);
             }}
-            className={`${ROW_BASE} gap-3 py-1 pl-10 pr-3 ${selected ? ROW_SELECTED : ROW_HOVER}`}
+            className={`${ROW_BASE} gap-3 py-1 pr-3 pl-10 ${selected ? ROW_SELECTED : ROW_HOVER}`}
           >
-            {selected && (
-              <span
-                aria-hidden="true"
-                className="absolute left-0 top-0 bottom-0 w-1 bg-primary-foreground"
-              />
-            )}
+            {selected && <BlinkingCursor />}
             <span
               aria-hidden="true"
-              className={`w-3 text-center text-xs ${
-                row.isActive ? (selected ? 'text-primary-foreground' : 'text-warning') : 'opacity-0'
-              }`}
+              className={`w-3 text-center text-xs ${row.isActive ? 'text-warning' : 'opacity-0'}`}
               title={row.isActive ? 'Active window in its session' : undefined}
             >
               ★
             </span>
-            <span className={`tabular-nums ${selected ? 'opacity-70' : 'text-muted-foreground'}`}>
-              {row.index}
-            </span>
-            <span className={selected ? 'font-medium' : ''}>{row.name}</span>
+            <span className="text-muted-foreground tabular-nums">{row.index}</span>
+            <span className={selected ? 'text-info' : ''}>{row.name}</span>
           </div>
         );
       })}
