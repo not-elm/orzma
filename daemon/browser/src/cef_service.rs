@@ -239,6 +239,29 @@ pub fn stub_for_tests() -> CefHostHandles {
     }
 }
 
+/// Builds a `CefHostHandles` whose `is_dead` flag is already `true`. Returned
+/// by the daemon-bootstrap fallback when `spawn_and_handshake` fails — terminal
+/// activities continue to function and every Browser Activity request is
+/// short-circuited with `BrowserUnavailable` by the existing `is_dead` checks.
+pub fn dead_handles_after_spawn_failure() -> CefHostHandles {
+    let (tx, _rx) = mpsc::channel::<HostCommand>(8);
+    let (_ev_tx, ev_rx) = mpsc::channel::<HostEvent>(8);
+    let (scm_tx, _scm_rx) = mpsc::channel::<ScmSend>(8);
+    // SAFETY: `true(1)` is required by POSIX and always present in `$PATH` on
+    // every supported target; failing to spawn it indicates a broken environment
+    // (no `$PATH`, no shell exec) and the daemon cannot recover.
+    let child = Command::new("true")
+        .spawn()
+        .expect("`true` must always spawn");
+    CefHostHandles {
+        commands: tx,
+        events: StdMutex::new(Some(ev_rx)),
+        child: StdMutex::new(Some(child)),
+        is_dead: Arc::new(AtomicBool::new(true)),
+        scm_tx,
+    }
+}
+
 async fn pump(
     rd: Arc<Mutex<OwnedReadHalf>>,
     wr: Arc<Mutex<OwnedWriteHalf>>,

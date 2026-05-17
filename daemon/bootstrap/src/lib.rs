@@ -93,10 +93,22 @@ pub async fn run() -> anyhow::Result<()> {
 
     let cef_host_socket = runtime.sock_dir().join("cef_host.sock");
     let supervisor = CefHostSupervisor::new(cef_host_socket);
-    let cef_host_handles = supervisor.spawn_and_handshake().await.map_err(|e| {
-        tracing::error!(error = %e, "cef_host spawn_and_handshake failed");
-        e
-    })?;
+    let cef_host_handles = match supervisor.spawn_and_handshake().await {
+        Ok(handles) => handles,
+        Err(e) => {
+            // NOTE: a missing/broken cef_host (CI without CEF runtime deps, dev
+            // box that never ran `make bundle-cef-host`, hostile sandbox) must
+            // NOT block daemon startup — terminal and extension activities are
+            // independent of the browser path. Fall back to a pre-`is_dead`
+            // handle so every Browser Activity request short-circuits with
+            // `BrowserUnavailable` via the existing checks.
+            tracing::error!(
+                error = %e,
+                "cef_host spawn_and_handshake failed; continuing with browser backend disabled"
+            );
+            ozmux_browser::cef_service::dead_handles_after_spawn_failure()
+        }
+    };
     let cef_host = Arc::new(cef_host_handles);
 
     let state = AppState::new(
