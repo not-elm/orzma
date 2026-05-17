@@ -19,6 +19,40 @@ pub struct Browser {
     pub incognito: bool,
 }
 
+/// Direction the new pane is placed relative to the current pane when
+/// `ozmux browser --split <DIR>` is used. Wire-mapped to CEF's
+/// `(orientation, side)` pair: `right`/`left` → horizontal split,
+/// `down`/`up` → vertical split; `right`/`down` → `after`, `left`/`up` → `before`.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum SplitDirection {
+    /// New pane appears to the right (horizontal split, `side = after`).
+    Right,
+    /// New pane appears to the left (horizontal split, `side = before`).
+    Left,
+    /// New pane appears below (vertical split, `side = after`).
+    Down,
+    /// New pane appears above (vertical split, `side = before`).
+    Up,
+}
+
+/// Maps a user-facing `SplitDirection` to the `(orientation, side)` pair the
+/// daemon's `POST .../split` endpoint expects. Strings match the serde
+/// representation of `ozmux_multiplexer::{SplitOrientation, Side}`
+/// (lowercase).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Wired by Task 3 when `--split` flag is added to Browser::run()")
+)]
+fn split_direction_to_wire(d: SplitDirection) -> (&'static str, &'static str) {
+    match d {
+        SplitDirection::Right => ("horizontal", "after"),
+        SplitDirection::Left => ("horizontal", "before"),
+        SplitDirection::Down => ("vertical", "after"),
+        SplitDirection::Up => ("vertical", "before"),
+    }
+}
+
 impl CommandExecute for Browser {
     async fn run(self) -> Result<()> {
         run(self).await
@@ -126,5 +160,37 @@ mod tests {
     #[test]
     fn chrome_scheme_passes_through() {
         assert_eq!(normalize_url("chrome://settings"), "chrome://settings");
+    }
+
+    #[test]
+    fn split_direction_to_wire_right_maps_to_horizontal_after() {
+        assert_eq!(
+            split_direction_to_wire(SplitDirection::Right),
+            ("horizontal", "after")
+        );
+    }
+
+    #[test]
+    fn split_direction_to_wire_left_maps_to_horizontal_before() {
+        assert_eq!(
+            split_direction_to_wire(SplitDirection::Left),
+            ("horizontal", "before")
+        );
+    }
+
+    #[test]
+    fn split_direction_to_wire_down_maps_to_vertical_after() {
+        assert_eq!(
+            split_direction_to_wire(SplitDirection::Down),
+            ("vertical", "after")
+        );
+    }
+
+    #[test]
+    fn split_direction_to_wire_up_maps_to_vertical_before() {
+        assert_eq!(
+            split_direction_to_wire(SplitDirection::Up),
+            ("vertical", "before")
+        );
     }
 }
