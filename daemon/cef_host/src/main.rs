@@ -77,6 +77,44 @@ wrap_app! {
     }
 }
 
+/// Returns the path to the generic helper executable inside `cef_host.app`,
+/// or `None` if the current exe is not running from inside such a bundle.
+#[cfg(target_os = "macos")]
+fn in_bundle_helper() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let macos_dir = exe.parent()?;
+    // NOTE: bundled cef_host lives at `<app>/Contents/MacOS/cef_host`; if our
+    // parent directory isn't named `MacOS`, we are not running from inside the
+    // .app and the caller should fall back to the OUT_DIR copy.
+    if macos_dir.file_name()?.to_str()? != "MacOS" {
+        return None;
+    }
+    let contents = macos_dir.parent()?;
+    let helper = contents
+        .join("Frameworks")
+        .join("cef_host Helper.app")
+        .join("Contents/MacOS")
+        .join("cef_host Helper");
+    helper.exists().then_some(helper)
+}
+
+/// Returns the in-bundle Chromium Embedded Framework dylib path when running
+/// from inside `cef_host.app`, or `None` otherwise.
+#[cfg(target_os = "macos")]
+fn in_bundle_framework_dylib() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let macos_dir = exe.parent()?;
+    if macos_dir.file_name()?.to_str()? != "MacOS" {
+        return None;
+    }
+    let contents = macos_dir.parent()?;
+    let dylib = contents
+        .join("Frameworks")
+        .join("Chromium Embedded Framework.framework")
+        .join("Chromium Embedded Framework");
+    dylib.exists().then_some(dylib)
+}
+
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_env("OZMUX_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
@@ -93,10 +131,16 @@ fn main() -> std::process::ExitCode {
     {
         use cef_dll_sys::{FRAMEWORK_PATH, get_cef_dir};
         use std::os::unix::ffi::OsStrExt;
-        let cef_dir = get_cef_dir().expect("CEF directory not found");
-        let framework = cef_dir
-            .join(FRAMEWORK_PATH)
-            .canonicalize()
+        // NOTE: when cef_host runs from inside cef_host.app/Contents/MacOS, the
+        // CEF framework lives next to us at ../Frameworks/Chromium Embedded
+        // Framework.framework — prefer that copy so the running process sees the
+        // same framework as the helper sub-bundles. Fall back to the build-time
+        // OUT_DIR copy via get_cef_dir() for non-bundled debug runs.
+        let framework = in_bundle_framework_dylib()
+            .or_else(|| {
+                let cef_dir = get_cef_dir()?;
+                cef_dir.join(FRAMEWORK_PATH).canonicalize().ok()
+            })
             .expect("failed to resolve CEF framework path");
         let path =
             std::ffi::CString::new(framework.as_os_str().as_bytes()).expect("invalid path bytes");
@@ -138,8 +182,7 @@ fn main() -> std::process::ExitCode {
 
     let mut settings = Settings::default();
     settings.windowless_rendering_enabled = 1;
-    settings.root_cache_path =
-        cef::CefString::from(browser_data_root.to_string_lossy().as_ref());
+    settings.root_cache_path = cef::CefString::from(browser_data_root.to_string_lossy().as_ref());
     settings.no_sandbox = 1;
     settings.multi_threaded_message_loop = 0;
     settings.external_message_pump = 0;
@@ -149,12 +192,15 @@ fn main() -> std::process::ExitCode {
     #[cfg(target_os = "macos")]
     {
         use cef_dll_sys::{FRAMEWORK_PATH, get_cef_dir};
-        let cef_dir = get_cef_dir().expect("CEF directory not found");
-        // FRAMEWORK_PATH = "Chromium Embedded Framework.framework/Chromium Embedded Framework"
-        // so parent() gives us the .framework bundle directory itself.
-        let framework_dylib = cef_dir
-            .join(FRAMEWORK_PATH)
-            .canonicalize()
+        // NOTE: prefer the framework copy inside cef_host.app/Contents/Frameworks/
+        // so the running browser process matches the helper sub-bundles.
+        // FRAMEWORK_PATH = "Chromium Embedded Framework.framework/Chromium Embedded Framework";
+        // parent() of the dylib gives us the .framework directory itself.
+        let framework_dylib = in_bundle_framework_dylib()
+            .or_else(|| {
+                let cef_dir = get_cef_dir()?;
+                cef_dir.join(FRAMEWORK_PATH).canonicalize().ok()
+            })
             .expect("failed to resolve CEF framework dylib path");
         let framework_dir = framework_dylib
             .parent()
@@ -169,13 +215,18 @@ fn main() -> std::process::ExitCode {
         // NOTE: on macOS, locales live in <Resources>/<locale>.lproj/locale.pak, not a
         // flat locales/ subdirectory, so locales_dir_path is left at default (empty).
 
-        // Point browser_subprocess_path at the cef_helper binary so CEF can spawn GPU /
-        // Renderer helper processes.  The binary must be on disk before CefInitialize.
-        let helper_path = std::env::current_exe()
-            .expect("cannot determine current exe path")
-            .parent()
-            .expect("exe has no parent dir")
-            .join("cef_helper");
+        // Point browser_subprocess_path at the generic helper sub-bundle inside
+        // cef_host.app. CEF auto-routes to the GPU / Renderer / Plugin / Alerts
+        // variants via the `--type=...` switch it adds when spawning helpers.
+        // When running outside the .app (legacy debug), fall back to the
+        // sibling cef_helper binary.
+        let helper_path = in_bundle_helper().unwrap_or_else(|| {
+            std::env::current_exe()
+                .expect("cannot determine current exe path")
+                .parent()
+                .expect("exe has no parent dir")
+                .join("cef_helper")
+        });
         settings.browser_subprocess_path =
             cef::CefString::from(helper_path.to_string_lossy().as_ref());
 

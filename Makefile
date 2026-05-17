@@ -1,9 +1,16 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk
+.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-cef-host
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/http_server/src/handlers
 INDEX_HTML := $(HTTP_DIR)/index.html
 OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+BUNDLE_CEF_HOST_DEP := bundle-cef-host
+else
+BUNDLE_CEF_HOST_DEP :=
+endif
 
 help:
 	@echo "Targets:"
@@ -14,6 +21,7 @@ help:
 	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
 	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
+	@echo "  bundle-cef-host    - Assemble target/debug/cef_host.app (macOS multi-process CEF requires a .app bundle)"
 	@echo "  kill-daemon        - Kill the daemon listening on :3200 and any stray cef_host"
 	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
@@ -41,7 +49,11 @@ dev-frontend:
 dev-backend:
 	cargo run -p daemon_bootstrap
 
-dev-daemon: memo-build-sdk
+bundle-cef-host:
+	cargo build -p ozmux_cef_host
+	cargo run -p xtask -- bundle-cef-host
+
+dev-daemon: memo-build-sdk $(BUNDLE_CEF_HOST_DEP)
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) \
 	OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1 \
 	cargo run -p daemon_bootstrap
@@ -54,10 +66,10 @@ fix-lint:
 	cargo fmt
 	pnpm lint:fix
 
-dev-e2e-setup:
+dev-e2e-setup: $(BUNDLE_CEF_HOST_DEP)
 	./scripts/dev-e2e.sh setup
 
-dev-e2e: memo-build-sdk
+dev-e2e: memo-build-sdk $(BUNDLE_CEF_HOST_DEP)
 	./scripts/dev-e2e.sh start
 
 dev-e2e-stop:
@@ -73,7 +85,8 @@ kill-daemon:
 	fi; \
 	cef_pids=$$(pgrep -x cef_host 2>/dev/null); \
 	helper_pids=$$(pgrep -x cef_helper 2>/dev/null); \
-	all_pids="$$cef_pids $$helper_pids"; \
+	bundle_helper_pids=$$(pgrep -f 'cef_host Helper' 2>/dev/null); \
+	all_pids="$$cef_pids $$helper_pids $$bundle_helper_pids"; \
 	if [ -n "$$(echo $$all_pids | tr -d ' ')" ]; then \
 		echo "killing stray cef_host/cef_helper (pid $$all_pids)"; \
 		kill $$all_pids 2>/dev/null || true; \

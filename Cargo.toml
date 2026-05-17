@@ -12,6 +12,7 @@ members = [
   "daemon/macros",
   "daemon/multiplexer",
   "daemon/terminal",
+  "xtask",
 ]
 
 [workspace.package]

@@ -158,8 +158,8 @@ impl CefHostSupervisor {
         let listener = UnixListener::bind(&self.socket_path)?;
         tracing::info!(socket = %self.socket_path.display(), "listening for cef_host");
 
-        let cef_host_bin = std::env::var("OZMUX_CEF_HOST_BIN")
-            .unwrap_or_else(|_| "./target/debug/cef_host".into());
+        let cef_host_bin =
+            std::env::var("OZMUX_CEF_HOST_BIN").unwrap_or_else(|_| default_cef_host_bin().into());
         let child = Command::new(&cef_host_bin)
             .env("OZMUX_CEF_HOST_SOCKET", &self.socket_path)
             .spawn()?;
@@ -192,6 +192,22 @@ impl CefHostSupervisor {
             is_dead: Arc::new(AtomicBool::new(false)),
             scm_tx,
         })
+    }
+}
+
+/// Default path to the `cef_host` executable. On macOS, multi-process CEF
+/// requires the executable to live inside a `.app` bundle with a
+/// `CFBundleIdentifier` (Mach port rendezvous is namespaced by bundle ID), so
+/// we point at the bundled executable assembled by `xtask bundle-cef-host`.
+/// On other platforms the bare binary is used. Override with `OZMUX_CEF_HOST_BIN`.
+fn default_cef_host_bin() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "./target/debug/cef_host.app/Contents/MacOS/cef_host"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "./target/debug/cef_host"
     }
 }
 
