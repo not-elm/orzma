@@ -270,12 +270,22 @@ impl BrowserPool {
                 };
                 match delta.signum() {
                     -1 => {
-                        tracing::debug!(?aid, "NavigateHistory back");
-                        entry.browser.go_back();
+                        // NOTE: guard on can_go_back — calling go_back with no
+                        // back entry is a wasted round-trip into Chromium.
+                        if entry.browser.can_go_back() != 0 {
+                            tracing::debug!(?aid, "NavigateHistory back");
+                            entry.browser.go_back();
+                        } else {
+                            tracing::debug!(?aid, "NavigateHistory back: no back history");
+                        }
                     }
                     1 => {
-                        tracing::debug!(?aid, "NavigateHistory forward");
-                        entry.browser.go_forward();
+                        if entry.browser.can_go_forward() != 0 {
+                            tracing::debug!(?aid, "NavigateHistory forward");
+                            entry.browser.go_forward();
+                        } else {
+                            tracing::debug!(?aid, "NavigateHistory forward: no forward history");
+                        }
                     }
                     _ => {
                         tracing::warn!(?aid, delta, "NavigateHistory: delta is zero, no-op");
