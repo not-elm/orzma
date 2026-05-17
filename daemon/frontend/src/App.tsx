@@ -53,6 +53,14 @@ export function App() {
   const openChooseTreeRef = useRef(chooseTree.open);
   openChooseTreeRef.current = chooseTree.open;
 
+  // NOTE: usePrefixMode caches the shortcut handlers at mount with `useEffect([])`,
+  // so the `ctx.openChooseTree` closure runs forever against the values it captured
+  // on first render. attached.status is 'loading' at first render — without this
+  // ref the guard below permanently early-returns and the picker never opens in
+  // production (Vite HMR masks the bug in dev).
+  const attachedRef = useRef(attached);
+  attachedRef.current = attached;
+
   const ctx: ShortcutContext = {
     activeWindow: () => activeWindowRef.current,
     activePane: () => activePaneRef.current,
@@ -65,7 +73,7 @@ export function App() {
       openPromptRef.current(w, name);
     },
     openChooseTree: () => {
-      if (attached.status !== 'ready') return;
+      if (attachedRef.current.status !== 'ready') return;
       openChooseTreeRef.current();
     },
   };
