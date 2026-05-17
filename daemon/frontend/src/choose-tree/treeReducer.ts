@@ -19,11 +19,10 @@ export type TreeAction =
   | { type: 'tree-reloaded'; tree: SessionTreeNode[]; attachedSessionId: SessionId | null };
 
 function rowMatches(row: VisibleRow, cursor: TreeCursor): boolean {
-  if (cursor.kind === 'session') return row.kind === 'session' && row.sessionId === cursor.sessionId;
+  if (cursor.kind === 'session')
+    return row.kind === 'session' && row.sessionId === cursor.sessionId;
   return (
-    row.kind === 'window' &&
-    row.sessionId === cursor.sessionId &&
-    row.windowId === cursor.windowId
+    row.kind === 'window' && row.sessionId === cursor.sessionId && row.windowId === cursor.windowId
   );
 }
 

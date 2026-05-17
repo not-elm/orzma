@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialTreeState, treeReducer, type TreeState } from './treeReducer';
+import { initialTreeState, type TreeState, treeReducer } from './treeReducer';
 import type { SessionTreeNode } from './types';
 
 const tree: SessionTreeNode[] = [
@@ -81,7 +81,11 @@ describe('treeReducer', () => {
       tree,
     );
     if (next.cursor.kind === 'window') {
-      const w = tree.find((s) => s.id === next.cursor.sessionId)?.windows.find((w) => w.id === (next.cursor as Extract<typeof next.cursor, { kind: 'window' }>).windowId);
+      const w = tree
+        .find((s) => s.id === next.cursor.sessionId)
+        ?.windows.find(
+          (w) => w.id === (next.cursor as Extract<typeof next.cursor, { kind: 'window' }>).windowId,
+        );
       expect(w).toBeDefined();
     } else {
       expect(['sid-a', 'sid-b']).toContain(next.cursor.sessionId);
