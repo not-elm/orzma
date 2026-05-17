@@ -30,6 +30,17 @@ use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{Mutex, mpsc};
 
+/// Closes a stray ancillary fd received with a non-`BrowserCreate` command.
+/// Logs a warning naming the carrier so spurious SCM_RIGHTS bugs are visible.
+fn close_stray_fd(fd: RawFd, command: &str) {
+    // SAFETY: `fd` was received via recvmsg+SCM_RIGHTS inside
+    // recv_command_with_fd; no other variable holds a copy of it.
+    unsafe {
+        libc::close(fd);
+    }
+    tracing::warn!(command, "stray fd received on non-BrowserCreate command, closed");
+}
+
 /// Connects to the daemon UDS, performs the Hello / Ready handshake,
 /// then forwards `HostCommand`s into the CEF command queue and pumps outgoing
 /// events back to the daemon.
@@ -104,91 +115,55 @@ async fn pump(
                     }
                     HostCommand::Resize { aid, css_w, css_h, dpr } => {
                         if let Some(stray) = fd {
-                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
-                            // inside `recv_command_with_fd`. It is not aliased: we
-                            // hold the only copy, no other variable has captured it,
-                            // and this is its only close. Closing here prevents the
-                            // fd from leaking when the command does not consume it.
-                            unsafe { libc::close(stray); }
-                            tracing::warn!("stray fd on Resize, closed");
+                            close_stray_fd(stray, "Resize");
                         }
                         CefCommand::Resize { aid, css_w, css_h, dpr }
                     }
                     HostCommand::Close { aid } => {
                         if let Some(stray) = fd {
-                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
-                            // inside `recv_command_with_fd`. It is not aliased: we
-                            // hold the only copy, no other variable has captured it,
-                            // and this is its only close. Closing here prevents the
-                            // fd from leaking when the command does not consume it.
-                            unsafe { libc::close(stray); }
-                            tracing::warn!("stray fd on Close, closed");
+                            close_stray_fd(stray, "Close");
                         }
                         CefCommand::Close { aid }
                     }
                     HostCommand::Shutdown => {
                         if let Some(stray) = fd {
-                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
-                            // inside `recv_command_with_fd`. It is not aliased: we
-                            // hold the only copy, no other variable has captured it,
-                            // and this is its only close. Closing here prevents the
-                            // fd from leaking when the command does not consume it.
-                            unsafe { libc::close(stray); }
+                            close_stray_fd(stray, "Shutdown");
                         }
                         CefCommand::Shutdown
                     }
                     HostCommand::Ready { .. } => {
                         if let Some(stray) = fd {
-                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
-                            // inside `recv_command_with_fd`. It is not aliased: we
-                            // hold the only copy, no other variable has captured it,
-                            // and this is its only close. Closing here prevents the
-                            // fd from leaking when the command does not consume it.
-                            unsafe { libc::close(stray); }
+                            close_stray_fd(stray, "Ready");
                         }
                         continue;
                     }
                     HostCommand::SendInput { aid, input } => {
                         if let Some(stray) = fd {
-                            // SAFETY: `stray` was just received via recvmsg+SCM_RIGHTS
-                            // inside `recv_command_with_fd`. It is not aliased: we
-                            // hold the only copy, no other variable has captured it,
-                            // and this is its only close. Closing here prevents the
-                            // fd from leaking when the command does not consume it.
-                            unsafe { libc::close(stray); }
-                            tracing::warn!("stray fd on SendInput, closed");
+                            close_stray_fd(stray, "SendInput");
                         }
                         CefCommand::SendInput { aid, event: input }
                     }
                     HostCommand::Navigate { aid, url } => {
                         if let Some(stray) = fd {
-                            // SAFETY: see above — same invariants apply.
-                            unsafe { libc::close(stray); }
-                            tracing::warn!("stray fd on Navigate, closed");
+                            close_stray_fd(stray, "Navigate");
                         }
                         CefCommand::Navigate { aid, url }
                     }
                     HostCommand::NavigateHistory { aid, delta } => {
                         if let Some(stray) = fd {
-                            // SAFETY: see above — same invariants apply.
-                            unsafe { libc::close(stray); }
-                            tracing::warn!("stray fd on NavigateHistory, closed");
+                            close_stray_fd(stray, "NavigateHistory");
                         }
                         CefCommand::NavigateHistory { aid, delta }
                     }
                     HostCommand::PauseScreencast { aid } => {
                         if let Some(stray) = fd {
-                            // SAFETY: see above — same invariants apply.
-                            unsafe { libc::close(stray); }
-                            tracing::warn!("stray fd on PauseScreencast, closed");
+                            close_stray_fd(stray, "PauseScreencast");
                         }
                         CefCommand::PauseScreencast { aid }
                     }
                     HostCommand::ResumeScreencast { aid } => {
                         if let Some(stray) = fd {
-                            // SAFETY: see above — same invariants apply.
-                            unsafe { libc::close(stray); }
-                            tracing::warn!("stray fd on ResumeScreencast, closed");
+                            close_stray_fd(stray, "ResumeScreencast");
                         }
                         CefCommand::ResumeScreencast { aid }
                     }
@@ -197,8 +172,7 @@ async fn pump(
                     | HostCommand::GetSelection { .. }
                     | HostCommand::SetClipboard { .. } => {
                         if let Some(stray) = fd {
-                            // SAFETY: see above — same invariants apply.
-                            unsafe { libc::close(stray); }
+                            close_stray_fd(stray, "unimplemented");
                         }
                         tracing::warn!("unimplemented HostCommand received; ignoring");
                         continue;
