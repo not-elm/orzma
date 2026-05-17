@@ -1,15 +1,18 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-cef-host
+.PHONY: build dev-frontend dev-backend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-cef-host bundle-cef-host-release
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/http_server/src/handlers
 INDEX_HTML := $(HTTP_DIR)/index.html
 OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
+CARGO_BIN_DIR := $(if $(CARGO_HOME),$(CARGO_HOME)/bin,$(HOME)/.cargo/bin)
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 BUNDLE_CEF_HOST_DEP := bundle-cef-host
+BUNDLE_CEF_HOST_RELEASE_DEP := bundle-cef-host-release
 else
 BUNDLE_CEF_HOST_DEP :=
+BUNDLE_CEF_HOST_RELEASE_DEP :=
 endif
 
 help:
@@ -23,6 +26,7 @@ help:
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
 	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
 	@echo "  bundle-cef-host    - Assemble target/debug/cef_host.app (macOS multi-process CEF requires a .app bundle)"
+	@echo "  bundle-cef-host-release - Same as bundle-cef-host but for the release profile (target/release/cef_host.app)"
 	@echo "  kill-daemon        - Kill the daemon listening on :3200 and any stray cef_host"
 	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
@@ -53,6 +57,10 @@ dev-backend:
 bundle-cef-host:
 	cargo build -p ozmux_cef_host
 	cargo run -p xtask -- bundle-cef-host
+
+bundle-cef-host-release:
+	cargo build --release -p ozmux_cef_host
+	cargo run -p xtask -- bundle-cef-host --release
 
 dev-daemon: memo-build-sdk $(BUNDLE_CEF_HOST_DEP)
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) \
@@ -105,8 +113,13 @@ test-wire-contract:
 	cargo run -p ozmux_terminal --example emit_fixture -- --all
 	pnpm exec tsx tools/verify-msgpack.ts daemon/terminal/tests/fixtures/wire_msgpack/
 
-dev-tauri: build
+dev-tauri: build $(BUNDLE_CEF_HOST_RELEASE_DEP)
 	cargo install --path ./cli --locked
+ifeq ($(UNAME_S),Darwin)
+	@echo "installing cef_host.app to $(CARGO_BIN_DIR)"
+	@rm -rf "$(CARGO_BIN_DIR)/cef_host.app"
+	@cp -R target/release/cef_host.app "$(CARGO_BIN_DIR)/"
+endif
 	@pid=$$(lsof -nP -iTCP:3200 -sTCP:LISTEN -t 2>/dev/null); \
 	if [ -n "$$pid" ]; then \
 	  echo "NOTE: existing process on :3200 (pid $$pid) will be reused by the launcher."; \
