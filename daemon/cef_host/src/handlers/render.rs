@@ -162,8 +162,8 @@ wrap_render_handler! {
                 || overflow
                 || self.state.force_keyframe.get();
 
-            let packed_payload: Vec<u8> = if is_keyframe {
-                buf.to_vec()
+            let delta_payload: Vec<u8> = if is_keyframe {
+                Vec::new()
             } else {
                 let cap: usize = damage.iter().map(|r| (r.w * r.h * 4) as usize).sum();
                 let mut out = Vec::with_capacity(cap);
@@ -176,6 +176,7 @@ wrap_render_handler! {
                 }
                 out
             };
+            let payload: &[u8] = if is_keyframe { buf } else { &delta_payload };
 
             let frame_seq = self.state.alloc_frame_seq();
             let captured_at_us = std::time::SystemTime::now()
@@ -193,7 +194,7 @@ wrap_render_handler! {
                     is_keyframe,
                     damage_rects: damage,
                     is_popup: true,
-                    payload: &packed_payload,
+                    payload,
                 });
                 // NOTE: the popup slot is fixed; the daemon reads it via
                 // read_popup, so lap / slot_idx carry no meaning here.
@@ -208,7 +209,7 @@ wrap_render_handler! {
                     is_keyframe,
                     damage_rects: damage,
                     is_popup: false,
-                    payload: &packed_payload,
+                    payload,
                 });
 
                 if is_keyframe {
@@ -231,13 +232,13 @@ wrap_render_handler! {
             });
 
             tracing::debug!(
-                aid = %self.aid.0,
+                aid = ?self.aid,
                 frame_seq,
                 is_popup,
                 is_keyframe,
                 width,
                 height,
-                payload_len = packed_payload.len(),
+                payload_len = payload.len(),
                 "on_paint -> shm",
             );
         }
