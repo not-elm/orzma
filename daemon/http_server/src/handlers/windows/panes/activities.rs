@@ -62,6 +62,12 @@ pub enum ActivityKindInput {
     Browser {
         #[serde(default)]
         initial_url: Option<String>,
+        /// Storage profile for this browser activity. Defaults to
+        /// `Named { name: "default" }` when absent so callers that do not
+        /// specify a profile get persistent storage without requiring an
+        /// explicit field.
+        #[serde(default)]
+        profile: BrowserProfile,
     },
 }
 
@@ -102,8 +108,8 @@ impl ActivityInput {
                 },
                 extension_name: Some(extension_name),
             },
-            ActivityKindInput::Browser { initial_url } => ParsedActivity {
-                activity: Activity::browser(self.activity_id, initial_url, BrowserProfile::default()),
+            ActivityKindInput::Browser { initial_url, profile } => ParsedActivity {
+                activity: Activity::browser(self.activity_id, initial_url, profile),
                 extension_name: None,
             },
         }

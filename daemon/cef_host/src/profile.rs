@@ -35,6 +35,21 @@ pub(crate) fn sanitize_profile_name(name: &str) -> Result<(), ProfileError> {
 }
 
 /// Absolute cache path for a named profile: `<root>/profiles/<name>`.
+///
+/// # NOTE on CEF Chrome runtime profile isolation
+///
+/// CEF Chrome runtime initializes a "Default" profile directly under
+/// `root_cache_path`. A `RequestContext` whose `cache_path` is
+/// `profiles/<name>` (two levels deep) is accepted by
+/// `request_context_create_context`; Chrome may log a
+/// "Cannot create profile at path …/profiles/<name>" diagnostic from
+/// `chrome_browser_context.cc`, but `browser_host_create_browser_sync`
+/// still succeeds and the context provides per-activity request isolation.
+/// Full Chrome-managed profile separation (separate cookie DB, etc.) would
+/// require using Chrome's profile naming convention (`Default`, `Profile N`,
+/// …) as direct children of `root_cache_path` via the Chrome profile
+/// management API — a future improvement tracked separately.
+///
 /// `name` is sanitized first.
 pub(crate) fn named_cache_path(root_cache_path: &Path, name: &str) -> Result<PathBuf, ProfileError> {
     sanitize_profile_name(name)?;

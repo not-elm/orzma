@@ -26,7 +26,7 @@ async fn handshake_then_one_frame() {
     let _ = std::fs::remove_file(&socket);
 
     let supervisor = CefHostSupervisor::new(socket);
-    let mut handles =
+    let handles =
         tokio::time::timeout(Duration::from_secs(15), supervisor.spawn_and_handshake())
             .await
             .expect("handshake timed out")
