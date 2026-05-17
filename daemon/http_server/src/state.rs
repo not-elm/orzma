@@ -549,9 +549,10 @@ impl AppState {
     /// PTY for its bootstrap terminal activity, make it the active
     /// window, and publish the parent `SessionView`.
     ///
-    /// On PTY spawn failure the half-created window is rolled back via
-    /// `close_window` and the spawn error is returned. A failing
-    /// rollback is logged and the original spawn error still wins.
+    /// On PTY-spawn or active-window-selection failure the half-created
+    /// window is rolled back via `close_window` and the original error
+    /// is returned. A failing rollback is logged and the original error
+    /// still wins.
     pub async fn create_window(
         &self,
         session_id: Option<&SessionId>,
