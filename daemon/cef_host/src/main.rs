@@ -187,7 +187,11 @@ fn main() -> std::process::ExitCode {
     // NOTE: event_tx is cloned into each BrowserPool entry's NavInner so that
     // DisplayHandler / LoadHandler can emit HostEvent::NavStateChanged to the
     // daemon without acquiring the pool lock.
-    let handle = post_command::PoolHandle::new(pool::BrowserPool::new(event_tx));
+    // TODO: Task 9 wires the real browser data root here.
+    let handle = post_command::PoolHandle::new(pool::BrowserPool::new(
+        event_tx,
+        std::env::temp_dir(),
+    ));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)

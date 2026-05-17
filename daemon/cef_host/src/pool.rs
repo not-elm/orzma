@@ -12,15 +12,18 @@ use crate::handlers::lifespan::OzmuxLifeSpanHandler;
 use crate::handlers::load::OzmuxLoadHandler;
 use crate::handlers::render::{OzmuxRenderHandler, RenderHandlerState};
 use crate::post_command::PoolHandle;
+use crate::profile::resolve_cache_path;
 use crate::shm_writer::ShmWriter;
 use cef::{
-    Browser, BrowserSettings, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, WindowInfo,
-    browser_host_create_browser_sync,
+    Browser, BrowserSettings, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, RequestContext,
+    RequestContextSettings, WindowInfo, browser_host_create_browser_sync,
+    request_context_create_context,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, CefCookieDto, HostEvent, InputEvent};
 use std::collections::HashMap;
 use std::os::fd::RawFd;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -86,6 +89,9 @@ pub struct BrowserEntry {
     /// with the active `OzmuxRenderHandler` so `CefCommand::Resize` can
     /// update the viewport without rebuilding the handler.
     pub render_state: Arc<RenderHandlerState>,
+    /// Storage profile this browser was created with. Used on `Close` to
+    /// release the named-profile `RequestContext` refcount.
+    pub profile: BrowserProfileWire,
 }
 
 /// Per-slot payload budget: a 4K (3840×2160) BGRA frame + 4 KiB slack.
@@ -116,6 +122,14 @@ pub struct BrowserPool {
     /// after construction. Used by the cookie-install callback to re-post
     /// `CreateBrowserAfterCookies` back to the UI thread from the CEF IO thread.
     pub(crate) pool_handle: Option<PoolHandle>,
+    /// Disk-persistent named-profile request contexts, keyed by profile name.
+    /// Shared across activities naming the same profile; ref-counted by
+    /// `named_refcounts` and dropped when the last activity closes.
+    named_contexts: HashMap<String, RequestContext>,
+    /// Live activity count per named profile, for `named_contexts` GC.
+    named_refcounts: HashMap<String, usize>,
+    /// Absolute CEF `root_cache_path` (parent of every named profile dir).
+    root_cache_path: PathBuf,
 }
 
 impl BrowserPool {
@@ -127,12 +141,18 @@ impl BrowserPool {
     ///
     /// `pool_handle` is `None` here; `PoolHandle::new` plants the back-reference
     /// after wrapping the pool so cookie-install callbacks can re-post commands.
-    pub fn new(event_tx: mpsc::UnboundedSender<HostEvent>) -> Self {
+    ///
+    /// `root_cache_path` is the absolute parent directory under which named
+    /// profiles get their disk-persistent `RequestContext` cache directories.
+    pub fn new(event_tx: mpsc::UnboundedSender<HostEvent>, root_cache_path: PathBuf) -> Self {
         Self {
             browsers: HashMap::new(),
             event_tx,
             shutdown_requested: false,
             pool_handle: None,
+            named_contexts: HashMap::new(),
+            named_refcounts: HashMap::new(),
+            root_cache_path,
         }
     }
 
@@ -179,9 +199,7 @@ impl BrowserPool {
                 shm_fd,
                 profile,
             } => {
-                // TODO: Task 8 passes profile to create_browser; placeholder keeps it bound until then.
-                let _ = &profile;
-                self.create_browser(aid, initial_url, epoch, shm_fd);
+                self.create_browser(aid, initial_url, epoch, shm_fd, profile);
             }
             CefCommand::Resize {
                 aid,
@@ -238,6 +256,7 @@ impl BrowserPool {
                     unsafe {
                         libc::close(entry.shm_fd);
                     }
+                    self.release_profile(&entry.profile);
                 }
             }
             CefCommand::Shutdown => {
@@ -330,7 +349,14 @@ impl BrowserPool {
         clippy::field_reassign_with_default,
         reason = "WindowInfo::default() uses unsafe zeroed() with size field; struct-literal form is impractical due to raw pointer fields"
     )]
-    fn create_browser(&mut self, aid: ActivityId, initial_url: String, epoch: u32, shm_fd: RawFd) {
+    fn create_browser(
+        &mut self,
+        aid: ActivityId,
+        initial_url: String,
+        epoch: u32,
+        shm_fd: RawFd,
+        profile: BrowserProfileWire,
+    ) {
         tracing::info!(?aid, %initial_url, epoch, shm_fd, "BrowserCreate");
 
         let total_size = ShmWriter::required_region_size(SLOT_PAYLOAD_MAX);
@@ -356,6 +382,18 @@ impl BrowserPool {
         // SAFETY: ptr is a valid mmap region of total_size bytes, writable,
         // and we are the sole writer on the CEF UI thread.
         let shm = Arc::new(unsafe { ShmWriter::from_mmap(ptr as *mut u8, SLOT_PAYLOAD_MAX) });
+
+        let mut request_context = match self.request_context_for(&profile) {
+            Some(c) => c,
+            None => {
+                tracing::error!(?aid, "RequestContext unavailable; aborting BrowserCreate");
+                // SAFETY: ptr was mmap'd above; unmap before bailing.
+                unsafe { libc::munmap(ptr, total_size) };
+                // SAFETY: shm_fd was duped from the daemon side and is owned here.
+                unsafe { libc::close(shm_fd) };
+                return;
+            }
+        };
 
         let render_state = Arc::new(RenderHandlerState::new(1280, 800, 1.0));
         let render_handler = OzmuxRenderHandler::new(
@@ -396,7 +434,7 @@ impl BrowserPool {
             Some(&url_str),
             Some(&browser_settings),
             None,
-            None,
+            Some(&mut request_context),
         );
 
         match browser {
@@ -408,6 +446,7 @@ impl BrowserPool {
                     host.was_hidden(0);
                     host.notify_screen_info_changed();
                 }
+                self.retain_profile(&profile);
                 self.browsers.insert(
                     aid.clone(),
                     BrowserEntry {
@@ -417,14 +456,84 @@ impl BrowserPool {
                         browser: b,
                         shm,
                         render_state,
+                        profile,
                     },
                 );
             }
             None => {
                 tracing::error!(?aid, "browser_host_create_browser_sync returned None");
-                // SAFETY: mmap was established above; munmap is safe here since we own ptr.
+                // SAFETY: ptr was mmap'd above; we own it and no BrowserEntry took it.
                 unsafe { libc::munmap(ptr, total_size) };
+                // SAFETY: shm_fd was duped from the daemon side; no BrowserEntry owns it on this path.
+                unsafe { libc::close(shm_fd) };
+                self.discard_unretained_context(&profile);
             }
+        }
+    }
+
+    /// Obtains the `RequestContext` for `profile`. Named profiles are created
+    /// once and cached in `named_contexts` (shared across activities); the
+    /// caller must call `retain_profile` to bump the refcount. Incognito
+    /// profiles get a fresh in-memory context every call (never cached).
+    ///
+    /// Returns `None` if context creation fails — the caller MUST treat this
+    /// as a `BrowserCreate` failure and NOT fall back to the global context.
+    fn request_context_for(&mut self, profile: &BrowserProfileWire) -> Option<RequestContext> {
+        let cache_path = match resolve_cache_path(&self.root_cache_path, profile) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(error = %e, "invalid browser profile; rejecting BrowserCreate");
+                return None;
+            }
+        };
+        match profile {
+            BrowserProfileWire::Named { name } => {
+                if let Some(ctx) = self.named_contexts.get(name) {
+                    return Some(ctx.clone());
+                }
+                let dir = cache_path.expect("named profile yields Some cache_path");
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    tracing::error!(error = %e, dir = %dir.display(), "create profile dir failed");
+                    return None;
+                }
+                let ctx = create_request_context(Some(&dir))?;
+                self.named_contexts.insert(name.clone(), ctx.clone());
+                Some(ctx)
+            }
+            BrowserProfileWire::Incognito => create_request_context(None),
+        }
+    }
+
+    /// Increments the live-activity refcount for a named profile.
+    fn retain_profile(&mut self, profile: &BrowserProfileWire) {
+        if let BrowserProfileWire::Named { name } = profile {
+            *self.named_refcounts.entry(name.clone()).or_insert(0) += 1;
+        }
+    }
+
+    /// Decrements the refcount; drops the cached `RequestContext` at zero.
+    /// The on-disk directory is left in place (persistent).
+    fn release_profile(&mut self, profile: &BrowserProfileWire) {
+        if let BrowserProfileWire::Named { name } = profile
+            && let Some(c) = self.named_refcounts.get_mut(name)
+        {
+            *c = c.saturating_sub(1);
+            if *c == 0 {
+                self.named_refcounts.remove(name);
+                self.named_contexts.remove(name);
+                tracing::debug!(profile = %name, "named RequestContext dropped (refcount 0)");
+            }
+        }
+    }
+
+    /// Drops a named `RequestContext` created for a `BrowserCreate` that then
+    /// failed before any activity retained it. A context still referenced by
+    /// a live activity (refcount entry present) is left intact.
+    fn discard_unretained_context(&mut self, profile: &BrowserProfileWire) {
+        if let BrowserProfileWire::Named { name } = profile
+            && !self.named_refcounts.contains_key(name)
+        {
+            self.named_contexts.remove(name);
         }
     }
 
@@ -432,4 +541,23 @@ impl BrowserPool {
     pub fn browser_count(&self) -> usize {
         self.browsers.len()
     }
+}
+
+/// Creates a `RequestContext`. `cache_dir = Some` → disk-persistent;
+/// `None` → empty `cache_path`, i.e. CEF in-memory ("incognito") mode.
+fn create_request_context(cache_dir: Option<&std::path::Path>) -> Option<RequestContext> {
+    // NOTE: RequestContextSettings::default() already sets `size` to
+    // size_of::<_cef_request_context_settings_t>(); no manual sizing needed.
+    let mut settings = RequestContextSettings::default();
+    if let Some(dir) = cache_dir {
+        settings.cache_path = CefString::from(dir.to_string_lossy().as_ref());
+        // NOTE: persist_session_cookies = 1 so imported host-Chrome session
+        // cookies survive a daemon restart.
+        settings.persist_session_cookies = 1;
+    }
+    let ctx = request_context_create_context(Some(&settings), None);
+    if ctx.is_none() {
+        tracing::error!("request_context_create_context returned None");
+    }
+    ctx
 }
