@@ -540,6 +540,8 @@ pub enum Action {
     },
     /// Break the active pane into a new window.
     BreakPaneToWindow,
+    /// Show the cross-session window picker (tmux choose-tree).
+    ChooseTree,
 }
 
 /// Layout direction shared by `FocusPane` and `ResizePane`.
