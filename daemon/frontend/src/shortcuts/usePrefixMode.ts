@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { isChooseTreeOpen } from '../choose-tree/chooseTreeGate';
 import { fetchJson } from '../fetchJson';
 import { actionToHandler, type ShortcutContext } from './actionDispatch';
 import { matchesChord } from './chord';
@@ -64,7 +65,7 @@ function ensureDispatcher() {
   const handler = (e: KeyboardEvent) => {
     if (!shared) return;
     if (e.isComposing) return;
-    if (isRenamePromptOpen()) return;
+    if (isRenamePromptOpen() || isChooseTreeOpen()) return;
 
     if (!shared.armed && !shared.repeatMode) {
       if (e.repeat) return;
