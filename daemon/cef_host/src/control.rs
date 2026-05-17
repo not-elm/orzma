@@ -110,10 +110,13 @@ async fn pump(
                 };
                 let internal_cmd = match cmd {
                     HostCommand::BrowserCreate { aid, initial_url, epoch, cookies, profile } => {
-                        let shm_fd = fd.unwrap_or(-1);
-                        if shm_fd < 0 {
-                            tracing::warn!(?aid, "BrowserCreate without ancillary shm_fd");
-                        }
+                        let Some(shm_fd) = fd else {
+                            tracing::error!(
+                                ?aid,
+                                "BrowserCreate without ancillary shm_fd; rejecting (protocol violation)"
+                            );
+                            continue;
+                        };
                         CefCommand::BrowserCreate { aid, initial_url, epoch, shm_fd, cookies, profile }
                     }
                     HostCommand::Resize { aid, css_w, css_h, dpr } => {
