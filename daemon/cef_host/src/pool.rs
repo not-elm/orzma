@@ -47,7 +47,8 @@ pub enum CefCommand {
     /// Internal: fires after all cookies from `BrowserCreate` have been
     /// committed to `CefCookieManager`. The UI thread then calls
     /// `browser_host_create_browser_sync` so the first navigation carries the
-    /// cookies. Posted from the CEF IO thread via `post_command::post`.
+    /// cookies. Posted from the CEF UI thread (after `install_cookies`'s
+    /// callback fires) via `post_command::post`.
     CreateBrowserAfterCookies {
         aid: ActivityId,
         initial_url: String,
@@ -128,6 +129,13 @@ pub struct BrowserPool {
     named_contexts: HashMap<String, RequestContext>,
     /// Live activity count per named profile, for `named_contexts` GC.
     named_refcounts: HashMap<String, usize>,
+    /// `RequestContext`s resolved at `BrowserCreate` time (for cookie seeding)
+    /// and held until the matching `CreateBrowserAfterCookies` consumes them.
+    /// Required for incognito profiles, where `request_context_for` would
+    /// otherwise mint a fresh context and lose the seeded cookies; named
+    /// profiles route through here too for uniformity (harmless — they are
+    /// cached, so re-resolution returns the same instance).
+    pending_contexts: HashMap<ActivityId, RequestContext>,
     /// Absolute CEF `root_cache_path` (parent of every named profile dir).
     root_cache_path: PathBuf,
     /// Whether this daemon owns the data-root lock. When `false`, another
@@ -162,6 +170,7 @@ impl BrowserPool {
             pool_handle: None,
             named_contexts: HashMap::new(),
             named_refcounts: HashMap::new(),
+            pending_contexts: HashMap::new(),
             root_cache_path,
             persistent_profiles_enabled,
         }
@@ -188,7 +197,15 @@ impl BrowserPool {
                 let pool_handle = self.pool_handle.clone().expect(
                     "pool_handle not set; PoolHandle::new must plant it before commands arrive",
                 );
-                crate::cookies::install_cookies(cookies, move || {
+                let Some(ctx) = self.request_context_for(&profile) else {
+                    tracing::error!(?aid, "RequestContext unavailable; aborting BrowserCreate");
+                    // SAFETY: shm_fd was duped from the daemon side via
+                    // SCM_RIGHTS and is owned here; close it before bailing.
+                    unsafe { libc::close(shm_fd) };
+                    return;
+                };
+                self.pending_contexts.insert(aid.clone(), ctx.clone());
+                crate::cookies::install_cookies(cookies, &ctx, move || {
                     if let Err(e) = crate::post_command::post(
                         &pool_handle,
                         CefCommand::CreateBrowserAfterCookies {
@@ -200,6 +217,11 @@ impl BrowserPool {
                         },
                     ) {
                         tracing::error!(error = %e, "failed to post CreateBrowserAfterCookies");
+                        // TODO: on post() failure both shm_fd and the
+                        // pending_contexts[aid] entry leak until process exit;
+                        // cleaning up requires re-entering the pool from this
+                        // closure (e.g. another post_command::post of a cleanup
+                        // command). Out of scope for the cookie-context wiring.
                     }
                 });
             }
@@ -257,6 +279,14 @@ impl BrowserPool {
             }
             CefCommand::Close { aid } => {
                 tracing::info!(?aid, "Close");
+                // NOTE: drop any context stashed by a still-in-flight
+                // BrowserCreate whose CreateBrowserAfterCookies has not fired
+                // yet. Evicting the stash makes the late CreateBrowserAfterCookies
+                // observe `None` from `take_pending_context` and abort cleanly.
+                // No `release_profile` is needed for the in-flight case:
+                // `retain_profile` only fires inside `create_browser` after the
+                // `BrowserEntry` is inserted, which has not happened yet here.
+                self.pending_contexts.remove(&aid);
                 if let Some(entry) = self.browsers.remove(&aid) {
                     // NOTE: CloseBrowser triggers OnBeforeClose which drops the CEF handle.
                     let host = entry.browser.host();
@@ -400,14 +430,28 @@ impl BrowserPool {
         // and we are the sole writer on the CEF UI thread.
         let shm = Arc::new(unsafe { ShmWriter::from_mmap(ptr as *mut u8, SLOT_PAYLOAD_MAX) });
 
-        let mut request_context = match self.request_context_for(&profile) {
+        let mut request_context = match self.take_pending_context(&aid) {
             Some(c) => c,
             None => {
-                tracing::error!(?aid, "RequestContext unavailable; aborting BrowserCreate");
+                // NOTE: stash absent means `Close` arrived while cookies were
+                // installing and evicted `pending_contexts[aid]`. The activity
+                // is being torn down — abort browser creation cleanly instead
+                // of minting a fresh context that would produce a ghost
+                // browser nothing tracks.
+                tracing::info!(
+                    ?aid,
+                    "pending RequestContext evicted by Close; aborting BrowserCreate"
+                );
                 // SAFETY: ptr was mmap'd above; unmap before bailing.
                 unsafe { libc::munmap(ptr, total_size) };
                 // SAFETY: shm_fd was duped from the daemon side and is owned here.
                 unsafe { libc::close(shm_fd) };
+                // NOTE: if this BrowserCreate cached a fresh named-profile
+                // RequestContext in `named_contexts` that no other activity
+                // has retained, drop it here. `discard_unretained_context`
+                // is a no-op for Incognito and for already-retained Named
+                // profiles, so this is safe to call unconditionally.
+                self.discard_unretained_context(&effective_profile);
                 return;
             }
         };
@@ -523,6 +567,13 @@ impl BrowserPool {
             }
             BrowserProfileWire::Incognito => create_request_context(None),
         }
+    }
+
+    /// Consumes the `RequestContext` stashed by `CefCommand::BrowserCreate` for
+    /// `aid`. `None` means `Close` already evicted the stash (the activity is
+    /// being torn down); the caller must abort browser creation.
+    fn take_pending_context(&mut self, aid: &ActivityId) -> Option<RequestContext> {
+        self.pending_contexts.remove(aid)
     }
 
     /// Resolves the profile a browser is effectively created with. A `Named`

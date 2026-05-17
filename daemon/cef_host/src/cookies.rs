@@ -1,16 +1,17 @@
-//! CEF cookie installation helper: seeds the global `CefCookieManager` from
-//! a list of `CefCookieDto` entries received via `BrowserCreate`.
+//! CEF cookie installation helper: seeds a per-activity `RequestContext`'s
+//! `CefCookieManager` from a list of `CefCookieDto` entries received via
+//! `BrowserCreate`.
 //!
-//! The callback-based `set_cookie` API fires on the CEF IO thread. A shared
-//! `Arc<AtomicUsize>` pending counter tracks in-flight calls; when it reaches
-//! zero the `on_done` closure fires. The caller (pool.rs) wraps `on_done` as
-//! a `post_command::post` call back to the UI thread so `CreateBrowserSync`
-//! only runs after all cookies have been committed.
+//! The callback-based `set_cookie` completion callback fires on the CEF UI
+//! thread. A shared `Arc<AtomicUsize>` pending counter tracks in-flight calls;
+//! when it reaches zero the `on_done` closure fires. The caller (pool.rs)
+//! wraps `on_done` as a `post_command::post` call back to the UI thread so
+//! `CreateBrowserSync` only runs after all cookies have been committed.
 
 use cef::rc::Rc as _;
 use cef::{
-    Cookie, CookieSameSite, ImplCookieManager, ImplSetCookieCallback, SetCookieCallback,
-    WrapSetCookieCallback, cookie_manager_get_global_manager, wrap_set_cookie_callback,
+    Cookie, CookieSameSite, ImplCookieManager, ImplRequestContext, ImplSetCookieCallback,
+    RequestContext, SetCookieCallback, WrapSetCookieCallback, wrap_set_cookie_callback,
 };
 use ozmux_browser_cef_protocol::wire::{CefCookieDto, SameSite};
 use std::sync::{
@@ -50,7 +51,8 @@ wrap_set_cookie_callback! {
     }
 }
 
-/// Installs `cookies` into the global CEF cookie store, then calls `on_done`.
+/// Installs `cookies` into `request_context`'s cookie manager, then calls
+/// `on_done`.
 ///
 /// When `cookies` is empty, `on_done` is called synchronously before this
 /// function returns. When cookies are non-empty, each entry is submitted via
@@ -58,13 +60,27 @@ wrap_set_cookie_callback! {
 /// completed. Must be called from the CEF UI thread.
 ///
 /// The empty-list fast path is synchronous and safe to call from any context.
-pub fn install_cookies(cookies: Vec<CefCookieDto>, on_done: impl FnOnce() + Send + 'static) {
+pub fn install_cookies(
+    cookies: Vec<CefCookieDto>,
+    request_context: &RequestContext,
+    on_done: impl FnOnce() + Send + 'static,
+) {
     if cookies.is_empty() {
         on_done();
         return;
     }
 
-    let Some(mgr) = cookie_manager_get_global_manager(None) else {
+    // NOTE: the ready-callback path (`cookie_manager(Some(&mut cb))` + waiting
+    // for the CompletionCallback before seeding) is deliberately NOT used here.
+    // We pass `None` and seed immediately, relying on CEF internally queueing
+    // `set_cookie` calls against the context's storage initialization. This is
+    // acceptable because named-profile cache directories are `create_dir_all`'d
+    // before the context is created (pool.rs), and CEF queues `set_cookie`
+    // against storage init in practice. Risk: a freshly-created context's very
+    // first `set_cookie` batch could in principle race storage init; if cookie
+    // loss is ever observed here, switch to the `wrap_completion_callback!`
+    // ready-callback approach.
+    let Some(mgr) = request_context.cookie_manager(None) else {
         tracing::warn!("CookieManager unavailable; proceeding without cookies");
         on_done();
         return;
