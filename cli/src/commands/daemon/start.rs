@@ -33,47 +33,24 @@ impl CommandExecute for StartArgs {
         if self.foreground {
             return daemon_bootstrap::run().await;
         }
-        start_detached().await
+        match super::ensure_running().await? {
+            super::DaemonStartOutcome::AlreadyRunning => {
+                eprintln!(
+                    "ozmux daemon already running on {}",
+                    daemon_bootstrap::HTTP_ADDR
+                );
+            }
+            super::DaemonStartOutcome::Started => {
+                if let Some(pid) = daemon_bootstrap::pidfile::read()? {
+                    println!("{pid}");
+                }
+            }
+        }
+        Ok(())
     }
 }
 
-async fn start_detached() -> anyhow::Result<()> {
-    if is_running() {
-        eprintln!(
-            "ozmux daemon already running on {}",
-            daemon_bootstrap::HTTP_ADDR
-        );
-        return Ok(());
-    }
-
-    let lock = acquire_lock()
-        .await
-        .context("acquire daemon launcher lock")?;
-
-    if is_running() {
-        eprintln!(
-            "ozmux daemon already running on {}",
-            daemon_bootstrap::HTTP_ADDR
-        );
-        drop(lock);
-        return Ok(());
-    }
-
-    spawn_detached().context("spawn ozmux daemon")?;
-
-    wait_until_ready()
-        .await
-        .context("daemon did not become ready in time")?;
-
-    drop(lock);
-
-    if let Some(pid) = daemon_bootstrap::pidfile::read()? {
-        println!("{pid}");
-    }
-    Ok(())
-}
-
-fn is_running() -> bool {
+pub(super) fn is_running() -> bool {
     let Ok(addr) = daemon_bootstrap::HTTP_ADDR.parse::<SocketAddr>() else {
         return false;
     };
@@ -85,7 +62,7 @@ fn runtime_dir() -> anyhow::Result<PathBuf> {
         .with_context(|| "create runtime dir at $TMPDIR/ozmux".to_string())
 }
 
-async fn acquire_lock() -> anyhow::Result<File> {
+pub(super) async fn acquire_lock() -> anyhow::Result<File> {
     let path = runtime_dir()?.join("daemon.lock");
     let file = OpenOptions::new()
         .create(true)
@@ -116,7 +93,7 @@ async fn acquire_lock() -> anyhow::Result<File> {
     }
 }
 
-fn spawn_detached() -> anyhow::Result<()> {
+pub(super) fn spawn_detached() -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("resolve current executable")?;
     let (log, log_err) = open_daemon_log_pair()?;
 
@@ -159,7 +136,7 @@ fn detach_from_session(cmd: &mut std::process::Command) {
     }
 }
 
-async fn wait_until_ready() -> anyhow::Result<()> {
+pub(super) async fn wait_until_ready() -> anyhow::Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(1))
         .build()
