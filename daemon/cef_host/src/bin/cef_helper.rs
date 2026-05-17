@@ -9,7 +9,8 @@
 
 use cef::args::Args;
 use cef::rc::Rc as _;
-use cef::{App, ImplApp, ImplCommandLine, WrapApp, wrap_app};
+use cef::{App, ImplApp, WrapApp, wrap_app};
+use ozmux_cef_host::append_flag;
 
 wrap_app! {
     struct HelperApp;
@@ -21,8 +22,7 @@ wrap_app! {
             command_line: Option<&mut cef::CommandLine>,
         ) {
             if let Some(cl) = command_line {
-                let mock_kc = cef::CefString::from("use-mock-keychain");
-                cl.append_switch(Some(&mock_kc));
+                append_flag(cl, "use-mock-keychain");
             }
         }
     }

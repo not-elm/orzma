@@ -14,9 +14,9 @@
 use cef::Settings;
 use cef::args::Args;
 use cef::rc::Rc as _;
-use cef::{App, ImplApp, ImplCommandLine, WrapApp, wrap_app};
+use cef::{App, ImplApp, WrapApp, wrap_app};
 use ozmux_browser_cef_protocol::wire::HostEvent;
-use ozmux_cef_host::{control, pool, post_command};
+use ozmux_cef_host::{append_flag, append_flag_value, control, pool, post_command};
 use std::path::PathBuf;
 
 wrap_app! {
@@ -40,21 +40,15 @@ wrap_app! {
             // utility (which performs cookie encryption) ends up invoking the real macOS
             // Keychain and raises a "Chromium Safe Storage" authorization dialog. Inject it
             // unconditionally to keep cookie crypto fully in-memory.
-            let mock_kc = cef::CefString::from("use-mock-keychain");
-            cl.append_switch(Some(&mock_kc));
+            append_flag(cl, "use-mock-keychain");
 
             if is_browser {
-                let flag2 = cef::CefString::from("no-sandbox");
-                cl.append_switch(Some(&flag2));
-                let flag3 = cef::CefString::from("disable-gpu");
-                cl.append_switch(Some(&flag3));
+                append_flag(cl, "no-sandbox");
+                append_flag(cl, "disable-gpu");
 
                 if std::env::var("OZMUX_BROWSER_SITE_ISOLATION").as_deref() != Ok("1") {
-                    let disable_features = cef::CefString::from("disable-features");
-                    let value = cef::CefString::from("IsolateOrigins,site-per-process");
-                    cl.append_switch_with_value(Some(&disable_features), Some(&value));
-                    let dsit = cef::CefString::from("disable-site-isolation-trials");
-                    cl.append_switch(Some(&dsit));
+                    append_flag_value(cl, "disable-features", "IsolateOrigins,site-per-process");
+                    append_flag(cl, "disable-site-isolation-trials");
                 } else {
                     tracing::info!(
                         "OZMUX_BROWSER_SITE_ISOLATION=1 — Site Isolation left enabled"
