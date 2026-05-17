@@ -12,10 +12,17 @@ name = "ozmux"
 path = "src/main.rs"
 
 [dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time", "process"] }
 anyhow = { workspace = true }
-clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+clap = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+libc = { workspace = true }
 uuid = { workspace = true }
+daemon_bootstrap = { path = "../daemon/bootstrap" }
+
+[dev-dependencies]
+reqwest = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }
+libc = { workspace = true }

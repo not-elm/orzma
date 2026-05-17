@@ -12,8 +12,10 @@ const DEFAULT_JSON = {
       key: 'x',
       modifiers: { ctrl: false, shift: false, alt: false, meta: false },
       action: { type: 'close-pane' },
+      repeatable: false,
     },
   ],
+  repeat_timeout_ms: 500,
 };
 
 beforeEach(() => {
@@ -38,7 +40,67 @@ describe('parseShortcuts', () => {
         modifiers: { ctrl: false, shift: false, alt: false, meta: false },
       },
       action: { type: 'close-pane' },
+      repeatable: false,
     });
+    expect(out?.repeat_timeout_ms).toBe(500);
+  });
+
+  it.each([
+    'left',
+    'right',
+    'up',
+    'down',
+  ] as const)('parses a resize-pane binding with %s direction and repeatable=true', (direction) => {
+    const payload = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key:
+            direction === 'left'
+              ? 'ArrowLeft'
+              : direction === 'right'
+                ? 'ArrowRight'
+                : direction === 'up'
+                  ? 'ArrowUp'
+                  : 'ArrowDown',
+          modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+          action: { type: 'resize-pane', direction },
+          repeatable: true,
+        },
+      ],
+    };
+    const out = parseShortcuts(payload);
+    expect(out).not.toBeNull();
+    expect(out?.bindings).toHaveLength(2);
+    expect(out?.bindings[1].action.type).toBe('resize-pane');
+    if (out?.bindings[1].action.type === 'resize-pane') {
+      expect(out.bindings[1].action.direction).toBe(direction);
+    }
+    expect(out?.bindings[1].repeatable).toBe(true);
+  });
+
+  it('defaults repeatable to false when the field is missing', () => {
+    const payload = {
+      ...DEFAULT_JSON,
+      bindings: [
+        {
+          key: 'x',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'close-pane' },
+        },
+      ],
+    };
+    const out = parseShortcuts(payload);
+    expect(out?.bindings).toHaveLength(1);
+    expect(out?.bindings[0].repeatable).toBe(false);
+  });
+
+  it('defaults repeat_timeout_ms to 500 when the field is missing', () => {
+    const { repeat_timeout_ms: _omit, ...without } = DEFAULT_JSON;
+    const out = parseShortcuts(without);
+    expect(out).not.toBeNull();
+    expect(out?.repeat_timeout_ms).toBe(500);
   });
 
   it('returns null when prefix is missing or malformed', () => {
@@ -255,5 +317,78 @@ describe('parseShortcuts', () => {
     expect(out?.bindings).toHaveLength(1);
     expect(out?.bindings[0].action.type).toBe('close-pane');
     expect(console.warn).toHaveBeenCalled();
+  });
+
+  it('parses focus-window action', () => {
+    const raw = {
+      prefix: {
+        key: 'b',
+        modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+        timeout_ms: 2000,
+      },
+      bindings: [
+        {
+          key: 'n',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'focus-window', offset: 'next' },
+          repeatable: true,
+        },
+      ],
+    };
+    const out = parseShortcuts(raw);
+    expect(out?.bindings[0]?.action).toEqual({ type: 'focus-window', offset: 'next' });
+  });
+
+  it('parses focus-window-number action', () => {
+    const raw = {
+      prefix: {
+        key: 'b',
+        modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+        timeout_ms: 2000,
+      },
+      bindings: [
+        {
+          key: '0',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'focus-window-number', index: 0 },
+          repeatable: false,
+        },
+      ],
+    };
+    const out = parseShortcuts(raw);
+    expect(out?.bindings[0]?.action).toEqual({ type: 'focus-window-number', index: 0 });
+  });
+
+  it('parses a rename-window binding', () => {
+    const out = parseShortcuts({
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: ',',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: false },
+          action: { type: 'rename-window' },
+          repeatable: false,
+        },
+      ],
+    });
+    expect(out?.bindings).toHaveLength(2);
+    expect(out?.bindings[1].action).toEqual({ type: 'rename-window' });
+  });
+
+  it('parses a new-window binding', () => {
+    const out = parseShortcuts({
+      ...DEFAULT_JSON,
+      bindings: [
+        {
+          key: 'c',
+          modifiers: { ctrl: false, shift: true, alt: false, meta: false },
+          action: { type: 'new-window' },
+          repeatable: false,
+        },
+      ],
+    });
+    expect(out?.bindings).toHaveLength(1);
+    expect(out?.bindings[0].action).toEqual({ type: 'new-window' });
   });
 });

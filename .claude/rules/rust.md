@@ -23,7 +23,7 @@ Non-doc line comments are restricted. The only permitted forms:
 | Form | Use |
 | --- | --- |
 | `// TODO: <text>` | Work to address later |
-| `// NOTE: <text>` | A non-obvious invariant or warning to the reader |
+| `// NOTE: <text>` | A **critical caveat** — only when overlooking it causes real harm; see the bar below |
 | `// SAFETY: <text>` | Required justification for any `unsafe { ... }` block (rustc / clippy idiom) |
 
 Forbidden:
@@ -33,6 +33,17 @@ Forbidden:
 | Plain narrative comments | `// increments counter` | What the code does belongs in identifiers |
 | Block comments | `/* ... */` | Same |
 | Commented-out code | `// let x = old_impl();` | History lives in git |
+| `// NOTE:` for merely non-obvious or "good to know" info | `// NOTE: this is the handler` | NOTE is for critical caveats only — rename the identifier or delete |
+
+A `// NOTE:` is reserved for a **critical caveat**: something that, if a
+reader overlooks it, leads to a bug, a crash, data loss, a security
+issue, or a violated invariant. "Non-obvious" or "good to know" is not
+enough — the test is concrete harm on the line that misses it.
+Qualifying examples: a race condition, a workaround for a specific
+upstream bug, an ordering requirement the surrounding code silently
+relies on, an invariant a later mutation must preserve. If overlooking
+the comment causes no real failure, do not write it — rename an
+identifier so the code carries the meaning, or delete it.
 
 Note: `///` and `//!` are **doc comments**, not "line comments" for this rule — see the next section.
 
@@ -161,6 +172,33 @@ items on `pub(crate)` containers stay `pub`) would create persistent
 noise. Run it locally when you want to audit a crate, then turn it back
 off.
 
+## Item ordering — private items last
+
+Within an `impl` block (and at module / file scope), declare items in
+descending visibility order: `pub`, then `pub(crate)` / `pub(super)` /
+`pub(in path)`, then private (no-modifier) items **last**. Private
+helper functions live at the bottom of the block, below every item that
+exposes API.
+
+Rationale: a reader scanning an `impl` block or module sees the surface
+it can call first; the implementation details that support that surface
+come after.
+
+Required:
+
+- Private (no-visibility-modifier) `fn`s are declared after every `pub`
+  and `pub(crate)`-or-narrower-but-still-exported item in the same
+  `impl` block or module.
+- Within the private group, keep related helpers together; order them
+  for readability (roughly call order).
+
+Not constrained:
+
+- `#[cfg(test)] mod tests { ... }` contents — test code is exempt.
+- Trait `impl` blocks whose method order is dictated by the trait.
+- Struct field order — governed by layout / grouping concerns, not this
+  rule.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:
@@ -191,6 +229,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - "No blank lines between import groups"
 - `#[expect]` preference over `#[allow]`
 - Visibility minimization — `pub` items demoted to `pub(crate)` / narrower when no cross-crate caller exists, with the "container already narrow" exception above. `#![warn(unreachable_pub)]` can be enabled temporarily to audit but is not on by default.
+- Item ordering — private (no-modifier) items declared after `pub` / exported ones (see "Item ordering — private items last")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 

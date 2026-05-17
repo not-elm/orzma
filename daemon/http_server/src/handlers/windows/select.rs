@@ -1,15 +1,19 @@
-use crate::error::HttpResult;
+//! `POST /windows/{window_id}/select` — promote a window to active
+//! within its session and broadcast the updated `SessionView`.
+
+use crate::{AppState, error::HttpResult};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use ozmux_multiplexer::{MultiplexerService, WindowId};
+use ozmux_multiplexer::WindowId;
 
+/// Promote a window to active within its session.
 pub async fn select(
-    State(multiplexer): State<MultiplexerService>,
+    State(state): State<AppState>,
     Path(window_id): Path<WindowId>,
 ) -> HttpResult<StatusCode> {
-    multiplexer.select_active_window(&window_id).await?;
+    state.select_active_window(&window_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -69,5 +73,42 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"]["code"].as_str(), Some("WINDOW_NOT_ATTACHED"));
+    }
+
+    #[tokio::test]
+    async fn select_publishes_session_view() {
+        use std::time::Duration;
+        let state = fresh_state();
+        let sid = state.multiplexer.create_session(None).await;
+        let (_wid_a, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let (wid_b, _, _) = state
+            .multiplexer
+            .create_window(Some(&sid), None)
+            .await
+            .unwrap();
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+
+        let (router, _) = router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{}/select", wid_b))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let view = tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["active_window"].as_str(), Some(wid_b.as_ref()));
     }
 }

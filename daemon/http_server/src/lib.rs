@@ -8,6 +8,8 @@ pub mod layout_broadcast;
 pub mod layout_dto;
 pub(crate) mod origin_guard;
 pub(crate) mod provision;
+pub mod session_broadcast;
+pub mod session_view;
 pub mod state;
 mod title_republish;
 pub mod window_view;
@@ -87,6 +89,10 @@ pub fn sessions_router() -> Router<AppState> {
                 .patch(handlers::sessions::rename::rename)
                 .delete(handlers::sessions::delete::delete),
         )
+        .route(
+            "/{session_id}/events",
+            get(handlers::sessions::events::events),
+        )
 }
 
 pub fn windows_router() -> Router<AppState> {
@@ -97,6 +103,10 @@ pub fn windows_router() -> Router<AppState> {
             get(handlers::windows::get)
                 .patch(handlers::windows::rename::rename)
                 .delete(handlers::windows::delete::delete),
+        )
+        .route(
+            "/{window_id}/dimensions",
+            axum::routing::patch(handlers::windows::dimensions::patch_dimensions),
         )
         .route(
             "/{window_id}/select",
@@ -142,6 +152,7 @@ pub(crate) mod test_helpers {
             terminal,
             ozmux_extension::ExtensionRegistry::default(),
             crate::layout_broadcast::LayoutBroadcaster::default(),
+            crate::session_broadcast::SessionBroadcaster::default(),
             Arc::new(ozmux_configs::OzmuxConfigs::default()),
             crate::activity_titles::ActivityTitles::default(),
             cef_host,

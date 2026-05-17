@@ -31,8 +31,8 @@ cmd_setup() {
   echo "setup: pnpm install --frozen-lockfile" >&2
   (cd "${REPO_ROOT}" && pnpm install --frozen-lockfile)
 
-  echo "setup: cargo build -p daemon_bootstrap" >&2
-  (cd "${REPO_ROOT}" && cargo build -p daemon_bootstrap)
+  echo "setup: cargo build -p ozmux_cli" >&2
+  (cd "${REPO_ROOT}" && cargo build -p ozmux_cli)
 
   echo "setup: install Playwright Chromium" >&2
   (cd "${REPO_ROOT}" && npx -y playwright@1 install chromium)
@@ -69,7 +69,7 @@ cmd_start() {
   # raises an authorization dialog on every Browser Activity create.
   (cd "${REPO_ROOT}" && exec env OZMUX_EXTENSION_ROOT="${REPO_ROOT}/extensions" \
     OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1 \
-    cargo run -p daemon_bootstrap) \
+    cargo run -p ozmux_cli -- daemon start --foreground) \
     >"${daemon_log}" 2>&1 &
   local daemon_pid=$!
   printf '%s\n' "${daemon_pid}" >> "${PID_FILE}"

@@ -158,12 +158,13 @@ impl CefHostSupervisor {
         let listener = UnixListener::bind(&self.socket_path)?;
         tracing::info!(socket = %self.socket_path.display(), "listening for cef_host");
 
-        let cef_host_bin =
-            std::env::var("OZMUX_CEF_HOST_BIN").unwrap_or_else(|_| default_cef_host_bin().into());
+        let cef_host_bin = std::env::var("OZMUX_CEF_HOST_BIN")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| default_cef_host_bin());
         let child = Command::new(&cef_host_bin)
             .env("OZMUX_CEF_HOST_SOCKET", &self.socket_path)
             .spawn()?;
-        tracing::info!(pid = child.id(), bin = %cef_host_bin, "spawned cef_host");
+        tracing::info!(pid = child.id(), bin = %cef_host_bin.display(), "spawned cef_host");
 
         let (stream, _addr) = listener.accept().await?;
         let (mut rd, mut wr) = stream.into_split();
@@ -195,19 +196,28 @@ impl CefHostSupervisor {
     }
 }
 
-/// Default path to the `cef_host` executable. On macOS, multi-process CEF
-/// requires the executable to live inside a `.app` bundle with a
-/// `CFBundleIdentifier` (Mach port rendezvous is namespaced by bundle ID), so
-/// we point at the bundled executable assembled by `xtask bundle-cef-host`.
-/// On other platforms the bare binary is used. Override with `OZMUX_CEF_HOST_BIN`.
-fn default_cef_host_bin() -> &'static str {
+/// Default path to the `cef_host` executable, resolved relative to the
+/// daemon binary's own directory so that a working-directory change (cargo
+/// test, daemon spawned via Tauri, etc.) does not break the lookup. On
+/// macOS, multi-process CEF requires the executable to live inside a `.app`
+/// bundle with a `CFBundleIdentifier` (Mach port rendezvous is namespaced by
+/// bundle ID), so we point at the bundled executable assembled by
+/// `xtask bundle-cef-host`. On other platforms the bare binary sibling is
+/// used. Override with `OZMUX_CEF_HOST_BIN`.
+fn default_cef_host_bin() -> std::path::PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     #[cfg(target_os = "macos")]
     {
-        "./target/debug/cef_host.app/Contents/MacOS/cef_host"
+        exe_dir
+            .join("cef_host.app")
+            .join("Contents/MacOS/cef_host")
     }
     #[cfg(not(target_os = "macos"))]
     {
-        "./target/debug/cef_host"
+        exe_dir.join("cef_host")
     }
 }
 

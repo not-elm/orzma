@@ -1,37 +1,79 @@
 import { useRef } from 'react';
 import { LayoutView } from './layout/LayoutView';
-import { useDefaultWindow } from './layout/useDefaultWindow';
+import type { DefaultWindowState } from './layout/types';
 import { useWindowLayout } from './layout/useWindowLayout';
 import type { ShortcutContext } from './shortcuts/actionDispatch';
 import { PrefixIndicator } from './shortcuts/PrefixIndicator';
 import { usePrefixMode } from './shortcuts/usePrefixMode';
+import { RenameWindowPrompt } from './statusbar/RenameWindowPrompt';
+import { StatusBar } from './statusbar/StatusBar';
+import type { SessionView } from './statusbar/types';
+import { useDefaultSession } from './statusbar/useDefaultSession';
+import { useRenameWindowPrompt } from './statusbar/useRenameWindowPrompt';
+import { liveOrReconnectingView, useSessionView } from './statusbar/useSessionView';
+import { windowSelect } from './statusbar/windowSelect';
 
 export function App() {
-  const def = useDefaultWindow();
-  const wid = def.status === 'ready' ? def.windowId : null;
+  const sessionDefault = useDefaultSession();
+  const sid = sessionDefault.status === 'ready' ? sessionDefault.sessionId : null;
+  const sessionView = useSessionView(sid);
+
+  const liveSession = liveOrReconnectingView(sessionView);
+  const wid = liveSession?.active_window ?? null;
+
   const layout = useWindowLayout(wid);
+
+  const def: DefaultWindowState =
+    wid !== null
+      ? { status: 'ready', windowId: wid }
+      : sessionDefault.status === 'error'
+        ? { status: 'error', message: sessionDefault.message }
+        : { status: 'loading' };
 
   const view = layout.status === 'gone' ? null : layout.view;
   const activePaneRef = useRef<string | null>(null);
   const activeWindowRef = useRef<string | null>(null);
   const activeActivityRef = useRef<string | null>(null);
+  const activeSessionRef = useRef<SessionView | null>(null);
+  const activeWindowNameRef = useRef<string | null>(null);
   activePaneRef.current = view?.active_pane ?? null;
   activeWindowRef.current = wid;
   const activePaneObj = view?.panes.find((p) => p.id === view.active_pane);
   activeActivityRef.current = activePaneObj?.active_activity ?? null;
+  activeSessionRef.current = liveSession;
+  activeWindowNameRef.current = liveSession?.windows.find((w) => w.id === wid)?.name ?? null;
+
+  const { promptState, openPrompt, closePrompt } = useRenameWindowPrompt();
+  const openPromptRef = useRef(openPrompt);
+  openPromptRef.current = openPrompt;
 
   const ctx: ShortcutContext = {
     activeWindow: () => activeWindowRef.current,
     activePane: () => activePaneRef.current,
     activeActivity: () => activeActivityRef.current,
+    activeSession: () => activeSessionRef.current,
+    openRenameWindow: () => {
+      const w = activeWindowRef.current;
+      const name = activeWindowNameRef.current;
+      if (w === null || name === null) return;
+      openPromptRef.current(w, name);
+    },
   };
 
   const { isArmed, prefix } = usePrefixMode(ctx);
 
   return (
-    <>
-      <LayoutView windowState={def} layoutState={layout} />
+    <div className="flex h-dvh w-dvw flex-col bg-background">
+      <div className="relative min-h-0 flex-1">
+        <LayoutView windowState={def} layoutState={layout} />
+      </div>
+      <RenameWindowPrompt promptState={promptState} closePrompt={closePrompt} />
+      <StatusBar
+        sessionState={sessionView}
+        windowReconnecting={layout.status === 'reconnecting'}
+        onSelectWindow={windowSelect}
+      />
       <PrefixIndicator armed={isArmed} prefix={prefix} />
-    </>
+    </div>
   );
 }

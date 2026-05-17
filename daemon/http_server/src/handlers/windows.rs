@@ -9,6 +9,7 @@ use ozmux_multiplexer::WindowId;
 
 pub mod create;
 pub mod delete;
+pub mod dimensions;
 pub mod events;
 pub mod focus_pane;
 pub mod panes;

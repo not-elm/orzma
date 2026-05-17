@@ -382,6 +382,20 @@ impl LayoutCellState {
             .get_mut(id)
             .ok_or_else(|| MultiplexerError::CellNotFound(id.clone()))
     }
+
+    /// Sibling-module accessor returning the cell as an `Option`. Used by the
+    /// `resize` algorithm which routinely needs to short-circuit on missing
+    /// cells without manufacturing a `MultiplexerError`.
+    #[inline]
+    pub(super) fn get(&self, id: &CellId) -> Option<&Cell> {
+        self.0.get(id)
+    }
+
+    /// Sibling-module mutable accessor counterpart to [`Self::get`].
+    #[inline]
+    pub(super) fn get_mut(&mut self, id: &CellId) -> Option<&mut Cell> {
+        self.0.get_mut(id)
+    }
 }
 
 /// Internal record gathered by `plan_collapse` and consumed by `apply_collapse`.

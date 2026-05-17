@@ -45,3 +45,12 @@ export interface WindowView {
   panes: PaneView[];
   layout: WindowLayoutNode;
 }
+
+/**
+ * Public state of `useDefaultSession` / `useDefaultWindow`-style hooks
+ * — historical shape preserved here because `LayoutView` still consumes it.
+ */
+export type DefaultWindowState =
+  | { status: 'loading' }
+  | { status: 'ready'; windowId: WindowId }
+  | { status: 'error'; message: string };

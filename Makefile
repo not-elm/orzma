@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-cef-host
+.PHONY: build dev-frontend dev-backend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-cef-host
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/http_server/src/handlers
@@ -14,10 +14,11 @@ endif
 
 help:
 	@echo "Targets:"
-	@echo "  build              - Build frontend to single HTML, then build release binary"
+	@echo "  build              - Build frontend to single HTML, then build the ozmux CLI (which bundles the daemon)"
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
-	@echo "  dev-backend        - Run axum server on :3200 (debug build redirects / to :5173)"
-	@echo "  dev-daemon         - Run daemon_bootstrap (extensions loaded; Chrome cookie import skipped)"
+	@echo "  dev-backend        - Run the daemon on :3200 via 'ozmux daemon start --foreground'"
+	@echo "  dev-daemon         - Same as dev-backend but with OZMUX_EXTENSION_ROOT preset and Chrome cookie import skipped"
+	@echo "  dev-tauri          - Build frontend + install ozmux on PATH, then run 'cargo tauri dev'"
 	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
 	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
@@ -41,13 +42,13 @@ build:
 	pnpm --dir $(FRONTEND_DIR) install --frozen-lockfile
 	pnpm --dir $(FRONTEND_DIR) build
 	@$(MAKE) --no-print-directory verify-out-dir
-	cargo build --release -p daemon_bootstrap
+	cargo build --release -p ozmux_cli
 
 dev-frontend:
 	pnpm --dir $(FRONTEND_DIR) dev
 
 dev-backend:
-	cargo run -p daemon_bootstrap
+	cargo run -p ozmux_cli -- daemon start --foreground
 
 bundle-cef-host:
 	cargo build -p ozmux_cef_host
@@ -56,13 +57,13 @@ bundle-cef-host:
 dev-daemon: memo-build-sdk $(BUNDLE_CEF_HOST_DEP)
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) \
 	OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1 \
-	cargo run -p daemon_bootstrap
+	cargo run -p ozmux_cli -- daemon start --foreground
 
 clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
 
 fix-lint:
-	cargo clippy --fix --allow-dirty --allow-staged
+	cargo clippy --workspace --exclude ozmux-client --fix --allow-dirty --allow-staged
 	cargo fmt
 	pnpm lint:fix
 
@@ -104,3 +105,12 @@ test-wire-goldens:
 test-wire-contract:
 	cargo run -p ozmux_terminal --example emit_fixture -- --all
 	pnpm exec tsx tools/verify-msgpack.ts daemon/terminal/tests/fixtures/wire_msgpack/
+
+dev-tauri: build
+	cargo install --path ./cli --locked
+	@pid=$$(lsof -nP -iTCP:3200 -sTCP:LISTEN -t 2>/dev/null); \
+	if [ -n "$$pid" ]; then \
+	  echo "NOTE: existing process on :3200 (pid $$pid) will be reused by the launcher."; \
+	  echo "      Run 'kill $$pid' first if you want to launch the freshly built daemon."; \
+	fi
+	cd client && cargo tauri dev

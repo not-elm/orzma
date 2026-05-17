@@ -5,6 +5,8 @@ export function makeShortcutContext(overrides?: Partial<ShortcutContext>): Short
     activeWindow: () => null,
     activePane: () => null,
     activeActivity: () => null,
+    activeSession: () => null,
+    openRenameWindow: () => {},
     ...overrides,
   };
 }

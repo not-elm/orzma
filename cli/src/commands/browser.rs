@@ -1,9 +1,29 @@
 //! `ozmux browser` subcommand: opens an embedded Browser Activity in the
 //! current terminal pane via the daemon's REST API.
 
-use crate::cli::Browser;
+use crate::commands::CommandExecute;
 use crate::daemon_client;
 use anyhow::{Context, Result};
+use clap::Args;
+
+/// `ozmux browser [URL]` — open a Browser Activity in the active pane.
+#[derive(Args)]
+pub struct Browser {
+    /// URL to open. Schemes are added automatically: `foo.com` → `https://foo.com`.
+    pub url: Option<String>,
+    /// Named storage profile to use. Defaults to `default`.
+    #[arg(long, conflicts_with = "incognito")]
+    pub profile: Option<String>,
+    /// Open in an ephemeral in-memory profile (no disk persistence).
+    #[arg(long)]
+    pub incognito: bool,
+}
+
+impl CommandExecute for Browser {
+    async fn run(self) -> Result<()> {
+        run(self).await
+    }
+}
 
 /// Run the `ozmux browser` subcommand. Reads the current pane/window from
 /// PTY-injected env vars, asks the daemon to create the activity, then
