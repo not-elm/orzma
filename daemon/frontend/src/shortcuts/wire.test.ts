@@ -394,7 +394,11 @@ describe('parseShortcuts', () => {
 
   it('parses a choose-tree action binding', () => {
     const result = parseShortcuts({
-      prefix: { key: 'b', modifiers: { ctrl: true, shift: false, alt: false, meta: false }, timeout_ms: 2000 },
+      prefix: {
+        key: 'b',
+        modifiers: { ctrl: true, shift: false, alt: false, meta: false },
+        timeout_ms: 2000,
+      },
       bindings: [
         {
           key: 'w',

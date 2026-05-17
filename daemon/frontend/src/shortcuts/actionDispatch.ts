@@ -20,6 +20,8 @@ export interface ShortcutContext {
   activeSession: () => SessionView | null;
   /** Opens the rename-window prompt for the active window. */
   openRenameWindow: () => void;
+  /** Opens the cross-session window picker (tmux choose-tree). */
+  openChooseTree: () => void;
 }
 
 /**
@@ -33,6 +35,8 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
       return () => withActivePane(ctx, closePane);
     case 'rename-window':
       return () => ctx.openRenameWindow();
+    case 'choose-tree':
+      return () => ctx.openChooseTree();
     case 'new-window':
       return () => {
         const view = ctx.activeSession();

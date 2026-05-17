@@ -58,6 +58,7 @@ export function App() {
       if (w === null || name === null) return;
       openPromptRef.current(w, name);
     },
+    openChooseTree: () => {},
   };
 
   const { isArmed, prefix } = usePrefixMode(ctx);

@@ -400,6 +400,17 @@ describe('actionToHandler', () => {
     expect(openRenameWindow).toHaveBeenCalledTimes(1);
   });
 
+  it('returns a handler that calls openChooseTree on choose-tree', () => {
+    const openChooseTree = vi.fn();
+    const ctx = makeShortcutContext({ openChooseTree });
+    const handler = actionToHandler({ type: 'choose-tree' }, ctx);
+    if (handler === null) {
+      throw new Error('handler should not be null');
+    }
+    handler();
+    expect(openChooseTree).toHaveBeenCalledTimes(1);
+  });
+
   it('returns a handler that POSTs /windows with the active session id', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
