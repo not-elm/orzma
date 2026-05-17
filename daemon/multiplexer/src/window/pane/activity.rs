@@ -31,7 +31,9 @@ impl Default for BrowserProfile {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ActivityKind {
     Terminal,
-    Extension { html_root: std::path::PathBuf },
+    Extension {
+        html_root: std::path::PathBuf,
+    },
     Browser {
         initial_url: Option<String>,
         #[serde(default)]
@@ -74,7 +76,10 @@ impl Activity {
         Self {
             id,
             name: "Browser".to_string(),
-            kind: ActivityKind::Browser { initial_url, profile },
+            kind: ActivityKind::Browser {
+                initial_url,
+                profile,
+            },
         }
     }
 }
@@ -107,7 +112,10 @@ mod tests_browser_variant {
         let json = serde_json::to_value(&kind).unwrap();
         assert!(matches!(
             serde_json::from_value::<ActivityKind>(json).unwrap(),
-            ActivityKind::Browser { initial_url: None, .. }
+            ActivityKind::Browser {
+                initial_url: None,
+                ..
+            }
         ));
     }
 
@@ -126,7 +134,9 @@ mod tests_browser_variant {
     fn activity_kind_browser_round_trips_with_named_profile() {
         let kind = ActivityKind::Browser {
             initial_url: Some("https://example.com".into()),
-            profile: BrowserProfile::Named { name: "work".into() },
+            profile: BrowserProfile::Named {
+                name: "work".into(),
+            },
         };
         let json = serde_json::to_value(&kind).unwrap();
         assert_eq!(json["type"], "browser");
@@ -149,7 +159,10 @@ mod tests_browser_variant {
         assert_eq!(json["profile"]["kind"], "incognito");
         assert!(matches!(
             serde_json::from_value::<ActivityKind>(json).unwrap(),
-            ActivityKind::Browser { profile: BrowserProfile::Incognito, .. }
+            ActivityKind::Browser {
+                profile: BrowserProfile::Incognito,
+                ..
+            }
         ));
     }
 

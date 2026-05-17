@@ -211,9 +211,7 @@ fn default_cef_host_bin() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     #[cfg(target_os = "macos")]
     {
-        exe_dir
-            .join("cef_host.app")
-            .join("Contents/MacOS/cef_host")
+        exe_dir.join("cef_host.app").join("Contents/MacOS/cef_host")
     }
     #[cfg(not(target_os = "macos"))]
     {

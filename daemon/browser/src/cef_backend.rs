@@ -77,7 +77,14 @@ impl CefBackend {
         let _nav_rx = self.registry.insert(aid.clone(), ring, reader);
 
         self.handles
-            .request_browser_create(aid.clone(), initial_url.to_string(), epoch, cookies, profile, shm_fd)
+            .request_browser_create(
+                aid.clone(),
+                initial_url.to_string(),
+                epoch,
+                cookies,
+                profile,
+                shm_fd,
+            )
             .await
             .map_err(CefBackendError::ControlSendFailed)?;
 

@@ -90,6 +90,7 @@ async fn extract_macos(initial_url: &str) -> Result<Vec<CefCookieDto>, std::io::
 /// - Domain cookie (`host_key` starts with `.`): `host` must equal the bare
 ///   domain or be a subdomain of it.
 /// - Host-only cookie (no leading dot): `host` must equal `host_key` exactly.
+#[cfg(target_os = "macos")]
 fn cookie_applies_to_host(host: &str, host_key: &str) -> bool {
     if let Some(domain) = host_key.strip_prefix('.') {
         host == domain || is_subdomain_of(host, domain)
@@ -101,6 +102,7 @@ fn cookie_applies_to_host(host: &str, host_key: &str) -> bool {
 /// Returns `true` when `host` ends in `.{parent}` — i.e. is a strict subdomain
 /// of `parent`. Avoids the `format!(".{parent}")` allocation used by a naive
 /// `ends_with` and explicitly rejects the same-host case.
+#[cfg(target_os = "macos")]
 fn is_subdomain_of(host: &str, parent: &str) -> bool {
     host.len() > parent.len() + 1
         && host.as_bytes()[host.len() - parent.len() - 1] == b'.'
@@ -109,6 +111,7 @@ fn is_subdomain_of(host: &str, parent: &str) -> bool {
 
 /// Extracts the registrable host from a URL for use as the `cookies_by_host`
 /// query key. Falls back to the full URL string on parse failure.
+#[cfg(target_os = "macos")]
 fn host_from_url(url: &str) -> String {
     url::Url::parse(url)
         .ok()
@@ -204,22 +207,22 @@ mod tests {
         assert_eq!(url, "https://example.com/");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn cookie_applies_to_host_domain_cookie_matches_self_and_subdomain() {
         assert!(cookie_applies_to_host("github.com", ".github.com"));
         assert!(cookie_applies_to_host("api.github.com", ".github.com"));
-        assert!(cookie_applies_to_host(
-            "deep.api.github.com",
-            ".github.com"
-        ));
+        assert!(cookie_applies_to_host("deep.api.github.com", ".github.com"));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn cookie_applies_to_host_domain_cookie_rejects_unrelated() {
         assert!(!cookie_applies_to_host("notgithub.com", ".github.com"));
         assert!(!cookie_applies_to_host("github.example.com", ".github.com"));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn cookie_applies_to_host_host_only_requires_exact_match() {
         assert!(cookie_applies_to_host("github.com", "github.com"));

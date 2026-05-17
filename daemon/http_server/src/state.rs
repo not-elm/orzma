@@ -176,9 +176,11 @@ impl AppState {
         {
             let _ = self
                 .cef_host
-                .send_command(ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
-                    aid: CefActivityId(prev.to_string()),
-                })
+                .send_command(
+                    ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
+                        aid: CefActivityId(prev.to_string()),
+                    },
+                )
                 .await;
         }
         if matches!(
@@ -187,9 +189,11 @@ impl AppState {
         ) {
             let _ = self
                 .cef_host
-                .send_command(ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
-                    aid: CefActivityId(next.to_string()),
-                })
+                .send_command(
+                    ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
+                        aid: CefActivityId(next.to_string()),
+                    },
+                )
                 .await;
         }
     }

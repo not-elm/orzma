@@ -44,7 +44,9 @@ fn main() {
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
-            .map(|frameworks| frameworks.join("Chromium Embedded Framework.framework/Chromium Embedded Framework"))
+            .map(|frameworks| {
+                frameworks.join("Chromium Embedded Framework.framework/Chromium Embedded Framework")
+            })
             .filter(|p| p.exists());
         let framework = match in_bundle {
             Some(p) => p

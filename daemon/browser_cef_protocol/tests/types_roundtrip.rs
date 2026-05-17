@@ -55,7 +55,9 @@ fn host_command_browser_create_roundtrips() {
         initial_url: "https://example.com/".into(),
         epoch: 1,
         cookies: vec![],
-        profile: BrowserProfileWire::Named { name: "default".into() },
+        profile: BrowserProfileWire::Named {
+            name: "default".into(),
+        },
     });
 }
 
@@ -113,7 +115,9 @@ fn host_command_browser_create_with_cookies_roundtrips() {
         initial_url: "https://example.com/".into(),
         epoch: 1,
         cookies,
-        profile: BrowserProfileWire::Named { name: "default".into() },
+        profile: BrowserProfileWire::Named {
+            name: "default".into(),
+        },
     });
 }
 
@@ -628,7 +632,9 @@ fn host_command_browser_create_roundtrips_with_named_profile() {
         initial_url: "https://example.com".into(),
         epoch: 1,
         cookies: vec![],
-        profile: BrowserProfileWire::Named { name: "work".into() },
+        profile: BrowserProfileWire::Named {
+            name: "work".into(),
+        },
     });
 }
 

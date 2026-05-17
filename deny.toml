@@ -50,7 +50,21 @@ allow = [
     "MPL-2.0",
     "CDLA-Permissive-2.0",
 ]
-exceptions = []
+exceptions = [
+    # NOTE: `decrypt-cookies` and its `chromium-crypto` companion are LGPL-3.0;
+    # they are pulled in only by `ozmux_browser`'s host-Chrome cookie import
+    # path and are not embedded statically into shipped binaries beyond
+    # standard dynamic linking. Allowed by exception.
+    { allow = ["LGPL-3.0-or-later"], crate = "chromium-crypto" },
+    { allow = ["LGPL-3.0-or-later"], crate = "decrypt-cookies" },
+    # NOTE: `libbz2-rs-sys` is a Rust port of the original bzip2 library
+    # released under the original bzip2 license — non-restrictive but not in
+    # SPDX's permissive default set. Pulled transitively via `decrypt-cookies`.
+    { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" },
+    # NOTE: `tiny-keccak` is CC0-1.0 (public domain dedication). Pulled
+    # transitively via `decrypt-cookies` → `chromium-crypto`.
+    { allow = ["CC0-1.0"], crate = "tiny-keccak" },
+]
 
 [bans]
 multiple-versions = "warn"

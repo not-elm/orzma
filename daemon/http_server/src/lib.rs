@@ -241,8 +241,7 @@ mod tests {
         let extra = test_helpers::add_activity_via_window(&state, &wid, &pid).await;
         let cef_aid = CefActivityId(extra.to_string());
         let shm_fd = create_shm_for_activity(&cef_aid.0, SLOT_PAYLOAD_MAX).expect("shm alloc");
-        let reader =
-            Arc::new(OwnedShmReader::map(&shm_fd, SLOT_PAYLOAD_MAX).expect("shm map"));
+        let reader = Arc::new(OwnedShmReader::map(&shm_fd, SLOT_PAYLOAD_MAX).expect("shm map"));
         state
             .browser_cef
             .insert(cef_aid.clone(), Arc::new(FrameRing::new(123, 1)), reader);

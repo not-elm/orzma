@@ -128,8 +128,11 @@ mod tests {
         state
             .multiplexer
             .with_window_or_404(&wid, |w| {
-                w.pane_mut(&pid)?
-                    .add_activity(Activity::browser(browser_aid.clone(), None, BrowserProfile::default()))
+                w.pane_mut(&pid)?.add_activity(Activity::browser(
+                    browser_aid.clone(),
+                    None,
+                    BrowserProfile::default(),
+                ))
             })
             .await
             .unwrap();

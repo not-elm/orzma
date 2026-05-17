@@ -51,7 +51,10 @@ pub(crate) fn sanitize_profile_name(name: &str) -> Result<(), ProfileError> {
 /// management API — a future improvement tracked separately.
 ///
 /// `name` is sanitized first.
-pub(crate) fn named_cache_path(root_cache_path: &Path, name: &str) -> Result<PathBuf, ProfileError> {
+pub(crate) fn named_cache_path(
+    root_cache_path: &Path,
+    name: &str,
+) -> Result<PathBuf, ProfileError> {
     sanitize_profile_name(name)?;
     Ok(root_cache_path.join("profiles").join(name))
 }
@@ -158,9 +161,17 @@ mod tests {
     #[test]
     fn resolve_cache_path_named_and_incognito() {
         let root = PathBuf::from("/data/ozmux/browser");
-        let named =
-            resolve_cache_path(&root, &BrowserProfileWire::Named { name: "work".into() }).unwrap();
-        assert_eq!(named, Some(PathBuf::from("/data/ozmux/browser/profiles/work")));
+        let named = resolve_cache_path(
+            &root,
+            &BrowserProfileWire::Named {
+                name: "work".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            named,
+            Some(PathBuf::from("/data/ozmux/browser/profiles/work"))
+        );
         let incog = resolve_cache_path(&root, &BrowserProfileWire::Incognito).unwrap();
         assert_eq!(incog, None);
     }

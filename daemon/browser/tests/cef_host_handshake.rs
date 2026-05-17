@@ -26,11 +26,10 @@ async fn handshake_then_one_frame() {
     let _ = std::fs::remove_file(&socket);
 
     let supervisor = CefHostSupervisor::new(socket);
-    let handles =
-        tokio::time::timeout(Duration::from_secs(15), supervisor.spawn_and_handshake())
-            .await
-            .expect("handshake timed out")
-            .expect("handshake failed");
+    let handles = tokio::time::timeout(Duration::from_secs(15), supervisor.spawn_and_handshake())
+        .await
+        .expect("handshake timed out")
+        .expect("handshake failed");
 
     let aid = ActivityId(format!("test-{}", uuid::Uuid::new_v4()));
     let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, SLOT_PAYLOAD_MAX)
@@ -67,7 +66,9 @@ async fn handshake_then_one_frame() {
             "about:blank".into(),
             1,
             Vec::new(),
-            BrowserProfileWire::Named { name: "default".into() },
+            BrowserProfileWire::Named {
+                name: "default".into(),
+            },
             shm_fd,
         )
         .await

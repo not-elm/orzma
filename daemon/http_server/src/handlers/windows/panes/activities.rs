@@ -108,7 +108,10 @@ impl ActivityInput {
                 },
                 extension_name: Some(extension_name),
             },
-            ActivityKindInput::Browser { initial_url, profile } => ParsedActivity {
+            ActivityKindInput::Browser {
+                initial_url,
+                profile,
+            } => ParsedActivity {
                 activity: Activity::browser(self.activity_id, initial_url, profile),
                 extension_name: None,
             },
