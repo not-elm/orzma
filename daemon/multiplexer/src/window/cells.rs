@@ -966,18 +966,25 @@ mod tests {
         let (root, cell_a) = state.new_window_layout(pa.clone());
         let cell_b = state.new_pane(pb.clone(), None);
         let split_ab = state
-            .split_cell(cell_a.clone(), cell_b.clone(), Side::After, SplitOrientation::Horizontal)
+            .split_cell(
+                cell_a.clone(),
+                cell_b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .unwrap();
         let cell_c = state.new_pane(pc.clone(), None);
         let _split_abc = state
-            .split_cell(split_ab, cell_c.clone(), Side::After, SplitOrientation::Vertical)
+            .split_cell(
+                split_ab,
+                cell_c.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
             .unwrap();
 
         let ordered = state.ordered_pane_cells(&root).unwrap();
-        assert_eq!(
-            ordered,
-            vec![(cell_a, pa), (cell_b, pb), (cell_c, pc)]
-        );
+        assert_eq!(ordered, vec![(cell_a, pa), (cell_b, pb), (cell_c, pc)]);
     }
 
     #[test]
@@ -1009,7 +1016,12 @@ mod tests {
         let (_root, cell_a) = state.new_window_layout(pa.clone());
         let cell_b = state.new_pane(pb.clone(), None);
         let _split = state
-            .split_cell(cell_a.clone(), cell_b.clone(), Side::After, SplitOrientation::Horizontal)
+            .split_cell(
+                cell_a.clone(),
+                cell_b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .unwrap();
 
         state.swap_panes(&cell_a, &cell_b).unwrap();
@@ -1032,7 +1044,12 @@ mod tests {
         let (root, cell_a) = state.new_window_layout(pa.clone());
         let cell_b = state.new_pane(pb.clone(), None);
         let split = state
-            .split_cell(cell_a.clone(), cell_b, Side::After, SplitOrientation::Horizontal)
+            .split_cell(
+                cell_a.clone(),
+                cell_b,
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
             .unwrap();
 
         let err = state.swap_panes(&cell_a, &split).unwrap_err();

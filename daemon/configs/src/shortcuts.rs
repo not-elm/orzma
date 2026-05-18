@@ -887,14 +887,24 @@ mod tests {
         let prev = s.bindings.iter().any(|b| {
             b.chord.key == Key::Char('{')
                 && b.chord.modifiers.shift
-                && matches!(b.action, Action::SwapPane { offset: SwapOffset::Prev })
+                && matches!(
+                    b.action,
+                    Action::SwapPane {
+                        offset: SwapOffset::Prev
+                    }
+                )
                 && b.repeatable
         });
         assert!(prev, "missing Prefix+{{ -> SwapPane(Prev) (repeatable)");
         let next = s.bindings.iter().any(|b| {
             b.chord.key == Key::Char('}')
                 && b.chord.modifiers.shift
-                && matches!(b.action, Action::SwapPane { offset: SwapOffset::Next })
+                && matches!(
+                    b.action,
+                    Action::SwapPane {
+                        offset: SwapOffset::Next
+                    }
+                )
                 && b.repeatable
         });
         assert!(next, "missing Prefix+}} -> SwapPane(Next) (repeatable)");

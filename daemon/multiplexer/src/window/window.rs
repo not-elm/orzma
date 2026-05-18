@@ -617,8 +617,14 @@ mod swap_tests {
 
         let pb = PaneId::new();
         let ab = Activity::terminal(ActivityId::new());
-        w.split_pane(&pa, pb.clone(), ab, Side::After, SplitOrientation::Horizontal)
-            .unwrap();
+        w.split_pane(
+            &pa,
+            pb.clone(),
+            ab,
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
 
         let pc = PaneId::new();
         let ac = Activity::terminal(ActivityId::new());
@@ -656,7 +662,12 @@ mod swap_tests {
         assert_eq!(pane_order(&w), vec![pa.clone(), pb.clone(), pc.clone()]);
 
         let out = w.swap_pane(&pa, SwapOffset::Next).unwrap();
-        assert_eq!(out, SwapOutcome::Swapped { other_pane: pb.clone() });
+        assert_eq!(
+            out,
+            SwapOutcome::Swapped {
+                other_pane: pb.clone()
+            }
+        );
         assert_eq!(pane_order(&w), vec![pb.clone(), pa.clone(), pc]);
     }
 
@@ -664,7 +675,12 @@ mod swap_tests {
     fn swap_pane_prev_wraps_around_from_first() {
         let (mut w, pa, pb, pc) = three_pane_window();
         let out = w.swap_pane(&pa, SwapOffset::Prev).unwrap();
-        assert_eq!(out, SwapOutcome::Swapped { other_pane: pc.clone() });
+        assert_eq!(
+            out,
+            SwapOutcome::Swapped {
+                other_pane: pc.clone()
+            }
+        );
         assert_eq!(pane_order(&w), vec![pc, pb, pa]);
     }
 
@@ -672,7 +688,12 @@ mod swap_tests {
     fn swap_pane_next_wraps_around_from_last() {
         let (mut w, pa, pb, pc) = three_pane_window();
         let out = w.swap_pane(&pc, SwapOffset::Next).unwrap();
-        assert_eq!(out, SwapOutcome::Swapped { other_pane: pa.clone() });
+        assert_eq!(
+            out,
+            SwapOutcome::Swapped {
+                other_pane: pa.clone()
+            }
+        );
         assert_eq!(pane_order(&w), vec![pc, pb, pa]);
     }
 
@@ -714,14 +735,26 @@ mod swap_tests {
         let mut wn = Window::new_with_initial(wid.clone(), "w".into(), pa.clone(), aa);
         let pb = PaneId::new();
         let ab = Activity::terminal(ActivityId::new());
-        wn.split_pane(&pa, pb.clone(), ab, Side::After, SplitOrientation::Horizontal)
-            .unwrap();
+        wn.split_pane(
+            &pa,
+            pb.clone(),
+            ab,
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
 
         let aa2 = Activity::terminal(ActivityId::new());
         let mut wp = Window::new_with_initial(wid, "w".into(), pa.clone(), aa2);
         let ab2 = Activity::terminal(ActivityId::new());
-        wp.split_pane(&pa, pb.clone(), ab2, Side::After, SplitOrientation::Horizontal)
-            .unwrap();
+        wp.split_pane(
+            &pa,
+            pb.clone(),
+            ab2,
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
 
         wn.swap_pane(&pa, SwapOffset::Next).unwrap();
         wp.swap_pane(&pa, SwapOffset::Prev).unwrap();
