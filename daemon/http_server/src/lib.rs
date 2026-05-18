@@ -24,31 +24,10 @@ use axum::{
 use tokio::net::TcpListener;
 
 pub async fn serve(state: AppState) -> HttpResult {
-    let sid = state.multiplexer.create_session(None).await;
-    let (wid, pid, aid) = state
-        .multiplexer
-        .create_window(Some(&sid), None)
+    state
+        .provision_session_with_activity(None, None)
         .await
         .expect("bootstrap cannot fail on empty AppState");
-
-    if let Err(e) = state
-        .terminal
-        .spawn(
-            pid,
-            aid,
-            ozmux_terminal::SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
-                cwd: None,
-                window_id: Some(wid),
-                session_id: Some(sid),
-            },
-        )
-        .await
-    {
-        panic!("bootstrap PTY spawn failed: {e}");
-    }
 
     let listener = TcpListener::bind("127.0.0.1:3200")
         .await
