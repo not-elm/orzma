@@ -27,8 +27,7 @@ pub(super) fn spawn_detached(session_id: &str) -> Result<()> {
         .stderr(Stdio::null());
     crate::process::detach::configure_detached(&mut cmd);
 
-    cmd.spawn()
-        .with_context(|| format!("spawn {bin} {url}"))?;
+    cmd.spawn().with_context(|| format!("spawn {bin} {url}"))?;
     // NOTE: drop the child handle without waiting; the launcher is
     // intentionally detached.
     Ok(())

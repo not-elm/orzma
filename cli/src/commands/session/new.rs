@@ -16,6 +16,9 @@ pub(crate) struct NewArgs {
     /// Name for the new session. The daemon assigns a default if omitted.
     #[arg(short = 's', long)]
     name: Option<String>,
+    /// Open the new session in the Tauri client window after creating it.
+    #[arg(long)]
+    open: bool,
 }
 
 #[derive(Serialize)]
@@ -37,6 +40,15 @@ impl CommandExecute for NewArgs {
         let cwd = current_dir_string();
         let id = new_session(self.name, cwd).await?;
         println!("{id}");
+        if self.open
+            && let Err(e) = super::client_open::spawn_detached(&id)
+        {
+            eprintln!(
+                "warning: failed to launch ozmux-client: {e}. \
+                 Open this URL manually: {}/?session={id}",
+                daemon_bootstrap::HTTP_BASE_URL
+            );
+        }
         Ok(())
     }
 }

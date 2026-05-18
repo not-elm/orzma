@@ -116,3 +116,53 @@ async fn session_new_sends_current_dir_as_cwd() {
     let resp = Client::new().get(&url).send().await.expect("GET session");
     assert!(resp.status().is_success());
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn session_new_open_invokes_client_bin_with_url() {
+    let bin = env!("CARGO_BIN_EXE_ozmux").to_string();
+    assert!(
+        !daemon_running(),
+        "a daemon is already running on {DAEMON_ADDR}; stop it before running this test"
+    );
+    let _guard = DaemonStopGuard { bin: bin.clone() };
+
+    let out = Command::new(&bin)
+        .env("OZMUX_CLIENT_BIN", "/usr/bin/true")
+        .args(["session", "new", "--open", "-s", "with-open"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .expect("spawn ozmux session new --open");
+
+    assert!(out.status.success(), "session new --open failed: {out:?}");
+    assert_single_id_line(&out.stdout, "with-open");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn session_new_open_warns_but_succeeds_when_client_bin_missing() {
+    let bin = env!("CARGO_BIN_EXE_ozmux").to_string();
+    assert!(
+        !daemon_running(),
+        "a daemon is already running on {DAEMON_ADDR}; stop it before running this test"
+    );
+    let _guard = DaemonStopGuard { bin: bin.clone() };
+
+    let out = Command::new(&bin)
+        .env("OZMUX_CLIENT_BIN", "/nonexistent/path/ozmux-client")
+        .args(["session", "new", "--open", "-s", "missing-client"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .expect("spawn ozmux session new --open");
+
+    assert!(
+        out.status.success(),
+        "session new should exit 0 even on client spawn failure: {out:?}"
+    );
+    assert_single_id_line(&out.stdout, "missing-client");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ozmux-client"),
+        "expected stderr to warn about ozmux-client; got: {stderr:?}"
+    );
+}
