@@ -1068,6 +1068,34 @@ mod provision_session_with_activity_tests {
             "the half-created session must be rolled back"
         );
     }
+
+    #[tokio::test]
+    async fn concurrent_provision_and_delete_does_not_deadlock() {
+        let state = fresh_state();
+        let (existing_sid, _, _, _) = state
+            .provision_session_with_activity(Some("victim".into()), None)
+            .await
+            .unwrap();
+
+        let state_a = state.clone();
+        let state_b = state.clone();
+        let victim = existing_sid.clone();
+
+        let run = async {
+            let h_new = tokio::spawn(async move {
+                state_a
+                    .provision_session_with_activity(Some("new".into()), None)
+                    .await
+            });
+            let h_del = tokio::spawn(async move { state_b.delete_session(&victim).await });
+            let _ = h_new.await.unwrap();
+            let _ = h_del.await.unwrap();
+        };
+
+        timeout(Duration::from_secs(3), run)
+            .await
+            .expect("provision + delete deadlocked");
+    }
 }
 
 #[cfg(test)]
