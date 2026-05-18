@@ -9,6 +9,7 @@ use crate::commands::{
 
 mod commands;
 mod daemon_client;
+mod process;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

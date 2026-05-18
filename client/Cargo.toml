@@ -21,3 +21,4 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["process"] }
 anyhow = { workspace = true }
+daemon_bootstrap = { path = "../daemon/bootstrap" }

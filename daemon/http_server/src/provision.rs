@@ -30,7 +30,7 @@ pub(crate) async fn provision_activity_runtime(
     match kind {
         ActivityKind::Terminal => {
             crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty(
-                state, wid, pid, aid,
+                state, wid, pid, aid, None,
             )
             .await
         }

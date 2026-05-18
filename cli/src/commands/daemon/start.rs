@@ -5,7 +5,6 @@ use clap::Args;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::net::{SocketAddr, TcpStream};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -102,7 +101,7 @@ pub(super) fn spawn_detached() -> anyhow::Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err));
-    detach_from_session(&mut cmd);
+    crate::process::detach::configure_detached(&mut cmd);
 
     cmd.spawn().context("fork detached daemon")?;
     // NOTE: drop the child handle without waiting; the daemon is intentionally
@@ -121,19 +120,6 @@ fn open_daemon_log_pair() -> anyhow::Result<(File, File)> {
         .try_clone()
         .with_context(|| format!("clone log file handle for {}", log_path.display()))?;
     Ok((log, log_err))
-}
-
-fn detach_from_session(cmd: &mut std::process::Command) {
-    // SAFETY: setsid is async-signal-safe (POSIX.1-2008 Table 2-5) and the
-    // closure runs between fork and exec where no Rust destructors fire.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
 }
 
 pub(super) async fn wait_until_ready() -> anyhow::Result<()> {

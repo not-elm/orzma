@@ -1242,6 +1242,7 @@ dependencies = [
  "ozmux_http_server",
  "ozmux_multiplexer",
  "ozmux_terminal",
+ "percent-encoding",
  "tempfile",
  "tokio",
  "tracing",
@@ -3716,6 +3717,7 @@ name = "ozmux-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "daemon_bootstrap",
  "tauri",
  "tauri-build",
  "tokio",
@@ -3785,6 +3787,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]

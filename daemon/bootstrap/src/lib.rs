@@ -16,6 +16,15 @@ pub const HTTP_BASE_URL: &str = "http://127.0.0.1:3200";
 /// `/health` endpoint URL used by the CLI and Tauri client to confirm readiness.
 pub const HEALTH_URL: &str = "http://127.0.0.1:3200/health";
 
+/// Builds the daemon deep-link URL for the given session id, with the
+/// id percent-encoded. Shared between the CLI (`session new --open`)
+/// and the Tauri client launcher so the URL shape stays consistent.
+pub fn session_deep_link_url(session_id: &str) -> String {
+    let encoded =
+        percent_encoding::utf8_percent_encode(session_id, percent_encoding::NON_ALPHANUMERIC);
+    format!("{HTTP_BASE_URL}/?session={encoded}")
+}
+
 /// Returns the ozmux runtime directory (`$TMPDIR/ozmux`), creating it if
 /// it does not already exist.
 pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {

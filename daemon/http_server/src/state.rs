@@ -19,6 +19,7 @@ use ozmux_multiplexer::{
 };
 use ozmux_terminal::TerminalService;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Lightweight discriminant for `ActivityKind`, used by route-kind guards
@@ -691,7 +692,7 @@ impl AppState {
         name: Option<String>,
     ) -> HttpResult<(WindowId, PaneId, ActivityId)> {
         let (wid, pid, aid) = self.multiplexer.create_window(session_id, name).await?;
-        if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid).await {
+        if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid, None).await {
             self.rollback_window(&wid, "PTY spawn failure").await;
             return Err(spawn_err);
         }
@@ -703,6 +704,44 @@ impl AppState {
             return Err(select_err.into());
         }
         Ok((wid, pid, aid))
+    }
+
+    /// Provision a brand-new Session with an attached Window+Pane+terminal
+    /// Activity and its PTY in a single atomic step, then broadcast the
+    /// resulting `SessionView`.
+    ///
+    /// Used by both `serve()`'s bootstrap and the `POST /sessions` HTTP
+    /// handler so the same provisioning lives in one place.
+    ///
+    /// On PTY-spawn failure the partially-created session/window are rolled
+    /// back via `rollback_window` + `delete_session` (which also closes the
+    /// session broadcast) before the original error is returned.
+    ///
+    /// `cwd` is the initial working directory for the spawned shell; `None`
+    /// inherits the daemon process's CWD.
+    pub async fn provision_session_with_activity(
+        &self,
+        name: Option<String>,
+        cwd: Option<&Path>,
+    ) -> HttpResult<(SessionId, WindowId, PaneId, ActivityId)> {
+        let sid = self.multiplexer.create_session(name).await;
+
+        let (wid, pid, aid) = match self.multiplexer.create_window(Some(&sid), None).await {
+            Ok(triple) => triple,
+            Err(e) => {
+                self.rollback_session(&sid).await;
+                return Err(e.into());
+            }
+        };
+
+        if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid, cwd).await {
+            self.rollback_window(&wid, "PTY spawn failure").await;
+            self.rollback_session(&sid).await;
+            return Err(spawn_err);
+        }
+
+        self.publish_session_view(&sid).await;
+        Ok((sid, wid, pid, aid))
     }
 
     /// Rename a session and broadcast the updated view.
@@ -789,6 +828,12 @@ impl AppState {
             });
         }
         Ok(activity)
+    }
+
+    async fn rollback_session(&self, sid: &SessionId) {
+        if let Err(rb) = self.delete_session(sid).await {
+            tracing::warn!(error = %rb, %sid, "rollback delete_session failed");
+        }
     }
 
     /// Tear down a half-created window after a `create_window` step failed.
@@ -992,6 +1037,87 @@ mod tests {
             .await
             .expect_err("must reject mismatched kind");
         assert!(matches!(err, HttpError::ActivityKindMismatch { .. }));
+    }
+}
+
+#[cfg(test)]
+mod provision_session_with_activity_tests {
+    use crate::test_helpers::fresh_state;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn provision_creates_full_chain_and_publishes() {
+        let state = fresh_state();
+        let (sid, wid, pid, aid) = state
+            .provision_session_with_activity(Some("s1".into()), None)
+            .await
+            .expect("provision succeeded");
+
+        assert!(!sid.as_ref().is_empty());
+        assert!(!wid.as_ref().is_empty());
+        assert!(!pid.as_ref().is_empty());
+        assert!(!aid.as_ref().is_empty());
+
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+        state.publish_session_view(&sid).await;
+        let view = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["name"].as_str(), Some("s1"));
+        assert_eq!(view["windows"].as_array().map(|a| a.len()), Some(1));
+    }
+
+    #[tokio::test]
+    async fn provision_rolls_back_on_pty_spawn_failure() {
+        let state = fresh_state();
+        state.terminal.inject_next_spawn_failure();
+
+        state
+            .provision_session_with_activity(Some("rollback".into()), None)
+            .await
+            .expect_err("expected PTY spawn to fail");
+
+        assert_eq!(
+            state.multiplexer.windows.len(),
+            0,
+            "the half-created window must be rolled back"
+        );
+        let sessions = state.multiplexer.sessions.lock().await;
+        assert_eq!(
+            sessions.len(),
+            0,
+            "the half-created session must be rolled back"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_provision_and_delete_does_not_deadlock() {
+        let state = fresh_state();
+        let (existing_sid, _, _, _) = state
+            .provision_session_with_activity(Some("victim".into()), None)
+            .await
+            .unwrap();
+
+        let state_a = state.clone();
+        let state_b = state.clone();
+        let victim = existing_sid.clone();
+
+        let run = async {
+            let h_new = tokio::spawn(async move {
+                state_a
+                    .provision_session_with_activity(Some("new".into()), None)
+                    .await
+            });
+            let h_del = tokio::spawn(async move { state_b.delete_session(&victim).await });
+            let _ = h_new.await.unwrap();
+            let _ = h_del.await.unwrap();
+        };
+
+        timeout(Duration::from_secs(3), run)
+            .await
+            .expect("provision + delete deadlocked");
     }
 }
 

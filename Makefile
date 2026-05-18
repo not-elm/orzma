@@ -113,8 +113,8 @@ test-wire-contract:
 	cargo run -p ozmux_terminal --example emit_fixture -- --all
 	pnpm exec tsx tools/verify-msgpack.ts daemon/terminal/tests/fixtures/wire_msgpack/
 
-dev-tauri: build $(BUNDLE_CEF_HOST_RELEASE_DEP)
-	cargo install --path ./cli --locked
+dev: build $(BUNDLE_CEF_HOST_RELEASE_DEP)
+	cargo install --path ./cli --locked 
 ifeq ($(UNAME_S),Darwin)
 	@echo "installing cef_host.app to $(CARGO_BIN_DIR)"
 	@rm -rf "$(CARGO_BIN_DIR)/cef_host.app"
@@ -127,4 +127,4 @@ endif
 	  echo "NOTE: existing process on :3200 (pid $$pid) will be reused by the launcher."; \
 	  echo "      Run 'kill $$pid' first if you want to launch the freshly built daemon."; \
 	fi
-	cd client && cargo tauri dev
+	cd client && OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) cargo tauri dev
