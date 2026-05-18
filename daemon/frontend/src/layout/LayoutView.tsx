@@ -109,12 +109,6 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
             bounds={b}
             active={isActive}
             onPointerDown={() => activate(pane.id)}
-            className={clsx(
-              'outline -outline-offset-2',
-              isActive
-                ? 'outline-2 outline-tmux-pane-active'
-                : 'outline-1 outline-tmux-pane-border',
-            )}
           >
             <PaneContent
               windowId={view.id}
