@@ -231,6 +231,28 @@ impl LayoutCellState {
         Ok(())
     }
 
+    /// Swap the `pane:` field of two `PaneCell` leaves. Errors with
+    /// `InvalidCellType` if either id resolves to `Cell::Root` or
+    /// `Cell::Split`. Cell ids, parent pointers, splits, and weights are
+    /// untouched — only the pane payload of each cell moves.
+    pub fn swap_panes(&mut self, a: &CellId, b: &CellId) -> MultiplexerResult {
+        let pane_a = match self.cell(a)? {
+            Cell::Pane(p) => p.pane.clone(),
+            _ => return Err(MultiplexerError::InvalidCellType(a.clone())),
+        };
+        let pane_b = match self.cell(b)? {
+            Cell::Pane(p) => p.pane.clone(),
+            _ => return Err(MultiplexerError::InvalidCellType(b.clone())),
+        };
+        if let Cell::Pane(p) = self.cell_mut(a)? {
+            p.pane = pane_b;
+        }
+        if let Cell::Pane(p) = self.cell_mut(b)? {
+            p.pane = pane_a;
+        }
+        Ok(())
+    }
+
     fn collect_panes(&self, id: &CellId, out: &mut Vec<PaneId>) -> MultiplexerResult {
         match self.cell(id)? {
             Cell::Root(r) => {
@@ -977,5 +999,46 @@ mod tests {
         assert!(state.cell(&split_id).is_err());
         assert!(state.cell(&pane_a).is_err());
         assert!(state.cell(&pane_b).is_err());
+    }
+
+    #[test]
+    fn swap_panes_exchanges_pane_field_between_two_pane_cells() {
+        let mut state = LayoutCellState::default();
+        let pa = PaneId::new();
+        let pb = PaneId::new();
+        let (_root, cell_a) = state.new_window_layout(pa.clone());
+        let cell_b = state.new_pane(pb.clone(), None);
+        let _split = state
+            .split_cell(cell_a.clone(), cell_b.clone(), Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+
+        state.swap_panes(&cell_a, &cell_b).unwrap();
+
+        match state.cell(&cell_a).unwrap() {
+            Cell::Pane(p) => assert_eq!(p.pane, pb),
+            _ => panic!("cell_a should still be a Pane"),
+        }
+        match state.cell(&cell_b).unwrap() {
+            Cell::Pane(p) => assert_eq!(p.pane, pa),
+            _ => panic!("cell_b should still be a Pane"),
+        }
+    }
+
+    #[test]
+    fn swap_panes_errors_when_either_cell_is_not_a_pane() {
+        let mut state = LayoutCellState::default();
+        let pa = PaneId::new();
+        let pb = PaneId::new();
+        let (root, cell_a) = state.new_window_layout(pa.clone());
+        let cell_b = state.new_pane(pb.clone(), None);
+        let split = state
+            .split_cell(cell_a.clone(), cell_b, Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+
+        let err = state.swap_panes(&cell_a, &split).unwrap_err();
+        assert!(matches!(err, MultiplexerError::InvalidCellType(_)));
+
+        let err = state.swap_panes(&root, &cell_a).unwrap_err();
+        assert!(matches!(err, MultiplexerError::InvalidCellType(_)));
     }
 }
