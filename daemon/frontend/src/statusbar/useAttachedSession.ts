@@ -55,29 +55,29 @@ export function useAttachedSession(): AttachedSessionState {
 
 function readRequestedSessionId(): SessionId | null {
   try {
-    return (new URLSearchParams(window.location.search).get('session') as SessionId) ?? null;
+    return new URLSearchParams(window.location.search).get('session');
   } catch {
     return null;
   }
 }
 
 async function resolveSessionId(requested: SessionId | null): Promise<SessionId> {
+  let lastList: SessionsListResponse | null = null;
   for (let attempt = 0; attempt <= DEEP_LINK_RETRY_ATTEMPTS; attempt++) {
-    const list = (await fetchJson('/sessions')) as SessionsListResponse;
-    if (requested) {
-      const hit = list.sessions.find((s) => s.id === requested);
-      if (hit) return hit.id;
-      if (attempt < DEEP_LINK_RETRY_ATTEMPTS) {
-        await sleep(DEEP_LINK_RETRY_INTERVAL_MS);
-        continue;
-      }
-      console.warn(`useAttachedSession: session '${requested}' not found; falling back to first`);
+    if (attempt > 0) {
+      await sleep(DEEP_LINK_RETRY_INTERVAL_MS);
     }
-    const initial = list.sessions[0]?.id;
-    if (!initial) throw new Error('no default session');
-    return initial;
+    lastList = (await fetchJson('/sessions')) as SessionsListResponse;
+    if (!requested) break;
+    const hit = lastList.sessions.find((s) => s.id === requested);
+    if (hit) return hit.id;
   }
-  throw new Error('no default session');
+  if (requested) {
+    console.warn(`useAttachedSession: session '${requested}' not found; falling back to first`);
+  }
+  const initial = lastList?.sessions[0]?.id;
+  if (!initial) throw new Error('no default session');
+  return initial;
 }
 
 function sleep(ms: number): Promise<void> {
