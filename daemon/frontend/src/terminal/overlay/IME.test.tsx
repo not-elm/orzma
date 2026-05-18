@@ -2,7 +2,14 @@ import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { IME } from './IME';
 
-const fakeFm = { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 };
+const fakeFm = {
+  cellW: 8,
+  cellH: 16,
+  baseline: 12,
+  fontCss: '14px monospace',
+  dpr: 1,
+  letterSpacing: 0,
+};
 
 describe('IME', () => {
   it('renders preedit text at cursor cell coords', () => {
