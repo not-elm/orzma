@@ -20,6 +20,7 @@ export const cycleActivityEndpoint = (wid: string, pid: string) =>
 export const focusPaneEndpoint = (wid: string) => `/windows/${wid}/focus-pane`;
 export const resizePaneEndpoint = (wid: string, pid: string) =>
   `/windows/${wid}/panes/${pid}/resize`;
+export const swapPaneEndpoint = (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/swap`;
 export const windowDimensionsEndpoint = (wid: string) => `/windows/${wid}/dimensions`;
 
 export const vtTerminalWsUrl = (
