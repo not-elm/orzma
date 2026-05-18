@@ -10,6 +10,7 @@
 //! stops the daemon even if an assertion panics partway through.
 
 use daemon_bootstrap::HTTP_ADDR as DAEMON_ADDR;
+use reqwest::Client;
 use std::net::{SocketAddr, TcpStream};
 use std::process::Stdio;
 use std::time::Duration;
@@ -92,7 +93,6 @@ fn assert_single_id_line(stdout: &[u8], label: &str) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn session_new_sends_current_dir_as_cwd() {
-    use reqwest::Client;
     let bin = env!("CARGO_BIN_EXE_ozmux").to_string();
     assert!(
         !daemon_running(),
