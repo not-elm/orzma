@@ -3716,6 +3716,7 @@ name = "ozmux-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "percent-encoding",
  "tauri",
  "tauri-build",
  "tokio",
@@ -3782,9 +3783,11 @@ dependencies = [
  "clap",
  "daemon_bootstrap",
  "libc",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]
