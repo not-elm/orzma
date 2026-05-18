@@ -40,6 +40,8 @@ pub struct TerminalService {
     forced_failures: Arc<RwLock<HashSet<ActivityId>>>,
     #[cfg(any(test, feature = "test-helpers"))]
     next_spawn_fails: Arc<AtomicBool>,
+    #[cfg(any(test, feature = "test-helpers"))]
+    recorded_cwds: Arc<RwLock<HashMap<ActivityId, Option<String>>>>,
 }
 
 impl Default for TerminalService {
@@ -52,6 +54,8 @@ impl Default for TerminalService {
             forced_failures: Arc::default(),
             #[cfg(any(test, feature = "test-helpers"))]
             next_spawn_fails: Arc::default(),
+            #[cfg(any(test, feature = "test-helpers"))]
+            recorded_cwds: Arc::default(),
         }
     }
 }
@@ -104,6 +108,14 @@ impl TerminalService {
                 pixel_height: 0,
             })
             .to_terminal_result()?;
+
+        #[cfg(any(test, feature = "test-helpers"))]
+        {
+            self.recorded_cwds
+                .write()
+                .await
+                .insert(activity_id.clone(), opts.cwd.clone());
+        }
 
         let mut cmd = CommandBuilder::new(&opts.shell);
         if let Some(cwd) = &opts.cwd {

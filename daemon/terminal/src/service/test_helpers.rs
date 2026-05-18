@@ -145,4 +145,13 @@ impl TerminalService {
         let state = vt_state.lock().expect("vt_state lock poisoned");
         Some(state.term.mode().contains(TermMode::ALT_SCREEN))
     }
+
+    /// Returns the `cwd` value that was passed in `SpawnOptions` when
+    /// `spawn` was called for `aid`. The outer `Option` is `None` when no
+    /// spawn was recorded for that id; the inner `Option<String>` is the
+    /// actual `SpawnOptions::cwd` value (which itself may be `None` if the
+    /// caller passed `cwd: None`).
+    pub async fn recorded_cwd_for_test(&self, aid: &ActivityId) -> Option<Option<String>> {
+        self.recorded_cwds.read().await.get(aid).cloned()
+    }
 }
