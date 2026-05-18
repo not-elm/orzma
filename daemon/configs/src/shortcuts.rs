@@ -447,6 +447,32 @@ impl Default for Shortcuts {
                     action: Action::NewWindow,
                     repeatable: false,
                 },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('{'),
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::SwapPane {
+                        offset: SwapOffset::Prev,
+                    },
+                    repeatable: true,
+                },
+                Binding {
+                    chord: KeyChord {
+                        key: Key::Char('}'),
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                    },
+                    action: Action::SwapPane {
+                        offset: SwapOffset::Next,
+                    },
+                    repeatable: true,
+                },
             ],
             repeat_timeout_ms: 500,
         }
@@ -856,11 +882,30 @@ mod tests {
     }
 
     #[test]
+    fn default_bindings_include_swap_pane_prev_and_next() {
+        let s = Shortcuts::default();
+        let prev = s.bindings.iter().any(|b| {
+            b.chord.key == Key::Char('{')
+                && b.chord.modifiers.shift
+                && matches!(b.action, Action::SwapPane { offset: SwapOffset::Prev })
+                && b.repeatable
+        });
+        assert!(prev, "missing Prefix+{{ -> SwapPane(Prev) (repeatable)");
+        let next = s.bindings.iter().any(|b| {
+            b.chord.key == Key::Char('}')
+                && b.chord.modifiers.shift
+                && matches!(b.action, Action::SwapPane { offset: SwapOffset::Next })
+                && b.repeatable
+        });
+        assert!(next, "missing Prefix+}} -> SwapPane(Next) (repeatable)");
+    }
+
+    #[test]
     fn default_shortcuts_serializes_to_stable_json() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         assert_eq!(
             json,
-            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"},"repeatable":false},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"},"repeatable":false},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"},"repeatable":false},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"},"repeatable":false},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"choose-tree"},"repeatable":false},{"key":"&","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"close-activity"},"repeatable":false},{"key":"s","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"horizontal"},"repeatable":false},{"key":"v","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"vertical"},"repeatable":false},{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"next"},"repeatable":false},{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"prev"},"repeatable":false},{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window","offset":"next"},"repeatable":true},{"key":"p","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window","offset":"prev"},"repeatable":true},{"key":"0","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":0},"repeatable":false},{"key":"1","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":1},"repeatable":false},{"key":"2","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":2},"repeatable":false},{"key":"3","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":3},"repeatable":false},{"key":"4","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":4},"repeatable":false},{"key":"5","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":5},"repeatable":false},{"key":"6","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":6},"repeatable":false},{"key":"7","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":7},"repeatable":false},{"key":"8","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":8},"repeatable":false},{"key":"9","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":9},"repeatable":false},{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"left"},"repeatable":false},{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"down"},"repeatable":false},{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"up"},"repeatable":false},{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"right"},"repeatable":false},{"key":"ArrowLeft","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"left"},"repeatable":true},{"key":"ArrowRight","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"right"},"repeatable":true},{"key":"ArrowUp","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"up"},"repeatable":true},{"key":"ArrowDown","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"down"},"repeatable":true},{"key":",","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"rename-window"},"repeatable":false},{"key":"c","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"new-window"},"repeatable":false}],"repeat_timeout_ms":500}"#
+            r#"{"prefix":{"key":"b","modifiers":{"ctrl":true,"shift":false,"alt":false,"meta":false},"timeout_ms":2000},"bindings":[{"key":"x","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"close-pane"},"repeatable":false},{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"horizontal"},"repeatable":false},{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"split-pane","direction":"vertical"},"repeatable":false},{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"new-terminal-activity"},"repeatable":false},{"key":"w","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"choose-tree"},"repeatable":false},{"key":"&","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"close-activity"},"repeatable":false},{"key":"s","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"horizontal"},"repeatable":false},{"key":"v","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"break-activity-to-pane","direction":"vertical"},"repeatable":false},{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"next"},"repeatable":false},{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-activity","offset":"prev"},"repeatable":false},{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window","offset":"next"},"repeatable":true},{"key":"p","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window","offset":"prev"},"repeatable":true},{"key":"0","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":0},"repeatable":false},{"key":"1","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":1},"repeatable":false},{"key":"2","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":2},"repeatable":false},{"key":"3","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":3},"repeatable":false},{"key":"4","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":4},"repeatable":false},{"key":"5","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":5},"repeatable":false},{"key":"6","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":6},"repeatable":false},{"key":"7","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":7},"repeatable":false},{"key":"8","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":8},"repeatable":false},{"key":"9","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-window-number","index":9},"repeatable":false},{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"left"},"repeatable":false},{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"down"},"repeatable":false},{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"up"},"repeatable":false},{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"focus-pane","direction":"right"},"repeatable":false},{"key":"ArrowLeft","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"left"},"repeatable":true},{"key":"ArrowRight","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"right"},"repeatable":true},{"key":"ArrowUp","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"up"},"repeatable":true},{"key":"ArrowDown","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"resize-pane","direction":"down"},"repeatable":true},{"key":",","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":false},"action":{"type":"rename-window"},"repeatable":false},{"key":"c","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"new-window"},"repeatable":false},{"key":"{","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"swap-pane","offset":"prev"},"repeatable":true},{"key":"}","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":false},"action":{"type":"swap-pane","offset":"next"},"repeatable":true}],"repeat_timeout_ms":500}"#
         );
     }
 }
