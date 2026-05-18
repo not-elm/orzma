@@ -9,7 +9,7 @@ export function PaneMockup() {
       <div className="border border-border rounded-md overflow-hidden font-mono text-sm">
         {/* biome-ignore lint/plugin: showcase mockup needs literal pane proportions */}
         <div className="grid grid-cols-[1.4fr_1fr] min-h-[200px]">
-          <div className="bg-background text-foreground p-3 border-2 border-tmux-pane-active">
+          <div className="bg-background text-foreground p-3">
             <div>
               <span className="text-muted-foreground">$</span>{' '}
               <span className="text-primary">cargo</span> run
@@ -23,7 +23,7 @@ export function PaneMockup() {
             <div className="text-warning"> M src/lib.rs</div>
           </div>
 
-          <div className="bg-tmux-pane-inactive-bg text-foreground p-3 border border-tmux-pane-border">
+          <div className="bg-tmux-pane-inactive-bg text-foreground p-3">
             <div className="text-muted-foreground">[logs]</div>
             <div>listening :8080</div>
             <div className="text-success">200 GET /api/sessions</div>

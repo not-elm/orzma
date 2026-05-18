@@ -66,13 +66,14 @@
   --color-info-foreground: var(--tn-bg);
 
   --color-tmux-pane-border: var(--tn-border);
-  --color-tmux-pane-active: var(--tn-blue);
   --color-tmux-pane-inactive-bg: var(--tn-bg-pane-inactive);
   --color-tmux-pane-inactive-overlay: var(--tn-pane-inactive-overlay);
   --color-tmux-status-bar: var(--tn-bg-status);
   --color-tmux-status-bar-foreground: var(--tn-blue);
   --color-tmux-cursor: var(--tn-cursor);
   --color-tmux-cursor-inactive: var(--tn-cursor-inactive);
+  --color-tmux-tab-inactive-bg: var(--tn-bg-card);
+  --color-tmux-tab-inactive-foreground: var(--tn-fg-muted);
   --color-selection: var(--tn-selection);
 
   --animate-cursor-blink: cursor-blink 1200ms step-end infinite;
