@@ -7,7 +7,7 @@ pub mod cells;
 pub mod direction;
 pub mod pane;
 pub(crate) mod resize;
-pub mod swap;
+pub(crate) mod swap;
 #[allow(clippy::module_inception)]
 mod window;
 

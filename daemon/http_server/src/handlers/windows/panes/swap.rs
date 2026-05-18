@@ -10,14 +10,12 @@ use axum::{
 use ozmux_multiplexer::{PaneId, SwapOffset, WindowId};
 use serde::Deserialize;
 
-/// Request body: `{ "offset": "prev" | "next" }`.
 #[derive(Deserialize)]
 pub struct SwapRequest {
     offset: SwapOffset,
 }
 
-/// Handler for `POST /windows/{wid}/panes/{pid}/swap`. Delegates to
-/// [`AppState::swap_pane`], which decides whether to broadcast.
+/// Handler for `POST /windows/{wid}/panes/{pid}/swap`.
 pub async fn swap(
     State(state): State<AppState>,
     Path((wid, pid)): Path<(WindowId, PaneId)>,

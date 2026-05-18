@@ -208,10 +208,10 @@ impl Window {
         pane: &PaneId,
         offset: SwapOffset,
     ) -> MultiplexerResult<SwapOutcome> {
-        let ordered = self.cells.ordered_pane_cells(&self.root_cell)?;
-        if ordered.len() < 2 {
+        if self.panes.len() < 2 {
             return Ok(SwapOutcome::NoOp);
         }
+        let ordered = self.cells.ordered_pane_cells(&self.root_cell)?;
         let i = ordered
             .iter()
             .position(|(_, p)| p == pane)

@@ -190,17 +190,18 @@ impl LayoutCellState {
         }
     }
 
-    /// Collect every `PaneId` reachable from `start`'s subtree (Root or Split
-    /// roots are descended; Pane leaves contribute their `PaneId`).
+    /// Collect every `PaneId` reachable from `start`'s subtree, in
+    /// depth-first lhs-before-rhs order.
     pub fn pane_ids_in_subtree(&self, start: &CellId) -> MultiplexerResult<Vec<PaneId>> {
-        let mut out = Vec::new();
-        self.collect_panes(start, &mut out)?;
-        Ok(out)
+        Ok(self
+            .ordered_pane_cells(start)?
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect())
     }
 
-    /// Same traversal as `pane_ids_in_subtree` but also yields each leaf's
-    /// `CellId`. Used by `Window::swap_pane` to address two cells for the
-    /// pane-field swap.
+    /// Collect every pane leaf reachable from `start`, yielding each leaf's
+    /// (`CellId`, `PaneId`) in depth-first lhs-before-rhs order.
     pub(crate) fn ordered_pane_cells(
         &self,
         start: &CellId,
@@ -236,37 +237,13 @@ impl LayoutCellState {
     /// `Cell::Split`. Cell ids, parent pointers, splits, and weights are
     /// untouched — only the pane payload of each cell moves.
     pub(crate) fn swap_panes(&mut self, a: &CellId, b: &CellId) -> MultiplexerResult {
-        let pane_a = match self.cell(a)? {
-            Cell::Pane(p) => p.pane.clone(),
-            _ => return Err(MultiplexerError::InvalidCellType(a.clone())),
+        let [Some(cell_a), Some(cell_b)] = self.0.get_disjoint_mut([a, b]) else {
+            return Err(MultiplexerError::CellNotFound(a.clone()));
         };
-        let pane_b = match self.cell(b)? {
-            Cell::Pane(p) => p.pane.clone(),
-            _ => return Err(MultiplexerError::InvalidCellType(b.clone())),
+        let (Cell::Pane(pa), Cell::Pane(pb)) = (cell_a, cell_b) else {
+            return Err(MultiplexerError::InvalidCellType(a.clone()));
         };
-        if let Cell::Pane(p) = self.cell_mut(a)? {
-            p.pane = pane_b;
-        }
-        if let Cell::Pane(p) = self.cell_mut(b)? {
-            p.pane = pane_a;
-        }
-        Ok(())
-    }
-
-    fn collect_panes(&self, id: &CellId, out: &mut Vec<PaneId>) -> MultiplexerResult {
-        match self.cell(id)? {
-            Cell::Root(r) => {
-                let child = r.child.clone();
-                self.collect_panes(&child, out)?;
-            }
-            Cell::Split(s) => {
-                let lhs = s.lhs_cell.clone();
-                let rhs = s.rhs_cell.clone();
-                self.collect_panes(&lhs, out)?;
-                self.collect_panes(&rhs, out)?;
-            }
-            Cell::Pane(p) => out.push(p.pane.clone()),
-        }
+        std::mem::swap(&mut pa.pane, &mut pb.pane);
         Ok(())
     }
 
