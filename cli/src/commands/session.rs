@@ -5,6 +5,7 @@ use clap::Subcommand;
 
 use crate::commands::CommandExecute;
 
+pub(crate) mod client_open;
 pub(crate) mod new;
 
 #[derive(Subcommand)]
