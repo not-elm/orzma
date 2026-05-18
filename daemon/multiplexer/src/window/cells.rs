@@ -201,7 +201,6 @@ impl LayoutCellState {
     /// Same traversal as `pane_ids_in_subtree` but also yields each leaf's
     /// `CellId`. Used by `Window::swap_pane` to address two cells for the
     /// pane-field swap.
-    #[expect(dead_code, reason = "Window::swap_pane is implemented in a follow-up task")]
     pub(crate) fn ordered_pane_cells(
         &self,
         start: &CellId,
@@ -236,7 +235,6 @@ impl LayoutCellState {
     /// `InvalidCellType` if either id resolves to `Cell::Root` or
     /// `Cell::Split`. Cell ids, parent pointers, splits, and weights are
     /// untouched — only the pane payload of each cell moves.
-    #[expect(dead_code, reason = "Window::swap_pane is implemented in a follow-up task")]
     pub(crate) fn swap_panes(&mut self, a: &CellId, b: &CellId) -> MultiplexerResult {
         let pane_a = match self.cell(a)? {
             Cell::Pane(p) => p.pane.clone(),

@@ -2,6 +2,7 @@ use crate::error::{MultiplexerError, MultiplexerResult};
 use crate::window::cells::{CellId, LayoutCellState, Side, SplitOrientation};
 use crate::window::pane::activity::{Activity, ActivityId};
 use crate::window::pane::{Pane, PaneId, PaneState, SetActiveOutcome};
+use crate::window::swap::{SwapOffset, SwapOutcome};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -195,6 +196,42 @@ impl Window {
         self.pane_to_cell.remove(pane_id);
         self.pane_active_points.remove(pane_id);
         Ok(pane.activities.into_iter().map(|a| a.id).collect())
+    }
+
+    /// Swap the named pane's contents with its previous or next neighbor in
+    /// the depth-first leaf traversal of the cell tree. Returns
+    /// `SwapOutcome::NoOp` for a single-pane window. The active pane id is
+    /// not mutated — the same `PaneId` is now hosted by a different cell,
+    /// so focus visually follows the swap.
+    pub fn swap_pane(
+        &mut self,
+        pane: &PaneId,
+        offset: SwapOffset,
+    ) -> MultiplexerResult<SwapOutcome> {
+        let ordered = self.cells.ordered_pane_cells(&self.root_cell)?;
+        if ordered.len() < 2 {
+            return Ok(SwapOutcome::NoOp);
+        }
+        let i = ordered
+            .iter()
+            .position(|(_, p)| p == pane)
+            .ok_or_else(|| MultiplexerError::PaneNotFound(pane.clone()))?;
+        let len = ordered.len() as isize;
+        let delta: isize = match offset {
+            SwapOffset::Prev => -1,
+            SwapOffset::Next => 1,
+        };
+        let j = ((i as isize + delta).rem_euclid(len)) as usize;
+
+        let cell_i = ordered[i].0.clone();
+        let cell_j = ordered[j].0.clone();
+        let other_pane = ordered[j].1.clone();
+
+        self.cells.swap_panes(&cell_i, &cell_j)?;
+        self.pane_to_cell.insert(pane.clone(), cell_j);
+        self.pane_to_cell.insert(other_pane.clone(), cell_i);
+
+        Ok(SwapOutcome::Swapped { other_pane })
     }
 
     /// Set the active pane in this Window. Returns `Unchanged` so the caller
@@ -562,5 +599,132 @@ mod tests {
         assert!(win.pane_active_points.contains_key(&new_pane));
         win.close_pane(&new_pane).unwrap();
         assert!(!win.pane_active_points.contains_key(&new_pane));
+    }
+}
+
+#[cfg(test)]
+mod swap_tests {
+    use super::*;
+    use crate::window::cells::{Side, SplitOrientation};
+    use crate::window::pane::activity::{Activity, ActivityId};
+    use crate::window::swap::{SwapOffset, SwapOutcome};
+
+    fn three_pane_window() -> (Window, PaneId, PaneId, PaneId) {
+        let wid = WindowId::new();
+        let pa = PaneId::new();
+        let aa = Activity::terminal(ActivityId::new());
+        let mut w = Window::new_with_initial(wid, "w".into(), pa.clone(), aa);
+
+        let pb = PaneId::new();
+        let ab = Activity::terminal(ActivityId::new());
+        w.split_pane(&pa, pb.clone(), ab, Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+
+        let pc = PaneId::new();
+        let ac = Activity::terminal(ActivityId::new());
+        w.split_pane(&pb, pc.clone(), ac, Side::After, SplitOrientation::Vertical)
+            .unwrap();
+
+        (w, pa, pb, pc)
+    }
+
+    fn pane_order(w: &Window) -> Vec<PaneId> {
+        w.cells
+            .ordered_pane_cells(&w.root_cell)
+            .unwrap()
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect()
+    }
+
+    #[test]
+    fn swap_pane_in_single_pane_window_returns_noop() {
+        let wid = WindowId::new();
+        let pa = PaneId::new();
+        let aa = Activity::terminal(ActivityId::new());
+        let mut w = Window::new_with_initial(wid, "w".into(), pa.clone(), aa);
+
+        let out = w.swap_pane(&pa, SwapOffset::Next).unwrap();
+        assert_eq!(out, SwapOutcome::NoOp);
+        let out = w.swap_pane(&pa, SwapOffset::Prev).unwrap();
+        assert_eq!(out, SwapOutcome::NoOp);
+    }
+
+    #[test]
+    fn swap_pane_next_moves_active_pane_one_slot_forward() {
+        let (mut w, pa, pb, pc) = three_pane_window();
+        assert_eq!(pane_order(&w), vec![pa.clone(), pb.clone(), pc.clone()]);
+
+        let out = w.swap_pane(&pa, SwapOffset::Next).unwrap();
+        assert_eq!(out, SwapOutcome::Swapped { other_pane: pb.clone() });
+        assert_eq!(pane_order(&w), vec![pb.clone(), pa.clone(), pc]);
+    }
+
+    #[test]
+    fn swap_pane_prev_wraps_around_from_first() {
+        let (mut w, pa, pb, pc) = three_pane_window();
+        let out = w.swap_pane(&pa, SwapOffset::Prev).unwrap();
+        assert_eq!(out, SwapOutcome::Swapped { other_pane: pc.clone() });
+        assert_eq!(pane_order(&w), vec![pc, pb, pa]);
+    }
+
+    #[test]
+    fn swap_pane_next_wraps_around_from_last() {
+        let (mut w, pa, pb, pc) = three_pane_window();
+        let out = w.swap_pane(&pc, SwapOffset::Next).unwrap();
+        assert_eq!(out, SwapOutcome::Swapped { other_pane: pa.clone() });
+        assert_eq!(pane_order(&w), vec![pc, pb, pa]);
+    }
+
+    #[test]
+    fn swap_pane_prev_is_inverse_of_next() {
+        let (mut w, _pa, pb, _pc) = three_pane_window();
+        let before = pane_order(&w);
+        w.swap_pane(&pb, SwapOffset::Next).unwrap();
+        w.swap_pane(&pb, SwapOffset::Prev).unwrap();
+        assert_eq!(pane_order(&w), before);
+    }
+
+    #[test]
+    fn swap_pane_preserves_active_pane_id_and_pane_to_cell_bijection() {
+        let (mut w, pa, pb, _pc) = three_pane_window();
+        let active_before = w.active_pane.clone();
+        w.swap_pane(&pa, SwapOffset::Next).unwrap();
+        assert_eq!(w.active_pane, active_before);
+
+        for (cell_id, pane_id) in w.cells.ordered_pane_cells(&w.root_cell).unwrap() {
+            assert_eq!(w.pane_to_cell.get(&pane_id), Some(&cell_id));
+        }
+        let _ = pb;
+    }
+
+    #[test]
+    fn swap_pane_unknown_pane_returns_pane_not_found() {
+        let (mut w, _pa, _pb, _pc) = three_pane_window();
+        let stranger = PaneId::new();
+        let err = w.swap_pane(&stranger, SwapOffset::Next).unwrap_err();
+        assert!(matches!(err, MultiplexerError::PaneNotFound(_)));
+    }
+
+    #[test]
+    fn swap_pane_with_two_panes_prev_and_next_produce_same_state() {
+        let wid = WindowId::new();
+        let pa = PaneId::new();
+        let aa = Activity::terminal(ActivityId::new());
+        let mut wn = Window::new_with_initial(wid.clone(), "w".into(), pa.clone(), aa);
+        let pb = PaneId::new();
+        let ab = Activity::terminal(ActivityId::new());
+        wn.split_pane(&pa, pb.clone(), ab, Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+
+        let aa2 = Activity::terminal(ActivityId::new());
+        let mut wp = Window::new_with_initial(wid, "w".into(), pa.clone(), aa2);
+        let ab2 = Activity::terminal(ActivityId::new());
+        wp.split_pane(&pa, pb.clone(), ab2, Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+
+        wn.swap_pane(&pa, SwapOffset::Next).unwrap();
+        wp.swap_pane(&pa, SwapOffset::Prev).unwrap();
+        assert_eq!(pane_order(&wn), pane_order(&wp));
     }
 }
