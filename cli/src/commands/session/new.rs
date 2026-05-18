@@ -44,7 +44,7 @@ impl CommandExecute for NewArgs {
             && let Err(e) = super::client_open::spawn_detached(&id)
         {
             eprintln!(
-                "warning: failed to launch ozmux-client: {e}. \
+                "warning: failed to launch ozmux-client: {e:#}. \
                  Open this URL manually: {}",
                 daemon_bootstrap::session_deep_link_url(&id)
             );
