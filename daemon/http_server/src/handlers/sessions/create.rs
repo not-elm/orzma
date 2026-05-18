@@ -1,23 +1,40 @@
-//! `POST /sessions` — create a session and broadcast the new view.
+//! `POST /sessions` — atomic Session+Window+Pane+Activity+PTY provisioning,
+//! then broadcast of the new SessionView.
 
 use crate::AppState;
+use crate::error::HttpResult;
 use axum::{Json, extract::State, http::StatusCode};
 use serde::Deserialize;
+use std::path::PathBuf;
 
 #[derive(Deserialize, Default)]
 pub struct CreateRequest {
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
-/// Create a new session, broadcast the new `SessionView`, and return
-/// `201 Created` with the new id.
+/// Create a new session along with its bootstrap Window/Pane/terminal
+/// Activity and PTY (cwd defaults to the daemon process's CWD when
+/// omitted). Returns `201 Created` with the four resulting ids.
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<CreateRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let id = state.create_session(body.name).await;
-    (StatusCode::CREATED, Json(serde_json::json!({ "id": id })))
+) -> HttpResult<(StatusCode, Json<serde_json::Value>)> {
+    let cwd: Option<PathBuf> = body.cwd.map(PathBuf::from);
+    let (sid, wid, pid, aid) = state
+        .provision_session_with_activity(body.name, cwd.as_deref())
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": sid,
+            "window_id": wid,
+            "pane_id": pid,
+            "activity_id": aid,
+        })),
+    ))
 }
 
 #[cfg(test)]
@@ -109,8 +126,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
         let v: serde_json::Value =
-            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
 
         let aid: ozmux_multiplexer::ActivityId =
             serde_json::from_value(v["activity_id"].clone()).unwrap();
