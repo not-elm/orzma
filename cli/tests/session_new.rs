@@ -1,13 +1,14 @@
-//! Integration test for `ozmux session new`: verifies it creates a
-//! session via the daemon, auto-starting the daemon when none is running
-//! and reusing an already-running daemon otherwise.
+//! Integration tests for `ozmux session new`: verifies it creates a
+//! session via the daemon (auto-starting / reusing the daemon), sends
+//! the caller's CWD, and optionally launches the Tauri client.
 //!
-//! Like `daemon_lifecycle.rs`, this test binds the real TCP port 3200 and
-//! writes the real `$TMPDIR/ozmux/daemon.pid`. `cargo test` runs each
-//! integration-test file as its own binary sequentially, so it does not
-//! overlap with `daemon_lifecycle.rs`. The single test below runs both
-//! scenarios in sequence to avoid in-binary parallelism, and a drop guard
-//! stops the daemon even if an assertion panics partway through.
+//! Like `daemon_lifecycle.rs`, these tests bind the real TCP port 3200
+//! and write the real `$TMPDIR/ozmux/daemon.pid`. `cargo test` runs each
+//! integration-test file as its own binary sequentially, so they do not
+//! overlap with `daemon_lifecycle.rs`. Each test below runs in sequence
+//! within this binary to avoid in-binary parallelism, and the per-test
+//! `DaemonStopGuard` stops the daemon even if an assertion panics partway
+//! through.
 
 use daemon_bootstrap::HTTP_ADDR as DAEMON_ADDR;
 use reqwest::Client;

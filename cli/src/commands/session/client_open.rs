@@ -6,7 +6,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use std::process::{Command, Stdio};
 
 /// Build the deep-link URL for the given session id.
-fn deep_link_url(session_id: &str) -> String {
+pub(super) fn deep_link_url(session_id: &str) -> String {
     let encoded = utf8_percent_encode(session_id, NON_ALPHANUMERIC);
     format!("{}/?session={}", daemon_bootstrap::HTTP_BASE_URL, encoded)
 }
