@@ -98,7 +98,7 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
   };
 
   return (
-    <div ref={setContainer} className="relative h-full w-full bg-background">
+    <div ref={setContainer} className="relative h-full w-full bg-tmux-status-bar">
       {view.panes.map((pane) => {
         const b = bounds.get(pane.id);
         if (!b) return null;
