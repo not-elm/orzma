@@ -41,7 +41,7 @@ pub(crate) enum DaemonStartOutcome {
 /// Ensures the ozmux daemon is running, spawning it detached if it is not.
 ///
 /// Writes nothing to stdout or stderr on the success path, so callers with
-/// their own stdout contract (e.g. `session create`) get a clean stream.
+/// their own stdout contract (e.g. `session new`) get a clean stream.
 /// Spawn-failure diagnostics may still reach stderr.
 pub(crate) async fn ensure_running() -> anyhow::Result<DaemonStartOutcome> {
     if start::is_running() {
