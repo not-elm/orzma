@@ -7,6 +7,7 @@ pub mod cells;
 pub mod direction;
 pub mod pane;
 pub(crate) mod resize;
+pub mod swap;
 #[allow(clippy::module_inception)]
 mod window;
 
@@ -17,4 +18,5 @@ pub use cells::{
 pub use direction::PaneDirection;
 pub use pane::activity::{Activity, ActivityId, ActivityKind, BrowserProfile};
 pub use pane::{CycleDirection, Pane, PaneId, PaneState, SetActiveOutcome};
+pub use swap::{SwapOffset, SwapOutcome};
 pub use window::{Window, WindowDimensions, WindowId, WindowState};
