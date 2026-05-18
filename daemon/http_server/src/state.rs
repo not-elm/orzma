@@ -1036,7 +1036,6 @@ mod provision_session_with_activity_tests {
         assert!(!pid.as_ref().is_empty());
         assert!(!aid.as_ref().is_empty());
 
-        // Re-broadcast and confirm the session view is observable.
         let mut rx = state.session_broadcast.subscribe_or_create(&sid);
         state.publish_session_view(&sid).await;
         let view = timeout(Duration::from_millis(100), rx.recv())
