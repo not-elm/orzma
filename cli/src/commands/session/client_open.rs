@@ -5,6 +5,8 @@ use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::process::{Command, Stdio};
 
+const CLIENT_BIN_NAME: &str = "ozmux-client";
+
 /// Spawn `ozmux-client` (or whichever binary `OZMUX_CLIENT_BIN` points at)
 /// detached from the CLI's controlling tty, passing the session-scoped URL
 /// as its first positional argument. Returns an error only when the
@@ -33,14 +35,17 @@ fn resolve_client_bin() -> OsString {
         return v;
     }
     #[cfg(debug_assertions)]
-    if let Some(sibling) = sibling_client_bin() {
-        return sibling.into_os_string();
+    if let Some(bin) = debug_client_bin() {
+        return bin;
     }
-    #[cfg(debug_assertions)]
-    if let Some(workspace_built) = workspace_target_debug_client() {
-        return workspace_built.into_os_string();
-    }
-    OsString::from("ozmux-client")
+    OsString::from(CLIENT_BIN_NAME)
+}
+
+#[cfg(debug_assertions)]
+fn debug_client_bin() -> Option<OsString> {
+    sibling_client_bin()
+        .or_else(workspace_target_debug_client)
+        .map(std::path::PathBuf::into_os_string)
 }
 
 #[cfg(debug_assertions)]
@@ -51,12 +56,14 @@ fn sibling_client_bin() -> Option<std::path::PathBuf> {
 
 #[cfg(debug_assertions)]
 fn sibling_client_bin_at(dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let candidate = dir.join("ozmux-client");
+    let candidate = dir.join(CLIENT_BIN_NAME);
     candidate.is_file().then_some(candidate)
 }
 
 #[cfg(debug_assertions)]
 fn workspace_target_debug_client() -> Option<std::path::PathBuf> {
+    // NOTE: CARGO_MANIFEST_DIR is `<workspace>/cli`; `.parent()` is the
+    // workspace root. Same idiom as `xtask/src/main.rs`.
     workspace_target_debug_client_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
 }
 
@@ -68,7 +75,7 @@ fn workspace_target_debug_client_in(
         .parent()?
         .join("target")
         .join("debug")
-        .join("ozmux-client");
+        .join(CLIENT_BIN_NAME);
     candidate.is_file().then_some(candidate)
 }
 
@@ -88,54 +95,56 @@ mod tests {
     }
 
     #[cfg(debug_assertions)]
-    #[test]
-    fn sibling_client_bin_at_returns_path_when_file_exists() {
-        use std::fs::File;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let candidate = dir.path().join("ozmux-client");
-        File::create(&candidate).expect("create sibling");
-        let resolved = super::sibling_client_bin_at(dir.path()).expect("should find sibling");
-        assert_eq!(resolved, candidate);
-    }
+    mod debug {
+        use super::super::{
+            CLIENT_BIN_NAME, sibling_client_bin_at, workspace_target_debug_client_in,
+        };
 
-    #[cfg(debug_assertions)]
-    #[test]
-    fn sibling_client_bin_at_returns_none_when_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert!(super::sibling_client_bin_at(dir.path()).is_none());
-    }
+        #[test]
+        fn sibling_client_bin_at_returns_path_when_file_exists() {
+            use std::fs::File;
+            let dir = tempfile::tempdir().expect("tempdir");
+            let candidate = dir.path().join(CLIENT_BIN_NAME);
+            File::create(&candidate).expect("create sibling");
+            let resolved = sibling_client_bin_at(dir.path()).expect("should find sibling");
+            assert_eq!(resolved, candidate);
+        }
 
-    #[cfg(debug_assertions)]
-    #[test]
-    fn sibling_client_bin_at_ignores_directory_with_same_name() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir(dir.path().join("ozmux-client")).expect("mkdir");
-        assert!(super::sibling_client_bin_at(dir.path()).is_none());
-    }
+        #[test]
+        fn sibling_client_bin_at_returns_none_when_missing() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            assert!(sibling_client_bin_at(dir.path()).is_none());
+        }
 
-    #[cfg(debug_assertions)]
-    #[test]
-    fn workspace_target_debug_client_in_returns_path_when_file_exists() {
-        use std::fs::{File, create_dir_all};
-        let workspace = tempfile::tempdir().expect("tempdir");
-        let cli_dir = workspace.path().join("cli");
-        create_dir_all(&cli_dir).expect("mkdir cli");
-        let target_debug = workspace.path().join("target").join("debug");
-        create_dir_all(&target_debug).expect("mkdir target/debug");
-        let candidate = target_debug.join("ozmux-client");
-        File::create(&candidate).expect("create binary");
+        #[test]
+        fn sibling_client_bin_at_ignores_directory_with_same_name() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir(dir.path().join(CLIENT_BIN_NAME)).expect("mkdir");
+            assert!(sibling_client_bin_at(dir.path()).is_none());
+        }
 
-        let resolved =
-            super::workspace_target_debug_client_in(&cli_dir).expect("should find workspace built");
-        assert_eq!(resolved, candidate);
-    }
+        #[test]
+        fn workspace_target_debug_client_in_returns_path_when_file_exists() {
+            use std::fs::{File, create_dir_all};
+            let workspace = tempfile::tempdir().expect("tempdir");
+            let cli_dir = workspace.path().join("cli");
+            create_dir_all(&cli_dir).expect("mkdir cli");
+            let target_debug = workspace.path().join("target").join("debug");
+            create_dir_all(&target_debug).expect("mkdir target/debug");
+            let candidate = target_debug.join(CLIENT_BIN_NAME);
+            File::create(&candidate).expect("create binary");
 
-    #[cfg(debug_assertions)]
-    #[test]
-    fn workspace_target_debug_client_in_returns_none_when_missing() {
-        let workspace = tempfile::tempdir().expect("tempdir");
-        let cli_dir = workspace.path().join("cli");
-        std::fs::create_dir(&cli_dir).expect("mkdir cli");
-        assert!(super::workspace_target_debug_client_in(&cli_dir).is_none());
+            let resolved =
+                workspace_target_debug_client_in(&cli_dir).expect("should find workspace built");
+            assert_eq!(resolved, candidate);
+        }
+
+        #[test]
+        fn workspace_target_debug_client_in_returns_none_when_missing() {
+            let workspace = tempfile::tempdir().expect("tempdir");
+            let cli_dir = workspace.path().join("cli");
+            std::fs::create_dir(&cli_dir).expect("mkdir cli");
+            assert!(workspace_target_debug_client_in(&cli_dir).is_none());
+        }
     }
 }
