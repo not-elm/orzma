@@ -68,7 +68,9 @@ fn current_dir_string() -> Option<String> {
     match std::env::current_dir() {
         Ok(p) => Some(p.to_string_lossy().into_owned()),
         Err(e) => {
-            eprintln!("warning: could not resolve current directory: {e}; falling back to daemon CWD");
+            eprintln!(
+                "warning: could not resolve current directory: {e}; falling back to daemon CWD"
+            );
             None
         }
     }
