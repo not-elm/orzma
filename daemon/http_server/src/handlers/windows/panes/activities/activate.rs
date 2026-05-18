@@ -99,4 +99,42 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
+
+    #[tokio::test]
+    async fn activate_browser_activity_does_not_error() {
+        use ozmux_multiplexer::{Activity, BrowserProfile};
+
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _term_aid) = test_helpers::bootstrap_default(&state).await;
+        let browser_aid = ActivityId::new();
+        state
+            .multiplexer
+            .with_window_or_404(&wid, |w| {
+                w.pane_mut(&pid)?.add_activity(Activity::browser(
+                    browser_aid.clone(),
+                    None,
+                    BrowserProfile::default(),
+                ))
+            })
+            .await
+            .unwrap();
+        let (router, _state) = test_helpers::router_with(state);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/windows/{wid}/panes/{pid}/activities/{browser_aid}/activate"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_success(),
+            "expected 2xx, got {}",
+            resp.status()
+        );
+    }
 }

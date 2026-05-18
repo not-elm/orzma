@@ -1,0 +1,29 @@
+[package]
+name = "ozmux_browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+ozmux_multiplexer = { path = "../multiplexer" }
+ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
+nix = { version = "0.29", features = ["mman", "fs"] }
+libc = "0.2"
+url = "2"
+decrypt-cookies = "0.11.1"
+tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net", "io-util", "process", "fs"] }
+sendfd = "0.4"
+bytes = { workspace = true }
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = { workspace = true }
+ozmux_cef_host = { path = "../cef_host" }
+uuid = { version = "1", features = ["v4"] }

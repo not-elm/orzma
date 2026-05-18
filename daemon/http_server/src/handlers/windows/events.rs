@@ -20,7 +20,7 @@ async fn handle_events_socket(socket: WebSocket, state: AppState, window_id: Win
     // NOTE: subscribe BEFORE building the snapshot so no layout/title
     // re-broadcast can slip through the gap between snapshot and subscribe.
     let mut receiver = state.layout_broadcast.subscribe_or_create(&window_id);
-    let titles = state.terminal.all_titles().await;
+    let titles = state.titles.snapshot().await;
     let snapshot_and_rx = state
         .multiplexer
         .with_window(&window_id, |w| WindowView::from_window(w, &titles))

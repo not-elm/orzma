@@ -1,11 +1,14 @@
-//! ozmux CLI entry point. Exposes the `daemon` and `session` subcommand
-//! groups; new subcommands are added under `commands/`.
+//! ozmux CLI entry point. Exposes the `daemon`, `session`, and `browser`
+//! subcommand groups; new subcommands are added under `commands/`.
 
 use clap::{Parser, Subcommand};
 
-use crate::commands::{CommandExecute, daemon::DaemonCommand, session::SessionCommand};
+use crate::commands::{
+    CommandExecute, browser::Browser, daemon::DaemonCommand, session::SessionCommand,
+};
 
 mod commands;
+mod daemon_client;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,6 +31,8 @@ enum Command {
     /// Session management commands.
     #[command(subcommand)]
     Session(SessionCommand),
+    /// Open an embedded browser activity in the current pane.
+    Browser(Browser),
 }
 
 impl CommandExecute for Command {
@@ -35,6 +40,7 @@ impl CommandExecute for Command {
         match self {
             Self::Daemon(command) => command.run().await,
             Self::Session(command) => command.run().await,
+            Self::Browser(command) => command.run().await,
         }
     }
 }

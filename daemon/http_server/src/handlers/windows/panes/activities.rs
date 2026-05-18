@@ -3,13 +3,14 @@ use axum::{
     Router,
     routing::{delete as method_delete, get, post},
 };
-use ozmux_multiplexer::{Activity, ActivityId, ActivityKind};
+use ozmux_multiplexer::{Activity, ActivityId, ActivityKind, BrowserProfile};
 use serde::Deserialize;
 use std::path::PathBuf;
 
 pub mod activate;
 pub mod add_to_pane;
 pub mod break_to_pane;
+pub mod browser_ws;
 pub mod close_activity;
 pub mod handlers_ws;
 pub mod iframe_serve;
@@ -28,6 +29,7 @@ pub fn router() -> Router<AppState> {
             "/{activity_id}/break-to-pane",
             post(break_to_pane::break_to_pane),
         )
+        .route("/{activity_id}/browser/ws", get(browser_ws::browser_ws))
         .route("/{activity_id}/terminal/ws", get(terminal_ws::terminal_ws))
         .route("/{activity_id}/handlers/ws", get(handlers_ws::handlers_ws))
         .route(
@@ -56,6 +58,16 @@ pub enum ActivityKindInput {
         /// variant; the SDK fills it from the bootstrap-time `EXTENSION_NAME`
         /// env var.
         extension_name: String,
+    },
+    Browser {
+        #[serde(default)]
+        initial_url: Option<String>,
+        /// Storage profile for this browser activity. Defaults to
+        /// `Named { name: "default" }` when absent so callers that do not
+        /// specify a profile get persistent storage without requiring an
+        /// explicit field.
+        #[serde(default)]
+        profile: BrowserProfile,
     },
 }
 
@@ -95,6 +107,13 @@ impl ActivityInput {
                     kind: ActivityKind::Extension { html_root },
                 },
                 extension_name: Some(extension_name),
+            },
+            ActivityKindInput::Browser {
+                initial_url,
+                profile,
+            } => ParsedActivity {
+                activity: Activity::browser(self.activity_id, initial_url, profile),
+                extension_name: None,
             },
         }
     }

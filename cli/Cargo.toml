@@ -16,8 +16,10 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "
 anyhow = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 libc = { workspace = true }
+uuid = { workspace = true }
 daemon_bootstrap = { path = "../daemon/bootstrap" }
 
 [dev-dependencies]

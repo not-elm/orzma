@@ -241,12 +241,32 @@ mod tests {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message as TtMessage;
 
+    fn ws_req(
+        addr: std::net::SocketAddr,
+        wid: &ozmux_multiplexer::WindowId,
+        pid: &ozmux_multiplexer::PaneId,
+        aid: &ozmux_multiplexer::ActivityId,
+    ) -> tokio_tungstenite::tungstenite::http::Request<()> {
+        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
+        tokio_tungstenite::tungstenite::http::Request::builder()
+            .uri(&url)
+            .header("host", addr.to_string())
+            .header("origin", "http://127.0.0.1:3200")
+            .header("upgrade", "websocket")
+            .header("connection", "upgrade")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .body(())
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn hello_is_first_frame_with_required_fields() {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
-        let (mut ws, _resp) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let (mut ws, _resp) = tokio_tungstenite::connect_async(ws_req(addr, &wid, &pid, &aid))
+            .await
+            .unwrap();
         let msg = ws.next().await.unwrap().unwrap();
         match msg {
             TtMessage::Text(s) => {
@@ -268,8 +288,9 @@ mod tests {
     async fn snapshot_arrives_after_hello() {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let (mut ws, _) = tokio_tungstenite::connect_async(ws_req(addr, &wid, &pid, &aid))
+            .await
+            .unwrap();
         // Skip hello.
         let _ = ws.next().await.unwrap().unwrap();
         // Next binary frame is the initial snapshot.
@@ -292,8 +313,9 @@ mod tests {
     async fn more_frames_flow_after_initial_snapshot() {
         let (addr, state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let (mut ws, _) = tokio_tungstenite::connect_async(ws_req(addr, &wid, &pid, &aid))
+            .await
+            .unwrap();
         // Skip hello + initial snapshot.
         let _ = ws.next().await.unwrap().unwrap();
         let _ = ws.next().await.unwrap().unwrap();
@@ -333,8 +355,9 @@ mod tests {
 
         let (addr, state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let (mut ws, _) = tokio_tungstenite::connect_async(ws_req(addr, &wid, &pid, &aid))
+            .await
+            .unwrap();
         let _ = ws.next().await.unwrap().unwrap(); // hello
         let _ = ws.next().await.unwrap().unwrap(); // initial snapshot
 
@@ -383,8 +406,9 @@ mod tests {
     async fn malformed_client_text_closes_with_1011() {
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let (mut ws, _) = tokio_tungstenite::connect_async(ws_req(addr, &wid, &pid, &aid))
+            .await
+            .unwrap();
         let _ = ws.next().await.unwrap().unwrap();
         let _ = ws.next().await.unwrap().unwrap();
 
@@ -418,8 +442,9 @@ mod tests {
 
         let (addr, _state, wid, pid, aid) =
             crate::handlers::windows::panes::activities::test_support::boot_server_full().await;
-        let url = format!("ws://{addr}/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws");
-        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let (mut ws, _) = tokio_tungstenite::connect_async(ws_req(addr, &wid, &pid, &aid))
+            .await
+            .unwrap();
         let _ = ws.next().await.unwrap().unwrap(); // hello
         let _ = ws.next().await.unwrap().unwrap(); // initial snapshot
 

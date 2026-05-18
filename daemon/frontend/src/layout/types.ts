@@ -25,9 +25,10 @@ export type WindowLayoutNode =
 
 export interface ActivityView {
   id: ActivityId;
-  kind: 'terminal' | 'extension';
+  kind: 'terminal' | 'extension' | 'browser';
   title: string;
   iframe_url?: string;
+  url?: string;
 }
 
 export interface PaneView {

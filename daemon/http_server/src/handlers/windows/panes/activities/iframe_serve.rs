@@ -1,8 +1,9 @@
 use crate::AppState;
 use crate::error::HttpError;
+use crate::state::ActivityKindDiscriminant;
 use axum::{
     extract::{Path, State},
-    http::header::CONTENT_TYPE,
+    http::{HeaderMap, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
 use ozmux_multiplexer::{Activity, ActivityId, ActivityKind, PaneId, WindowId};
@@ -14,13 +15,22 @@ use serde::Serialize;
 pub async fn iframe_serve(
     State(state): State<AppState>,
     Path((wid, pid, aid, path)): Path<(WindowId, PaneId, ActivityId, String)>,
+    headers: HeaderMap,
 ) -> Result<Response, HttpError> {
-    let activity = state
-        .ensure_activity_in_pane_in_window_and_fetch(&wid, &pid, &aid)
-        .await?;
-    if !matches!(activity.kind, ActivityKind::Extension { .. }) {
-        return Err(HttpError::IframeFileNotFound(path));
+    // NOTE: same-origin GET requests (e.g. the daemon's own frontend loading an
+    // extension iframe) may legitimately omit the Origin header. This route only
+    // filters explicitly cross-origin requests; absent Origin is permitted here
+    // unlike the WebSocket upgrades (terminal_ws, handlers_ws) which always
+    // receive an Origin from the browser.
+    if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
+        let s = origin.to_str().map_err(|_| HttpError::ForbiddenOrigin)?;
+        if !crate::origin_guard::is_allowed_origin(s) {
+            return Err(HttpError::ForbiddenOrigin);
+        }
     }
+    let activity = state
+        .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Extension)
+        .await?;
     let session_id = crate::handlers::windows::panes::session_owning_window(&state, &wid).await;
     let ids = OzmuxIds {
         session_id: session_id.map(|s| s.to_string()),

@@ -27,7 +27,7 @@ mod tests {
     };
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use ozmux_multiplexer::ActivityId;
+    use ozmux_multiplexer::{Activity, ActivityId, BrowserProfile};
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -116,6 +116,37 @@ mod tests {
             .await
             .expect("publish timed out")
             .expect("recv error");
+    }
+
+    #[tokio::test]
+    async fn close_activity_browser_close_is_missing_ok() {
+        use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
+
+        let state = fresh_state();
+        let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
+        let browser_aid = ActivityId::new();
+        state
+            .multiplexer
+            .with_window_or_404(&wid, |w| {
+                w.pane_mut(&pid)?.add_activity(Activity::browser(
+                    browser_aid.clone(),
+                    None,
+                    BrowserProfile::default(),
+                ))
+            })
+            .await
+            .unwrap();
+        let cef_aid = CefActivityId(browser_aid.to_string());
+        // NOTE: cef ring is absent (activity was never provisioned); close must succeed anyway.
+        assert!(state.browser_cef.frame_ring(&cef_aid).is_none());
+        state
+            .close_activity(&wid, &pid, &browser_aid)
+            .await
+            .unwrap();
+        assert!(
+            state.browser_cef.frame_ring(&cef_aid).is_none(),
+            "cef close is missing-ok; ring remains absent after close"
+        );
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+use crate::activity_titles::ActivityTitles;
 use crate::handlers::windows::panes::spawn_terminal::spawn_terminal_pty;
 use crate::layout_broadcast::LayoutBroadcaster;
 use crate::session_broadcast::SessionBroadcaster;
@@ -5,6 +6,10 @@ use crate::session_view::SessionView;
 use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
+use ozmux_browser::cef_backend::CefBackend;
+use ozmux_browser::cef_registry::BrowserCefRegistry;
+use ozmux_browser::cef_service::CefHostHandles;
+use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
 use ozmux_multiplexer::{
@@ -15,6 +20,18 @@ use ozmux_multiplexer::{
 use ozmux_terminal::TerminalService;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Lightweight discriminant for `ActivityKind`, used by route-kind guards
+/// to assert an Activity matches a specific kind before dispatching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityKindDiscriminant {
+    /// Terminal PTY activity.
+    Terminal,
+    /// Extension (iframe-served) activity.
+    Extension,
+    /// Browser activity.
+    Browser,
+}
 
 /// Input bundle for [`AppState::split_pane`].
 pub struct SplitInput {
@@ -58,6 +75,13 @@ pub struct AppState {
     pub session_broadcast: SessionBroadcaster,
     /// Daemon-wide configuration loaded at startup (shortcuts, etc.).
     pub configs: Arc<OzmuxConfigs>,
+    /// Kind-agnostic per-activity title map. All activity kinds (terminal,
+    /// browser, …) publish into this; consumers snapshot it for layout builds.
+    pub titles: ActivityTitles,
+    /// CEF-backed BrowserActivity registry.
+    pub browser_cef: Arc<BrowserCefRegistry>,
+    /// Handle to the cef_host child process and its command/event channels.
+    pub cef_host: Arc<CefHostHandles>,
 }
 
 impl AppState {
@@ -72,6 +96,8 @@ impl AppState {
         layout_broadcast: LayoutBroadcaster,
         session_broadcast: SessionBroadcaster,
         configs: Arc<OzmuxConfigs>,
+        titles: ActivityTitles,
+        cef_host: Arc<CefHostHandles>,
     ) -> Self {
         Self {
             multiplexer: MultiplexerService::default(),
@@ -80,6 +106,9 @@ impl AppState {
             layout_broadcast,
             session_broadcast,
             configs,
+            titles,
+            browser_cef: Arc::new(BrowserCefRegistry::new()),
+            cef_host,
         }
     }
 
@@ -89,14 +118,84 @@ impl AppState {
         pid: &PaneId,
         aid: &ActivityId,
     ) -> HttpResult {
+        let prev_active = self
+            .multiplexer
+            .with_window(wid, |w| w.pane(pid).ok().map(|p| p.active_activity.clone()))
+            .await
+            .flatten();
+
         let outcome = self
             .multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.set_active_activity(aid))
             .await?;
+
         if matches!(outcome, SetActiveOutcome::Changed) {
+            self.toggle_screencast_on_active_change(wid, pid, prev_active.as_ref(), aid)
+                .await;
             self.publish_window_layout(wid).await;
         }
         Ok(())
+    }
+
+    /// Look up the `ActivityKindDiscriminant` of `aid` within `(wid, pid)`.
+    /// Returns `None` when the activity is not present in that pane.
+    async fn activity_kind_in_pane(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> Option<ActivityKindDiscriminant> {
+        let kind = self
+            .multiplexer
+            .with_window(wid, |w| {
+                w.pane(pid).ok()?.activity(aid).map(|a| match &a.kind {
+                    ActivityKind::Terminal => ActivityKindDiscriminant::Terminal,
+                    ActivityKind::Extension { .. } => ActivityKindDiscriminant::Extension,
+                    ActivityKind::Browser { .. } => ActivityKindDiscriminant::Browser,
+                })
+            })
+            .await??;
+        Some(kind)
+    }
+
+    /// On active-activity change, pause screencast for the previous Browser
+    /// activity and resume it for the next Browser activity. Both calls are
+    /// missing-ok.
+    pub(crate) async fn toggle_screencast_on_active_change(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        prev: Option<&ActivityId>,
+        next: &ActivityId,
+    ) {
+        if let Some(prev) = prev
+            && matches!(
+                self.activity_kind_in_pane(wid, pid, prev).await,
+                Some(ActivityKindDiscriminant::Browser)
+            )
+        {
+            let _ = self
+                .cef_host
+                .send_command(
+                    ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
+                        aid: CefActivityId(prev.to_string()),
+                    },
+                )
+                .await;
+        }
+        if matches!(
+            self.activity_kind_in_pane(wid, pid, next).await,
+            Some(ActivityKindDiscriminant::Browser)
+        ) {
+            let _ = self
+                .cef_host
+                .send_command(
+                    ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
+                        aid: CefActivityId(next.to_string()),
+                    },
+                )
+                .await;
+        }
     }
 
     pub async fn cycle_active_activity(
@@ -207,15 +306,11 @@ impl AppState {
 
         // NOTE: PTY spawn must precede the layout publish so the frontend never
         // sees a terminal activity without a backing PTY.
-        if matches!(activity_kind, ActivityKind::Terminal)
-            && let Err(spawn_err) = spawn_terminal_pty(self, wid, pid, &aid).await
+        if let Err(spawn_err) =
+            crate::provision::provision_activity_runtime(self, wid, pid, &aid, &activity_kind).await
         {
             if let Err(rollback_err) = self.rollback_added_activity(wid, pid, &aid).await {
-                tracing::warn!(
-                    error = %rollback_err,
-                    %wid, %pid, %aid,
-                    "failed to roll back added activity after PTY spawn failure"
-                );
+                tracing::warn!(error = %rollback_err, %wid, %pid, %aid, "rollback failed");
             }
             return Err(spawn_err);
         }
@@ -235,22 +330,28 @@ impl AppState {
         aid: &ActivityId,
     ) -> HttpResult<()> {
         self.ensure_pane_in_window(wid, pid)?;
-        let removed = self
-            .multiplexer
+        self.multiplexer
             .with_window_or_404(wid, |w| w.pane_mut(pid)?.remove_activity(aid))
             .await?;
 
-        match removed.kind {
-            ActivityKind::Terminal => {
-                let _ = self.terminal.kill(aid).await;
-            }
-            ActivityKind::Extension { .. } => {
-                self.extensions.forget_activity(aid);
-            }
-        }
+        // NOTE: every backend's close is idempotent + missing-ok; no kind dispatch required.
+        let _ = self.terminal.kill(aid).await;
+        self.extensions.forget_activity(aid);
+        self.cef_close_activity(aid).await;
 
         self.publish_window_layout(wid).await;
         Ok(())
+    }
+
+    /// Drops the per-activity cef ring (no-op if the activity was never
+    /// provisioned via cef) and tells cef_host to close its browser handle.
+    /// Failure to reach cef_host is logged but never propagated.
+    async fn cef_close_activity(&self, aid: &ActivityId) {
+        let backend = CefBackend {
+            handles: Arc::clone(&self.cef_host),
+            registry: Arc::clone(&self.browser_cef),
+        };
+        backend.close(&CefActivityId(aid.to_string())).await;
     }
 
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
@@ -289,9 +390,14 @@ impl AppState {
 
         // NOTE: PTY spawn must precede the layout publish so the frontend never
         // sees a terminal activity without a backing PTY.
-        if matches!(activity_kind, ActivityKind::Terminal)
-            && let Err(spawn_err) =
-                spawn_terminal_pty(self, wid, &new_pane_id, &new_activity_id).await
+        if let Err(spawn_err) = crate::provision::provision_activity_runtime(
+            self,
+            wid,
+            &new_pane_id,
+            &new_activity_id,
+            &activity_kind,
+        )
+        .await
         {
             self.rollback_split(wid, &new_pane_id).await;
             return Err(spawn_err);
@@ -356,11 +462,11 @@ impl AppState {
 
         self.multiplexer.pane_owner_window.remove(pid);
         self.extensions.forget_pane(pid);
-        for aid in &activities {
-            self.extensions.forget_activity(aid);
-        }
+        // NOTE: every backend's close is idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
+            self.extensions.forget_activity(aid);
+            self.cef_close_activity(aid).await;
         }
 
         self.publish_window_layout(wid).await;
@@ -407,9 +513,11 @@ impl AppState {
         for pid in pane_ids {
             self.extensions.forget_pane(&pid);
         }
+        // NOTE: every backend's close is idempotent + missing-ok; no kind dispatch required.
         for aid in &activities {
             let _ = self.terminal.kill(aid).await;
             self.extensions.forget_activity(aid);
+            self.cef_close_activity(aid).await;
         }
         self.layout_broadcast.close(wid);
         if let Some(sid) = parent {
@@ -431,6 +539,40 @@ impl AppState {
         Ok(activities)
     }
 
+    async fn rollback_added_activity(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        aid: &ActivityId,
+    ) -> MultiplexerResult<()> {
+        self.multiplexer
+            .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
+                w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
+        // NOTE: spawn happens before publish, so the frontend never saw the new
+        // pane — no layout re-broadcast is needed on rollback.
+        let activities = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
+            .await;
+        match activities {
+            Ok(_aids) => {
+                self.multiplexer.pane_owner_window.remove(new_pane_id);
+            }
+            Err(_) => {
+                tracing::warn!(
+                    %new_pane_id,
+                    "split rollback failed to close pane after spawn failure"
+                );
+            }
+        }
+    }
+
     /// Build the current Window layout snapshot under the Window lock and
     /// broadcast it. Used by every handler that mutates a Window and by the
     /// title-republish task.
@@ -438,7 +580,7 @@ impl AppState {
         // NOTE: titles are snapshotted separately from the window state, so a
         // published view's title can be one title-change cycle stale. This is
         // benign — the next title change re-broadcasts the corrected view.
-        let titles = self.terminal.all_titles().await;
+        let titles = self.titles.snapshot().await;
         let _ = self
             .multiplexer
             .with_window(wid, |w| match WindowView::from_window(w, &titles) {
@@ -600,35 +742,32 @@ impl AppState {
         Ok(())
     }
 
-    async fn rollback_added_activity(
+    /// Like [`Self::ensure_activity_in_pane_in_window_and_fetch`], but also
+    /// asserts that the activity's kind matches `want`. Returns
+    /// [`HttpError::ActivityKindMismatch`] when the kinds differ.
+    pub(crate) async fn ensure_activity_kind(
         &self,
         wid: &WindowId,
         pid: &PaneId,
         aid: &ActivityId,
-    ) -> MultiplexerResult<()> {
-        self.multiplexer
-            .with_window_or_404(wid, |w| -> Result<(), MultiplexerError> {
-                w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
-            })
-            .await
-    }
-
-    async fn rollback_split(&self, wid: &WindowId, new_pane_id: &PaneId) {
-        // NOTE: spawn happens before publish, so the frontend never saw the new
-        // pane — no layout re-broadcast is needed on rollback.
-        let closed = self
-            .multiplexer
-            .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
-            .await
-            .is_ok();
-        if !closed {
-            tracing::warn!(
-                %new_pane_id,
-                "split rollback failed to close pane after spawn failure"
-            );
-            return;
+        want: ActivityKindDiscriminant,
+    ) -> HttpResult<Activity> {
+        let activity = self
+            .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
+            .await?;
+        let got = match &activity.kind {
+            ActivityKind::Terminal => ActivityKindDiscriminant::Terminal,
+            ActivityKind::Extension { .. } => ActivityKindDiscriminant::Extension,
+            ActivityKind::Browser { .. } => ActivityKindDiscriminant::Browser,
+        };
+        if got != want {
+            return Err(HttpError::ActivityKindMismatch {
+                aid: aid.clone(),
+                want,
+                got,
+            });
         }
-        self.multiplexer.pane_owner_window.remove(new_pane_id);
+        Ok(activity)
     }
 
     /// Tear down a half-created window after a `create_window` step failed.
@@ -686,6 +825,18 @@ impl FromRef<AppState> for MultiplexerService {
 impl FromRef<AppState> for Arc<OzmuxConfigs> {
     fn from_ref(input: &AppState) -> Self {
         Arc::clone(&input.configs)
+    }
+}
+
+impl FromRef<AppState> for Arc<BrowserCefRegistry> {
+    fn from_ref(input: &AppState) -> Self {
+        Arc::clone(&input.browser_cef)
+    }
+}
+
+impl FromRef<AppState> for Arc<CefHostHandles> {
+    fn from_ref(input: &AppState) -> Self {
+        Arc::clone(&input.cef_host)
     }
 }
 
@@ -803,6 +954,23 @@ mod session_publish_tests {
             .expect("publish timed out")
             .expect("recv error");
         assert_eq!(view["windows"][0]["name"].as_str(), Some("renamed"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers;
+
+    #[tokio::test]
+    async fn ensure_activity_kind_rejects_mismatched_kind() {
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, term_aid) = test_helpers::bootstrap_default(&state).await;
+        let err = state
+            .ensure_activity_kind(&wid, &pid, &term_aid, ActivityKindDiscriminant::Browser)
+            .await
+            .expect_err("must reject mismatched kind");
+        assert!(matches!(err, HttpError::ActivityKindMismatch { .. }));
     }
 }
 

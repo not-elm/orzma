@@ -1,6 +1,8 @@
 //! HTTP-layer error type and axum IntoResponse mapping.
 
-use ozmux_multiplexer::MultiplexerError;
+use crate::state::ActivityKindDiscriminant;
+use ozmux_browser::BrowserUnavailableReason;
+use ozmux_multiplexer::{ActivityId, MultiplexerError};
 use ozmux_terminal::TerminalError;
 use thiserror::Error;
 
@@ -42,6 +44,29 @@ pub enum HttpError {
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
 
+    /// An unrecoverable server-side error with a free-form message.
+    #[error("internal error: {0}")]
+    Internal(String),
+
+    /// The request's `Origin` header is not in the allowlist.
+    #[error("forbidden origin")]
+    ForbiddenOrigin,
+
+    /// The resolved activity's kind does not match what the route requires.
+    #[error("activity {aid} kind mismatch: want {want:?}, got {got:?}")]
+    ActivityKindMismatch {
+        /// Id of the activity whose kind was checked.
+        aid: ActivityId,
+        /// The kind the route expected.
+        want: ActivityKindDiscriminant,
+        /// The kind the activity actually has.
+        got: ActivityKindDiscriminant,
+    },
+
+    /// The cef_host child has crashed and the browser backend is unavailable.
+    #[error("cef_host dead: {0:?}")]
+    CefHostDead(BrowserUnavailableReason),
+
     #[error("invalid dimensions: {field} must be >= 1")]
     InvalidDimensions { field: &'static str },
 
@@ -54,6 +79,13 @@ pub type HttpResult<T = ()> = Result<T, HttpError>;
 impl axum::response::IntoResponse for HttpError {
     fn into_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
+        if let HttpError::CefHostDead(reason) = &self {
+            let body = serde_json::json!({
+                "error": { "code": "CEF_HOST_DEAD", "message": self.to_string() },
+                "reason": reason,
+            });
+            return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
+        }
         let (status, code) = match &self {
             HttpError::Session(MultiplexerError::SessionNotFound(_)) => {
                 (StatusCode::NOT_FOUND, "SESSION_NOT_FOUND")
@@ -104,6 +136,7 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::ServiceUnavailable(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
             }
+            HttpError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
             HttpError::InvalidDimensions { .. } => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_DIMENSIONS")
             }
@@ -124,6 +157,11 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::Session(MultiplexerError::CannotRemoveLastActivity(_)) => {
                 (StatusCode::CONFLICT, "CANNOT_REMOVE_LAST_ACTIVITY")
             }
+            HttpError::ForbiddenOrigin => (StatusCode::FORBIDDEN, "FORBIDDEN_ORIGIN"),
+            HttpError::ActivityKindMismatch { .. } => {
+                (StatusCode::CONFLICT, "ACTIVITY_KIND_MISMATCH")
+            }
+            HttpError::CefHostDead(_) => unreachable!("handled by early return above"),
             // MissingParentCell, SplitTargetEqualsNewCell, ActivePaneMustBelongToWindow,
             // Terminal::Pty, FailedLaunch fall through → 500
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
@@ -285,6 +323,19 @@ mod tests {
         let err = HttpError::Session(MultiplexerError::CannotRemoveLastActivity(PaneId::new()));
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn cef_host_dead_maps_to_503() {
+        let err = HttpError::CefHostDead(BrowserUnavailableReason::RetryExhausted {
+            last_error: "boom".into(),
+        });
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"]["code"].as_str(), Some("CEF_HOST_DEAD"));
+        assert_eq!(v["reason"]["kind"].as_str(), Some("retry_exhausted"));
     }
 
     #[test]

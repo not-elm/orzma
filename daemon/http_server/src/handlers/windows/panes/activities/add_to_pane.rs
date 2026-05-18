@@ -205,6 +205,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_to_pane_accepts_browser_kind() {
+        if !crate::requires_real_chrome() {
+            eprintln!("skipping; set OZMUX_TEST_REAL_CHROME=1 to run (launches real Chromium)");
+            return;
+        }
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
+        let (router, _state) = test_helpers::router_with(state);
+        let new_aid = ActivityId::new();
+        let body = serde_json::json!({
+            "activity": {
+                "activity_id": new_aid,
+                "kind": { "type": "browser", "initial_url": "https://example.com" }
+            }
+        });
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/windows/{wid}/panes/{pid}/activities"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
     async fn add_to_pane_rolls_back_when_spawn_fails() {
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
@@ -244,4 +274,9 @@ mod tests {
         let recv = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
         assert!(recv.is_err(), "no broadcast must be sent on rollback");
     }
+
+    // TODO: add a Browser-provision rollback test once CefBackend exposes a
+    // fault-injection helper (similar to terminal.inject_spawn_failure).
+    // For now, the rollback path is structurally identical to the Terminal
+    // path tested above and is exercised end-to-end by the Playwright test.
 }

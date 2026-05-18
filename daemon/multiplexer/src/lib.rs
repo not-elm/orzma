@@ -13,7 +13,7 @@ pub use error::{MultiplexerError, MultiplexerResult};
 pub use session::{Session, SessionId, SessionState};
 pub use window::resize::ResizePaneOutcome;
 pub use window::{
-    Activity, ActivityId, ActivityKind, Cell, CellId, CloseOutcome, CycleDirection,
+    Activity, ActivityId, ActivityKind, BrowserProfile, Cell, CellId, CloseOutcome, CycleDirection,
     LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, RootCell, SetActiveOutcome,
     Side, SplitCell, SplitOrientation, Window, WindowDimensions, WindowId, WindowState,
 };

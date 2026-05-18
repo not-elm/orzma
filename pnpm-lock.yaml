@@ -21,6 +21,9 @@ catalogs:
     '@vitest/ui':
       specifier: ^4.1.5
       version: 4.1.5
+    '@webgpu/types':
+      specifier: ^0.1.70
+      version: 0.1.70
     jsdom:
       specifier: ^29.1.1
       version: 29.1.1
@@ -132,6 +135,9 @@ importers:
       '@vitest/ui':
         specifier: 'catalog:'
         version: 4.1.5(vitest@4.1.5)
+      '@webgpu/types':
+        specifier: 'catalog:'
+        version: 0.1.70
       babel-plugin-react-compiler:
         specifier: ^1.0.0
         version: 1.0.0
@@ -1089,6 +1095,9 @@ packages:
 
   '@vitest/utils@4.1.5':
     resolution: {integrity: sha512-76wdkrmfXfqGjueGgnb45ITPyUi1ycZ4IHgC2bhPDUfWHklY/q3MdLOAB+TF1e6xfl8NxNY0ZYaPCFNWSsw3Ug==}
+
+  '@webgpu/types@0.1.70':
+    resolution: {integrity: sha512-LFiNHHKMvmAEvwVew3JLJmTdShhbdwRFSImUshGhE2mGE8ybQzIo63l5uRp+YKnNx+8Qno8Kf6gN+DKMreIJCA==}
 
   ansi-regex@5.0.1:
     resolution: {integrity: sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ==}
@@ -2435,6 +2444,8 @@ snapshots:
       '@vitest/pretty-format': 4.1.5
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
+
+  '@webgpu/types@0.1.70': {}
 
   ansi-regex@5.0.1: {}
 

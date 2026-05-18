@@ -8,6 +8,9 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
+ozmux_browser = { path = "../browser" }
+ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
+bytes = { workspace = true }
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_terminal = { path = "../terminal" }
 ozmux_extension = { path = "../extension" }

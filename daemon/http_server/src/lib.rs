@@ -1,10 +1,13 @@
 //! HTTP/WebSocket server: axum router, REST handlers, and PTY WS bridging.
 
+pub mod activity_titles;
 pub mod error;
 pub mod extractors;
 pub mod handlers;
 pub mod layout_broadcast;
 pub mod layout_dto;
+pub(crate) mod origin_guard;
+pub(crate) mod provision;
 pub mod session_broadcast;
 pub mod session_view;
 pub mod state;
@@ -121,19 +124,39 @@ pub fn windows_router() -> Router<AppState> {
         .nest("/{window_id}/panes", handlers::windows::panes::router())
 }
 
+/// Returns `true` when `OZMUX_TEST_REAL_CHROME=1` is set in the environment.
+/// Tests that require a live Chromium process should skip themselves when this
+/// returns `false`.
+#[cfg(test)]
+pub(crate) fn requires_real_chrome() -> bool {
+    std::env::var("OZMUX_TEST_REAL_CHROME").ok().as_deref() == Some("1")
+}
+
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use super::{AppState, daemon_router};
     use axum::Router;
+    use ozmux_extension::runtime::RuntimeRoot;
     use ozmux_multiplexer::{Activity, ActivityId, PaneId, SessionId, WindowId};
+    use std::sync::Arc;
 
     pub(crate) fn fresh_state() -> AppState {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let runtime =
+            Arc::new(RuntimeRoot::new_in(tmp.path(), std::process::id()).expect("RuntimeRoot"));
+        // NOTE: keep the tempdir alive for the process lifetime so the paths
+        // inside RuntimeRoot remain valid for tests that exercise the fs paths.
+        std::mem::forget(tmp);
+        let terminal = ozmux_terminal::TerminalService::with_runtime_root(Arc::clone(&runtime));
+        let cef_host = Arc::new(ozmux_browser::cef_service::stub_for_tests());
         AppState::new(
-            ozmux_terminal::TerminalService::default(),
+            terminal,
             ozmux_extension::ExtensionRegistry::default(),
             crate::layout_broadcast::LayoutBroadcaster::default(),
             crate::session_broadcast::SessionBroadcaster::default(),
-            std::sync::Arc::new(ozmux_configs::OzmuxConfigs::default()),
+            Arc::new(ozmux_configs::OzmuxConfigs::default()),
+            crate::activity_titles::ActivityTitles::default(),
+            cef_host,
         )
     }
 
@@ -198,10 +221,40 @@ mod tests {
     use super::*;
     use ozmux_multiplexer::WindowId;
 
-    #[test]
-    fn app_state_default_includes_layout_broadcaster() {
+    #[tokio::test]
+    async fn app_state_default_includes_layout_broadcaster() {
         let state = test_helpers::fresh_state();
         let _ = state.layout_broadcast.subscribe_or_create(&WindowId::new());
+    }
+
+    #[tokio::test]
+    async fn close_activity_removes_cef_ring() {
+        use ozmux_browser::frame_ring::FrameRing;
+        use ozmux_browser::shm_alloc::{SLOT_PAYLOAD_MAX, create_shm_for_activity};
+        use ozmux_browser::shm_reader::OwnedShmReader;
+        use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
+        use std::sync::Arc;
+
+        let state = test_helpers::fresh_state();
+        let (_sid, wid, pid, aid) = test_helpers::bootstrap_default(&state).await;
+        // Bootstrap created a pane with one activity; close_activity refuses
+        // to remove the last activity, so seed a second one to be the target.
+        let extra = test_helpers::add_activity_via_window(&state, &wid, &pid).await;
+        let cef_aid = CefActivityId(extra.to_string());
+        let shm_fd = create_shm_for_activity(&cef_aid.0, SLOT_PAYLOAD_MAX).expect("shm alloc");
+        let reader = Arc::new(OwnedShmReader::map(&shm_fd, SLOT_PAYLOAD_MAX).expect("shm map"));
+        state
+            .browser_cef
+            .insert(cef_aid.clone(), Arc::new(FrameRing::new(123, 1)), reader);
+        assert!(state.browser_cef.frame_ring(&cef_aid).is_some());
+
+        state.close_activity(&wid, &pid, &extra).await.unwrap();
+        assert!(
+            state.browser_cef.frame_ring(&cef_aid).is_none(),
+            "ring should be removed after close_activity"
+        );
+        // Sanity: the original bootstrap activity is still around.
+        let _ = aid;
     }
 
     #[tokio::test]

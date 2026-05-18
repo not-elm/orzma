@@ -20,16 +20,6 @@ use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 type WsSink = SplitSink<WebSocket, Message>;
 type WsStream = SplitStream<WebSocket>;
 
-fn is_allowed_origin(origin: &str) -> bool {
-    matches!(
-        origin,
-        "http://127.0.0.1:3200"
-            | "http://localhost:3200"
-            | "http://127.0.0.1:5173"
-            | "http://localhost:5173"
-    )
-}
-
 #[derive(Deserialize)]
 struct UdsEnvelope<'a> {
     #[serde(borrow)]
@@ -112,8 +102,8 @@ pub async fn handlers_ws(
         .get(axum::http::header::ORIGIN)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if !is_allowed_origin(origin) {
-        return Err(HttpError::Forbidden("origin not allowed".into()));
+    if !crate::origin_guard::is_allowed_origin(origin) {
+        return Err(HttpError::ForbiddenOrigin);
     }
     let ext_name = state
         .extensions

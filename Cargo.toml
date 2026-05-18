@@ -3,13 +3,17 @@ resolver = "2"
 members = [
   "cli",
   "daemon/bootstrap",
+  "daemon/browser",
+  "daemon/browser_cef_protocol",
+  "daemon/cef_host",
   "daemon/configs",
   "daemon/extension",
-  "daemon/macros",
-  "daemon/terminal",
-  "daemon/multiplexer",
   "daemon/http_server",
+  "daemon/macros",
+  "daemon/multiplexer",
+  "daemon/terminal",
   "client",
+  "xtask",
 ]
 
 [workspace.package]

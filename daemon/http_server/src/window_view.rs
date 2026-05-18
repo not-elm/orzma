@@ -34,6 +34,11 @@ pub enum ActivityView {
         title: String,
         iframe_url: String,
     },
+    Browser {
+        id: ActivityId,
+        title: String,
+        url: Option<String>,
+    },
 }
 
 impl WindowView {
@@ -101,6 +106,11 @@ impl ActivityView {
                     "/windows/{}/panes/{}/activities/{}/iframe/index.html",
                     wid, pid, activity.id
                 ),
+            },
+            ActivityKind::Browser { initial_url, .. } => Self::Browser {
+                id: activity.id.clone(),
+                title: activity.name.clone(),
+                url: initial_url.clone(),
             },
         }
     }
