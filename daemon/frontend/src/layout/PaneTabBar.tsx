@@ -24,7 +24,7 @@ export function PaneTabBar({ windowId, pane, isActive, onActivate }: PaneTabBarP
     <div
       role="tablist"
       className={clsx(
-        'flex shrink-0 overflow-hidden bg-tmux-status-bar',
+        'flex shrink-0 gap-0.5 overflow-hidden bg-tmux-status-bar px-1 pt-1',
         !isActive && 'opacity-60',
       )}
     >
@@ -39,11 +39,10 @@ export function PaneTabBar({ windowId, pane, isActive, onActivate }: PaneTabBarP
             title={activity.title}
             onPointerDown={(event) => selectTab(event, activity.id)}
             className={clsx(
-              'min-w-0 flex-1 truncate border-r border-tmux-pane-border px-3 py-1',
-              'text-left font-mono text-xs',
+              'w-35 shrink-0 truncate px-3 py-1 text-left font-mono text-xs',
               selected
-                ? 'border-t border-t-tmux-pane-active bg-background text-tmux-pane-active'
-                : 'text-muted-foreground',
+                ? 'bg-background text-foreground'
+                : 'bg-tmux-tab-inactive-bg text-tmux-tab-inactive-foreground',
             )}
           >
             {activity.title}
