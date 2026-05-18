@@ -1,4 +1,3 @@
-import { clsx } from 'clsx';
 import { type PointerEventHandler, type ReactNode, useEffect, useState } from 'react';
 import { cellHeightOf, cellWidthOf } from '../terminal/renderer/font';
 import { PaneContent } from './PaneContent';
@@ -10,17 +9,16 @@ import type { LayoutState } from './useWindowLayout';
 
 interface AbsoluteBoxProps {
   bounds: Bounds;
-  className?: string;
   active?: boolean;
   onPointerDown?: PointerEventHandler<HTMLDivElement>;
   children: ReactNode;
 }
 
-function AbsoluteBox({ bounds, className, active, onPointerDown, children }: AbsoluteBoxProps) {
+function AbsoluteBox({ bounds, active, onPointerDown, children }: AbsoluteBoxProps) {
   return (
     <div
       data-active={active}
-      className={clsx('absolute', className)}
+      className="absolute"
       onPointerDown={onPointerDown}
       // biome-ignore lint/plugin: bounds are computed at runtime as percentages of the window
       style={{
