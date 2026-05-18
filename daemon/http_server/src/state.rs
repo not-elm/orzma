@@ -282,6 +282,27 @@ impl AppState {
         Ok(())
     }
 
+    /// Swap the named pane's contents with its prev/next neighbor in the
+    /// window's pane-index order. Publishes a layout update only when the
+    /// mutation was applied (a single-pane window returns Ok and skips the
+    /// broadcast, matching `resize_pane`'s soft-no-op behavior).
+    pub async fn swap_pane(
+        &self,
+        wid: &WindowId,
+        pid: &PaneId,
+        offset: ozmux_multiplexer::SwapOffset,
+    ) -> HttpResult<()> {
+        self.ensure_pane_in_window(wid, pid)?;
+        let outcome = self
+            .multiplexer
+            .with_window_or_404(wid, |w| w.swap_pane(pid, offset))
+            .await?;
+        if matches!(outcome, ozmux_multiplexer::SwapOutcome::Swapped { .. }) {
+            self.publish_window_layout(wid).await;
+        }
+        Ok(())
+    }
+
     /// Add an Activity to a Pane and broadcast the new layout. For
     /// terminal-kind activities, also spawn the backing PTY; on spawn
     /// failure the activity record is rolled back before returning the

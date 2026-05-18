@@ -15,7 +15,8 @@ pub use window::resize::ResizePaneOutcome;
 pub use window::{
     Activity, ActivityId, ActivityKind, BrowserProfile, Cell, CellId, CloseOutcome, CycleDirection,
     LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, RootCell, SetActiveOutcome,
-    Side, SplitCell, SplitOrientation, Window, WindowDimensions, WindowId, WindowState,
+    Side, SplitCell, SplitOrientation, SwapOffset, SwapOutcome, Window, WindowDimensions, WindowId,
+    WindowState,
 };
 
 /// Backwards-compatible alias for the active-pane outcome. Use

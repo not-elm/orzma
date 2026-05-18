@@ -125,7 +125,31 @@ describe('parseShortcuts', () => {
     ).toBeNull();
   });
 
-  it('drops bindings with unknown action type but keeps the rest', () => {
+  it('parses a swap-pane binding for prev and next offsets', () => {
+    const payload = {
+      ...DEFAULT_JSON,
+      bindings: [
+        DEFAULT_JSON.bindings[0],
+        {
+          key: '{',
+          modifiers: { ctrl: false, shift: true, alt: false, meta: false },
+          action: { type: 'swap-pane', offset: 'prev' },
+        },
+        {
+          key: '}',
+          modifiers: { ctrl: false, shift: true, alt: false, meta: false },
+          action: { type: 'swap-pane', offset: 'next' },
+        },
+      ],
+    };
+    const out = parseShortcuts(payload);
+    expect(out).not.toBeNull();
+    expect(out?.bindings).toHaveLength(3);
+    expect(out?.bindings[1].action).toEqual({ type: 'swap-pane', offset: 'prev' });
+    expect(out?.bindings[2].action).toEqual({ type: 'swap-pane', offset: 'next' });
+  });
+
+  it('drops bindings with an unknown action type but keeps the rest', () => {
     const withUnknown = {
       ...DEFAULT_JSON,
       bindings: [
@@ -133,7 +157,7 @@ describe('parseShortcuts', () => {
         {
           key: 'q',
           modifiers: { ctrl: false, shift: false, alt: false, meta: false },
-          action: { type: 'swap-pane', offset: 'next' },
+          action: { type: 'definitely-not-a-real-action' },
         },
       ],
     };

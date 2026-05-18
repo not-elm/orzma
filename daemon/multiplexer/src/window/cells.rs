@@ -190,28 +190,60 @@ impl LayoutCellState {
         }
     }
 
-    /// Collect every `PaneId` reachable from `start`'s subtree (Root or Split
-    /// roots are descended; Pane leaves contribute their `PaneId`).
+    /// Collect every `PaneId` reachable from `start`'s subtree, in
+    /// depth-first lhs-before-rhs order.
     pub fn pane_ids_in_subtree(&self, start: &CellId) -> MultiplexerResult<Vec<PaneId>> {
+        Ok(self
+            .ordered_pane_cells(start)?
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect())
+    }
+
+    /// Collect every pane leaf reachable from `start`, yielding each leaf's
+    /// (`CellId`, `PaneId`) in depth-first lhs-before-rhs order.
+    pub(crate) fn ordered_pane_cells(
+        &self,
+        start: &CellId,
+    ) -> MultiplexerResult<Vec<(CellId, PaneId)>> {
         let mut out = Vec::new();
-        self.collect_panes(start, &mut out)?;
+        self.collect_pane_cells(start, &mut out)?;
         Ok(out)
     }
 
-    fn collect_panes(&self, id: &CellId, out: &mut Vec<PaneId>) -> MultiplexerResult {
+    fn collect_pane_cells(
+        &self,
+        id: &CellId,
+        out: &mut Vec<(CellId, PaneId)>,
+    ) -> MultiplexerResult {
         match self.cell(id)? {
             Cell::Root(r) => {
                 let child = r.child.clone();
-                self.collect_panes(&child, out)?;
+                self.collect_pane_cells(&child, out)?;
             }
             Cell::Split(s) => {
                 let lhs = s.lhs_cell.clone();
                 let rhs = s.rhs_cell.clone();
-                self.collect_panes(&lhs, out)?;
-                self.collect_panes(&rhs, out)?;
+                self.collect_pane_cells(&lhs, out)?;
+                self.collect_pane_cells(&rhs, out)?;
             }
-            Cell::Pane(p) => out.push(p.pane.clone()),
+            Cell::Pane(p) => out.push((id.clone(), p.pane.clone())),
         }
+        Ok(())
+    }
+
+    /// Swap the `pane:` field of two `PaneCell` leaves. Errors with
+    /// `InvalidCellType` if either id resolves to `Cell::Root` or
+    /// `Cell::Split`. Cell ids, parent pointers, splits, and weights are
+    /// untouched — only the pane payload of each cell moves.
+    pub(crate) fn swap_panes(&mut self, a: &CellId, b: &CellId) -> MultiplexerResult {
+        let [Some(cell_a), Some(cell_b)] = self.0.get_disjoint_mut([a, b]) else {
+            return Err(MultiplexerError::CellNotFound(a.clone()));
+        };
+        let (Cell::Pane(pa), Cell::Pane(pb)) = (cell_a, cell_b) else {
+            return Err(MultiplexerError::InvalidCellType(a.clone()));
+        };
+        std::mem::swap(&mut pa.pane, &mut pb.pane);
         Ok(())
     }
 
@@ -903,6 +935,36 @@ mod tests {
     }
 
     #[test]
+    fn ordered_pane_cells_returns_cell_id_and_pane_id_in_dfs_order() {
+        let mut state = LayoutCellState::default();
+        let pa = PaneId::new();
+        let pb = PaneId::new();
+        let pc = PaneId::new();
+        let (root, cell_a) = state.new_window_layout(pa.clone());
+        let cell_b = state.new_pane(pb.clone(), None);
+        let split_ab = state
+            .split_cell(
+                cell_a.clone(),
+                cell_b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap();
+        let cell_c = state.new_pane(pc.clone(), None);
+        let _split_abc = state
+            .split_cell(
+                split_ab,
+                cell_c.clone(),
+                Side::After,
+                SplitOrientation::Vertical,
+            )
+            .unwrap();
+
+        let ordered = state.ordered_pane_cells(&root).unwrap();
+        assert_eq!(ordered, vec![(cell_a, pa), (cell_b, pb), (cell_c, pc)]);
+    }
+
+    #[test]
     fn remove_subtree_drops_every_cell_below_root() {
         let mut state = LayoutCellState::default();
         let (root_id, pane_a) = state.new_window_layout(pid());
@@ -921,5 +983,56 @@ mod tests {
         assert!(state.cell(&split_id).is_err());
         assert!(state.cell(&pane_a).is_err());
         assert!(state.cell(&pane_b).is_err());
+    }
+
+    #[test]
+    fn swap_panes_exchanges_pane_field_between_two_pane_cells() {
+        let mut state = LayoutCellState::default();
+        let pa = PaneId::new();
+        let pb = PaneId::new();
+        let (_root, cell_a) = state.new_window_layout(pa.clone());
+        let cell_b = state.new_pane(pb.clone(), None);
+        let _split = state
+            .split_cell(
+                cell_a.clone(),
+                cell_b.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap();
+
+        state.swap_panes(&cell_a, &cell_b).unwrap();
+
+        match state.cell(&cell_a).unwrap() {
+            Cell::Pane(p) => assert_eq!(p.pane, pb),
+            _ => panic!("cell_a should still be a Pane"),
+        }
+        match state.cell(&cell_b).unwrap() {
+            Cell::Pane(p) => assert_eq!(p.pane, pa),
+            _ => panic!("cell_b should still be a Pane"),
+        }
+    }
+
+    #[test]
+    fn swap_panes_errors_when_either_cell_is_not_a_pane() {
+        let mut state = LayoutCellState::default();
+        let pa = PaneId::new();
+        let pb = PaneId::new();
+        let (root, cell_a) = state.new_window_layout(pa.clone());
+        let cell_b = state.new_pane(pb.clone(), None);
+        let split = state
+            .split_cell(
+                cell_a.clone(),
+                cell_b,
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap();
+
+        let err = state.swap_panes(&cell_a, &split).unwrap_err();
+        assert!(matches!(err, MultiplexerError::InvalidCellType(_)));
+
+        let err = state.swap_panes(&root, &cell_a).unwrap_err();
+        assert!(matches!(err, MultiplexerError::InvalidCellType(_)));
     }
 }

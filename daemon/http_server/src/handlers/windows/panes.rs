@@ -12,6 +12,7 @@ pub mod cycle_activity;
 pub mod resize;
 pub mod spawn_terminal;
 pub mod split;
+pub mod swap;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -22,6 +23,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/{pane_id}/split", post(split::split))
         .route("/{pane_id}/resize", post(resize::resize))
+        .route("/{pane_id}/swap", post(swap::swap))
         .route("/{pane_id}", method_delete(close::close))
         .nest("/{pane_id}/activities", activities::router())
 }

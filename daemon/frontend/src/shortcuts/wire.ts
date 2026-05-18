@@ -63,6 +63,10 @@ const ActionSchema = z.discriminatedUnion('type', [
     type: z.literal('resize-pane'),
     direction: z.enum(['up', 'down', 'left', 'right']),
   }),
+  z.object({
+    type: z.literal('swap-pane'),
+    offset: z.enum(['prev', 'next']),
+  }),
 ]);
 
 const PrefixSchema = KeyChordFieldsSchema.extend({
