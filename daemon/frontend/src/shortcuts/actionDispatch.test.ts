@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PaneId, WindowId } from '../layout/types';
 import { makeShortcutContext } from './__test-helpers';
 import { actionToHandler } from './actionDispatch';
 import type { Action } from './wire';
@@ -409,6 +410,42 @@ describe('actionToHandler', () => {
     }
     handler();
     expect(openChooseTree).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'prev',
+    'next',
+  ] as const)('returns a handler that POSTs swap-pane with %s offset', async (offset) => {
+    const fetchMock = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const ctx = makeShortcutContext({
+      activeWindow: () => 'wid-1' as WindowId,
+      activePane: () => 'pid-1' as PaneId,
+    });
+    const handler = actionToHandler({ type: 'swap-pane', offset }, ctx);
+    expect(handler).not.toBeNull();
+    handler?.();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledWith('/windows/wid-1/panes/pid-1/swap', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ offset }),
+    });
+  });
+
+  it('swap-pane handler is a no-op when active pane is null', async () => {
+    const fetchMock = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const ctx = makeShortcutContext({
+      activeWindow: () => 'wid-1' as WindowId,
+      activePane: () => null,
+    });
+    const handler = actionToHandler({ type: 'swap-pane', offset: 'next' }, ctx);
+    handler?.();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns a handler that POSTs /windows with the active session id', async () => {

@@ -7,6 +7,7 @@ import { focusPane } from '../layout/focusPane';
 import { newTerminalActivity } from '../layout/newTerminalActivity';
 import { resizePane } from '../layout/resizePane';
 import { splitPane } from '../layout/splitPane';
+import { swapPane } from '../layout/swapPane';
 import type { ActivityId, PaneId, WindowId } from '../layout/types';
 import type { SessionView } from '../statusbar/types';
 import { windowSelect } from '../statusbar/windowSelect';
@@ -85,6 +86,10 @@ export function actionToHandler(action: Action, ctx: ShortcutContext): (() => vo
     case 'focus-pane': {
       const direction = action.direction;
       return () => withActiveWindow(ctx, (w) => focusPane(w, direction));
+    }
+    case 'swap-pane': {
+      const offset = action.offset;
+      return () => withActivePane(ctx, (w, p) => swapPane(w, p, offset));
     }
     case 'resize-pane': {
       const direction = action.direction;
