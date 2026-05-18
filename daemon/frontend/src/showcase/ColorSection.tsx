@@ -122,16 +122,16 @@ const GROUPS: Group[] = [
         rawVar: '--tn-border',
       },
       {
-        name: 'tmux-pane-active',
-        bgClass: 'bg-tmux-pane-active',
-        textClass: null,
-        rawVar: '--tn-blue',
-      },
-      {
         name: 'tmux-status-bar',
         bgClass: 'bg-tmux-status-bar',
         textClass: 'text-tmux-status-bar-foreground',
         rawVar: '--tn-bg-status',
+      },
+      {
+        name: 'tmux-tab-inactive-bg',
+        bgClass: 'bg-tmux-tab-inactive-bg',
+        textClass: 'text-tmux-tab-inactive-foreground',
+        rawVar: '--tn-bg-card',
       },
     ],
   },
