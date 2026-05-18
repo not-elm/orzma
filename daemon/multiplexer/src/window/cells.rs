@@ -198,6 +198,39 @@ impl LayoutCellState {
         Ok(out)
     }
 
+    /// Same traversal as `pane_ids_in_subtree` but also yields each leaf's
+    /// `CellId`. Used by `Window::swap_pane` to address two cells for the
+    /// pane-field swap.
+    pub fn ordered_pane_cells(
+        &self,
+        start: &CellId,
+    ) -> MultiplexerResult<Vec<(CellId, PaneId)>> {
+        let mut out = Vec::new();
+        self.collect_pane_cells(start, &mut out)?;
+        Ok(out)
+    }
+
+    fn collect_pane_cells(
+        &self,
+        id: &CellId,
+        out: &mut Vec<(CellId, PaneId)>,
+    ) -> MultiplexerResult {
+        match self.cell(id)? {
+            Cell::Root(r) => {
+                let child = r.child.clone();
+                self.collect_pane_cells(&child, out)?;
+            }
+            Cell::Split(s) => {
+                let lhs = s.lhs_cell.clone();
+                let rhs = s.rhs_cell.clone();
+                self.collect_pane_cells(&lhs, out)?;
+                self.collect_pane_cells(&rhs, out)?;
+            }
+            Cell::Pane(p) => out.push((id.clone(), p.pane.clone())),
+        }
+        Ok(())
+    }
+
     fn collect_panes(&self, id: &CellId, out: &mut Vec<PaneId>) -> MultiplexerResult {
         match self.cell(id)? {
             Cell::Root(r) => {
@@ -900,6 +933,29 @@ mod tests {
     fn split_ratio_normalizes_zero_total_to_half() {
         assert_eq!(LayoutCellState::split_ratio(0.0, 0.0), 0.5);
         assert_eq!(LayoutCellState::split_ratio(1.0, 3.0), 0.25);
+    }
+
+    #[test]
+    fn ordered_pane_cells_returns_cell_id_and_pane_id_in_dfs_order() {
+        let mut state = LayoutCellState::default();
+        let pa = PaneId::new();
+        let pb = PaneId::new();
+        let pc = PaneId::new();
+        let (root, cell_a) = state.new_window_layout(pa.clone());
+        let cell_b = state.new_pane(pb.clone(), None);
+        let split_ab = state
+            .split_cell(cell_a.clone(), cell_b.clone(), Side::After, SplitOrientation::Horizontal)
+            .unwrap();
+        let cell_c = state.new_pane(pc.clone(), None);
+        let _split_abc = state
+            .split_cell(split_ab, cell_c.clone(), Side::After, SplitOrientation::Vertical)
+            .unwrap();
+
+        let ordered = state.ordered_pane_cells(&root).unwrap();
+        assert_eq!(
+            ordered,
+            vec![(cell_a, pa), (cell_b, pb), (cell_c, pc)]
+        );
     }
 
     #[test]
