@@ -39,10 +39,10 @@ export function PaneTabBar({ windowId, pane, isActive, onActivate }: PaneTabBarP
             title={activity.title}
             onPointerDown={(event) => selectTab(event, activity.id)}
             className={clsx(
-              'w-35 shrink-0 truncate px-3 py-1 text-left font-mono text-xs',
+              'w-35 shrink-0 truncate border-x border-t px-3 py-1 text-left font-mono text-xs',
               selected
-                ? 'bg-background text-foreground'
-                : 'bg-tmux-tab-inactive-bg text-tmux-tab-inactive-foreground',
+                ? 'border-tmux-pane-border bg-background text-foreground'
+                : 'border-transparent bg-tmux-tab-inactive-bg text-tmux-tab-inactive-foreground',
             )}
           >
             {activity.title}
