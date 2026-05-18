@@ -22,6 +22,8 @@ pub(crate) struct NewArgs {
 struct NewSessionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -32,18 +34,19 @@ struct NewSessionResponse {
 impl CommandExecute for NewArgs {
     async fn run(self) -> anyhow::Result<()> {
         daemon::ensure_running().await?;
-        let id = new_session(self.name).await?;
+        let cwd = current_dir_string();
+        let id = new_session(self.name, cwd).await?;
         println!("{id}");
         Ok(())
     }
 }
 
-async fn new_session(name: Option<String>) -> anyhow::Result<String> {
+async fn new_session(name: Option<String>, cwd: Option<String>) -> anyhow::Result<String> {
     let client = daemon::http_client(NEW_TIMEOUT)?;
     let url = format!("{}/sessions", daemon_bootstrap::HTTP_BASE_URL);
     let response = client
         .post(&url)
-        .json(&NewSessionRequest { name })
+        .json(&NewSessionRequest { name, cwd })
         .send()
         .await
         .with_context(|| format!("POST {url}"))?;
@@ -59,4 +62,14 @@ async fn new_session(name: Option<String>) -> anyhow::Result<String> {
         .await
         .context("parse session new response body")?;
     Ok(parsed.id)
+}
+
+fn current_dir_string() -> Option<String> {
+    match std::env::current_dir() {
+        Ok(p) => Some(p.to_string_lossy().into_owned()),
+        Err(e) => {
+            eprintln!("warning: could not resolve current directory: {e}; falling back to daemon CWD");
+            None
+        }
+    }
 }

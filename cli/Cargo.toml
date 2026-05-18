@@ -24,5 +24,6 @@ daemon_bootstrap = { path = "../daemon/bootstrap" }
 
 [dev-dependencies]
 reqwest = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }
 libc = { workspace = true }

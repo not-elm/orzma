@@ -89,3 +89,30 @@ fn assert_single_id_line(stdout: &[u8], label: &str) {
         "{label}: session id line is empty"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn session_new_sends_current_dir_as_cwd() {
+    use reqwest::Client;
+    let bin = env!("CARGO_BIN_EXE_ozmux").to_string();
+    assert!(
+        !daemon_running(),
+        "a daemon is already running on {DAEMON_ADDR}; stop it before running this test"
+    );
+    let _guard = DaemonStopGuard { bin: bin.clone() };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = Command::new(&bin)
+        .current_dir(dir.path())
+        .args(["session", "new", "-s", "cwd-check"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .expect("spawn ozmux session new");
+    assert!(out.status.success(), "session new failed: {out:?}");
+
+    let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    let url = format!("http://{DAEMON_ADDR}/sessions/{id}");
+    let resp = Client::new().get(&url).send().await.expect("GET session");
+    assert!(resp.status().is_success());
+}
