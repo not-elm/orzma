@@ -5,18 +5,18 @@ use clap::Subcommand;
 
 use crate::commands::CommandExecute;
 
-pub(crate) mod create;
+pub(crate) mod new;
 
 #[derive(Subcommand)]
 pub enum SessionCommand {
     /// Create a new session.
-    Create(create::CreateArgs),
+    New(new::NewArgs),
 }
 
 impl CommandExecute for SessionCommand {
     async fn run(self) -> anyhow::Result<()> {
         match self {
-            Self::Create(args) => args.run().await,
+            Self::New(args) => args.run().await,
         }
     }
 }

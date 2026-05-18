@@ -1,4 +1,4 @@
-//! Integration test for `ozmux session create`: verifies it creates a
+//! Integration test for `ozmux session new`: verifies it creates a
 //! session via the daemon, auto-starting the daemon when none is running
 //! and reusing an already-running daemon otherwise.
 //!
@@ -33,7 +33,7 @@ impl Drop for DaemonStopGuard {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn session_create_autostarts_then_reuses_daemon() {
+async fn session_new_autostarts_then_reuses_daemon() {
     let bin = env!("CARGO_BIN_EXE_ozmux").to_string();
     assert!(
         !daemon_running(),
@@ -41,10 +41,10 @@ async fn session_create_autostarts_then_reuses_daemon() {
     );
     let _guard = DaemonStopGuard { bin: bin.clone() };
 
-    let auto = run_create(&bin, "autostart-session").await;
+    let auto = run_new(&bin, "autostart-session").await;
     assert!(
         auto.status.success(),
-        "session create (auto-start) failed: {auto:?}"
+        "session new (auto-start) failed: {auto:?}"
     );
     assert_single_id_line(&auto.stdout, "auto-start");
     assert!(
@@ -52,21 +52,21 @@ async fn session_create_autostarts_then_reuses_daemon() {
         "daemon should be running after auto-start"
     );
 
-    let reuse = run_create(&bin, "reuse-session").await;
+    let reuse = run_new(&bin, "reuse-session").await;
     assert!(
         reuse.status.success(),
-        "session create (reuse) failed: {reuse:?}"
+        "session new (reuse) failed: {reuse:?}"
     );
     assert_single_id_line(&reuse.stdout, "reuse");
 }
 
-async fn run_create(bin: &str, name: &str) -> std::process::Output {
+async fn run_new(bin: &str, name: &str) -> std::process::Output {
     Command::new(bin)
-        .args(["session", "create", "-s", name])
+        .args(["session", "new", "-s", name])
         .stdin(Stdio::null())
         .output()
         .await
-        .expect("spawn ozmux session create")
+        .expect("spawn ozmux session new")
 }
 
 fn daemon_running() -> bool {
