@@ -1049,26 +1049,23 @@ mod provision_session_with_activity_tests {
     #[tokio::test]
     async fn provision_rolls_back_on_pty_spawn_failure() {
         let state = fresh_state();
-        let pre_session_count = state.multiplexer.sessions.lock().await.len();
-        let pre_window_count = state.multiplexer.windows.len();
-
         state.terminal.inject_next_spawn_failure();
 
-        let err = state
+        state
             .provision_session_with_activity(Some("rollback".into()), None)
             .await
             .expect_err("expected PTY spawn to fail");
-        let _ = err;
 
-        let post_session_count = state.multiplexer.sessions.lock().await.len();
-        let post_window_count = state.multiplexer.windows.len();
         assert_eq!(
-            pre_session_count, post_session_count,
-            "session should be rolled back"
+            state.multiplexer.windows.len(),
+            0,
+            "the half-created window must be rolled back"
         );
+        let sessions = state.multiplexer.sessions.lock().await;
         assert_eq!(
-            pre_window_count, post_window_count,
-            "window should be rolled back"
+            sessions.len(),
+            0,
+            "the half-created session must be rolled back"
         );
     }
 }
