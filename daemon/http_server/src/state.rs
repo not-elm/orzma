@@ -670,7 +670,7 @@ impl AppState {
         name: Option<String>,
     ) -> HttpResult<(WindowId, PaneId, ActivityId)> {
         let (wid, pid, aid) = self.multiplexer.create_window(session_id, name).await?;
-        if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid).await {
+        if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid, None).await {
             self.rollback_window(&wid, "PTY spawn failure").await;
             return Err(spawn_err);
         }
