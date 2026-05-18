@@ -73,6 +73,8 @@
   --color-tmux-status-bar-foreground: var(--tn-blue);
   --color-tmux-cursor: var(--tn-cursor);
   --color-tmux-cursor-inactive: var(--tn-cursor-inactive);
+  --color-tmux-tab-inactive-bg: var(--tn-bg-card);
+  --color-tmux-tab-inactive-foreground: var(--tn-fg-muted);
   --color-selection: var(--tn-selection);
 
   --animate-cursor-blink: cursor-blink 1200ms step-end infinite;
