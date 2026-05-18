@@ -19,6 +19,7 @@ use ozmux_multiplexer::{
 };
 use ozmux_terminal::TerminalService;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Lightweight discriminant for `ActivityKind`, used by route-kind guards
@@ -684,6 +685,48 @@ impl AppState {
         Ok((wid, pid, aid))
     }
 
+    /// Provision a brand-new Session with an attached Window+Pane+terminal
+    /// Activity and its PTY in a single atomic step, then broadcast the
+    /// resulting `SessionView`.
+    ///
+    /// Used by both `serve()`'s bootstrap and the `POST /sessions` HTTP
+    /// handler so the same provisioning lives in one place.
+    ///
+    /// On PTY-spawn failure the partially-created session/window are rolled
+    /// back via `rollback_window` + `delete_session` (which also closes the
+    /// session broadcast) before the original error is returned.
+    ///
+    /// `cwd` is the initial working directory for the spawned shell; `None`
+    /// inherits the daemon process's CWD.
+    pub async fn provision_session_with_activity(
+        &self,
+        name: Option<String>,
+        cwd: Option<&Path>,
+    ) -> HttpResult<(SessionId, WindowId, PaneId, ActivityId)> {
+        let sid = self.multiplexer.create_session(name).await;
+
+        let (wid, pid, aid) = match self.multiplexer.create_window(Some(&sid), None).await {
+            Ok(triple) => triple,
+            Err(e) => {
+                if let Err(rb) = self.delete_session(&sid).await {
+                    tracing::warn!(error = %rb, %sid, "rollback delete_session failed");
+                }
+                return Err(e.into());
+            }
+        };
+
+        if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid, cwd).await {
+            self.rollback_window(&wid, "PTY spawn failure").await;
+            if let Err(rb) = self.delete_session(&sid).await {
+                tracing::warn!(error = %rb, %sid, "rollback delete_session failed");
+            }
+            return Err(spawn_err);
+        }
+
+        self.publish_session_view(&sid).await;
+        Ok((sid, wid, pid, aid))
+    }
+
     /// Rename a session and broadcast the updated view.
     pub async fn rename_session(&self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
         self.multiplexer.rename_session(sid, name).await?;
@@ -971,6 +1014,37 @@ mod tests {
             .await
             .expect_err("must reject mismatched kind");
         assert!(matches!(err, HttpError::ActivityKindMismatch { .. }));
+    }
+}
+
+#[cfg(test)]
+mod provision_session_with_activity_tests {
+    use crate::test_helpers::fresh_state;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn provision_creates_full_chain_and_publishes() {
+        let state = fresh_state();
+        let (sid, wid, pid, aid) = state
+            .provision_session_with_activity(Some("s1".into()), None)
+            .await
+            .expect("provision succeeded");
+
+        assert!(!sid.as_ref().is_empty());
+        assert!(!wid.as_ref().is_empty());
+        assert!(!pid.as_ref().is_empty());
+        assert!(!aid.as_ref().is_empty());
+
+        // Re-broadcast and confirm the session view is observable.
+        let mut rx = state.session_broadcast.subscribe_or_create(&sid);
+        state.publish_session_view(&sid).await;
+        let view = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("recv error");
+        assert_eq!(view["name"].as_str(), Some("s1"));
+        assert_eq!(view["windows"].as_array().map(|a| a.len()), Some(1));
     }
 }
 
