@@ -45,12 +45,8 @@ fn resolve_initial_url(arg: Option<&str>, base: &str) -> anyhow::Result<Url> {
             }
         },
         Some(s) => {
-            let mut u = base_url.clone();
-            u.set_query(Some(&format!(
-                "session={}",
-                percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC)
-            )));
-            Ok(u)
+            let url = daemon_bootstrap::session_deep_link_url(s);
+            Url::parse(&url).map_err(|e| anyhow::anyhow!("failed to construct deep-link URL: {e}"))
         }
     }
 }

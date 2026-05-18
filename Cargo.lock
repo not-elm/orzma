@@ -1242,6 +1242,7 @@ dependencies = [
  "ozmux_http_server",
  "ozmux_multiplexer",
  "ozmux_terminal",
+ "percent-encoding",
  "tempfile",
  "tokio",
  "tracing",
@@ -3716,7 +3717,7 @@ name = "ozmux-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "percent-encoding",
+ "daemon_bootstrap",
  "tauri",
  "tauri-build",
  "tokio",
@@ -3783,7 +3784,6 @@ dependencies = [
  "clap",
  "daemon_bootstrap",
  "libc",
- "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",

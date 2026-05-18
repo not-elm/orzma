@@ -708,18 +708,14 @@ impl AppState {
         let (wid, pid, aid) = match self.multiplexer.create_window(Some(&sid), None).await {
             Ok(triple) => triple,
             Err(e) => {
-                if let Err(rb) = self.delete_session(&sid).await {
-                    tracing::warn!(error = %rb, %sid, "rollback delete_session failed");
-                }
+                self.rollback_session(&sid).await;
                 return Err(e.into());
             }
         };
 
         if let Err(spawn_err) = spawn_terminal_pty(self, &wid, &pid, &aid, cwd).await {
             self.rollback_window(&wid, "PTY spawn failure").await;
-            if let Err(rb) = self.delete_session(&sid).await {
-                tracing::warn!(error = %rb, %sid, "rollback delete_session failed");
-            }
+            self.rollback_session(&sid).await;
             return Err(spawn_err);
         }
 
@@ -811,6 +807,12 @@ impl AppState {
             });
         }
         Ok(activity)
+    }
+
+    async fn rollback_session(&self, sid: &SessionId) {
+        if let Err(rb) = self.delete_session(sid).await {
+            tracing::warn!(error = %rb, %sid, "rollback delete_session failed");
+        }
     }
 
     /// Tear down a half-created window after a `create_window` step failed.

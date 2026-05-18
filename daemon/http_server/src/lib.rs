@@ -27,7 +27,7 @@ pub async fn serve(state: AppState) -> HttpResult {
     state
         .provision_session_with_activity(None, None)
         .await
-        .expect("bootstrap cannot fail on empty AppState");
+        .unwrap_or_else(|e| panic!("bootstrap PTY provisioning failed: {e}"));
 
     let listener = TcpListener::bind("127.0.0.1:3200")
         .await

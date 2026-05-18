@@ -21,7 +21,6 @@ serde_json = { workspace = true }
 libc = { workspace = true }
 uuid = { workspace = true }
 daemon_bootstrap = { path = "../daemon/bootstrap" }
-percent-encoding = "2"
 
 [dev-dependencies]
 reqwest = { workspace = true }

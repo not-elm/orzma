@@ -2,14 +2,7 @@
 //! URL pointing at a specific session.
 
 use anyhow::{Context, Result};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use std::process::{Command, Stdio};
-
-/// Build the deep-link URL for the given session id.
-pub(super) fn deep_link_url(session_id: &str) -> String {
-    let encoded = utf8_percent_encode(session_id, NON_ALPHANUMERIC);
-    format!("{}/?session={}", daemon_bootstrap::HTTP_BASE_URL, encoded)
-}
 
 /// Spawn `ozmux-client` (or whichever binary `OZMUX_CLIENT_BIN` points at)
 /// detached from the CLI's controlling tty, passing the session-scoped URL
@@ -18,7 +11,7 @@ pub(super) fn deep_link_url(session_id: &str) -> String {
 /// not awaited.
 pub(super) fn spawn_detached(session_id: &str) -> Result<()> {
     let bin = std::env::var("OZMUX_CLIENT_BIN").unwrap_or_else(|_| "ozmux-client".into());
-    let url = deep_link_url(session_id);
+    let url = daemon_bootstrap::session_deep_link_url(session_id);
 
     let mut cmd = Command::new(&bin);
     cmd.arg(&url)
@@ -35,18 +28,16 @@ pub(super) fn spawn_detached(session_id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn deep_link_url_encodes_session_id() {
-        let url = deep_link_url("abc-123");
+        let url = daemon_bootstrap::session_deep_link_url("abc-123");
         assert!(url.starts_with("http://"));
         assert!(url.contains("?session=abc%2D123"));
     }
 
     #[test]
     fn deep_link_url_escapes_dangerous_chars() {
-        let url = deep_link_url("hi&id=evil");
+        let url = daemon_bootstrap::session_deep_link_url("hi&id=evil");
         assert!(url.contains("?session=hi%26id%3Devil"));
     }
 }
