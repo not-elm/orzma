@@ -109,3 +109,33 @@ async fn attach_unknown_session_id_fails() {
         "expected stderr to mention 'session not found'; got: {stderr:?}"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn attach_fails_when_client_bin_missing() {
+    let bin = env!("CARGO_BIN_EXE_ozmux").to_string();
+    assert!(
+        !daemon_running(),
+        "a daemon is already running on {DAEMON_ADDR}; stop it before running this test"
+    );
+    let _guard = DaemonStopGuard { bin: bin.clone() };
+
+    let id = run_new(&bin, "attach-missing-client").await;
+
+    let out = Command::new(&bin)
+        .env("OZMUX_CLIENT_BIN", "/nonexistent/path/ozmux-client")
+        .args(["session", "attach", &id])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .expect("spawn ozmux session attach");
+
+    assert!(
+        !out.status.success(),
+        "session attach should hard-error when client binary spawn fails: {out:?}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ozmux-client") || stderr.contains("spawn"),
+        "expected stderr to mention the spawn failure; got: {stderr:?}"
+    );
+}
