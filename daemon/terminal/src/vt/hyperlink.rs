@@ -17,7 +17,12 @@ use serde::{Deserialize, Serialize};
 
 /// Wire-level monotonic hyperlink id. Encoded as bare `u32` on the wire via
 /// `#[serde(transparent)]`.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+// NOTE: HyperlinkWireId must remain `Ord` — frame_builder.rs uses
+// BTreeMap<HyperlinkWireId, _> to keep hyperlink iteration deterministic
+// for byte-equal golden fixtures. Changing the inner type away from a
+// primitive numeric requires switching to an alternative stable-ordered
+// container in frame_builder.rs.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct HyperlinkWireId(pub u32);
 

@@ -17,7 +17,7 @@ use alacritty_terminal::term::TermDamage;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthChar;
 
 /// Outcome of damage inspection.
@@ -66,7 +66,7 @@ pub(crate) fn build_snapshot<T>(
 ) -> FrameSnapshot {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
-    let mut emitted: HashMap<HyperlinkWireId, HyperlinkUri> = HashMap::new();
+    let mut emitted: BTreeMap<HyperlinkWireId, HyperlinkUri> = BTreeMap::new();
     let rows_data: Vec<Row> = (0..rows as i32)
         .map(|y| Row {
             runs: coalesce_row(term, y, interner, &mut emitted),
@@ -99,7 +99,7 @@ pub(super) fn build_delta<T>(
     rows: &[u16],
     interner: &mut HyperlinkInterner,
 ) -> FrameDelta {
-    let mut emitted: HashMap<HyperlinkWireId, HyperlinkUri> = HashMap::new();
+    let mut emitted: BTreeMap<HyperlinkWireId, HyperlinkUri> = BTreeMap::new();
     let dirty_rows: Vec<DirtyRow> = rows
         .iter()
         .map(|&r| DirtyRow {
@@ -219,7 +219,7 @@ fn coalesce_row<T>(
     term: &Term<T>,
     y: i32,
     interner: &mut HyperlinkInterner,
-    emitted_hyperlinks: &mut HashMap<HyperlinkWireId, HyperlinkUri>,
+    emitted_hyperlinks: &mut BTreeMap<HyperlinkWireId, HyperlinkUri>,
 ) -> Vec<Run> {
     let cols = term.columns() as u16;
     let grid_row = &term.grid()[viewport_row_to_line(term, y)];
@@ -647,7 +647,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "abc");
         let mut interner = HyperlinkInterner::new();
-        let mut emitted = HashMap::new();
+        let mut emitted = BTreeMap::new();
         let runs = coalesce_row(&term, 0, &mut interner, &mut emitted);
         let merged: String = runs.iter().map(|r| r.text.as_str()).collect();
         assert!(merged.starts_with("abc"), "got: {merged:?}");
@@ -667,7 +667,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Top);
         let mut interner = HyperlinkInterner::new();
-        let mut emitted = HashMap::new();
+        let mut emitted = BTreeMap::new();
         let runs = coalesce_row(&term, 0, &mut interner, &mut emitted);
         let merged: String = runs.iter().map(|r| r.text.as_str()).collect();
         assert!(
