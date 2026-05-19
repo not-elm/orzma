@@ -1,41 +1,45 @@
 use crate::AppState;
-use crate::error::HttpResult;
-use crate::window_view::WindowView;
 use axum::{
-    Json,
-    extract::{Path, State},
+    Router,
+    routing::{get, patch, post},
 };
-use ozmux_multiplexer::WindowId;
 
 pub mod create;
 pub mod delete;
 pub mod dimensions;
 pub mod events;
+pub mod fetch;
 pub mod focus_pane;
 pub mod panes;
 pub mod rename;
 pub mod select;
 
-pub async fn get(
-    State(state): State<AppState>,
-    Path(window_id): Path<WindowId>,
-) -> HttpResult<Json<WindowView>> {
-    let titles = state.titles.snapshot().await;
-    let view = state
-        .multiplexer
-        .with_window_or_404(&window_id, |w| WindowView::from_window(w, &titles))
-        .await?;
-    Ok(Json(view))
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/", post(create::create))
+        .nest("/{window_id}", window_id_router())
+}
+
+fn window_id_router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/",
+            get(fetch::get).patch(rename::rename).delete(delete::delete),
+        )
+        .route("/dimensions", patch(dimensions::patch_dimensions))
+        .route("/select", post(select::select))
+        .route("/focus-pane", post(focus_pane::focus_pane))
+        .route("/events", get(events::events))
+        .nest("/panes", panes::router())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::AppState;
     use crate::test_helpers::{bootstrap_default, fresh_state, router_with};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
-    use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation};
+    use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation, WindowId};
     use std::path::PathBuf;
     use tower::ServiceExt;
 

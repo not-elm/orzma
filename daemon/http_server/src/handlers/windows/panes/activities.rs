@@ -20,22 +20,18 @@ mod vt_ws;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(add_to_pane::add_to_pane))
-        .route(
-            "/{activity_id}",
-            method_delete(close_activity::close_activity),
-        )
-        .route("/{activity_id}/activate", post(activate::activate))
-        .route(
-            "/{activity_id}/break-to-pane",
-            post(break_to_pane::break_to_pane),
-        )
-        .route("/{activity_id}/browser/ws", get(browser_ws::browser_ws))
-        .route("/{activity_id}/terminal/ws", get(terminal_ws::terminal_ws))
-        .route("/{activity_id}/handlers/ws", get(handlers_ws::handlers_ws))
-        .route(
-            "/{activity_id}/iframe/{*path}",
-            get(iframe_serve::iframe_serve),
-        )
+        .nest("/{activity_id}", activity_id_router())
+}
+
+fn activity_id_router() -> Router<AppState> {
+    Router::new()
+        .route("/", method_delete(close_activity::close_activity))
+        .route("/activate", post(activate::activate))
+        .route("/break-to-pane", post(break_to_pane::break_to_pane))
+        .route("/browser/ws", get(browser_ws::browser_ws))
+        .route("/terminal/ws", get(terminal_ws::terminal_ws))
+        .route("/handlers/ws", get(handlers_ws::handlers_ws))
+        .route("/iframe/{*path}", get(iframe_serve::iframe_serve))
 }
 
 #[derive(Deserialize)]

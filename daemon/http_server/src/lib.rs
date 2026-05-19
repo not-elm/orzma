@@ -17,10 +17,7 @@ pub mod window_view;
 pub use error::{HttpError, HttpResult};
 pub use state::AppState;
 
-use axum::{
-    Router,
-    routing::{get, post},
-};
+use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
 pub async fn serve(state: AppState) -> HttpResult {
@@ -43,64 +40,10 @@ pub fn daemon_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(handlers::index::handler))
         .route("/health", get(handlers::health::check))
-        .nest("/sessions", sessions_router())
-        .nest("/windows", windows_router())
-        .nest("/configs", configs_router())
+        .nest("/sessions", handlers::sessions::router())
+        .nest("/windows", handlers::windows::router())
+        .nest("/configs", handlers::configs::router())
         .with_state(state)
-}
-
-/// Router for read-only config endpoints under `/configs`.
-pub fn configs_router() -> Router<AppState> {
-    Router::new()
-        .route("/shortcuts", get(handlers::configs::shortcuts::get))
-        .route("/font", get(handlers::configs::font::get))
-}
-
-pub fn sessions_router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/",
-            get(handlers::sessions::list::list).post(handlers::sessions::create::create),
-        )
-        .route("/tree", get(handlers::sessions::tree::tree))
-        .route(
-            "/{session_id}",
-            get(handlers::sessions::get::get)
-                .patch(handlers::sessions::rename::rename)
-                .delete(handlers::sessions::delete::delete),
-        )
-        .route(
-            "/{session_id}/events",
-            get(handlers::sessions::events::events),
-        )
-}
-
-pub fn windows_router() -> Router<AppState> {
-    Router::new()
-        .route("/", post(handlers::windows::create::create))
-        .route(
-            "/{window_id}",
-            get(handlers::windows::get)
-                .patch(handlers::windows::rename::rename)
-                .delete(handlers::windows::delete::delete),
-        )
-        .route(
-            "/{window_id}/dimensions",
-            axum::routing::patch(handlers::windows::dimensions::patch_dimensions),
-        )
-        .route(
-            "/{window_id}/select",
-            post(handlers::windows::select::select),
-        )
-        .route(
-            "/{window_id}/focus-pane",
-            post(handlers::windows::focus_pane::focus_pane),
-        )
-        .route(
-            "/{window_id}/events",
-            get(handlers::windows::events::events),
-        )
-        .nest("/{window_id}/panes", handlers::windows::panes::router())
 }
 
 /// Returns `true` when `OZMUX_TEST_REAL_CHROME=1` is set in the environment.
