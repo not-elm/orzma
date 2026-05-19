@@ -1,25 +1,25 @@
 {
   "kind": "snapshot",
   "seq": 1,
-  "cols": 5,
+  "cols": 3,
   "rows": 1,
   "cursor": {
     "x": 0,
     "y": 0,
-    "shape": "underline",
-    "blinking": true,
+    "shape": "block",
+    "blinking": false,
     "visible": true
   },
   "rows_data": [
     {
       "runs": [
         {
-          "cols": 5,
+          "cols": 3,
           "fg": null,
           "bg": null,
           "style": 0,
-          "text": "hello",
-          "hyperlink_id": 0
+          "text": "abc",
+          "hyperlink_id": 1
         }
       ]
     }
@@ -28,8 +28,8 @@
   "modes": [],
   "hyperlinks": [
     {
-      "id": 0,
-      "uri": "https://ozmux.example"
+      "id": 1,
+      "uri": "https://example.com/"
     }
   ],
   "display_offset": 0,

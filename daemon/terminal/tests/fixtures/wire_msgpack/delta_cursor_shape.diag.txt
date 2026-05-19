@@ -2,13 +2,27 @@
   "kind": "delta",
   "seq": 4,
   "cursor": {
-    "x": 0,
+    "x": 1,
     "y": 0,
     "shape": "bar",
     "blinking": false,
     "visible": true
   },
-  "dirty_rows": [],
+  "dirty_rows": [
+    {
+      "row": 0,
+      "runs": [
+        {
+          "cols": 3,
+          "fg": null,
+          "bg": null,
+          "style": 0,
+          "text": "xyz",
+          "hyperlink_id": null
+        }
+      ]
+    }
+  ],
   "hyperlinks": [],
   "display_offset": 0
 }

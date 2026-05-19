@@ -1,9 +1,10 @@
 {
-  "kind": "mode",
-  "seq": 3,
   "added": [
-    "mouse-vt200",
-    "mouse-btn-event"
+    "mouse-sgr-1006"
   ],
-  "removed": []
+  "kind": "mode",
+  "removed": [
+    "alt-screen"
+  ],
+  "seq": 3
 }
