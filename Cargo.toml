@@ -51,3 +51,7 @@ bytes = "1"
 tokio-util = "0.7.12"
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+tracing-chrome = "0.7"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
+metrics-util = "0.18"
