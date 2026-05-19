@@ -4,8 +4,8 @@
   "cursor": {
     "x": 0,
     "y": 0,
-    "shape": "underline",
-    "blinking": true,
+    "shape": "block",
+    "blinking": false,
     "visible": true
   },
   "dirty_rows": [
@@ -13,20 +13,20 @@
       "row": 0,
       "runs": [
         {
-          "cols": 5,
+          "cols": 3,
           "fg": null,
           "bg": null,
           "style": 0,
-          "text": "world",
-          "hyperlink_id": 0
+          "text": "xyz",
+          "hyperlink_id": 1
         }
       ]
     }
   ],
   "hyperlinks": [
     {
-      "id": 0,
-      "uri": "https://ozmux.example"
+      "id": 1,
+      "uri": "https://example.com/"
     }
   ],
   "display_offset": 0

@@ -1,18 +1,27 @@
 {
   "kind": "snapshot",
   "seq": 3,
-  "cols": 1,
+  "cols": 3,
   "rows": 1,
   "cursor": {
     "x": 0,
     "y": 0,
-    "shape": "underline",
+    "shape": "block",
     "blinking": true,
     "visible": true
   },
   "rows_data": [
     {
-      "runs": []
+      "runs": [
+        {
+          "cols": 3,
+          "fg": null,
+          "bg": null,
+          "style": 0,
+          "text": "abc",
+          "hyperlink_id": null
+        }
+      ]
     }
   ],
   "reason": "initial",

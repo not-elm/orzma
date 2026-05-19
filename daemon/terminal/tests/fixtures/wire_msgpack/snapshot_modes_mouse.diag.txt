@@ -1,4 +1,5 @@
 {
+  "kind": "snapshot",
   "seq": 7,
   "cols": 3,
   "rows": 1,
@@ -25,7 +26,7 @@
   ],
   "reason": "initial",
   "modes": [
-    "mouse-any-event",
+    "mouse-btn-event",
     "mouse-sgr-1006"
   ],
   "hyperlinks": [],
