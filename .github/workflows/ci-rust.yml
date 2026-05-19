@@ -51,8 +51,14 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    name: test
+    name: test (features=${{ matrix.features }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "ozmux_cli/tracing-chrome"
     steps:
       - uses: actions/checkout@v5
       - name: Install Tauri Linux system deps
@@ -74,7 +80,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ci"
-      - run: cargo test --workspace --tests -- --test-threads=1
+      - name: Test (features=${{ matrix.features }})
+        run: |
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo test --workspace --tests --features "${{ matrix.features }}" -- --test-threads=1
+          else
+            cargo test --workspace --tests -- --test-threads=1
+          fi
 
   doc:
     name: doc
