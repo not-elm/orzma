@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- **Built-in `@browser` command.** Type `@browser <URL>` at the prompt
+  inside any terminal Activity to open an embedded browser pane.
+  Equivalent to `ozmux browser <URL>` with the same flag set.
+
+### Changed
+
+- **Extension command names may now start with `@`.** The SDK
+  command-name regex was loosened from `^[a-z]…$` to `^@?[a-z]…$`.
+  The `memo` extension's command is now invoked as `@memo`.
+
+### Known limitations
+
+- Built-in `@<name>` commands rely on the shell's default PATH-based
+  command lookup. The initial release is verified on bash, zsh, fish,
+  dash, and POSIX sh. **Nushell** uses `@` as an attribute syntax
+  for `def` declarations and is likely to mis-parse a bare
+  `@browser foo` — nushell users can fall back to `^@browser foo`
+  (caret-prefixed external command). Empirical confirmation of this
+  workaround is tracked in
+  `docs/superpowers/specs/2026-05-19-builtin-command-aliases-design.md`.
+
 ### Breaking changes
 
 - HTTP routes are now hierarchical under
