@@ -5,6 +5,8 @@ use axum::{
     extract::{FromRequest, Path, Query, State, WebSocketUpgrade},
     response::Response,
 };
+#[cfg(not(debug_assertions))]
+use axum::response::IntoResponse;
 use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 use serde::Deserialize;
 
@@ -19,6 +21,12 @@ pub struct TerminalWsParams {
 /// upgrades and runs the VT frame bridge. Internal routing is keyed by
 /// ActivityId; the path includes (wid, pid) so URLs are self-describing for
 /// the SDK and pre-upgrade authorization is straightforward.
+///
+/// In debug builds, a `?replay=<fixture>` query parameter diverts the
+/// connection to the deterministic PTY-tape replay harness (see
+/// `ozmux_terminal::testing`) instead of the live PTY bridge. In release
+/// builds the same query parameter returns HTTP 404 so the debug-only path
+/// cannot be invoked in production.
 pub async fn terminal_ws(
     State(state): State<AppState>,
     Path((wid, pid, aid)): Path<(WindowId, PaneId, ActivityId)>,
@@ -37,6 +45,32 @@ pub async fn terminal_ws(
         .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Terminal)
         .await?;
 
+    let replay_fixture = req
+        .uri()
+        .query()
+        .and_then(|q| {
+            url::form_urlencoded::parse(q.as_bytes())
+                .find(|(k, _)| k == "replay")
+                .map(|(_, v)| v.into_owned())
+        });
+
+    if let Some(fixture) = replay_fixture {
+        #[cfg(debug_assertions)]
+        {
+            const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+            let ws = WebSocketUpgrade::from_request(req, &())
+                .await
+                .map_err(|e| HttpError::Forbidden(e.to_string()))?
+                .max_message_size(MAX_FRAME_BYTES);
+            return Ok(ws.on_upgrade(move |socket| run_replay_session(fixture, socket)));
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = fixture;
+            return Ok(axum::http::StatusCode::NOT_FOUND.into_response());
+        }
+    }
+
     const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
     let ws = WebSocketUpgrade::from_request(req, &())
         .await
@@ -46,6 +80,36 @@ pub async fn terminal_ws(
     let terminal = state.terminal.clone();
     let last_seq = params.last_seq;
     Ok(ws.on_upgrade(move |socket| super::vt_ws::vt_ws_loop(socket, terminal, aid, last_seq)))
+}
+
+/// Debug-only background replay session: drives the named PTY tape through
+/// the test replay harness and holds the WebSocket open until the client
+/// disconnects. Incoming client frames are ignored while replay is in
+/// progress; the replay task is cancelled if the connection drops first.
+#[cfg(debug_assertions)]
+async fn run_replay_session(fixture: String, mut ws: axum::extract::ws::WebSocket) {
+    use futures_util::StreamExt;
+    use ozmux_terminal::testing::replay::{ReplayMode, feed_pty_tape};
+    use ozmux_terminal::testing::tape::Tape;
+    use tokio_util::task::AbortOnDropHandle;
+
+    let task = tokio::spawn(async move {
+        let tape_path = std::path::PathBuf::from(format!(
+            "daemon/terminal/tests/fixtures/pty_tapes/{fixture}.tape"
+        ));
+        match Tape::load(&tape_path) {
+            Ok(tape) => match feed_pty_tape(&tape, ReplayMode::Timed).await {
+                Ok(_msgs) => tracing::info!(?fixture, "?replay=: completed"),
+                Err(e) => tracing::error!(?fixture, error = %e, "?replay=: feed_pty_tape failed"),
+            },
+            Err(e) => tracing::error!(?fixture, error = %e, "?replay=: tape load failed"),
+        }
+    });
+    let _guard = AbortOnDropHandle::new(task);
+
+    while let Some(_msg) = ws.next().await {
+        // Ignore client frames; replay runs in the background.
+    }
 }
 
 #[cfg(test)]

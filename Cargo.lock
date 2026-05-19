@@ -3869,6 +3869,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -6209,6 +6210,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
