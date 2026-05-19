@@ -32,6 +32,33 @@ pub(crate) const BUILTINS: &[BuiltinCommand] = &[BuiltinCommand {
     cli_args: &["browser"],
 }];
 
+/// Creates `bin_dir` (0700) and writes one shim file (0500) per entry
+/// in `BUILTINS`. Per-shim failures are reported via the returned
+/// `Result::Err` for the first failure; callers should wrap with
+/// `tracing::error!` and continue (the daemon does not fail because
+/// of a missing built-in).
+pub(crate) async fn materialize(bin_dir: &Path, ozmux_exe: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(bin_dir)
+        .await
+        .with_context(|| format!("create built-in bin dir {}", bin_dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(bin_dir, std::fs::Permissions::from_mode(0o700))
+            .await
+            .with_context(|| format!("chmod 0700 {}", bin_dir.display()))?;
+    }
+
+    for cmd in BUILTINS {
+        let path = bin_dir.join(cmd.shim_name);
+        let body = render_shim(ozmux_exe, cmd.cli_args);
+        write_shim_file(&path, &body)
+            .await
+            .with_context(|| format!("write built-in shim {}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// Verifies that the absolute path that will be baked into every
 /// shim is not itself inside the runtime bin tree. Pure — no
 /// filesystem access. Defends against the pyenv-#2696 class of
@@ -73,33 +100,6 @@ fn render_shim(ozmux_exe: &Path, cli_args: &[&str]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!("#!/bin/sh\nexec {exe} {args} \"$@\"\n")
-}
-
-/// Creates `bin_dir` (0700) and writes one shim file (0500) per entry
-/// in `BUILTINS`. Per-shim failures are reported via the returned
-/// `Result::Err` for the first failure; callers should wrap with
-/// `tracing::error!` and continue (the daemon does not fail because
-/// of a missing built-in).
-pub(crate) async fn materialize(bin_dir: &Path, ozmux_exe: &Path) -> Result<()> {
-    tokio::fs::create_dir_all(bin_dir)
-        .await
-        .with_context(|| format!("create built-in bin dir {}", bin_dir.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(bin_dir, std::fs::Permissions::from_mode(0o700))
-            .await
-            .with_context(|| format!("chmod 0700 {}", bin_dir.display()))?;
-    }
-
-    for cmd in BUILTINS {
-        let path = bin_dir.join(cmd.shim_name);
-        let body = render_shim(ozmux_exe, cmd.cli_args);
-        write_shim_file(&path, &body)
-            .await
-            .with_context(|| format!("write built-in shim {}", path.display()))?;
-    }
-    Ok(())
 }
 
 async fn write_shim_file(path: &Path, body: &str) -> Result<()> {

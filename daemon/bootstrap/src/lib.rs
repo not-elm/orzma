@@ -307,8 +307,7 @@ async fn materialize_builtins(runtime: &RuntimeRoot) -> anyhow::Result<()> {
             ozmux_exe.display()
         )
     })?;
-    check_builtin_name_collision()
-        .context("an extension claims the reserved __builtin name")?;
+    check_builtin_name_collision().context("an extension claims the reserved __builtin name")?;
     let bin = runtime.bin_dir().join(builtin_commands::BUILTIN_DIR_NAME);
     builtin_commands::materialize(&bin, &ozmux_exe)
         .await
