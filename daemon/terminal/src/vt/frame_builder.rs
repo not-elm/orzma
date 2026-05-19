@@ -86,6 +86,7 @@ pub(crate) fn build_snapshot<T>(
             .collect(),
         display_offset: term.grid().display_offset() as u32,
         history_size: term.history_size() as u32,
+        produced_at_us: None,
     }
 }
 
@@ -116,6 +117,7 @@ pub(super) fn build_delta<T>(
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
         display_offset: term.grid().display_offset() as u32,
+        produced_at_us: None,
     }
 }
 

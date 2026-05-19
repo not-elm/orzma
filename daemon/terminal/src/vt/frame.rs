@@ -153,6 +153,11 @@ pub struct FrameSnapshot {
     /// Total scrollback history line count (upper bound for display_offset).
     #[serde(default)]
     pub history_size: u32,
+    /// Optional wall-clock epoch microseconds when this frame was produced
+    /// by the bridge. Filled when `OZMUX_PERF_PRODUCED_AT=1`. Tail-optional
+    /// to keep existing wire fixtures byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub produced_at_us: Option<u64>,
 }
 
 /// Differential update relative to the prior frame.
@@ -173,6 +178,11 @@ pub struct FrameDelta {
     /// Lines scrolled back from the live tail. `0` = at live tail.
     #[serde(default)]
     pub display_offset: u32,
+    /// Optional wall-clock epoch microseconds when this frame was produced
+    /// by the bridge. Filled when `OZMUX_PERF_PRODUCED_AT=1`. Tail-optional
+    /// to keep existing wire fixtures byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub produced_at_us: Option<u64>,
 }
 
 /// Wire-level render frame, dispatched by the `kind` tag.
@@ -337,6 +347,7 @@ mod tests {
             hyperlinks: vec![],
             display_offset: 0,
             history_size: 0,
+            produced_at_us: None,
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
@@ -365,6 +376,7 @@ mod tests {
             }],
             display_offset: 0,
             history_size: 0,
+            produced_at_us: None,
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
@@ -401,6 +413,7 @@ mod tests {
             ],
             hyperlinks: vec![],
             display_offset: 0,
+            produced_at_us: None,
         };
         let bytes = encode(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
@@ -424,6 +437,7 @@ mod tests {
                 uri: HyperlinkUri::new("https://example.org"),
             }],
             display_offset: 0,
+            produced_at_us: None,
         };
         let bytes = encode(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
@@ -468,6 +482,7 @@ mod tests {
             hyperlinks: vec![],
             display_offset: 0,
             history_size: 0,
+            produced_at_us: None,
         });
         let bytes = encode(&snap).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
@@ -507,6 +522,7 @@ mod tests {
             hyperlinks: vec![],
             display_offset: 0,
             history_size: 0,
+            produced_at_us: None,
         };
         let bytes = encode(&snap).unwrap();
         let decoded: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
@@ -527,6 +543,7 @@ mod tests {
             dirty_rows: vec![],
             hyperlinks: vec![],
             display_offset: 12,
+            produced_at_us: None,
         };
         let bytes = encode(&RenderFrame::Delta(delta.clone())).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
@@ -555,6 +572,7 @@ mod tests {
             hyperlinks: vec![],
             display_offset: 5,
             history_size: 100,
+            produced_at_us: None,
         };
         let bytes = encode(&RenderFrame::Snapshot(snap.clone())).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
@@ -563,5 +581,46 @@ mod tests {
         };
         assert_eq!(out.display_offset, 5);
         assert_eq!(out.history_size, 100);
+    }
+
+    fn sample_snapshot() -> FrameSnapshot {
+        FrameSnapshot {
+            seq: 0,
+            cols: 80,
+            rows: 24,
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                blinking: false,
+                visible: true,
+            },
+            rows_data: vec![],
+            reason: SnapshotReason::Initial,
+            modes: vec![],
+            hyperlinks: vec![],
+            display_offset: 0,
+            history_size: 0,
+            produced_at_us: None,
+        }
+    }
+
+    #[test]
+    fn frame_snapshot_round_trip_with_produced_at() {
+        let mut snap = sample_snapshot();
+        snap.produced_at_us = Some(1_700_000_000_000_000);
+        let bytes = encode(&snap).unwrap();
+        let back: FrameSnapshot = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back.produced_at_us, Some(1_700_000_000_000_000));
+    }
+
+    #[test]
+    fn frame_snapshot_round_trip_without_produced_at_is_byte_identical() {
+        let snap = sample_snapshot();
+        assert!(snap.produced_at_us.is_none());
+        let bytes_a = encode(&snap).unwrap();
+        let back: FrameSnapshot = rmp_serde::from_slice(&bytes_a).unwrap();
+        let bytes_b = encode(&back).unwrap();
+        assert_eq!(bytes_a, bytes_b, "skip_serializing_if must omit None field");
     }
 }

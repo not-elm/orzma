@@ -84,6 +84,7 @@ fn snapshot_minimal() -> FrameSnapshot {
         hyperlinks: vec![],
         display_offset: 0,
         history_size: 0,
+        produced_at_us: None,
     }
 }
 
@@ -143,6 +144,7 @@ fn delta_minimal() -> FrameDelta {
         }],
         hyperlinks: vec![],
         display_offset: 0,
+        produced_at_us: None,
     }
 }
 

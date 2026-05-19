@@ -41,6 +41,7 @@ fn make_snapshot_80x24() -> FrameSnapshot {
         hyperlinks: vec![],
         display_offset: 0,
         history_size: 0,
+        produced_at_us: None,
     }
 }
 
@@ -70,6 +71,7 @@ fn make_delta_4rows() -> FrameDelta {
             .collect(),
         hyperlinks: vec![],
         display_offset: 0,
+        produced_at_us: None,
     }
 }
 
