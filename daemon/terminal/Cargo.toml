@@ -33,8 +33,29 @@ path = "tests/vt_scroll.rs"
 name = "frame_encode"
 harness = false
 
+[[bench]]
+name = "vt_parse_throughput"
+harness = false
+required-features = ["test-helpers"]
+
+[[bench]]
+name = "frame_build_delta_burst"
+harness = false
+required-features = ["test-helpers"]
+
+[[bench]]
+name = "bridge_to_subscribe"
+harness = false
+required-features = ["test-helpers"]
+
+[[bench]]
+name = "broadcast_lag_rate"
+harness = false
+required-features = ["test-helpers"]
+
 [dev-dependencies]
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support", "async_tokio"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [dependencies]
 toml = { version = "0.8", default-features = false, features = ["parse"], optional = true }
