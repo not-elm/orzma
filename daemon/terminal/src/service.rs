@@ -10,6 +10,7 @@ use crate::{
     vt::bridge::VtState,
     vt::frame::{RenderFrame, SnapshotReason, encode},
     vt::frame_builder::build_snapshot,
+    vt::frame_ring::WireMessage,
 };
 use bytes::Bytes;
 use ozmux_extension::runtime::RuntimeRoot;
@@ -307,10 +308,22 @@ impl TerminalService {
         let mut state = vt_state.lock().expect("vt_state poisoned");
 
         if let Some(last) = last_seq
-            && let Some(deltas) = state.frame_ring.replay(last)
+            && let Some(replay) = state.frame_ring.replay(last)
         {
+            let last_replay_seq = replay
+                .iter()
+                .rev()
+                .find_map(|m| match m {
+                    WireMessage::Binary { seq, .. } => Some(*seq),
+                    WireMessage::Text(_) => None,
+                })
+                .unwrap_or(last);
             let rx = state.wire_broadcast.subscribe();
-            return Ok(FrameSubscription::ResumeReplay { deltas, rx });
+            return Ok(FrameSubscription::ResumeReplay {
+                deltas: replay,
+                last_replay_seq,
+                rx,
+            });
         }
 
         // Fresh snapshot path. The snapshot is not a sequenced emission, so we

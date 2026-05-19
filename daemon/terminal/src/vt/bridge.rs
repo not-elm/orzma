@@ -269,7 +269,7 @@ fn emit_now(
         let binary_seq = state.frame_seq;
         state.frame_seq = state.frame_seq.wrapping_add(1);
         let encoded = Bytes::from(encoded_vec);
-        state.frame_ring.push(binary_seq, encoded.clone());
+        state.frame_ring.push_binary(binary_seq, encoded.clone());
 
         // NOTE: mode is announced BEFORE the binary so the client
         // applies mode-related side-effects before re-rendering.

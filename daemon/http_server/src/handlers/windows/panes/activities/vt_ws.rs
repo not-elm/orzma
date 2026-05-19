@@ -178,9 +178,19 @@ pub(super) async fn vt_ws_loop(
             }
             rx
         }
-        Ok(FrameSubscription::ResumeReplay { deltas, rx }) => {
-            for d in deltas {
-                if tx.send(Message::Binary(d)).await.is_err() {
+        Ok(FrameSubscription::ResumeReplay {
+            deltas,
+            last_replay_seq: _,
+            rx,
+        }) => {
+            for wm in deltas {
+                let result = match wm {
+                    WireMessage::Binary { encoded, .. } => {
+                        tx.send(Message::Binary(encoded)).await
+                    }
+                    WireMessage::Text(text) => tx.send(Message::Text(text.into())).await,
+                };
+                if result.is_err() {
                     return;
                 }
             }

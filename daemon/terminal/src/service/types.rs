@@ -52,8 +52,12 @@ pub enum FrameSubscription {
     /// Client applies each delta in order then consumes `rx` for further
     /// deltas.
     ResumeReplay {
-        /// Buffered deltas in seq order.
-        deltas: Vec<Bytes>,
+        /// Buffered wire messages in insertion order, preserving WS opcode.
+        deltas: Vec<WireMessage>,
+        /// Maximum binary seq number among entries in `deltas`. Falls back to
+        /// the caller's `last_seq` when the replay batch contains no binary
+        /// frames (mode/error only).
+        last_replay_seq: u32,
         /// Receiver for subsequent wire messages.
         rx: broadcast::Receiver<WireMessage>,
     },
