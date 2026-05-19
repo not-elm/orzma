@@ -23,15 +23,26 @@ export const resizePaneEndpoint = (wid: string, pid: string) =>
 export const swapPaneEndpoint = (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/swap`;
 export const windowDimensionsEndpoint = (wid: string) => `/windows/${wid}/dimensions`;
 
+/** Options for {@link vtTerminalWsUrl}. */
+export interface VtWsUrlOpts {
+  lastSeq?: number;
+  replay?: string;
+  recordPerf?: boolean;
+}
+
+/** Builds the VT terminal WebSocket URL, encoding optional replay/perf flags as query params. */
 export const vtTerminalWsUrl = (
   windowId: string,
   paneId: string,
   activityId: string,
-  lastSeq?: number,
+  opts: VtWsUrlOpts = {},
 ) => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const base = `${proto}//${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/terminal/ws`;
-  if (typeof lastSeq !== 'number') return base;
-  const params = new URLSearchParams({ last_seq: String(lastSeq) });
-  return `${base}?${params.toString()}`;
+  const params = new URLSearchParams();
+  if (typeof opts.lastSeq === 'number') params.set('last_seq', String(opts.lastSeq));
+  if (opts.replay) params.set('replay', opts.replay);
+  if (opts.recordPerf) params.set('record-perf', '1');
+  const q = params.toString();
+  return q ? `${base}?${q}` : base;
 };

@@ -52,6 +52,12 @@ function mapsEqual<K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>): boolean {
   return true;
 }
 
+/** Options for {@link useTerminal}: dev-only replay/record-perf flags forwarded to the WS layer. */
+export interface UseTerminalOptions {
+  replay?: string;
+  recordPerf?: boolean;
+}
+
 /** Subscribes to the VT socket, decodes frames into the grid, pushes the grid
  *  into grid-store, and wires all input listeners (IME / paste / mouse / focus
  *  / keydown) plus native clipboard copy. */
@@ -59,6 +65,7 @@ export function useTerminal(
   windowId: string,
   paneId: string,
   activityId: string | null,
+  options?: UseTerminalOptions,
 ): TerminalApi {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -83,7 +90,10 @@ export function useTerminal(
   if (!overlayStoreRef.current) overlayStoreRef.current = createOverlayStore();
   const overlayStore = overlayStoreRef.current;
 
-  const socket = useTerminalSocket(windowId, paneId, activityId);
+  const socket = useTerminalSocket(windowId, paneId, activityId, {
+    replay: options?.replay,
+    recordPerf: options?.recordPerf,
+  });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: socket is ref-stable; rebind on connection keys
   useEffect(() => {

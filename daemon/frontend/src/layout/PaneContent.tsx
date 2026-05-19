@@ -12,20 +12,36 @@ interface PaneContentProps {
   pane: PaneView;
   isActive: boolean;
   onActivate: () => void;
+  replay?: string;
+  recordPerf?: boolean;
 }
 
-export function PaneContent({ windowId, pane, isActive, onActivate }: PaneContentProps) {
+export function PaneContent({
+  windowId,
+  pane,
+  isActive,
+  onActivate,
+  replay,
+  recordPerf,
+}: PaneContentProps) {
   return (
     <div className="flex h-full w-full flex-col">
       <PaneTabBar windowId={windowId} pane={pane} isActive={isActive} onActivate={onActivate} />
       <div className="relative min-h-0 flex-1">
-        <PaneBody windowId={windowId} pane={pane} isActive={isActive} onActivate={onActivate} />
+        <PaneBody
+          windowId={windowId}
+          pane={pane}
+          isActive={isActive}
+          onActivate={onActivate}
+          replay={replay}
+          recordPerf={recordPerf}
+        />
       </div>
     </div>
   );
 }
 
-function PaneBody({ windowId, pane, isActive, onActivate }: PaneContentProps) {
+function PaneBody({ windowId, pane, isActive, onActivate, replay, recordPerf }: PaneContentProps) {
   const activity = pane.activities.find((a) => a.id === pane.active_activity);
   if (!activity) return <PanePlaceholder paneId={pane.id} />;
 
@@ -55,6 +71,8 @@ function PaneBody({ windowId, pane, isActive, onActivate }: PaneContentProps) {
       paneId={pane.id}
       activityId={activity.id}
       isActive={isActive}
+      replay={replay}
+      recordPerf={recordPerf}
     />
   );
 }

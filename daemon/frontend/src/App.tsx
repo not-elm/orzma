@@ -15,7 +15,13 @@ import { useRenameWindowPrompt } from './statusbar/useRenameWindowPrompt';
 import { liveOrReconnectingView, useSessionView } from './statusbar/useSessionView';
 import { windowSelect } from './statusbar/windowSelect';
 
-export function App() {
+/** Top-level app props: dev-only replay/record-perf flags threaded down to the WS layer. */
+export interface AppProps {
+  replay?: string;
+  recordPerf?: boolean;
+}
+
+export function App({ replay, recordPerf }: AppProps = {}) {
   const attached = useAttachedSession();
   const sid = attached.status === 'ready' ? attached.sessionId : null;
   const sessionView = useSessionView(sid);
@@ -83,7 +89,12 @@ export function App() {
   return (
     <div className="flex h-dvh w-dvw flex-col bg-background">
       <div className="relative min-h-0 flex-1">
-        <LayoutView windowState={def} layoutState={layout} />
+        <LayoutView
+          windowState={def}
+          layoutState={layout}
+          replay={replay}
+          recordPerf={recordPerf}
+        />
       </div>
       <RenameWindowPrompt promptState={promptState} closePrompt={closePrompt} />
       {chooseTree.state.open && attached.status === 'ready' && (

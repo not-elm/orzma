@@ -10,6 +10,8 @@ async function bootstrap(): Promise<void> {
 
   const params = new URLSearchParams(window.location.search);
   const isShowcase = import.meta.env.DEV && params.get('showcase') === 'tokens';
+  const replay = import.meta.env.DEV ? (params.get('replay') ?? undefined) : undefined;
+  const recordPerf = import.meta.env.DEV ? params.get('record-perf') === '1' : false;
   const rootElement = document.getElementById('root');
   if (!rootElement) throw new Error('#root element not found');
   const root = createRoot(rootElement);
@@ -24,7 +26,7 @@ async function bootstrap(): Promise<void> {
   } else {
     root.render(
       <StrictMode>
-        <App />
+        <App replay={replay} recordPerf={recordPerf} />
       </StrictMode>,
     );
   }

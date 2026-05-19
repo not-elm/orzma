@@ -16,9 +16,18 @@ interface TerminalProps {
   paneId: string;
   activityId: string;
   isActive: boolean;
+  replay?: string;
+  recordPerf?: boolean;
 }
 
-export function Terminal({ windowId, paneId, activityId, isActive }: TerminalProps) {
+export function Terminal({
+  windowId,
+  paneId,
+  activityId,
+  isActive,
+  replay,
+  recordPerf,
+}: TerminalProps) {
   const {
     paneRef,
     textareaRef,
@@ -30,7 +39,7 @@ export function Terminal({ windowId, paneId, activityId, isActive }: TerminalPro
     fm,
     gridStore,
     overlayStore,
-  } = useTerminal(windowId, paneId, activityId);
+  } = useTerminal(windowId, paneId, activityId, { replay, recordPerf });
 
   // NOTE: seeded false so an initial isActive=true mount registers as a transition.
   const prevActiveRef = useRef(false);

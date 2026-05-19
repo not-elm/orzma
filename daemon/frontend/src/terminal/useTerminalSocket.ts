@@ -16,6 +16,8 @@ export type ClientControl =
 /** Options for the socket hook. */
 export interface TerminalSocketOptions {
   lastSeq?: number;
+  replay?: string;
+  recordPerf?: boolean;
 }
 
 /** Ref-stable handle returned by `useTerminalSocket`. */
@@ -51,10 +53,12 @@ export function useTerminalSocket(
   const apiRef = useRef<TerminalSocket | null>(null);
 
   const lastSeq = options?.lastSeq;
+  const replay = options?.replay;
+  const recordPerf = options?.recordPerf;
 
   useEffect(() => {
     if (!activityId) return;
-    const url = vtTerminalWsUrl(windowId, paneId, activityId, lastSeq);
+    const url = vtTerminalWsUrl(windowId, paneId, activityId, { lastSeq, replay, recordPerf });
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
@@ -105,7 +109,7 @@ export function useTerminalSocket(
       pendingOutboundBinaryRef.current = [];
       ws.close();
     };
-  }, [windowId, paneId, activityId, lastSeq]);
+  }, [windowId, paneId, activityId, lastSeq, replay, recordPerf]);
 
   if (apiRef.current === null) {
     const api: TerminalSocket = {

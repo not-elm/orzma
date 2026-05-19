@@ -36,9 +36,16 @@ function AbsoluteBox({ bounds, active, onPointerDown, children }: AbsoluteBoxPro
 interface LayoutViewProps {
   windowState: DefaultWindowState;
   layoutState: LayoutState;
+  replay?: string;
+  recordPerf?: boolean;
 }
 
-export function LayoutView({ windowState: def, layoutState: layout }: LayoutViewProps) {
+export function LayoutView({
+  windowState: def,
+  layoutState: layout,
+  replay,
+  recordPerf,
+}: LayoutViewProps) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [metrics, setMetrics] = useState<{ cellW: number; cellH: number } | null>(null);
   const liveWid = layout.status !== 'gone' && layout.view !== null ? layout.view.id : null;
@@ -113,6 +120,8 @@ export function LayoutView({ windowState: def, layoutState: layout }: LayoutView
               pane={pane}
               isActive={isActive}
               onActivate={() => activate(pane.id)}
+              replay={replay}
+              recordPerf={recordPerf}
             />
           </AbsoluteBox>
         );
