@@ -428,15 +428,15 @@ impl TerminalService {
 /// avoid a daemon_terminal → daemon_bootstrap dep cycle.
 fn build_path_prefix(entries: Vec<String>) -> Option<String> {
     const BUILTIN_DIR_NAME: &str = "__builtin";
-    let (builtin, mut rest): (Vec<String>, Vec<String>) = entries.into_iter().partition(|p| {
+    let (mut builtin, mut rest): (Vec<String>, Vec<String>) = entries.into_iter().partition(|p| {
         std::path::Path::new(p).file_name().and_then(|n| n.to_str()) == Some(BUILTIN_DIR_NAME)
     });
     rest.sort();
-    let ordered: Vec<String> = builtin.into_iter().chain(rest).collect();
-    if ordered.is_empty() {
+    builtin.append(&mut rest);
+    if builtin.is_empty() {
         None
     } else {
-        Some(ordered.join(":"))
+        Some(builtin.join(":"))
     }
 }
 

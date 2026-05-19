@@ -3,10 +3,11 @@
 //! (currently the `ozmux` CLI's `daemon start --foreground` command) drive
 //! the tokio runtime themselves and call `run().await`.
 
-mod builtin_commands;
 /// PID file management for the daemon process: write/read/remove plus
 /// `is_process_alive` and a `PidFileGuard` RAII helper.
 pub mod pidfile;
+
+mod builtin_commands;
 
 /// Address the daemon's HTTP server binds to.
 pub const HTTP_ADDR: &str = "127.0.0.1:3200";
