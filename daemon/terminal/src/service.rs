@@ -429,10 +429,7 @@ impl TerminalService {
 fn build_path_prefix(entries: Vec<String>) -> Option<String> {
     const BUILTIN_DIR_NAME: &str = "__builtin";
     let (builtin, mut rest): (Vec<String>, Vec<String>) = entries.into_iter().partition(|p| {
-        std::path::Path::new(p)
-            .file_name()
-            .and_then(|n| n.to_str())
-            == Some(BUILTIN_DIR_NAME)
+        std::path::Path::new(p).file_name().and_then(|n| n.to_str()) == Some(BUILTIN_DIR_NAME)
     });
     rest.sort();
     let ordered: Vec<String> = builtin.into_iter().chain(rest).collect();
@@ -783,10 +780,7 @@ mod tests {
     #[test]
     fn extension_path_prefix_handles_missing_builtin() {
         use super::build_path_prefix;
-        let entries: Vec<String> = vec![
-            "/tmp/r/bin/zeta".into(),
-            "/tmp/r/bin/alpha".into(),
-        ];
+        let entries: Vec<String> = vec!["/tmp/r/bin/zeta".into(), "/tmp/r/bin/alpha".into()];
         let got = build_path_prefix(entries).expect("non-empty");
         assert_eq!(got, "/tmp/r/bin/alpha:/tmp/r/bin/zeta");
     }

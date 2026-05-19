@@ -3,10 +3,10 @@
 //! (currently the `ozmux` CLI's `daemon start --foreground` command) drive
 //! the tokio runtime themselves and call `run().await`.
 
+mod builtin_commands;
 /// PID file management for the daemon process: write/read/remove plus
 /// `is_process_alive` and a `PidFileGuard` RAII helper.
 pub mod pidfile;
-mod builtin_commands;
 
 /// Address the daemon's HTTP server binds to.
 pub const HTTP_ADDR: &str = "127.0.0.1:3200";
@@ -354,9 +354,7 @@ fn check_builtin_name_collision() -> anyhow::Result<()> {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
             continue;
         };
-        if value.get("name").and_then(|n| n.as_str())
-            == Some(builtin_commands::BUILTIN_DIR_NAME)
-        {
+        if value.get("name").and_then(|n| n.as_str()) == Some(builtin_commands::BUILTIN_DIR_NAME) {
             bail!(
                 "extension at {} declares reserved name {}",
                 pkg_path.display(),

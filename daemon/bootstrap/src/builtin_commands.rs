@@ -207,7 +207,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("__builtin");
         materialize(&bin, Path::new("/usr/bin/true")).await.unwrap();
-        materialize(&bin, Path::new("/usr/bin/false")).await.unwrap();
+        materialize(&bin, Path::new("/usr/bin/false"))
+            .await
+            .unwrap();
 
         for cmd in BUILTINS {
             let body = std::fs::read_to_string(bin.join(cmd.shim_name)).unwrap();
