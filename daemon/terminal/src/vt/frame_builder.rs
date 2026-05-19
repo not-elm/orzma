@@ -58,6 +58,7 @@ pub(super) fn build_mode(prev: TermMode, curr: TermMode, seq: u32) -> Option<Mod
 /// Reads the current terminal grid via shared reference, coalescing each row
 /// into runs of cells with identical attributes. Wide-char spacer cells are
 /// skipped so the wide character itself accounts for its full column width.
+#[tracing::instrument(skip_all, fields(seq))]
 pub(crate) fn build_snapshot<T>(
     term: &Term<T>,
     seq: u32,
@@ -95,6 +96,7 @@ pub(crate) fn build_snapshot<T>(
 ///
 /// Each entry is a full-row replacement (not partial). Row ordering follows
 /// the supplied slice.
+#[tracing::instrument(skip_all, fields(seq))]
 pub(super) fn build_delta<T>(
     term: &Term<T>,
     seq: u32,

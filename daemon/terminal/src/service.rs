@@ -170,6 +170,7 @@ impl TerminalService {
             vt_chunk_rx,
             opts.window_id.clone(),
             self.title_tx.clone(),
+            activity_id.clone(),
         );
         ptys.insert(activity_id, handle);
         Ok(())

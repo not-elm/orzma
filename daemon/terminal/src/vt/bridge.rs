@@ -10,8 +10,10 @@ use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config;
 use bytes::Bytes;
+use metrics::gauge;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::vt::coalescer::{Coalescer, DamageVerdict};
 use crate::vt::frame::{Cursor, RenderFrame, SnapshotReason, encode};
@@ -23,7 +25,7 @@ use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 use crate::vt::produced_at::produced_at_enabled;
 use crate::vt::title::sanitize_title;
-use ozmux_multiplexer::WindowId;
+use ozmux_multiplexer::{ActivityId, WindowId};
 
 /// Internal-only knob for replay/test contexts. Production code uses
 /// `BridgeConfig::default()` (unchanged behavior).
@@ -99,6 +101,10 @@ pub(crate) struct VtState {
     /// Wall-clock epoch micros captured at the same moment as `started_at`.
     /// `None` when `SystemTime` predates the Unix epoch (essentially never).
     pub(crate) bridge_started_at_unix_us: Option<u64>,
+    /// Handle for the 100 ms broadcast-depth gauge task.
+    /// `AbortOnDropHandle` cancels the task when this `VtState` is dropped.
+    /// `None` when `BridgeConfig::spawn_gauge` is false.
+    gauge_handle: Option<AbortOnDropHandle<()>>,
 }
 
 impl VtState {
@@ -133,6 +139,7 @@ impl VtState {
             title: None,
             started_at,
             bridge_started_at_unix_us,
+            gauge_handle: None,
         }
     }
 
@@ -331,6 +338,7 @@ fn emit_now(
               determinism config; a builder would obscure the single \
               hot-path call site in TerminalHandle::new"
 )]
+#[tracing::instrument(skip_all, fields(activity_id = tracing::field::Empty))]
 pub(crate) async fn run_bridge_task(
     vt_state: Arc<std::sync::Mutex<VtState>>,
     mut pty_rx: mpsc::Receiver<Bytes>,
@@ -340,11 +348,23 @@ pub(crate) async fn run_bridge_task(
     title_tx: broadcast::Sender<WindowId>,
     cancel: CancellationToken,
     config: BridgeConfig,
+    activity_id: ActivityId,
 ) {
-    // NOTE: spawn_gauge is reserved for PR-B (broadcast-depth gauge task).
-    // It has no production consumer yet; touch it so the field isn't
-    // flagged unused while the wiring is in flight.
-    let _ = config.spawn_gauge;
+    tracing::Span::current().record("activity_id", &activity_id.as_ref());
+    if config.spawn_gauge {
+        let tx_for_gauge = vt_state.lock().expect("vt_state poisoned").wire_broadcast.clone();
+        let depth_gauge = gauge!("ozmux_broadcast_queue_depth", "kind" => "terminal");
+        let handle = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                depth_gauge.set(tx_for_gauge.len() as f64);
+            }
+        });
+        vt_state.lock().expect("vt_state poisoned").gauge_handle =
+            Some(AbortOnDropHandle::new(handle));
+    }
     let mut coalescer = Coalescer::new();
     let mut window_open_mode: Option<alacritty_terminal::term::TermMode> = None;
 
@@ -557,6 +577,7 @@ mod tests {
             title_tx,
             cancel.clone(),
             BridgeConfig::default(),
+            ActivityId::new(),
         ));
 
         pty_tx.send(Bytes::from_static(b"hello")).await.unwrap();
@@ -618,6 +639,7 @@ mod tests {
             title_tx,
             cancel.clone(),
             BridgeConfig::default(),
+            ActivityId::new(),
         ));
         TitleBridge {
             control_tx,

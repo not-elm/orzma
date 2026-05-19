@@ -79,12 +79,13 @@ anyhow = { workspace = true }
 portable-pty = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
+metrics = { workspace = true }
 alacritty_terminal = "0.26"
 vte = "0.15"
 rmp-serde = { workspace = true }
 unicode-width = { workspace = true }
 bytes = { workspace = true }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 
 [build-dependencies]
 toml = { version = "0.8", default-features = false, features = ["parse"] }

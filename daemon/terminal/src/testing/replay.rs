@@ -8,6 +8,7 @@ use crate::testing::tape::Tape;
 use crate::vt::bridge::{BridgeConfig, VtState, run_bridge_task};
 use crate::vt::frame_ring::WireMessage;
 use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
+use ozmux_multiplexer::ActivityId;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -96,6 +97,7 @@ pub async fn feed_pty_tape(tape: &Tape, mode: ReplayMode) -> Result<Vec<WireMess
         title_tx,
         cancel,
         cfg,
+        ActivityId::new(),
     ));
 
     TapePlayer::new(pty_tx.clone(), mode).play(tape).await?;
