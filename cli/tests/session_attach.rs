@@ -47,7 +47,10 @@ async fn run_new(bin: &str, name: &str) -> String {
         .await
         .expect("spawn ozmux session new");
     assert!(out.status.success(), "session new failed: {out:?}");
-    String::from_utf8(out.stdout).expect("utf-8").trim().to_string()
+    String::from_utf8(out.stdout)
+        .expect("utf-8")
+        .trim()
+        .to_string()
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -164,8 +167,5 @@ async fn attach_fails_when_daemon_not_running() {
         stderr.contains("daemon is not running"),
         "expected stderr to mention 'daemon is not running'; got: {stderr:?}"
     );
-    assert!(
-        !daemon_running(),
-        "attach must not auto-start the daemon"
-    );
+    assert!(!daemon_running(), "attach must not auto-start the daemon");
 }

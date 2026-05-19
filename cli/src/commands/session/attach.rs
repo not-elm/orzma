@@ -22,9 +22,7 @@ pub(crate) struct AttachArgs {
 impl CommandExecute for AttachArgs {
     async fn run(self) -> anyhow::Result<()> {
         if !daemon::is_running() {
-            anyhow::bail!(
-                "daemon is not running. Run `ozmux daemon start` first."
-            );
+            anyhow::bail!("daemon is not running. Run `ozmux daemon start` first.");
         }
         verify_session_exists(&self.session_id).await?;
         super::client_open::spawn_detached(&self.session_id)?;
@@ -47,9 +45,7 @@ async fn verify_session_exists(id: &str) -> anyhow::Result<()> {
     }
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "daemon returned {status} for GET /sessions/{id}: {body}"
-        );
+        anyhow::bail!("daemon returned {status} for GET /sessions/{id}: {body}");
     }
     Ok(())
 }
