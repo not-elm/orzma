@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { vtTerminalWsUrl } from './api';
-import { markStage, markStageAt } from './perf/marks';
+import { markStage, markStageAt, recordProducedAt } from './perf/marks';
 import { decodeFrame } from './protocol/frame';
 
 export type SocketStatus = 'connecting' | 'connected' | 'disconnected' | 'exited';
@@ -97,6 +97,9 @@ export function useTerminalSocket(
           if (decoded.kind === 'snapshot' || decoded.kind === 'delta') {
             markStageAt(decoded.seq, 'ws_recv', arrivalT);
             markStage(decoded.seq, 'decode');
+            if (decoded.produced_at_us !== undefined) {
+              recordProducedAt(decoded.seq, decoded.produced_at_us);
+            }
           }
         } catch {
           // NOTE: non-msgpack or malformed frames skip perf attribution but

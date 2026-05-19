@@ -79,6 +79,30 @@ export function getMarkTime(seq: number, stage: Stage): number | undefined {
   return undefined;
 }
 
+const producedAtBySeq = new Map<number, number>();
+
+/**
+ * Records the server-side `produced_at_us` for a given seq, used by
+ * report.ts to compute end-to-end latency via the `server_to_ws_recv_us`
+ * synth-stage.
+ */
+export function recordProducedAt(seq: number, producedAtUs: number): void {
+  if (!PERF_ENABLED) return;
+  producedAtBySeq.set(seq, producedAtUs);
+  if (producedAtBySeq.size > 5000) {
+    const first = producedAtBySeq.keys().next().value;
+    if (first !== undefined) producedAtBySeq.delete(first);
+  }
+}
+
+/**
+ * Returns the recorded `produced_at_us` for `seq`, or undefined if not
+ * captured (frame had no field, perf disabled, or evicted).
+ */
+export function getProducedAt(seq: number): number | undefined {
+  return producedAtBySeq.get(seq);
+}
+
 /**
  * Resets the ring buffer write index to zero. Exposed for tests that need
  * to clear the buffer without reloading the module.
@@ -87,4 +111,5 @@ export const __test_only_resetPerfBuffer = (): void => {
   if (globalThis.__ozmuxPerfBuffer !== undefined) {
     globalThis.__ozmuxPerfBuffer.writeIndex = 0;
   }
+  producedAtBySeq.clear();
 };

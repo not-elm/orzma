@@ -18,3 +18,9 @@ declare var __ozmuxPerfBuffer:
       cap: number;
     }
   | undefined;
+
+// Installed at app boot by terminal/perf/report.ts when __OZMUX_PERF is true.
+// Walks the typed-array ring and returns per-stage percentile stats.
+declare function __OZMUX_PERF_REPORT(opts?: {
+  includeRaw?: boolean;
+}): import('./terminal/perf/report').PerfReport;

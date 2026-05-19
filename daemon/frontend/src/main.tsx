@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client';
 import './styles/theme.css';
 import { App } from './App.tsx';
 import { loadFontConfig, preloadFonts } from './config/font';
+import { installPerfReport } from './terminal/perf/report';
+
+installPerfReport();
 
 async function bootstrap(): Promise<void> {
   await loadFontConfig();
