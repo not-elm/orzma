@@ -199,3 +199,93 @@ async fn extension_streams_channel_events() {
     assert_eq!(received[2]["frame"]["payload"], serde_json::json!({"i": 2}));
     assert_eq!(received[3]["frame"]["kind"], "sub.complete");
 }
+
+/// Verifies that a `__builtin/@browser` shim materialised under
+/// `runtime_root/bin/` is discoverable via `command -v @browser` inside
+/// a `/bin/sh` spawned by `TerminalService` — i.e., that
+/// `extension_path_prefix` pins `__builtin` to the head of `PATH`.
+///
+/// The shim is written by hand here because the canonical materialiser
+/// (`daemon_bootstrap::builtin_commands::materialize`) is `pub(crate)`
+/// and not reachable from external crates. The shim *contents* are
+/// covered by `daemon_bootstrap`'s inline tests; this test exercises
+/// only PATH plumbing.
+#[tokio::test]
+async fn builtin_browser_shim_is_on_path() {
+    let parent = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
+
+    let bin = runtime.bin_dir().join("__builtin");
+    std::fs::create_dir_all(&bin).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let shim = bin.join("@browser");
+    std::fs::write(&shim, "#!/bin/sh\nexec '/usr/bin/true' 'browser' \"$@\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o500)).unwrap();
+    }
+
+    let svc = TerminalService::with_runtime_root(Arc::clone(&runtime));
+    let activity = ActivityId::new();
+    svc.spawn(
+        PaneId::new(),
+        activity.clone(),
+        SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+            window_id: Some(WindowId::new()),
+            session_id: Some(SessionId::new()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity).await.unwrap();
+    // NOTE: sentinels are split across two shell vars so the literal
+    // command text never matches the start/end needles — otherwise the
+    // PTY echo of the typed command line would be the first match,
+    // isolating the resolved path from prompts and control characters.
+    svc.write(
+        &activity,
+        b"S='__OZMUX'; printf \"${S}_S__%s${S}_E__\\n\" \"$(command -v @browser)\"\n",
+    )
+    .await
+    .unwrap();
+
+    let mut got = Vec::new();
+    let start_needle = b"__OZMUX_S__";
+    let end_needle = b"__OZMUX_E__";
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(ozmux_terminal::TerminalEvent::Data { buffer })) =
+            tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
+        {
+            got.extend_from_slice(&buffer);
+            if let Some(s) = find_subslice(&got, start_needle)
+                && let Some(e_rel) = find_subslice(&got[s + start_needle.len()..], end_needle)
+            {
+                let e = s + start_needle.len() + e_rel;
+                let resolved = String::from_utf8_lossy(&got[s + start_needle.len()..e]);
+                assert!(
+                    resolved.ends_with("/__builtin/@browser"),
+                    "expected resolved path to end with /__builtin/@browser, got: {resolved:?}",
+                );
+                svc.kill(&activity).await.unwrap();
+                return;
+            }
+        }
+    }
+    let dump = String::from_utf8_lossy(&got);
+    panic!("sentinel never appeared. captured stream so far: {dump}");
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}

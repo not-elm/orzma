@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 bootstrap({
   commands: {
-    memo: async (ctx) => {
+    "@memo": async (ctx) => {
       ctx.stdout.write(`memo invoked in pane ${ctx.pane.id}\n`);
 
       await ctx.pane.split({

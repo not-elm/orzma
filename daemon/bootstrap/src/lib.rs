@@ -3,9 +3,27 @@
 //! (currently the `ozmux` CLI's `daemon start --foreground` command) drive
 //! the tokio runtime themselves and call `run().await`.
 
+use anyhow::Context;
+use ozmux_browser::BrowserUnavailableReason;
+use ozmux_browser::cef_registry::BrowserCefRegistry;
+use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
+use ozmux_configs::OzmuxConfigs;
+use ozmux_extension::handle::ExtensionHandles;
+use ozmux_extension::registry::ExtensionRegistry;
+use ozmux_extension::runtime::RuntimeRoot;
+use ozmux_http_server::AppState;
+use ozmux_http_server::activity_titles::ActivityTitles;
+use ozmux_multiplexer::MultiplexerService;
+use ozmux_terminal::TerminalService;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use tokio::signal::unix::{SignalKind, signal};
+
 /// PID file management for the daemon process: write/read/remove plus
 /// `is_process_alive` and a `PidFileGuard` RAII helper.
 pub mod pidfile;
+
+mod builtin_commands;
 
 /// Address the daemon's HTTP server binds to.
 pub const HTTP_ADDR: &str = "127.0.0.1:3200";
@@ -33,20 +51,6 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
-use ozmux_browser::BrowserUnavailableReason;
-use ozmux_browser::cef_registry::BrowserCefRegistry;
-use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
-use ozmux_configs::OzmuxConfigs;
-use ozmux_extension::handle::ExtensionHandles;
-use ozmux_extension::registry::ExtensionRegistry;
-use ozmux_extension::runtime::RuntimeRoot;
-use ozmux_http_server::AppState;
-use ozmux_http_server::activity_titles::ActivityTitles;
-use ozmux_terminal::TerminalService;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use tokio::signal::unix::{SignalKind, signal};
-
 /// Runs the ozmux daemon to completion. Initialises tracing, cleans up any
 /// stale PID file, loads configuration and extensions, then serves HTTP on
 /// `127.0.0.1:3200` until `SIGINT` or `SIGTERM` is received.
@@ -55,6 +59,43 @@ use tokio::signal::unix::{SignalKind, signal};
 /// serve loop and removes it on any exit path — graceful shutdown, error
 /// propagation, or panic — via a `PidFileGuard` RAII helper.
 pub async fn run() -> anyhow::Result<()> {
+    init_tracing();
+    pidfile::cleanup_if_stale()?;
+
+    let configs = load_configs().await?;
+    let runtime = init_runtime().await?;
+
+    let registry = ExtensionRegistry::default();
+    let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
+
+    let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
+    let titles = ActivityTitles::default();
+    let cef_host = acquire_cef_host(&runtime).await;
+
+    let state = AppState::new(
+        terminal.clone(),
+        registry,
+        ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
+        ozmux_http_server::session_broadcast::SessionBroadcaster::from_env(),
+        Arc::clone(&configs),
+        titles.clone(),
+        cef_host,
+    );
+
+    let _event_pump = spawn_event_pump(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
+    spawn_cef_crash_watcher(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
+    spawn_terminal_title_bridge(terminal, titles, state.multiplexer.clone());
+
+    let _pid_guard = pidfile::PidFileGuard::create(std::process::id())?;
+    let result = run_until_shutdown(state).await;
+    drop(runtime);
+    result
+}
+
+/// Initialises `tracing-subscriber` with the daemon's default filter,
+/// allowing `RUST_LOG` overrides. Must be called exactly once per
+/// process.
+fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -64,24 +105,32 @@ pub async fn run() -> anyhow::Result<()> {
             }),
         )
         .init();
+}
 
-    pidfile::cleanup_if_stale()?;
-
-    let configs = match OzmuxConfigs::load().await {
+/// Loads the user's ozmux config; aborts daemon startup if the
+/// config cannot be parsed.
+async fn load_configs() -> anyhow::Result<Arc<OzmuxConfigs>> {
+    match OzmuxConfigs::load().await {
         Ok(c) => {
             tracing::info!(
                 prefix = ?c.shortcuts.prefix.chord,
                 bindings = c.shortcuts.bindings.len(),
                 "loaded ozmux config"
             );
-            Arc::new(c)
+            Ok(Arc::new(c))
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to load ozmux config; aborting");
-            return Err(e.into());
+            Err(e.into())
         }
-    };
+    }
+}
 
+/// Resolves a runtime root for this daemon PID and materialises both
+/// the `ozmux` CLI shim and the built-in `@<name>` shims into it.
+/// Shim placement is best-effort — failures log and the daemon
+/// continues without the affected shims.
+async fn init_runtime() -> anyhow::Result<Arc<RuntimeRoot>> {
     let parent = runtime_dir()?;
     RuntimeRoot::gc_stale(&parent)?;
     let longest = longest_extension_name()?;
@@ -93,26 +142,32 @@ pub async fn run() -> anyhow::Result<()> {
     if let Err(e) = place_cli_shim(&runtime) {
         tracing::warn!(error = %e, "failed to place ozmux CLI shim");
     }
+    if let Err(e) = materialize_builtins(&runtime).await {
+        tracing::warn!(error = %e, "failed to materialise built-in shims");
+    }
+    Ok(runtime)
+}
 
-    let registry = ExtensionRegistry::default();
-    let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
-
-    let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
-    let titles = ActivityTitles::default();
-
-    let cef_host_socket = runtime.sock_dir().join("cef_host.sock");
-    let supervisor = CefHostSupervisor::new(cef_host_socket);
+/// Spawns the CEF host child and handshakes with it, returning the
+/// resulting handles. On spawn error or handshake timeout, returns a
+/// pre-dead handle set so the daemon comes up with the browser
+/// backend disabled rather than blocking `/health`.
+async fn acquire_cef_host(
+    runtime: &RuntimeRoot,
+) -> Arc<ozmux_browser::cef_service::CefHostHandles> {
     // NOTE: cef_host startup can hang (binary missing → no UDS connect ever;
-    // missing CEF runtime libs → CefInitialize blocks). `spawn_and_handshake`
+    // missing CEF runtime libs → CefInitialize blocks). spawn_and_handshake
     // only resolves once the child sends Hello, so we cap the wait — past it
     // we proceed with the browser backend disabled rather than block the
     // entire daemon (`/health` would never come up).
     const CEF_HOST_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-    let cef_host_handles =
+    let socket = runtime.sock_dir().join("cef_host.sock");
+    let supervisor = CefHostSupervisor::new(socket);
+    let handles =
         match tokio::time::timeout(CEF_HOST_HANDSHAKE_TIMEOUT, supervisor.spawn_and_handshake())
             .await
         {
-            Ok(Ok(handles)) => handles,
+            Ok(Ok(h)) => h,
             Ok(Err(e)) => {
                 tracing::error!(
                     error = %e,
@@ -128,32 +183,17 @@ pub async fn run() -> anyhow::Result<()> {
                 ozmux_browser::cef_service::dead_handles_after_spawn_failure()
             }
         };
-    let cef_host = Arc::new(cef_host_handles);
+    Arc::new(handles)
+}
 
-    let state = AppState::new(
-        terminal.clone(),
-        registry,
-        ozmux_http_server::layout_broadcast::LayoutBroadcaster::from_env(),
-        ozmux_http_server::session_broadcast::SessionBroadcaster::from_env(),
-        Arc::clone(&configs),
-        titles.clone(),
-        cef_host,
-    );
-
-    // Drain HostEvents from cef_host and route NavStateChanged / TitleChanged
-    // into per-activity watch::Sender<NavState> on the BrowserCefRegistry so
-    // that the cef WS handler can push BrowserServerMsg::Nav to subscribers.
-    let _event_pump = spawn_event_pump(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
-
-    // Crash-watcher: awaits cef_host exit and broadcasts BrowserUnavailable to
-    // all connected WS clients. No respawn — Plan 3 territory.
-    spawn_cef_crash_watcher(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
-
-    // Adapter task: bridge terminal title-change notifications into ActivityTitles
-    // so that all consumers (title_republish, WindowView builder) read from the
-    // kind-agnostic map rather than directly from TerminalService.
-    let terminal_titles = titles.clone();
-    let multiplexer = state.multiplexer.clone();
+/// Spawns the adapter task that bridges terminal title-change events
+/// into the kind-agnostic `ActivityTitles` map so all consumers
+/// (`title_republish`, WindowView builder) read from one source.
+fn spawn_terminal_title_bridge(
+    terminal: TerminalService,
+    titles: ActivityTitles,
+    multiplexer: MultiplexerService,
+) {
     tokio::spawn(async move {
         let mut rx = terminal.subscribe_title_changes();
         loop {
@@ -179,14 +219,16 @@ pub async fn run() -> anyhow::Result<()> {
             let all = terminal.all_titles().await;
             for aid in aids {
                 if let Some(title) = all.get(&aid) {
-                    terminal_titles.set(&wid, &aid, title.clone()).await;
+                    titles.set(&wid, &aid, title.clone()).await;
                 }
             }
         }
     });
+}
 
-    let _pid_guard = pidfile::PidFileGuard::create(std::process::id())?;
-
+/// Serves HTTP until `SIGINT` or `SIGTERM`, surfacing any error from
+/// the serve future.
+async fn run_until_shutdown(state: AppState) -> anyhow::Result<()> {
     let mut sigterm = signal(SignalKind::terminate())?;
     let serve = ozmux_http_server::serve(state);
     tokio::select! {
@@ -198,7 +240,6 @@ pub async fn run() -> anyhow::Result<()> {
             tracing::info!("received SIGTERM, shutting down");
         }
     }
-    drop(runtime);
     Ok(())
 }
 
@@ -285,4 +326,25 @@ fn longest_extension_name() -> std::io::Result<String> {
         longest = "x".to_string();
     }
     Ok(longest)
+}
+
+/// Materialises the built-in `@<name>` shims into
+/// `runtime_root/bin/__builtin/`. Best-effort: returns `Err` on any
+/// failure and the caller logs and proceeds without the affected
+/// shims, matching the policy of `place_cli_shim()` above so the
+/// CLI shim and the built-in shims have consistent behaviour on
+/// error.
+async fn materialize_builtins(runtime: &RuntimeRoot) -> anyhow::Result<()> {
+    let ozmux_exe = std::env::current_exe().context("resolve current_exe")?;
+    builtin_commands::validate_ozmux_exe(runtime.bin_dir(), &ozmux_exe).with_context(|| {
+        format!(
+            "ozmux_exe failed self-recursion check (path: {})",
+            ozmux_exe.display()
+        )
+    })?;
+    let bin = runtime.bin_dir().join(builtin_commands::BUILTIN_DIR_NAME);
+    builtin_commands::materialize(&bin, &ozmux_exe)
+        .await
+        .with_context(|| format!("materialise built-in shims at {}", bin.display()))?;
+    Ok(())
 }

@@ -1243,6 +1243,7 @@ dependencies = [
  "ozmux_multiplexer",
  "ozmux_terminal",
  "percent-encoding",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
