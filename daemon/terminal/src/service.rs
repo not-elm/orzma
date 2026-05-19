@@ -408,18 +408,38 @@ impl TerminalService {
     fn extension_path_prefix(&self) -> Option<String> {
         let root = self.runtime_root.as_ref()?;
         let bin_dir = root.bin_dir();
-        let mut entries: Vec<String> = std::fs::read_dir(bin_dir)
+        let entries: Vec<String> = std::fs::read_dir(bin_dir)
             .ok()?
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
             .map(|e| e.path().to_string_lossy().into_owned())
             .collect();
-        entries.sort();
-        if entries.is_empty() {
-            None
-        } else {
-            Some(entries.join(":"))
-        }
+        build_path_prefix(entries)
+    }
+}
+
+/// Builds the colon-joined PATH prefix from a list of bin dir paths,
+/// pinning `__builtin` to the head so built-in shims always win over
+/// extensions of the same name. Extracted as a pure free function so
+/// the ordering can be unit-tested without spinning up a real
+/// `RuntimeRoot`. The name `__builtin` is the canonical reserved bin
+/// dir for built-in shims (defined as `BUILTIN_DIR_NAME` in
+/// `daemon/bootstrap/src/builtin_commands.rs`); inlined here to
+/// avoid a daemon_terminal → daemon_bootstrap dep cycle.
+fn build_path_prefix(entries: Vec<String>) -> Option<String> {
+    const BUILTIN_DIR_NAME: &str = "__builtin";
+    let (builtin, mut rest): (Vec<String>, Vec<String>) = entries.into_iter().partition(|p| {
+        std::path::Path::new(p)
+            .file_name()
+            .and_then(|n| n.to_str())
+            == Some(BUILTIN_DIR_NAME)
+    });
+    rest.sort();
+    let ordered: Vec<String> = builtin.into_iter().chain(rest).collect();
+    if ordered.is_empty() {
+        None
+    } else {
+        Some(ordered.join(":"))
     }
 }
 
@@ -740,6 +760,35 @@ mod tests {
             .await;
         assert!(matches!(result, Err(TerminalError::Pty(_))));
         assert!(svc.subscriber_count(&aid).await.is_none());
+    }
+
+    #[test]
+    fn extension_path_prefix_partitions_builtin_to_head() {
+        use super::build_path_prefix;
+        let entries: Vec<String> = vec![
+            "/tmp/r/bin/zeta".into(),
+            "/tmp/r/bin/__builtin".into(),
+            "/tmp/r/bin/alpha".into(),
+        ];
+        let got = build_path_prefix(entries).expect("non-empty");
+        assert_eq!(got, "/tmp/r/bin/__builtin:/tmp/r/bin/alpha:/tmp/r/bin/zeta");
+    }
+
+    #[test]
+    fn extension_path_prefix_returns_none_when_empty() {
+        use super::build_path_prefix;
+        assert!(build_path_prefix(vec![]).is_none());
+    }
+
+    #[test]
+    fn extension_path_prefix_handles_missing_builtin() {
+        use super::build_path_prefix;
+        let entries: Vec<String> = vec![
+            "/tmp/r/bin/zeta".into(),
+            "/tmp/r/bin/alpha".into(),
+        ];
+        let got = build_path_prefix(entries).expect("non-empty");
+        assert_eq!(got, "/tmp/r/bin/alpha:/tmp/r/bin/zeta");
     }
 
     #[tokio::test]
