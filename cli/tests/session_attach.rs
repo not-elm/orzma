@@ -139,3 +139,33 @@ async fn attach_fails_when_client_bin_missing() {
         "expected stderr to mention the spawn failure; got: {stderr:?}"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn attach_fails_when_daemon_not_running() {
+    let bin = env!("CARGO_BIN_EXE_ozmux").to_string();
+    assert!(
+        !daemon_running(),
+        "a daemon is already running on {DAEMON_ADDR}; stop it before running this test"
+    );
+
+    let out = Command::new(&bin)
+        .args(["session", "attach", "anything-here"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .expect("spawn ozmux session attach");
+
+    assert!(
+        !out.status.success(),
+        "session attach should fail when daemon is down: {out:?}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("daemon is not running"),
+        "expected stderr to mention 'daemon is not running'; got: {stderr:?}"
+    );
+    assert!(
+        !daemon_running(),
+        "attach must not auto-start the daemon"
+    );
+}
