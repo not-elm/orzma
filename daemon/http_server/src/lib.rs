@@ -21,6 +21,7 @@ use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
 pub async fn serve(state: AppState) -> HttpResult {
+    let _ = handlers::metrics::maybe_install();
     state
         .provision_session_with_activity(None, None)
         .await
@@ -38,6 +39,7 @@ pub async fn serve(state: AppState) -> HttpResult {
 
 pub fn daemon_router(state: AppState) -> Router {
     Router::new()
+        .route("/metrics", get(handlers::metrics::metrics_handler))
         .route("/", get(handlers::index::handler))
         .route("/health", get(handlers::health::check))
         .nest("/sessions", handlers::sessions::router())

@@ -10,7 +10,7 @@ use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config;
 use bytes::Bytes;
-use metrics::gauge;
+use metrics::{counter, gauge};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
@@ -319,6 +319,11 @@ fn emit_now(
             seq: binary_seq,
             encoded,
         });
+        let kind_label = match &frame {
+            RenderFrame::Snapshot(_) => "snapshot",
+            RenderFrame::Delta(_) => "delta",
+        };
+        counter!("ozmux_frames_emit_total", "kind" => kind_label).increment(1);
     }
 
     coalescer.disarm();
