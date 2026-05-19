@@ -16,6 +16,12 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
+    // SAFETY: emit_fixture is a single-threaded example binary; no other thread
+    // exists at this point so env mutation cannot race with concurrent getenv.
+    unsafe {
+        std::env::remove_var("OZMUX_PERF_PRODUCED_AT");
+    }
+
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) != Some("--all") {
         eprintln!("usage: cargo run -p ozmux_terminal --example emit_fixture -- --all");
@@ -34,6 +40,9 @@ fn main() {
     write_delta(dir, "delta_cursor_shape", &delta_cursor_shape());
     write_delta(dir, "delta_with_hyperlinks", &delta_with_hyperlinks());
 
+    write_snapshot_with_produced_at(dir);
+    write_delta_with_produced_at(dir);
+
     write_text(dir, "hello", &hello_json());
     write_text(
         dir,
@@ -46,7 +55,7 @@ fn main() {
         &mode_change(3, vec!["mouse-sgr-1006".into()], vec!["alt-screen".into()]),
     );
 
-    println!("emit_fixture: 4 snapshots + 3 deltas + 3 text fixtures written");
+    println!("emit_fixture: 6 snapshots/deltas + 3 text fixtures written (incl. produced_at pairs)");
 }
 
 fn write_snapshot(dir: &Path, name: &str, snap: &FrameSnapshot) {
@@ -170,6 +179,18 @@ fn delta_with_hyperlinks() -> FrameDelta {
         uri: HyperlinkUri::new("https://example.com/"),
     }];
     d
+}
+
+fn write_snapshot_with_produced_at(dir: &Path) {
+    let mut frame = snapshot_minimal();
+    frame.produced_at_us = Some(1_700_000_000_000_000);
+    write_snapshot(dir, "snapshot_with_produced_at", &frame);
+}
+
+fn write_delta_with_produced_at(dir: &Path) {
+    let mut frame = delta_minimal();
+    frame.produced_at_us = Some(1_700_000_000_000_001);
+    write_delta(dir, "delta_with_produced_at", &frame);
 }
 
 fn write_text(dir: &Path, name: &str, value: &serde_json::Value) {
