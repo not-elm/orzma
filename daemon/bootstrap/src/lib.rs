@@ -5,7 +5,7 @@
 
 /// PID file management for the daemon process: write/read/remove plus
 /// `is_process_alive` and a `PidFileGuard` RAII helper.
-use anyhow::bail;
+use anyhow::{Context, bail};
 use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
@@ -96,7 +96,9 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::warn!(error = %e, "failed to place ozmux CLI shim");
     }
 
-    materialize_builtins(&runtime).await;
+    if let Err(e) = materialize_builtins(&runtime).await {
+        tracing::warn!(error = %e, "failed to materialise built-in shims");
+    }
 
     let registry = ExtensionRegistry::default();
     let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
@@ -292,41 +294,26 @@ fn longest_extension_name() -> std::io::Result<String> {
 }
 
 /// Materialises the built-in `@<name>` shims into
-/// `runtime_root/bin/__builtin/`. Best-effort: every failure is
-/// logged and the daemon proceeds without the affected shims. This
-/// matches the policy of `place_cli_shim()` above so the CLI shim
-/// and the built-in shims have consistent behaviour on error.
-async fn materialize_builtins(runtime: &RuntimeRoot) {
-    let ozmux_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(error = %e, "current_exe() failed; skipping built-in shims");
-            return;
-        }
-    };
-    if let Err(e) = builtin_commands::validate_ozmux_exe(runtime.bin_dir(), &ozmux_exe) {
-        tracing::warn!(
-            error = %e,
-            path = %ozmux_exe.display(),
-            "ozmux_exe failed self-recursion check; skipping built-in shims",
-        );
-        return;
-    }
-    if let Err(e) = check_builtin_name_collision() {
-        tracing::error!(
-            error = %e,
-            "an extension claims the reserved __builtin name; skipping built-in shims",
-        );
-        return;
-    }
+/// `runtime_root/bin/__builtin/`. Best-effort: returns `Err` on any
+/// failure and the caller logs and proceeds without the affected
+/// shims, matching the policy of `place_cli_shim()` above so the
+/// CLI shim and the built-in shims have consistent behaviour on
+/// error.
+async fn materialize_builtins(runtime: &RuntimeRoot) -> anyhow::Result<()> {
+    let ozmux_exe = std::env::current_exe().context("resolve current_exe")?;
+    builtin_commands::validate_ozmux_exe(runtime.bin_dir(), &ozmux_exe).with_context(|| {
+        format!(
+            "ozmux_exe failed self-recursion check (path: {})",
+            ozmux_exe.display()
+        )
+    })?;
+    check_builtin_name_collision()
+        .context("an extension claims the reserved __builtin name")?;
     let bin = runtime.bin_dir().join(builtin_commands::BUILTIN_DIR_NAME);
-    if let Err(e) = builtin_commands::materialize(&bin, &ozmux_exe).await {
-        tracing::error!(
-            error = %e,
-            path = %bin.display(),
-            "failed to materialise built-in shims",
-        );
-    }
+    builtin_commands::materialize(&bin, &ozmux_exe)
+        .await
+        .with_context(|| format!("materialise built-in shims at {}", bin.display()))?;
+    Ok(())
 }
 
 /// Scans `OZMUX_EXTENSION_ROOT` for an extension whose
