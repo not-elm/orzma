@@ -3,7 +3,7 @@
 //! (currently the `ozmux` CLI's `daemon start --foreground` command) drive
 //! the tokio runtime themselves and call `run().await`.
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
@@ -342,109 +342,9 @@ async fn materialize_builtins(runtime: &RuntimeRoot) -> anyhow::Result<()> {
             ozmux_exe.display()
         )
     })?;
-    check_builtin_name_collision().context("an extension claims the reserved __builtin name")?;
     let bin = runtime.bin_dir().join(builtin_commands::BUILTIN_DIR_NAME);
     builtin_commands::materialize(&bin, &ozmux_exe)
         .await
         .with_context(|| format!("materialise built-in shims at {}", bin.display()))?;
     Ok(())
-}
-
-/// Scans `OZMUX_EXTENSION_ROOT` for an extension whose
-/// `package.json` declares the reserved built-in dir name.
-/// Returns `Err` on collision. Empty/unset env var is fine
-/// (returns Ok). The pre-pass uses an opportunistic parse —
-/// malformed package.json files are skipped silently because
-/// `ExtensionHandles::load()` will surface them later anyway.
-fn check_builtin_name_collision() -> anyhow::Result<()> {
-    let Ok(root) = std::env::var("OZMUX_EXTENSION_ROOT") else {
-        return Ok(());
-    };
-    if root.is_empty() {
-        return Ok(());
-    }
-    let entries = match std::fs::read_dir(&root) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-    for entry in entries.flatten() {
-        let pkg_path = entry.path().join("package.json");
-        let Ok(text) = std::fs::read_to_string(&pkg_path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        if value.get("name").and_then(|n| n.as_str()) == Some(builtin_commands::BUILTIN_DIR_NAME) {
-            bail!(
-                "extension at {} declares reserved name {}",
-                pkg_path.display(),
-                builtin_commands::BUILTIN_DIR_NAME,
-            );
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod lib_tests {
-    use super::check_builtin_name_collision;
-    use std::fs;
-
-    fn with_extension_root<F: FnOnce()>(root: &std::path::Path, f: F) {
-        // NOTE: process-global env mutation. Other tests in this binary
-        // that touch OZMUX_EXTENSION_ROOT must be either serial-guarded
-        // or in a separate test binary.
-        unsafe { std::env::set_var("OZMUX_EXTENSION_ROOT", root) };
-        f();
-        unsafe { std::env::remove_var("OZMUX_EXTENSION_ROOT") };
-    }
-
-    #[test]
-    fn collision_check_passes_when_no_offending_extension() {
-        let dir = tempfile::tempdir().unwrap();
-        let ext = dir.path().join("memo");
-        fs::create_dir_all(&ext).unwrap();
-        fs::write(
-            ext.join("package.json"),
-            r#"{"name":"memo","main":"bootstrap.ts"}"#,
-        )
-        .unwrap();
-        with_extension_root(dir.path(), || {
-            assert!(check_builtin_name_collision().is_ok());
-        });
-    }
-
-    #[test]
-    fn collision_check_errors_on_reserved_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let ext = dir.path().join("usurper");
-        fs::create_dir_all(&ext).unwrap();
-        fs::write(
-            ext.join("package.json"),
-            r#"{"name":"__builtin","main":"x.ts"}"#,
-        )
-        .unwrap();
-        with_extension_root(dir.path(), || {
-            assert!(check_builtin_name_collision().is_err());
-        });
-    }
-
-    #[test]
-    fn collision_check_tolerates_malformed_package_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let ext = dir.path().join("broken");
-        fs::create_dir_all(&ext).unwrap();
-        fs::write(ext.join("package.json"), "not json").unwrap();
-        with_extension_root(dir.path(), || {
-            assert!(check_builtin_name_collision().is_ok());
-        });
-    }
-
-    #[test]
-    fn collision_check_tolerates_missing_env_var() {
-        // No with_extension_root wrapper; env var stays unset.
-        unsafe { std::env::remove_var("OZMUX_EXTENSION_ROOT") };
-        assert!(check_builtin_name_collision().is_ok());
-    }
 }
