@@ -5,6 +5,20 @@
 
 /// PID file management for the daemon process: write/read/remove plus
 /// `is_process_alive` and a `PidFileGuard` RAII helper.
+use anyhow::bail;
+use ozmux_browser::BrowserUnavailableReason;
+use ozmux_browser::cef_registry::BrowserCefRegistry;
+use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
+use ozmux_configs::OzmuxConfigs;
+use ozmux_extension::handle::ExtensionHandles;
+use ozmux_extension::registry::ExtensionRegistry;
+use ozmux_extension::runtime::RuntimeRoot;
+use ozmux_http_server::AppState;
+use ozmux_http_server::activity_titles::ActivityTitles;
+use ozmux_terminal::TerminalService;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use tokio::signal::unix::{SignalKind, signal};
 pub mod pidfile;
 
 mod builtin_commands;
@@ -34,21 +48,6 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
-
-use anyhow::bail;
-use ozmux_browser::BrowserUnavailableReason;
-use ozmux_browser::cef_registry::BrowserCefRegistry;
-use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
-use ozmux_configs::OzmuxConfigs;
-use ozmux_extension::handle::ExtensionHandles;
-use ozmux_extension::registry::ExtensionRegistry;
-use ozmux_extension::runtime::RuntimeRoot;
-use ozmux_http_server::AppState;
-use ozmux_http_server::activity_titles::ActivityTitles;
-use ozmux_terminal::TerminalService;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use tokio::signal::unix::{SignalKind, signal};
 
 /// Runs the ozmux daemon to completion. Initialises tracing, cleans up any
 /// stale PID file, loads configuration and extensions, then serves HTTP on
