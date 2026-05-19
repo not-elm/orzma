@@ -56,20 +56,12 @@ pub enum RecvOutcome {
 ///
 /// # Determinism contract (caller's responsibility)
 ///
-/// Caller MUST be in a `current_thread` tokio runtime with
-/// `start_paused(true)`. See spec Section 6.
+/// For deterministic Vec<WireMessage> output across runs, call from a
+/// `current_thread` tokio runtime with `start_paused(true)`. The
+/// `?replay=` WS route invokes this from the live daemon runtime
+/// (not paused) — output may vary across runs in that case, which is
+/// acceptable for a debug-only smoke route. See spec Section 6.
 pub async fn feed_pty_tape(tape: &Tape, mode: ReplayMode) -> Result<Vec<WireMessage>, ReplayError> {
-    #[cfg(debug_assertions)]
-    {
-        let t0 = tokio::time::Instant::now();
-        tokio::task::yield_now().await;
-        let t1 = tokio::time::Instant::now();
-        debug_assert!(
-            t1.duration_since(t0).is_zero(),
-            "feed_pty_tape requires tokio start_paused(true) — see spec Section 6"
-        );
-    }
-
     let cfg = BridgeConfig {
         coalesce: false,
         spawn_gauge: false,

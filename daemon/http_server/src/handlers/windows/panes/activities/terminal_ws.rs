@@ -83,31 +83,51 @@ pub async fn terminal_ws(
 }
 
 /// Debug-only background replay session: drives the named PTY tape through
-/// the test replay harness and holds the WebSocket open until the client
-/// disconnects. Incoming client frames are ignored while replay is in
+/// the test replay harness and forwards each resulting WireMessage to the
+/// connected client. Incoming client frames are ignored while replay is in
 /// progress; the replay task is cancelled if the connection drops first.
 #[cfg(debug_assertions)]
-async fn run_replay_session(fixture: String, mut ws: axum::extract::ws::WebSocket) {
-    use futures_util::StreamExt;
+async fn run_replay_session(fixture: String, ws: axum::extract::ws::WebSocket) {
+    use futures_util::{SinkExt, StreamExt};
     use ozmux_terminal::testing::replay::{ReplayMode, feed_pty_tape};
     use ozmux_terminal::testing::tape::Tape;
+    use ozmux_terminal::vt::WireMessage;
     use tokio_util::task::AbortOnDropHandle;
+
+    let (mut ws_tx, mut ws_rx) = ws.split();
 
     let task = tokio::spawn(async move {
         let tape_path = std::path::PathBuf::from(format!(
             "daemon/terminal/tests/fixtures/pty_tapes/{fixture}.tape"
         ));
-        match Tape::load(&tape_path) {
-            Ok(tape) => match feed_pty_tape(&tape, ReplayMode::Timed).await {
-                Ok(_msgs) => tracing::info!(?fixture, "?replay=: completed"),
-                Err(e) => tracing::error!(?fixture, error = %e, "?replay=: feed_pty_tape failed"),
-            },
-            Err(e) => tracing::error!(?fixture, error = %e, "?replay=: tape load failed"),
+        let tape = match Tape::load(&tape_path) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(?fixture, error = %e, "?replay=: tape load failed");
+                return;
+            }
+        };
+        match feed_pty_tape(&tape, ReplayMode::Immediate).await {
+            Ok(msgs) => {
+                tracing::info!(?fixture, frames = msgs.len(), "?replay=: completed");
+                for msg in msgs {
+                    let frame = match msg {
+                        WireMessage::Binary { encoded, .. } => {
+                            axum::extract::ws::Message::Binary(encoded)
+                        }
+                        WireMessage::Text(s) => axum::extract::ws::Message::Text(s.into()),
+                    };
+                    if ws_tx.send(frame).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            Err(e) => tracing::error!(?fixture, error = %e, "?replay=: feed_pty_tape failed"),
         }
     });
     let _guard = AbortOnDropHandle::new(task);
 
-    while let Some(_msg) = ws.next().await {
+    while let Some(_msg) = ws_rx.next().await {
         // Ignore client frames; replay runs in the background.
     }
 }

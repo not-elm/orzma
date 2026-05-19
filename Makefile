@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-cef-host bundle-cef-host-release
+.PHONY: build dev-frontend dev-backend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-cef-host bundle-cef-host-release bench-vt perf-baseline-client perf-compare capture-tape
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/http_server/src/handlers
@@ -128,3 +128,18 @@ endif
 	  echo "      Run 'kill $$pid' first if you want to launch the freshly built daemon."; \
 	fi
 	cd client && OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) cargo tauri dev
+
+bench-vt:
+	cargo bench -p ozmux_terminal --features test-helpers --bench vt_parse_throughput
+	cargo bench -p ozmux_terminal --features test-helpers --bench frame_build_delta_burst
+	cargo bench -p ozmux_terminal --features test-helpers --bench bridge_to_subscribe
+	cargo bench -p ozmux_terminal --features test-helpers --bench broadcast_lag_rate
+
+perf-baseline-client:
+	scripts/perf-baseline-client.sh
+
+perf-compare:
+	@echo "perf-compare BASELINE=<a.json> HEAD=<b.json> — TODO PR-B implements"
+
+capture-tape:
+	scripts/capture-nvim-tape.sh
