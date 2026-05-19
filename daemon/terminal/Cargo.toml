@@ -29,6 +29,10 @@ required-features = ["test-helpers"]
 name = "vt_scroll"
 path = "tests/vt_scroll.rs"
 
+[[example]]
+name = "generate_tape"
+required-features = ["test-helpers"]
+
 [[bench]]
 name = "frame_encode"
 harness = false

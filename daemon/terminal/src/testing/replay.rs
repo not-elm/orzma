@@ -108,6 +108,11 @@ pub async fn feed_pty_tape(tape: &Tape, mode: ReplayMode) -> Result<Vec<WireMess
 
     TapePlayer::new(pty_tx.clone(), mode).play(tape).await?;
     drop(pty_tx);
+    // NOTE: drop vt_state before entering the recv loop. vt_state holds
+    // a clone of wire_tx inside VtState::wire_broadcast; keeping it alive
+    // would prevent the broadcast channel from closing after the bridge
+    // task exits, causing wire_rx.recv() to block forever.
+    drop(vt_state);
     // NOTE: drop the wire_tx clone we own so the bridge becomes the sole
     // sender; when its loop exits (pty_rx closed → recv returns None →
     // break), all senders are dropped and the receiver returns Closed.

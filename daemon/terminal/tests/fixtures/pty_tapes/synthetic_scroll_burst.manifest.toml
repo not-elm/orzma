@@ -1,0 +1,11 @@
+sha256 = "ec27b2bcda303fb14704c6ee2bbebfff61e2b4269f3f1cbe113420cfaee62271"
+estimated_total_wire_messages = 250  # conservative upper bound
+created_kind = "synthetic"
+created_at = "2026-05-19T00:00:00Z"
+
+[runtime]
+alacritty_terminal_version = "0.26.0"
+
+[synthetic]
+generator_path = "daemon/terminal/examples/generate_tape.rs"
+generator_commit = "PR-A initial"
