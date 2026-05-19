@@ -18,6 +18,9 @@ use ozmux_terminal::TerminalService;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::signal::unix::{SignalKind, signal};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Registry, fmt};
 
 /// PID file management for the daemon process: write/read/remove plus
 /// `is_process_alive` and a `PidFileGuard` RAII helper.
@@ -51,6 +54,19 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+/// Guard returned by [`init_tracing`]. Holds the tracing-chrome `FlushGuard`
+/// (when active) so its `Drop` impl flushes the writer thread on daemon
+/// shutdown. **Must be held as a local variable in `run()` for the entire
+/// daemon lifetime — storing it in a `static` or `OnceLock` would prevent
+/// the flush because statics never drop.**
+pub enum TraceGuard {
+    /// No Chrome trace active; tracing uses the plain `fmt` layer only.
+    None,
+    /// Chrome trace is active; the `FlushGuard` flushes the writer thread on drop.
+    #[cfg(feature = "tracing-chrome")]
+    Chrome(tracing_chrome::FlushGuard),
+}
+
 /// Runs the ozmux daemon to completion. Initialises tracing, cleans up any
 /// stale PID file, loads configuration and extensions, then serves HTTP on
 /// `127.0.0.1:3200` until `SIGINT` or `SIGTERM` is received.
@@ -59,7 +75,7 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
 /// serve loop and removes it on any exit path — graceful shutdown, error
 /// propagation, or panic — via a `PidFileGuard` RAII helper.
 pub async fn run() -> anyhow::Result<()> {
-    init_tracing();
+    let _trace_guard = init_tracing();
     pidfile::cleanup_if_stale()?;
 
     let configs = load_configs().await?;
@@ -92,19 +108,54 @@ pub async fn run() -> anyhow::Result<()> {
     result
 }
 
-/// Initialises `tracing-subscriber` with the daemon's default filter,
-/// allowing `RUST_LOG` overrides. Must be called exactly once per
-/// process.
-fn init_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(
-                    "info,hyper=warn,tower=warn,tokio_tungstenite=warn,tungstenite=warn",
-                )
-            }),
-        )
+/// Initialises `tracing-subscriber` with a Registry-based stack and returns a
+/// [`TraceGuard`] that the caller must hold for the daemon lifetime.
+///
+/// Layer order: `EnvFilter → fmt → chrome` (when the `tracing-chrome` feature
+/// is active and `OZMUX_PERF_TRACE` names an output path).
+///
+/// Without the feature, setting `OZMUX_PERF_TRACE` is a hard error — the
+/// daemon prints a clear message and exits rather than silently producing no
+/// trace file.
+fn init_tracing() -> TraceGuard {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,hyper=warn,tower=warn,tokio_tungstenite=warn,tungstenite=warn")
+    });
+    let fmt_layer = fmt::layer().with_writer(std::io::stderr);
+
+    #[cfg(feature = "tracing-chrome")]
+    {
+        if let Ok(path) = std::env::var("OZMUX_PERF_TRACE") {
+            let (chrome_layer, guard) = tracing_chrome::ChromeLayerBuilder::new()
+                .file(path)
+                .include_args(true)
+                .build();
+            Registry::default()
+                .with(env_filter)
+                .with(fmt_layer)
+                .with(chrome_layer)
+                .init();
+            return TraceGuard::Chrome(guard);
+        }
+    }
+
+    #[cfg(not(feature = "tracing-chrome"))]
+    {
+        if std::env::var("OZMUX_PERF_TRACE").is_ok() {
+            eprintln!(
+                "ERROR: OZMUX_PERF_TRACE is set but ozmux was built without the \
+                 tracing-chrome feature. Rebuild with `cargo install --features \
+                 tracing-chrome --path ./cli`."
+            );
+            std::process::exit(1);
+        }
+    }
+
+    Registry::default()
+        .with(env_filter)
+        .with(fmt_layer)
         .init();
+    TraceGuard::None
 }
 
 /// Loads the user's ozmux config; aborts daemon startup if the

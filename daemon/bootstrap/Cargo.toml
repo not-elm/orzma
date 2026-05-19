@@ -7,11 +7,16 @@ readme.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+tracing-chrome = ["dep:tracing-chrome"]
+
 [lib]
 name = "daemon_bootstrap"
 path = "src/lib.rs"
 
 [dependencies]
+tracing-chrome = { workspace = true, optional = true }
 ozmux_browser = { path = "../browser" }
 ozmux_configs = { path = "../configs" }
 ozmux_extension = { path = "../extension" }

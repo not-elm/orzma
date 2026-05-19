@@ -7,6 +7,10 @@ readme.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+tracing-chrome = ["daemon_bootstrap/tracing-chrome"]
+
 [[bin]]
 name = "ozmux"
 path = "src/main.rs"
