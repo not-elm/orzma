@@ -97,6 +97,39 @@ async fn run_replay_session(fixture: String, ws: axum::extract::ws::WebSocket) {
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     let task = tokio::spawn(async move {
+        // NOTE: replay sessions have no real bridge, so we synthesize a hello
+        // with a fresh SystemTime origin. The frontend treats this hello like
+        // any other and uses it to bootstrap the renderer's geometry state.
+        let bridge_started_at_unix_us: Option<u64> = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| d.as_micros().try_into().ok());
+        let hello = serde_json::json!({
+            "kind": "hello",
+            "seq": 0,
+            "cols": 80,
+            "rows": 24,
+            "cursor": {
+                "x": 0,
+                "y": 0,
+                "shape": "block",
+                "blinking": false,
+                "visible": true,
+            },
+            "escape_caps": super::vt_ws::ESCAPE_CAPS,
+            "input_caps": super::vt_ws::INPUT_CAPS,
+            "bridge_started_at_unix_us": bridge_started_at_unix_us,
+        });
+        if ws_tx
+            .send(axum::extract::ws::Message::Text(
+                hello.to_string().into(),
+            ))
+            .await
+            .is_err()
+        {
+            return;
+        }
+
         let tape_path = std::path::PathBuf::from(format!(
             "daemon/terminal/tests/fixtures/pty_tapes/{fixture}.tape"
         ));

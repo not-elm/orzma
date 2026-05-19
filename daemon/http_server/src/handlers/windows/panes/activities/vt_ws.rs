@@ -8,7 +8,7 @@ use ozmux_terminal::vt::WireMessage;
 use ozmux_terminal::{FrameSubscription, TerminalGeometry, TerminalService};
 use tokio::sync::broadcast::error::RecvError;
 
-const ESCAPE_CAPS: &[&str] = &[
+pub(super) const ESCAPE_CAPS: &[&str] = &[
     "sgr",
     "cup",
     "ed",
@@ -24,7 +24,7 @@ const ESCAPE_CAPS: &[&str] = &[
     "focus-events",
     "app-cursor-keys",
 ];
-const INPUT_CAPS: &[&str] = &["text-utf8", "key-vt-encoded"];
+pub(super) const INPUT_CAPS: &[&str] = &["text-utf8", "key-vt-encoded"];
 
 /// Inbound JSON control messages from the client.
 #[derive(serde::Deserialize)]
