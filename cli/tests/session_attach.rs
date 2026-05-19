@@ -79,3 +79,33 @@ async fn attach_existing_session_invokes_client_bin() {
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn attach_unknown_session_id_fails() {
+    let bin = env!("CARGO_BIN_EXE_ozmux").to_string();
+    assert!(
+        !daemon_running(),
+        "a daemon is already running on {DAEMON_ADDR}; stop it before running this test"
+    );
+    let _guard = DaemonStopGuard { bin: bin.clone() };
+
+    let _id = run_new(&bin, "attach-unknown-warmup").await;
+
+    let out = Command::new(&bin)
+        .env("OZMUX_CLIENT_BIN", "/usr/bin/true")
+        .args(["session", "attach", "definitely-not-a-real-id"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .expect("spawn ozmux session attach");
+
+    assert!(
+        !out.status.success(),
+        "session attach with unknown id should fail: {out:?}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("session not found"),
+        "expected stderr to mention 'session not found'; got: {stderr:?}"
+    );
+}
