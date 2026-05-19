@@ -18,6 +18,7 @@
 // inline style (biome-ignore documented) when popup_rect is set.
 
 import { useEffect, useRef, useState } from 'react';
+import { getBrowserConfig } from '../config/browser';
 import { ContextMenu } from './ContextMenu';
 import { attachIme } from './input/ime';
 import { attachKeyboard } from './input/keyboard';
@@ -351,6 +352,7 @@ export function BrowserActivity({ windowId, paneId, activityId }: Props) {
             url={nav.url}
             canBack={nav.can_back}
             canForward={nav.can_forward}
+            searchTemplate={getBrowserConfig().searchTemplate}
             onBack={() => send({ kind: 'navigate_history', delta: -1 })}
             onForward={() => send({ kind: 'navigate_history', delta: 1 })}
             onReload={() => send({ kind: 'navigate', url: nav.url })}

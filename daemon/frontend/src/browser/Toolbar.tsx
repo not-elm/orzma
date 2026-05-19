@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { resolveOmniboxInput } from './omnibox';
 
 interface Props {
   /** Server-driven URL, used to seed the draft input. */
@@ -8,14 +9,17 @@ interface Props {
   canBack?: boolean;
   /** Same as `canBack` for forward. */
   canForward?: boolean;
+  /** Search-engine template (`{query}` placeholder) for non-URL input.
+   *  Defaults to the DuckDuckGo template baked into `omnibox.ts`. */
+  searchTemplate?: string;
   /** Fires when the user clicks the back button. */
   onBack: () => void;
   /** Fires when the user clicks the forward button. */
   onForward: () => void;
   /** Fires when the user clicks the reload button. */
   onReload: () => void;
-  /** Fires when the user presses Enter in the URL input. URL is already
-   *  normalized (scheme prepended if missing). */
+  /** Fires when the user presses Enter in the URL input. The argument is
+   *  already either a fully-qualified URL or a search URL. */
   onGo: (url: string) => void;
 }
 
@@ -32,6 +36,7 @@ export function Toolbar({
   url,
   canBack = true,
   canForward = true,
+  searchTemplate,
   onBack,
   onForward,
   onReload,
@@ -73,15 +78,11 @@ export function Toolbar({
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
-            onGo(normalizeUrl(draft));
+            const resolved = resolveOmniboxInput(draft, searchTemplate);
+            if (resolved.length > 0) onGo(resolved);
           }
         }}
       />
     </div>
   );
-}
-
-function normalizeUrl(input: string): string {
-  if (/^[a-z]+:\/\//.test(input) || input.startsWith('about:')) return input;
-  return `https://${input}`;
 }

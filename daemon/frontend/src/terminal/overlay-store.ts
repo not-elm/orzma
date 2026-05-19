@@ -34,6 +34,7 @@ const INITIAL_FM: FontMetrics = {
   baseline: 12,
   fontCss: '14px monospace',
   dpr: 1,
+  letterSpacing: 0,
 };
 
 function shallowEqualCursor(a: Cursor, b: Cursor): boolean {

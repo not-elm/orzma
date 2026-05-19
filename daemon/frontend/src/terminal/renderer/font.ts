@@ -2,9 +2,9 @@ import stringWidth from 'string-width';
 
 /** Per-cell font geometry produced by the DOM probes (`cellWidthOf` / `cellHeightOf`). */
 export interface FontMetrics {
-  /** Pixel width of one terminal cell. */
+  /** Pixel width of one terminal cell (rounded). */
   cellW: number;
-  /** Pixel height of one terminal cell. */
+  /** Pixel height of one terminal cell (rounded). */
   cellH: number;
   /** Baseline offset from the top of the cell, in pixels. */
   baseline: number;
@@ -12,6 +12,14 @@ export interface FontMetrics {
   fontCss: string;
   /** Device pixel ratio at measurement time. */
   dpr: number;
+  /** Negative tracking (usually) that compresses the font's natural glyph
+   *  advance into the rounded [`cellW`] grid. Applied as `letter-spacing` on
+   *  the row container so that column N of rendered text aligns with the
+   *  cursor's `cursor.x * cellW` position. xterm.js `DomRenderer` uses the
+   *  same trick (`_setDefaultSpacing`); without it, the per-char drift of
+   *  `naturalCellW − cellW` (~0.2 CSS px at 9pt) accumulates to roughly one
+   *  cell across 30–40 columns and the cursor visibly lags the text. */
+  letterSpacing: number;
 }
 
 /** Class that makes an element pick up the configured terminal font and size
@@ -70,15 +78,30 @@ function withProbe<T>(
 
 /** Measures the rendered width of "W" in the terminal font. Used by Row.tsx
  *  for `letterSpacing = cellW - cellWidthOf(...)` to prevent sub-pixel drift
- *  on long rows (xterm.js `DomRenderer._setDefaultSpacing`). */
+ *  on long rows (xterm.js `DomRenderer._setDefaultSpacing`).
+ *
+ *  Rounded to integer CSS px: `getBoundingClientRect()` returns sub-pixel
+ *  floats which cascade into row `height`/`line-height`/cursor coordinates
+ *  and cause text to render against fractional pixel boundaries — glyphs
+ *  end up rasterised across two device pixels and look softer than
+ *  Alacritty's CoreText output. xterm.js #985 fixed the same class of
+ *  blur by quantising the cell box.
+ */
 export function cellWidthOf(container: HTMLElement): number {
+  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => Math.round(r.width));
+}
+
+/** Measures the unrounded width of "W" in the terminal font. Paired with
+ *  [`cellWidthOf`] to derive the row-level `letter-spacing` correction. */
+export function naturalCellWidthOf(container: HTMLElement): number {
   return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => r.width);
 }
 
 /** Measures the line-height-1 height of one row in the terminal font, so
- *  `cellH` matches the actual row line-box height. */
+ *  `cellH` matches the actual row line-box height. Rounded to integer CSS px
+ *  for the same reason as [`cellWidthOf`]. */
 export function cellHeightOf(container: HTMLElement): number {
-  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => r.height);
+  return withProbe(container, PROBE_BASE_CLASS, 'W', (r) => Math.round(r.height));
 }
 
 // NOTE: keyed by (chars, bold, italic) only — must be cleared if the font

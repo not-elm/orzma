@@ -4,11 +4,13 @@
 
 #![warn(missing_docs)]
 
+use crate::browser::BrowserConfig;
 use crate::font::FontConfig;
 use crate::shortcuts::Shortcuts;
 use crate::theme::Theme;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 
+pub mod browser;
 pub mod error;
 pub mod font;
 mod path;
@@ -25,6 +27,8 @@ pub struct OzmuxConfigs {
     pub theme: Theme,
     /// Font configuration.
     pub font: FontConfig,
+    /// Browser activity configuration.
+    pub browser: BrowserConfig,
 }
 
 impl OzmuxConfigs {

@@ -6,7 +6,14 @@ import { encodeMouseEvent, pointToCell, setupMouse } from './mouse';
 const dec = new TextDecoder();
 
 function fakeMetrics(): FontMetrics {
-  return { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 };
+  return {
+    cellW: 8,
+    cellH: 16,
+    baseline: 12,
+    fontCss: '14px monospace',
+    dpr: 1,
+    letterSpacing: 0,
+  };
 }
 
 describe('encodeMouseEvent', () => {
@@ -499,6 +506,7 @@ function makeWheelHarness(modes: ReadonlySet<string>) {
       baseline: 12,
       fontCss: '14px monospace',
       dpr: 1,
+      letterSpacing: 0,
     } as FontMetrics,
   };
   const modesRef: { current: ReadonlySet<string> } = { current: modes };

@@ -163,6 +163,7 @@ impl CefHostSupervisor {
             .unwrap_or_else(|_| default_cef_host_bin());
         let child = Command::new(&cef_host_bin)
             .env("OZMUX_CEF_HOST_SOCKET", &self.socket_path)
+            .kill_on_drop(true)
             .spawn()?;
         tracing::info!(pid = child.id(), bin = %cef_host_bin.display(), "spawned cef_host");
 

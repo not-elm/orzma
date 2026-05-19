@@ -4,6 +4,7 @@
 use crate::OzmuxConfigs;
 use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
+use crate::browser::BrowserPatch;
 use crate::font::FontPatch;
 use crate::shortcuts::{Binding, Prefix};
 use crate::theme::ThemePatch;
@@ -16,6 +17,7 @@ pub(crate) struct RawConfigs {
     pub(crate) shortcuts: Option<RawShortcuts>,
     pub(crate) theme: Option<ThemePatch>,
     pub(crate) font: Option<FontPatch>,
+    pub(crate) browser: Option<BrowserPatch>,
 }
 
 /// `[shortcuts]` shape with each subfield optional.
@@ -44,6 +46,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.font {
             base.font = patch.apply_to(base.font);
+        }
+        if let Some(patch) = self.browser {
+            base.browser = patch.apply_to(base.browser);
         }
         base
     }
@@ -206,6 +211,29 @@ mod tests {
             validate(&merged).unwrap_err(),
             crate::OzmuxConfigsError::InvalidFontSize { .. }
         ));
+    }
+
+    #[test]
+    fn browser_section_overrides_search_template() {
+        let raw: RawConfigs = toml::from_str(
+            r#"
+            [browser]
+            search_template = "https://www.google.com/search?q={query}"
+        "#,
+        )
+        .unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(
+            merged.browser.search_template,
+            "https://www.google.com/search?q={query}"
+        );
+    }
+
+    #[test]
+    fn absent_browser_section_keeps_default_duckduckgo() {
+        let raw = RawConfigs::default();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.browser, crate::browser::BrowserConfig::default());
     }
 
     #[test]
