@@ -55,3 +55,6 @@ rmp-serde = { workspace = true }
 unicode-width = { workspace = true }
 bytes = { workspace = true }
 tokio-util = { workspace = true }
+
+[build-dependencies]
+toml = { version = "0.8", default-features = false, features = ["parse"] }
