@@ -35,7 +35,6 @@ fn window_id_router() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::AppState;
     use crate::test_helpers::{bootstrap_default, fresh_state, router_with};
     use axum::body::{Body, to_bytes};
