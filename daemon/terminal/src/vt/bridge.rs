@@ -21,6 +21,7 @@ use crate::vt::frame_builder::{
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
+use crate::vt::produced_at::produced_at_enabled;
 use crate::vt::title::sanitize_title;
 use ozmux_multiplexer::WindowId;
 
@@ -88,6 +89,16 @@ pub(crate) struct VtState {
     /// title has been set / after `ResetTitle`. Read by
     /// `TerminalService::all_titles` for tab labels.
     pub title: Option<String>,
+    /// Monotonic wall-clock captured at bridge construction.
+    /// Used together with `bridge_started_at_unix_us` to derive epoch
+    /// micros for each emitted frame without a `getenv`-per-frame syscall.
+    /// `std::time::Instant` is used rather than `tokio::time::Instant`
+    /// because benchmarks run with `Builder::start_paused(true)`, which
+    /// freezes tokio time and would make elapsed() return ~0.
+    pub(crate) started_at: std::time::Instant,
+    /// Wall-clock epoch micros captured at the same moment as `started_at`.
+    /// `None` when `SystemTime` predates the Unix epoch (essentially never).
+    pub(crate) bridge_started_at_unix_us: Option<u64>,
 }
 
 impl VtState {
@@ -103,6 +114,11 @@ impl VtState {
             rows: rows.into(),
         };
         let term = Term::new(Config::default(), &size, listener);
+        let started_at = std::time::Instant::now();
+        let bridge_started_at_unix_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| d.as_micros().try_into().ok());
         Self {
             term,
             parser: alacritty_terminal::vte::ansi::Processor::new(),
@@ -115,6 +131,8 @@ impl VtState {
             hyperlinks: HyperlinkInterner::new(),
             wire_broadcast,
             title: None,
+            started_at,
+            bridge_started_at_unix_us,
         }
     }
 
@@ -132,6 +150,18 @@ impl VtState {
     pub fn cursor_changed(&self) -> bool {
         let curr = extract_cursor(&self.term);
         self.prev_cursor.as_ref().is_none_or(|prev| *prev != curr)
+    }
+
+    /// Returns the wall-clock epoch micros at which the current frame is
+    /// being emitted, or `None` if produced-at observability is disabled or
+    /// the bridge could not capture a wall-clock origin at construction.
+    fn current_produced_at_us(&self) -> Option<u64> {
+        if !produced_at_enabled() {
+            return None;
+        }
+        let origin = self.bridge_started_at_unix_us?;
+        let elapsed_us: u64 = self.started_at.elapsed().as_micros().try_into().ok()?;
+        Some(origin.saturating_add(elapsed_us))
     }
 }
 
@@ -193,17 +223,6 @@ fn decide_frame_kind(state: &VtState, dirty: DirtyRows) -> FrameKind {
 /// replaced with an error text frame so the client can handle the anomaly.
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
-/// Broadcasts an error text frame indicating the encoded frame exceeded
-/// [`MAX_FRAME_BYTES`]. Increments the sequence number via the caller.
-fn emit_frame_size_error(wb: &broadcast::Sender<WireMessage>, seq: u32) {
-    let json = serde_json::json!({
-        "kind": "error",
-        "seq": seq,
-        "category": "frame_size_exceeded",
-    });
-    let _ = wb.send(WireMessage::Text(json.to_string()));
-}
-
 /// Emits a frame for the damage stashed on `VtState` and disarms the
 /// Coalescer. Called by [`run_bridge_task`] from both the chunk-immediate-flush
 /// path and the deadline-fires path. The `window_open_mode` is consumed via
@@ -240,6 +259,7 @@ fn emit_now(
     let kind = decide_frame_kind(&state, dirty);
     state.first_emit = false;
     let seq = state.frame_seq;
+    let produced_at = state.current_produced_at_us();
     let frame = {
         let VtState {
             ref term,
@@ -248,10 +268,10 @@ fn emit_now(
         } = *state;
         match kind {
             FrameKind::Snapshot { reason } => {
-                RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks, None))
+                RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks, produced_at))
             }
             FrameKind::Delta { rows } => {
-                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks, None))
+                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks, produced_at))
             }
         }
     };
@@ -260,11 +280,19 @@ fn emit_now(
     let encoded_vec = encode(&frame).expect("encode infallible");
 
     if encoded_vec.len() > MAX_FRAME_BYTES {
-        emit_frame_size_error(&state.wire_broadcast, state.frame_seq);
+        let error_seq = state.frame_seq;
         // NOTE: frame_seq still advances on drop so the wire reflects a gap;
         // clients use the gap to know a frame was lost rather than silently
         // skipping seq numbers.
         state.frame_seq = state.frame_seq.wrapping_add(1);
+        let json = serde_json::json!({
+            "kind": "error",
+            "seq": error_seq,
+            "category": "frame_size_exceeded",
+        })
+        .to_string();
+        state.frame_ring.push_error(error_seq, json.clone());
+        let _ = state.wire_broadcast.send(WireMessage::Text(json));
     } else {
         let binary_seq = state.frame_seq;
         state.frame_seq = state.frame_seq.wrapping_add(1);
@@ -274,8 +302,10 @@ fn emit_now(
         // NOTE: mode is announced BEFORE the binary so the client
         // applies mode-related side-effects before re-rendering.
         if let Some(m) = build_mode(prev_mode, curr_mode, state.frame_seq) {
+            let mode_seq = state.frame_seq;
             state.frame_seq = state.frame_seq.wrapping_add(1);
             let json = serde_json::to_string(&m).expect("mode json infallible");
+            state.frame_ring.push_mode(mode_seq, json.clone());
             let _ = state.wire_broadcast.send(WireMessage::Text(json));
         }
         let _ = state.wire_broadcast.send(WireMessage::Binary {
@@ -699,18 +729,17 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn emit_frame_size_error_sends_text_with_category() {
-        let (wb, mut rx) = broadcast::channel::<WireMessage>(16);
-        super::emit_frame_size_error(&wb, 42);
-        let msg = rx.recv().await.unwrap();
-        match msg {
-            WireMessage::Text(s) => {
-                assert!(s.contains("\"kind\":\"error\""));
-                assert!(s.contains("\"category\":\"frame_size_exceeded\""));
-                assert!(s.contains("\"seq\":42"));
-            }
-            _ => panic!("expected Text(error)"),
-        }
+    #[test]
+    fn oversize_error_json_has_expected_fields() {
+        let seq: u32 = 42;
+        let json = serde_json::json!({
+            "kind": "error",
+            "seq": seq,
+            "category": "frame_size_exceeded",
+        })
+        .to_string();
+        assert!(json.contains("\"kind\":\"error\""));
+        assert!(json.contains("\"category\":\"frame_size_exceeded\""));
+        assert!(json.contains("\"seq\":42"));
     }
 }

@@ -29,6 +29,11 @@ required-features = ["test-helpers"]
 name = "vt_scroll"
 path = "tests/vt_scroll.rs"
 
+[[test]]
+name = "frame_ring_push_invariant"
+path = "tests/frame_ring_push_invariant.rs"
+required-features = ["test-helpers"]
+
 [[example]]
 name = "generate_tape"
 required-features = ["test-helpers"]

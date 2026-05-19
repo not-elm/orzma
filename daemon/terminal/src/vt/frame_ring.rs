@@ -45,7 +45,7 @@ impl RingEntry {
     fn byte_cost(&self) -> usize {
         match self {
             RingEntry::Binary { encoded, .. } => encoded.len(),
-            RingEntry::Mode { text, .. } | RingEntry::Error { text, .. } => text.as_bytes().len(),
+            RingEntry::Mode { text, .. } | RingEntry::Error { text, .. } => text.len(),
         }
     }
 }
@@ -86,6 +86,11 @@ impl FrameRing {
     /// Pushes an error JSON text frame into the ring.
     pub fn push_error(&mut self, seq: u32, text: String) {
         self.push_entry(RingEntry::Error { seq, text });
+    }
+
+    /// Returns the number of entries currently stored in the ring.
+    pub(crate) fn entries_len(&self) -> usize {
+        self.entries.len()
     }
 
     /// Replays consecutive entries from `last_seq + 1` up to the latest seq.

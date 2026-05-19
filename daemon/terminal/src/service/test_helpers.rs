@@ -154,4 +154,15 @@ impl TerminalService {
     pub async fn recorded_cwd_for_test(&self, aid: &ActivityId) -> Option<Option<String>> {
         self.recorded_cwds.read().await.get(aid).cloned()
     }
+
+    /// Returns the number of entries currently stored in the `FrameRing` for
+    /// the given activity. Test-only — used by the ring-push invariant test to
+    /// assert `broadcast_send_count == ring_entries_count`.
+    pub async fn frame_ring_entries_len(&self, activity: &ActivityId) -> Option<usize> {
+        let guard = self.read(activity).await.ok()?;
+        let vt_state = guard.vt_state.clone();
+        drop(guard);
+        let state = vt_state.lock().expect("vt_state poisoned");
+        Some(state.frame_ring.entries_len())
+    }
 }
