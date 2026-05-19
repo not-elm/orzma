@@ -8,6 +8,7 @@ pub(crate) mod frame_ring;
 pub(crate) mod hyperlink;
 pub(crate) mod listener;
 pub(crate) mod mode_diff;
+pub(crate) mod produced_at;
 pub(crate) mod title;
 
 pub use coalescer::Coalescer;
