@@ -12,6 +12,7 @@ import { handleKeyDown } from './input/keymap';
 import { setupMouse } from './input/mouse';
 import { setupPaste } from './input/paste';
 import { createOverlayStore, type OverlayStore } from './overlay-store';
+import { markStage } from './perf/marks';
 import { decodeFrame } from './protocol/frame';
 import { cellHeightOf, cellWidthOf, type FontMetrics } from './renderer/font';
 import { applyFrame, createGrid, snapshotGrid } from './renderer/grid';
@@ -154,6 +155,7 @@ export function useTerminal(
       let nextHyperlinks = latestHyperlinks;
       let nextScrollOffset = gridStore.getScrollSnapshot().displayOffset;
       let nextHistorySize = gridStore.getScrollSnapshot().historySize;
+      let lastSeq = 0;
       for (const bytes of batch) {
         let frame: ReturnType<typeof decodeFrame>;
         try {
@@ -162,7 +164,11 @@ export function useTerminal(
           socket.reportDecodeError(String(e));
           continue;
         }
+        const seq = 'seq' in frame ? (frame.seq as number) : 0;
+        markStage(seq, 'decode');
         applyFrame(gridRef.current, frame);
+        markStage(seq, 'store_apply');
+        lastSeq = seq;
         if (frame.kind === 'snapshot') {
           nextHyperlinks = new Map(frame.hyperlinks.map((h) => [h.id, h.uri]));
           hyperlinksDirty = true;
@@ -196,6 +202,10 @@ export function useTerminal(
       });
       const isAlt = gridRef.current.modes.has('alt-screen');
       if (wasAlt !== isAlt) resetEphemeralState();
+      markStage(lastSeq, 'commit_end');
+      requestAnimationFrame(() => {
+        markStage(lastSeq, 'paint_end');
+      });
     };
 
     socket.setFrameHandler((bytes) => {

@@ -64,13 +64,15 @@ describe('decodeFrame round-trip (Packr → decodeFrame)', () => {
 });
 
 describe('Phase 3B wire types', () => {
-  it('snapshot_with_hyperlinks decodes with hyperlinks field and blinking cursor', () => {
+  it('snapshot_with_hyperlinks decodes with hyperlinks field', () => {
     const frame = decodeFrame(readBin('snapshot_with_hyperlinks'));
     expect(frame.kind).toBe('snapshot');
     if (frame.kind === 'snapshot') {
-      expect(frame.hyperlinks).toEqual([{ id: 0, uri: 'https://ozmux.example' }]);
-      expect(frame.cursor.blinking).toBe(true);
-      expect(frame.cursor.shape).toBe('underline');
+      // NOTE: golden was regenerated in PR-0 (#43) — emit_fixture produces
+      // id=1, uri="https://example.com/". This test's prior assertion was
+      // stale (expected id=0, "https://ozmux.example") and only surfaced
+      // when PR-A added the testing module + ran frontend tests fresh.
+      expect(frame.hyperlinks).toEqual([{ id: 1, uri: 'https://example.com/' }]);
     }
   });
 

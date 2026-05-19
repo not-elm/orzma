@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { vtTerminalWsUrl } from './api';
+import { markStage } from './perf/marks';
 
 export type SocketStatus = 'connecting' | 'connected' | 'disconnected' | 'exited';
 
@@ -77,6 +78,7 @@ export function useTerminalSocket(
       setStatus('connected');
     };
     ws.onmessage = (ev) => {
+      markStage(0, 'ws_recv');
       if (typeof ev.data === 'string') {
         const handler = controlHandlerRef.current;
         if (handler) handler(ev.data);
