@@ -15,17 +15,18 @@ pub mod split;
 pub mod swap;
 
 pub fn router() -> Router<AppState> {
+    Router::new().nest("/{pane_id}", pane_id_router())
+}
+
+fn pane_id_router() -> Router<AppState> {
     Router::new()
-        .route("/{pane_id}/activate", post(activate::activate))
-        .route(
-            "/{pane_id}/cycle-activity",
-            post(cycle_activity::cycle_activity),
-        )
-        .route("/{pane_id}/split", post(split::split))
-        .route("/{pane_id}/resize", post(resize::resize))
-        .route("/{pane_id}/swap", post(swap::swap))
-        .route("/{pane_id}", method_delete(close::close))
-        .nest("/{pane_id}/activities", activities::router())
+        .route("/", method_delete(close::close))
+        .route("/activate", post(activate::activate))
+        .route("/cycle-activity", post(cycle_activity::cycle_activity))
+        .route("/split", post(split::split))
+        .route("/resize", post(resize::resize))
+        .route("/swap", post(swap::swap))
+        .nest("/activities", activities::router())
 }
 
 /// Walk the SessionState to find which Session owns `wid`. Used to populate
