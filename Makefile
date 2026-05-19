@@ -52,6 +52,7 @@ dev-frontend:
 	pnpm --dir $(FRONTEND_DIR) dev
 
 dev-backend:
+	OZMUX_FRONTEND_DEV=1 \
 	cargo run -p ozmux_cli -- daemon start --foreground
 
 bundle-cef-host:
@@ -64,6 +65,7 @@ bundle-cef-host-release:
 
 dev-daemon: memo-build-sdk $(BUNDLE_CEF_HOST_DEP)
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) \
+	OZMUX_FRONTEND_DEV=1 \
 	cargo run -p ozmux_cli -- daemon start --foreground
 
 clean:

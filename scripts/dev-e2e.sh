@@ -65,6 +65,7 @@ cmd_start() {
 
   echo "start: launching daemon (logs: ${daemon_log})" >&2
   (cd "${REPO_ROOT}" && exec env OZMUX_EXTENSION_ROOT="${REPO_ROOT}/extensions" \
+    OZMUX_FRONTEND_DEV=1 \
     cargo run -p ozmux_cli -- daemon start --foreground) \
     >"${daemon_log}" 2>&1 &
   local daemon_pid=$!

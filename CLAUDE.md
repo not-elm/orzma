@@ -34,7 +34,7 @@ Members live under `cli/`, `daemon/*`, and `client/`. Edition 2024, toolchain pi
 ### How the pieces connect at runtime
 
 1. `ozmux daemon start --foreground` (via `daemon_bootstrap::run()`) reads `OZMUX_EXTENSION_ROOT`, creates the runtime root, spawns extension Node processes (UDS in `sock/`), and starts the axum server.
-2. The browser loads the embedded `index.html` from `GET /`. In debug builds, `/` redirects to `http://localhost:5173` so Vite HMR can be used.
+2. The browser loads the embedded `index.html` from `GET /`. When `OZMUX_FRONTEND_DEV=1` is set on the daemon process, `/` redirects to `http://localhost:5173` so Vite HMR can be used; otherwise the embedded bundle is served regardless of build profile. `make dev-daemon` / `make dev-backend` / `make dev-e2e` set the env var; `make dev` (Tauri) does not, so a stale debug daemon does not break the Tauri webview.
 3. The frontend opens a WebSocket to `/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws` for the bootstrap activity. The daemon does server-side VT emulation (`alacritty_terminal::Term` inside `VtState`) and broadcasts msgpack `WireMessage` frames (snapshot + delta); the frontend's custom DOM renderer applies them to its grid store. Keyboard, mouse, and resize messages travel back over the same socket.
 4. Extensions are reachable via `/windows/{wid}/panes/{pid}/activities/{aid}/iframe/*` (proxied to the extension's HTTP server over its UDS).
 
