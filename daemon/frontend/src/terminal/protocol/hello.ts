@@ -9,6 +9,7 @@ export interface HelloFrame {
   cursor: Cursor;
   escape_caps: string[];
   input_caps: string[];
+  bridge_started_at_unix_us?: number;
 }
 
 /** Parses a JSON text hello frame. Throws `Error` if the shape is invalid. */

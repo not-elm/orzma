@@ -63,6 +63,24 @@ describe('decodeFrame round-trip (Packr → decodeFrame)', () => {
   });
 });
 
+describe('produced_at_us fixture roundtrips', () => {
+  it('snapshot_with_produced_at decodes with produced_at_us', () => {
+    const frame = decodeFrame(readBin('snapshot_with_produced_at'));
+    expect(frame.kind).toBe('snapshot');
+    if (frame.kind === 'snapshot') {
+      expect(frame.produced_at_us).toBe(1_700_000_000_000_000);
+    }
+  });
+
+  it('delta_with_produced_at decodes with produced_at_us', () => {
+    const frame = decodeFrame(readBin('delta_with_produced_at'));
+    expect(frame.kind).toBe('delta');
+    if (frame.kind === 'delta') {
+      expect(frame.produced_at_us).toBe(1_700_000_000_000_001);
+    }
+  });
+});
+
 describe('Phase 3B wire types', () => {
   it('snapshot_with_hyperlinks decodes with hyperlinks field', () => {
     const frame = decodeFrame(readBin('snapshot_with_hyperlinks'));

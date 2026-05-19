@@ -44,3 +44,47 @@ export function markStage(seq: number, stage: Stage): void {
   buf.times[i] = performance.now();
   buf.writeIndex += 1;
 }
+
+/**
+ * Records a stage at an explicit prior timestamp. Used when the caller knows
+ * a stage happened in the past (e.g. ws_recv before the seq was decoded).
+ */
+export function markStageAt(seq: number, stage: Stage, t: number): void {
+  if (!PERF_ENABLED) return;
+  // biome-ignore lint/style/noNonNullAssertion: buffer is guaranteed non-null by the module-init block that runs when PERF_ENABLED is true
+  const buf = globalThis.__ozmuxPerfBuffer!;
+  const i = buf.writeIndex % buf.cap;
+  buf.seqs[i] = seq;
+  buf.stages[i] = STAGE_IDS[stage];
+  buf.times[i] = t;
+  buf.writeIndex += 1;
+}
+
+/**
+ * Returns the recorded timestamp for `(seq, stage)`, or `undefined` if no
+ * such mark exists in the active buffer window.
+ */
+export function getMarkTime(seq: number, stage: Stage): number | undefined {
+  if (!PERF_ENABLED) return undefined;
+  // biome-ignore lint/style/noNonNullAssertion: buffer is guaranteed non-null by the module-init block that runs when PERF_ENABLED is true
+  const buf = globalThis.__ozmuxPerfBuffer!;
+  const stageId = STAGE_IDS[stage];
+  const lo = Math.max(0, buf.writeIndex - buf.cap);
+  for (let i = lo; i < buf.writeIndex; i++) {
+    const slot = i % buf.cap;
+    if (buf.seqs[slot] === seq && buf.stages[slot] === stageId) {
+      return buf.times[slot];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resets the ring buffer write index to zero. Exposed for tests that need
+ * to clear the buffer without reloading the module.
+ */
+export const __test_only_resetPerfBuffer = (): void => {
+  if (globalThis.__ozmuxPerfBuffer !== undefined) {
+    globalThis.__ozmuxPerfBuffer.writeIndex = 0;
+  }
+};

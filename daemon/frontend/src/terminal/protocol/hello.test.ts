@@ -29,4 +29,33 @@ describe('parseHello', () => {
       ),
     ).toThrow();
   });
+
+  it('parses bridge_started_at_unix_us when present', () => {
+    const json = JSON.stringify({
+      kind: 'hello',
+      seq: 0,
+      cols: 80,
+      rows: 24,
+      cursor: { x: 0, y: 0, shape: 'block', blinking: true, visible: true },
+      escape_caps: [],
+      input_caps: [],
+      bridge_started_at_unix_us: 1_700_000_000_000_000,
+    });
+    const hello = parseHello(json);
+    expect(hello.bridge_started_at_unix_us).toBe(1_700_000_000_000_000);
+  });
+
+  it('tolerates missing bridge_started_at_unix_us', () => {
+    const json = JSON.stringify({
+      kind: 'hello',
+      seq: 0,
+      cols: 80,
+      rows: 24,
+      cursor: { x: 0, y: 0, shape: 'block', blinking: true, visible: true },
+      escape_caps: [],
+      input_caps: [],
+    });
+    const hello = parseHello(json);
+    expect(hello.bridge_started_at_unix_us).toBeUndefined();
+  });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { vtTerminalWsUrl } from './api';
-import { markStage } from './perf/marks';
+import { markStage, markStageAt } from './perf/marks';
+import { decodeFrame } from './protocol/frame';
 
 export type SocketStatus = 'connecting' | 'connected' | 'disconnected' | 'exited';
 
@@ -82,7 +83,6 @@ export function useTerminalSocket(
       setStatus('connected');
     };
     ws.onmessage = (ev) => {
-      markStage(0, 'ws_recv');
       if (typeof ev.data === 'string') {
         const handler = controlHandlerRef.current;
         if (handler) handler(ev.data);
@@ -90,7 +90,18 @@ export function useTerminalSocket(
         return;
       }
       if (ev.data instanceof ArrayBuffer) {
+        const arrivalT = performance.now();
         const bytes = new Uint8Array(ev.data);
+        try {
+          const decoded = decodeFrame(bytes);
+          if (decoded.kind === 'snapshot' || decoded.kind === 'delta') {
+            markStageAt(decoded.seq, 'ws_recv', arrivalT);
+            markStage(decoded.seq, 'decode');
+          }
+        } catch {
+          // NOTE: non-msgpack or malformed frames skip perf attribution but
+          // are still forwarded to the frame handler below.
+        }
         const handler = frameHandlerRef.current;
         if (handler) handler(bytes);
         else pendingFrameRef.current.push(bytes);
