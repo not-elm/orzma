@@ -66,6 +66,16 @@ pub(crate) async fn ensure_running() -> anyhow::Result<DaemonStartOutcome> {
     Ok(DaemonStartOutcome::Started)
 }
 
+/// Returns `true` if a daemon is currently responding on `HTTP_ADDR`.
+///
+/// Thin wrapper over the in-module `start::is_running()` probe so callers
+/// outside `commands::daemon` (e.g. `commands::session::attach`) can ask
+/// the question without widening `start::is_running()`'s `pub(super)`
+/// visibility.
+pub(crate) fn is_running() -> bool {
+    start::is_running()
+}
+
 /// Builds a `reqwest` client for HTTP requests to the local daemon, with the
 /// given per-request timeout.
 pub(crate) fn http_client(timeout: Duration) -> anyhow::Result<reqwest::Client> {
