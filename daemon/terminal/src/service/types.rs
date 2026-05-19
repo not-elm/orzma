@@ -33,6 +33,9 @@ pub struct TerminalGeometry {
     pub rows: u16,
     /// Cursor state at read time.
     pub cursor: Cursor,
+    /// Wall-clock epoch micros captured when the VT bridge was constructed.
+    /// `None` when `SystemTime` could not be captured (essentially never).
+    pub bridge_started_at_unix_us: Option<u64>,
 }
 
 /// Outcome of subscribing to an activity's wire stream.

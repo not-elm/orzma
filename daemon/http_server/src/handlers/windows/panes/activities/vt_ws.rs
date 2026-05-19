@@ -110,6 +110,14 @@ async fn handle_client_binary(
     Ok(())
 }
 
+/// Extracts the `seq` field from a JSON text frame, used to track `last_sent_seq`
+/// for text-opcode wire messages (mode changes, oversize errors).
+fn extract_seq_from_text_json(text: &str) -> Option<u32> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("seq")?.as_u64()?.try_into().ok())
+}
+
 /// Sends the initial `hello` text frame announcing geometry and capability
 /// negotiation. Returns the underlying sink error when the client has
 /// already disconnected.
@@ -125,6 +133,7 @@ async fn send_hello(
         "cursor": geom.cursor,
         "escape_caps": ESCAPE_CAPS,
         "input_caps": INPUT_CAPS,
+        "bridge_started_at_unix_us": geom.bridge_started_at_unix_us,
     });
     tx.send(Message::Text(hello.to_string().into())).await
 }
@@ -171,6 +180,8 @@ pub(super) async fn vt_ws_loop(
         return;
     }
 
+    let mut last_sent_seq: Option<u32> = last_seq;
+
     let mut rx_frames = match terminal.subscribe_frames(&aid, last_seq).await {
         Ok(FrameSubscription::FreshSnapshot { snapshot, rx }) => {
             if tx.send(Message::Binary(snapshot)).await.is_err() {
@@ -184,14 +195,21 @@ pub(super) async fn vt_ws_loop(
             rx,
         }) => {
             for wm in deltas {
-                let result = match wm {
-                    WireMessage::Binary { encoded, .. } => {
-                        tx.send(Message::Binary(encoded)).await
+                match wm {
+                    WireMessage::Binary { seq, encoded } => {
+                        if tx.send(Message::Binary(encoded)).await.is_err() {
+                            return;
+                        }
+                        last_sent_seq = Some(seq);
                     }
-                    WireMessage::Text(text) => tx.send(Message::Text(text.into())).await,
-                };
-                if result.is_err() {
-                    return;
+                    WireMessage::Text(text) => {
+                        if let Some(seq) = extract_seq_from_text_json(&text) {
+                            last_sent_seq = Some(seq);
+                        }
+                        if tx.send(Message::Text(text.into())).await.is_err() {
+                            return;
+                        }
+                    }
                 }
             }
             rx
@@ -202,25 +220,53 @@ pub(super) async fn vt_ws_loop(
     loop {
         tokio::select! {
             srv = rx_frames.recv() => match srv {
-                Ok(WireMessage::Binary { encoded, .. }) => {
+                Ok(WireMessage::Binary { seq, encoded }) => {
                     if tx.send(Message::Binary(encoded)).await.is_err() {
                         break;
                     }
+                    last_sent_seq = Some(seq);
                 }
                 Ok(WireMessage::Text(s)) => {
+                    if let Some(seq) = extract_seq_from_text_json(&s) {
+                        last_sent_seq = Some(seq);
+                    }
                     if tx.send(Message::Text(s.into())).await.is_err() { break; }
                 }
-                Err(RecvError::Lagged(_)) => {
-                    // NOTE: passing Some(0) forces SnapshotReason::Lagged because
-                    // any non-empty ring's first seq is > 0. Passing None would
-                    // yield Reconnect, which misrepresents the cause here. A
-                    // dedicated API would be cleaner; revisit in Phase 2B.
-                    match terminal.subscribe_frames(&aid, Some(0)).await {
+                Err(RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        target: "ozmux.lag",
+                        activity_id = %aid,
+                        skipped = n,
+                        "WS subscriber lagged behind broadcast"
+                    );
+                    metrics::counter!("ozmux_broadcast_lagged_total").increment(1);
+                    match terminal.subscribe_frames(&aid, last_sent_seq).await {
+                        Ok(FrameSubscription::ResumeReplay { deltas, last_replay_seq: _, rx }) => {
+                            for wm in deltas {
+                                match wm {
+                                    WireMessage::Binary { seq, encoded } => {
+                                        if tx.send(Message::Binary(encoded)).await.is_err() {
+                                            return;
+                                        }
+                                        last_sent_seq = Some(seq);
+                                    }
+                                    WireMessage::Text(text) => {
+                                        if let Some(seq) = extract_seq_from_text_json(&text) {
+                                            last_sent_seq = Some(seq);
+                                        }
+                                        if tx.send(Message::Text(text.into())).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                            rx_frames = rx;
+                        }
                         Ok(FrameSubscription::FreshSnapshot { snapshot, rx }) => {
                             if tx.send(Message::Binary(snapshot)).await.is_err() { break; }
                             rx_frames = rx;
                         }
-                        _ => break,
+                        Err(_) => break,
                     }
                 }
                 Err(RecvError::Closed) => break,
@@ -288,6 +334,10 @@ mod tests {
                 assert!(v["cursor"].is_object());
                 assert!(v["escape_caps"].is_array());
                 assert!(v["input_caps"].is_array());
+                assert!(
+                    v.get("bridge_started_at_unix_us").is_some(),
+                    "hello must include bridge_started_at_unix_us key"
+                );
             }
             other => panic!("expected Text(hello), got {other:?}"),
         }

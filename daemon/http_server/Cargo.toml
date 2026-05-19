@@ -29,6 +29,7 @@ thiserror = { workspace = true }
 futures-util = { workspace = true }
 mime_guess = { workspace = true }
 dashmap = { workspace = true }
+metrics = { workspace = true }
 
 [dev-dependencies]
 ozmux_terminal = { path = "../terminal", features = ["test-helpers"] }

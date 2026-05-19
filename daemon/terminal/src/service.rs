@@ -371,6 +371,7 @@ impl TerminalService {
             cols: state.term.columns() as u16,
             rows: state.term.screen_lines() as u16,
             cursor: crate::vt::frame_builder::extract_cursor(&state.term),
+            bridge_started_at_unix_us: state.bridge_started_at_unix_us,
         })
     }
 
