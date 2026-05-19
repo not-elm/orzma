@@ -248,10 +248,10 @@ fn emit_now(
         } = *state;
         match kind {
             FrameKind::Snapshot { reason } => {
-                RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks))
+                RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks, None))
             }
             FrameKind::Delta { rows } => {
-                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks))
+                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks, None))
             }
         }
     };

@@ -331,7 +331,7 @@ impl TerminalService {
                 ref mut hyperlinks,
                 ..
             } = *state;
-            build_snapshot(term, snap_seq, reason, hyperlinks)
+            build_snapshot(term, snap_seq, reason, hyperlinks, None)
         };
         let encoded_vec =
             encode(&RenderFrame::Snapshot(snap)).expect("encode infallible for valid frame");
