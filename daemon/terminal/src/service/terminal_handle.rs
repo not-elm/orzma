@@ -2,7 +2,7 @@
 
 use crate::event::TerminalEvent;
 use crate::pty::scrollback::ScrollbackBuffer;
-use crate::vt::bridge::{VtState, run_bridge_task};
+use crate::vt::bridge::{BridgeConfig, VtState, run_bridge_task};
 use crate::vt::frame_ring::WireMessage;
 use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 use bytes::Bytes;
@@ -114,6 +114,7 @@ impl TerminalHandle {
             window_id,
             title_tx,
             vt_cancel.clone(),
+            BridgeConfig::default(),
         ));
 
         Self {

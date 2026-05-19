@@ -24,6 +24,31 @@ use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 use crate::vt::title::sanitize_title;
 use ozmux_multiplexer::WindowId;
 
+/// Internal-only knob for replay/test contexts. Production code uses
+/// `BridgeConfig::default()` (unchanged behavior).
+///
+/// See `docs/superpowers/specs/2026-05-19-pr-a-replay-harness-design.md`
+/// Section 3 "BridgeConfig".
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BridgeConfig {
+    /// Whether the coalescer's IDLE/MAX_CAP windows are honored.
+    /// False = flush-after-each-chunk (replay determinism mode).
+    pub coalesce: bool,
+    /// Whether to spawn the 100 ms broadcast-depth gauge task alongside
+    /// the bridge. False = no gauge (replay determinism: no extra timers
+    /// that would interfere with `tokio::time::pause()`).
+    pub spawn_gauge: bool,
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        Self {
+            coalesce: true,
+            spawn_gauge: true,
+        }
+    }
+}
+
 /// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
 /// PTY chunk.
@@ -270,6 +295,12 @@ fn emit_now(
 /// parsing risks data loss that is unrecoverable from the wire log.
 /// The Coalescer only buffers the *decision to emit*; the Term itself
 /// stays continuously up to date.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "bridge wires raw VT + PTY + control + title channels plus a \
+              determinism config; a builder would obscure the single \
+              hot-path call site in TerminalHandle::new"
+)]
 pub(crate) async fn run_bridge_task(
     vt_state: Arc<std::sync::Mutex<VtState>>,
     mut pty_rx: mpsc::Receiver<Bytes>,
@@ -278,7 +309,12 @@ pub(crate) async fn run_bridge_task(
     activity_window: Option<WindowId>,
     title_tx: broadcast::Sender<WindowId>,
     cancel: CancellationToken,
+    config: BridgeConfig,
 ) {
+    // NOTE: spawn_gauge is reserved for PR-B (broadcast-depth gauge task).
+    // It has no production consumer yet; touch it so the field isn't
+    // flagged unused while the wiring is in flight.
+    let _ = config.spawn_gauge;
     let mut coalescer = Coalescer::new();
     let mut window_open_mode: Option<alacritty_terminal::term::TermMode> = None;
 
@@ -320,11 +356,16 @@ pub(crate) async fn run_bridge_task(
                     }
                     let dirty = collect_dirty_rows(&mut state.term);
                     let verdict = classify_damage(&dirty, state.cursor_changed());
-                    let flush = coalescer.should_flush_immediately(
+                    let policy_flush = coalescer.should_flush_immediately(
                         state.first_emit,
                         &verdict,
                         state.pending_user_input,
                     );
+                    // NOTE: replay/test mode disables the coalescer entirely
+                    // so emits are 1:1 with PTY chunks — required by
+                    // feed_pty_tape so output is reproducible without
+                    // tokio::time::advance dances.
+                    let flush = policy_flush || !config.coalesce;
                     if flush
                         && state.pending_user_input
                         && matches!(verdict, DamageVerdict::AtMostOneRow)
@@ -485,6 +526,7 @@ mod tests {
             None,
             title_tx,
             cancel.clone(),
+            BridgeConfig::default(),
         ));
 
         pty_tx.send(Bytes::from_static(b"hello")).await.unwrap();
@@ -545,6 +587,7 @@ mod tests {
             Some(wid.clone()),
             title_tx,
             cancel.clone(),
+            BridgeConfig::default(),
         ));
         TitleBridge {
             control_tx,

@@ -8,7 +8,7 @@ authors.workspace = true
 publish.workspace = true
 
 [features]
-test-helpers = []
+test-helpers = ["dep:toml", "dep:sha2"]
 
 [[test]]
 name = "vt_integration"
@@ -37,6 +37,8 @@ harness = false
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [dependencies]
+toml = { version = "0.8", default-features = false, features = ["parse"], optional = true }
+sha2 = { version = "0.10", optional = true }
 serde_json = "1"
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_extension = { path = "../extension" }
