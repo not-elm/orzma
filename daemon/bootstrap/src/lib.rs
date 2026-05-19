@@ -34,6 +34,7 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+use anyhow::bail;
 use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
@@ -94,6 +95,8 @@ pub async fn run() -> anyhow::Result<()> {
     if let Err(e) = place_cli_shim(&runtime) {
         tracing::warn!(error = %e, "failed to place ozmux CLI shim");
     }
+
+    materialize_builtins(&runtime).await;
 
     let registry = ExtensionRegistry::default();
     let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
@@ -286,4 +289,143 @@ fn longest_extension_name() -> std::io::Result<String> {
         longest = "x".to_string();
     }
     Ok(longest)
+}
+
+/// Materialises the built-in `@<name>` shims into
+/// `runtime_root/bin/__builtin/`. Best-effort: every failure is
+/// logged and the daemon proceeds without the affected shims. This
+/// matches the policy of `place_cli_shim()` above so the CLI shim
+/// and the built-in shims have consistent behaviour on error.
+async fn materialize_builtins(runtime: &RuntimeRoot) {
+    let ozmux_exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "current_exe() failed; skipping built-in shims");
+            return;
+        }
+    };
+    if let Err(e) = builtin_commands::validate_ozmux_exe(runtime.bin_dir(), &ozmux_exe) {
+        tracing::warn!(
+            error = %e,
+            path = %ozmux_exe.display(),
+            "ozmux_exe failed self-recursion check; skipping built-in shims",
+        );
+        return;
+    }
+    if let Err(e) = check_builtin_name_collision() {
+        tracing::error!(
+            error = %e,
+            "an extension claims the reserved __builtin name; skipping built-in shims",
+        );
+        return;
+    }
+    let bin = runtime.bin_dir().join(builtin_commands::BUILTIN_DIR_NAME);
+    if let Err(e) = builtin_commands::materialize(&bin, &ozmux_exe).await {
+        tracing::error!(
+            error = %e,
+            path = %bin.display(),
+            "failed to materialise built-in shims",
+        );
+    }
+}
+
+/// Scans `OZMUX_EXTENSION_ROOT` for an extension whose
+/// `package.json` declares the reserved built-in dir name.
+/// Returns `Err` on collision. Empty/unset env var is fine
+/// (returns Ok). The pre-pass uses an opportunistic parse —
+/// malformed package.json files are skipped silently because
+/// `ExtensionHandles::load()` will surface them later anyway.
+fn check_builtin_name_collision() -> anyhow::Result<()> {
+    let Ok(root) = std::env::var("OZMUX_EXTENSION_ROOT") else {
+        return Ok(());
+    };
+    if root.is_empty() {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.flatten() {
+        let pkg_path = entry.path().join("package.json");
+        let Ok(text) = std::fs::read_to_string(&pkg_path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if value.get("name").and_then(|n| n.as_str())
+            == Some(builtin_commands::BUILTIN_DIR_NAME)
+        {
+            bail!(
+                "extension at {} declares reserved name {}",
+                pkg_path.display(),
+                builtin_commands::BUILTIN_DIR_NAME,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod lib_tests {
+    use super::check_builtin_name_collision;
+    use std::fs;
+
+    fn with_extension_root<F: FnOnce()>(root: &std::path::Path, f: F) {
+        // NOTE: process-global env mutation. Other tests in this binary
+        // that touch OZMUX_EXTENSION_ROOT must be either serial-guarded
+        // or in a separate test binary.
+        unsafe { std::env::set_var("OZMUX_EXTENSION_ROOT", root) };
+        f();
+        unsafe { std::env::remove_var("OZMUX_EXTENSION_ROOT") };
+    }
+
+    #[test]
+    fn collision_check_passes_when_no_offending_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = dir.path().join("memo");
+        fs::create_dir_all(&ext).unwrap();
+        fs::write(
+            ext.join("package.json"),
+            r#"{"name":"memo","main":"bootstrap.ts"}"#,
+        )
+        .unwrap();
+        with_extension_root(dir.path(), || {
+            assert!(check_builtin_name_collision().is_ok());
+        });
+    }
+
+    #[test]
+    fn collision_check_errors_on_reserved_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = dir.path().join("usurper");
+        fs::create_dir_all(&ext).unwrap();
+        fs::write(
+            ext.join("package.json"),
+            r#"{"name":"__builtin","main":"x.ts"}"#,
+        )
+        .unwrap();
+        with_extension_root(dir.path(), || {
+            assert!(check_builtin_name_collision().is_err());
+        });
+    }
+
+    #[test]
+    fn collision_check_tolerates_malformed_package_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = dir.path().join("broken");
+        fs::create_dir_all(&ext).unwrap();
+        fs::write(ext.join("package.json"), "not json").unwrap();
+        with_extension_root(dir.path(), || {
+            assert!(check_builtin_name_collision().is_ok());
+        });
+    }
+
+    #[test]
+    fn collision_check_tolerates_missing_env_var() {
+        // No with_extension_root wrapper; env var stays unset.
+        unsafe { std::env::remove_var("OZMUX_EXTENSION_ROOT") };
+        assert!(check_builtin_name_collision().is_ok());
+    }
 }
