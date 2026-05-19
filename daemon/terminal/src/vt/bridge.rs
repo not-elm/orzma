@@ -4,7 +4,7 @@
 //! are wired in Phase 2.
 
 use std::sync::Arc;
-use std::time::Instant;
+use tokio::time::Instant;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;

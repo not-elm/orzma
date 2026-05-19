@@ -5,7 +5,8 @@
 //! the `Term` directly; the bridge classifies damage and passes a verdict in.
 
 use std::cmp::min;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 use tokio::time::sleep_until;
 
 /// Classification of accumulated damage that drives the immediate-flush decision.
