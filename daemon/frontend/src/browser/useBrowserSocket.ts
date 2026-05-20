@@ -45,11 +45,7 @@ export interface NavSnapshot {
 }
 
 /** Mirrors `BrowserUnavailableReason` in wire.rs (serde tag = "kind", snake_case). */
-export type BrowserUnavailableReason =
-  | { kind: 'retry_exhausted'; last_error: string }
-  | { kind: 'binary_not_found'; path: string }
-  | { kind: 'cef_init_failed'; exit_code: number }
-  | { kind: 'protocol_mismatch'; expected: number; got: number };
+export type BrowserUnavailableReason = { kind: 'retry_exhausted'; last_error: string };
 
 /** Mirrors `CursorKind` in wire.rs (serde snake_case). */
 export type CursorKind =

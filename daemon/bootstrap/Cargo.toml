@@ -11,13 +11,20 @@ publish.workspace = true
 name = "daemon_bootstrap"
 path = "src/lib.rs"
 
+[[bin]]
+name = "ozmux-daemon"
+path = "src/main.rs"
+
 [dependencies]
 ozmux_browser = { path = "../browser" }
+ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
+ozmux_cef_host = { path = "../cef_host" }
 ozmux_configs = { path = "../configs" }
 ozmux_extension = { path = "../extension" }
 ozmux_http_server = { path = "../http_server" }
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_terminal = { path = "../terminal" }
+cef = "148.1.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -25,6 +32,9 @@ anyhow = { workspace = true }
 libc = { workspace = true }
 percent-encoding = "2"
 serde_json = { workspace = true }
+which = "6"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+ureq = "2"
+nix = { version = "0.29", features = ["signal"] }

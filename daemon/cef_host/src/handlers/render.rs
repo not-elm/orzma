@@ -1,6 +1,16 @@
-//! CefRenderHandler — writes OnPaint BGRA frames into the per-activity shm ring.
+//! CefRenderHandler — copies OnPaint BGRA frames out of CEF via the
+//! `FrameBufferPool` and emits `HostEvent::FrameProduced` to the daemon.
+//!
+//! Plan 3 Task 11+12: replaces the Plan 1-2 shm-ring path. The handler still
+//! holds an `Arc<ShmWriter>` so the legacy `FrameDescriptor` writer is kept
+//! around for Plan 5 Task 22 to remove cleanly; on the hot path each frame
+//! flows through the in-process pool + `Bytes` instead.
 
-use crate::shm_writer::{MAX_DAMAGE_RECTS, ShmWriter, SlotData};
+use crate::frame_buffer_pool::FrameBufferPool;
+
+/// Upper bound on damage rectangles in a single delta frame. Beyond this we
+/// promote the frame to a keyframe instead of carrying an unbounded list.
+const MAX_DAMAGE_RECTS: usize = 16;
 use cef::rc::Rc as _;
 use cef::{
     Browser, ImplRenderHandler, PaintElementType, Rect, RenderHandler, ScreenInfo,
@@ -73,9 +83,11 @@ unsafe impl Sync for RenderHandlerState {}
 wrap_render_handler! {
     pub struct OzmuxRenderHandler {
         aid: ActivityId,
-        shm: Arc<ShmWriter>,
         state: Arc<RenderHandlerState>,
         event_tx: mpsc::UnboundedSender<HostEvent>,
+        frame_pool: Arc<FrameBufferPool>,
+        session_id: u64,
+        epoch: u32,
     }
 
     impl RenderHandler {
@@ -162,21 +174,30 @@ wrap_render_handler! {
                 || overflow
                 || self.state.force_keyframe.get();
 
-            let delta_payload: Vec<u8> = if is_keyframe {
-                Vec::new()
+            // Acquire a recycled buffer sized to the frame's payload (keyframe =
+            // whole framebuffer; delta = concatenated dirty rows). Copying out
+            // before returning is mandatory: CEF reclaims `buffer` on return.
+            let payload_len: usize = if is_keyframe {
+                total_len
             } else {
-                let cap: usize = damage.iter().map(|r| (r.w * r.h * 4) as usize).sum();
-                let mut out = Vec::with_capacity(cap);
+                damage.iter().map(|r| (r.w * r.h * 4) as usize).sum()
+            };
+            let mut payload_buf = self.frame_pool.acquire(payload_len);
+            if is_keyframe {
+                payload_buf.copy_from_slice(buf);
+            } else {
+                let mut cursor = 0usize;
                 for r in &damage {
+                    let row_bytes = (r.w * 4) as usize;
                     for row in 0..r.h {
                         let src_off = ((r.y + row) as usize) * stride + (r.x as usize) * 4;
-                        let row_bytes = (r.w * 4) as usize;
-                        out.extend_from_slice(&buf[src_off..src_off + row_bytes]);
+                        payload_buf[cursor..cursor + row_bytes]
+                            .copy_from_slice(&buf[src_off..src_off + row_bytes]);
+                        cursor += row_bytes;
                     }
                 }
-                out
-            };
-            let payload: &[u8] = if is_keyframe { buf } else { &delta_payload };
+            }
+            let bgra = bytes::Bytes::from(payload_buf);
 
             let frame_seq = self.state.alloc_frame_seq();
             let captured_at_us = std::time::SystemTime::now()
@@ -184,51 +205,26 @@ wrap_render_handler! {
                 .map(|d| d.as_micros() as u64)
                 .unwrap_or(0);
 
-            let descriptor_damage = damage.clone();
-            let (lap, slot_idx) = if is_popup {
-                self.shm.write_slot_popup(SlotData {
-                    frame_seq,
-                    captured_at_us,
-                    width: width as u32,
-                    height: height as u32,
-                    is_keyframe,
-                    damage_rects: damage,
-                    is_popup: true,
-                    payload,
-                });
-                // NOTE: the popup slot is fixed; the daemon reads it via
-                // read_popup, so lap / slot_idx carry no meaning here.
-                (0u64, 0u8)
-            } else {
-                let lap = self.shm.current_lap();
-                let slot_idx = self.shm.write_slot(SlotData {
-                    frame_seq,
-                    captured_at_us,
-                    width: width as u32,
-                    height: height as u32,
-                    is_keyframe,
-                    damage_rects: damage,
-                    is_popup: false,
-                    payload,
-                });
+            if is_keyframe && !is_popup {
+                self.state.force_keyframe.set(false);
+            }
 
-                if is_keyframe {
-                    self.state.force_keyframe.set(false);
-                }
-                (lap, slot_idx)
-            };
-
-            // Notify the daemon that a frame is ready in shm. A send error
-            // means the control channel closed (daemon gone) — nothing to do.
-            let _ = self.event_tx.send(HostEvent::FrameDescriptor {
+            let payload_len_for_log = bgra.len();
+            // A send error means the control channel closed (daemon gone) —
+            // nothing to do; the recycled buffer's allocation ends up dropped
+            // along with the unsent `Bytes`.
+            let _ = self.event_tx.send(HostEvent::FrameProduced {
                 aid: self.aid.clone(),
-                lap,
-                slot_idx,
+                session_id: self.session_id,
+                epoch: self.epoch,
                 frame_seq,
                 captured_at_us,
+                width: width as u32,
+                height: height as u32,
                 is_keyframe,
-                damage_rects: descriptor_damage,
+                damage_rects: damage,
                 is_popup,
+                bgra,
             });
 
             tracing::debug!(
@@ -238,8 +234,8 @@ wrap_render_handler! {
                 is_keyframe,
                 width,
                 height,
-                payload_len = payload.len(),
-                "on_paint -> shm",
+                payload_len = payload_len_for_log,
+                "on_paint -> FrameProduced",
             );
         }
     }

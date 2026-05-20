@@ -4,15 +4,15 @@
 //! accepts `BrowserClientMsg::Subscribe` / `Resize` / `Input` / `Navigate` /
 //! `NavigateHistory` from the client. A concurrent `select!` arm drains
 //! inbound `BrowserClientMsg` frames and forwards them to
-//! `CefHostHandles::send_command`.
+//! `CefDispatcher::dispatch`.
 
 use crate::error::{HttpError, HttpResult};
 use crate::state::AppState;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{FromRequest, Path, State, WebSocketUpgrade};
 use axum::response::Response;
+use ozmux_browser::cef_dispatcher::CefDispatcher;
 use ozmux_browser::cef_registry::{BrowserCefRegistry, NavState};
-use ozmux_browser::cef_service::CefHostHandles;
 use ozmux_browser::frame_ring::{FrameEnvelope, FrameSubscription, SubscribeRequest};
 use ozmux_browser_cef_protocol::types::{ActivityId as CefActivityId, FrameKey};
 use ozmux_browser_cef_protocol::wire::{
@@ -58,7 +58,7 @@ struct SubscribeReq {
 async fn run(
     mut socket: WebSocket,
     registry: Arc<BrowserCefRegistry>,
-    cef_host: Arc<CefHostHandles>,
+    cef_host: Arc<dyn CefDispatcher>,
     aid: ActivityId,
 ) {
     let aid_proto = CefActivityId(aid.to_string());
@@ -166,7 +166,7 @@ async fn run(
             ws_result = socket.recv() => {
                 match ws_result {
                     Some(Ok(Message::Binary(data))) => {
-                        forward_client_msg(&data, &aid_proto, &cef_host).await;
+                        forward_client_msg(&data, &aid_proto, &*cef_host).await;
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {}
@@ -228,7 +228,7 @@ async fn run(
 /// Decode a raw binary frame received after the initial Subscribe and forward
 /// the corresponding `HostCommand` to cef_host. Unrecognised or irrelevant
 /// variants are silently ignored.
-async fn forward_client_msg(data: &[u8], aid_proto: &CefActivityId, cef_host: &CefHostHandles) {
+async fn forward_client_msg(data: &[u8], aid_proto: &CefActivityId, cef_host: &dyn CefDispatcher) {
     let cm = match rmp_serde::from_slice::<BrowserClientMsg>(data) {
         Ok(cm) => cm,
         Err(e) => {
@@ -261,8 +261,8 @@ async fn forward_client_msg(data: &[u8], aid_proto: &CefActivityId, cef_host: &C
         | BrowserClientMsg::CopyRequest
         | BrowserClientMsg::Paste { .. } => return,
     };
-    if let Err(e) = cef_host.send_command(cmd).await {
-        tracing::debug!(error = %e, "cef_host send_command failed");
+    if let Err(e) = cef_host.dispatch(cmd) {
+        tracing::debug!(error = %e, "cef_host dispatch failed");
     }
 }
 

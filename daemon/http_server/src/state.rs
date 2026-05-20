@@ -7,8 +7,8 @@ use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
 use ozmux_browser::cef_backend::CefBackend;
+use ozmux_browser::cef_dispatcher::CefDispatcher;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
-use ozmux_browser::cef_service::CefHostHandles;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
@@ -81,8 +81,10 @@ pub struct AppState {
     pub titles: ActivityTitles,
     /// CEF-backed BrowserActivity registry.
     pub browser_cef: Arc<BrowserCefRegistry>,
-    /// Handle to the cef_host child process and its command/event channels.
-    pub cef_host: Arc<CefHostHandles>,
+    /// Dispatcher for the cef_host transport. Production wires
+    /// `LiveCefDispatcher`; tests wire `StubCefDispatcher`. Plan 3 swaps the
+    /// live impl for in-process.
+    pub cef_host: Arc<dyn CefDispatcher>,
 }
 
 impl AppState {
@@ -91,6 +93,10 @@ impl AppState {
     /// intentionally not derived so callers cannot silently produce a state
     /// whose `TerminalService`, `ExtensionRegistry`, or `LayoutBroadcaster`
     /// are detached from the daemon's runtime root.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "AppState aggregates every daemon subsystem; threading them through a builder would just rename the noise"
+    )]
     pub fn new(
         terminal: TerminalService,
         extensions: ExtensionRegistry,
@@ -98,7 +104,8 @@ impl AppState {
         session_broadcast: SessionBroadcaster,
         configs: Arc<OzmuxConfigs>,
         titles: ActivityTitles,
-        cef_host: Arc<CefHostHandles>,
+        cef_host: Arc<dyn CefDispatcher>,
+        browser_cef: Arc<BrowserCefRegistry>,
     ) -> Self {
         Self {
             multiplexer: MultiplexerService::default(),
@@ -108,7 +115,7 @@ impl AppState {
             session_broadcast,
             configs,
             titles,
-            browser_cef: Arc::new(BrowserCefRegistry::new()),
+            browser_cef,
             cef_host,
         }
     }
@@ -175,27 +182,21 @@ impl AppState {
                 Some(ActivityKindDiscriminant::Browser)
             )
         {
-            let _ = self
-                .cef_host
-                .send_command(
-                    ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
-                        aid: CefActivityId(prev.to_string()),
-                    },
-                )
-                .await;
+            let _ = self.cef_host.dispatch(
+                ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
+                    aid: CefActivityId(prev.to_string()),
+                },
+            );
         }
         if matches!(
             self.activity_kind_in_pane(wid, pid, next).await,
             Some(ActivityKindDiscriminant::Browser)
         ) {
-            let _ = self
-                .cef_host
-                .send_command(
-                    ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
-                        aid: CefActivityId(next.to_string()),
-                    },
-                )
-                .await;
+            let _ = self.cef_host.dispatch(
+                ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
+                    aid: CefActivityId(next.to_string()),
+                },
+            );
         }
     }
 
@@ -369,11 +370,12 @@ impl AppState {
     /// provisioned via cef) and tells cef_host to close its browser handle.
     /// Failure to reach cef_host is logged but never propagated.
     async fn cef_close_activity(&self, aid: &ActivityId) {
+        let cef_aid = CefActivityId(aid.to_string());
         let backend = CefBackend {
-            handles: Arc::clone(&self.cef_host),
+            dispatcher: Arc::clone(&self.cef_host),
             registry: Arc::clone(&self.browser_cef),
         };
-        backend.close(&CefActivityId(aid.to_string())).await;
+        backend.close(&cef_aid).await;
     }
 
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
@@ -900,7 +902,7 @@ impl FromRef<AppState> for Arc<BrowserCefRegistry> {
     }
 }
 
-impl FromRef<AppState> for Arc<CefHostHandles> {
+impl FromRef<AppState> for Arc<dyn CefDispatcher> {
     fn from_ref(input: &AppState) -> Self {
         Arc::clone(&input.cef_host)
     }
