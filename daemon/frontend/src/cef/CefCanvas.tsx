@@ -214,8 +214,8 @@ export function CefCanvas({
         if (ev.data.type === 'unsupported') {
           setUnsupported(true);
         } else if (ev.data.type === 'paint-done') {
-          // NOTE: exposed for the Playwright e2e in browser-cef-poc.spec.ts
-          // (Task A16). Counts every successful render the worker reports.
+          // NOTE: exposed for the Playwright e2e in browser-cef-poc.spec.ts —
+          // counts every successful render the worker reports.
           const win = window as unknown as { __poc_paint_done_count?: number };
           win.__poc_paint_done_count = (win.__poc_paint_done_count ?? 0) + 1;
           // Append KPI entry when the paint is correlated to a wheel dispatch.
@@ -306,8 +306,8 @@ export function CefCanvas({
     path,
     worker: handle?.worker ?? null,
     generation: handle?.generation ?? 0,
-    // PoC: always re-subscribe fresh. Plan 2 wires persistence of the
-    // most-recent FrameKey across reconnects so ResumeReplay can fire.
+    // TODO: persist the most-recent FrameKey across reconnects so the
+    // daemon can hand back ResumeReplay instead of a fresh snapshot.
     lastKey: null,
     onMustRestart,
     onNav,

@@ -275,7 +275,7 @@ async fn forward_client_msg(data: &[u8], aid_proto: &CefActivityId, cef_host: &d
             dpr,
         },
         // Subscribe is handled before the main loop; CopyRequest and Paste
-        // require a separate channel not yet plumbed in Phase B.
+        // require a separate channel that is not yet plumbed.
         BrowserClientMsg::Subscribe { .. }
         | BrowserClientMsg::CopyRequest
         | BrowserClientMsg::Paste { .. } => return,

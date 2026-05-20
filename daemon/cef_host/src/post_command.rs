@@ -1,13 +1,11 @@
 //! Command passing from the Tokio worker thread to the CEF UI thread.
 //!
-//! Phase A Task A2: replaces the Plan 1 `Arc<Mutex<VecDeque>>` + main-thread
-//! drain loop with `cef::post_task(ThreadId::UI, ExecuteTask)`. Every
-//! `CefCommand` is wrapped in an `ExecuteTask` whose `execute()` acquires the
-//! `BrowserPool` mutex (uncontended in practice: only the CEF UI thread locks
-//! it) and dispatches.
-//!
-//! Phase A Task A3: adds `post_quit_loop` which posts `QuitTask` to the UI
-//! thread to call `cef::quit_message_loop()`, replacing the polling-loop flag.
+//! Every `CefCommand` is wrapped in an `ExecuteTask` and dispatched via
+//! `cef::post_task(ThreadId::UI, ExecuteTask)`. The task's `execute()`
+//! acquires the `BrowserPool` mutex (uncontended in practice — only the
+//! CEF UI thread locks it) and dispatches. Shutdown is wired similarly
+//! via `post_quit_loop`, which posts a `QuitTask` that calls
+//! `cef::quit_message_loop()`.
 
 use crate::pool::{BrowserPool, CefCommand};
 use cef::rc::Rc as _;
@@ -44,9 +42,9 @@ impl PoolHandle {
 
     /// Reads the observability flag set by a graceful `Shutdown` dispatch.
     ///
-    /// The flag does **not** drive the message loop (that is
-    /// `cef::quit_message_loop()` since Task A3); this accessor exists so
-    /// daemon-side observers and tests can detect that shutdown was requested.
+    /// The flag does **not** drive the message loop — `cef::quit_message_loop()`
+    /// posted via `QuitTask` does. This accessor exists so daemon-side
+    /// observers and tests can detect that shutdown was requested.
     pub fn snapshot_shutdown_requested(&self) -> bool {
         self.pool.lock().expect("pool poisoned").shutdown_requested
     }

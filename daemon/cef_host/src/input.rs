@@ -4,9 +4,9 @@
 //! control plane into the corresponding cef-rs 148 `BrowserHost` method calls.
 //! Called from `BrowserPool::execute` on the CEF UI thread.
 //!
-//! IME underline colours are forwarded as an empty slice for now; Plan 3
-//! wires coloured underlines using the `ImeUnderline` wire type (A12 spike
-//! confirmed `CompositionUnderline::default()` sets the required `size`).
+//! IME underline colours are forwarded as an empty slice — coloured
+//! underlines via the `ImeUnderline` wire type are not yet plumbed
+//! through `CompositionUnderline`.
 
 use cef::{
     CefString, CompositionUnderline, ImplBrowser, ImplBrowserHost, KeyEvent, KeyEventType,
