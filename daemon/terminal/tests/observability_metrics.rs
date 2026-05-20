@@ -244,6 +244,98 @@ async fn snapshot_total_by_reason_resize() {
 }
 
 #[tokio::test]
+async fn snapshot_total_sum_equals_frames_emit_total_snapshot_in_band() {
+    let (recorder, snapshotter) = new_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let (svc, aid) = spawn_with_emit(80, 24).await;
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+
+    // initial
+    chunk_tx.send(Bytes::from_static(b"x\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // resize
+    svc.resize(&aid, 80, 30).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // threshold: dirty >=85 % of 30 rows (>= 26 rows).
+    let mut buf = Vec::new();
+    for row in 1..=27 {
+        buf.extend_from_slice(format!("\x1b[{row};1H").as_bytes());
+        buf.push(b'X');
+    }
+    chunk_tx.send(Bytes::from(buf)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let initial = counter_value(
+        &snapshotter,
+        "ozmux_terminal_snapshot_total",
+        &[("reason", "initial")],
+    )
+    .unwrap_or(0);
+    let resize = counter_value(
+        &snapshotter,
+        "ozmux_terminal_snapshot_total",
+        &[("reason", "resize")],
+    )
+    .unwrap_or(0);
+    let threshold = counter_value(
+        &snapshotter,
+        "ozmux_terminal_snapshot_total",
+        &[("reason", "threshold")],
+    )
+    .unwrap_or(0);
+    let total = counter_value(
+        &snapshotter,
+        "ozmux_frames_emit_total",
+        &[("kind", "snapshot")],
+    )
+    .unwrap_or(0);
+    assert_eq!(
+        initial + resize + threshold,
+        total,
+        "in-band invariant violated: initial={initial} + resize={resize} + threshold={threshold} != frames_emit_total snapshot={total}",
+    );
+    svc.kill(&aid).await.unwrap();
+}
+
+#[tokio::test]
+async fn subscribe_triggered_snapshot_does_not_tick_snapshot_total() {
+    let (recorder, snapshotter) = new_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let (svc, aid) = spawn_with_emit(80, 24).await;
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+    chunk_tx.send(Bytes::from_static(b"x\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let initial_before = counter_value(
+        &snapshotter,
+        "ozmux_terminal_snapshot_total",
+        &[("reason", "initial")],
+    )
+    .unwrap_or(0);
+    assert_eq!(initial_before, 1);
+
+    // Subscribe with last_seq=None -> FreshSnapshot path. The snapshot
+    // is built outside emit_now and must NOT increment snapshot_total.
+    let _sub = svc.subscribe_frames(&aid, None).await.unwrap();
+
+    let initial_after = counter_value(
+        &snapshotter,
+        "ozmux_terminal_snapshot_total",
+        &[("reason", "initial")],
+    )
+    .unwrap_or(0);
+    assert_eq!(
+        initial_after, 1,
+        "subscribe-triggered FreshSnapshot must NOT tick snapshot_total"
+    );
+    svc.kill(&aid).await.unwrap();
+}
+
+#[tokio::test]
 async fn snapshot_total_by_reason_threshold() {
     let (recorder, snapshotter) = new_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
