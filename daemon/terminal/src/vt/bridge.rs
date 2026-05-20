@@ -179,9 +179,10 @@ pub(crate) struct VtState {
     /// Modes that became inactive since the previous successful emit.
     pub(crate) pending_modes_removed: Vec<&'static str>,
     /// Reason for the next emit. Set by control events that need
-    /// non-default attribution (resize, initial bootstrap). Cleared by
-    /// emit_now after recording the snapshot_total counter via
-    /// `Option::take`.
+    /// non-default attribution (resize, initial bootstrap). Read (by
+    /// `Copy`) at the top of `emit_now` and cleared only after the
+    /// broadcast send succeeds, so an early-returning emit (e.g. no
+    /// dirty rows) preserves the attribution for the next attempt.
     pub(crate) pending_emit_reason: Option<EmitReason>,
     /// Cached metric handles. Eliminates per-emit `Vec<Label>` allocations
     /// that the `histogram!` / `counter!` macros incur on each call.
@@ -407,10 +408,7 @@ const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 #[tracing::instrument(skip_all, fields(kind = tracing::field::Empty, reason = tracing::field::Empty, frame_seq = tracing::field::Empty))]
 fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer) {
     let mut state = vt_state.lock().expect("vt_state poisoned");
-    let reason = state
-        .pending_emit_reason
-        .take()
-        .unwrap_or(EmitReason::Deadline);
+    let reason = state.pending_emit_reason.unwrap_or(EmitReason::Deadline);
     let emit_start = std::time::Instant::now();
 
     let Some(mut dirty) = state.pending_damage.take() else {
@@ -554,6 +552,7 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
             "delta" => state.metrics.frames_emit_delta.increment(1),
             _ => unreachable!("kind_label is only 'snapshot' or 'delta'"),
         }
+        state.pending_emit_reason = None;
         if kind_label == "snapshot" {
             let counter = match reason {
                 EmitReason::Initial => &state.metrics.snapshot_total_initial,
