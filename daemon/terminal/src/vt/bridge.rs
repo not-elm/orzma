@@ -145,6 +145,11 @@ pub(crate) struct VtState {
     pub(crate) pending_modes_added: Vec<&'static str>,
     /// Modes that became inactive since the previous successful emit.
     pub(crate) pending_modes_removed: Vec<&'static str>,
+    /// Reason for the next emit. Set by control events that need
+    /// non-default attribution (resize, initial bootstrap). Cleared by
+    /// emit_now after recording the snapshot_total counter via
+    /// `Option::take`.
+    pub(crate) pending_emit_reason: Option<EmitReason>,
     /// Mirror of `term.mode()` captured at the previous successful emit.
     /// Initialized in `VtState::new` to `*term.mode()` (alacritty default
     /// mode set at construction time).
@@ -199,6 +204,7 @@ impl VtState {
             bridge_started_at_unix_us,
             pending_modes_added: Vec::new(),
             pending_modes_removed: Vec::new(),
+            pending_emit_reason: Some(EmitReason::Initial),
             last_emit_mode,
             row_hashes: HashMap::new(),
             scratch_dirty: Vec::new(),
