@@ -81,24 +81,40 @@ wrap_scheme_handler_factory! {
         ) -> Option<ResourceHandler> {
             let request = request?;
             let url = CefString::from(&request.url()).to_string();
-            let resolved = resolve_for_url(&self.extensions, &url);
-            match resolved {
-                Some((path, mime)) => Some(OzmuxExtResourceHandler::new(
-                    Arc::new(Mutex::new(None)),
-                    path,
-                    mime,
-                )),
-                None => Some(not_found_handler()),
-            }
+            let initial = match resolve_for_url(&self.extensions, &url) {
+                Some((path, mime)) => HandlerState::Pending { path, mime },
+                None => HandlerState::NotFound,
+            };
+            Some(OzmuxExtResourceHandler::new(Arc::new(Mutex::new(initial))))
         }
     }
 }
 
-wrap_resource_handler! {
-    struct OzmuxExtResourceHandler {
-        state: Arc<Mutex<Option<OpenFile>>>,
+/// Lifecycle state of a single `ozmux-ext://` request, driven by CEF's
+/// open → response_headers → read → cancel callback sequence on the
+/// resource-handler worker thread.
+enum HandlerState {
+    /// `create()` resolved a path; `open()` will attempt to open it.
+    Pending { path: PathBuf, mime: String },
+    /// Successfully opened. Owns the file handle until `read()` drains it
+    /// or `cancel()` is invoked.
+    Open {
+        file: File,
+        size: u64,
         path: PathBuf,
         mime: String,
+    },
+    /// Either `create()` failed to resolve a path under any extension's
+    /// `launch_dir`, or `open()` failed (e.g. file removed between
+    /// resolution and open). Surfaces as a 404 in `response_headers`.
+    NotFound,
+    /// Stream drained or cancelled. Subsequent `read()` calls return 0.
+    Done,
+}
+
+wrap_resource_handler! {
+    struct OzmuxExtResourceHandler {
+        state: Arc<Mutex<HandlerState>>,
     }
 
     impl ResourceHandler {
@@ -110,17 +126,28 @@ wrap_resource_handler! {
         ) -> i32 {
             // CEF documents `open`/`read` as called on a dedicated worker
             // thread (NOT UI / NOT IO), so a blocking `File::open` is safe.
-            let opened = File::open(&self.path)
-                .and_then(|f| f.metadata().map(|m| (f, m.len())))
-                .ok();
-            let success = opened.is_some();
-            if let Ok(mut guard) = self.state.lock() {
-                *guard = opened.map(|(file, size)| OpenFile { file, size });
-            }
             if let Some(handle_request) = handle_request {
                 *handle_request = 1;
             }
-            if success { 1 } else { 0 }
+            let Ok(mut guard) = self.state.lock() else {
+                return 0;
+            };
+            let HandlerState::Pending { path, mime } = std::mem::replace(&mut *guard, HandlerState::Done) else {
+                // NotFound stays NotFound so response_headers can emit 404;
+                // any other variant is a programming error (open called twice).
+                return 1;
+            };
+            match File::open(&path).and_then(|f| f.metadata().map(|m| (f, m.len()))) {
+                Ok((file, size)) => {
+                    *guard = HandlerState::Open { file, size, path, mime };
+                    1
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "ozmux-ext open failed");
+                    *guard = HandlerState::NotFound;
+                    1
+                }
+            }
         }
 
         fn response_headers(
@@ -130,15 +157,11 @@ wrap_resource_handler! {
             _redirect_url: Option<&mut CefString>,
         ) {
             let Some(response) = response else { return };
-            let size = self
-                .state
-                .lock()
-                .ok()
-                .and_then(|g| g.as_ref().map(|o| o.size as i64));
-            match size {
-                Some(len) => {
+            let Ok(guard) = self.state.lock() else { return };
+            match &*guard {
+                HandlerState::Open { size, mime, .. } => {
                     response.set_status(200);
-                    response.set_mime_type(Some(&CefString::from(self.mime.as_str())));
+                    response.set_mime_type(Some(&CefString::from(mime.as_str())));
                     // Disable caching so extension dev hot-reload picks up
                     // edits without a forced refresh.
                     response.set_header_by_name(
@@ -147,10 +170,10 @@ wrap_resource_handler! {
                         1,
                     );
                     if let Some(out) = response_length {
-                        *out = len;
+                        *out = *size as i64;
                     }
                 }
-                None => {
+                _ => {
                     response.set_status(404);
                     response.set_mime_type(Some(&CefString::from("text/plain")));
                     if let Some(out) = response_length {
@@ -178,7 +201,7 @@ wrap_resource_handler! {
                 *bytes_read = 0;
                 return 0;
             };
-            let Some(open) = guard.as_mut() else {
+            let HandlerState::Open { file, path, .. } = &mut *guard else {
                 *bytes_read = 0;
                 return 0;
             };
@@ -188,9 +211,10 @@ wrap_resource_handler! {
             // `Read::read`. The slice does not outlive the call.
             let buf =
                 unsafe { std::slice::from_raw_parts_mut(data_out, bytes_to_read as usize) };
-            match open.file.read(buf) {
+            match file.read(buf) {
                 Ok(0) => {
                     *bytes_read = 0;
+                    *guard = HandlerState::Done;
                     0
                 }
                 Ok(n) => {
@@ -198,8 +222,9 @@ wrap_resource_handler! {
                     1
                 }
                 Err(e) => {
-                    tracing::error!(path = %self.path.display(), error = %e, "ozmux-ext read failed");
+                    tracing::error!(path = %path.display(), error = %e, "ozmux-ext read failed");
                     *bytes_read = 0;
+                    *guard = HandlerState::Done;
                     0
                 }
             }
@@ -207,15 +232,10 @@ wrap_resource_handler! {
 
         fn cancel(&self) {
             if let Ok(mut guard) = self.state.lock() {
-                *guard = None;
+                *guard = HandlerState::Done;
             }
         }
     }
-}
-
-struct OpenFile {
-    file: File,
-    size: u64,
 }
 
 fn resolve_for_url(extensions: &ExtensionRegistry, url: &str) -> Option<(PathBuf, String)> {
@@ -227,14 +247,6 @@ fn resolve_for_url(extensions: &ExtensionRegistry, url: &str) -> Option<(PathBuf
         .essence_str()
         .to_string();
     Some((resolved, mime))
-}
-
-fn not_found_handler() -> ResourceHandler {
-    OzmuxExtResourceHandler::new(
-        Arc::new(Mutex::new(None)),
-        PathBuf::new(),
-        "text/plain".to_string(),
-    )
 }
 
 #[cfg(test)]
