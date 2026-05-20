@@ -11,7 +11,9 @@ pub mod activate;
 pub mod add_to_pane;
 pub mod break_to_pane;
 pub mod browser_ws;
+mod cef_screencast;
 pub mod close_activity;
+pub mod extension_cef_ws;
 pub mod handlers_ws;
 pub mod iframe_serve;
 pub mod terminal_ws;
@@ -29,6 +31,10 @@ fn activity_id_router() -> Router<AppState> {
         .route("/activate", post(activate::activate))
         .route("/break-to-pane", post(break_to_pane::break_to_pane))
         .route("/browser/ws", get(browser_ws::browser_ws))
+        .route(
+            "/extension/cef/ws",
+            get(extension_cef_ws::extension_cef_ws),
+        )
         .route("/terminal/ws", get(terminal_ws::terminal_ws))
         .route("/handlers/ws", get(handlers_ws::handlers_ws))
         .route("/iframe/{*path}", get(iframe_serve::iframe_serve))
