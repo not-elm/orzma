@@ -278,7 +278,7 @@ fn emit_now(
                 RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks, produced_at))
             }
             FrameKind::Delta { rows } => {
-                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks, produced_at))
+                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks, produced_at, vec![], vec![]))
             }
         }
     };

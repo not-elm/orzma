@@ -103,6 +103,8 @@ pub(super) fn build_delta<T>(
     rows: &[u16],
     interner: &mut HyperlinkInterner,
     produced_at_us: Option<u64>,
+    modes_added: Vec<String>,
+    modes_removed: Vec<String>,
 ) -> FrameDelta {
     let mut emitted: BTreeMap<HyperlinkWireId, HyperlinkUri> = BTreeMap::new();
     let dirty_rows: Vec<DirtyRow> = rows
@@ -122,8 +124,8 @@ pub(super) fn build_delta<T>(
             .collect(),
         display_offset: term.grid().display_offset() as u32,
         produced_at_us,
-        modes_added: vec![],
-        modes_removed: vec![],
+        modes_added,
+        modes_removed,
     }
 }
 
@@ -505,7 +507,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "xyz");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, 9, &[0u16], &mut interner, None);
+        let delta = build_delta(&term, 9, &[0u16], &mut interner, None, vec![], vec![]);
         assert_eq!(delta.seq, 9);
         assert_eq!(delta.dirty_rows.len(), 1);
         assert_eq!(delta.dirty_rows[0].row, 0);
@@ -522,7 +524,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "aaa\r\nbbb\r\nccc");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, 0, &[0, 2], &mut interner, None);
+        let delta = build_delta(&term, 0, &[0, 2], &mut interner, None, vec![], vec![]);
         assert_eq!(delta.dirty_rows.len(), 2);
         assert_eq!(delta.dirty_rows[0].row, 0);
         assert_eq!(delta.dirty_rows[1].row, 2);
@@ -532,7 +534,7 @@ mod tests {
     fn delta_empty_rows_slice_yields_empty_dirty_rows() {
         let term = make_term(10, 3);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, 100, &[], &mut interner, None);
+        let delta = build_delta(&term, 100, &[], &mut interner, None, vec![], vec![]);
         assert_eq!(delta.seq, 100);
         assert!(delta.dirty_rows.is_empty());
     }
@@ -542,7 +544,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "abc");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, 1, &[0], &mut interner, None);
+        let delta = build_delta(&term, 1, &[0], &mut interner, None, vec![], vec![]);
         assert_eq!(delta.cursor.x, 3);
         assert_eq!(delta.cursor.y, 0);
         assert!(delta.cursor.visible);
@@ -722,7 +724,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Top);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, 0, &[0u16], &mut interner, None);
+        let delta = build_delta(&term, 0, &[0u16], &mut interner, None, vec![], vec![]);
         let row0: String = delta.dirty_rows[0]
             .runs
             .iter()
@@ -807,7 +809,34 @@ mod tests {
     fn build_delta_sets_produced_at_us_when_provided() {
         let term = make_term(2, 2);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, 0, &[0u16], &mut interner, Some(123));
+        let delta = build_delta(&term, 0, &[0u16], &mut interner, Some(123), vec![], vec![]);
         assert_eq!(delta.produced_at_us, Some(123));
+    }
+
+    #[test]
+    fn build_delta_carries_inline_modes() {
+        let term = make_term(2, 2);
+        let mut interner = HyperlinkInterner::new();
+        let delta = build_delta(
+            &term,
+            7,
+            &[0u16],
+            &mut interner,
+            None,
+            vec!["bracketed-paste".to_string()],
+            vec!["alt-screen".to_string()],
+        );
+        assert_eq!(delta.seq, 7);
+        assert_eq!(delta.modes_added, vec!["bracketed-paste".to_string()]);
+        assert_eq!(delta.modes_removed, vec!["alt-screen".to_string()]);
+    }
+
+    #[test]
+    fn build_delta_defaults_empty_modes() {
+        let term = make_term(2, 2);
+        let mut interner = HyperlinkInterner::new();
+        let delta = build_delta(&term, 0, &[0u16], &mut interner, None, vec![], vec![]);
+        assert!(delta.modes_added.is_empty());
+        assert!(delta.modes_removed.is_empty());
     }
 }
