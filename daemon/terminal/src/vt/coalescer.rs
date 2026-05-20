@@ -261,6 +261,54 @@ mod tests {
     }
 
     #[test]
+    fn should_flush_immediately_on_many_rows_with_user_input_under_cap() {
+        let c = Coalescer::new();
+        // Typical nvim 1-line scroll: scrolled-in row + status line +
+        // tabline = 3 rows dirty. Under MANY_ROWS_INSTANT_CAP = 4.
+        assert!(c.should_flush_immediately(
+            false,
+            &DamageVerdict::ManyRows { rows: 3 },
+            true,
+        ));
+    }
+
+    #[test]
+    fn should_not_flush_immediately_on_many_rows_above_cap() {
+        let c = Coalescer::new();
+        // 5 rows > cap = 4: big redraw stays debounced.
+        assert!(!c.should_flush_immediately(
+            false,
+            &DamageVerdict::ManyRows { rows: 5 },
+            true,
+        ));
+    }
+
+    #[test]
+    fn should_not_flush_immediately_on_many_rows_when_already_armed() {
+        let mut c = Coalescer::new();
+        c.arm_or_extend(tokio::time::Instant::now());
+        // ManyRows{rows: 2} + user_input + armed coalescer => debounce
+        // (a prior chunk is in its window — let it complete).
+        assert!(!c.should_flush_immediately(
+            false,
+            &DamageVerdict::ManyRows { rows: 2 },
+            true,
+        ));
+    }
+
+    #[test]
+    fn should_not_flush_immediately_on_many_rows_without_user_input() {
+        let c = Coalescer::new();
+        // No pending_user_input → no immediate flush regardless of
+        // verdict shape.
+        assert!(!c.should_flush_immediately(
+            false,
+            &DamageVerdict::ManyRows { rows: 2 },
+            false,
+        ));
+    }
+
+    #[test]
     fn should_not_flush_idle_steady_state() {
         let c = Coalescer::new();
         assert!(!c.should_flush_immediately(false, &DamageVerdict::Idle, false));
