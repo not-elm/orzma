@@ -3765,6 +3765,7 @@ dependencies = [
  "bytes",
  "cef",
  "cef-dll-sys",
+ "crossbeam-queue",
  "decrypt-cookies",
  "fs2",
  "libc",
