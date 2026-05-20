@@ -194,3 +194,90 @@ async fn emit_duration_recorded_on_delta_emit() {
     );
     svc.kill(&aid).await.unwrap();
 }
+
+#[tokio::test]
+async fn snapshot_total_by_reason_initial() {
+    let (recorder, snapshotter) = new_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let (svc, aid) = spawn_with_emit(80, 24).await;
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+    chunk_tx.send(Bytes::from_static(b"x\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    assert_eq!(
+        counter_value(
+            &snapshotter,
+            "ozmux_terminal_snapshot_total",
+            &[("reason", "initial")],
+        ),
+        Some(1),
+    );
+    svc.kill(&aid).await.unwrap();
+}
+
+#[tokio::test]
+async fn snapshot_total_by_reason_resize() {
+    let (recorder, snapshotter) = new_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let (svc, aid) = spawn_with_emit(80, 24).await;
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+    chunk_tx.send(Bytes::from_static(b"x\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Resize: the bridge marks pending_emit_reason = Resize and emits
+    // a Snapshot frame the next time emit_now runs.
+    svc.resize(&aid, 80, 30).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let v = counter_value(
+        &snapshotter,
+        "ozmux_terminal_snapshot_total",
+        &[("reason", "resize")],
+    );
+    assert!(
+        v.unwrap_or(0) >= 1,
+        "expected >= 1 snapshot with reason=resize, got {v:?}"
+    );
+    svc.kill(&aid).await.unwrap();
+}
+
+#[tokio::test]
+async fn snapshot_total_by_reason_threshold() {
+    let (recorder, snapshotter) = new_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let (svc, aid) = spawn_with_emit(80, 24).await;
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+
+    // Initial snapshot emit.
+    chunk_tx.send(Bytes::from_static(b"x\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Now produce damage spanning >= 85 % of 24 rows. The decide_frame_kind
+    // threshold check (rows.len() * 20 >= total_rows * 17) promotes the
+    // delta to a Snapshot with reason=Deadline/Immediate, which maps to
+    // the snapshot_total_threshold counter. Use position-jump sequences
+    // so 22 distinct viewport rows are dirtied within a single chunk.
+    let mut buf = Vec::new();
+    for row in 1..=22 {
+        // CSI <row>;1H -> move cursor; followed by a single byte to
+        // dirty that row.
+        buf.extend_from_slice(format!("\x1b[{row};1H").as_bytes());
+        buf.push(b'X');
+    }
+    chunk_tx.send(Bytes::from(buf)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    let v = counter_value(
+        &snapshotter,
+        "ozmux_terminal_snapshot_total",
+        &[("reason", "threshold")],
+    );
+    assert!(
+        v.unwrap_or(0) >= 1,
+        "expected >= 1 snapshot with reason=threshold, got {v:?}"
+    );
+    svc.kill(&aid).await.unwrap();
+}
