@@ -552,6 +552,16 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
         tracing::Span::current().record("reason", reason.as_static_str());
         tracing::Span::current().record("frame_seq", binary_seq);
         counter!("ozmux_frames_emit_total", "kind" => kind_label).increment(1);
+        if kind_label == "snapshot" {
+            let counter = match reason {
+                EmitReason::Initial => &state.metrics.snapshot_total_initial,
+                EmitReason::Resize => &state.metrics.snapshot_total_resize,
+                EmitReason::Immediate | EmitReason::Deadline => {
+                    &state.metrics.snapshot_total_threshold
+                }
+            };
+            counter.increment(1);
+        }
         let emit_elapsed = emit_start.elapsed().as_secs_f64();
         match kind_label {
             "snapshot" => state.metrics.emit_duration_snapshot.record(emit_elapsed),
