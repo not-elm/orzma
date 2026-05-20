@@ -68,6 +68,15 @@ dev-daemon: memo-build-sdk $(BUNDLE_CEF_HOST_DEP)
 	OZMUX_FRONTEND_DEV=1 \
 	cargo run -p ozmux_cli -- daemon start --foreground
 
+# Phase 1 暫定: ozmux-daemon バイナリ経由で daemon を起動。
+# CEF は依然として cef_host 別プロセス。Plan 3 完了時に `dev-daemon` 本体に統合し、
+# このターゲットは削除する。
+.PHONY: dev-daemon-new
+dev-daemon-new:
+	OZMUX_EXTENSION_ROOT=$(PWD)/extensions \
+	OZMUX_FRONTEND_DEV=1 \
+	  target/debug/ozmux-daemon
+
 clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)
 
