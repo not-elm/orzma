@@ -70,10 +70,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
-    let cef_handles = acquire_cef_host(&runtime).await;
-    let cef_dispatcher: Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> = Arc::new(
-        ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(Arc::clone(&cef_handles)),
-    );
+    let cef_dispatcher = acquire_cef_host(&runtime).await;
 
     let state = AppState::new(
         terminal.clone(),
@@ -82,11 +79,11 @@ pub async fn run() -> anyhow::Result<()> {
         ozmux_http_server::session_broadcast::SessionBroadcaster::from_env(),
         Arc::clone(&configs),
         titles.clone(),
-        cef_dispatcher,
+        Arc::clone(&cef_dispatcher),
     );
 
-    let _event_pump = spawn_event_pump(Arc::clone(&cef_handles), Arc::clone(&state.browser_cef));
-    spawn_cef_crash_watcher(Arc::clone(&cef_handles), Arc::clone(&state.browser_cef));
+    let _event_pump = spawn_event_pump(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
+    spawn_cef_crash_watcher(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
     spawn_terminal_title_bridge(terminal, titles, state.multiplexer.clone());
 
     let _pid_guard = pidfile::PidFileGuard::create(std::process::id())?;
@@ -157,7 +154,7 @@ async fn init_runtime() -> anyhow::Result<Arc<RuntimeRoot>> {
 /// backend disabled rather than blocking `/health`.
 async fn acquire_cef_host(
     runtime: &RuntimeRoot,
-) -> Arc<ozmux_browser::cef_service::CefHostHandles> {
+) -> Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> {
     // NOTE: cef_host startup can hang (binary missing → no UDS connect ever;
     // missing CEF runtime libs → CefInitialize blocks). spawn_and_handshake
     // only resolves once the child sends Hello, so we cap the wait — past it
@@ -186,7 +183,9 @@ async fn acquire_cef_host(
                 ozmux_browser::cef_service::dead_handles_after_spawn_failure()
             }
         };
-    Arc::new(handles)
+    Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
+        Arc::new(handles),
+    ))
 }
 
 /// Spawns the adapter task that bridges terminal title-change events
@@ -253,7 +252,7 @@ async fn run_until_shutdown(state: AppState) -> anyhow::Result<()> {
 /// `BrowserUnavailableReason::RetryExhausted` carrying the process status.
 /// No respawn is attempted — that is Plan 3 territory.
 fn spawn_cef_crash_watcher(
-    cef_host: Arc<ozmux_browser::cef_service::CefHostHandles>,
+    cef_host: Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher>,
     registry: Arc<BrowserCefRegistry>,
 ) {
     let Some(mut child) = cef_host.take_child() else {

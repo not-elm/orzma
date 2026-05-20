@@ -407,10 +407,10 @@ async fn recv_msg_arc<T: serde::de::DeserializeOwned>(
 /// Panics if `handles.events_take()` returns `None` (i.e. the receiver was
 /// already consumed by a previous call or by a test).
 pub fn spawn_event_pump(
-    handles: Arc<CefHostHandles>,
+    dispatcher: Arc<dyn crate::cef_dispatcher::CefDispatcher>,
     registry: Arc<BrowserCefRegistry>,
 ) -> tokio::task::JoinHandle<()> {
-    let events = handles.events_take().expect(
+    let events = dispatcher.events_take().expect(
         "spawn_event_pump: events receiver already consumed; call this function exactly once",
     );
     tokio::spawn(event_pump_loop(events, registry))
