@@ -124,6 +124,10 @@ pub(crate) struct VtState {
     /// drop unchanged rows from DirtyRows::Rows before they reach
     /// decide_frame_kind. Bulk-reset on every Snapshot emit and on resize.
     pub(crate) row_hashes: HashMap<i32, u64>,
+    /// Reusable scratch buffer for collect_dirty_rows. Cleared and re-filled
+    /// per emit. Capacity is preserved across emits via the move-and-reclaim
+    /// pattern (the variant takes ownership; we write it back after consumption).
+    pub(crate) scratch_dirty: Vec<u16>,
     /// Handle for the 100 ms broadcast-depth gauge task.
     /// `AbortOnDropHandle` cancels the task when this `VtState` is dropped.
     /// `None` when `BridgeConfig::spawn_gauge` is false.
@@ -167,6 +171,7 @@ impl VtState {
             pending_modes_removed: Vec::new(),
             last_emit_mode,
             row_hashes: HashMap::new(),
+            scratch_dirty: Vec::new(),
             gauge_handle: None,
         }
     }
@@ -396,6 +401,9 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
         .map(|s| (*s).to_string())
         .collect();
 
+    // NOTE: we track the consumed rows Vec from FrameKind::Delta so capacity
+    // can be reclaimed into scratch_dirty after the emit completes.
+    let mut consumed_rows: Option<Vec<u16>> = None;
     let frame = {
         let VtState {
             ref term,
@@ -406,15 +414,19 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
             FrameKind::Snapshot { reason } => {
                 RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks, produced_at))
             }
-            FrameKind::Delta { rows } => RenderFrame::Delta(build_delta(
-                term,
-                seq,
-                &rows,
-                hyperlinks,
-                produced_at,
-                modes_added_owned,
-                modes_removed_owned,
-            )),
+            FrameKind::Delta { rows } => {
+                let frame = RenderFrame::Delta(build_delta(
+                    term,
+                    seq,
+                    &rows,
+                    hyperlinks,
+                    produced_at,
+                    modes_added_owned,
+                    modes_removed_owned,
+                ));
+                consumed_rows = Some(rows);
+                frame
+            }
         }
     };
     state.prev_cursor = Some(curr_cursor);
@@ -487,6 +499,12 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
                 }
             }
         }
+    }
+
+    // CAT-006: reclaim the rows Vec capacity into scratch_dirty so the
+    // allocator does not need to reallocate on the next collect_dirty_rows call.
+    if let Some(v) = consumed_rows {
+        state.scratch_dirty = v;
     }
 
     coalescer.disarm();
@@ -562,7 +580,10 @@ pub(crate) async fn run_bridge_task(
                             state.pending_modes_removed = diff.removed;
                         }
                     }
-                    state.pending_damage = Some(collect_dirty_rows(&mut state.term));
+                    let mut scratch = std::mem::take(&mut state.scratch_dirty);
+                    state.pending_damage =
+                        Some(collect_dirty_rows(&mut state.term, &mut scratch));
+                    state.scratch_dirty = scratch;
                 }
                 emit_now(&vt_state, &mut coalescer);
             }
@@ -579,7 +600,9 @@ pub(crate) async fn run_bridge_task(
                         state.pending_modes_added = diff.added;
                         state.pending_modes_removed = diff.removed;
                     }
-                    let dirty = collect_dirty_rows(&mut state.term);
+                    let mut scratch = std::mem::take(&mut state.scratch_dirty);
+                    let dirty = collect_dirty_rows(&mut state.term, &mut scratch);
+                    state.scratch_dirty = scratch;
                     let verdict = classify_damage(&dirty, state.cursor_changed());
                     let policy_flush = coalescer.should_flush_immediately(
                         state.first_emit,

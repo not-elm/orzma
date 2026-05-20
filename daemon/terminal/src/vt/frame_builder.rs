@@ -17,7 +17,6 @@ use alacritty_terminal::term::TermDamage;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};
-use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthChar;
 
 /// Outcome of damage inspection.
@@ -32,10 +31,21 @@ pub enum DirtyRows {
 /// Reads the damage tracker and returns row indices that changed.
 ///
 /// `&mut Term` is required because `Term::damage()` takes `&mut self`.
-pub(super) fn collect_dirty_rows<T>(term: &mut Term<T>) -> DirtyRows {
+/// `scratch_dirty` is cleared, filled with the dirty row indices, then
+/// moved into the returned `DirtyRows::Rows` variant via `mem::take`.
+/// The caller should reclaim the consumed `Vec` back into the scratch field
+/// after the emit completes so capacity persists across calls.
+pub(super) fn collect_dirty_rows<T>(
+    term: &mut Term<T>,
+    scratch_dirty: &mut Vec<u16>,
+) -> DirtyRows {
     match term.damage() {
         TermDamage::Full => DirtyRows::Full,
-        TermDamage::Partial(iter) => DirtyRows::Rows(iter.map(|d| d.line as u16).collect()),
+        TermDamage::Partial(iter) => {
+            scratch_dirty.clear();
+            scratch_dirty.extend(iter.map(|d| d.line as u16));
+            DirtyRows::Rows(std::mem::take(scratch_dirty))
+        }
     }
 }
 
@@ -54,10 +64,10 @@ pub(crate) fn build_snapshot<T>(
 ) -> FrameSnapshot {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
-    let mut emitted: BTreeMap<HyperlinkWireId, HyperlinkUri> = BTreeMap::new();
+    let mut hyperlinks_opt: Option<Vec<(HyperlinkWireId, HyperlinkUri)>> = None;
     let rows_data: Vec<Row> = (0..rows as i32)
         .map(|y| Row {
-            runs: coalesce_row(term, y, interner, &mut emitted),
+            runs: coalesce_row(term, y, interner, &mut hyperlinks_opt),
         })
         .collect();
     FrameSnapshot {
@@ -68,7 +78,8 @@ pub(crate) fn build_snapshot<T>(
         rows_data,
         reason,
         modes: snapshot_modes(*term.mode()),
-        hyperlinks: emitted
+        hyperlinks: hyperlinks_opt
+            .unwrap_or_default()
             .into_iter()
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
@@ -92,19 +103,20 @@ pub(super) fn build_delta<T>(
     modes_added: Vec<String>,
     modes_removed: Vec<String>,
 ) -> FrameDelta {
-    let mut emitted: BTreeMap<HyperlinkWireId, HyperlinkUri> = BTreeMap::new();
+    let mut hyperlinks_opt: Option<Vec<(HyperlinkWireId, HyperlinkUri)>> = None;
     let dirty_rows: Vec<DirtyRow> = rows
         .iter()
         .map(|&r| DirtyRow {
             row: r,
-            runs: coalesce_row(term, r as i32, interner, &mut emitted),
+            runs: coalesce_row(term, r as i32, interner, &mut hyperlinks_opt),
         })
         .collect();
     FrameDelta {
         seq,
         cursor: extract_cursor(term),
         dirty_rows,
-        hyperlinks: emitted
+        hyperlinks: hyperlinks_opt
+            .unwrap_or_default()
             .into_iter()
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
@@ -215,7 +227,7 @@ fn coalesce_row<T>(
     term: &Term<T>,
     y: i32,
     interner: &mut HyperlinkInterner,
-    emitted_hyperlinks: &mut BTreeMap<HyperlinkWireId, HyperlinkUri>,
+    emitted_hyperlinks: &mut Option<Vec<(HyperlinkWireId, HyperlinkUri)>>,
 ) -> Vec<Run> {
     let cols = term.columns() as u16;
     let grid_row = &term.grid()[viewport_row_to_line(term, y)];
@@ -238,9 +250,10 @@ fn coalesce_row<T>(
         // Resolve hyperlink (alac String id → HyperlinkWireId via interner).
         let hyperlink_id = cell.hyperlink().map(|h| {
             let id = interner.intern(h.id(), h.uri().as_ref());
-            emitted_hyperlinks
-                .entry(id)
-                .or_insert_with(|| HyperlinkUri::new(h.uri().to_string()));
+            let v = emitted_hyperlinks.get_or_insert_with(Vec::new);
+            if !v.iter().any(|(k, _)| *k == id) {
+                v.push((id, HyperlinkUri::new(h.uri().to_string())));
+            }
             id
         });
         let cell_attrs = RunAttrs::from_cell(cell, hyperlink_id);
@@ -377,17 +390,19 @@ mod tests {
     #[test]
     fn collect_full_on_fresh_term() {
         let mut term = make_term(10, 3);
+        let mut scratch = Vec::new();
         // First damage query returns Full per alacritty contract.
-        assert_eq!(collect_dirty_rows(&mut term), DirtyRows::Full);
+        assert_eq!(collect_dirty_rows(&mut term, &mut scratch), DirtyRows::Full);
     }
 
     #[test]
     fn collect_partial_after_reset() {
         let mut term = make_term(10, 3);
-        let _ = collect_dirty_rows(&mut term);
+        let mut scratch = Vec::new();
+        let _ = collect_dirty_rows(&mut term, &mut scratch);
         term.reset_damage();
         // After reset with no input, alacritty returns Partial{cursor row}.
-        match collect_dirty_rows(&mut term) {
+        match collect_dirty_rows(&mut term, &mut scratch) {
             DirtyRows::Full => panic!("expected Partial after reset"),
             DirtyRows::Rows(rows) => {
                 // line_count is 1 (cursor blink dirties cursor row only).
@@ -627,7 +642,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "abc");
         let mut interner = HyperlinkInterner::new();
-        let mut emitted = BTreeMap::new();
+        let mut emitted = None;
         let runs = coalesce_row(&term, 0, &mut interner, &mut emitted);
         let merged: String = runs.iter().map(|r| r.text.as_str()).collect();
         assert!(merged.starts_with("abc"), "got: {merged:?}");
@@ -647,7 +662,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Top);
         let mut interner = HyperlinkInterner::new();
-        let mut emitted = BTreeMap::new();
+        let mut emitted = None;
         let runs = coalesce_row(&term, 0, &mut interner, &mut emitted);
         let merged: String = runs.iter().map(|r| r.text.as_str()).collect();
         assert!(
