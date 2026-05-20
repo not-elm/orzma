@@ -226,9 +226,10 @@ impl ExtensionBridge {
     }
 
     fn lookup_sock_path(&self, aid: &ActivityId) -> Result<PathBuf, String> {
+        let mux_aid = ozmux_multiplexer::ActivityId::from(aid.0.as_str());
         let ext_name = self
             .extensions
-            .activity_owner_by_str(&aid.0)
+            .activity_owner(&mux_aid)
             .ok_or_else(|| format!("activity {} has no owning extension", aid.0))?;
         self.extensions
             .handlers_sock_path(&ext_name)
@@ -439,9 +440,7 @@ mod tests {
         registry.register(ext_name, std::path::Path::new("."));
         registry.set_handlers_sock_path(ext_name, &sock_path);
         let aid = ActivityId("a-eof".into());
-        // ozmux_multiplexer::ActivityId has a private inner field; construct
-        // via deserialization to get a stable string-keyed id.
-        let mux_aid: ozmux_multiplexer::ActivityId = serde_json::from_str(r#""a-eof""#).unwrap();
+        let mux_aid = ozmux_multiplexer::ActivityId::from("a-eof");
         registry.record_activity_owner(&mux_aid, ext_name);
 
         // Build a bridge with a counting callback. The bridge needs a

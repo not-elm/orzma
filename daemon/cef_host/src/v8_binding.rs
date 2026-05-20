@@ -774,7 +774,7 @@ mod tests {
         assert!(!s.by_browser.get(&7).unwrap().contains("c1"));
 
         s.forget_pending("s1");
-        assert!(s.by_browser.get(&7).is_none(), "empty bucket pruned");
+        assert!(!s.by_browser.contains_key(&7), "empty bucket pruned");
 
         s.forget_pending("c2");
         assert!(s.by_browser.is_empty());

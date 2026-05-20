@@ -5,6 +5,18 @@ use serde::{Deserialize, Serialize};
 #[newtype(as_ref(str), display, new(uuid_v4_string), default)]
 pub struct ActivityId(String);
 
+impl From<String> for ActivityId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for ActivityId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 /// Storage profile assigned to a Browser Activity.
 ///
 /// `Named` profiles are persisted to disk under the ozmux data dir and

@@ -113,18 +113,6 @@ impl ExtensionRegistry {
         g.activity_owner.get(activity_id).cloned()
     }
 
-    /// Looks up the owning extension by raw activity-id string. Used by
-    /// callers (e.g. the cef_host `ExtensionBridge`) that hold the activity id
-    /// in string form and cannot construct a fresh `ozmux_multiplexer::ActivityId`
-    /// (its inner field is private).
-    pub fn activity_owner_by_str(&self, activity_id: &str) -> Option<String> {
-        let g = self.inner.read().expect("registry poisoned");
-        g.activity_owner
-            .iter()
-            .find(|(k, _)| k.as_ref() == activity_id)
-            .map(|(_, v)| v.clone())
-    }
-
     pub fn pane_owner(&self, pane_id: &PaneId) -> Option<String> {
         let g = self.inner.read().expect("registry poisoned");
         g.pane_owner.get(pane_id).cloned()
