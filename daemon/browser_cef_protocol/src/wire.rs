@@ -6,7 +6,6 @@
 use crate::types::{ActivityId, FrameKey, Rect};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// SameSite policy for a cookie transferred to cef_host at BrowserCreate time.
 /// Task A5 reads these from the `decrypt-cookies` crate output and forwards
@@ -576,23 +575,6 @@ pub enum BrowserUnavailableReason {
     RetryExhausted {
         /// The last error message that caused the final failure.
         last_error: String,
-    },
-    /// The cef_host binary was not found at the expected path.
-    BinaryNotFound {
-        /// Absolute path that was searched.
-        path: PathBuf,
-    },
-    /// `CefInitialize` returned a failure exit code.
-    CefInitFailed {
-        /// The exit code returned by cef_host.
-        exit_code: i32,
-    },
-    /// cef_host reported an ABI version incompatible with the daemon.
-    ProtocolMismatch {
-        /// ABI version the daemon requires.
-        expected: u32,
-        /// ABI version cef_host advertised.
-        got: u32,
     },
 }
 

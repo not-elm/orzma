@@ -63,9 +63,9 @@ pub enum HttpError {
         got: ActivityKindDiscriminant,
     },
 
-    /// The cef_host child has crashed and the browser backend is unavailable.
-    #[error("cef_host dead: {0:?}")]
-    CefHostDead(BrowserUnavailableReason),
+    /// The browser backend is unavailable (e.g. retries exhausted).
+    #[error("browser unavailable: {0:?}")]
+    BrowserUnavailable(BrowserUnavailableReason),
 
     #[error("invalid dimensions: {field} must be >= 1")]
     InvalidDimensions { field: &'static str },
@@ -79,9 +79,9 @@ pub type HttpResult<T = ()> = Result<T, HttpError>;
 impl axum::response::IntoResponse for HttpError {
     fn into_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
-        if let HttpError::CefHostDead(reason) = &self {
+        if let HttpError::BrowserUnavailable(reason) = &self {
             let body = serde_json::json!({
-                "error": { "code": "CEF_HOST_DEAD", "message": self.to_string() },
+                "error": { "code": "BROWSER_UNAVAILABLE", "message": self.to_string() },
                 "reason": reason,
             });
             return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
@@ -161,7 +161,7 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::ActivityKindMismatch { .. } => {
                 (StatusCode::CONFLICT, "ACTIVITY_KIND_MISMATCH")
             }
-            HttpError::CefHostDead(_) => unreachable!("handled by early return above"),
+            HttpError::BrowserUnavailable(_) => unreachable!("handled by early return above"),
             // MissingParentCell, SplitTargetEqualsNewCell, ActivePaneMustBelongToWindow,
             // Terminal::Pty, FailedLaunch fall through → 500
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
@@ -326,15 +326,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cef_host_dead_maps_to_503() {
-        let err = HttpError::CefHostDead(BrowserUnavailableReason::RetryExhausted {
+    async fn browser_unavailable_maps_to_503() {
+        let err = HttpError::BrowserUnavailable(BrowserUnavailableReason::RetryExhausted {
             last_error: "boom".into(),
         });
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["error"]["code"].as_str(), Some("CEF_HOST_DEAD"));
+        assert_eq!(v["error"]["code"].as_str(), Some("BROWSER_UNAVAILABLE"));
         assert_eq!(v["reason"]["kind"].as_str(), Some("retry_exhausted"));
     }
 

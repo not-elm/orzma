@@ -252,24 +252,9 @@ fn browser_server_msg_renderer_terminated_roundtrips() {
 
 #[test]
 fn browser_server_msg_browser_unavailable_all_reasons_roundtrips() {
-    use std::path::PathBuf;
     wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
         reason: BrowserUnavailableReason::RetryExhausted {
             last_error: "spawn failed".into(),
-        },
-    });
-    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
-        reason: BrowserUnavailableReason::BinaryNotFound {
-            path: PathBuf::from("/usr/local/bin/cef_host"),
-        },
-    });
-    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
-        reason: BrowserUnavailableReason::CefInitFailed { exit_code: 1 },
-    });
-    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
-        reason: BrowserUnavailableReason::ProtocolMismatch {
-            expected: 4,
-            got: 3,
         },
     });
 }

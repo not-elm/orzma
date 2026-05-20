@@ -40,7 +40,7 @@ pub(crate) async fn provision_activity_runtime(
             profile,
         } => {
             if state.cef_host.is_dead() {
-                return Err(HttpError::CefHostDead(
+                return Err(HttpError::BrowserUnavailable(
                     BrowserUnavailableReason::RetryExhausted {
                         last_error: "cef_host previously crashed".into(),
                     },

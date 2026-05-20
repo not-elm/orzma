@@ -85,16 +85,7 @@ const POPUP_CANVAS_WIDTH = 800;
 const POPUP_CANVAS_HEIGHT = 600;
 
 function reasonLabel(reason: BrowserUnavailableReason): string {
-  switch (reason.kind) {
-    case 'retry_exhausted':
-      return `cef_host crashed: ${reason.last_error}. Restart the daemon.`;
-    case 'binary_not_found':
-      return `cef_host binary not found at ${reason.path}. Reinstall ozmux.`;
-    case 'cef_init_failed':
-      return `CEF failed to start (exit code ${reason.exit_code}). Check logs.`;
-    case 'protocol_mismatch':
-      return `Protocol mismatch (expected ${reason.expected}, got ${reason.got}).`;
-  }
+  return `cef_host crashed: ${reason.last_error}. Restart the daemon.`;
 }
 
 export function BrowserActivity({ windowId, paneId, activityId }: Props) {
