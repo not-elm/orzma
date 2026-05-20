@@ -15,7 +15,7 @@ use alacritty_terminal::index::Line;
 use alacritty_terminal::term::Config;
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor, Rgb};
 use bytes::Bytes;
-use metrics::{counter, gauge};
+use metrics::gauge;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
@@ -101,6 +101,8 @@ pub(crate) struct BridgeMetrics {
     pub(crate) snapshot_total_initial: metrics::Counter,
     pub(crate) snapshot_total_resize: metrics::Counter,
     pub(crate) snapshot_total_threshold: metrics::Counter,
+    pub(crate) frames_emit_snapshot: metrics::Counter,
+    pub(crate) frames_emit_delta: metrics::Counter,
 }
 
 impl BridgeMetrics {
@@ -113,6 +115,8 @@ impl BridgeMetrics {
             snapshot_total_initial: counter!("ozmux_terminal_snapshot_total", "reason" => "initial"),
             snapshot_total_resize: counter!("ozmux_terminal_snapshot_total", "reason" => "resize"),
             snapshot_total_threshold: counter!("ozmux_terminal_snapshot_total", "reason" => "threshold"),
+            frames_emit_snapshot: counter!("ozmux_frames_emit_total", "kind" => "snapshot"),
+            frames_emit_delta: counter!("ozmux_frames_emit_total", "kind" => "delta"),
         }
     }
 }
@@ -545,7 +549,11 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
         tracing::Span::current().record("kind", kind_label);
         tracing::Span::current().record("reason", reason.as_static_str());
         tracing::Span::current().record("frame_seq", binary_seq);
-        counter!("ozmux_frames_emit_total", "kind" => kind_label).increment(1);
+        match kind_label {
+            "snapshot" => state.metrics.frames_emit_snapshot.increment(1),
+            "delta" => state.metrics.frames_emit_delta.increment(1),
+            _ => unreachable!("kind_label is only 'snapshot' or 'delta'"),
+        }
         if kind_label == "snapshot" {
             let counter = match reason {
                 EmitReason::Initial => &state.metrics.snapshot_total_initial,
