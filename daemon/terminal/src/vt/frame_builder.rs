@@ -287,20 +287,68 @@ fn coalesce_row<T>(
     runs
 }
 
+/// Color+style packed into a single u64 for branch-free equality comparison.
+///
+/// Layout (LSB → MSB):
+///   bits  0– 7: style byte
+///   bits  8–33: fg color (2-bit discriminant + 24-bit payload)
+///   bits 34–59: bg color (same encoding)
+///   bits 60–63: unused (zero)
+///
+/// Discriminants: 0 = Default, 1 = Indexed, 2 = Rgb.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PackedColorStyle(u64);
+
+impl PackedColorStyle {
+    fn pack(fg: &Color, bg: &Color, style: u8) -> Self {
+        fn encode(c: &Color) -> u64 {
+            match c {
+                Color::Default => 0,
+                Color::Indexed(i) => (1u64 << 24) | (*i as u64),
+                Color::Rgb(r, g, b) => {
+                    (2u64 << 24) | ((*r as u64) << 16) | ((*g as u64) << 8) | (*b as u64)
+                }
+            }
+        }
+        PackedColorStyle((encode(bg) << 34) | (encode(fg) << 8) | (style as u64))
+    }
+
+    fn fg(self) -> Color {
+        decode_color((self.0 >> 8) & 0x03_FF_FF_FF)
+    }
+
+    fn bg(self) -> Color {
+        decode_color((self.0 >> 34) & 0x03_FF_FF_FF)
+    }
+
+    fn style(self) -> u8 {
+        self.0 as u8
+    }
+}
+
+fn decode_color(bits: u64) -> Color {
+    let disc = (bits >> 24) & 0x3;
+    let payload = bits & 0x00_FF_FF_FF;
+    match disc {
+        0 => Color::Default,
+        1 => Color::Indexed(payload as u8),
+        _ => Color::Rgb((payload >> 16) as u8, (payload >> 8) as u8, payload as u8),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunAttrs {
-    fg: Color,
-    bg: Color,
-    style: u8,
+    packed: PackedColorStyle,
     hyperlink_id: Option<HyperlinkWireId>,
 }
 
 impl RunAttrs {
     fn from_cell(cell: &Cell, hyperlink_id: Option<HyperlinkWireId>) -> Self {
+        let fg = color_from_alacritty(cell.fg);
+        let bg = color_from_alacritty(cell.bg);
+        let style = style_from_flags(cell.flags);
         Self {
-            fg: color_from_alacritty(cell.fg),
-            bg: color_from_alacritty(cell.bg),
-            style: style_from_flags(cell.flags),
+            packed: PackedColorStyle::pack(&fg, &bg, style),
             hyperlink_id,
         }
     }
@@ -308,9 +356,9 @@ impl RunAttrs {
     fn into_run(self, text: String, cols: u16) -> Run {
         Run {
             cols,
-            fg: self.fg,
-            bg: self.bg,
-            style: self.style,
+            fg: self.packed.fg(),
+            bg: self.packed.bg(),
+            style: self.packed.style(),
             text,
             hyperlink_id: self.hyperlink_id,
         }
