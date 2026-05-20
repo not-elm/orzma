@@ -21,6 +21,7 @@ pub mod input;
 pub mod pool;
 pub mod post_command;
 pub mod profile;
+pub mod scheme;
 
 pub use browser_app::BrowserApp;
 pub use cef_settings::{acquire_data_root, build_cef_settings, load_cef_framework};

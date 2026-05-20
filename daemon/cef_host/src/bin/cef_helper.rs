@@ -11,6 +11,7 @@ use cef::args::Args;
 use cef::rc::Rc as _;
 use cef::{App, ImplApp, WrapApp, wrap_app};
 use ozmux_cef_host::append_flag;
+use ozmux_cef_host::scheme::register_ozmux_ext;
 
 wrap_app! {
     struct HelperApp;
@@ -24,6 +25,20 @@ wrap_app! {
             if let Some(cl) = command_line {
                 append_flag(cl, "use-mock-keychain");
             }
+        }
+
+        // NOTE: must match BrowserApp::on_register_custom_schemes exactly — CEF
+        // requires identical scheme registration across all processes (browser,
+        // renderer, GPU, network, …). Divergence here corrupts URL parsing and
+        // security policy for the custom scheme.
+        fn on_register_custom_schemes(
+            &self,
+            registrar: Option<&mut cef::SchemeRegistrar>,
+        ) {
+            let Some(registrar) = registrar else {
+                return;
+            };
+            register_ozmux_ext(registrar);
         }
     }
 }
