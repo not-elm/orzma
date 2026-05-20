@@ -80,10 +80,10 @@ pub(crate) enum EmitReason {
 impl EmitReason {
     pub(crate) fn as_static_str(&self) -> &'static str {
         match self {
-            Self::Initial   => "initial",
-            Self::Resize    => "resize",
+            Self::Initial => "initial",
+            Self::Resize => "resize",
             Self::Immediate => "immediate",
-            Self::Deadline  => "deadline",
+            Self::Deadline => "deadline",
         }
     }
 }
@@ -96,10 +96,10 @@ impl EmitReason {
 /// closed set; this avoids label-vector allocation per increment.
 pub(crate) struct BridgeMetrics {
     pub(crate) emit_duration_snapshot: metrics::Histogram,
-    pub(crate) emit_duration_delta:    metrics::Histogram,
-    pub(crate) coalesce_wait:          metrics::Histogram,
-    pub(crate) snapshot_total_initial:   metrics::Counter,
-    pub(crate) snapshot_total_resize:    metrics::Counter,
+    pub(crate) emit_duration_delta: metrics::Histogram,
+    pub(crate) coalesce_wait: metrics::Histogram,
+    pub(crate) snapshot_total_initial: metrics::Counter,
+    pub(crate) snapshot_total_resize: metrics::Counter,
     pub(crate) snapshot_total_threshold: metrics::Counter,
 }
 
@@ -107,18 +107,12 @@ impl BridgeMetrics {
     pub(crate) fn new() -> Self {
         use metrics::{counter, histogram};
         Self {
-            emit_duration_snapshot:
-                histogram!("ozmux_terminal_emit_duration_seconds", "kind" => "snapshot"),
-            emit_duration_delta:
-                histogram!("ozmux_terminal_emit_duration_seconds", "kind" => "delta"),
-            coalesce_wait:
-                histogram!("ozmux_terminal_coalesce_wait_seconds"),
-            snapshot_total_initial:
-                counter!("ozmux_terminal_snapshot_total", "reason" => "initial"),
-            snapshot_total_resize:
-                counter!("ozmux_terminal_snapshot_total", "reason" => "resize"),
-            snapshot_total_threshold:
-                counter!("ozmux_terminal_snapshot_total", "reason" => "threshold"),
+            emit_duration_snapshot: histogram!("ozmux_terminal_emit_duration_seconds", "kind" => "snapshot"),
+            emit_duration_delta: histogram!("ozmux_terminal_emit_duration_seconds", "kind" => "delta"),
+            coalesce_wait: histogram!("ozmux_terminal_coalesce_wait_seconds"),
+            snapshot_total_initial: counter!("ozmux_terminal_snapshot_total", "reason" => "initial"),
+            snapshot_total_resize: counter!("ozmux_terminal_snapshot_total", "reason" => "resize"),
+            snapshot_total_threshold: counter!("ozmux_terminal_snapshot_total", "reason" => "threshold"),
         }
     }
 }
@@ -1136,9 +1130,9 @@ mod tests {
 
     #[test]
     fn emit_reason_as_static_str_covers_all_variants() {
-        assert_eq!(EmitReason::Initial.as_static_str(),   "initial");
-        assert_eq!(EmitReason::Resize.as_static_str(),    "resize");
+        assert_eq!(EmitReason::Initial.as_static_str(), "initial");
+        assert_eq!(EmitReason::Resize.as_static_str(), "resize");
         assert_eq!(EmitReason::Immediate.as_static_str(), "immediate");
-        assert_eq!(EmitReason::Deadline.as_static_str(),  "deadline");
+        assert_eq!(EmitReason::Deadline.as_static_str(), "deadline");
     }
 }

@@ -49,11 +49,7 @@ fn new_recorder() -> (DebuggingRecorder, Snapshotter) {
 }
 
 /// Returns the counter value for `name` + `labels` (subset match), or None.
-fn counter_value(
-    snapshotter: &Snapshotter,
-    name: &str,
-    labels: &[(&str, &str)],
-) -> Option<u64> {
+fn counter_value(snapshotter: &Snapshotter, name: &str, labels: &[(&str, &str)]) -> Option<u64> {
     snapshotter
         .snapshot()
         .into_vec()
@@ -180,7 +176,10 @@ async fn emit_duration_recorded_on_delta_emit() {
     // First chunk -> initial snapshot. Second chunk -> at least one delta.
     chunk_tx.send(Bytes::from_static(b"first\n")).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    chunk_tx.send(Bytes::from_static(b"second\n")).await.unwrap();
+    chunk_tx
+        .send(Bytes::from_static(b"second\n"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let n = histogram_count(
