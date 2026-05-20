@@ -166,9 +166,9 @@ impl AppState {
         Some(kind)
     }
 
-    /// On active-activity change, pause screencast for the previous Browser
-    /// activity and resume it for the next Browser activity. Both calls are
-    /// missing-ok.
+    /// On active-activity change, pause screencast for the previous CEF-backed
+    /// activity (Browser or Extension) and resume it for the next one. Both
+    /// calls are missing-ok.
     pub(crate) async fn toggle_screencast_on_active_change(
         &self,
         wid: &WindowId,
@@ -179,7 +179,7 @@ impl AppState {
         if let Some(prev) = prev
             && matches!(
                 self.activity_kind_in_pane(wid, pid, prev).await,
-                Some(ActivityKindDiscriminant::Browser)
+                Some(ActivityKindDiscriminant::Browser | ActivityKindDiscriminant::Extension)
             )
         {
             let _ = self.cef_host.dispatch(
@@ -190,7 +190,7 @@ impl AppState {
         }
         if matches!(
             self.activity_kind_in_pane(wid, pid, next).await,
-            Some(ActivityKindDiscriminant::Browser)
+            Some(ActivityKindDiscriminant::Browser | ActivityKindDiscriminant::Extension)
         ) {
             let _ = self.cef_host.dispatch(
                 ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
