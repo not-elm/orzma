@@ -70,7 +70,10 @@ pub async fn run() -> anyhow::Result<()> {
 
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
-    let cef_host = acquire_cef_host(&runtime).await;
+    let cef_handles = acquire_cef_host(&runtime).await;
+    let cef_dispatcher: Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> = Arc::new(
+        ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(Arc::clone(&cef_handles)),
+    );
 
     let state = AppState::new(
         terminal.clone(),
@@ -79,11 +82,11 @@ pub async fn run() -> anyhow::Result<()> {
         ozmux_http_server::session_broadcast::SessionBroadcaster::from_env(),
         Arc::clone(&configs),
         titles.clone(),
-        cef_host,
+        cef_dispatcher,
     );
 
-    let _event_pump = spawn_event_pump(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
-    spawn_cef_crash_watcher(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
+    let _event_pump = spawn_event_pump(Arc::clone(&cef_handles), Arc::clone(&state.browser_cef));
+    spawn_cef_crash_watcher(Arc::clone(&cef_handles), Arc::clone(&state.browser_cef));
     spawn_terminal_title_bridge(terminal, titles, state.multiplexer.clone());
 
     let _pid_guard = pidfile::PidFileGuard::create(std::process::id())?;

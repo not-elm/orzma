@@ -3,7 +3,7 @@
 //! out-of-process child; Plan 3 swaps this for in-process CEF). Tests use
 //! `StubCefDispatcher` to construct an `AppState` without spinning up CEF.
 
-use crate::cef_service::DispatchError;
+use crate::cef_service::{CefHostHandles, DispatchError};
 use ozmux_browser_cef_protocol::wire::{BrowserUnavailableReason, HostCommand, HostEvent};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -46,4 +46,12 @@ pub trait CefDispatcher: Send + Sync {
     /// Subscribes to permanent-unavailable broadcasts (currently driven by
     /// the crash watcher; preserved for endpoint compatibility).
     fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableReason>;
+
+    /// Returns the underlying OoP handles, for callers that still need
+    /// methods not on this trait (currently `request_browser_create` with
+    /// its SCM_RIGHTS fd, and `Close` via `send_command`). Returns `None`
+    /// for in-process or stub implementations; callers must treat that as
+    /// "browser unavailable". Plan 3 removes the last caller and this
+    /// method.
+    fn handles(&self) -> Option<&Arc<CefHostHandles>>;
 }

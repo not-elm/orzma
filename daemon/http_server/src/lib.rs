@@ -70,7 +70,8 @@ pub(crate) mod test_helpers {
         // inside RuntimeRoot remain valid for tests that exercise the fs paths.
         std::mem::forget(tmp);
         let terminal = ozmux_terminal::TerminalService::with_runtime_root(Arc::clone(&runtime));
-        let cef_host = Arc::new(ozmux_browser::cef_service::stub_for_tests());
+        let cef_host: Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> =
+            Arc::new(ozmux_browser::cef_dispatcher::stub::StubCefDispatcher::alive());
         AppState::new(
             terminal,
             ozmux_extension::ExtensionRegistry::default(),

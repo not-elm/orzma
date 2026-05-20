@@ -73,4 +73,8 @@ impl CefDispatcher for LiveCefDispatcher {
         let (_, rx) = broadcast::channel(1);
         rx
     }
+
+    fn handles(&self) -> Option<&Arc<CefHostHandles>> {
+        Some(&self.handles)
+    }
 }
