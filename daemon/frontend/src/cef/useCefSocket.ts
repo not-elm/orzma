@@ -1,19 +1,26 @@
-// Browser WebSocket hook. Connects to /browser/ws, sends Subscribe on open,
-// and forwards every incoming binary frame to the supplied frame worker as a
-// transferable ArrayBuffer.
-//
-// Peeks each incoming message's `kind` field on the main thread:
-// SubscribeReply frames are consumed here (and dispatch MustRestart to the
-// caller); all other frames are forwarded to the worker as transferable
-// ArrayBuffers so decode stays off the main thread.
-//
-// Returns `{ send }` so callers can push BrowserClientMsg frames on the same
-// socket the hook subscribed on (e.g. for input forwarding).
+//! CEF WebSocket hook shared by Browser and Extension activities.
+//!
+//! Connects to the supplied path (`browser/ws` for Browser activities,
+//! `extension/cef/ws` for Extension activities — both endpoints speak the same
+//! `BrowserClientMsg`/`BrowserServerMsg` wire protocol), sends Subscribe on
+//! open, and forwards every incoming binary frame to the supplied frame worker
+//! as a transferable ArrayBuffer.
+//!
+//! Peeks each incoming message's `kind` field on the main thread:
+//! SubscribeReply / Nav / BrowserUnavailable / Cursor frames are consumed here
+//! and dispatched to the supplied callbacks. Every other frame (screencast)
+//! is forwarded to the worker as a transferable ArrayBuffer so decode stays
+//! off the main thread.
+//!
+//! Returns `{ send }` so callers can push BrowserClientMsg frames on the same
+//! socket the hook subscribed on (e.g. for input forwarding).
 
 import { decode, encode } from 'msgpackr';
 import { useEffect, useRef } from 'react';
-import type { InputEvent } from './protocol/input';
+import type { InputEvent } from '../browser/protocol/input';
 
+/** Identifier for a single frame produced by cef_host. Echoed back to the
+ *  daemon on resubscribe so it can replay deltas from a known base. */
 export type FrameKey = {
   session_id: bigint;
   epoch: number;
@@ -69,10 +76,15 @@ export type CursorKind =
   | 'zoom_in'
   | 'zoom_out';
 
-export interface UseBrowserSocketOpts {
+/** Options for {@link useCefSocket}. */
+export interface UseCefSocketOpts {
   windowId: string;
   paneId: string;
   activityId: string;
+  /** WebSocket sub-path under `/windows/{wid}/panes/{pid}/activities/{aid}/`.
+   *  Use `browser/ws` for Browser activities and `extension/cef/ws` for
+   *  Extension activities. */
+  path: string;
   worker: Worker | null;
   generation: number;
   /** Last frame the renderer holds, or null to request a fresh keyframe. */
@@ -103,18 +115,21 @@ type SubscribeReplyMessage = {
     | { kind: 'awaiting_keyframe' };
 };
 
-/** Return value of `useBrowserSocket`. The `send` function pushes a
+/** Return value of {@link useCefSocket}. The `send` function pushes a
  *  `BrowserClientMsg` on the live socket; it no-ops when the socket is not
  *  yet open or has closed. */
-export interface UseBrowserSocketReturn {
+export interface UseCefSocketReturn {
   send: (msg: BrowserClientMsg) => void;
 }
 
-export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketReturn {
+/** React hook that opens a CEF screencast WebSocket and pumps screencast
+ *  frames into the supplied worker. */
+export function useCefSocket(opts: UseCefSocketOpts): UseCefSocketReturn {
   const {
     windowId,
     paneId,
     activityId,
+    path,
     worker,
     generation,
     lastKey,
@@ -128,7 +143,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
 
   useEffect(() => {
     if (!worker) return;
-    const url = `ws://${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/browser/ws`;
+    const url = `ws://${location.host}/windows/${windowId}/panes/${paneId}/activities/${activityId}/${path}`;
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
@@ -220,7 +235,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
     };
 
     ws.onerror = (ev) => {
-      console.warn('cef browser ws error', ev);
+      console.warn('cef ws error', ev);
     };
 
     return () => {
@@ -231,6 +246,7 @@ export function useBrowserSocket(opts: UseBrowserSocketOpts): UseBrowserSocketRe
     windowId,
     paneId,
     activityId,
+    path,
     worker,
     generation,
     lastKey,
