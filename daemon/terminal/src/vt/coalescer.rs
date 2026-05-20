@@ -152,6 +152,7 @@ impl Coalescer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time::{Duration as TokioDur, advance, pause};
 
     #[test]
     fn new_coalescer_is_disarmed() {
@@ -236,5 +237,41 @@ mod tests {
         let c = Coalescer::new();
         assert!(!c.should_flush_immediately(false, &DamageVerdict::Idle, false));
         assert!(!c.should_flush_immediately(false, &DamageVerdict::AtMostOneRow, false));
+    }
+
+    #[tokio::test]
+    async fn wait_deadline_idle_returns_exact_idle_duration_and_idle_trigger() {
+        pause();
+        let mut c = Coalescer::default();
+        let start = Instant::now();
+        c.arm_or_extend(start);
+        // Under paused virtual time, sleep_until(start + IDLE) resolves
+        // exactly at start + IDLE — no jitter to tolerate.
+        let (elapsed, trigger) = c.wait_deadline().await;
+        assert_eq!(elapsed, Coalescer::IDLE);
+        assert_eq!(trigger, WaitTrigger::Idle);
+    }
+
+    #[tokio::test]
+    async fn wait_deadline_max_cap_returns_exact_max_cap_duration_and_max_cap_trigger() {
+        pause();
+        let mut c = Coalescer::default();
+        let start = Instant::now();
+        c.arm_or_extend(start);
+        // Slide last_chunk_at forward so the IDLE deadline keeps moving past
+        // MAX_CAP, forcing MAX_CAP to win. At 9ms in: IDLE deadline = start +
+        // 9ms + IDLE (3ms) = start + 12ms, which ties with MAX_CAP. Our impl
+        // picks Idle on tie, so advance one more ms to break the tie.
+        advance(TokioDur::from_millis(9)).await;
+        let later = Instant::now();
+        c.arm_or_extend(later);
+        advance(TokioDur::from_millis(1)).await;
+        let later2 = Instant::now();
+        c.arm_or_extend(later2);
+        // Now: armed_at == start, last_chunk_at == start+10ms.
+        // IDLE deadline = start + 13ms, MAX_CAP deadline = start + 12ms → MaxCap wins.
+        let (elapsed, trigger) = c.wait_deadline().await;
+        assert_eq!(elapsed, Coalescer::MAX_CAP);
+        assert_eq!(trigger, WaitTrigger::MaxCap);
     }
 }
