@@ -169,17 +169,12 @@ async fn synthetic_jk_scroll_dumps_pr_e2a_metrics() {
         }
     }
 
-    if let Some(samples) =
-        histogram_samples(&rows, "ozmux_terminal_coalesce_wait_seconds", &[])
-    {
+    if let Some(samples) = histogram_samples(&rows, "ozmux_terminal_coalesce_wait_seconds", &[]) {
         let count = samples.len();
         let lt_3 = samples.iter().filter(|&&s| s < 0.003).count();
         let lt_6 = samples.iter().filter(|&&s| s >= 0.003 && s < 0.006).count();
         let lt_12 = samples.iter().filter(|&&s| s >= 0.006 && s < 0.012).count();
-        let lt_25 = samples
-            .iter()
-            .filter(|&&s| s >= 0.012 && s < 0.025)
-            .count();
+        let lt_25 = samples.iter().filter(|&&s| s >= 0.012 && s < 0.025).count();
         let ge_25 = samples.iter().filter(|&&s| s >= 0.025).count();
         let (p50, p99) = p50_p99_ms(samples);
         println!(
@@ -202,22 +197,13 @@ async fn synthetic_jk_scroll_dumps_pr_e2a_metrics() {
         println!("snapshot_total[reason={reason:9}]:     {v}");
     }
 
-    let drops =
-        counter_value(&rows, "ozmux_terminal_pty_chunk_drops_total", &[]).unwrap_or(0);
+    let drops = counter_value(&rows, "ozmux_terminal_pty_chunk_drops_total", &[]).unwrap_or(0);
     println!("pty_chunk_drops_total:                  {drops}");
 
-    let snap_total = counter_value(
-        &rows,
-        "ozmux_frames_emit_total",
-        &[("kind", "snapshot")],
-    )
-    .unwrap_or(0);
-    let delta_total = counter_value(
-        &rows,
-        "ozmux_frames_emit_total",
-        &[("kind", "delta")],
-    )
-    .unwrap_or(0);
+    let snap_total =
+        counter_value(&rows, "ozmux_frames_emit_total", &[("kind", "snapshot")]).unwrap_or(0);
+    let delta_total =
+        counter_value(&rows, "ozmux_frames_emit_total", &[("kind", "delta")]).unwrap_or(0);
     println!();
     println!("frames_emit_total[kind=snapshot]:       {snap_total}");
     println!("frames_emit_total[kind=delta]:          {delta_total}");
@@ -235,8 +221,7 @@ async fn synthetic_jk_scroll_dumps_pr_e2a_metrics() {
         > 0;
 
     let coalesce_samples =
-        histogram_samples(&rows, "ozmux_terminal_coalesce_wait_seconds", &[])
-            .unwrap_or_default();
+        histogram_samples(&rows, "ozmux_terminal_coalesce_wait_seconds", &[]).unwrap_or_default();
     let coalesce_count = coalesce_samples.len();
     let coalesce_p99_ms = if coalesce_samples.is_empty() {
         0.0

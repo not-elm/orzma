@@ -386,20 +386,13 @@ async fn pr_e2b_many_rows_with_user_input_skips_coalesce_wait() {
     // independent — pre-PR-E2b would yield ~20 coalesce_wait samples.
     for i in 0..20u16 {
         let _ = svc.write(&aid, b"j").await;
-        let payload = format!(
-            "\x1b7\x1b[24;1H\x1b[Kline{i:03}\x1b[1;1Hstatus{i:03}\x1b8"
-        );
+        let payload = format!("\x1b7\x1b[24;1H\x1b[Kline{i:03}\x1b[1;1Hstatus{i:03}\x1b8");
         let _ = chunk_tx.send(Bytes::from(payload)).await;
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let n = histogram_count(
-        &snapshotter,
-        "ozmux_terminal_coalesce_wait_seconds",
-        &[],
-    )
-    .unwrap_or(0);
+    let n = histogram_count(&snapshotter, "ozmux_terminal_coalesce_wait_seconds", &[]).unwrap_or(0);
 
     // Pre-PR-E2b: ~20 samples (every chunk debounced).
     // Post-PR-E2b: <= 2 samples (chunks take the immediate-flush path;
