@@ -248,27 +248,38 @@ impl ExtensionBridge {
             tracing::debug!(?aid, "extension_bridge: connection closed");
         });
     }
+
+    /// Closes the per-activity UDS connection, if any. Called from
+    /// `BrowserPool::handle_close` before tearing down the CEF browser so the
+    /// writer/reader tasks drain and shut down instead of lingering until the
+    /// extension process itself exits. Dropping the `Sender` lets queued
+    /// writes flush before the writer half closes — the abort path was the
+    /// previous source of silent data loss between EOF and entry removal.
+    pub fn disconnect(&self, aid: &ActivityId) {
+        let removed = self
+            .inner
+            .lock()
+            .expect("bridge poisoned")
+            .remove(aid)
+            .is_some();
+        if removed {
+            tracing::debug!(?aid, "extension_bridge: disconnect requested");
+        }
+    }
 }
 
 async fn run_connection(
     aid: ActivityId,
     stream: UnixStream,
-    mut rx: mpsc::Receiver<String>,
+    rx: mpsc::Receiver<String>,
     pool: PoolHandle,
 ) {
     let (uds_r, uds_w) = stream.into_split();
-    let mut framed_w = FramedWrite::new(uds_w, LinesCodec::new());
+    let framed_w = FramedWrite::new(uds_w, LinesCodec::new());
     let mut framed_r = FramedRead::new(uds_r, LinesCodec::new_with_max_length(1 << 20));
 
     let writer_aid = aid.clone();
-    let writer = tokio::spawn(async move {
-        while let Some(line) = rx.recv().await {
-            if let Err(e) = framed_w.send(line).await {
-                tracing::warn!(?writer_aid, error = %e, "extension_bridge: UDS write failed");
-                break;
-            }
-        }
-    });
+    let writer = tokio::spawn(run_writer(writer_aid, rx, framed_w));
 
     while let Some(item) = framed_r.next().await {
         let line = match item {
@@ -295,7 +306,25 @@ async fn run_connection(
             }
         }
     }
-    writer.abort();
+    // NOTE: do not abort the writer — that drops in-flight queued lines.
+    // The reader half is already done; once the bridge `disconnect` or the
+    // outer `spawn_connection` wrapper drops its `Sender`, the writer loop
+    // exits naturally after flushing every queued line. Joining here keeps
+    // the connection-cleanup ordering deterministic.
+    let _ = writer.await;
+}
+
+async fn run_writer(
+    aid: ActivityId,
+    mut rx: mpsc::Receiver<String>,
+    mut framed_w: FramedWrite<tokio::net::unix::OwnedWriteHalf, LinesCodec>,
+) {
+    while let Some(line) = rx.recv().await {
+        if let Err(e) = framed_w.send(line).await {
+            tracing::warn!(?aid, error = %e, "extension_bridge: UDS write failed");
+            break;
+        }
+    }
 }
 
 /// Decodes a `{aid, frame}` envelope line into a `BridgeDispatchKind`.

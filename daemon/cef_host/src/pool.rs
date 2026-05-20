@@ -409,6 +409,12 @@ impl BrowserPool {
     fn handle_close(&mut self, aid: ActivityId) {
         tracing::info!(?aid, "Close");
         self.pending_contexts.remove(&aid);
+        // Close the V8↔extension UDS connection before the CEF browser
+        // goes away — otherwise the per-aid writer/reader tasks linger
+        // until the extension process itself exits.
+        if let Some(bridge) = self.bridge.as_ref() {
+            bridge.disconnect(&aid);
+        }
         if let Some(entry) = self.browsers.remove(&aid) {
             let host = entry.browser.host();
             if let Some(h) = host {
