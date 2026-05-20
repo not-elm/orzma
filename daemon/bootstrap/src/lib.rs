@@ -265,20 +265,33 @@ async fn acquire_cef_host(
     );
     let pool_handle = PoolHandle::new(pool);
 
+    let dispatcher = Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
+        pool_handle.clone(),
+        bnd_rx,
+    ));
+
     // Install the V8↔extension bridge. Must happen after `PoolHandle::new`
     // plants its back-reference: the bridge holds a `PoolHandle` clone to
     // post `DispatchExtensionResponse` commands from its UDS reader.
+    //
+    // The unavailable callback holds a `Weak<LiveCefDispatcher>` so the
+    // bridge does not keep the dispatcher alive after daemon shutdown.
+    let dispatcher_weak = Arc::downgrade(&dispatcher);
+    let unavailable_cb: ozmux_cef_host::extension_bridge::UnavailableCallback =
+        Arc::new(move |aid, reason| {
+            if let Some(d) = dispatcher_weak.upgrade() {
+                d.mark_unavailable(Some(aid), reason);
+            }
+        });
     let bridge = ozmux_cef_host::extension_bridge::ExtensionBridge::new(
         tokio::runtime::Handle::current(),
         extensions,
         pool_handle.clone(),
-    );
+    )
+    .with_unavailable_callback(unavailable_cb);
     pool_handle.install_bridge(bridge);
 
-    Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
-        pool_handle,
-        bnd_rx,
-    ))
+    dispatcher as Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher>
 }
 
 /// Spawns the adapter task that bridges terminal title-change events

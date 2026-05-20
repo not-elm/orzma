@@ -211,10 +211,24 @@ async fn run(
                 }
             }
             // Outbound: forward BrowserUnavailable to the client and close.
+            // Filter: ignore events scoped to other activities (`Some(other_aid)`);
+            // forward daemon-wide (`None`) and per-aid matches.
             unavailable_result = unavailable_rx.recv() => {
                 match unavailable_result {
-                    Ok(reason) => {
-                        send_msg(&mut socket, &BrowserServerMsg::BrowserUnavailable { reason }).await;
+                    Ok(ev) => {
+                        if let Some(target) = &ev.aid
+                            && target != &aid_proto
+                        {
+                            continue;
+                        }
+                        send_msg(
+                            &mut socket,
+                            &BrowserServerMsg::BrowserUnavailable {
+                                aid: ev.aid,
+                                reason: ev.reason,
+                            },
+                        )
+                        .await;
                         break;
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,

@@ -254,10 +254,37 @@ fn browser_server_msg_renderer_terminated_roundtrips() {
 #[test]
 fn browser_server_msg_browser_unavailable_all_reasons_roundtrips() {
     wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
+        aid: None,
         reason: BrowserUnavailableReason::RetryExhausted {
             last_error: "spawn failed".into(),
         },
     });
+}
+
+#[test]
+fn browser_unavailable_per_aid_round_trip() {
+    // daemon-wide
+    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
+        aid: None,
+        reason: BrowserUnavailableReason::ExtensionDisconnected,
+    });
+    // per-aid
+    let bytes = rmp_serde::to_vec_named(&BrowserServerMsg::BrowserUnavailable {
+        aid: Some(ActivityId("a-extension-99".into())),
+        reason: BrowserUnavailableReason::ExtensionDisconnected,
+    })
+    .unwrap();
+    let back: BrowserServerMsg = rmp_serde::from_slice(&bytes).unwrap();
+    match back {
+        BrowserServerMsg::BrowserUnavailable { aid, reason } => {
+            assert_eq!(aid, Some(ActivityId("a-extension-99".into())));
+            assert!(matches!(
+                reason,
+                BrowserUnavailableReason::ExtensionDisconnected
+            ));
+        }
+        _ => panic!("expected BrowserUnavailable"),
+    }
 }
 
 #[test]

@@ -596,9 +596,27 @@ pub enum BrowserServerMsg {
     },
     /// The browser backend is not available and cannot recover.
     BrowserUnavailable {
+        /// When `Some(aid)`, the event is scoped to a single activity (e.g.
+        /// its owning extension disconnected). `None` indicates a daemon-wide
+        /// failure that should fan out to every browser activity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        aid: Option<ActivityId>,
         /// Why the browser is unavailable.
         reason: BrowserUnavailableReason,
     },
+}
+
+/// In-process broadcast payload for permanent-unavailable signals.
+///
+/// Mirrors the on-wire `BrowserServerMsg::BrowserUnavailable` variant but
+/// is kept as a separate type so the broadcast channel and the WS handler
+/// can share filtering logic without going through msgpack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserUnavailableEvent {
+    /// `Some(aid)` → scoped to a single activity. `None` → daemon-wide.
+    pub aid: Option<ActivityId>,
+    /// Why the browser is unavailable.
+    pub reason: BrowserUnavailableReason,
 }
 
 /// Reason sent in `BrowserServerMsg::BrowserUnavailable` (spec §5).
@@ -610,6 +628,10 @@ pub enum BrowserUnavailableReason {
         /// The last error message that caused the final failure.
         last_error: String,
     },
+    /// The activity's owning extension UDS connection dropped or failed to
+    /// open. The activity-scoped browser is unusable until the extension
+    /// reconnects.
+    ExtensionDisconnected,
 }
 
 /// Result of `subscribe_frames` inside `BrowserServerMsg::SubscribeReply`

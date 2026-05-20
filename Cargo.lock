@@ -3744,6 +3744,7 @@ dependencies = [
  "decrypt-cookies",
  "ozmux_browser_cef_protocol",
  "ozmux_cef_host",
+ "ozmux_extension",
  "ozmux_multiplexer",
  "tempfile",
  "thiserror 2.0.18",

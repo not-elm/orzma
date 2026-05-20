@@ -85,7 +85,17 @@ const POPUP_CANVAS_WIDTH = 800;
 const POPUP_CANVAS_HEIGHT = 600;
 
 function reasonLabel(reason: BrowserUnavailableReason): string {
-  return `cef_host crashed: ${reason.last_error}. Restart the daemon.`;
+  switch (reason.kind) {
+    case 'retry_exhausted':
+      return `cef_host crashed: ${reason.last_error}. Restart the daemon.`;
+    case 'extension_disconnected':
+      return 'Extension disconnected. Restart the extension to recover.';
+    default: {
+      // Unknown reason kind — surface the discriminant so debugging is possible.
+      const r = reason as { kind: string };
+      return `Browser unavailable (${r.kind}).`;
+    }
+  }
 }
 
 export function BrowserActivity({ windowId, paneId, activityId }: Props) {

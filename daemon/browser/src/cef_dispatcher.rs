@@ -4,7 +4,7 @@
 //! spinning up CEF.
 
 use crate::cef_service::DispatchError;
-use ozmux_browser_cef_protocol::wire::{BrowserUnavailableReason, HostCommand, HostEvent};
+use ozmux_browser_cef_protocol::wire::{BrowserUnavailableEvent, HostCommand, HostEvent};
 use tokio::sync::{broadcast, mpsc};
 
 pub mod live;
@@ -31,5 +31,5 @@ pub trait CefDispatcher: Send + Sync {
     /// Subscribes to permanent-unavailable broadcasts. Reserved for future
     /// in-process crash handling; in-process dispatchers currently never
     /// publish on this channel.
-    fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableReason>;
+    fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableEvent>;
 }

@@ -4,7 +4,7 @@
 
 use super::CefDispatcher;
 use crate::cef_service::DispatchError;
-use ozmux_browser_cef_protocol::wire::{BrowserUnavailableReason, HostCommand, HostEvent};
+use ozmux_browser_cef_protocol::wire::{BrowserUnavailableEvent, HostCommand, HostEvent};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc};
@@ -15,7 +15,7 @@ use tokio::sync::{broadcast, mpsc};
 pub struct StubCefDispatcher {
     is_dead: Arc<AtomicBool>,
     events: std::sync::Mutex<Option<mpsc::Receiver<HostEvent>>>,
-    unavailable_tx: broadcast::Sender<BrowserUnavailableReason>,
+    unavailable_tx: broadcast::Sender<BrowserUnavailableEvent>,
 }
 
 impl StubCefDispatcher {
@@ -60,7 +60,7 @@ impl CefDispatcher for StubCefDispatcher {
         self.is_dead.load(Ordering::Acquire)
     }
 
-    fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableReason> {
+    fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableEvent> {
         self.unavailable_tx.subscribe()
     }
 }

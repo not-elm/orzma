@@ -26,6 +26,7 @@ use crate::process_message::{
 };
 use futures_util::{SinkExt, StreamExt};
 use ozmux_browser_cef_protocol::types::ActivityId;
+use ozmux_browser_cef_protocol::wire::BrowserUnavailableReason;
 use ozmux_extension::registry::ExtensionRegistry;
 use serde::Deserialize;
 use serde_json::Value;
@@ -35,6 +36,12 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
+
+/// Callback invoked by the bridge when an activity's UDS connection fails
+/// (either initial connect or mid-stream EOF/IO error). The callee should
+/// surface this to any `/browser/ws` subscriber as a
+/// `BrowserUnavailable { aid: Some(_), reason }` event.
+pub type UnavailableCallback = Arc<dyn Fn(ActivityId, BrowserUnavailableReason) + Send + Sync>;
 
 /// Outbound message kind carried on the bridge; equivalent to the
 /// `CallResponse` / `SubEvent` shape but parameterized so we can reuse the
@@ -125,6 +132,7 @@ pub struct ExtensionBridge {
     runtime: tokio::runtime::Handle,
     extensions: ExtensionRegistry,
     pool: PoolHandle,
+    unavailable_cb: Option<UnavailableCallback>,
 }
 
 impl ExtensionBridge {
@@ -143,6 +151,22 @@ impl ExtensionBridge {
             runtime,
             extensions,
             pool,
+            unavailable_cb: None,
+        }
+    }
+
+    /// Installs the per-activity unavailable callback used to surface UDS
+    /// connect/EOF failures to the `/browser/ws` subscribers. Replaces any
+    /// previously installed callback; calling this with `Arc::clone` of the
+    /// same closure is idempotent in practice.
+    pub fn with_unavailable_callback(mut self, cb: UnavailableCallback) -> Self {
+        self.unavailable_cb = Some(cb);
+        self
+    }
+
+    fn notify_unavailable(&self, aid: &ActivityId, reason: BrowserUnavailableReason) {
+        if let Some(cb) = &self.unavailable_cb {
+            cb(aid.clone(), reason);
         }
     }
 
@@ -177,9 +201,13 @@ impl ExtensionBridge {
             return Ok(tx);
         }
         let sock_path = self.lookup_sock_path(aid)?;
-        let stream = UnixStream::connect(&sock_path)
-            .await
-            .map_err(|e| format!("UDS connect {}: {}", sock_path.display(), e))?;
+        let stream = match UnixStream::connect(&sock_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                self.notify_unavailable(aid, BrowserUnavailableReason::ExtensionDisconnected);
+                return Err(format!("UDS connect {}: {}", sock_path.display(), e));
+            }
+        };
         let (tx, rx) = mpsc::channel::<String>(64);
         {
             let mut g = self.inner.lock().expect("bridge poisoned");
@@ -213,9 +241,13 @@ impl ExtensionBridge {
     ) {
         let pool = self.pool.clone();
         let inner = self.inner.clone();
+        let cb = self.unavailable_cb.clone();
         self.runtime.spawn(async move {
             run_connection(aid.clone(), stream, rx, pool).await;
             inner.lock().expect("bridge poisoned").remove(&aid);
+            if let Some(cb) = cb {
+                cb(aid.clone(), BrowserUnavailableReason::ExtensionDisconnected);
+            }
             tracing::debug!(?aid, "extension_bridge: connection closed");
         });
     }
@@ -358,4 +390,88 @@ mod tests {
         assert!(decode_envelope("not json").is_err());
     }
 
+    // Verify that `run_connection`'s EOF path invokes the configured
+    // unavailable callback exactly once. The callback is invoked by the
+    // spawned task wrapper in `spawn_connection`, after `run_connection`
+    // returns and the entry is removed from the pool.
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_connection_eof_invokes_unavailable_callback() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::net::UnixListener;
+
+        // Server: accept, drop immediately → reader sees EOF.
+        let tmp = tempfile::tempdir().unwrap();
+        let sock_path = tmp.path().join("h.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let server = tokio::spawn(async move {
+            let _ = listener.accept().await;
+            // dropping listener + accepted stream → client side reads EOF
+        });
+
+        // Register an extension that owns the activity and points at the sock.
+        let registry = ozmux_extension::registry::ExtensionRegistry::default();
+        let ext_name = "ext-eof-test";
+        registry.register(ext_name, std::path::Path::new("."));
+        registry.set_handlers_sock_path(ext_name, &sock_path);
+        let aid = ActivityId("a-eof".into());
+        // ozmux_multiplexer::ActivityId has a private inner field; construct
+        // via deserialization to get a stable string-keyed id.
+        let mux_aid: ozmux_multiplexer::ActivityId =
+            serde_json::from_str(r#""a-eof""#).unwrap();
+        registry.record_activity_owner(&mux_aid, ext_name);
+
+        // Build a bridge with a counting callback. The bridge needs a
+        // PoolHandle to post DispatchExtensionResponse — provide a real
+        // one constructed from a BrowserPool stub.
+        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel::<
+            ozmux_browser_cef_protocol::wire::HostEvent,
+        >();
+        let frame_pool =
+            std::sync::Arc::new(crate::frame_buffer_pool::FrameBufferPool::new(2));
+        let pool = crate::pool::BrowserPool::new(
+            event_tx,
+            std::env::temp_dir(),
+            false,
+            0,
+            frame_pool,
+            registry.clone(),
+        );
+        let pool_handle = crate::post_command::PoolHandle::new(pool);
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let last_reason = Arc::new(Mutex::new(None::<BrowserUnavailableReason>));
+        let counter_cb = Arc::clone(&counter);
+        let last_cb = Arc::clone(&last_reason);
+        let cb: UnavailableCallback = Arc::new(move |_aid, reason| {
+            counter_cb.fetch_add(1, Ordering::SeqCst);
+            *last_cb.lock().unwrap() = Some(reason);
+        });
+
+        let bridge = ExtensionBridge::new(
+            tokio::runtime::Handle::current(),
+            registry,
+            pool_handle,
+        )
+        .with_unavailable_callback(cb);
+
+        // Trigger the forward → connect → spawn-reader flow. The server
+        // will drop the accepted stream, so the reader sees EOF and the
+        // spawn_connection wrapper fires the callback.
+        bridge.forward(aid.clone(), r#"{"kind":"result","id":"c","payload":{}}"#.to_string());
+
+        // Wait until callback fires (best-effort poll loop).
+        for _ in 0..50 {
+            if counter.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let _ = server.await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            last_reason.lock().unwrap().clone(),
+            Some(BrowserUnavailableReason::ExtensionDisconnected)
+        ));
+    }
 }
