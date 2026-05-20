@@ -60,6 +60,13 @@ impl Coalescer {
     pub const IDLE: Duration = Duration::from_millis(3);
     /// Hard ceiling: maximum time the first pending chunk waits.
     pub const MAX_CAP: Duration = Duration::from_millis(12);
+    /// PR-E2b: row-count cap for the new immediate-flush branch that
+    /// fires on `ManyRows + pending_user_input`. NeoVim 1-line scroll
+    /// in a TUI dirties scrolled-in row + status line + (sometimes)
+    /// tabline = 2-3 rows; cap of 4 leaves headroom while still
+    /// excluding bigger redraws (`:redraw!`, mode-line transitions)
+    /// from bypassing the debounce window.
+    const MANY_ROWS_INSTANT_CAP: usize = 4;
 
     /// Constructs a disarmed Coalescer.
     pub fn new() -> Self {
@@ -116,7 +123,7 @@ impl Coalescer {
     ///
     /// `pending_user_input` is consumed *by the caller* on a `true` return —
     /// the caller flips the bool before invoking this method only when the
-    /// verdict is `AtMostOneRow`. This method is pure: it does not mutate state.
+    /// verdict warrants. This method is pure: it does not mutate state.
     ///
     /// # Invariants
     ///
@@ -127,6 +134,9 @@ impl Coalescer {
     /// rows blank) before content arrives. Routing Full through the coalescer
     /// window lets `wait_deadline`'s `try_recv` drain absorb the row-content
     /// chunk into the same emit.
+    ///
+    /// PR-E2b extends this with a `ManyRows` branch gated on a row cap and
+    /// the coalescer NOT being armed — see spec § 2 and § 7.
     pub fn should_flush_immediately(
         &self,
         is_bootstrap: bool,
@@ -136,10 +146,21 @@ impl Coalescer {
         if is_bootstrap {
             return true;
         }
-        if pending_user_input && matches!(verdict, DamageVerdict::AtMostOneRow) {
-            return true;
+        if !pending_user_input {
+            return false;
         }
-        false
+        match verdict {
+            DamageVerdict::AtMostOneRow => true,
+            // PR-E2b: small ManyRows under user-input pressure is almost
+            // always an interactive editor redraw. Flushing immediately
+            // removes the 3-12 ms coalesce wait. The `is_none()` guard
+            // protects post-Full coalescing: if a prior Full chunk is
+            // already debouncing, let its window run.
+            DamageVerdict::ManyRows { rows } if *rows <= Self::MANY_ROWS_INSTANT_CAP => {
+                self.armed_at.is_none()
+            }
+            _ => false,
+        }
     }
 
     /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
