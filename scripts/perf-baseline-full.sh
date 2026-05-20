@@ -42,12 +42,18 @@ OZMUX_PERF_REPORT_OUT="$OUTPUT_DIR/perf-report.json" \
 curl -s http://127.0.0.1:3200/metrics > "$OUTPUT_DIR/metrics.txt"
 
 # Stop daemon and Vite (trap will also kill, but explicit is clearer).
+# pnpm + vite spawn wrapper processes whose PIDs differ from $VITE_PID
+# (the immediate child is the pnpm wrapper), so pkill -f catches the
+# stragglers that hold port 5173.
 kill "$DAEMON_PID" 2>/dev/null || true
 kill "$VITE_PID" 2>/dev/null || true
+pkill -f 'vite --port 5173' 2>/dev/null || true
+pkill -f 'pnpm.*ozmux-ui.*vite' 2>/dev/null || true
 trap - EXIT
 
-# Run criterion bench (--quick mode for reasonable wall time).
-cargo bench -p ozmux_terminal --bench broadcast_lag_rate -- --quick 2>&1 | \
+# Run criterion bench (--quick mode for reasonable wall time). The
+# broadcast_lag_rate bench requires the test-helpers feature gate.
+cargo bench -p ozmux_terminal --features test-helpers --bench broadcast_lag_rate -- --quick 2>&1 | \
     tee "$OUTPUT_DIR/bench.txt"
 
 # System info.
