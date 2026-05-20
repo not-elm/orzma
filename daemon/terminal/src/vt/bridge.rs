@@ -641,6 +641,22 @@ pub(crate) async fn run_bridge_task(
     activity_id: ActivityId,
 ) {
     tracing::Span::current().record("activity_id", activity_id.as_ref());
+    metrics::describe_histogram!(
+        "ozmux_terminal_emit_duration_seconds",
+        "Time taken to emit one frame (build + encode + broadcast + ring push), measured under VtState lock."
+    );
+    metrics::describe_histogram!(
+        "ozmux_terminal_coalesce_wait_seconds",
+        "Time elapsed from coalesce-window arming to the deadline-fired emit (elapsed_since_armed, not in-flight sleep)."
+    );
+    metrics::describe_counter!(
+        "ozmux_terminal_snapshot_total",
+        "Total snapshot frames emitted on the in-band bridge path, partitioned by promotion reason (initial / resize / threshold)."
+    );
+    metrics::describe_counter!(
+        "ozmux_terminal_pty_chunk_drops_total",
+        "PTY chunks dropped by the reader's try_send to the bridge channel (silent drop path)."
+    );
     if config.spawn_gauge {
         let tx_for_gauge = vt_state
             .lock()
