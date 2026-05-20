@@ -449,9 +449,7 @@ impl BrowserPool {
         initial_url: String,
         epoch: u32,
         profile: BrowserProfileWire,
-        // TODO: Task 4 — forward `context` into CEF `extra_info` so the render
-        // process can build `window.ozmux.context` in `on_context_created`.
-        _context: BrowserExtraContext,
+        context: BrowserExtraContext,
     ) {
         tracing::info!(?aid, %initial_url, epoch, "BrowserCreate");
 
@@ -481,13 +479,14 @@ impl BrowserPool {
         let window_info = build_window_info();
         let browser_settings = build_browser_settings();
         let url_str = CefString::from(initial_url.as_str());
+        let mut extra_info = crate::v8_binding::context_to_dict(&context);
 
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
             Some(&url_str),
             Some(&browser_settings),
-            None,
+            extra_info.as_mut(),
             Some(&mut request_context),
         );
 
