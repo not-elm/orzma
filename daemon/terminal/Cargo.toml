@@ -64,6 +64,7 @@ required-features = ["test-helpers"]
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support", "async_tokio"] }
+metrics-util = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [dependencies]
