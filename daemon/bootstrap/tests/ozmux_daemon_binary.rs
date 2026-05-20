@@ -65,7 +65,7 @@ fn ozmux_daemon_starts_serves_health_and_shuts_down() {
 
     let status = child.wait().expect("wait child");
     assert!(
-        status.success() || status.code() == Some(0),
+        status.success(),
         "ozmux-daemon did not exit cleanly: {status:?}"
     );
 }
