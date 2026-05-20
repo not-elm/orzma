@@ -655,7 +655,16 @@ pub(crate) async fn run_bridge_task(
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
-            (_elapsed, _trigger) = coalescer.wait_deadline() => {
+            (elapsed, trigger) = coalescer.wait_deadline() => {
+                {
+                    let state = vt_state.lock().expect("vt_state poisoned");
+                    state.metrics.coalesce_wait.record(elapsed.as_secs_f64());
+                }
+                tracing::trace!(
+                    ?trigger,
+                    elapsed_ms = elapsed.as_secs_f64() * 1000.0,
+                    "coalesce deadline fired"
+                );
                 // NOTE: drain any chunks already queued at the moment the
                 // deadline fires so they fold into the same emit. Single
                 // lock spans the drain so damage is collected once at the
