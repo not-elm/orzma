@@ -51,22 +51,46 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
-/// Runs the ozmux daemon to completion. Initialises tracing, cleans up any
-/// stale PID file, loads configuration and extensions, then serves HTTP on
-/// `127.0.0.1:3200` until `SIGINT` or `SIGTERM` is received.
+/// RAII bundle that owns daemon subsystem handles (runtime root, extension
+/// child processes, event pump task, CEF crash watcher task, PID file
+/// guard). Dropping the bundle tears every subsystem down in the right
+/// order: background tasks abort first, then `PidFileGuard`'s `Drop`
+/// removes the PID file, then the runtime root cleans up its scratch
+/// directory.
+pub struct RuntimeHandles {
+    event_pump: tokio::task::JoinHandle<()>,
+    crash_watcher: tokio::task::JoinHandle<()>,
+    _ext_handles: ExtensionHandles,
+    _pid_guard: pidfile::PidFileGuard,
+    _runtime: Arc<RuntimeRoot>,
+}
+
+impl Drop for RuntimeHandles {
+    fn drop(&mut self) {
+        // NOTE: abort the background tasks first so they cannot race with
+        // PidFileGuard / RuntimeRoot teardown by trying to touch state that
+        // is about to disappear.
+        self.event_pump.abort();
+        self.crash_watcher.abort();
+    }
+}
+
+/// Builds the daemon's `AppState` together with a `RuntimeHandles` bundle.
 ///
-/// Writes the daemon PID to `$TMPDIR/ozmux/daemon.pid` before entering the
-/// serve loop and removes it on any exit path — graceful shutdown, error
-/// propagation, or panic — via a `PidFileGuard` RAII helper.
-pub async fn run() -> anyhow::Result<()> {
-    init_tracing();
+/// Performs every startup step that does not require an active HTTP serve
+/// loop: stale PID cleanup, config + runtime root initialisation, extension
+/// discovery, terminal/title services, CEF host acquisition, AppState
+/// construction, plus the event pump, CEF crash watcher, terminal title
+/// bridge, and PID file guard. Does **not** initialise tracing — callers
+/// (`serve` and the deprecated `run`) own that side effect.
+pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
     pidfile::cleanup_if_stale()?;
 
     let configs = load_configs().await?;
     let runtime = init_runtime().await?;
 
     let registry = ExtensionRegistry::default();
-    let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
+    let ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
 
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
@@ -82,14 +106,54 @@ pub async fn run() -> anyhow::Result<()> {
         Arc::clone(&cef_dispatcher),
     );
 
-    let _event_pump = spawn_event_pump(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
-    spawn_cef_crash_watcher(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
+    let event_pump = spawn_event_pump(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
+    let crash_watcher =
+        spawn_cef_crash_watcher(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
     spawn_terminal_title_bridge(terminal, titles, state.multiplexer.clone());
 
-    let _pid_guard = pidfile::PidFileGuard::create(std::process::id())?;
-    let result = run_until_shutdown(state).await;
-    drop(runtime);
-    result
+    let pid_guard = pidfile::PidFileGuard::create(std::process::id())?;
+    Ok((
+        state,
+        RuntimeHandles {
+            event_pump,
+            crash_watcher,
+            _ext_handles: ext_handles,
+            _pid_guard: pid_guard,
+            _runtime: runtime,
+        },
+    ))
+}
+
+/// Serves the ozmux daemon HTTP API until `stop_rx` fires or the serve
+/// future returns. Initialises tracing, calls `build_state`, and runs the
+/// axum server. Signal handling is the caller's responsibility — pass a
+/// `oneshot::Receiver` whose sender is tripped by whatever shutdown
+/// orchestration the host (CEF-aware main, integration test, …) uses.
+pub async fn serve(stop_rx: tokio::sync::oneshot::Receiver<()>) -> anyhow::Result<()> {
+    init_tracing();
+    let (state, _handles) = build_state().await?;
+    let serve = ozmux_http_server::serve(state);
+    tokio::select! {
+        result = serve => result?,
+        _ = stop_rx => {
+            tracing::info!("serve: stop signal received");
+        }
+    }
+    Ok(())
+}
+
+/// Runs the ozmux daemon to completion using built-in `SIGINT`/`SIGTERM`
+/// signal handling. Initialises tracing, builds the state bundle, and
+/// serves HTTP on `127.0.0.1:3200` until a signal arrives.
+///
+/// Writes the daemon PID to `$TMPDIR/ozmux/daemon.pid` for the lifetime of
+/// the call and removes it on any exit path — graceful shutdown, error
+/// propagation, or panic — via the `RuntimeHandles` bundle's RAII drop.
+#[deprecated(note = "Use `serve(stop_rx)` from a CEF-aware main with explicit signal handling")]
+pub async fn run() -> anyhow::Result<()> {
+    init_tracing();
+    let (state, _handles) = build_state().await?;
+    run_until_shutdown(state).await
 }
 
 /// Initialises `tracing-subscriber` with the daemon's default filter,
@@ -258,10 +322,10 @@ async fn run_until_shutdown(state: AppState) -> anyhow::Result<()> {
 fn spawn_cef_crash_watcher(
     cef_host: Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher>,
     registry: Arc<BrowserCefRegistry>,
-) {
+) -> tokio::task::JoinHandle<()> {
     let Some(mut child) = cef_host.take_child() else {
         tracing::warn!("cef_host child already taken; crash-watcher not started");
-        return;
+        return tokio::spawn(async {});
     };
     let is_dead = cef_host.is_dead_handle();
     tokio::spawn(async move {
@@ -273,7 +337,7 @@ fn spawn_cef_crash_watcher(
         };
         tracing::error!(status = ?status, "cef_host exited unexpectedly");
         registry.broadcast_unavailable(BrowserUnavailableReason::RetryExhausted { last_error });
-    });
+    })
 }
 
 /// Place the `ozmux` CLI binary at `runtime/bin/ozmux/ozmux` so PTY-spawned

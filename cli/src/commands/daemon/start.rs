@@ -30,6 +30,10 @@ pub(crate) struct StartArgs {
 impl CommandExecute for StartArgs {
     async fn run(self) -> anyhow::Result<()> {
         if self.foreground {
+            #[expect(
+                deprecated,
+                reason = "Plan 3 Task 8 will route --foreground through serve(stop_rx)"
+            )]
             return daemon_bootstrap::run().await;
         }
         match super::ensure_running().await? {
