@@ -33,8 +33,9 @@ pub enum DamageVerdict {
     Full,
     /// At most one row is dirty (interactive echo / cursor-only motion).
     AtMostOneRow,
-    /// Many rows dirty — must be coalesced.
-    ManyRows,
+    /// Two or more rows dirty. The row count drives the PR-E2b
+    /// immediate-flush cap in `Coalescer::should_flush_immediately`.
+    ManyRows { rows: usize },
     /// No rows dirty and cursor unchanged.
     Idle,
 }
@@ -212,7 +213,7 @@ mod tests {
     fn should_flush_immediately_on_bootstrap() {
         let c = Coalescer::new();
         assert!(c.should_flush_immediately(true, &DamageVerdict::Idle, false));
-        assert!(c.should_flush_immediately(true, &DamageVerdict::ManyRows, false));
+        assert!(c.should_flush_immediately(true, &DamageVerdict::ManyRows { rows: 5 }, false));
     }
 
     #[test]
@@ -235,7 +236,7 @@ mod tests {
     #[test]
     fn should_not_flush_user_input_with_many_rows() {
         let c = Coalescer::new();
-        assert!(!c.should_flush_immediately(false, &DamageVerdict::ManyRows, true));
+        assert!(!c.should_flush_immediately(false, &DamageVerdict::ManyRows { rows: 8 }, true));
     }
 
     #[test]

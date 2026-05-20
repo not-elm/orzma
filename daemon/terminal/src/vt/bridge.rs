@@ -353,7 +353,7 @@ fn classify_damage(dirty: &DirtyRows, cursor_changed: bool) -> DamageVerdict {
             }
         }
         DirtyRows::Rows(rows) if rows.len() <= 1 => DamageVerdict::AtMostOneRow,
-        DirtyRows::Rows(_) => DamageVerdict::ManyRows,
+        DirtyRows::Rows(rows) => DamageVerdict::ManyRows { rows: rows.len() },
     }
 }
 
