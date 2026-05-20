@@ -1,24 +1,23 @@
 //! Render-process handler — reads the `extra_info` `DictionaryValue` passed by
 //! the browser process in `browser_host_create_browser_sync` and caches it
-//! per-browser inside the renderer.
+//! per-browser inside the renderer, then installs `window.ozmux` in the V8
+//! context of qualifying frames (main frame, role==extension, ozmux-ext://
+//! origin, matching `v8_context.is_same`).
 //!
-//! Task 5 only populates the cache; binding install (`window.ozmux.context`)
-//! follows in Task 6 via `on_context_created`. Storage lives in a
-//! `thread_local!` because every CEF callback in the render process runs on
-//! the single renderer main thread.
+//! Storage lives in a `thread_local!` because every CEF callback in the render
+//! process runs on the single renderer main thread.
 
 use cef::rc::Rc as _;
 use cef::{
-    Browser, CefString, DictionaryValue, ImplBrowser, ImplDictionaryValue,
-    ImplRenderProcessHandler, RenderProcessHandler, WrapRenderProcessHandler,
-    wrap_render_process_handler,
+    Browser, CefString, DictionaryValue, Frame, ImplBrowser, ImplDictionaryValue, ImplFrame,
+    ImplRenderProcessHandler, ImplV8Context, RenderProcessHandler, V8Context,
+    WrapRenderProcessHandler, wrap_render_process_handler,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// Per-browser context captured from `extra_info` in `on_browser_created`.
 #[derive(Clone, Debug)]
-#[expect(dead_code, reason = "fields consumed by Task 6 on_context_created binding install")]
 pub(crate) struct RenderState {
     pub(crate) role: String,
     pub(crate) session_id: Option<String>,
@@ -78,7 +77,57 @@ wrap_render_process_handler! {
                 cell.borrow_mut().remove(&id);
             });
         }
+
+        fn on_context_created(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            context: Option<&mut V8Context>,
+        ) {
+            let (Some(browser), Some(frame), Some(ctx)) = (browser, frame, context) else {
+                return;
+            };
+            if !is_extension_main_frame(browser, frame, ctx) {
+                return;
+            }
+            // NOTE: enter() must be paired with exit() — install_window_ozmux
+            // mutates V8 globals and CEF requires the context be entered for
+            // any V8 value creation in this thread.
+            if ctx.enter() == 0 {
+                return;
+            }
+            let state = STATES.with(|cell| cell.borrow().get(&browser.identifier()).cloned());
+            if let Some(state) = state {
+                crate::v8_binding::install_window_ozmux(ctx, &state);
+            }
+            ctx.exit();
+        }
     }
+}
+
+fn is_extension_main_frame(browser: &mut Browser, frame: &mut Frame, ctx: &mut V8Context) -> bool {
+    if frame.is_main() == 0 {
+        return false;
+    }
+    let mut frame_ctx = frame.v8_context();
+    let same = match frame_ctx.as_mut() {
+        Some(fc) => fc.is_same(Some(ctx)) != 0,
+        None => false,
+    };
+    if !same {
+        return false;
+    }
+    let url = CefString::from(&frame.url()).to_string();
+    if !url.starts_with("ozmux-ext://") {
+        return false;
+    }
+    let id = browser.identifier();
+    STATES.with(|cell| {
+        cell.borrow()
+            .get(&id)
+            .map(|state| state.role == "extension")
+            .unwrap_or(false)
+    })
 }
 
 fn read_string(dict: &mut DictionaryValue, key: &str) -> Option<String> {
