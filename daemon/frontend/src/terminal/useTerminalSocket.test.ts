@@ -44,25 +44,6 @@ describe('useTerminalSocket', () => {
     expect(Array.from(received[0])).toEqual([1, 2, 3]);
   });
 
-  it('routes Text frames to setControlHandler', async () => {
-    const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a'));
-    const received: string[] = [];
-    await waitFor(() => expect(server?.clients().length).toBe(1));
-
-    act(() => {
-      result.current.setControlHandler((text) => {
-        received.push(text);
-      });
-    });
-
-    act(() => {
-      server?.clients()[0].send('{"kind":"mode","seq":1,"added":["alt-screen"],"removed":[]}');
-    });
-
-    await waitFor(() => expect(received.length).toBe(1));
-    expect(received[0]).toContain('"kind":"mode"');
-  });
-
   it('buffers binary frames received before setFrameHandler is registered', async () => {
     const { result } = renderHook(() => useTerminalSocket('w', 'p', 'a'));
     await waitFor(() => expect(server?.clients().length).toBe(1));

@@ -104,3 +104,23 @@ describe('Phase 3B wire types', () => {
     }
   });
 });
+
+describe('CAT-007 inline modes fixtures', () => {
+  it('delta_with_modes decodes with modes_added and modes_removed', () => {
+    const frame = decodeFrame(readBin('delta_with_modes'));
+    expect(frame.kind).toBe('delta');
+    if (frame.kind === 'delta') {
+      expect(frame.modes_added).toEqual(['bracketed-paste']);
+      expect(frame.modes_removed).toEqual(['alt-screen']);
+    }
+  });
+
+  it('delta_minimal decodes with no inlined modes', () => {
+    const frame = decodeFrame(readBin('delta_minimal'));
+    expect(frame.kind).toBe('delta');
+    if (frame.kind === 'delta') {
+      expect(frame.modes_added ?? []).toEqual([]);
+      expect(frame.modes_removed ?? []).toEqual([]);
+    }
+  });
+});

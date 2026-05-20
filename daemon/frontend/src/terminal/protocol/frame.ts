@@ -71,6 +71,8 @@ export interface FrameDelta {
   hyperlinks: Hyperlink[];
   display_offset?: number;
   produced_at_us?: number;
+  modes_added?: string[];
+  modes_removed?: string[];
 }
 
 /** Render frame tagged union (matches wire spec § 4 RenderFrame discriminator). */

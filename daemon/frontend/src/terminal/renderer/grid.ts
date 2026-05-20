@@ -158,6 +158,12 @@ function rowsEqual(a: readonly Cell[], b: readonly Cell[]): boolean {
 }
 
 function applyDelta(grid: Grid, frame: FrameDelta): void {
+  // NOTE: apply mode transitions FIRST, unconditionally. Mode-only empty
+  // deltas (CAT-005 hash filter drops all dirty rows + CAT-007 pending modes
+  // bundle into an empty-rows delta) must still update the renderer's mode
+  // state even when there are no dirty rows.
+  for (const m of frame.modes_added ?? []) grid.modes.add(m);
+  for (const m of frame.modes_removed ?? []) grid.modes.delete(m);
   if (frame.dirty_rows.length > 0) {
     // NOTE: clone the rowVersions buffer so the reference changes. grid-store's
     // shallow equality compares rowVersions by reference (===); mutating the

@@ -226,22 +226,6 @@ export function useTerminal(
       }
     });
 
-    socket.setControlHandler((text) => {
-      try {
-        const msg = JSON.parse(text) as { kind?: string; added?: string[]; removed?: string[] };
-        if (msg.kind === 'mode') {
-          const altToggled =
-            msg.added?.includes('alt-screen') === true ||
-            msg.removed?.includes('alt-screen') === true;
-          for (const m of msg.added ?? []) gridRef.current.modes.add(m);
-          for (const m of msg.removed ?? []) gridRef.current.modes.delete(m);
-          if (altToggled) resetEphemeralState();
-        }
-      } catch (e) {
-        socket.reportDecodeError(String(e));
-      }
-    });
-
     const cleanups: Array<() => void> = [];
     const ta = textareaRef.current;
     if (ta) {
@@ -280,7 +264,6 @@ export function useTerminal(
       for (const c of cleanups) c();
       ro.disconnect();
       socket.setFrameHandler(null);
-      socket.setControlHandler(null);
     };
   }, [socket, windowId, paneId, activityId]);
 
