@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 ///
 /// `ExtensionRegistry` is internally `Arc<RwLock<…>>` so cloning the value
 /// passed in shares state with every other holder.
-pub fn make_factory(extensions: ExtensionRegistry) -> SchemeHandlerFactory {
+pub(crate) fn make_factory(extensions: ExtensionRegistry) -> SchemeHandlerFactory {
     OzmuxExtSchemeHandlerFactory::new(extensions)
 }
 
