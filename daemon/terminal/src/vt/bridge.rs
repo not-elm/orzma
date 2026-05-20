@@ -3,12 +3,17 @@
 //! Phase 1 advances `Term` only; frame emission and PtyWrite/control routing
 //! are wired in Phase 2.
 
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::time::Instant;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::Line;
 use alacritty_terminal::term::Config;
+use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor, Rgb};
 use bytes::Bytes;
 use metrics::{counter, gauge};
 use tokio::sync::{broadcast, mpsc};
@@ -16,9 +21,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::vt::coalescer::{Coalescer, DamageVerdict};
-use crate::vt::frame::{Cursor, RenderFrame, SnapshotReason, encode};
+use crate::vt::frame::{Cursor, CursorShape, RenderFrame, SnapshotReason, encode};
 use crate::vt::frame_builder::{
     DirtyRows, build_delta, build_snapshot, collect_dirty_rows, extract_cursor,
+    viewport_row_to_line,
 };
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
@@ -113,6 +119,11 @@ pub(crate) struct VtState {
     /// Initialized in `VtState::new` to `*term.mode()` (alacritty default
     /// mode set at construction time).
     pub(crate) last_emit_mode: alacritty_terminal::term::TermMode,
+    /// Per-grid-Line content hash from the previous emit. Keyed by absolute
+    /// `Line` inner i32 (negative for history rows). Used by CAT-005 to
+    /// drop unchanged rows from DirtyRows::Rows before they reach
+    /// decide_frame_kind. Bulk-reset on every Snapshot emit and on resize.
+    pub(crate) row_hashes: HashMap<i32, u64>,
     /// Handle for the 100 ms broadcast-depth gauge task.
     /// `AbortOnDropHandle` cancels the task when this `VtState` is dropped.
     /// `None` when `BridgeConfig::spawn_gauge` is false.
@@ -155,6 +166,7 @@ impl VtState {
             pending_modes_added: Vec::new(),
             pending_modes_removed: Vec::new(),
             last_emit_mode,
+            row_hashes: HashMap::new(),
             gauge_handle: None,
         }
     }
@@ -186,6 +198,71 @@ impl VtState {
         let elapsed_us: u64 = self.started_at.elapsed().as_micros().try_into().ok()?;
         Some(origin.saturating_add(elapsed_us))
     }
+}
+
+fn hash_named_color(n: NamedColor, h: &mut DefaultHasher) {
+    // NOTE: vte NamedColor derives Ord/PartialOrd but NOT Hash. Discriminants
+    // are explicit (Foreground=256, etc.), so u32 cast preserves identity.
+    (n as u32).hash(h);
+}
+
+fn hash_rgb(rgb: &Rgb, h: &mut DefaultHasher) {
+    // NOTE: vte Rgb derives PartialEq/Default but NOT Hash. Hash public fields.
+    rgb.r.hash(h);
+    rgb.g.hash(h);
+    rgb.b.hash(h);
+}
+
+fn hash_acolor(c: &AColor, h: &mut DefaultHasher) {
+    // NOTE: vte Color (AColor) does NOT derive Hash; walk discriminant + payload.
+    match c {
+        AColor::Named(n) => {
+            0u8.hash(h);
+            hash_named_color(*n, h);
+        }
+        AColor::Spec(rgb) => {
+            1u8.hash(h);
+            hash_rgb(rgb, h);
+        }
+        AColor::Indexed(i) => {
+            2u8.hash(h);
+            i.hash(h);
+        }
+    }
+}
+
+fn hash_cursor_shape(s: CursorShape, h: &mut DefaultHasher) {
+    // NOTE: ozmux wire CursorShape does NOT derive Hash — map to u8.
+    let n: u8 = match s {
+        CursorShape::Block => 0,
+        CursorShape::Underline => 1,
+        CursorShape::Bar => 2,
+    };
+    n.hash(h);
+}
+
+fn hash_row<T>(term: &Term<T>, line: Line, cursor: &Cursor, viewport_y: u16) -> u64 {
+    let mut h = DefaultHasher::new();
+    for cell in &term.grid()[line] {
+        cell.c.hash(&mut h);
+        hash_acolor(&cell.fg, &mut h);
+        hash_acolor(&cell.bg, &mut h);
+        cell.flags.bits().hash(&mut h);
+        if let Some(hyp) = cell.hyperlink().as_ref() {
+            1u8.hash(&mut h);
+            hyp.uri().hash(&mut h);
+            hyp.id().hash(&mut h);
+        } else {
+            0u8.hash(&mut h);
+        }
+    }
+    if cursor.visible && viewport_y == cursor.y {
+        cursor.x.hash(&mut h);
+        cursor.y.hash(&mut h);
+        hash_cursor_shape(cursor.shape, &mut h);
+        cursor.blinking.hash(&mut h);
+    }
+    h.finish()
 }
 
 /// Classifies the bridge's accumulated damage for the Coalescer's
@@ -252,21 +329,51 @@ const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer) {
     let mut state = vt_state.lock().expect("vt_state poisoned");
 
-    let Some(dirty) = state.pending_damage.take() else {
+    let Some(mut dirty) = state.pending_damage.take() else {
         coalescer.disarm();
         return;
     };
 
     let curr_cursor = extract_cursor(&state.term);
+
+    // CAT-005: hash-filter DirtyRows::Rows BEFORE decide_frame_kind so the
+    // threshold check doesn't false-promote unchanged rows to Snapshot.
+    // kept_hashes records (line_i32, hash) for rows that passed the filter;
+    // written into row_hashes in the commit phase after successful encode.
+    let mut kept_hashes: Vec<(i32, u64)> = Vec::new();
+    if let DirtyRows::Rows(rows) = &mut dirty {
+        let VtState {
+            ref term,
+            ref row_hashes,
+            ..
+        } = *state;
+        rows.retain(|&viewport_y| {
+            let line = viewport_row_to_line(term, viewport_y as i32);
+            let h = hash_row(term, line, &curr_cursor, viewport_y);
+            let stale = row_hashes.get(&line.0).copied();
+            if Some(h) == stale {
+                false
+            } else {
+                kept_hashes.push((line.0, h));
+                true
+            }
+        });
+    }
+
+    // CAT-005 + CAT-007: re-check emit eligibility after the filter.
+    let has_dirty = matches!(&dirty, DirtyRows::Full)
+        || matches!(&dirty, DirtyRows::Rows(r) if !r.is_empty());
+    let has_pending_modes = !state.pending_modes_added.is_empty()
+        || !state.pending_modes_removed.is_empty();
     let cursor_unchanged = state
         .prev_cursor
         .as_ref()
         .is_some_and(|prev| *prev == curr_cursor);
 
-    let dirty_is_empty = matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
-    let modes_unchanged =
-        state.pending_modes_added.is_empty() && state.pending_modes_removed.is_empty();
-    if dirty_is_empty && modes_unchanged && cursor_unchanged && !state.first_emit {
+    if !has_dirty && !has_pending_modes && cursor_unchanged && !state.first_emit {
+        // Truly nothing to emit. Reset alacritty's damage tracker so we
+        // don't re-walk the same damage on the next coalescer flush.
+        state.term.reset_damage();
         coalescer.disarm();
         return;
     }
@@ -356,6 +463,30 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
         state.pending_modes_added.clear();
         state.pending_modes_removed.clear();
         state.last_emit_mode = *state.term.mode();
+
+        // CAT-005 commit phase: update row_hashes after successful encode + push.
+        // For delta frames, write the kept (line, hash) pairs computed above.
+        // For snapshot frames, bulk-rehash all visible rows as the new baseline.
+        match &frame {
+            RenderFrame::Delta(_) => {
+                for (line_i32, h) in kept_hashes {
+                    state.row_hashes.insert(line_i32, h);
+                }
+            }
+            RenderFrame::Snapshot(_) => {
+                // CAT-005: snapshot is a full reset point. Re-hash all visible rows
+                // so the next delta can correctly identify changes.
+                state.row_hashes.clear();
+                let screen_rows = state.term.grid().screen_lines() as u16;
+                let snap_cursor = extract_cursor(&state.term);
+                let VtState { ref term, ref mut row_hashes, .. } = *state;
+                for viewport_y in 0..screen_rows {
+                    let line = viewport_row_to_line(term, viewport_y as i32);
+                    let h = hash_row(term, line, &snap_cursor, viewport_y);
+                    row_hashes.insert(line.0, h);
+                }
+            }
+        }
     }
 
     coalescer.disarm();

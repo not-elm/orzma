@@ -205,6 +205,10 @@ impl TerminalService {
             let dim = crate::vt::bridge::dim_for(cols, rows);
             let mut state = handle.vt_state.lock().expect("vt_state poisoned");
             state.term.resize(dim);
+            // CAT-005: viewport dimensions changed; the hash cache is invalidated
+            // because cells map to different Line indices after column/row resize.
+            // The next emit will be a forced Snapshot which repopulates row_hashes.
+            state.row_hashes.clear();
         }
 
         handle
