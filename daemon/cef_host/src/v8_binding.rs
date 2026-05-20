@@ -22,15 +22,15 @@
 use cef::rc::Rc as _;
 use cef::sys::cef_v8_propertyattribute_t;
 use cef::{
-    CefString, DictionaryValue, ImplDictionaryValue, ImplFrame, ImplListValue, ImplProcessMessage,
-    ImplV8Context, ImplV8Handler, ImplV8Value, ProcessId, V8Context, V8Handler,
+    CefString, DictionaryValue, ImplBrowser, ImplDictionaryValue, ImplFrame, ImplListValue,
+    ImplProcessMessage, ImplV8Context, ImplV8Handler, ImplV8Value, ProcessId, V8Context, V8Handler,
     V8Propertyattribute, V8Value, WrapV8Handler, dictionary_value_create, list_value_create,
     process_message_create, v8_value_create_function, v8_value_create_null, v8_value_create_object,
     v8_value_create_promise, v8_value_create_string, wrap_v8_handler,
 };
 use ozmux_browser_cef_protocol::wire::{BrowserExtraContext, BrowserRole};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::handlers::render_process::RenderState;
 use crate::process_message::{
@@ -49,6 +49,11 @@ thread_local! {
 struct RenderBindingState {
     pending_calls: HashMap<String, V8Value>,
     pending_subs: HashMap<String, SubChannel>,
+    /// Parallel index: which pending call/sub ids belong to which browser.
+    /// Used by [`clear_browser`] when a browser is destroyed so we don't
+    /// leave dangling Promises that never resolve or async iterators that
+    /// never error out. Each id appears in exactly one bucket.
+    by_browser: HashMap<i32, HashSet<String>>,
     next_id: u64,
 }
 
@@ -67,6 +72,71 @@ impl RenderBindingState {
         self.next_id += 1;
         format!("{}{}", prefix, self.next_id)
     }
+
+    fn register_pending(&mut self, browser_id: i32, id: String) {
+        self.by_browser.entry(browser_id).or_default().insert(id);
+    }
+
+    fn forget_pending(&mut self, id: &str) {
+        // Cheap: the entry is in at most one browser's bucket, so we walk
+        // until found. Browser counts per renderer process are small.
+        let mut empty_bucket: Option<i32> = None;
+        for (bid, set) in self.by_browser.iter_mut() {
+            if set.remove(id) {
+                if set.is_empty() {
+                    empty_bucket = Some(*bid);
+                }
+                break;
+            }
+        }
+        if let Some(bid) = empty_bucket {
+            self.by_browser.remove(&bid);
+        }
+    }
+}
+
+/// Rejects every in-flight `call()` Promise and errors every active
+/// `subscribe()` AsyncIterable that belongs to `browser_id`. Called from
+/// `OzmuxRenderProcessHandler::on_browser_destroyed` so consumers see a
+/// concrete failure (instead of a Promise that never settles) when the
+/// host yanks the browser mid-call.
+pub(crate) fn clear_browser(browser_id: i32) {
+    let ids = RENDER_STATE.with(|cell| {
+        cell.borrow_mut()
+            .by_browser
+            .remove(&browser_id)
+            .unwrap_or_default()
+    });
+    if ids.is_empty() {
+        return;
+    }
+    let err_msg = "browser destroyed before response";
+    RENDER_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        for id in ids {
+            if let Some(promise) = state.pending_calls.remove(&id) {
+                promise.reject_promise(Some(&CefString::from(err_msg)));
+                continue;
+            }
+            if let Some(mut ch) = state.pending_subs.remove(&id) {
+                ch.error = Some(err_msg.to_string());
+                ch.done = true;
+                if let Some(waker) = ch.waker.take() {
+                    waker.reject_promise(Some(&CefString::from(err_msg)));
+                }
+            }
+        }
+    });
+}
+
+/// Returns the V8 host browser's identifier for the current V8 context.
+/// Used when registering a fresh pending call/subscription so [`clear_browser`]
+/// can find and reject it later on `on_browser_destroyed`.
+fn current_browser_id() -> Option<i32> {
+    let ctx = cef::v8_context_get_current_context()?;
+    let frame = ctx.frame()?;
+    let browser = frame.browser()?;
+    Some(browser.identifier())
 }
 
 /// Called by `OzmuxRenderProcessHandler::on_process_message_received` when a
@@ -85,7 +155,14 @@ pub(crate) fn deliver_call_response(payload_json: &str) {
         CallResponse::Result { id, payload } => (id, Ok(payload)),
         CallResponse::Error { id, message, .. } => (id, Err(message)),
     };
-    let promise = RENDER_STATE.with(|cell| cell.borrow_mut().pending_calls.remove(&id));
+    let promise = RENDER_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        let promise = state.pending_calls.remove(&id);
+        if promise.is_some() {
+            state.forget_pending(&id);
+        }
+        promise
+    });
     let Some(promise) = promise else {
         tracing::warn!(id = %id, "call response for unknown id (dropped)");
         return;
@@ -356,15 +433,20 @@ wrap_v8_handler! {
                 return 1;
             };
             let id = RENDER_STATE.with(|cell| cell.borrow_mut().mint_id("c"));
+            let browser_id = current_browser_id();
             RENDER_STATE.with(|cell| {
-                cell.borrow_mut()
-                    .pending_calls
-                    .insert(id.clone(), promise.clone());
+                let mut state = cell.borrow_mut();
+                state.pending_calls.insert(id.clone(), promise.clone());
+                if let Some(bid) = browser_id {
+                    state.register_pending(bid, id.clone());
+                }
             });
             if !send_call_request(&id, &name_str, &payload_json) {
                 // Failed to send; reject immediately rather than leak the entry.
                 RENDER_STATE.with(|cell| {
-                    cell.borrow_mut().pending_calls.remove(&id);
+                    let mut state = cell.borrow_mut();
+                    state.pending_calls.remove(&id);
+                    state.forget_pending(&id);
                 });
                 promise.reject_promise(Some(&CefString::from("ozmux.call: send failed")));
             }
@@ -407,15 +489,22 @@ wrap_v8_handler! {
                 _ => "null".to_string(),
             };
             let id = RENDER_STATE.with(|cell| cell.borrow_mut().mint_id("s"));
+            let browser_id = current_browser_id();
             RENDER_STATE.with(|cell| {
-                cell.borrow_mut().pending_subs.insert(
+                let mut state = cell.borrow_mut();
+                state.pending_subs.insert(
                     id.clone(),
                     SubChannel { queue: VecDeque::new(), done: false, error: None, waker: None },
                 );
+                if let Some(bid) = browser_id {
+                    state.register_pending(bid, id.clone());
+                }
             });
             if !send_sub_open(&id, &name_str, &params_json) {
                 RENDER_STATE.with(|cell| {
-                    cell.borrow_mut().pending_subs.remove(&id);
+                    let mut state = cell.borrow_mut();
+                    state.pending_subs.remove(&id);
+                    state.forget_pending(&id);
                 });
                 if let Some(ex) = exception {
                     *ex = CefString::from("ozmux.subscribe: send failed");
@@ -517,7 +606,14 @@ wrap_v8_handler! {
             _retval: Option<&mut Option<V8Value>>,
             _exception: Option<&mut CefString>,
         ) -> ::std::os::raw::c_int {
-            let removed = RENDER_STATE.with(|cell| cell.borrow_mut().pending_subs.remove(&self.id));
+            let removed = RENDER_STATE.with(|cell| {
+                let mut state = cell.borrow_mut();
+                let removed = state.pending_subs.remove(&self.id);
+                if removed.is_some() {
+                    state.forget_pending(&self.id);
+                }
+                removed
+            });
             if removed.is_some() {
                 send_sub_cancel(&self.id);
             }
@@ -664,6 +760,32 @@ mod tests {
         assert_ne!(a, b);
         assert!(a.starts_with('c'));
         assert!(b.starts_with('c'));
+    }
+
+    #[test]
+    fn forget_pending_removes_from_by_browser() {
+        let mut s = RenderBindingState::default();
+        s.register_pending(7, "c1".to_string());
+        s.register_pending(7, "s1".to_string());
+        s.register_pending(8, "c2".to_string());
+
+        s.forget_pending("c1");
+        assert!(s.by_browser.get(&7).unwrap().contains("s1"));
+        assert!(!s.by_browser.get(&7).unwrap().contains("c1"));
+
+        s.forget_pending("s1");
+        assert!(s.by_browser.get(&7).is_none(), "empty bucket pruned");
+
+        s.forget_pending("c2");
+        assert!(s.by_browser.is_empty());
+    }
+
+    #[test]
+    fn forget_pending_no_op_for_unknown_id() {
+        let mut s = RenderBindingState::default();
+        s.register_pending(1, "a".to_string());
+        s.forget_pending("zzz");
+        assert!(s.by_browser.get(&1).unwrap().contains("a"));
     }
 
     // NOTE: silence unused warnings for the param of `deliver_call_response`

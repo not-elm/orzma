@@ -76,6 +76,11 @@ wrap_render_process_handler! {
         fn on_browser_destroyed(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else { return };
             let id = browser.identifier();
+            // Reject any in-flight V8 call() Promises or subscribe()
+            // async-iterators bound to this browser. Must happen before
+            // STATES is cleared so consumers still have a chance to see
+            // a concrete error rather than a Promise that never resolves.
+            crate::v8_binding::clear_browser(id);
             STATES.with(|cell| {
                 cell.borrow_mut().remove(&id);
             });
