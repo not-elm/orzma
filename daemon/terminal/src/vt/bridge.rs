@@ -367,8 +367,13 @@ const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 /// Emits a frame for the damage stashed on `VtState` and disarms the
 /// Coalescer. Called by [`run_bridge_task`] from both the chunk-immediate-flush
 /// path and the deadline-fires path.
+#[tracing::instrument(skip_all, fields(kind = tracing::field::Empty, reason = tracing::field::Empty, frame_seq = tracing::field::Empty))]
 fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer) {
     let mut state = vt_state.lock().expect("vt_state poisoned");
+    let reason = state
+        .pending_emit_reason
+        .take()
+        .unwrap_or(EmitReason::Deadline);
 
     let Some(mut dirty) = state.pending_damage.take() else {
         coalescer.disarm();
@@ -503,6 +508,9 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
             RenderFrame::Snapshot(_) => "snapshot",
             RenderFrame::Delta(_) => "delta",
         };
+        tracing::Span::current().record("kind", kind_label);
+        tracing::Span::current().record("reason", reason.as_static_str());
+        tracing::Span::current().record("frame_seq", binary_seq);
         counter!("ozmux_frames_emit_total", "kind" => kind_label).increment(1);
 
         // CAT-007 commit phase: the pending mode transition has been bundled into
