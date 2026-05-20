@@ -148,7 +148,7 @@ impl TerminalService {
         let scrollback = ScrollbackBuffer::new();
         let (event_sender, _) = broadcast::channel(1024);
 
-        let (vt_chunk_tx, vt_chunk_rx) = tokio::sync::mpsc::channel::<Bytes>(128);
+        let (vt_chunk_tx, vt_chunk_rx) = tokio::sync::mpsc::channel::<Bytes>(512);
 
         spawn_pty_reader(
             reader,
