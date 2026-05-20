@@ -20,6 +20,7 @@ pub mod handlers;
 pub mod input;
 pub mod pool;
 pub mod post_command;
+pub(crate) mod process_message;
 pub mod profile;
 pub mod scheme;
 pub(crate) mod v8_binding;

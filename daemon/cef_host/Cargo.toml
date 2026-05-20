@@ -21,7 +21,13 @@ fs2 = "0.4"
 mime_guess = { workspace = true }
 ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
 ozmux_extension = { path = "../extension" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+ozmux_multiplexer = { path = "../multiplexer" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio-util = { workspace = true, features = ["codec"] }
+futures-util = { workspace = true }
+uuid = { workspace = true }
 bytes = "1"
 thiserror = { workspace = true }
 tracing = "0.1"
