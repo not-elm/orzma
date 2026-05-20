@@ -160,10 +160,6 @@ wrap_resource_handler! {
             }
         }
 
-        #[expect(
-            clippy::not_unsafe_ptr_arg_deref,
-            reason = "fn signature is dictated by wrap_resource_handler! macro from cef-rs; the raw-ptr write happens inside a documented unsafe block below"
-        )]
         fn read(
             &self,
             data_out: *mut u8,
