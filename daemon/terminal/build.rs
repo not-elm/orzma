@@ -20,7 +20,9 @@ fn main() {
 
     let lock_text = std::fs::read_to_string(&lock).unwrap();
     let parsed: toml::Value = toml::from_str(&lock_text).unwrap();
-    let packages = parsed["package"].as_array().expect("Cargo.lock missing [package]");
+    let packages = parsed["package"]
+        .as_array()
+        .expect("Cargo.lock missing [package]");
     let version = packages
         .iter()
         .find(|p| p["name"].as_str() == Some("alacritty_terminal"))

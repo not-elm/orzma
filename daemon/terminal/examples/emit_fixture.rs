@@ -55,7 +55,9 @@ fn main() {
         &mode_change(3, vec!["mouse-sgr-1006".into()], vec!["alt-screen".into()]),
     );
 
-    println!("emit_fixture: 6 snapshots/deltas + 3 text fixtures written (incl. produced_at pairs)");
+    println!(
+        "emit_fixture: 6 snapshots/deltas + 3 text fixtures written (incl. produced_at pairs)"
+    );
 }
 
 fn write_snapshot(dir: &Path, name: &str, snap: &FrameSnapshot) {

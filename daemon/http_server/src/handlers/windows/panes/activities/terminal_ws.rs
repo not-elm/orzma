@@ -1,12 +1,12 @@
 use crate::AppState;
 use crate::error::HttpError;
 use crate::state::ActivityKindDiscriminant;
+#[cfg(not(debug_assertions))]
+use axum::response::IntoResponse;
 use axum::{
     extract::{FromRequest, Path, Query, State, WebSocketUpgrade},
     response::Response,
 };
-#[cfg(not(debug_assertions))]
-use axum::response::IntoResponse;
 use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
 use serde::Deserialize;
 
@@ -45,14 +45,11 @@ pub async fn terminal_ws(
         .ensure_activity_kind(&wid, &pid, &aid, ActivityKindDiscriminant::Terminal)
         .await?;
 
-    let replay_fixture = req
-        .uri()
-        .query()
-        .and_then(|q| {
-            url::form_urlencoded::parse(q.as_bytes())
-                .find(|(k, _)| k == "replay")
-                .map(|(_, v)| v.into_owned())
-        });
+    let replay_fixture = req.uri().query().and_then(|q| {
+        url::form_urlencoded::parse(q.as_bytes())
+            .find(|(k, _)| k == "replay")
+            .map(|(_, v)| v.into_owned())
+    });
 
     if let Some(fixture) = replay_fixture {
         #[cfg(debug_assertions)]
@@ -121,9 +118,7 @@ async fn run_replay_session(fixture: String, ws: axum::extract::ws::WebSocket) {
             "bridge_started_at_unix_us": bridge_started_at_unix_us,
         });
         if ws_tx
-            .send(axum::extract::ws::Message::Text(
-                hello.to_string().into(),
-            ))
+            .send(axum::extract::ws::Message::Text(hello.to_string().into()))
             .await
             .is_err()
         {

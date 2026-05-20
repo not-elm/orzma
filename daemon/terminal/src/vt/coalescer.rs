@@ -73,7 +73,7 @@ impl Coalescer {
     /// When disarmed, returns a future that never resolves (`future::pending`).
     pub async fn wait_deadline(&self) {
         match self.next_deadline() {
-            Some(deadline) => sleep_until(deadline.into()).await,
+            Some(deadline) => sleep_until(deadline).await,
             None => std::future::pending::<()>().await,
         }
     }

@@ -13,7 +13,9 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn t01_metrics_returns_404_when_env_unset() {
     // SAFETY: tests run serial (--test-threads=1 in CI).
-    unsafe { std::env::remove_var("OZMUX_METRICS"); }
+    unsafe {
+        std::env::remove_var("OZMUX_METRICS");
+    }
     let app = build_test_router();
     let response = app
         .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
@@ -25,7 +27,9 @@ async fn t01_metrics_returns_404_when_env_unset() {
 #[tokio::test]
 async fn t02_metrics_returns_200_when_env_set() {
     // SAFETY: tests run serial.
-    unsafe { std::env::set_var("OZMUX_METRICS", "1"); }
+    unsafe {
+        std::env::set_var("OZMUX_METRICS", "1");
+    }
     let _ = ozmux_http_server::handlers::metrics::maybe_install();
     let app = build_test_router();
     let response = app
@@ -33,7 +37,9 @@ async fn t02_metrics_returns_200_when_env_set() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    unsafe { std::env::remove_var("OZMUX_METRICS"); }
+    unsafe {
+        std::env::remove_var("OZMUX_METRICS");
+    }
 }
 
 fn build_test_router() -> axum::Router {

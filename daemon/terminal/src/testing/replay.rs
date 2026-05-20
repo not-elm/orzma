@@ -57,7 +57,7 @@ pub enum RecvOutcome {
 ///
 /// # Determinism contract (caller's responsibility)
 ///
-/// For deterministic Vec<WireMessage> output across runs, call from a
+/// For deterministic `Vec<WireMessage>` output across runs, call from a
 /// `current_thread` tokio runtime with `start_paused(true)`. The
 /// `?replay=` WS route invokes this from the live daemon runtime
 /// (not paused) — output may vary across runs in that case, which is

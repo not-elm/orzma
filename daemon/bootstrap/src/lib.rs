@@ -54,7 +54,7 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
-/// Guard returned by [`init_tracing`]. Holds the tracing-chrome `FlushGuard`
+/// Guard returned by `init_tracing`. Holds the tracing-chrome `FlushGuard`
 /// (when active) so its `Drop` impl flushes the writer thread on daemon
 /// shutdown. **Must be held as a local variable in `run()` for the entire
 /// daemon lifetime — storing it in a `static` or `OnceLock` would prevent
@@ -151,10 +151,7 @@ fn init_tracing() -> TraceGuard {
         }
     }
 
-    Registry::default()
-        .with(env_filter)
-        .with(fmt_layer)
-        .init();
+    Registry::default().with(env_filter).with(fmt_layer).init();
     TraceGuard::None
 }
 

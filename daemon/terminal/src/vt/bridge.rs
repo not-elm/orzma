@@ -355,9 +355,13 @@ pub(crate) async fn run_bridge_task(
     config: BridgeConfig,
     activity_id: ActivityId,
 ) {
-    tracing::Span::current().record("activity_id", &activity_id.as_ref());
+    tracing::Span::current().record("activity_id", activity_id.as_ref());
     if config.spawn_gauge {
-        let tx_for_gauge = vt_state.lock().expect("vt_state poisoned").wire_broadcast.clone();
+        let tx_for_gauge = vt_state
+            .lock()
+            .expect("vt_state poisoned")
+            .wire_broadcast
+            .clone();
         let depth_gauge = gauge!("ozmux_broadcast_queue_depth", "kind" => "terminal");
         let handle = tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));

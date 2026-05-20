@@ -37,10 +37,8 @@ fn build_records() -> Vec<TapeRecord> {
 
     // Phase 2: 10 frames with OSC 8 hyperlinks
     for i in 0..10 {
-        let chunk = format!(
-            "\x1b[1;1H\x1b]8;;https://example.com/{i}\x1b\\link-{i}\x1b]8;;\x1b\\"
-        )
-        .into_bytes();
+        let chunk = format!("\x1b[1;1H\x1b]8;;https://example.com/{i}\x1b\\link-{i}\x1b]8;;\x1b\\")
+            .into_bytes();
         records.push(TapeRecord {
             ts_ns_offset: bump(&mut ts, 16_000_000),
             bytes: chunk,
