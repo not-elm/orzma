@@ -152,6 +152,10 @@ async fn init_runtime() -> anyhow::Result<Arc<RuntimeRoot>> {
 /// resulting handles. On spawn error or handshake timeout, returns a
 /// pre-dead handle set so the daemon comes up with the browser
 /// backend disabled rather than blocking `/health`.
+#[expect(
+    deprecated,
+    reason = "Plan 3 will replace dead_handles_after_spawn_failure with a direct StubCefDispatcher::dead() fallback"
+)]
 async fn acquire_cef_host(
     runtime: &RuntimeRoot,
 ) -> Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> {

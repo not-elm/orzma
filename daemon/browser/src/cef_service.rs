@@ -236,6 +236,9 @@ fn default_cef_host_bin() -> std::path::PathBuf {
 /// daemon unit tests that build `AppState` but never exercise the cef path.
 /// Must be called from within a Tokio runtime context.
 #[doc(hidden)]
+#[deprecated(
+    note = "Use ozmux_browser::cef_dispatcher::stub::StubCefDispatcher::dead() instead"
+)]
 pub fn stub_for_tests() -> CefHostHandles {
     let (tx, _rx) = mpsc::channel::<HostCommand>(8);
     let (_ev_tx, ev_rx) = mpsc::channel::<HostEvent>(8);
@@ -256,6 +259,9 @@ pub fn stub_for_tests() -> CefHostHandles {
 /// by the daemon-bootstrap fallback when `spawn_and_handshake` fails — terminal
 /// activities continue to function and every Browser Activity request is
 /// short-circuited with `BrowserUnavailable` by the existing `is_dead` checks.
+#[deprecated(
+    note = "Live dispatcher's failure path now returns Arc<dyn CefDispatcher> directly"
+)]
 pub fn dead_handles_after_spawn_failure() -> CefHostHandles {
     let (tx, _rx) = mpsc::channel::<HostCommand>(8);
     let (_ev_tx, ev_rx) = mpsc::channel::<HostEvent>(8);
