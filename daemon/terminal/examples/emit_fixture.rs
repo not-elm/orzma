@@ -10,7 +10,7 @@
 //! `make test-wire-goldens` (which uses `tools/bin-to-diag.sh`).
 use ozmux_terminal::vt::{
     Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkUri,
-    HyperlinkWireId, ModeFrame, RenderFrame, Row, Run, SnapshotReason, encode,
+    HyperlinkWireId, RenderFrame, Row, Run, SnapshotReason, encode,
 };
 use std::fs;
 use std::path::Path;
@@ -227,6 +227,5 @@ fn hello_json() -> serde_json::Value {
 }
 
 fn mode_change(seq: u32, added: Vec<String>, removed: Vec<String>) -> serde_json::Value {
-    let mf = ModeFrame::new(seq, added, removed);
-    serde_json::to_value(mf).expect("ModeFrame to_value")
+    serde_json::json!({ "kind": "mode", "seq": seq, "added": added, "removed": removed })
 }

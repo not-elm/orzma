@@ -27,8 +27,6 @@ pub enum WireMessage {
 pub enum RingEntry {
     /// A binary-encoded MessagePack frame.
     Binary { seq: u32, encoded: Bytes },
-    /// A mode-change JSON text frame.
-    Mode { seq: u32, text: String },
     /// An error JSON text frame.
     Error { seq: u32, text: String },
 }
@@ -36,16 +34,14 @@ pub enum RingEntry {
 impl RingEntry {
     fn seq(&self) -> u32 {
         match self {
-            RingEntry::Binary { seq, .. }
-            | RingEntry::Mode { seq, .. }
-            | RingEntry::Error { seq, .. } => *seq,
+            RingEntry::Binary { seq, .. } | RingEntry::Error { seq, .. } => *seq,
         }
     }
 
     fn byte_cost(&self) -> usize {
         match self {
             RingEntry::Binary { encoded, .. } => encoded.len(),
-            RingEntry::Mode { text, .. } | RingEntry::Error { text, .. } => text.len(),
+            RingEntry::Error { text, .. } => text.len(),
         }
     }
 }
@@ -76,11 +72,6 @@ impl FrameRing {
     /// silently; Phase 2's 4 MiB frame size cap prevents this in practice.
     pub fn push_binary(&mut self, seq: u32, encoded: Bytes) {
         self.push_entry(RingEntry::Binary { seq, encoded });
-    }
-
-    /// Pushes a mode-change JSON text frame into the ring.
-    pub fn push_mode(&mut self, seq: u32, text: String) {
-        self.push_entry(RingEntry::Mode { seq, text });
     }
 
     /// Pushes an error JSON text frame into the ring.
@@ -127,9 +118,7 @@ impl FrameRing {
                     seq: *seq,
                     encoded: encoded.clone(),
                 },
-                RingEntry::Mode { text, .. } | RingEntry::Error { text, .. } => {
-                    WireMessage::Text(text.clone())
-                }
+                RingEntry::Error { text, .. } => WireMessage::Text(text.clone()),
             });
         }
         Some(out)
@@ -222,28 +211,6 @@ mod tests {
         match msg {
             WireMessage::Text(s) => assert_eq!(s, "hello"),
             WireMessage::Binary { .. } => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn replay_returns_mixed_binary_and_mode_in_insertion_order() {
-        let mut ring = FrameRing::new(64 * 1024);
-        ring.push_binary(1, Bytes::from_static(b"binary-1"));
-        ring.push_mode(2, "mode-2".to_string());
-        ring.push_binary(3, Bytes::from_static(b"binary-3"));
-        let out = ring.replay(0).expect("contiguous");
-        assert_eq!(out.len(), 3);
-        match &out[0] {
-            WireMessage::Binary { seq, .. } => assert_eq!(*seq, 1),
-            _ => panic!("expected Binary, got {:?}", &out[0]),
-        }
-        match &out[1] {
-            WireMessage::Text(t) => assert_eq!(t, "mode-2"),
-            _ => panic!("expected Text, got {:?}", &out[1]),
-        }
-        match &out[2] {
-            WireMessage::Binary { seq, .. } => assert_eq!(*seq, 3),
-            _ => panic!("expected Binary, got {:?}", &out[2]),
         }
     }
 

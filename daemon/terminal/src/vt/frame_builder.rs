@@ -5,11 +5,11 @@
 //! `vt_state` lock; this module performs no locking.
 
 use crate::vt::frame::{
-    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, ModeFrame, Row,
+    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, Row,
     Run, SnapshotReason, style,
 };
 use crate::vt::hyperlink::{HyperlinkInterner, HyperlinkUri, HyperlinkWireId};
-use crate::vt::mode_diff::{TRACKED_MODES, diff_mode};
+use crate::vt::mode_diff::TRACKED_MODES;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
@@ -37,20 +37,6 @@ pub(super) fn collect_dirty_rows<T>(term: &mut Term<T>) -> DirtyRows {
         TermDamage::Full => DirtyRows::Full,
         TermDamage::Partial(iter) => DirtyRows::Rows(iter.map(|d| d.line as u16).collect()),
     }
-}
-
-/// Computes a `ModeFrame` from a `TermMode` transition. Returns `None` when
-/// no tracked flag changed.
-pub(super) fn build_mode(prev: TermMode, curr: TermMode, seq: u32) -> Option<ModeFrame> {
-    let change = diff_mode(prev, curr);
-    if change.is_empty() {
-        return None;
-    }
-    Some(ModeFrame::new(
-        seq,
-        change.added.into_iter().map(String::from).collect(),
-        change.removed.into_iter().map(String::from).collect(),
-    ))
 }
 
 /// Builds a full-screen snapshot frame.
@@ -363,7 +349,7 @@ mod tests {
     use crate::vt::frame_ring::WireMessage;
     use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
     use alacritty_terminal::grid::Scroll;
-    use alacritty_terminal::term::{Config, TermMode};
+    use alacritty_terminal::term::Config;
     use std::sync::Arc;
     use tokio::sync::{broadcast, mpsc};
 
@@ -393,22 +379,6 @@ mod tests {
         let mut term = make_term(10, 3);
         // First damage query returns Full per alacritty contract.
         assert_eq!(collect_dirty_rows(&mut term), DirtyRows::Full);
-    }
-
-    #[test]
-    fn build_mode_enter_alt_screen() {
-        let prev = TermMode::empty();
-        let curr = TermMode::ALT_SCREEN;
-        let m = build_mode(prev, curr, 42).expect("transition present");
-        assert_eq!(m.seq, 42);
-        assert_eq!(m.added, vec!["alt-screen".to_string()]);
-        assert!(m.removed.is_empty());
-    }
-
-    #[test]
-    fn build_mode_no_change_returns_none() {
-        let m = TermMode::BRACKETED_PASTE;
-        assert!(build_mode(m, m, 1).is_none());
     }
 
     #[test]

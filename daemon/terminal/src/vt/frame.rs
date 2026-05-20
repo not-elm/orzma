@@ -204,45 +204,6 @@ pub enum RenderFrame {
     Delta(FrameDelta),
 }
 
-/// Wire mode-change announcement (JSON text frame).
-///
-/// Emitted when `Term::mode()` changes between two `parser.advance` calls.
-/// Carries a global `seq` consuming a slot in the frame sequence space,
-/// matching the wire spec's "every server frame has seq" requirement.
-/// Not stored in `frame_ring` — clients recover from missed mode frames
-/// via the next snapshot's `modes` field.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModeFrame {
-    /// Frame discriminator. Always `ModeKind::Mode` (serializes to `"mode"`).
-    pub kind: ModeKind,
-    /// Monotonic frame sequence number.
-    pub seq: u32,
-    /// Mode names that transitioned from unset to set.
-    pub added: Vec<String>,
-    /// Mode names that transitioned from set to unset.
-    pub removed: Vec<String>,
-}
-
-/// Discriminator value for [`ModeFrame`]. Unit enum so serde emits the
-/// literal string `"mode"` on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModeKind {
-    /// The only valid value — denotes a mode-change announcement.
-    Mode,
-}
-
-impl ModeFrame {
-    /// Constructs a mode frame with the given seq from a transition.
-    pub fn new(seq: u32, added: Vec<String>, removed: Vec<String>) -> Self {
-        Self {
-            kind: ModeKind::Mode,
-            seq,
-            added,
-            removed,
-        }
-    }
-}
 
 /// Encodes a wire value as map-keyed MessagePack so field names are preserved
 /// for the frontend's msgpackr decoder.
@@ -500,20 +461,6 @@ mod tests {
         let bytes = encode(&snap).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(decoded, snap);
-    }
-
-    #[test]
-    fn mode_frame_serializes_with_kind_and_seq() {
-        let m = ModeFrame::new(
-            17,
-            vec!["alt-screen".to_string()],
-            vec!["mouse-vt200".to_string()],
-        );
-        let json = serde_json::to_string(&m).unwrap();
-        assert!(json.contains(r#""kind":"mode""#));
-        assert!(json.contains(r#""seq":17"#));
-        assert!(json.contains(r#""added":["alt-screen"]"#));
-        assert!(json.contains(r#""removed":["mouse-vt200"]"#));
     }
 
     #[test]
