@@ -176,12 +176,19 @@ function applyDelta(grid: Grid, frame: FrameDelta): void {
   grid.cursor = frame.cursor;
 }
 
+/**
+ * Module-scope segmenter for grapheme clustering. Stateless for the
+ * `'en' + 'grapheme'` configuration (locale-agnostic per Unicode 15.1
+ * default extended grapheme clusters); hoisting amortizes construction
+ * across all expandRunsToRow calls instead of allocating once per call.
+ */
+const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
 /** Reverses run coalescing: returns one Cell per grapheme cluster. */
 export function expandRunsToRow(runs: readonly Run[], _cols: number): Cell[] {
   const cells: Cell[] = [];
-  const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
   for (const run of runs) {
-    for (const { segment } of segmenter.segment(run.text)) {
+    for (const { segment } of GRAPHEME_SEGMENTER.segment(run.text)) {
       const w = widthOfGrapheme(segment);
       cells.push({
         text: segment,
