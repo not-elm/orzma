@@ -26,6 +26,18 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
 
+/// Error returned when a `HostCommand` cannot be delivered to cef_host.
+#[derive(thiserror::Error, Debug)]
+pub enum DispatchError {
+    /// The cef_host control channel has been closed (cef_host died or the
+    /// supervisor was dropped).
+    #[error("cef_host control channel closed")]
+    ChannelClosed,
+    /// The cef_host is marked permanently unavailable.
+    #[error("cef_host marked dead: {0}")]
+    Dead(String),
+}
+
 /// A framed payload that must be delivered with an ancillary fd via SCM_RIGHTS.
 struct ScmSend {
     payload: Vec<u8>,

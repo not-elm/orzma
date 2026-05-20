@@ -1,6 +1,7 @@
 //! Headless browser service for ozmux (cef path).
 
 pub mod cef_backend;
+pub mod cef_dispatcher;
 pub mod cef_registry;
 pub mod cef_service;
 pub mod cookie_extractor;
