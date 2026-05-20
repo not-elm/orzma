@@ -9,8 +9,9 @@
 
 use cef::args::Args;
 use cef::rc::Rc as _;
-use cef::{App, ImplApp, WrapApp, wrap_app};
+use cef::{App, ImplApp, RenderProcessHandler, WrapApp, wrap_app};
 use ozmux_cef_host::append_flag;
+use ozmux_cef_host::handlers::render_process::OzmuxRenderProcessHandler;
 use ozmux_cef_host::scheme::register_ozmux_ext;
 
 wrap_app! {
@@ -39,6 +40,10 @@ wrap_app! {
                 return;
             };
             register_ozmux_ext(registrar);
+        }
+
+        fn render_process_handler(&self) -> Option<RenderProcessHandler> {
+            Some(OzmuxRenderProcessHandler::new())
         }
     }
 }
