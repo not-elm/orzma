@@ -33,7 +33,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
 use crate::handlers::render_process::RenderState;
-use crate::process_message::{MSG_CALL_REQUEST, MSG_SUB_CANCEL, MSG_SUB_OPEN};
+use crate::process_message::{
+    CallResponse, HandlerOutgoingFrame, MSG_CALL_REQUEST, MSG_SUB_CANCEL, MSG_SUB_OPEN, SubEvent,
+};
 
 thread_local! {
     /// Per-render-thread registry. Each entry tracks an in-flight `call()`
@@ -72,34 +74,26 @@ impl RenderBindingState {
 /// its V8 Promise, and removes the entry. Must be called with the V8 context
 /// already entered.
 pub(crate) fn deliver_call_response(payload_json: &str) {
-    let parsed: serde_json::Value = match serde_json::from_str(payload_json) {
+    let response: CallResponse = match serde_json::from_str(payload_json) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(error = %e, "call response payload is not JSON");
+            tracing::warn!(error = %e, "call response payload not decodable");
             return;
         }
     };
-    let id = parsed
-        .get("id")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let Some(id) = id else {
-        tracing::warn!("call response missing id field");
-        return;
+    let (id, outcome) = match response {
+        CallResponse::Result { id, payload } => (id, Ok(payload)),
+        CallResponse::Error { id, message, .. } => (id, Err(message)),
     };
-    let kind = parsed.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let promise = RENDER_STATE.with(|cell| cell.borrow_mut().pending_calls.remove(&id));
     let Some(promise) = promise else {
         tracing::warn!(id = %id, "call response for unknown id (dropped)");
         return;
     };
-    match kind {
-        "result" => {
-            let inner = parsed
-                .get("payload")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let payload_str = serde_json::to_string(&inner).unwrap_or_else(|_| "null".to_string());
+    match outcome {
+        Ok(payload) => {
+            let payload_str =
+                serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string());
             let Some(mut v) = v8_value_create_string(Some(&CefString::from(payload_str.as_str())))
             else {
                 tracing::error!("v8_value_create_string returned None resolving call");
@@ -107,16 +101,8 @@ pub(crate) fn deliver_call_response(payload_json: &str) {
             };
             promise.resolve_promise(Some(&mut v));
         }
-        "error" => {
-            let msg = parsed
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("ozmux call error")
-                .to_string();
+        Err(msg) => {
             promise.reject_promise(Some(&CefString::from(msg.as_str())));
-        }
-        other => {
-            tracing::warn!(kind = %other, "unexpected call response kind");
         }
     }
 }
@@ -126,54 +112,34 @@ pub(crate) fn deliver_call_response(payload_json: &str) {
 /// and resolves any waiting `next()` Promise. Must be called with the V8
 /// context already entered.
 pub(crate) fn deliver_sub_event(payload_json: &str) {
-    let parsed: serde_json::Value = match serde_json::from_str(payload_json) {
+    let event: SubEvent = match serde_json::from_str(payload_json) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(error = %e, "sub event payload is not JSON");
+            tracing::warn!(error = %e, "sub event payload not decodable");
             return;
         }
     };
-    let id = parsed
-        .get("id")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let Some(id) = id else {
-        tracing::warn!("sub event missing id field");
-        return;
+    let id = match &event {
+        SubEvent::Data { id, .. } | SubEvent::Complete { id } | SubEvent::Error { id, .. } => {
+            id.clone()
+        }
     };
-    let kind = parsed
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
     RENDER_STATE.with(|cell| {
         let mut state = cell.borrow_mut();
         let Some(ch) = state.pending_subs.get_mut(&id) else {
             return;
         };
-        match kind.as_str() {
-            "sub.data" => {
-                let inner = parsed
-                    .get("payload")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                let s = serde_json::to_string(&inner).unwrap_or_else(|_| "null".to_string());
+        match event {
+            SubEvent::Data { payload, .. } => {
+                let s = serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string());
                 ch.queue.push_back(s);
             }
-            "sub.complete" => {
+            SubEvent::Complete { .. } => {
                 ch.done = true;
             }
-            "sub.error" => {
-                let msg = parsed
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("ozmux subscribe error")
-                    .to_string();
-                ch.error = Some(msg);
+            SubEvent::Error { message, .. } => {
+                ch.error = Some(message);
                 ch.done = true;
-            }
-            other => {
-                tracing::warn!(kind = %other, "unexpected sub event kind");
             }
         }
         if let Some(waker) = ch.waker.take() {
@@ -561,28 +527,49 @@ wrap_v8_handler! {
 }
 
 fn send_call_request(id: &str, name: &str, payload_json: &str) -> bool {
-    let payload = format!(
-        r#"{{"id":{},"name":{},"payload":{}}}"#,
-        json_str(id),
-        json_str(name),
-        payload_json
-    );
-    send_process_message(MSG_CALL_REQUEST, &payload)
+    let payload = parse_inner_json(payload_json);
+    let frame = HandlerOutgoingFrame::Call {
+        id: id.to_string(),
+        name: name.to_string(),
+        payload,
+    };
+    let Ok(s) = serde_json::to_string(&frame) else {
+        tracing::error!("serialize HandlerOutgoingFrame::Call failed");
+        return false;
+    };
+    send_process_message(MSG_CALL_REQUEST, &s)
 }
 
 fn send_sub_open(id: &str, name: &str, params_json: &str) -> bool {
-    let payload = format!(
-        r#"{{"id":{},"name":{},"params":{}}}"#,
-        json_str(id),
-        json_str(name),
-        params_json
-    );
-    send_process_message(MSG_SUB_OPEN, &payload)
+    let params = parse_inner_json(params_json);
+    let frame = HandlerOutgoingFrame::SubOpen {
+        id: id.to_string(),
+        name: name.to_string(),
+        params,
+    };
+    let Ok(s) = serde_json::to_string(&frame) else {
+        tracing::error!("serialize HandlerOutgoingFrame::SubOpen failed");
+        return false;
+    };
+    send_process_message(MSG_SUB_OPEN, &s)
 }
 
 fn send_sub_cancel(id: &str) -> bool {
-    let payload = format!(r#"{{"id":{}}}"#, json_str(id));
-    send_process_message(MSG_SUB_CANCEL, &payload)
+    let frame = HandlerOutgoingFrame::SubCancel { id: id.to_string() };
+    let Ok(s) = serde_json::to_string(&frame) else {
+        tracing::error!("serialize HandlerOutgoingFrame::SubCancel failed");
+        return false;
+    };
+    send_process_message(MSG_SUB_CANCEL, &s)
+}
+
+/// Parses a JSON literal received from the JS wrapper. JS always
+/// pre-serializes user payloads with `JSON.stringify` (or sends the literal
+/// `"null"` when `undefined`); a parse failure here means the JS wrapper
+/// passed something non-JSON and we silently coerce to `null` rather than
+/// dropping the call.
+fn parse_inner_json(s: &str) -> serde_json::Value {
+    serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
 }
 
 /// Sends a CEF process message from the current V8 context's main frame to
@@ -610,12 +597,6 @@ fn send_process_message(message_name: &str, payload_json: &str) -> bool {
     args.set_string(0, Some(&CefString::from(payload_json)));
     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
     true
-}
-
-/// Wraps a string as a JSON string literal. Avoids a full `serde_json`
-/// invocation for short ids and names.
-fn json_str(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn build_context_object(state: &RenderState) -> Option<V8Value> {

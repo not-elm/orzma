@@ -28,20 +28,28 @@ pub(crate) const MSG_SUB_CANCEL: &str = "ozmux.sub.cancel";
 /// Browser → render: a `sub.data` / `sub.complete` / `sub.error` event.
 pub(crate) const MSG_SUB_EVENT: &str = "ozmux.sub.event";
 
-// NOTE: CallRequest/SubOpen/SubCancel are the render→browser payloads. The
-// browser-side `OzmuxClient::on_process_message_received` does not deserialize
-// them into these structs — it forwards the raw JSON string straight onto the
-// extension UDS after a kind-field re-stamp. The types are kept here so the
-// V8-side encoder (Task 7c) can build payloads from the same definitions.
-#[allow(
-    dead_code,
-    reason = "render-side payload types consumed by V8 binding in Task 7c"
-)]
+/// Render → browser frames (call.request / sub.open / sub.cancel), tagged
+/// `kind` so the serialized form matches the
+/// `HandlerCallFrame` / `SubOpenFrame` / `SubCancelFrame` shapes that the
+/// Node SDK ships on the extension UDS. The browser-side bridge can
+/// forward the JSON straight onto the UDS without re-shaping it.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub(crate) struct CallRequest {
-    pub id: String,
-    pub name: String,
-    pub payload: Value,
+#[serde(tag = "kind")]
+pub(crate) enum HandlerOutgoingFrame {
+    #[serde(rename = "call")]
+    Call {
+        id: String,
+        name: String,
+        payload: Value,
+    },
+    #[serde(rename = "sub.open")]
+    SubOpen {
+        id: String,
+        name: String,
+        params: Value,
+    },
+    #[serde(rename = "sub.cancel")]
+    SubCancel { id: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -56,26 +64,6 @@ pub(crate) enum CallResponse {
         code: String,
         message: String,
     },
-}
-
-#[allow(
-    dead_code,
-    reason = "render-side payload types consumed by V8 binding in Task 7c"
-)]
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub(crate) struct SubOpen {
-    pub id: String,
-    pub name: String,
-    pub params: Value,
-}
-
-#[allow(
-    dead_code,
-    reason = "render-side payload types consumed by V8 binding in Task 7c"
-)]
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub(crate) struct SubCancel {
-    pub id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -99,15 +87,40 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn call_request_round_trips() {
-        let req = CallRequest {
+    fn call_frame_serializes_with_kind() {
+        let v = HandlerOutgoingFrame::Call {
             id: "c1".to_string(),
             name: "greet".to_string(),
             payload: json!({"who": "world"}),
         };
-        let s = serde_json::to_string(&req).unwrap();
-        let back: CallRequest = serde_json::from_str(&s).unwrap();
-        assert_eq!(req, back);
+        let s = serde_json::to_string(&v).unwrap();
+        assert!(s.contains(r#""kind":"call""#));
+        let back: HandlerOutgoingFrame = serde_json::from_str(&s).unwrap();
+        assert_eq!(v, back);
+    }
+
+    #[test]
+    fn sub_open_frame_serializes_with_kind() {
+        let v = HandlerOutgoingFrame::SubOpen {
+            id: "s1".to_string(),
+            name: "counter".to_string(),
+            params: json!({"max": 5}),
+        };
+        let s = serde_json::to_string(&v).unwrap();
+        assert!(s.contains(r#""kind":"sub.open""#));
+        let back: HandlerOutgoingFrame = serde_json::from_str(&s).unwrap();
+        assert_eq!(v, back);
+    }
+
+    #[test]
+    fn sub_cancel_frame_serializes_with_kind() {
+        let v = HandlerOutgoingFrame::SubCancel {
+            id: "s1".to_string(),
+        };
+        let s = serde_json::to_string(&v).unwrap();
+        assert!(s.contains(r#""kind":"sub.cancel""#));
+        let back: HandlerOutgoingFrame = serde_json::from_str(&s).unwrap();
+        assert_eq!(v, back);
     }
 
     #[test]
@@ -132,28 +145,6 @@ mod tests {
         let s = serde_json::to_string(&v).unwrap();
         assert!(s.contains(r#""kind":"error""#));
         let back: CallResponse = serde_json::from_str(&s).unwrap();
-        assert_eq!(v, back);
-    }
-
-    #[test]
-    fn sub_open_round_trips() {
-        let v = SubOpen {
-            id: "s1".to_string(),
-            name: "counter".to_string(),
-            params: json!({"max": 5}),
-        };
-        let s = serde_json::to_string(&v).unwrap();
-        let back: SubOpen = serde_json::from_str(&s).unwrap();
-        assert_eq!(v, back);
-    }
-
-    #[test]
-    fn sub_cancel_round_trips() {
-        let v = SubCancel {
-            id: "s1".to_string(),
-        };
-        let s = serde_json::to_string(&v).unwrap();
-        let back: SubCancel = serde_json::from_str(&s).unwrap();
         assert_eq!(v, back);
     }
 

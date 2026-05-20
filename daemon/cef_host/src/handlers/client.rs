@@ -6,9 +6,12 @@
 //! `ozmux.sub.open`, `ozmux.sub.cancel`) for the V8 ↔ extension bridge by
 //! caching a per-browser `(ActivityId, BrowserRole)` planted in
 //! `on_after_created` (see `lifespan.rs`) and forwarding the payload to
-//! the [`crate::extension_bridge::ExtensionBridge`]. The role is also
-//! consulted by [`crate::handlers::request::OzmuxRequestHandler`] to
-//! deny Browser → `ozmux-ext://` navigations.
+//! the [`crate::extension_bridge::ExtensionBridge`]. The render side
+//! already encodes the JSON with the `kind` field that the SDK extension
+//! UDS protocol expects (see `process_message::HandlerOutgoingFrame`), so
+//! the payload string is forwarded verbatim. The role is also consulted
+//! by [`crate::handlers::request::OzmuxRequestHandler`] to deny Browser →
+//! `ozmux-ext://` navigations.
 
 #![allow(
     clippy::too_many_arguments,
@@ -165,8 +168,7 @@ wrap_client! {
             };
             match name.as_str() {
                 MSG_CALL_REQUEST | MSG_SUB_OPEN | MSG_SUB_CANCEL => {
-                    let frame_json = render_frame_json(name.as_str(), &payload_json);
-                    bridge.forward(aid, frame_json);
+                    bridge.forward(aid, payload_json);
                     1
                 }
                 _ => {
@@ -174,38 +176,6 @@ wrap_client! {
                     0
                 }
             }
-        }
-    }
-}
-
-/// Re-stamps the render-side JSON (CallRequest / SubOpen / SubCancel) into
-/// the SDK protocol shape (HandlerCallFrame / SubOpenFrame / SubCancelFrame)
-/// expected by the extension UDS. The translation is purely a `kind` field
-/// rename — the inner id / name / payload fields are already shaped to
-/// match.
-fn render_frame_json(message_name: &str, payload_json: &str) -> String {
-    let kind = match message_name {
-        MSG_CALL_REQUEST => "call",
-        MSG_SUB_OPEN => "sub.open",
-        MSG_SUB_CANCEL => "sub.cancel",
-        _ => return payload_json.to_string(),
-    };
-    // Parse, inject `kind`, re-emit. We re-parse rather than string-patching
-    // so a malformed or unexpected payload surfaces as a JSON error in the
-    // bridge logs instead of being silently mangled.
-    match serde_json::from_str::<serde_json::Value>(payload_json) {
-        Ok(mut v) => {
-            if let Some(obj) = v.as_object_mut() {
-                obj.insert(
-                    "kind".to_string(),
-                    serde_json::Value::String(kind.to_string()),
-                );
-            }
-            v.to_string()
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "render_frame_json: payload not JSON");
-            payload_json.to_string()
         }
     }
 }
