@@ -29,9 +29,22 @@ pub struct ExtensionInfo {
 
 impl ExtensionRegistry {
     pub fn register(&self, name: &str, launch_dir: &Path) {
-        let canonical = launch_dir
-            .canonicalize()
-            .unwrap_or_else(|_| launch_dir.to_path_buf());
+        let canonical = match launch_dir.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                // NOTE: when canonicalize fails (broken symlink, missing dir,
+                // permission), the scheme handler's `starts_with(base)` check
+                // will reject every ozmux-ext:// request against a non-canonical
+                // base and the user will see silent 404s. Surface it.
+                tracing::warn!(
+                    extension = name,
+                    path = %launch_dir.display(),
+                    error = %e,
+                    "canonicalize launch_dir failed; ozmux-ext requests under this extension may 404",
+                );
+                launch_dir.to_path_buf()
+            }
+        };
         let mut g = self.inner.write().expect("registry poisoned");
         g.by_name.insert(
             name.to_string(),

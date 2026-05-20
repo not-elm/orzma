@@ -34,7 +34,7 @@ pub(crate) fn make_factory(extensions: ExtensionRegistry) -> SchemeHandlerFactor
 /// Parses an `ozmux-ext://<host>/<path>` URL into `(host, path)`. Empty paths
 /// default to `index.html`. Returns `None` for malformed input (wrong scheme
 /// or empty host).
-pub(crate) fn parse_ozmux_ext_url(url: &str) -> Option<(String, String)> {
+fn parse_ozmux_ext_url(url: &str) -> Option<(String, String)> {
     let rest = url.strip_prefix("ozmux-ext://")?;
     let (host, path) = match rest.find('/') {
         Some(idx) => (&rest[..idx], &rest[idx + 1..]),
@@ -43,6 +43,10 @@ pub(crate) fn parse_ozmux_ext_url(url: &str) -> Option<(String, String)> {
     if host.is_empty() {
         return None;
     }
+    // Strip query string and fragment before file-system resolution. Bundlers
+    // (Vite, etc.) emit cache-busted URLs like `ozmux-ext://memo/app.js?v=1`;
+    // without this, `base.join("app.js?v=1").canonicalize()` 404s the asset.
+    let path = path.split_once(['?', '#']).map_or(path, |(p, _)| p);
     let path = if path.is_empty() { "index.html" } else { path };
     Some((host.to_string(), path.to_string()))
 }
@@ -53,7 +57,7 @@ pub(crate) fn parse_ozmux_ext_url(url: &str) -> Option<(String, String)> {
 ///
 /// `base` MUST already be canonicalised by the caller — this function only
 /// canonicalises the candidate child so the `starts_with` check is reliable.
-pub(crate) fn resolve_under_base(base: &Path, rel: &str) -> Option<PathBuf> {
+fn resolve_under_base(base: &Path, rel: &str) -> Option<PathBuf> {
     let candidate = base.join(rel).canonicalize().ok()?;
     if candidate.starts_with(base) {
         Some(candidate)
@@ -156,7 +160,10 @@ wrap_resource_handler! {
             }
         }
 
-        #[allow(clippy::not_unsafe_ptr_arg_deref)]
+        #[expect(
+            clippy::not_unsafe_ptr_arg_deref,
+            reason = "fn signature is dictated by wrap_resource_handler! macro from cef-rs; the raw-ptr write happens inside a documented unsafe block below"
+        )]
         fn read(
             &self,
             data_out: *mut u8,
@@ -272,6 +279,24 @@ mod tests {
         let (host, path) = parse_ozmux_ext_url("ozmux-ext://memo/assets/app.js").unwrap();
         assert_eq!(host, "memo");
         assert_eq!(path, "assets/app.js");
+    }
+
+    #[test]
+    fn strips_query_string() {
+        let (_, path) = parse_ozmux_ext_url("ozmux-ext://memo/app.js?v=1").unwrap();
+        assert_eq!(path, "app.js");
+    }
+
+    #[test]
+    fn strips_fragment() {
+        let (_, path) = parse_ozmux_ext_url("ozmux-ext://memo/index.html#section").unwrap();
+        assert_eq!(path, "index.html");
+    }
+
+    #[test]
+    fn empty_path_with_query_defaults_to_index_html() {
+        let (_, path) = parse_ozmux_ext_url("ozmux-ext://memo/?cb=42").unwrap();
+        assert_eq!(path, "index.html");
     }
 
     #[test]
