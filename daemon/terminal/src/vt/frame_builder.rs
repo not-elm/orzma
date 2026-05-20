@@ -178,7 +178,7 @@ pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
 /// - `0 <= y < screen_lines`
 /// - `display_offset` fits in `i32`. ozmux uses the default
 ///   `scrolling_history = 10000`, far below `i32::MAX`.
-fn viewport_row_to_line<T>(term: &Term<T>, y: i32) -> Line {
+pub(super) fn viewport_row_to_line<T>(term: &Term<T>, y: i32) -> Line {
     debug_assert!(
         (0..term.screen_lines() as i32).contains(&y),
         "viewport row {y} out of range 0..{}",
