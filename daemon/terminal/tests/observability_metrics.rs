@@ -1,7 +1,7 @@
-//! PR-E2a: validates that the new observability instrumentation fires
-//! under realistic bridge scenarios. Uses metrics-util DebuggingRecorder
-//! installed per-test via metrics::set_default_local_recorder, then
-//! snapshots Counter and Histogram values by name + labels.
+//! Validates that the observability instrumentation fires under realistic
+//! bridge scenarios. Uses metrics-util DebuggingRecorder installed per-test
+//! via metrics::set_default_local_recorder, then snapshots Counter and
+//! Histogram values by name + labels.
 
 use bytes::Bytes;
 use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
@@ -394,13 +394,13 @@ async fn pr_e2b_many_rows_with_user_input_skips_coalesce_wait() {
 
     let n = histogram_count(&snapshotter, "ozmux_terminal_coalesce_wait_seconds", &[]).unwrap_or(0);
 
-    // Pre-PR-E2b: ~20 samples (every chunk debounced).
-    // Post-PR-E2b: <= 2 samples (chunks take the immediate-flush path;
-    // boundary effects may leave 1-2 stragglers).
+    // Before the immediate-flush fix, every chunk was debounced (~20 samples).
+    // After the fix, chunks take the immediate-flush path and at most 1-2
+    // stragglers remain due to boundary effects.
     assert!(
         n <= 2,
-        "expected <= 2 coalesce_wait samples after PR-E2b fix \
-         (chunks should immediate-flush), got {n}"
+        "expected <= 2 coalesce_wait samples after immediate-flush \
+         (chunks should bypass debounce), got {n}"
     );
     svc.kill(&aid).await.unwrap();
 }

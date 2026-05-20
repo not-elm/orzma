@@ -77,10 +77,10 @@ async fn binary_delta_ring_entry_count_matches_broadcast_count() {
 
 #[tokio::test]
 async fn mode_change_inlined_no_separate_ring_entry() {
-    // Under CAT-007 the bridge does NOT push a separate mode entry to the
-    // ring; the mode transition is inlined into the next binary FrameDelta.
-    // Invariant: broadcast_send_count == ring_entries_count, AND the
-    // FrameDelta carries modes_added=["bracketed-paste"].
+    // The bridge does NOT push a separate mode entry to the ring; the mode
+    // transition is inlined into the next binary FrameDelta. Invariant:
+    // broadcast_send_count == ring_entries_count, AND the FrameDelta carries
+    // modes_added=["bracketed-paste"].
     //
     // Bracketed-paste (\x1b[?2004h) + one byte is used instead of alt-screen
     // (\x1b[?1049h). Alt-screen triggers DirtyRows::Full → Snapshot, which

@@ -60,12 +60,12 @@ impl Coalescer {
     pub const IDLE: Duration = Duration::from_millis(3);
     /// Hard ceiling: maximum time the first pending chunk waits.
     pub const MAX_CAP: Duration = Duration::from_millis(12);
-    /// PR-E2b: row-count cap for the new immediate-flush branch that
-    /// fires on `ManyRows + pending_user_input`. NeoVim 1-line scroll
-    /// in a TUI dirties scrolled-in row + status line + (sometimes)
-    /// tabline = 2-3 rows; cap of 4 leaves headroom while still
-    /// excluding bigger redraws (`:redraw!`, mode-line transitions)
-    /// from bypassing the debounce window.
+    /// Row-count cap for the immediate-flush branch that fires on
+    /// `ManyRows + pending_user_input`. NeoVim 1-line scroll in a TUI
+    /// dirties scrolled-in row + status line + (sometimes) tabline =
+    /// 2-3 rows; cap of 4 leaves headroom while still excluding bigger
+    /// redraws (`:redraw!`, mode-line transitions) from bypassing the
+    /// debounce window.
     const MANY_ROWS_INSTANT_CAP: usize = 4;
 
     /// Constructs a disarmed Coalescer.
@@ -151,11 +151,9 @@ impl Coalescer {
         }
         match verdict {
             DamageVerdict::AtMostOneRow => true,
-            // PR-E2b: small ManyRows under user-input pressure is almost
-            // always an interactive editor redraw. Flushing immediately
-            // removes the 3-12 ms coalesce wait. The `is_none()` guard
-            // protects post-Full coalescing: if a prior Full chunk is
-            // already debouncing, let its window run.
+            // NOTE: the `armed_at.is_none()` guard protects post-Full coalescing —
+            // if a prior Full chunk is already debouncing, its window must run to
+            // completion rather than be cut short by a follow-up ManyRows chunk.
             DamageVerdict::ManyRows { rows } if *rows <= Self::MANY_ROWS_INSTANT_CAP => {
                 self.armed_at.is_none()
             }
@@ -163,12 +161,10 @@ impl Coalescer {
         }
     }
 
-    /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
-    /// Returns `None` when the Coalescer is disarmed.
-    ///
-    /// PR-E2a: `wait_deadline()` inlined the deadline computation so it can
-    /// return `(elapsed_since_armed, WaitTrigger)` directly. This helper is
-    /// retained only for the boundary-condition unit tests below.
+    /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`,
+    /// or `None` when the Coalescer is disarmed. Test-only: production code
+    /// uses `wait_deadline()`, which inlines this computation so it can
+    /// return `(elapsed_since_armed, WaitTrigger)` in one step.
     #[cfg(test)]
     fn next_deadline(&self) -> Option<Instant> {
         let armed = self.armed_at?;

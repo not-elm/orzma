@@ -192,9 +192,9 @@ pub(crate) struct VtState {
     /// mode set at construction time).
     pub(crate) last_emit_mode: alacritty_terminal::term::TermMode,
     /// Per-grid-Line content hash from the previous emit. Keyed by absolute
-    /// `Line` inner i32 (negative for history rows). Used by CAT-005 to
-    /// drop unchanged rows from DirtyRows::Rows before they reach
-    /// decide_frame_kind. Bulk-reset on every Snapshot emit and on resize.
+    /// `Line` inner i32 (negative for history rows). Used to drop unchanged
+    /// rows from `DirtyRows::Rows` before they reach `decide_frame_kind`.
+    /// Bulk-reset on every Snapshot emit and on resize.
     pub(crate) row_hashes: HashMap<i32, u64>,
     /// Reusable scratch buffer for collect_dirty_rows. Cleared and re-filled
     /// per emit. Capacity is preserved across emits via the move-and-reclaim
@@ -425,10 +425,8 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
 
     let curr_cursor = extract_cursor(&state.term);
 
-    // CAT-005: hash-filter DirtyRows::Rows BEFORE decide_frame_kind so the
-    // threshold check doesn't false-promote unchanged rows to Snapshot.
-    // kept_hashes records (line_i32, hash) for rows that passed the filter;
-    // written into row_hashes in the commit phase after successful encode.
+    // NOTE: hash-filter DirtyRows::Rows BEFORE decide_frame_kind — otherwise
+    // the row-count threshold check false-promotes unchanged rows to Snapshot.
     let mut kept_hashes: Vec<(i32, u64)> = Vec::new();
     if let DirtyRows::Rows(rows) = &mut dirty {
         let VtState {
@@ -449,7 +447,6 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
         });
     }
 
-    // CAT-005 + CAT-007: re-check emit eligibility after the filter.
     let has_dirty =
         matches!(&dirty, DirtyRows::Full) || matches!(&dirty, DirtyRows::Rows(r) if !r.is_empty());
     let has_pending_modes =
@@ -472,8 +469,6 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
     let seq = state.frame_seq;
     let produced_at = state.current_produced_at_us();
 
-    // CAT-007: convert pending mode transitions (Vec<&'static str>) to owned
-    // Vec<String> for wire serialization. Cleared in the commit phase below.
     let modes_added_owned: Vec<String> = state
         .pending_modes_added
         .iter()
@@ -578,16 +573,10 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
             _ => unreachable!("kind_label is only 'snapshot' or 'delta'"),
         }
 
-        // CAT-007 commit phase: the pending mode transition has been bundled into
-        // the wire frame. Reset pending and update last_emit_mode so the next
-        // advance computes the diff from this point.
         state.pending_modes_added.clear();
         state.pending_modes_removed.clear();
         state.last_emit_mode = *state.term.mode();
 
-        // CAT-005 commit phase: update row_hashes after successful encode + push.
-        // For delta frames, write the kept (line, hash) pairs computed above.
-        // For snapshot frames, bulk-rehash all visible rows as the new baseline.
         match &frame {
             RenderFrame::Delta(_) => {
                 for (line_i32, h) in kept_hashes {
@@ -595,8 +584,6 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
                 }
             }
             RenderFrame::Snapshot(_) => {
-                // CAT-005: snapshot is a full reset point. Re-hash all visible rows
-                // so the next delta can correctly identify changes.
                 state.row_hashes.clear();
                 let screen_rows = state.term.grid().screen_lines() as u16;
                 let snap_cursor = extract_cursor(&state.term);
@@ -614,8 +601,6 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
         }
     }
 
-    // CAT-006: reclaim the rows Vec capacity into scratch_dirty so the
-    // allocator does not need to reallocate on the next collect_dirty_rows call.
     if let Some(v) = consumed_rows {
         state.scratch_dirty = v;
     }
@@ -710,8 +695,8 @@ pub(crate) async fn run_bridge_task(
                     while let Ok(chunk) = pty_rx.try_recv() {
                         if !chunk.is_empty() {
                             state.advance(&chunk);
-                            // CAT-007: recompute mode transition against last_emit_mode. OVERWRITE
-                            // semantics (never append) keep the net transition correct across A→B→A.
+                            // NOTE: mode-diff is OVERWRITTEN against last_emit_mode (never appended)
+                            // so the net transition stays correct across A→B→A flips within one cycle.
                             let curr_mode = *state.term.mode();
                             let diff = crate::vt::mode_diff::diff_mode(state.last_emit_mode, curr_mode);
                             state.pending_modes_added = diff.added;
@@ -722,10 +707,6 @@ pub(crate) async fn run_bridge_task(
                     state.pending_damage =
                         Some(collect_dirty_rows(&mut state.term, &mut scratch));
                     state.scratch_dirty = scratch;
-                    // PR-E2a: only mark Deadline if no higher-priority reason
-                    // is already pending (Resize / Initial). is_none() guard
-                    // preserves whatever was set earlier by service::resize
-                    // or by VtState::new.
                     if state.pending_emit_reason.is_none() {
                         state.pending_emit_reason = Some(EmitReason::Deadline);
                     }
@@ -738,8 +719,8 @@ pub(crate) async fn run_bridge_task(
                     let mut state = vt_state.lock().expect("vt_state poisoned");
                     if !chunk.is_empty() {
                         state.advance(&chunk);
-                        // CAT-007: recompute mode transition against last_emit_mode. OVERWRITE
-                        // semantics (never append) keep the net transition correct across A→B→A.
+                        // NOTE: mode-diff is OVERWRITTEN against last_emit_mode (never appended)
+                        // so the net transition stays correct across A→B→A flips within one cycle.
                         let curr_mode = *state.term.mode();
                         let diff = crate::vt::mode_diff::diff_mode(state.last_emit_mode, curr_mode);
                         state.pending_modes_added = diff.added;
@@ -766,12 +747,8 @@ pub(crate) async fn run_bridge_task(
                         state.pending_user_input = false;
                     }
                     state.pending_damage = Some(dirty);
-                    if flush {
-                        // PR-E2a: same is_none() guard as deadline arm —
-                        // Initial / Resize set earlier take priority.
-                        if state.pending_emit_reason.is_none() {
-                            state.pending_emit_reason = Some(EmitReason::Immediate);
-                        }
+                    if flush && state.pending_emit_reason.is_none() {
+                        state.pending_emit_reason = Some(EmitReason::Immediate);
                     }
                     flush
                 };

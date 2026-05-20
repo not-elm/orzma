@@ -205,13 +205,11 @@ impl TerminalService {
             let dim = crate::vt::bridge::dim_for(cols, rows);
             let mut state = handle.vt_state.lock().expect("vt_state poisoned");
             state.term.resize(dim);
-            // CAT-005: viewport dimensions changed; the hash cache is invalidated
-            // because cells map to different Line indices after column/row resize.
-            // The next emit will be a forced Snapshot which repopulates row_hashes.
+            // NOTE: row_hashes is invalidated on resize — cells map to different
+            // Line indices, so stale entries would produce false-equal hits and
+            // wedge unchanged rows out of the next delta. The forced Snapshot
+            // repopulates the cache.
             state.row_hashes.clear();
-            // PR-E2a: attribute the upcoming snapshot to a resize event.
-            // The bridge would otherwise see this as a Deadline-arm emit
-            // and tag it `reason="threshold"`.
             state.pending_emit_reason = Some(crate::vt::bridge::EmitReason::Resize);
         }
 

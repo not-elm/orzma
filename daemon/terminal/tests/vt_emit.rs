@@ -98,8 +98,8 @@ async fn second_chunk_emits_a_delta() {
 
 #[tokio::test]
 async fn mode_change_inlines_into_next_binary_delta() {
-    // CAT-007: mode transitions are inlined into the next binary FrameDelta
-    // rather than emitted as a separate WireMessage::Text frame.
+    // Mode transitions are inlined into the next binary FrameDelta rather
+    // than emitted as a separate WireMessage::Text frame.
     //
     // Bracketed-paste mode (\x1b[?2004h) toggles a mode bit without triggering
     // DirtyRows::Full, so the emit path is a Delta (not a Snapshot). The
@@ -213,9 +213,9 @@ async fn drain_binary_emit(rx: &mut Receiver<WireMessage>, settle: Duration) -> 
     frames
 }
 
-/// CAT-005: writing identical content to the same row twice must cause the
-/// second emit's delta to have no dirty_rows entry for that row. The hash
-/// filter drops the row because it is unchanged since the previous emit.
+/// Writing identical content to the same row twice must cause the second
+/// emit's delta to have no dirty_rows entry for that row. The hash filter
+/// drops the row because it is unchanged since the previous emit.
 #[tokio::test]
 async fn cat005_hash_filter_drops_identical_row() {
     let (svc, aid) = spawn_terminal(80, 24).await;
@@ -261,10 +261,10 @@ async fn cat005_hash_filter_drops_identical_row() {
     svc.kill(&aid).await.unwrap();
 }
 
-/// CAT-005: moving the cursor within a row (without writing any new cells)
-/// changes the row's hash because cursor.x is included. The row must
-/// therefore NOT be suppressed — it must appear in the next delta so the
-/// client can update the cursor position.
+/// Moving the cursor within a row (without writing any new cells) changes
+/// the row's hash because cursor.x is included. The row must therefore NOT
+/// be suppressed — it must appear in the next delta so the client can
+/// update the cursor position.
 #[tokio::test]
 async fn cat005_cursor_x_change_invalidates_row() {
     let (svc, aid) = spawn_terminal(80, 24).await;
@@ -312,9 +312,9 @@ async fn cat005_cursor_x_change_invalidates_row() {
     svc.kill(&aid).await.unwrap();
 }
 
-/// CAT-005: a Snapshot emit bulk-resets row_hashes. After a resize-triggered
-/// snapshot the hash cache is cleared, so writing the same content that was
-/// there before the resize must not be silently suppressed in the next delta.
+/// A Snapshot emit bulk-resets row_hashes. After a resize-triggered snapshot
+/// the hash cache is cleared, so writing the same content that was there
+/// before the resize must not be silently suppressed in the next delta.
 #[tokio::test]
 async fn cat005_snapshot_resets_hash_cache() {
     let (svc, aid) = spawn_terminal(80, 24).await;
