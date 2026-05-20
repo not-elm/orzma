@@ -10,11 +10,14 @@
 use cef::rc::Rc as _;
 use cef::{
     Browser, CefString, DictionaryValue, Frame, ImplBrowser, ImplDictionaryValue, ImplFrame,
-    ImplRenderProcessHandler, ImplV8Context, RenderProcessHandler, V8Context,
-    WrapRenderProcessHandler, wrap_render_process_handler,
+    ImplListValue, ImplProcessMessage, ImplRenderProcessHandler, ImplV8Context, ProcessId,
+    ProcessMessage, RenderProcessHandler, V8Context, WrapRenderProcessHandler,
+    wrap_render_process_handler,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+use crate::process_message::{MSG_CALL_RESPONSE, MSG_SUB_EVENT};
 
 /// Per-browser context captured from `extra_info` in `on_browser_created`.
 #[derive(Clone, Debug)]
@@ -101,6 +104,47 @@ wrap_render_process_handler! {
                 crate::v8_binding::install_window_ozmux(ctx, &state);
             }
             ctx.exit();
+        }
+
+        fn on_process_message_received(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            source_process: ProcessId,
+            message: Option<&mut ProcessMessage>,
+        ) -> ::std::os::raw::c_int {
+            // Only browser-process responses are routed here; render→render
+            // (would be a bug) and unknown sources are silently dropped.
+            if source_process != ProcessId::BROWSER {
+                return 0;
+            }
+            let (Some(frame), Some(message)) = (frame, message) else {
+                return 0;
+            };
+            let name = CefString::from(&message.name()).to_string();
+            let Some(args) = message.argument_list() else {
+                return 0;
+            };
+            if args.size() < 1 {
+                return 0;
+            }
+            let payload = CefString::from(&args.string(0)).to_string();
+            // V8 calls (resolve_promise / reject_promise) require the context
+            // be entered; re-enter from the frame.
+            let ctx = match frame.v8_context() {
+                Some(c) => c,
+                None => return 0,
+            };
+            if ctx.enter() == 0 {
+                return 0;
+            }
+            match name.as_str() {
+                MSG_CALL_RESPONSE => crate::v8_binding::deliver_call_response(&payload),
+                MSG_SUB_EVENT => crate::v8_binding::deliver_sub_event(&payload),
+                _ => {}
+            }
+            ctx.exit();
+            1
         }
     }
 }

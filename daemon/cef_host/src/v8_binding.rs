@@ -1,25 +1,221 @@
-//! V8 binding helpers used by the render-process handler.
+//! V8 binding for `window.ozmux` (`context`, `call`, `subscribe`).
 //!
-//! Two concerns live here:
-//! 1. `context_to_dict` — serializes `BrowserExtraContext` into the cef-rs
-//!    `DictionaryValue` passed to `browser_host_create_browser_sync` so the
-//!    renderer can read its activity context back from `extra_info`.
-//! 2. `install_window_ozmux` — installs the `window.ozmux` API surface inside
-//!    a V8 context: a read-only `context` object plus throwing-stub
-//!    `call`/`subscribe` functions (Task 7 replaces the stubs with the real
-//!    process-message-backed implementation).
+//! Three concerns live here:
+//!
+//! 1. `context_to_dict` — serializes `BrowserExtraContext` into a CEF
+//!    `DictionaryValue` passed via `extra_info` to
+//!    `browser_host_create_browser_sync`. The render side reads this back in
+//!    `on_browser_created`.
+//! 2. `install_window_ozmux` — installs `window.ozmux.__native_call` and
+//!    `window.ozmux.__native_subscribe` as native V8 functions backed by
+//!    Rust handlers, then runs a small JS wrapper (via `V8Context::eval`)
+//!    that re-exposes them as the documented Promise / AsyncIterable surface
+//!    (`window.ozmux.call`, `window.ozmux.subscribe`).
+//! 3. `RENDER_STATE` — per-render-thread registry of pending Promises and
+//!    subscription queues, keyed by id. Populated by
+//!    `OzmuxRenderProcessHandler::on_process_message_received` (see
+//!    `handlers/render_process.rs`).
+//!
+//! Threading: the render process is single-threaded, so `thread_local!` is
+//! sufficient for the pending-call / pending-subscription registries.
 
 use cef::rc::Rc as _;
 use cef::sys::cef_v8_propertyattribute_t;
 use cef::{
-    CefString, DictionaryValue, ImplDictionaryValue, ImplV8Context, ImplV8Handler, ImplV8Value,
-    V8Context, V8Handler, V8Propertyattribute, V8Value, WrapV8Handler, dictionary_value_create,
-    v8_value_create_function, v8_value_create_null, v8_value_create_object,
+    CefString, DictionaryValue, ImplDictionaryValue, ImplFrame, ImplListValue,
+    ImplProcessMessage, ImplV8Context, ImplV8Handler, ImplV8Value, ProcessId, V8Context,
+    V8Handler, V8Propertyattribute, V8Value, WrapV8Handler, dictionary_value_create,
+    list_value_create, process_message_create, v8_value_create_function,
+    v8_value_create_null, v8_value_create_object, v8_value_create_promise,
     v8_value_create_string, wrap_v8_handler,
 };
 use ozmux_browser_cef_protocol::wire::{BrowserExtraContext, BrowserRole};
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
 
 use crate::handlers::render_process::RenderState;
+use crate::process_message::{MSG_CALL_REQUEST, MSG_SUB_CANCEL, MSG_SUB_OPEN};
+
+thread_local! {
+    /// Per-render-thread registry. Each entry tracks an in-flight `call()`
+    /// or `subscribe()` originated from V8. The render process is single
+    /// threaded so this thread-local is the natural home.
+    static RENDER_STATE: RefCell<RenderBindingState> =
+        RefCell::new(RenderBindingState::default());
+}
+
+#[derive(Default)]
+struct RenderBindingState {
+    pending_calls: HashMap<String, V8Value>,
+    pending_subs: HashMap<String, SubChannel>,
+    next_id: u64,
+}
+
+struct SubChannel {
+    queue: VecDeque<String>,
+    done: bool,
+    error: Option<String>,
+    /// A pending `next()` Promise waiting for the next event. At most one —
+    /// the JS wrapper does not call `next()` concurrently because the
+    /// AsyncIterable consumer awaits each result.
+    waker: Option<V8Value>,
+}
+
+impl RenderBindingState {
+    fn mint_id(&mut self, prefix: &str) -> String {
+        self.next_id += 1;
+        format!("{}{}", prefix, self.next_id)
+    }
+}
+
+/// Called by `OzmuxRenderProcessHandler::on_process_message_received` when a
+/// `MSG_CALL_RESPONSE` arrives. Looks up the pending call, resolves/rejects
+/// its V8 Promise, and removes the entry. Must be called with the V8 context
+/// already entered.
+pub(crate) fn deliver_call_response(payload_json: &str) {
+    let parsed: serde_json::Value = match serde_json::from_str(payload_json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "call response payload is not JSON");
+            return;
+        }
+    };
+    let id = parsed.get("id").and_then(|v| v.as_str()).map(str::to_string);
+    let Some(id) = id else {
+        tracing::warn!("call response missing id field");
+        return;
+    };
+    let kind = parsed
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let promise = RENDER_STATE.with(|cell| cell.borrow_mut().pending_calls.remove(&id));
+    let Some(promise) = promise else {
+        tracing::warn!(id = %id, "call response for unknown id (dropped)");
+        return;
+    };
+    match kind {
+        "result" => {
+            let inner = parsed
+                .get("payload")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let payload_str = serde_json::to_string(&inner).unwrap_or_else(|_| "null".to_string());
+            let Some(mut v) = v8_value_create_string(Some(&CefString::from(payload_str.as_str())))
+            else {
+                tracing::error!("v8_value_create_string returned None resolving call");
+                return;
+            };
+            promise.resolve_promise(Some(&mut v));
+        }
+        "error" => {
+            let msg = parsed
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ozmux call error")
+                .to_string();
+            promise.reject_promise(Some(&CefString::from(msg.as_str())));
+        }
+        other => {
+            tracing::warn!(kind = %other, "unexpected call response kind");
+        }
+    }
+}
+
+/// Called by `OzmuxRenderProcessHandler::on_process_message_received` when a
+/// `MSG_SUB_EVENT` arrives. Pushes the event into the per-subscription queue
+/// and resolves any waiting `next()` Promise. Must be called with the V8
+/// context already entered.
+pub(crate) fn deliver_sub_event(payload_json: &str) {
+    let parsed: serde_json::Value = match serde_json::from_str(payload_json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "sub event payload is not JSON");
+            return;
+        }
+    };
+    let id = parsed.get("id").and_then(|v| v.as_str()).map(str::to_string);
+    let Some(id) = id else {
+        tracing::warn!("sub event missing id field");
+        return;
+    };
+    let kind = parsed.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    RENDER_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        let Some(ch) = state.pending_subs.get_mut(&id) else {
+            return;
+        };
+        match kind.as_str() {
+            "sub.data" => {
+                let inner = parsed
+                    .get("payload")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let s = serde_json::to_string(&inner).unwrap_or_else(|_| "null".to_string());
+                ch.queue.push_back(s);
+            }
+            "sub.complete" => {
+                ch.done = true;
+            }
+            "sub.error" => {
+                let msg = parsed
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("ozmux subscribe error")
+                    .to_string();
+                ch.error = Some(msg);
+                ch.done = true;
+            }
+            other => {
+                tracing::warn!(kind = %other, "unexpected sub event kind");
+            }
+        }
+        if let Some(waker) = ch.waker.take() {
+            drain_one_into_waker(&id, ch, waker);
+        }
+    });
+}
+
+/// Pops one event from `ch` and resolves the supplied `next()` waker
+/// promise. Caller must hold the RENDER_STATE borrow and have already
+/// extracted the waker (`Option::take`) so this fn does not need to.
+fn drain_one_into_waker(_id: &str, ch: &mut SubChannel, waker: V8Value) {
+    // sub.error has higher priority than queued data — if both arrive in the
+    // same tick we surface the error first so callers see the failure.
+    if let Some(err) = ch.error.take() {
+        waker.reject_promise(Some(&CefString::from(err.as_str())));
+        return;
+    }
+    if let Some(s) = ch.queue.pop_front() {
+        let Some(obj) = build_iter_result(false, Some(s.as_str())) else {
+            return;
+        };
+        let mut obj = obj;
+        waker.resolve_promise(Some(&mut obj));
+        return;
+    }
+    if ch.done {
+        let Some(obj) = build_iter_result(true, None) else {
+            return;
+        };
+        let mut obj = obj;
+        waker.resolve_promise(Some(&mut obj));
+    }
+}
+
+fn build_iter_result(done: bool, value_json: Option<&str>) -> Option<V8Value> {
+    let obj = v8_value_create_object(None, None)?;
+    let done_v = cef::v8_value_create_bool(if done { 1 } else { 0 })?;
+    set_value(&obj, "done", done_v);
+    if let Some(s) = value_json {
+        let v = v8_value_create_string(Some(&CefString::from(s)))?;
+        set_value(&obj, "value", v);
+    } else {
+        let v = v8_value_create_null()?;
+        set_value(&obj, "value", v);
+    }
+    Some(obj)
+}
 
 /// Serializes a `BrowserExtraContext` into a fresh `DictionaryValue` for
 /// `browser_host_create_browser_sync(..., extra_info, ...)`. The render side
@@ -50,31 +246,283 @@ pub(crate) fn install_window_ozmux(ctx: &mut V8Context, state: &RenderState) {
     let Some(global) = ctx.global() else { return };
     let Some(ozmux) = v8_value_create_object(None, None) else { return };
     let Some(context_obj) = build_context_object(state) else { return };
-
     set_readonly(&ozmux, "context", context_obj);
 
-    let call_msg = "ozmux.call not yet implemented".to_string();
-    let mut call_handler: V8Handler = ThrowingV8Handler::new(call_msg);
-    let call_name = CefString::from("call");
+    let call_name = CefString::from("__native_call");
+    let mut call_handler: V8Handler = CallHandler::new();
     if let Some(call_fn) = v8_value_create_function(Some(&call_name), Some(&mut call_handler)) {
-        set_readonly(&ozmux, "call", call_fn);
+        set_readonly(&ozmux, "__native_call", call_fn);
     }
 
-    let subscribe_msg = "ozmux.subscribe not yet implemented".to_string();
-    let mut subscribe_handler: V8Handler = ThrowingV8Handler::new(subscribe_msg);
-    let subscribe_name = CefString::from("subscribe");
-    if let Some(subscribe_fn) =
-        v8_value_create_function(Some(&subscribe_name), Some(&mut subscribe_handler))
-    {
-        set_readonly(&ozmux, "subscribe", subscribe_fn);
+    let sub_name = CefString::from("__native_subscribe");
+    let mut sub_handler: V8Handler = SubscribeHandler::new();
+    if let Some(sub_fn) = v8_value_create_function(Some(&sub_name), Some(&mut sub_handler)) {
+        set_readonly(&ozmux, "__native_subscribe", sub_fn);
     }
 
     set_readonly(&global, "ozmux", ozmux);
+
+    // Install the JS wrapper that adapts the native string-based primitives
+    // into the documented `Promise<any>` / `AsyncIterable<Event>` API.
+    let url = CefString::from("ozmux-internal://v8-wrapper.js");
+    let code = CefString::from(WRAPPER_JS);
+    let mut retval: Option<V8Value> = None;
+    let mut exception: Option<cef::V8Exception> = None;
+    if ctx.eval(Some(&code), Some(&url), 0, Some(&mut retval), Some(&mut exception)) == 0 {
+        tracing::error!("install_window_ozmux: wrapper eval failed");
+    }
+}
+
+/// JS that runs once per extension-frame context. Wraps the native string
+/// primitives with a Promise / AsyncIterable façade matching the SDK
+/// contract.
+const WRAPPER_JS: &str = r#"
+(function() {
+  const m = window.ozmux;
+  if (!m) return;
+  const nativeCall = m.__native_call;
+  const nativeSubscribe = m.__native_subscribe;
+
+  Object.defineProperty(m, 'call', {
+    configurable: false,
+    enumerable: true,
+    writable: false,
+    value: function call(name, payload) {
+      const payloadJson = payload === undefined ? 'null' : JSON.stringify(payload);
+      return nativeCall(name, payloadJson).then(function(s) {
+        return s == null ? null : JSON.parse(s);
+      });
+    },
+  });
+
+  Object.defineProperty(m, 'subscribe', {
+    configurable: false,
+    enumerable: true,
+    writable: false,
+    value: function subscribe(name, params, opts) {
+      const paramsJson = params === undefined ? 'null' : JSON.stringify(params);
+      const handle = nativeSubscribe(name, paramsJson);
+      const signal = opts && opts.signal;
+      let cancelled = false;
+      function doCancel() {
+        if (cancelled) return;
+        cancelled = true;
+        try { handle.cancel(); } catch (_) {}
+      }
+      if (signal) {
+        if (signal.aborted) doCancel();
+        else signal.addEventListener('abort', doCancel, { once: true });
+      }
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            next() {
+              if (cancelled) return Promise.resolve({ value: undefined, done: true });
+              return handle.next().then(function(r) {
+                if (r && r.done) return { value: undefined, done: true };
+                const v = r && r.value;
+                return { value: v == null ? null : JSON.parse(v), done: false };
+              });
+            },
+            return() {
+              doCancel();
+              return Promise.resolve({ value: undefined, done: true });
+            },
+          };
+        },
+      };
+    },
+  });
+})();
+"#;
+
+wrap_v8_handler! {
+    pub(crate) struct CallHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> ::std::os::raw::c_int {
+            let args = arguments.unwrap_or(&[]);
+            let name_str = match args.first().and_then(|a| a.as_ref()) {
+                Some(v) if v.is_string() != 0 => {
+                    CefString::from(&v.string_value()).to_string()
+                }
+                _ => {
+                    if let Some(ex) = exception {
+                        *ex = CefString::from("ozmux.call: name must be a string");
+                    }
+                    return 1;
+                }
+            };
+            let payload_json = match args.get(1).and_then(|a| a.as_ref()) {
+                Some(v) if v.is_string() != 0 => {
+                    CefString::from(&v.string_value()).to_string()
+                }
+                _ => "null".to_string(),
+            };
+            let Some(promise) = v8_value_create_promise() else {
+                if let Some(ex) = exception {
+                    *ex = CefString::from("ozmux.call: failed to create promise");
+                }
+                return 1;
+            };
+            let id = RENDER_STATE.with(|cell| cell.borrow_mut().mint_id("c"));
+            RENDER_STATE.with(|cell| {
+                cell.borrow_mut()
+                    .pending_calls
+                    .insert(id.clone(), promise.clone());
+            });
+            if !send_call_request(&id, &name_str, &payload_json) {
+                // Failed to send; reject immediately rather than leak the entry.
+                RENDER_STATE.with(|cell| {
+                    cell.borrow_mut().pending_calls.remove(&id);
+                });
+                promise.reject_promise(Some(&CefString::from("ozmux.call: send failed")));
+            }
+            if let Some(rv) = retval {
+                *rv = Some(promise);
+            }
+            1
+        }
+    }
 }
 
 wrap_v8_handler! {
-    pub(crate) struct ThrowingV8Handler {
-        msg: String,
+    pub(crate) struct SubscribeHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> ::std::os::raw::c_int {
+            let args = arguments.unwrap_or(&[]);
+            let name_str = match args.first().and_then(|a| a.as_ref()) {
+                Some(v) if v.is_string() != 0 => {
+                    CefString::from(&v.string_value()).to_string()
+                }
+                _ => {
+                    if let Some(ex) = exception {
+                        *ex = CefString::from("ozmux.subscribe: name must be a string");
+                    }
+                    return 1;
+                }
+            };
+            let params_json = match args.get(1).and_then(|a| a.as_ref()) {
+                Some(v) if v.is_string() != 0 => {
+                    CefString::from(&v.string_value()).to_string()
+                }
+                _ => "null".to_string(),
+            };
+            let id = RENDER_STATE.with(|cell| cell.borrow_mut().mint_id("s"));
+            RENDER_STATE.with(|cell| {
+                cell.borrow_mut().pending_subs.insert(
+                    id.clone(),
+                    SubChannel { queue: VecDeque::new(), done: false, error: None, waker: None },
+                );
+            });
+            if !send_sub_open(&id, &name_str, &params_json) {
+                RENDER_STATE.with(|cell| {
+                    cell.borrow_mut().pending_subs.remove(&id);
+                });
+                if let Some(ex) = exception {
+                    *ex = CefString::from("ozmux.subscribe: send failed");
+                }
+                return 1;
+            }
+            // Build the per-subscription handle: { next, cancel }
+            let Some(handle) = v8_value_create_object(None, None) else {
+                if let Some(ex) = exception {
+                    *ex = CefString::from("ozmux.subscribe: failed to create handle");
+                }
+                return 1;
+            };
+            let next_name = CefString::from("next");
+            let mut next_handler: V8Handler = SubNextHandler::new(id.clone());
+            if let Some(f) = v8_value_create_function(Some(&next_name), Some(&mut next_handler)) {
+                set_value(&handle, "next", f);
+            }
+            let cancel_name = CefString::from("cancel");
+            let mut cancel_handler: V8Handler = SubCancelHandler::new(id);
+            if let Some(f) = v8_value_create_function(Some(&cancel_name), Some(&mut cancel_handler)) {
+                set_value(&handle, "cancel", f);
+            }
+            if let Some(rv) = retval {
+                *rv = Some(handle);
+            }
+            1
+        }
+    }
+}
+
+wrap_v8_handler! {
+    pub(crate) struct SubNextHandler {
+        id: String,
+    }
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            _arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            _exception: Option<&mut CefString>,
+        ) -> ::std::os::raw::c_int {
+            let Some(promise) = v8_value_create_promise() else { return 1 };
+            // Best effort: try to drain a queued event synchronously to
+            // avoid a microtask hop. If nothing is available, install a
+            // waker for the next sub event.
+            RENDER_STATE.with(|cell| {
+                let mut state = cell.borrow_mut();
+                let Some(ch) = state.pending_subs.get_mut(&self.id) else {
+                    // Subscription already cleaned up: resolve as { done:true }.
+                    if let Some(obj) = build_iter_result(true, None) {
+                        let mut obj = obj;
+                        promise.resolve_promise(Some(&mut obj));
+                    }
+                    return;
+                };
+                if let Some(err) = ch.error.take() {
+                    promise.reject_promise(Some(&CefString::from(err.as_str())));
+                    return;
+                }
+                if let Some(s) = ch.queue.pop_front() {
+                    if let Some(obj) = build_iter_result(false, Some(s.as_str())) {
+                        let mut obj = obj;
+                        promise.resolve_promise(Some(&mut obj));
+                    }
+                    return;
+                }
+                if ch.done {
+                    if let Some(obj) = build_iter_result(true, None) {
+                        let mut obj = obj;
+                        promise.resolve_promise(Some(&mut obj));
+                    }
+                    return;
+                }
+                ch.waker = Some(promise.clone());
+            });
+            if let Some(rv) = retval {
+                *rv = Some(promise);
+            }
+            1
+        }
+    }
+}
+
+wrap_v8_handler! {
+    pub(crate) struct SubCancelHandler {
+        id: String,
     }
 
     impl V8Handler {
@@ -84,14 +532,73 @@ wrap_v8_handler! {
             _object: Option<&mut V8Value>,
             _arguments: Option<&[Option<V8Value>]>,
             _retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _exception: Option<&mut CefString>,
         ) -> ::std::os::raw::c_int {
-            if let Some(exception) = exception {
-                *exception = CefString::from(self.msg.as_str());
+            let removed = RENDER_STATE.with(|cell| cell.borrow_mut().pending_subs.remove(&self.id));
+            if removed.is_some() {
+                send_sub_cancel(&self.id);
             }
             1
         }
     }
+}
+
+fn send_call_request(id: &str, name: &str, payload_json: &str) -> bool {
+    let payload = format!(
+        r#"{{"id":{},"name":{},"payload":{}}}"#,
+        json_str(id),
+        json_str(name),
+        payload_json
+    );
+    send_process_message(MSG_CALL_REQUEST, &payload)
+}
+
+fn send_sub_open(id: &str, name: &str, params_json: &str) -> bool {
+    let payload = format!(
+        r#"{{"id":{},"name":{},"params":{}}}"#,
+        json_str(id),
+        json_str(name),
+        params_json
+    );
+    send_process_message(MSG_SUB_OPEN, &payload)
+}
+
+fn send_sub_cancel(id: &str) -> bool {
+    let payload = format!(r#"{{"id":{}}}"#, json_str(id));
+    send_process_message(MSG_SUB_CANCEL, &payload)
+}
+
+/// Sends a CEF process message from the current V8 context's main frame to
+/// the browser process. Looks the frame up via
+/// `v8_context_get_current_context()` rather than threading a `Browser`
+/// through every call site.
+fn send_process_message(message_name: &str, payload_json: &str) -> bool {
+    let Some(ctx) = cef::v8_context_get_current_context() else {
+        tracing::warn!("send_process_message: no current V8 context");
+        return false;
+    };
+    let Some(frame) = ctx.frame() else {
+        tracing::warn!("send_process_message: V8 context has no frame");
+        return false;
+    };
+    let cef_name = CefString::from(message_name);
+    let Some(mut msg) = process_message_create(Some(&cef_name)) else {
+        tracing::error!(name = message_name, "process_message_create returned None");
+        return false;
+    };
+    let Some(args) = msg.argument_list().or_else(list_value_create) else {
+        tracing::error!("argument_list returned None");
+        return false;
+    };
+    args.set_string(0, Some(&CefString::from(payload_json)));
+    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+    true
+}
+
+/// Wraps a string as a JSON string literal. Avoids a full `serde_json`
+/// invocation for short ids and names.
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn build_context_object(state: &RenderState) -> Option<V8Value> {
@@ -119,6 +626,11 @@ fn set_readonly(obj: &V8Value, key: &str, mut value: V8Value) {
     obj.set_value_bykey(Some(&cef_key), Some(&mut value), readonly_attributes());
 }
 
+fn set_value(obj: &V8Value, key: &str, mut value: V8Value) {
+    let cef_key = CefString::from(key);
+    obj.set_value_bykey(Some(&cef_key), Some(&mut value), V8Propertyattribute::default());
+}
+
 fn set_readonly_str(obj: &V8Value, key: &str, value: &str) {
     let Some(string_value) = v8_value_create_string(Some(&CefString::from(value))) else {
         return;
@@ -134,4 +646,41 @@ fn readonly_attributes() -> V8Propertyattribute {
 
 fn set_str(dict: &DictionaryValue, key: &str, value: &str) {
     dict.set_string(Some(&CefString::from(key)), Some(&CefString::from(value)));
+}
+
+// Allow tests / future code paths to reach the registry while keeping the
+// guts opaque outside.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mint_id_increments() {
+        let mut s = RenderBindingState::default();
+        let a = s.mint_id("c");
+        let b = s.mint_id("c");
+        assert_ne!(a, b);
+        assert!(a.starts_with('c'));
+        assert!(b.starts_with('c'));
+    }
+
+    // NOTE: silence unused warnings for the param of `deliver_call_response`
+    // / `deliver_sub_event` when the rest of the module compiles without
+    // them being exercised by integration tests. The render-process handler
+    // calls these from a real V8 context which we can't construct in unit
+    // tests.
+    #[test]
+    fn delivery_helpers_short_circuit_on_unknown_id() {
+        // No panic for unknown id; both helpers no-op silently.
+        deliver_call_response(r#"{"kind":"result","id":"zzz","payload":null}"#);
+        deliver_sub_event(r#"{"kind":"sub.complete","id":"zzz"}"#);
+    }
+
+    /// Ensures we silently ignore malformed JSON instead of panicking.
+    #[test]
+    fn delivery_helpers_ignore_garbage() {
+        deliver_call_response("not json");
+        deliver_sub_event("not json");
+    }
+
 }
