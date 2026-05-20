@@ -1,7 +1,7 @@
 //! CEF initialize / shutdown helpers for `ozmux-daemon`. Runs on the main
 //! thread. Plan 3.
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use cef::App;
 use cef::args::Args;
 use ozmux_cef_host::cef_settings::build_cef_settings;
@@ -20,12 +20,11 @@ pub fn init_on_main(browser_data_root: &Path, args: &Args, app: &mut App) -> Res
         Some(app),
         std::ptr::null_mut(),
     );
-    if ok != 1 {
-        bail!(
-            "cef::initialize returned {ok} (expected 1; cef_exit_code={})",
-            cef::get_exit_code()
-        );
-    }
+    anyhow::ensure!(
+        ok == 1,
+        "cef::initialize returned {ok} (expected 1; cef_exit_code={})",
+        cef::get_exit_code(),
+    );
     tracing::info!("cef::initialize succeeded");
     Ok(())
 }

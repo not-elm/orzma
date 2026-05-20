@@ -427,13 +427,9 @@ fn longest_extension_name() -> std::io::Result<String> {
 /// CLI shim and the built-in shims have consistent behaviour on
 /// error.
 async fn materialize_builtins(runtime: &RuntimeRoot) -> anyhow::Result<()> {
-    // The shims must exec the `ozmux` CLI binary, NOT the running
-    // `ozmux-daemon` binary. Using `current_exe()` here was correct when the
-    // daemon shipped inside `ozmux`, but now that it is a separate
-    // `ozmux-daemon` binary, `current_exe()` resolves to the daemon and the
-    // `@browser` shim ends up trying to start a second daemon (which then
-    // panics on `acquire_data_root_lock`). Resolve the CLI binary via the
-    // same layered fallback as `place_cli_shim` to avoid that.
+    // NOTE: shims must exec the `ozmux` CLI, not `current_exe()` — since the
+    // daemon is its own binary, `current_exe()` points at `ozmux-daemon` and
+    // would make `@browser` start a second daemon (lock contention panic).
     let Some(ozmux_exe) = resolve_ozmux_cli() else {
         tracing::warn!(
             "ozmux CLI binary could not be resolved; built-in @-shims (e.g. @browser) will not be on PATH"

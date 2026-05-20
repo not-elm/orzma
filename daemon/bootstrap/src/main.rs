@@ -18,59 +18,55 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
 fn main() -> Result<()> {
-    // Initialise tracing FIRST so cef::initialize and helper-process lookup
-    // log lines reach stderr / daemon.log. `serve()` calls `init_tracing()`
-    // again on the bg runtime; it is now idempotent via `try_init()`.
+    // NOTE: init_tracing must run before cef::initialize so CEF init log
+    // lines (framework / subprocess paths, success/failure) reach
+    // stderr / daemon.log. `serve()` calls it again on the bg runtime;
+    // the second call is a no-op via `try_init()`.
     init_tracing();
 
-    // 1) Load CEF framework dylib (macOS) and arm api_hash. No-op elsewhere.
-    load_cef_framework();
-
-    // 2) Run CEF's helper-process dispatch hook. The bundled helpers normally
-    //    execute `cef_helper`, but CefExecuteProcess still performs required
-    //    browser-process startup bookkeeping before CefInitialize.
-    let args = Args::new();
-    dispatch_helper_process_or_continue(&args);
-
-    // 3) Acquire data-root lock; the lock guard must outlive `run_message_loop`.
+    // NOTE: acquire the data-root lock BEFORE load_cef_framework loads the
+    // ~210 MB CEF dylib — failing fast on lock contention avoids paying that
+    // cost when another daemon is already running.
     let (browser_data_root, data_root_lock) = acquire_data_root();
     anyhow::ensure!(
         data_root_lock.is_some(),
         "another ozmux-daemon holds the browser data root {}; stop it before starting a new daemon",
         browser_data_root.display(),
     );
+    // NOTE: keep the lock guard alive across run_message_loop so the OS lock
+    // is held for the whole daemon lifetime.
     let _data_root_lock = data_root_lock;
 
-    // 4) CEF init on the main thread.
+    load_cef_framework();
+
+    // NOTE: CefExecuteProcess still performs required browser-process
+    // startup bookkeeping before CefInitialize, even though our helpers
+    // run as a separate `cef_helper` binary (so this call always returns
+    // -1 and we continue as the browser process).
+    let args = Args::new();
+    dispatch_helper_process_or_continue(&args);
+
     let mut app = BrowserApp::new();
     cef_lifecycle::init_on_main(&browser_data_root, &args, &mut app)
         .context("cef::initialize on main thread failed")?;
 
-    // 5) Shutdown coordination channel: signal handler (or panic hook) trips
-    //    `stop_tx`; bg thread observes via `stop_rx` and drains `serve`.
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let stop_tx_slot = Arc::new(Mutex::new(Some(stop_tx)));
-
-    // 6) Spawn the bg thread that owns the Tokio multi-thread runtime.
     let bg = spawn_bg_runtime(Arc::clone(&stop_tx_slot), stop_rx)?;
 
-    // 7) Drive the CEF message loop on the main thread. Returns once the bg
-    //    thread (or a panic hook) posts a quit task.
     cef_lifecycle::run_message_loop();
 
-    // 8) Defensive: if the message loop exited for any other reason, make sure
-    //    bg sees a stop signal so it does not deadlock on `stop_rx`.
+    // NOTE: defensive — if run_message_loop exits without the signal
+    // listener tripping stop_tx (e.g., post_quit_loop from a panic hook),
+    // send the stop signal here so bg does not deadlock on stop_rx.
     if let Some(tx) = stop_tx_slot.lock().expect("stop_tx mutex poisoned").take() {
         let _ = tx.send(());
     }
 
-    // 9) Wait for the bg runtime to finish draining.
     let bg_result = bg.join().expect("bg thread panicked");
 
-    // 10) Final CEF teardown after the message loop has fully exited.
     cef_lifecycle::shutdown();
 
-    // 11) Surface any serve error.
     bg_result
 }
 
