@@ -565,7 +565,7 @@ pub(crate) async fn run_bridge_task(
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
-            () = coalescer.wait_deadline() => {
+            (_elapsed, _trigger) = coalescer.wait_deadline() => {
                 // NOTE: drain any chunks already queued at the moment the
                 // deadline fires so they fold into the same emit. Single
                 // lock spans the drain so damage is collected once at the

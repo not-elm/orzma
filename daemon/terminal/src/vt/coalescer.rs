@@ -84,11 +84,29 @@ impl Coalescer {
 
     /// Future for `tokio::select!`. Resolves when the deadline elapses.
     /// When disarmed, returns a future that never resolves (`future::pending`).
-    pub async fn wait_deadline(&self) {
-        match self.next_deadline() {
-            Some(deadline) => sleep_until(deadline).await,
-            None => std::future::pending::<()>().await,
-        }
+    ///
+    /// Returns `(elapsed_since_armed, trigger)` — measured at the moment
+    /// the deadline fires, anchored to `armed_at`. This is intentionally
+    /// **not** "time spent sleeping in the current future": `select!`
+    /// cancels and recreates this future on every chunk arrival, so the
+    /// in-flight sleep can be 1-3 ms even when the coalesce window was
+    /// armed 12 ms ago.
+    pub async fn wait_deadline(&self) -> (Duration, WaitTrigger) {
+        let Some(armed) = self.armed_at else {
+            std::future::pending::<()>().await;
+            unreachable!("future::pending() never resolves");
+        };
+        let last = self.last_chunk_at.unwrap_or(armed);
+        let idle_deadline = last + Self::IDLE;
+        let max_cap_deadline = armed + Self::MAX_CAP;
+        let (deadline, trigger) = if idle_deadline <= max_cap_deadline {
+            (idle_deadline, WaitTrigger::Idle)
+        } else {
+            (max_cap_deadline, WaitTrigger::MaxCap)
+        };
+        sleep_until(deadline).await;
+        let elapsed = deadline.duration_since(armed);
+        (elapsed, trigger)
     }
 
     /// Immediate-flush eligibility. Called by the bridge after `state.advance`
