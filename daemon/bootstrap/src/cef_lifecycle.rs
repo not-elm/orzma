@@ -1,7 +1,7 @@
 //! CEF initialize / shutdown helpers for `ozmux-daemon`. Runs on the main
 //! thread. Plan 3.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use cef::App;
 use cef::args::Args;
 use ozmux_cef_host::cef_settings::build_cef_settings;
@@ -12,16 +12,20 @@ use tokio::sync::oneshot;
 /// `cef::run_message_loop()` or browser create. Plan 3 R1 finding: cef-rs
 /// auto-installs the macOS `NSApplication` subclass via the CEF C++ layer,
 /// so no manual `objc2` step is needed.
-pub fn init_on_main(browser_data_root: &Path, app: &mut App) -> Result<()> {
+pub fn init_on_main(browser_data_root: &Path, args: &Args, app: &mut App) -> Result<()> {
     let settings = build_cef_settings(browser_data_root);
-    let main_args = Args::new();
     let ok = cef::initialize(
-        Some(main_args.as_main_args()),
+        Some(args.as_main_args()),
         Some(&settings),
         Some(app),
         std::ptr::null_mut(),
     );
-    anyhow::ensure!(ok == 1, "cef::initialize returned {ok} (expected 1)");
+    if ok != 1 {
+        bail!(
+            "cef::initialize returned {ok} (expected 1; cef_exit_code={})",
+            cef::get_exit_code()
+        );
+    }
     tracing::info!("cef::initialize succeeded");
     Ok(())
 }
