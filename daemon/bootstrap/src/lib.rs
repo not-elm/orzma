@@ -93,7 +93,8 @@ pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
     let browser_cef = Arc::new(BrowserCefRegistry::new());
-    let cef_dispatcher = acquire_cef_host(&runtime, browser_cef.session_id()).await;
+    let cef_dispatcher =
+        acquire_cef_host(&runtime, browser_cef.session_id(), registry.clone()).await;
 
     let state = AppState::new(
         terminal.clone(),
@@ -224,6 +225,7 @@ async fn init_runtime() -> anyhow::Result<Arc<RuntimeRoot>> {
 async fn acquire_cef_host(
     _runtime: &RuntimeRoot,
     session_id: u64,
+    extensions: ExtensionRegistry,
 ) -> Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> {
     use ozmux_browser_cef_protocol::wire::HostEvent;
     use ozmux_cef_host::FrameBufferPool;
@@ -253,7 +255,14 @@ async fn acquire_cef_host(
     let frame_pool = Arc::new(FrameBufferPool::new(60));
     // Persistent disk profiles are paused pool-wide (see BrowserPool docs); the
     // flag is preserved so the lock plumbing stays in place for future work.
-    let pool = BrowserPool::new(unb_tx, browser_data_root, false, session_id, frame_pool);
+    let pool = BrowserPool::new(
+        unb_tx,
+        browser_data_root,
+        false,
+        session_id,
+        frame_pool,
+        extensions,
+    );
     let pool_handle = PoolHandle::new(pool);
 
     Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(

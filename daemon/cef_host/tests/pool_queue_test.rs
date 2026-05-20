@@ -9,6 +9,7 @@ use ozmux_browser_cef_protocol::wire::HostEvent;
 use ozmux_cef_host::FrameBufferPool;
 use ozmux_cef_host::pool::BrowserPool;
 use ozmux_cef_host::post_command::PoolHandle;
+use ozmux_extension::registry::ExtensionRegistry;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -22,12 +23,14 @@ fn pool_handle_shutdown_flag_visible_after_set() {
     // since no NavStateChanged events will be emitted.
     let (event_tx, _event_rx) = mpsc::unbounded_channel::<HostEvent>();
     let frame_pool = Arc::new(FrameBufferPool::new(4));
+    let extensions = ExtensionRegistry::default();
     let handle = PoolHandle::new(BrowserPool::new(
         event_tx,
         std::env::temp_dir(),
         false,
         0,
         frame_pool,
+        extensions,
     ));
     handle.with_pool_mut_for_tests(|p| p.shutdown_requested = true);
     assert!(handle.snapshot_shutdown_requested());

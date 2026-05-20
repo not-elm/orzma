@@ -4,6 +4,8 @@
 //! requires `on_register_custom_schemes` to return the same set of schemes
 //! across the browser, renderer, GPU, network, and other utility processes.
 
+pub mod ozmux_ext;
+
 use cef::{ImplSchemeRegistrar, SchemeOptions, SchemeRegistrar};
 
 /// Registers the `ozmux-ext` custom scheme with CEF using the flags required

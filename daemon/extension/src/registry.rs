@@ -29,12 +29,15 @@ pub struct ExtensionInfo {
 
 impl ExtensionRegistry {
     pub fn register(&self, name: &str, launch_dir: &Path) {
+        let canonical = launch_dir
+            .canonicalize()
+            .unwrap_or_else(|_| launch_dir.to_path_buf());
         let mut g = self.inner.write().expect("registry poisoned");
         g.by_name.insert(
             name.to_string(),
             ExtensionInfo {
                 name: name.to_string(),
-                launch_dir: launch_dir.to_path_buf(),
+                launch_dir: canonical,
                 handlers_sock_path: None,
             },
         );
@@ -170,6 +173,20 @@ mod tests {
         let cloned = reg.clone();
         reg.register("memo", Path::new("/tmp/memo"));
         assert!(cloned.get("memo").is_some());
+    }
+
+    #[test]
+    fn register_stores_canonical_launch_dir() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        let outer = tmp.path().to_path_buf();
+        let inner = outer.join("ext");
+        std::fs::create_dir(&inner).unwrap();
+        let weird = outer.join("ext").join(".");
+        let reg = ExtensionRegistry::default();
+        reg.register("memo", &weird);
+        let info = reg.get("memo").expect("registered");
+        assert_eq!(info.launch_dir, inner.canonicalize().unwrap());
     }
 
     #[test]

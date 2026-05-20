@@ -16,13 +16,14 @@ use crate::post_command::PoolHandle;
 use crate::profile::resolve_cache_path;
 use cef::{
     Browser, BrowserSettings, CefString, Client, ImplBrowser, ImplBrowserHost, ImplFrame,
-    RequestContext, RequestContextSettings, WindowInfo, browser_host_create_browser_sync,
-    request_context_create_context,
+    ImplRequestContext, RequestContext, RequestContextSettings, WindowInfo,
+    browser_host_create_browser_sync, request_context_create_context,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::{
     BrowserExtraContext, BrowserProfileWire, CefCookieDto, HostEvent, InputEvent,
 };
+use ozmux_extension::registry::ExtensionRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -156,6 +157,13 @@ pub struct BrowserPool {
                   the flag stays so the lock plumbing does not need re-introduction later."
     )]
     persistent_profiles_enabled: bool,
+    /// Registry of loaded ozmux extensions; consulted by the
+    /// `ozmux-ext://` `SchemeHandlerFactory` registered on every fresh
+    /// `RequestContext` to map `host` → `launch_dir`.
+    ///
+    /// `ExtensionRegistry` is itself `Arc<RwLock<...>>`-backed; cloning is
+    /// cheap and shares the same underlying state with every other holder.
+    extensions: ExtensionRegistry,
 }
 
 impl BrowserPool {
@@ -180,12 +188,19 @@ impl BrowserPool {
     ///
     /// `frame_pool` recycles the BGRA buffers each `RenderHandler::on_paint`
     /// allocates, shared across every browser in this pool.
+    ///
+    /// `extensions` is consulted by the `ozmux-ext://` `SchemeHandlerFactory`
+    /// that the pool registers on every fresh `RequestContext` it creates
+    /// (incognito profiles get a context per browser; named profiles share
+    /// one). The factory needs the live registry to resolve `<host>` to a
+    /// canonicalised `launch_dir` at request time.
     pub fn new(
         event_tx: mpsc::UnboundedSender<HostEvent>,
         root_cache_path: PathBuf,
         persistent_profiles_enabled: bool,
         session_id: u64,
         frame_pool: Arc<FrameBufferPool>,
+        extensions: ExtensionRegistry,
     ) -> Self {
         Self {
             browsers: HashMap::new(),
@@ -199,6 +214,7 @@ impl BrowserPool {
             pending_contexts: HashMap::new(),
             root_cache_path,
             persistent_profiles_enabled,
+            extensions,
         }
     }
 
@@ -522,10 +538,32 @@ impl BrowserPool {
                     return Some(ctx.clone());
                 }
                 let ctx = create_request_context()?;
+                self.register_ozmux_ext_factory(&ctx);
                 self.named_contexts.insert(name.clone(), ctx.clone());
                 Some(ctx)
             }
-            BrowserProfileWire::Incognito => create_request_context(),
+            BrowserProfileWire::Incognito => {
+                let ctx = create_request_context()?;
+                self.register_ozmux_ext_factory(&ctx);
+                Some(ctx)
+            }
+        }
+    }
+
+    /// Registers the `ozmux-ext://` `SchemeHandlerFactory` on `ctx`.
+    /// Must be called once per freshly minted `RequestContext` — incognito
+    /// profiles get a new context per `BrowserCreate`, and each named profile
+    /// gets one the first time it is requested. Registering on a context that
+    /// has already been wired is harmless but wasteful.
+    fn register_ozmux_ext_factory(&self, ctx: &RequestContext) {
+        let mut factory = crate::scheme::ozmux_ext::make_factory(self.extensions.clone());
+        let scheme_name = CefString::from("ozmux-ext");
+        let ok = ctx.register_scheme_handler_factory(Some(&scheme_name), None, Some(&mut factory));
+        if ok == 0 {
+            tracing::error!(
+                "register_scheme_handler_factory(ozmux-ext) returned 0; \
+                 extension front-ends will not load in this RequestContext"
+            );
         }
     }
 

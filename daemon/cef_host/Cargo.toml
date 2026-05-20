@@ -18,7 +18,9 @@ cef = "148.1.0"
 cef-dll-sys = { version = "148.1.0", features = ["sandbox"] }
 crossbeam-queue = "0.3"
 fs2 = "0.4"
+mime_guess = { workspace = true }
 ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
+ozmux_extension = { path = "../extension" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 bytes = "1"
 thiserror = { workspace = true }
@@ -26,3 +28,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+tempfile = { workspace = true }
