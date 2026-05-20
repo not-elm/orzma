@@ -4,6 +4,7 @@
 //! flushes accumulated terminal damage to the wire. The Coalescer never touches
 //! the `Term` directly; the bridge classifies damage and passes a verdict in.
 
+#[cfg(test)]
 use std::cmp::min;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -142,6 +143,11 @@ impl Coalescer {
 
     /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
     /// Returns `None` when the Coalescer is disarmed.
+    ///
+    /// PR-E2a: `wait_deadline()` inlined the deadline computation so it can
+    /// return `(elapsed_since_armed, WaitTrigger)` directly. This helper is
+    /// retained only for the boundary-condition unit tests below.
+    #[cfg(test)]
     fn next_deadline(&self) -> Option<Instant> {
         let armed = self.armed_at?;
         let last = self.last_chunk_at.unwrap_or(armed);
