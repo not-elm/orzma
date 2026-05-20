@@ -9,7 +9,8 @@
 //! `cef::run_message_loop`.
 
 use anyhow::{Context as _, Result};
-use daemon_bootstrap::{cef_lifecycle, serve};
+use cef::args::Args;
+use daemon_bootstrap::{cef_lifecycle, init_tracing, serve};
 use ozmux_cef_host::BrowserApp;
 use ozmux_cef_host::cef_settings::{acquire_data_root, load_cef_framework};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,50 +18,70 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
 fn main() -> Result<()> {
-    // NOTE: tracing is initialised by `serve()` on the bg runtime. Calling
-    // `init_tracing` here would cause a double-`set_global_default` panic.
-    // Early main-thread log lines therefore go to the default `log` no-op
-    // until the bg thread comes up.
+    // Initialise tracing FIRST so cef::initialize and helper-process lookup
+    // log lines reach stderr / daemon.log. `serve()` calls `init_tracing()`
+    // again on the bg runtime; it is now idempotent via `try_init()`.
+    init_tracing();
 
     // 1) Load CEF framework dylib (macOS) and arm api_hash. No-op elsewhere.
-    //    Helper-process dispatch is not needed here: helpers run as separate
-    //    `cef_helper` binaries, so the daemon is always the browser process.
     load_cef_framework();
 
-    // 2) Acquire data-root lock; the lock guard must outlive `run_message_loop`.
-    let (browser_data_root, _data_root_lock) = acquire_data_root();
+    // 2) Run CEF's helper-process dispatch hook. The bundled helpers normally
+    //    execute `cef_helper`, but CefExecuteProcess still performs required
+    //    browser-process startup bookkeeping before CefInitialize.
+    let args = Args::new();
+    dispatch_helper_process_or_continue(&args);
 
-    // 3) CEF init on the main thread.
+    // 3) Acquire data-root lock; the lock guard must outlive `run_message_loop`.
+    let (browser_data_root, data_root_lock) = acquire_data_root();
+    anyhow::ensure!(
+        data_root_lock.is_some(),
+        "another ozmux-daemon holds the browser data root {}; stop it before starting a new daemon",
+        browser_data_root.display(),
+    );
+    let _data_root_lock = data_root_lock;
+
+    // 4) CEF init on the main thread.
     let mut app = BrowserApp::new();
-    cef_lifecycle::init_on_main(&browser_data_root, &mut app)
+    cef_lifecycle::init_on_main(&browser_data_root, &args, &mut app)
         .context("cef::initialize on main thread failed")?;
 
-    // 4) Shutdown coordination channel: signal handler (or panic hook) trips
+    // 5) Shutdown coordination channel: signal handler (or panic hook) trips
     //    `stop_tx`; bg thread observes via `stop_rx` and drains `serve`.
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let stop_tx_slot = Arc::new(Mutex::new(Some(stop_tx)));
 
-    // 5) Spawn the bg thread that owns the Tokio multi-thread runtime.
+    // 6) Spawn the bg thread that owns the Tokio multi-thread runtime.
     let bg = spawn_bg_runtime(Arc::clone(&stop_tx_slot), stop_rx)?;
 
-    // 6) Drive the CEF message loop on the main thread. Returns once the bg
+    // 7) Drive the CEF message loop on the main thread. Returns once the bg
     //    thread (or a panic hook) posts a quit task.
     cef_lifecycle::run_message_loop();
 
-    // 7) Defensive: if the message loop exited for any other reason, make sure
+    // 8) Defensive: if the message loop exited for any other reason, make sure
     //    bg sees a stop signal so it does not deadlock on `stop_rx`.
     if let Some(tx) = stop_tx_slot.lock().expect("stop_tx mutex poisoned").take() {
         let _ = tx.send(());
     }
 
-    // 8) Wait for the bg runtime to finish draining.
+    // 9) Wait for the bg runtime to finish draining.
     let bg_result = bg.join().expect("bg thread panicked");
 
-    // 9) Final CEF teardown after the message loop has fully exited.
+    // 10) Final CEF teardown after the message loop has fully exited.
     cef_lifecycle::shutdown();
 
-    // 10) Surface any serve error.
+    // 11) Surface any serve error.
     bg_result
+}
+
+/// Runs `cef::execute_process`. If this invocation is unexpectedly a helper
+/// subprocess, exit immediately with CEF's requested code; otherwise continue as
+/// the browser process.
+fn dispatch_helper_process_or_continue(args: &Args) {
+    let exit_code = cef::execute_process(Some(args.as_main_args()), None, std::ptr::null_mut());
+    if exit_code >= 0 {
+        std::process::exit(exit_code);
+    }
 }
 
 /// Spawns the background OS thread that hosts the Tokio runtime, installs

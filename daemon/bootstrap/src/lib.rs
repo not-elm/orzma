@@ -154,10 +154,14 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 /// Initialises `tracing-subscriber` with the daemon's default filter,
-/// allowing `RUST_LOG` overrides. Must be called exactly once per
-/// process.
-fn init_tracing() {
-    tracing_subscriber::fmt()
+/// allowing `RUST_LOG` overrides. Idempotent — subsequent calls are
+/// no-ops (the first installer wins).
+///
+/// Public so that `ozmux-daemon::main` can install tracing BEFORE
+/// `cef::initialize`, ensuring CEF-init log lines (framework paths,
+/// subprocess path, success/failure) reach stderr / daemon.log.
+pub fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::new(
@@ -165,7 +169,7 @@ fn init_tracing() {
                 )
             }),
         )
-        .init();
+        .try_init();
 }
 
 /// Loads the user's ozmux config; aborts daemon startup if the
