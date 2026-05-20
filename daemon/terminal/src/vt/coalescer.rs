@@ -9,6 +9,19 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
 
+/// Which deadline fired when [`Coalescer::wait_deadline`] resolved.
+///
+/// Surfaced in `tracing` events for diagnostic value; not exported as a
+/// histogram label because bucket position on `coalesce_wait_seconds`
+/// already discriminates the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitTrigger {
+    /// IDLE (3 ms after the last chunk) deadline fired.
+    Idle,
+    /// MAX_CAP (12 ms after first arming) deadline fired.
+    MaxCap,
+}
+
 /// Classification of accumulated damage that drives the immediate-flush decision.
 /// The bridge constructs this once per pre-emit decision (via `Term::damage()`)
 /// and reuses it for the actual emit so `Term::damage()` is never called twice
