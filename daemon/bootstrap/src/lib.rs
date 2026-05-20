@@ -6,7 +6,7 @@
 use anyhow::Context;
 use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
-use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
+use ozmux_browser::cef_service::spawn_event_pump;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::registry::ExtensionRegistry;
@@ -215,47 +215,45 @@ async fn init_runtime() -> anyhow::Result<Arc<RuntimeRoot>> {
     Ok(runtime)
 }
 
-/// Spawns the CEF host child and handshakes with it, returning the
-/// resulting handles. On spawn error or handshake timeout, returns a
-/// pre-dead handle set so the daemon comes up with the browser
-/// backend disabled rather than blocking `/health`.
-#[expect(
-    deprecated,
-    reason = "Plan 3 will replace dead_handles_after_spawn_failure with a direct StubCefDispatcher::dead() fallback"
-)]
+/// Builds the in-process CEF dispatcher. CEF itself is initialised on the
+/// main thread by `cef_lifecycle::init_on_main` before the bg runtime spawns
+/// this function; here we only construct the daemon-side wrappers (`BrowserPool`,
+/// `PoolHandle`, and the host-event channel) and hand them to
+/// `LiveCefDispatcher`.
+///
+/// The pool starts empty; the first `HostCommand::BrowserCreate` populates it
+/// via the in-process create_browser path (Plan 3 Task 12).
 async fn acquire_cef_host(
-    runtime: &RuntimeRoot,
+    _runtime: &RuntimeRoot,
 ) -> Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> {
-    // NOTE: cef_host startup can hang (binary missing → no UDS connect ever;
-    // missing CEF runtime libs → CefInitialize blocks). spawn_and_handshake
-    // only resolves once the child sends Hello, so we cap the wait — past it
-    // we proceed with the browser backend disabled rather than block the
-    // entire daemon (`/health` would never come up).
-    const CEF_HOST_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-    let socket = runtime.sock_dir().join("cef_host.sock");
-    let supervisor = CefHostSupervisor::new(socket);
-    let handles =
-        match tokio::time::timeout(CEF_HOST_HANDSHAKE_TIMEOUT, supervisor.spawn_and_handshake())
-            .await
-        {
-            Ok(Ok(h)) => h,
-            Ok(Err(e)) => {
-                tracing::error!(
-                    error = %e,
-                    "cef_host spawn_and_handshake failed; continuing with browser backend disabled"
-                );
-                ozmux_browser::cef_service::dead_handles_after_spawn_failure()
+    use ozmux_browser_cef_protocol::wire::HostEvent;
+    use ozmux_cef_host::pool::BrowserPool;
+    use ozmux_cef_host::post_command::PoolHandle;
+    use ozmux_cef_host::profile;
+    use tokio::sync::mpsc;
+
+    // CEF handlers want an UnboundedSender (they fire from non-async callbacks
+    // on the CEF UI / IO threads where awaiting backpressure is not possible).
+    // The CefDispatcher trait surfaces a bounded mpsc::Receiver, so a tiny
+    // forwarder task bridges the two.
+    let (unb_tx, mut unb_rx) = mpsc::unbounded_channel::<HostEvent>();
+    let (bnd_tx, bnd_rx) = mpsc::channel::<HostEvent>(256);
+    tokio::spawn(async move {
+        while let Some(ev) = unb_rx.recv().await {
+            if bnd_tx.send(ev).await.is_err() {
+                break;
             }
-            Err(_elapsed) => {
-                tracing::error!(
-                    timeout_s = CEF_HOST_HANDSHAKE_TIMEOUT.as_secs(),
-                    "cef_host did not handshake in time; continuing with browser backend disabled"
-                );
-                ozmux_browser::cef_service::dead_handles_after_spawn_failure()
-            }
-        };
+        }
+    });
+
+    let browser_data_root = profile::browser_data_root();
+    // Persistent disk profiles are paused pool-wide (see BrowserPool docs); the
+    // flag is preserved so the lock plumbing stays in place for future work.
+    let pool = BrowserPool::new(unb_tx, browser_data_root, false);
+    let pool_handle = PoolHandle::new(pool);
+
     Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
-        Arc::new(handles),
+        pool_handle, bnd_rx,
     ))
 }
 

@@ -77,6 +77,11 @@ pub enum CefCommand {
     PauseScreencast { aid: ActivityId },
     /// Resume screencast frame production for an activity and force a keyframe.
     ResumeScreencast { aid: ActivityId },
+    /// No-op command. Used by the in-process dispatcher to absorb
+    /// daemon-facing `HostCommand` variants that are not meaningful in-process
+    /// (the OoP handshake `Ready`, the `BrowserCreate` path that goes through
+    /// a dedicated method, and unimplemented variants like `RecreateShm`).
+    Noop,
 }
 
 /// Holds the live state for one browser activity.
@@ -217,6 +222,7 @@ impl BrowserPool {
             }
             CefCommand::PauseScreencast { aid } => self.handle_pause_screencast(aid),
             CefCommand::ResumeScreencast { aid } => self.handle_resume_screencast(aid),
+            CefCommand::Noop => {}
         }
     }
 
