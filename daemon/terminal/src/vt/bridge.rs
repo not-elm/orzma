@@ -544,9 +544,10 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
             RenderFrame::Snapshot(_) => "snapshot",
             RenderFrame::Delta(_) => "delta",
         };
-        tracing::Span::current().record("kind", kind_label);
-        tracing::Span::current().record("reason", reason.as_static_str());
-        tracing::Span::current().record("frame_seq", binary_seq);
+        let span = tracing::Span::current();
+        span.record("kind", kind_label);
+        span.record("reason", reason.as_static_str());
+        span.record("frame_seq", binary_seq);
         match kind_label {
             "snapshot" => state.metrics.frames_emit_snapshot.increment(1),
             "delta" => state.metrics.frames_emit_delta.increment(1),
