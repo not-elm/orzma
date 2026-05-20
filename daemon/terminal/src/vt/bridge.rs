@@ -88,6 +88,41 @@ impl EmitReason {
     }
 }
 
+/// Cached metric handles to avoid `histogram!` / `counter!` macro
+/// allocations on the hot path (each macro call re-walks the recorder
+/// and allocates a `Vec<Label>` for the label set).
+///
+/// Snapshot counters are per-reason since `EmitReason` is a small
+/// closed set; this avoids label-vector allocation per increment.
+pub(crate) struct BridgeMetrics {
+    pub(crate) emit_duration_snapshot: metrics::Histogram,
+    pub(crate) emit_duration_delta:    metrics::Histogram,
+    pub(crate) coalesce_wait:          metrics::Histogram,
+    pub(crate) snapshot_total_initial:   metrics::Counter,
+    pub(crate) snapshot_total_resize:    metrics::Counter,
+    pub(crate) snapshot_total_threshold: metrics::Counter,
+}
+
+impl BridgeMetrics {
+    pub(crate) fn new() -> Self {
+        use metrics::{counter, histogram};
+        Self {
+            emit_duration_snapshot:
+                histogram!("ozmux_terminal_emit_duration_seconds", "kind" => "snapshot"),
+            emit_duration_delta:
+                histogram!("ozmux_terminal_emit_duration_seconds", "kind" => "delta"),
+            coalesce_wait:
+                histogram!("ozmux_terminal_coalesce_wait_seconds"),
+            snapshot_total_initial:
+                counter!("ozmux_terminal_snapshot_total", "reason" => "initial"),
+            snapshot_total_resize:
+                counter!("ozmux_terminal_snapshot_total", "reason" => "resize"),
+            snapshot_total_threshold:
+                counter!("ozmux_terminal_snapshot_total", "reason" => "threshold"),
+        }
+    }
+}
+
 /// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
 /// PTY chunk.
@@ -150,6 +185,9 @@ pub(crate) struct VtState {
     /// emit_now after recording the snapshot_total counter via
     /// `Option::take`.
     pub(crate) pending_emit_reason: Option<EmitReason>,
+    /// Cached metric handles. Eliminates per-emit `Vec<Label>` allocations
+    /// that the `histogram!` / `counter!` macros incur on each call.
+    pub(crate) metrics: BridgeMetrics,
     /// Mirror of `term.mode()` captured at the previous successful emit.
     /// Initialized in `VtState::new` to `*term.mode()` (alacritty default
     /// mode set at construction time).
@@ -205,6 +243,7 @@ impl VtState {
             pending_modes_added: Vec::new(),
             pending_modes_removed: Vec::new(),
             pending_emit_reason: Some(EmitReason::Initial),
+            metrics: BridgeMetrics::new(),
             last_emit_mode,
             row_hashes: HashMap::new(),
             scratch_dirty: Vec::new(),
