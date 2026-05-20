@@ -1,0 +1,34 @@
+{
+  "kind": "delta",
+  "seq": 42,
+  "cursor": {
+    "x": 0,
+    "y": 0,
+    "shape": "block",
+    "blinking": false,
+    "visible": true
+  },
+  "dirty_rows": [
+    {
+      "row": 0,
+      "runs": [
+        {
+          "cols": 3,
+          "fg": null,
+          "bg": null,
+          "style": 0,
+          "text": "xyz",
+          "hyperlink_id": null
+        }
+      ]
+    }
+  ],
+  "hyperlinks": [],
+  "display_offset": 0,
+  "modes_added": [
+    "bracketed-paste"
+  ],
+  "modes_removed": [
+    "alt-screen"
+  ]
+}

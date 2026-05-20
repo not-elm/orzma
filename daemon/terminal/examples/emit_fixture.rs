@@ -39,24 +39,15 @@ fn main() {
     write_delta(dir, "delta_minimal", &delta_minimal());
     write_delta(dir, "delta_cursor_shape", &delta_cursor_shape());
     write_delta(dir, "delta_with_hyperlinks", &delta_with_hyperlinks());
+    write_delta(dir, "delta_with_modes", &delta_with_modes());
 
     write_snapshot_with_produced_at(dir);
     write_delta_with_produced_at(dir);
 
     write_text(dir, "hello", &hello_json());
-    write_text(
-        dir,
-        "mode_change",
-        &mode_change(2, vec!["alt-screen".into()], vec![]),
-    );
-    write_text(
-        dir,
-        "mode_change_mouse",
-        &mode_change(3, vec!["mouse-sgr-1006".into()], vec!["alt-screen".into()]),
-    );
 
     println!(
-        "emit_fixture: 6 snapshots/deltas + 3 text fixtures written (incl. produced_at pairs)"
+        "emit_fixture: 8 snapshots/deltas + 1 text fixture written (incl. produced_at pairs)"
     );
 }
 
@@ -185,6 +176,14 @@ fn delta_with_hyperlinks() -> FrameDelta {
     d
 }
 
+fn delta_with_modes() -> FrameDelta {
+    let mut d = delta_minimal();
+    d.seq = 42;
+    d.modes_added = vec!["bracketed-paste".to_string()];
+    d.modes_removed = vec!["alt-screen".to_string()];
+    d
+}
+
 fn write_snapshot_with_produced_at(dir: &Path) {
     let mut frame = snapshot_minimal();
     frame.produced_at_us = Some(1_700_000_000_000_000);
@@ -226,6 +225,3 @@ fn hello_json() -> serde_json::Value {
     })
 }
 
-fn mode_change(seq: u32, added: Vec<String>, removed: Vec<String>) -> serde_json::Value {
-    serde_json::json!({ "kind": "mode", "seq": seq, "added": added, "removed": removed })
-}

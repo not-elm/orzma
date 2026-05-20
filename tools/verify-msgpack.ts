@@ -17,7 +17,7 @@ const unpackr = new Unpackr({
 });
 
 // JSON-text fixtures whose `.bin` contains JSON, not msgpack.
-const TEXT_FIXTURES = new Set(['hello', 'mode_change', 'mode_change_mouse']);
+const TEXT_FIXTURES = new Set(['hello']);
 
 let failed = 0;
 const bins = readdirSync(dir).filter((f) => f.endsWith('.bin')).sort();

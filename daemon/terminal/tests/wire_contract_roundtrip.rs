@@ -1,16 +1,15 @@
 //! Wire-contract round-trip test: every binary fixture decodes as `RenderFrame`
 //! and re-encodes to byte-identical msgpack via `vt::encode`.
 //!
-//! Text fixtures (`hello.bin`, `mode_change.bin`, `mode_change_mouse.bin`) are
-//! excluded — they are JSON text, not msgpack. The TypeScript verifier at
-//! `tools/verify-msgpack.ts` handles those.
+//! Text fixtures (`hello.bin`) are excluded — they are JSON text, not msgpack.
+//! The TypeScript verifier at `tools/verify-msgpack.ts` handles those.
 use ozmux_terminal::vt::{RenderFrame, encode};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const FIXTURE_DIR: &str = "tests/fixtures/wire_msgpack";
 
-const TEXT_FIXTURES: &[&str] = &["hello", "mode_change", "mode_change_mouse"];
+const TEXT_FIXTURES: &[&str] = &["hello"];
 
 fn binary_fixtures() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_DIR);
