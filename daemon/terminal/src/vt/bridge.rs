@@ -279,21 +279,25 @@ impl VtState {
     }
 }
 
+/// Hashes a vte `NamedColor` discriminant into `h`.
+///
+/// vte `NamedColor` derives `Ord`/`PartialOrd` but NOT `Hash`. Discriminants
+/// are explicit (Foreground=256, etc.), so the `u32` cast preserves identity.
 fn hash_named_color(n: NamedColor, h: &mut DefaultHasher) {
-    // NOTE: vte NamedColor derives Ord/PartialOrd but NOT Hash. Discriminants
-    // are explicit (Foreground=256, etc.), so u32 cast preserves identity.
     (n as u32).hash(h);
 }
 
+/// Hashes a vte `Rgb` triple into `h` by walking its public fields, since
+/// `Rgb` derives `PartialEq`/`Default` but NOT `Hash`.
 fn hash_rgb(rgb: &Rgb, h: &mut DefaultHasher) {
-    // NOTE: vte Rgb derives PartialEq/Default but NOT Hash. Hash public fields.
     rgb.r.hash(h);
     rgb.g.hash(h);
     rgb.b.hash(h);
 }
 
+/// Hashes a vte `Color` (`AColor`) value into `h` by walking the
+/// discriminant and payload, since `AColor` does NOT derive `Hash`.
 fn hash_acolor(c: &AColor, h: &mut DefaultHasher) {
-    // NOTE: vte Color (AColor) does NOT derive Hash; walk discriminant + payload.
     match c {
         AColor::Named(n) => {
             0u8.hash(h);
@@ -310,8 +314,9 @@ fn hash_acolor(c: &AColor, h: &mut DefaultHasher) {
     }
 }
 
+/// Hashes an ozmux wire `CursorShape` into `h` by mapping the variant to a
+/// `u8`, since the wire type does NOT derive `Hash`.
 fn hash_cursor_shape(s: CursorShape, h: &mut DefaultHasher) {
-    // NOTE: ozmux wire CursorShape does NOT derive Hash — map to u8.
     let n: u8 = match s {
         CursorShape::Block => 0,
         CursorShape::Underline => 1,
@@ -320,6 +325,8 @@ fn hash_cursor_shape(s: CursorShape, h: &mut DefaultHasher) {
     n.hash(h);
 }
 
+/// Computes a content hash for a single grid row, including the cursor
+/// overlay if the cursor is visible and rendered on this `viewport_y`.
 fn hash_row<T>(term: &Term<T>, line: Line, cursor: &Cursor, viewport_y: u16) -> u64 {
     let mut h = DefaultHasher::new();
     for cell in &term.grid()[line] {
