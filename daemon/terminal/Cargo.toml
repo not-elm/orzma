@@ -39,6 +39,11 @@ name = "observability_metrics"
 path = "tests/observability_metrics.rs"
 required-features = ["test-helpers"]
 
+[[test]]
+name = "jk_scroll_synthetic"
+path = "tests/jk_scroll_synthetic.rs"
+required-features = ["test-helpers"]
+
 [[example]]
 name = "generate_tape"
 required-features = ["test-helpers"]
