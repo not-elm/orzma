@@ -46,9 +46,7 @@ fn main() {
 
     write_text(dir, "hello", &hello_json());
 
-    println!(
-        "emit_fixture: 8 snapshots/deltas + 1 text fixture written (incl. produced_at pairs)"
-    );
+    println!("emit_fixture: 8 snapshots/deltas + 1 text fixture written (incl. produced_at pairs)");
 }
 
 fn write_snapshot(dir: &Path, name: &str, snap: &FrameSnapshot) {
@@ -224,4 +222,3 @@ fn hello_json() -> serde_json::Value {
         "input_caps": ["text-utf8", "key-vt-encoded"],
     })
 }
-

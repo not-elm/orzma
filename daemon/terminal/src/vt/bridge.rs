@@ -366,10 +366,10 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
     }
 
     // CAT-005 + CAT-007: re-check emit eligibility after the filter.
-    let has_dirty = matches!(&dirty, DirtyRows::Full)
-        || matches!(&dirty, DirtyRows::Rows(r) if !r.is_empty());
-    let has_pending_modes = !state.pending_modes_added.is_empty()
-        || !state.pending_modes_removed.is_empty();
+    let has_dirty =
+        matches!(&dirty, DirtyRows::Full) || matches!(&dirty, DirtyRows::Rows(r) if !r.is_empty());
+    let has_pending_modes =
+        !state.pending_modes_added.is_empty() || !state.pending_modes_removed.is_empty();
     let cursor_unchanged = state
         .prev_cursor
         .as_ref()
@@ -491,7 +491,11 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
                 state.row_hashes.clear();
                 let screen_rows = state.term.grid().screen_lines() as u16;
                 let snap_cursor = extract_cursor(&state.term);
-                let VtState { ref term, ref mut row_hashes, .. } = *state;
+                let VtState {
+                    ref term,
+                    ref mut row_hashes,
+                    ..
+                } = *state;
                 for viewport_y in 0..screen_rows {
                     let line = viewport_row_to_line(term, viewport_y as i32);
                     let h = hash_row(term, line, &snap_cursor, viewport_y);

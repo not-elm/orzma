@@ -204,7 +204,6 @@ pub enum RenderFrame {
     Delta(FrameDelta),
 }
 
-
 /// Encodes a wire value as map-keyed MessagePack so field names are preserved
 /// for the frontend's msgpackr decoder.
 ///
@@ -624,6 +623,9 @@ mod tests {
         let bytes_a = encode(&d).unwrap();
         let back: FrameDelta = rmp_serde::from_slice(&bytes_a).unwrap();
         let bytes_b = encode(&back).unwrap();
-        assert_eq!(bytes_a, bytes_b, "skip_serializing_if must omit empty mode fields");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "skip_serializing_if must omit empty mode fields"
+        );
     }
 }

@@ -5,8 +5,8 @@
 //! `vt_state` lock; this module performs no locking.
 
 use crate::vt::frame::{
-    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, Row,
-    Run, SnapshotReason, style,
+    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, Row, Run,
+    SnapshotReason, style,
 };
 use crate::vt::hyperlink::{HyperlinkInterner, HyperlinkUri, HyperlinkWireId};
 use crate::vt::mode_diff::TRACKED_MODES;
@@ -35,10 +35,7 @@ pub enum DirtyRows {
 /// moved into the returned `DirtyRows::Rows` variant via `mem::take`.
 /// The caller should reclaim the consumed `Vec` back into the scratch field
 /// after the emit completes so capacity persists across calls.
-pub(super) fn collect_dirty_rows<T>(
-    term: &mut Term<T>,
-    scratch_dirty: &mut Vec<u16>,
-) -> DirtyRows {
+pub(super) fn collect_dirty_rows<T>(term: &mut Term<T>, scratch_dirty: &mut Vec<u16>) -> DirtyRows {
     match term.damage() {
         TermDamage::Full => DirtyRows::Full,
         TermDamage::Partial(iter) => {

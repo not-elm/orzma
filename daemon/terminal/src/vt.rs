@@ -13,8 +13,8 @@ pub(crate) mod title;
 
 pub use coalescer::Coalescer;
 pub use frame::{
-    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink,
-    RenderFrame, Row, Run, SnapshotReason, encode,
+    Color, Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, RenderFrame, Row,
+    Run, SnapshotReason, encode,
 };
 pub use frame_ring::WireMessage;
 pub use hyperlink::{HyperlinkUri, HyperlinkWireId};

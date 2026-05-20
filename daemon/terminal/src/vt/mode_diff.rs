@@ -14,13 +14,6 @@ pub struct ModeChange {
     pub removed: Vec<&'static str>,
 }
 
-impl ModeChange {
-    /// Returns true when no flags transitioned.
-    pub fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.removed.is_empty()
-    }
-}
-
 // NOTE: TermMode constant names follow alacritty_terminal 0.26 (term/mod.rs
 // bitflags definition). Only wire spec § 4.7 modes are tracked here;
 // alacritty-internal flags like LINE_WRAP are intentionally excluded.
@@ -58,7 +51,8 @@ mod tests {
     #[test]
     fn no_change_yields_empty() {
         let m = TermMode::ALT_SCREEN;
-        assert!(diff_mode(m, m).is_empty());
+        let change = diff_mode(m, m);
+        assert!(change.added.is_empty() && change.removed.is_empty());
     }
 
     #[test]
