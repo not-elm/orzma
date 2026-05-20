@@ -46,7 +46,9 @@ pub(crate) fn spawn_pty_reader(
     // source of truth.
     tokio::spawn(async move {
         while let Some(chunk) = rx.recv().await {
-            let _ = vt_chunk_tx.try_send(Bytes::copy_from_slice(&chunk));
+            if vt_chunk_tx.try_send(Bytes::copy_from_slice(&chunk)).is_err() {
+                metrics::counter!("ozmux_terminal_pty_chunk_drops_total").increment(1);
+            }
             scrollback.push_and_broadcast(&event_sender, chunk).await;
         }
     });
