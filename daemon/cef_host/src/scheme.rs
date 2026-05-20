@@ -30,6 +30,11 @@ pub fn register_ozmux_ext(registrar: &mut SchemeRegistrar) {
         | SchemeOptions::DISPLAY_ISOLATED.get_raw()) as std::os::raw::c_int;
     let ok = registrar.add_custom_scheme(Some(&scheme), options);
     if ok == 0 {
-        tracing::warn!("cef: failed to register custom scheme `ozmux-ext`");
+        // NOTE: silent partial registration corrupts URL parsing, CORS, and
+        // the upcoming scheme handler dispatch across processes; this MUST
+        // surface as an error so operators see the divergence in red logs.
+        tracing::error!(
+            "cef: failed to register custom scheme `ozmux-ext` — URLs will not parse as standard form, CORS and scheme handler factory will not work in this process"
+        );
     }
 }
