@@ -11,7 +11,7 @@ use crate::error::{HttpError, HttpResult};
 use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_backend::CefBackend;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
-use ozmux_browser_cef_protocol::wire::BrowserProfileWire;
+use ozmux_browser_cef_protocol::wire::{BrowserExtraContext, BrowserProfileWire, BrowserRole};
 use ozmux_multiplexer::{ActivityId, ActivityKind, BrowserProfile, PaneId, WindowId};
 use std::sync::Arc;
 
@@ -52,8 +52,18 @@ pub(crate) async fn provision_activity_runtime(
             };
             let cef_aid = CefActivityId(aid.to_string());
             let url = initial_url.as_deref().unwrap_or("about:blank");
+            let session_id =
+                crate::handlers::windows::panes::session_owning_window(state, wid).await;
+            let context = BrowserExtraContext {
+                role: BrowserRole::Browser,
+                session_id: session_id.map(|s| s.to_string()),
+                window_id: wid.to_string(),
+                pane_id: pid.to_string(),
+                activity_id: aid.to_string(),
+                extension_name: None,
+            };
             backend
-                .provision(&cef_aid, url, browser_profile_to_wire(profile))
+                .provision(&cef_aid, url, browser_profile_to_wire(profile), context)
                 .await
                 .map_err(|e| HttpError::Internal(format!("cef browser provision failed: {e}")))?;
             Ok(())

@@ -7,7 +7,7 @@ use crate::cef_registry::BrowserCefRegistry;
 use crate::cef_service::DispatchError;
 use crate::frame_ring::FrameRing;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
-use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, HostCommand};
+use ozmux_browser_cef_protocol::wire::{BrowserExtraContext, BrowserProfileWire, HostCommand};
 use std::sync::Arc;
 
 /// Errors returned by the cef provisioning hook.
@@ -40,11 +40,16 @@ impl CefBackend {
     ///
     /// `profile` is forwarded verbatim to `HostCommand::BrowserCreate` and
     /// selects the embedded browser's storage profile.
+    ///
+    /// `context` is forwarded into CEF's `extra_info` so the render process
+    /// can build `window.ozmux.context` synchronously in
+    /// `on_context_created`.
     pub async fn provision(
         &self,
         aid: &CefActivityId,
         initial_url: &str,
         profile: BrowserProfileWire,
+        context: BrowserExtraContext,
     ) -> Result<u32, CefBackendError> {
         let cookies = crate::cookie_extractor::extract_for(initial_url)
             .await
@@ -68,6 +73,7 @@ impl CefBackend {
                 epoch,
                 cookies,
                 profile,
+                context,
             })
             .map_err(CefBackendError::ControlSendFailed)?;
 

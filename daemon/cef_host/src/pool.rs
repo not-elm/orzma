@@ -20,7 +20,9 @@ use cef::{
     request_context_create_context,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
-use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, CefCookieDto, HostEvent, InputEvent};
+use ozmux_browser_cef_protocol::wire::{
+    BrowserExtraContext, BrowserProfileWire, CefCookieDto, HostEvent, InputEvent,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -40,6 +42,7 @@ pub enum CefCommand {
         epoch: u32,
         cookies: Vec<CefCookieDto>,
         profile: BrowserProfileWire,
+        context: BrowserExtraContext,
     },
     /// Internal: fires after all cookies from `BrowserCreate` have been
     /// committed to `CefCookieManager`. The UI thread then calls
@@ -51,6 +54,7 @@ pub enum CefCommand {
         initial_url: String,
         epoch: u32,
         profile: BrowserProfileWire,
+        context: BrowserExtraContext,
     },
     /// Resize the browser viewport.
     Resize {
@@ -208,13 +212,15 @@ impl BrowserPool {
                 epoch,
                 cookies,
                 profile,
-            } => self.handle_browser_create(aid, initial_url, epoch, cookies, profile),
+                context,
+            } => self.handle_browser_create(aid, initial_url, epoch, cookies, profile, context),
             CefCommand::CreateBrowserAfterCookies {
                 aid,
                 initial_url,
                 epoch,
                 profile,
-            } => self.handle_create_after_cookies(aid, initial_url, epoch, profile),
+                context,
+            } => self.handle_create_after_cookies(aid, initial_url, epoch, profile, context),
             CefCommand::Resize {
                 aid,
                 css_w,
@@ -242,6 +248,7 @@ impl BrowserPool {
         epoch: u32,
         cookies: Vec<CefCookieDto>,
         profile: BrowserProfileWire,
+        context: BrowserExtraContext,
     ) {
         tracing::info!(
             ?aid,
@@ -266,6 +273,7 @@ impl BrowserPool {
                     initial_url,
                     epoch,
                     profile,
+                    context,
                 },
             ) {
                 tracing::error!(error = %e, "failed to post CreateBrowserAfterCookies");
@@ -285,8 +293,9 @@ impl BrowserPool {
         initial_url: String,
         epoch: u32,
         profile: BrowserProfileWire,
+        context: BrowserExtraContext,
     ) {
-        self.create_browser(aid, initial_url, epoch, profile);
+        self.create_browser(aid, initial_url, epoch, profile, context);
     }
 
     /// Handles `CefCommand::Resize` by clamping to `MAX_VIEWPORT_W`/`MAX_VIEWPORT_H` and updating render state.
@@ -424,6 +433,9 @@ impl BrowserPool {
         initial_url: String,
         epoch: u32,
         profile: BrowserProfileWire,
+        // TODO: Task 4 — forward `context` into CEF `extra_info` so the render
+        // process can build `window.ozmux.context` in `on_context_created`.
+        _context: BrowserExtraContext,
     ) {
         tracing::info!(?aid, %initial_url, epoch, "BrowserCreate");
 
