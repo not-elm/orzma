@@ -299,7 +299,7 @@ enum FrameKind {
 /// Policy, in priority order:
 /// 1. `state.first_emit` → `Snapshot { reason: Initial }` (bootstrap frame).
 /// 2. `DirtyRows::Full` → `Snapshot { reason: Resize }` (full damage after resize or clear).
-/// 3. Partial damage ≥ 70 % of total rows → `Snapshot { reason: Resize }` (bandwidth crossover).
+/// 3. Partial damage ≥ 85 % of total rows → `Snapshot { reason: Resize }` (bandwidth crossover).
 /// 4. Otherwise → `Delta { rows }`.
 fn decide_frame_kind(state: &VtState, dirty: DirtyRows) -> FrameKind {
     let total_rows = state.term.screen_lines() as u16;
@@ -313,7 +313,7 @@ fn decide_frame_kind(state: &VtState, dirty: DirtyRows) -> FrameKind {
             reason: SnapshotReason::Resize,
         },
         DirtyRows::Rows(rows) => {
-            if (rows.len() as u32) * 10 >= (total_rows as u32) * 7 {
+            if (rows.len() as u32) * 20 >= (total_rows as u32) * 17 {
                 FrameKind::Snapshot {
                     reason: SnapshotReason::Resize,
                 }
@@ -947,6 +947,34 @@ mod tests {
             WireMessage::Text(s) => assert_eq!(s, "hello"),
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn decide_frame_kind_below_threshold_keeps_partial_at_84_percent() {
+        // 21/25 rows dirty (84%) — must remain Delta (84 < 85).
+        let mut state = make_state(80, 25);
+        state.first_emit = false;
+        let rows: Vec<u16> = (0..21).collect();
+        let kind = decide_frame_kind(&state, DirtyRows::Rows(rows));
+        assert!(matches!(kind, FrameKind::Delta { .. }));
+    }
+
+    #[test]
+    fn decide_frame_kind_at_threshold_promotes_to_full_at_85_percent() {
+        // 17/20 rows dirty (exactly 85%) — must promote to Snapshot.
+        let mut state = make_state(80, 20);
+        state.first_emit = false;
+        let rows: Vec<u16> = (0..17).collect();
+        let kind = decide_frame_kind(&state, DirtyRows::Rows(rows));
+        assert!(matches!(kind, FrameKind::Snapshot { .. }));
+    }
+
+    #[test]
+    fn decide_frame_kind_full_damage_always_snapshot() {
+        let mut state = make_state(80, 24);
+        state.first_emit = false;
+        let kind = decide_frame_kind(&state, DirtyRows::Full);
+        assert!(matches!(kind, FrameKind::Snapshot { .. }));
     }
 
     #[test]
