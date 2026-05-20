@@ -156,6 +156,8 @@ fn delta_minimal() -> FrameDelta {
         hyperlinks: vec![],
         display_offset: 0,
         produced_at_us: None,
+        modes_added: vec![],
+        modes_removed: vec![],
     }
 }
 
