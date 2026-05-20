@@ -8,7 +8,7 @@ authors.workspace = true
 publish.workspace = true
 
 [features]
-test-helpers = ["dep:toml", "dep:sha2"]
+test-helpers = ["dep:toml", "dep:sha2", "dep:metrics-util"]
 
 [[test]]
 name = "vt_integration"
@@ -80,6 +80,7 @@ tokio = { workspace = true, features = ["test-util"] }
 [dependencies]
 toml = { version = "0.8", default-features = false, features = ["parse"], optional = true }
 sha2 = { version = "0.10", optional = true }
+metrics-util = { workspace = true, optional = true }
 serde_json = "1"
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_extension = { path = "../extension" }

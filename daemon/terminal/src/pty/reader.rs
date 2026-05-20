@@ -59,30 +59,12 @@ pub(crate) fn spawn_pty_reader(
 
 #[cfg(test)]
 mod tests {
+    use crate::service::test_helpers::{counter_value, new_debugging_recorder};
     use bytes::Bytes;
-    use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
-
-    fn snapshot_counter_value(snapshotter: &Snapshotter, name: &str) -> Option<u64> {
-        snapshotter
-            .snapshot()
-            .into_vec()
-            .into_iter()
-            .find_map(|(key, _unit, _desc, value)| {
-                if key.key().name() == name {
-                    match value {
-                        DebugValue::Counter(c) => Some(c),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            })
-    }
 
     #[tokio::test]
     async fn pty_reader_try_send_full_increments_drops_counter() {
-        let recorder = DebuggingRecorder::new();
-        let snapshotter = recorder.snapshotter();
+        let (recorder, snapshotter) = new_debugging_recorder();
         let _guard = metrics::set_default_local_recorder(&recorder);
 
         // Capacity 1 channel saturated by the first send; a second
@@ -96,7 +78,7 @@ mod tests {
             metrics::counter!("ozmux_terminal_pty_chunk_drops_total").increment(1);
         }
 
-        let v = snapshot_counter_value(&snapshotter, "ozmux_terminal_pty_chunk_drops_total");
+        let v = counter_value(&snapshotter, "ozmux_terminal_pty_chunk_drops_total", &[]);
         assert_eq!(v, Some(1));
     }
 }

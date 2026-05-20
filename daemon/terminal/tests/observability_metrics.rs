@@ -4,10 +4,11 @@
 //! Histogram values by name + labels.
 
 use bytes::Bytes;
-use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 use ozmux_multiplexer::{ActivityId, PaneId};
+use ozmux_terminal::service::test_helpers::{
+    counter_value, histogram_count, new_debugging_recorder,
+};
 use ozmux_terminal::{SpawnOptions, TerminalService};
-use std::collections::HashMap;
 use std::time::Duration;
 
 /// Spawns a TerminalService + bootstrap activity at the given dimensions
@@ -36,73 +37,9 @@ async fn spawn_with_emit(cols: u16, rows: u16) -> (TerminalService, ActivityId) 
     (svc, aid)
 }
 
-/// Creates a fresh `DebuggingRecorder` + `Snapshotter` pair. The caller
-/// keeps the recorder alive on its own stack and installs it via
-/// `metrics::set_default_local_recorder(&recorder)`. The recorder must
-/// outlive the `_guard` returned by `set_default_local_recorder`, which
-/// is why the install is done inline by the test rather than abstracted
-/// into a helper that returns the guard by value.
-fn new_recorder() -> (DebuggingRecorder, Snapshotter) {
-    let recorder = DebuggingRecorder::new();
-    let snapshotter = recorder.snapshotter();
-    (recorder, snapshotter)
-}
-
-/// Returns the counter value for `name` + `labels` (subset match), or None.
-fn counter_value(snapshotter: &Snapshotter, name: &str, labels: &[(&str, &str)]) -> Option<u64> {
-    snapshotter
-        .snapshot()
-        .into_vec()
-        .into_iter()
-        .find_map(|(key, _unit, _desc, value)| {
-            if key.key().name() != name {
-                return None;
-            }
-            let key_labels: HashMap<&str, &str> =
-                key.key().labels().map(|l| (l.key(), l.value())).collect();
-            for (k, v) in labels {
-                if key_labels.get(k) != Some(v) {
-                    return None;
-                }
-            }
-            match value {
-                DebugValue::Counter(c) => Some(c),
-                _ => None,
-            }
-        })
-}
-
-/// Returns the histogram sample count for `name` + `labels`, or None.
-fn histogram_count(
-    snapshotter: &Snapshotter,
-    name: &str,
-    labels: &[(&str, &str)],
-) -> Option<usize> {
-    snapshotter
-        .snapshot()
-        .into_vec()
-        .into_iter()
-        .find_map(|(key, _unit, _desc, value)| {
-            if key.key().name() != name {
-                return None;
-            }
-            let key_labels: HashMap<&str, &str> =
-                key.key().labels().map(|l| (l.key(), l.value())).collect();
-            for (k, v) in labels {
-                if key_labels.get(k) != Some(v) {
-                    return None;
-                }
-            }
-            match value {
-                DebugValue::Histogram(samples) => Some(samples.len()),
-                _ => None,
-            }
-        })
-}
-
 #[tokio::test]
 async fn install_recorder_helper_works() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
     metrics::counter!("__test_smoke").increment(1);
     assert_eq!(counter_value(&snapshotter, "__test_smoke", &[]), Some(1));
@@ -110,7 +47,7 @@ async fn install_recorder_helper_works() {
 
 #[tokio::test]
 async fn emit_duration_recorded_on_initial_snapshot() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;
@@ -134,7 +71,7 @@ async fn emit_duration_recorded_on_initial_snapshot() {
 
 #[tokio::test]
 async fn coalesce_wait_recorded_on_deadline_emit() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;
@@ -167,7 +104,7 @@ async fn coalesce_wait_recorded_on_deadline_emit() {
 
 #[tokio::test]
 async fn emit_duration_recorded_on_delta_emit() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;
@@ -196,7 +133,7 @@ async fn emit_duration_recorded_on_delta_emit() {
 
 #[tokio::test]
 async fn snapshot_total_by_reason_initial() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;
@@ -217,7 +154,7 @@ async fn snapshot_total_by_reason_initial() {
 
 #[tokio::test]
 async fn snapshot_total_by_reason_resize() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;
@@ -244,7 +181,7 @@ async fn snapshot_total_by_reason_resize() {
 
 #[tokio::test]
 async fn snapshot_total_sum_equals_frames_emit_total_snapshot_in_band() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;
@@ -301,7 +238,7 @@ async fn snapshot_total_sum_equals_frames_emit_total_snapshot_in_band() {
 
 #[tokio::test]
 async fn subscribe_triggered_snapshot_does_not_tick_snapshot_total() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;
@@ -336,7 +273,7 @@ async fn subscribe_triggered_snapshot_does_not_tick_snapshot_total() {
 
 #[tokio::test]
 async fn snapshot_total_by_reason_threshold() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;
@@ -375,7 +312,7 @@ async fn snapshot_total_by_reason_threshold() {
 
 #[tokio::test]
 async fn pr_e2b_many_rows_with_user_input_skips_coalesce_wait() {
-    let (recorder, snapshotter) = new_recorder();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let (svc, aid) = spawn_with_emit(80, 24).await;

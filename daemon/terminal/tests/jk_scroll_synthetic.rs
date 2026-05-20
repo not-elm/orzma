@@ -10,19 +10,13 @@
 //! The test is `#[ignore]` so it does not run on normal `cargo test`.
 
 use bytes::Bytes;
-use metrics_util::CompositeKey;
-use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 use ozmux_multiplexer::{ActivityId, PaneId};
+use ozmux_terminal::service::test_helpers::{
+    SnapshotRow, counter_value_in as counter_value, histogram_samples_in as histogram_samples,
+    new_debugging_recorder,
+};
 use ozmux_terminal::{SpawnOptions, TerminalService};
-use std::collections::HashMap;
 use std::time::Duration;
-
-type SnapshotRow = (
-    CompositeKey,
-    Option<metrics::Unit>,
-    Option<metrics::SharedString>,
-    DebugValue,
-);
 
 const CHUNKS: usize = 200;
 const CHUNK_INTERVAL_MS: u64 = 15;
@@ -34,53 +28,6 @@ fn nvim_scroll_chunk(seq: usize) -> Bytes {
         "\x1b7\x1b[24;1H\x1b[K\x1b[24;1Hline {seq:04}: lorem ipsum dolor sit amet consectetur\x1b[1;1H-- INSERT --  {seq:04} \x1b8"
     );
     Bytes::from(payload)
-}
-
-/// Returns the counter value for `name` + `labels` (subset match), or None.
-/// NOTE: `DebuggingRecorder::snapshot()` drains histogram samples on each
-/// call, so the caller MUST take a single snapshot and reuse it via this
-/// slice-based lookup rather than re-snapshotting per query.
-fn counter_value(rows: &[SnapshotRow], name: &str, labels: &[(&str, &str)]) -> Option<u64> {
-    rows.iter().find_map(|(key, _u, _d, v)| {
-        if key.key().name() != name {
-            return None;
-        }
-        let kl: HashMap<&str, &str> = key.key().labels().map(|l| (l.key(), l.value())).collect();
-        for (k, val) in labels {
-            if kl.get(k) != Some(val) {
-                return None;
-            }
-        }
-        match v {
-            DebugValue::Counter(c) => Some(*c),
-            _ => None,
-        }
-    })
-}
-
-/// Returns histogram sample values (in seconds) for `name` + `labels`, or None.
-fn histogram_samples(
-    rows: &[SnapshotRow],
-    name: &str,
-    labels: &[(&str, &str)],
-) -> Option<Vec<f64>> {
-    rows.iter().find_map(|(key, _u, _d, v)| {
-        if key.key().name() != name {
-            return None;
-        }
-        let kl: HashMap<&str, &str> = key.key().labels().map(|l| (l.key(), l.value())).collect();
-        for (k, val) in labels {
-            if kl.get(k) != Some(val) {
-                return None;
-            }
-        }
-        match v {
-            DebugValue::Histogram(samples) => {
-                Some(samples.iter().map(|s| s.into_inner()).collect())
-            }
-            _ => None,
-        }
-    })
 }
 
 /// Returns (p50, p99) from a histogram of samples, in milliseconds.
@@ -98,8 +45,7 @@ fn p50_p99_ms(mut samples: Vec<f64>) -> (f64, f64) {
 #[tokio::test]
 #[ignore = "synthetic load test - run explicitly with --ignored"]
 async fn synthetic_jk_scroll_dumps_pr_e2a_metrics() {
-    let recorder = DebuggingRecorder::new();
-    let snapshotter = recorder.snapshotter();
+    let (recorder, snapshotter) = new_debugging_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
 
     let svc = TerminalService::default();

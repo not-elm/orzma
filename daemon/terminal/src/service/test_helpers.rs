@@ -10,9 +10,115 @@ use crate::vt::frame_ring::WireMessage;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::{TermDamage, TermMode};
 use bytes::Bytes;
+use metrics_util::CompositeKey;
+use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 use ozmux_multiplexer::ActivityId;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use tokio::sync::{broadcast, mpsc};
+
+/// One row of a `metrics_util::debugging::Snapshot` materialized via
+/// `Snapshotter::snapshot().into_vec()`. Exposed so tests that need to
+/// query multiple metrics from a single drained snapshot (the histogram
+/// drain semantics force this in some cases) can share a typed alias.
+pub type SnapshotRow = (
+    CompositeKey,
+    Option<metrics::Unit>,
+    Option<metrics::SharedString>,
+    DebugValue,
+);
+
+/// Creates a fresh `DebuggingRecorder` + `Snapshotter` pair. The caller
+/// owns the recorder on its stack and installs it via
+/// `metrics::set_default_local_recorder(&recorder)`. The recorder must
+/// outlive the install guard, which is why the install is done inline by
+/// the test rather than abstracted into a helper that returns the guard.
+pub fn new_debugging_recorder() -> (DebuggingRecorder, Snapshotter) {
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    (recorder, snapshotter)
+}
+
+/// Counter value lookup over a pre-snapshotted row slice, by metric name
+/// and a label-subset match. Use this when a test needs to query several
+/// metrics from a single `snapshot()` call (required for histograms,
+/// which `DebuggingRecorder` drains per snapshot).
+pub fn counter_value_in(rows: &[SnapshotRow], name: &str, labels: &[(&str, &str)]) -> Option<u64> {
+    rows.iter().find_map(|(key, _u, _d, v)| {
+        if key.key().name() != name {
+            return None;
+        }
+        let kl: HashMap<&str, &str> = key.key().labels().map(|l| (l.key(), l.value())).collect();
+        for (k, val) in labels {
+            if kl.get(k) != Some(val) {
+                return None;
+            }
+        }
+        match v {
+            DebugValue::Counter(c) => Some(*c),
+            _ => None,
+        }
+    })
+}
+
+/// Histogram sample count lookup over a pre-snapshotted row slice.
+pub fn histogram_count_in(
+    rows: &[SnapshotRow],
+    name: &str,
+    labels: &[(&str, &str)],
+) -> Option<usize> {
+    histogram_samples_in(rows, name, labels).map(|s| s.len())
+}
+
+/// Histogram samples lookup over a pre-snapshotted row slice, returning
+/// raw sample values for full distribution analysis (p50/p99, bucketing).
+pub fn histogram_samples_in(
+    rows: &[SnapshotRow],
+    name: &str,
+    labels: &[(&str, &str)],
+) -> Option<Vec<f64>> {
+    rows.iter().find_map(|(key, _u, _d, v)| {
+        if key.key().name() != name {
+            return None;
+        }
+        let kl: HashMap<&str, &str> = key.key().labels().map(|l| (l.key(), l.value())).collect();
+        for (k, val) in labels {
+            if kl.get(k) != Some(val) {
+                return None;
+            }
+        }
+        match v {
+            DebugValue::Histogram(samples) => {
+                Some(samples.iter().map(|s| s.into_inner()).collect())
+            }
+            _ => None,
+        }
+    })
+}
+
+/// Counter value lookup. Takes a fresh snapshot of the recorder; safe to
+/// call multiple times since `DebuggingRecorder` does not drain counters.
+pub fn counter_value(
+    snapshotter: &Snapshotter,
+    name: &str,
+    labels: &[(&str, &str)],
+) -> Option<u64> {
+    let rows = snapshotter.snapshot().into_vec();
+    counter_value_in(&rows, name, labels)
+}
+
+/// Histogram sample count lookup. Takes a fresh snapshot of the recorder.
+/// `DebuggingRecorder` drains histograms on each `snapshot()` call, so
+/// for multiple histogram queries against the same observation window
+/// take one snapshot manually and use [`histogram_count_in`].
+pub fn histogram_count(
+    snapshotter: &Snapshotter,
+    name: &str,
+    labels: &[(&str, &str)],
+) -> Option<usize> {
+    let rows = snapshotter.snapshot().into_vec();
+    histogram_count_in(&rows, name, labels)
+}
 
 /// Snapshot of the alacritty `TermDamage` state captured by the test-only
 /// [`TerminalService::inspect_damage_and_reset`] helper. Used by Phase 1
