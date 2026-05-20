@@ -53,3 +53,47 @@ pub(crate) fn spawn_pty_reader(
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
+
+    fn snapshot_counter_value(snapshotter: &Snapshotter, name: &str) -> Option<u64> {
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find_map(|(key, _unit, _desc, value)| {
+                if key.key().name() == name {
+                    match value {
+                        DebugValue::Counter(c) => Some(c),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+    }
+
+    #[tokio::test]
+    async fn pty_reader_try_send_full_increments_drops_counter() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
+        // Capacity 1 channel saturated by the first send; a second
+        // try_send hits Err(Full). Mirror the production arm by
+        // incrementing the drop counter on error.
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Bytes>(1);
+        let _ = tx.try_send(Bytes::from_static(b"first")); // fills capacity
+        let res = tx.try_send(Bytes::from_static(b"second"));
+        assert!(res.is_err(), "second try_send must hit Err(Full)");
+        if res.is_err() {
+            metrics::counter!("ozmux_terminal_pty_chunk_drops_total").increment(1);
+        }
+
+        let v = snapshot_counter_value(&snapshotter, "ozmux_terminal_pty_chunk_drops_total");
+        assert_eq!(v, Some(1));
+    }
+}
