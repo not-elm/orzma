@@ -624,6 +624,13 @@ pub(crate) async fn run_bridge_task(
                     state.pending_damage =
                         Some(collect_dirty_rows(&mut state.term, &mut scratch));
                     state.scratch_dirty = scratch;
+                    // PR-E2a: only mark Deadline if no higher-priority reason
+                    // is already pending (Resize / Initial). is_none() guard
+                    // preserves whatever was set earlier by service::resize
+                    // or by VtState::new.
+                    if state.pending_emit_reason.is_none() {
+                        state.pending_emit_reason = Some(EmitReason::Deadline);
+                    }
                 }
                 emit_now(&vt_state, &mut coalescer);
             }
@@ -661,6 +668,13 @@ pub(crate) async fn run_bridge_task(
                         state.pending_user_input = false;
                     }
                     state.pending_damage = Some(dirty);
+                    if flush {
+                        // PR-E2a: same is_none() guard as deadline arm —
+                        // Initial / Resize set earlier take priority.
+                        if state.pending_emit_reason.is_none() {
+                            state.pending_emit_reason = Some(EmitReason::Immediate);
+                        }
+                    }
                     flush
                 };
                 if should_flush {
