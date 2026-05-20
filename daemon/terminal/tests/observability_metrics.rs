@@ -137,6 +137,39 @@ async fn emit_duration_recorded_on_initial_snapshot() {
 }
 
 #[tokio::test]
+async fn coalesce_wait_recorded_on_deadline_emit() {
+    let (recorder, snapshotter) = new_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let (svc, aid) = spawn_with_emit(80, 24).await;
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+
+    // Drive an initial chunk so first_emit is false (immediate flush
+    // path on bootstrap consumes the chunk without recording into
+    // coalesce_wait — that arm only fires from wait_deadline).
+    chunk_tx.send(Bytes::from_static(b"x\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Multi-row damage delivered via the test chunk sender: bypasses
+    // svc.write so pending_user_input stays false. Verdict is ManyRows,
+    // immediate-flush is false, so the coalescer arms and the deadline
+    // arm fires after at most MAX_CAP (~12 ms).
+    let many: Vec<u8> = (0..5)
+        .flat_map(|i| format!("row {i:02}\r\n").into_bytes())
+        .collect();
+    chunk_tx.send(Bytes::from(many)).await.unwrap();
+    // Wait well past MAX_CAP so the deadline definitely fires.
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    let n = histogram_count(&snapshotter, "ozmux_terminal_coalesce_wait_seconds", &[]);
+    assert!(
+        n.unwrap_or(0) >= 1,
+        "expected >= 1 coalesce_wait sample after a deadline-fired emit, got {n:?}"
+    );
+    svc.kill(&aid).await.unwrap();
+}
+
+#[tokio::test]
 async fn emit_duration_recorded_on_delta_emit() {
     let (recorder, snapshotter) = new_recorder();
     let _guard = metrics::set_default_local_recorder(&recorder);
