@@ -58,6 +58,36 @@ impl Default for BridgeConfig {
     }
 }
 
+/// Why the next `emit_now` is firing.
+///
+/// Threaded through `VtState.pending_emit_reason` (not as an `emit_now`
+/// parameter) because `service::resize` mutates `Term::resize` and then
+/// pings the bridge via an empty-chunk wake-up — there is no resize-
+/// specific call site that could pass `EmitReason::Resize` directly.
+/// See spec § 3.2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmitReason {
+    /// First emit on this VtState (`frame_seq == 0`).
+    Initial,
+    /// Triggered by an explicit `service::resize` call.
+    Resize,
+    /// `Coalescer::should_flush_immediately` returned true (chunk-arm path).
+    Immediate,
+    /// `Coalescer::wait_deadline()` fired (deadline-arm path).
+    Deadline,
+}
+
+impl EmitReason {
+    pub(crate) fn as_static_str(&self) -> &'static str {
+        match self {
+            Self::Initial   => "initial",
+            Self::Resize    => "resize",
+            Self::Immediate => "immediate",
+            Self::Deadline  => "deadline",
+        }
+    }
+}
+
 /// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
 /// PTY chunk.
