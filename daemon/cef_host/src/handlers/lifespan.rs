@@ -9,11 +9,13 @@ use cef::{
     wrap_life_span_handler,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
+use ozmux_browser_cef_protocol::wire::BrowserRole;
 use std::sync::Arc;
 
 wrap_life_span_handler! {
     pub struct OzmuxLifeSpanHandler {
         aid: ActivityId,
+        role: BrowserRole,
         browser_map: Arc<ClientBrowserMap>,
     }
 
@@ -21,7 +23,8 @@ wrap_life_span_handler! {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             tracing::info!(aid = %self.aid.0, "OnAfterCreated");
             if let Some(b) = browser {
-                self.browser_map.insert(b.identifier(), self.aid.clone());
+                self.browser_map
+                    .insert(b.identifier(), self.aid.clone(), self.role);
             }
         }
 

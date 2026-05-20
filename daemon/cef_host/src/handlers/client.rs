@@ -1,12 +1,21 @@
 //! CEF ClientHandler aggregator — exposes RenderHandler, LifeSpanHandler,
-//! DisplayHandler, LoadHandler, and ContextMenuHandler to a
-//! `browser_host_create_browser_sync` call.
+//! DisplayHandler, LoadHandler, ContextMenuHandler, and RequestHandler to
+//! a `browser_host_create_browser_sync` call.
 //!
 //! Also fields render-process messages (`ozmux.call.request`,
 //! `ozmux.sub.open`, `ozmux.sub.cancel`) for the V8 ↔ extension bridge by
-//! caching a per-browser `ActivityId` planted in `on_after_created` (see
-//! `lifespan.rs`) and forwarding the payload to the
-//! [`crate::extension_bridge::ExtensionBridge`].
+//! caching a per-browser `(ActivityId, BrowserRole)` planted in
+//! `on_after_created` (see `lifespan.rs`) and forwarding the payload to
+//! the [`crate::extension_bridge::ExtensionBridge`]. The role is also
+//! consulted by [`crate::handlers::request::OzmuxRequestHandler`] to
+//! deny Browser → `ozmux-ext://` navigations.
+
+#![allow(
+    clippy::too_many_arguments,
+    reason = "wrap_client! synthesizes `OzmuxClient::new` with one arg per handler; each handler \
+              is required by the embedded browser and bundling them would just move the same \
+              fields one call deeper"
+)]
 
 use crate::extension_bridge::ExtensionBridge;
 use crate::process_message::{
@@ -16,28 +25,39 @@ use cef::rc::Rc as _;
 use cef::{
     Browser, CefString, Client, ContextMenuHandler, DisplayHandler, Frame, ImplBrowser, ImplClient,
     ImplListValue, ImplProcessMessage, LifeSpanHandler, LoadHandler, ProcessId, ProcessMessage,
-    RenderHandler, WrapClient, wrap_client,
+    RenderHandler, RequestHandler, WrapClient, wrap_client,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
+use ozmux_browser_cef_protocol::wire::BrowserRole;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Per-browser context used to route process messages back onto the
-/// extension UDS. Populated in `OzmuxLifeSpanHandler::on_after_created`
-/// (which has the `Browser` handle), cleared in `on_before_close`.
+/// extension UDS and to gate navigation policy. Populated in
+/// `OzmuxLifeSpanHandler::on_after_created` (which has the `Browser`
+/// handle), cleared in `on_before_close`.
 #[derive(Default)]
 pub struct ClientBrowserMap {
-    inner: Mutex<HashMap<i32, ActivityId>>,
+    inner: Mutex<HashMap<i32, BrowserEntry>>,
+}
+
+/// Per-browser-id record kept by [`ClientBrowserMap`]: the owning activity
+/// (for bridge routing) and the activity's role (for navigation policy).
+#[derive(Clone)]
+pub(crate) struct BrowserEntry {
+    pub aid: ActivityId,
+    pub role: BrowserRole,
 }
 
 impl ClientBrowserMap {
-    /// Records the activity that owns `browser_id`. Called once per browser
-    /// lifecycle from the LifeSpanHandler on the CEF UI thread.
-    pub fn insert(&self, browser_id: i32, aid: ActivityId) {
+    /// Records the activity that owns `browser_id` together with its role.
+    /// Called once per browser lifecycle from the LifeSpanHandler on the
+    /// CEF UI thread.
+    pub fn insert(&self, browser_id: i32, aid: ActivityId, role: BrowserRole) {
         self.inner
             .lock()
             .expect("client browser map poisoned")
-            .insert(browser_id, aid);
+            .insert(browser_id, BrowserEntry { aid, role });
     }
 
     /// Forgets the mapping; called when a browser is being destroyed.
@@ -48,12 +68,23 @@ impl ClientBrowserMap {
             .remove(&browser_id);
     }
 
-    fn get(&self, browser_id: i32) -> Option<ActivityId> {
+    /// Returns the role of the browser identified by `browser_id`, if known.
+    /// Used by `OzmuxRequestHandler::on_before_browse` to enforce that only
+    /// Extension-role browsers may navigate to `ozmux-ext://` URLs.
+    pub(crate) fn role(&self, browser_id: i32) -> Option<BrowserRole> {
         self.inner
             .lock()
             .expect("client browser map poisoned")
             .get(&browser_id)
-            .cloned()
+            .map(|e| e.role)
+    }
+
+    fn get_aid(&self, browser_id: i32) -> Option<ActivityId> {
+        self.inner
+            .lock()
+            .expect("client browser map poisoned")
+            .get(&browser_id)
+            .map(|e| e.aid.clone())
     }
 }
 
@@ -64,6 +95,7 @@ wrap_client! {
         display: DisplayHandler,
         load: LoadHandler,
         context_menu: ContextMenuHandler,
+        request: RequestHandler,
         bridge: Option<ExtensionBridge>,
         browser_map: Arc<ClientBrowserMap>,
     }
@@ -87,6 +119,10 @@ wrap_client! {
 
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
             Some(self.context_menu.clone())
+        }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request.clone())
         }
 
         fn on_process_message_received(
@@ -118,7 +154,7 @@ wrap_client! {
                 return 0;
             }
             let payload_json = CefString::from(&args.string(0)).to_string();
-            let aid = match self.browser_map.get(browser.identifier()) {
+            let aid = match self.browser_map.get_aid(browser.identifier()) {
                 Some(a) => a,
                 None => {
                     tracing::warn!(

@@ -574,6 +574,11 @@ impl AppState {
                 w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
             })
             .await?;
+        // NOTE: extension owner row is recorded *before* provisioning; if
+        // provisioning fails it must be forgotten here, otherwise
+        // `activity_owner(aid)` keeps returning a stale name for an activity
+        // that no longer exists in the multiplexer.
+        self.extensions.forget_activity(aid);
         Ok(())
     }
 
@@ -585,8 +590,15 @@ impl AppState {
             .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
             .await;
         match activities {
-            Ok(_aids) => {
+            Ok(aids) => {
                 self.multiplexer.pane_owner_window.remove(new_pane_id);
+                // NOTE: split records pane+activity owners up-front (see
+                // `split_pane`); on rollback both must be forgotten or
+                // `activity_owner` / `pane_owner` return stale names.
+                self.extensions.forget_pane(new_pane_id);
+                for aid in &aids {
+                    self.extensions.forget_activity(aid);
+                }
             }
             Err(_) => {
                 tracing::warn!(

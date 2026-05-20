@@ -34,7 +34,9 @@ pub(crate) async fn provision_activity_runtime(
             )
             .await
         }
-        ActivityKind::Extension { .. } => Ok(()),
+        ActivityKind::Extension { .. } => {
+            provision_extension_cef(state, wid, pid, aid).await
+        }
         ActivityKind::Browser {
             initial_url,
             profile,
@@ -69,6 +71,54 @@ pub(crate) async fn provision_activity_runtime(
             Ok(())
         }
     }
+}
+
+/// Spawns the embedded CEF browser that backs an Extension Activity.
+///
+/// The browser is created with `role == Extension` and an initial
+/// `ozmux-ext://<extension>/index.html` URL; the `OzmuxClient`'s
+/// scheme-handler-factory serves the bytes out of the extension's
+/// `launch_dir`, and the render process's `on_context_created` installs
+/// `window.ozmux` because the role gate (see `render_process.rs`) is
+/// satisfied.
+async fn provision_extension_cef(
+    state: &AppState,
+    wid: &WindowId,
+    pid: &PaneId,
+    aid: &ActivityId,
+) -> HttpResult<()> {
+    if state.cef_host.is_dead() {
+        return Err(HttpError::BrowserUnavailable(
+            BrowserUnavailableReason::RetryExhausted {
+                last_error: "cef_host previously crashed".into(),
+            },
+        ));
+    }
+    let extension_name = state.extensions.activity_owner(aid).ok_or_else(|| {
+        HttpError::Internal(format!(
+            "extension activity {aid} has no registered owner; cannot resolve ozmux-ext host",
+        ))
+    })?;
+    let backend = CefBackend {
+        dispatcher: Arc::clone(&state.cef_host),
+        registry: Arc::clone(&state.browser_cef),
+    };
+    let cef_aid = CefActivityId(aid.to_string());
+    let session_id = crate::handlers::windows::panes::session_owning_window(state, wid).await;
+    let context = BrowserExtraContext {
+        role: BrowserRole::Extension,
+        session_id: session_id.map(|s| s.to_string()),
+        window_id: wid.to_string(),
+        pane_id: pid.to_string(),
+        activity_id: aid.to_string(),
+        extension_name: Some(extension_name.clone()),
+    };
+    let initial_url = format!("ozmux-ext://{extension_name}/index.html");
+    backend
+        .provision(&cef_aid, &initial_url, BrowserProfileWire::Incognito, context)
+        .await
+        .map_err(|e| HttpError::Internal(format!("cef extension provision failed: {e}")))?;
+    Ok(())
 }
 
 /// Converts a multiplexer profile variant to its wire-protocol equivalent

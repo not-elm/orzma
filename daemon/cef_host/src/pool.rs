@@ -529,6 +529,7 @@ impl BrowserPool {
         let render_state = Arc::new(RenderHandlerState::new(1280, 800, 1.0));
         let mut client = build_client(
             aid.clone(),
+            context.role,
             self.event_tx.clone(),
             Arc::clone(&render_state),
             Arc::clone(&self.frame_pool),
@@ -684,8 +685,14 @@ impl BrowserPool {
 }
 
 /// Builds the `OzmuxClient` wrapping every per-browser handler.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "per-browser-creation factory: role is required by lifespan + request handlers, and \
+              bundling these into a struct would just move the same fields one layer deeper"
+)]
 fn build_client(
     aid: ActivityId,
+    role: ozmux_browser_cef_protocol::wire::BrowserRole,
     event_tx: mpsc::UnboundedSender<HostEvent>,
     render_state: Arc<RenderHandlerState>,
     frame_pool: Arc<FrameBufferPool>,
@@ -694,6 +701,7 @@ fn build_client(
     bridge: Option<ExtensionBridge>,
 ) -> Client {
     use crate::handlers::client::ClientBrowserMap;
+    use crate::handlers::request::OzmuxRequestHandler;
     let browser_map = Arc::new(ClientBrowserMap::default());
     let render_handler = OzmuxRenderHandler::new(
         aid.clone(),
@@ -703,17 +711,20 @@ fn build_client(
         session_id,
         epoch,
     );
-    let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone(), Arc::clone(&browser_map));
+    let life_span_handler =
+        OzmuxLifeSpanHandler::new(aid.clone(), role, Arc::clone(&browser_map));
     let nav_inner = NavInner::new(aid, event_tx);
     let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
     let load_handler = OzmuxLoadHandler::new(nav_inner);
     let context_menu_handler = OzmuxContextMenuHandler::new();
+    let request_handler = OzmuxRequestHandler::new(Arc::clone(&browser_map));
     OzmuxClient::new(
         render_handler,
         life_span_handler,
         display_handler,
         load_handler,
         context_menu_handler,
+        request_handler,
         bridge,
         browser_map,
     )
