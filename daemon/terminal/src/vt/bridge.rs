@@ -18,7 +18,7 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::vt::coalescer::{Coalescer, DamageVerdict};
 use crate::vt::frame::{Cursor, RenderFrame, SnapshotReason, encode};
 use crate::vt::frame_builder::{
-    DirtyRows, build_delta, build_mode, build_snapshot, collect_dirty_rows, extract_cursor,
+    DirtyRows, build_delta, build_snapshot, collect_dirty_rows, extract_cursor,
 };
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
@@ -101,6 +101,18 @@ pub(crate) struct VtState {
     /// Wall-clock epoch micros captured at the same moment as `started_at`.
     /// `None` when `SystemTime` predates the Unix epoch (essentially never).
     pub(crate) bridge_started_at_unix_us: Option<u64>,
+    /// Modes that became active since the previous successful emit.
+    /// OVERWRITTEN on each `term.advance(chunk)` call — never appended —
+    /// to keep the net transition correct under A→B→A flips.
+    /// `&'static str` (not `String`) avoids per-chunk allocation; converted
+    /// to `Vec<String>` only at emit-time when building the FrameDelta.
+    pub(crate) pending_modes_added: Vec<&'static str>,
+    /// Modes that became inactive since the previous successful emit.
+    pub(crate) pending_modes_removed: Vec<&'static str>,
+    /// Mirror of `term.mode()` captured at the previous successful emit.
+    /// Initialized in `VtState::new` to `*term.mode()` (alacritty default
+    /// mode set at construction time).
+    pub(crate) last_emit_mode: alacritty_terminal::term::TermMode,
     /// Handle for the 100 ms broadcast-depth gauge task.
     /// `AbortOnDropHandle` cancels the task when this `VtState` is dropped.
     /// `None` when `BridgeConfig::spawn_gauge` is false.
@@ -120,6 +132,7 @@ impl VtState {
             rows: rows.into(),
         };
         let term = Term::new(Config::default(), &size, listener);
+        let last_emit_mode = *term.mode();
         let started_at = std::time::Instant::now();
         let bridge_started_at_unix_us = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -139,6 +152,9 @@ impl VtState {
             title: None,
             started_at,
             bridge_started_at_unix_us,
+            pending_modes_added: Vec::new(),
+            pending_modes_removed: Vec::new(),
+            last_emit_mode,
             gauge_handle: None,
         }
     }
@@ -232,25 +248,15 @@ const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 /// Emits a frame for the damage stashed on `VtState` and disarms the
 /// Coalescer. Called by [`run_bridge_task`] from both the chunk-immediate-flush
-/// path and the deadline-fires path. The `window_open_mode` is consumed via
-/// `.take()` so the next window starts with a fresh capture.
-fn emit_now(
-    vt_state: &Arc<std::sync::Mutex<VtState>>,
-    coalescer: &mut Coalescer,
-    window_open_mode: &mut Option<alacritty_terminal::term::TermMode>,
-) {
+/// path and the deadline-fires path.
+fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer) {
     let mut state = vt_state.lock().expect("vt_state poisoned");
 
     let Some(dirty) = state.pending_damage.take() else {
         coalescer.disarm();
-        *window_open_mode = None;
         return;
     };
 
-    let prev_mode = window_open_mode
-        .take()
-        .unwrap_or_else(|| *state.term.mode());
-    let curr_mode = *state.term.mode();
     let curr_cursor = extract_cursor(&state.term);
     let cursor_unchanged = state
         .prev_cursor
@@ -258,7 +264,9 @@ fn emit_now(
         .is_some_and(|prev| *prev == curr_cursor);
 
     let dirty_is_empty = matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
-    if dirty_is_empty && prev_mode == curr_mode && cursor_unchanged && !state.first_emit {
+    let modes_unchanged =
+        state.pending_modes_added.is_empty() && state.pending_modes_removed.is_empty();
+    if dirty_is_empty && modes_unchanged && cursor_unchanged && !state.first_emit {
         coalescer.disarm();
         return;
     }
@@ -267,6 +275,20 @@ fn emit_now(
     state.first_emit = false;
     let seq = state.frame_seq;
     let produced_at = state.current_produced_at_us();
+
+    // CAT-007: convert pending mode transitions (Vec<&'static str>) to owned
+    // Vec<String> for wire serialization. Cleared in the commit phase below.
+    let modes_added_owned: Vec<String> = state
+        .pending_modes_added
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let modes_removed_owned: Vec<String> = state
+        .pending_modes_removed
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+
     let frame = {
         let VtState {
             ref term,
@@ -277,14 +299,27 @@ fn emit_now(
             FrameKind::Snapshot { reason } => {
                 RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks, produced_at))
             }
-            FrameKind::Delta { rows } => {
-                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks, produced_at, vec![], vec![]))
-            }
+            FrameKind::Delta { rows } => RenderFrame::Delta(build_delta(
+                term,
+                seq,
+                &rows,
+                hyperlinks,
+                produced_at,
+                modes_added_owned,
+                modes_removed_owned,
+            )),
         }
     };
     state.prev_cursor = Some(curr_cursor);
     state.term.reset_damage();
-    let encoded_vec = encode(&frame).expect("encode infallible");
+    let encoded_vec = match encode(&frame) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("frame encode failed: {e}");
+            coalescer.disarm();
+            return;
+        }
+    };
 
     if encoded_vec.len() > MAX_FRAME_BYTES {
         let error_seq = state.frame_seq;
@@ -305,16 +340,6 @@ fn emit_now(
         state.frame_seq = state.frame_seq.wrapping_add(1);
         let encoded = Bytes::from(encoded_vec);
         state.frame_ring.push_binary(binary_seq, encoded.clone());
-
-        // NOTE: mode is announced BEFORE the binary so the client
-        // applies mode-related side-effects before re-rendering.
-        if let Some(m) = build_mode(prev_mode, curr_mode, state.frame_seq) {
-            let mode_seq = state.frame_seq;
-            state.frame_seq = state.frame_seq.wrapping_add(1);
-            let json = serde_json::to_string(&m).expect("mode json infallible");
-            state.frame_ring.push_mode(mode_seq, json.clone());
-            let _ = state.wire_broadcast.send(WireMessage::Text(json));
-        }
         let _ = state.wire_broadcast.send(WireMessage::Binary {
             seq: binary_seq,
             encoded,
@@ -324,6 +349,13 @@ fn emit_now(
             RenderFrame::Delta(_) => "delta",
         };
         counter!("ozmux_frames_emit_total", "kind" => kind_label).increment(1);
+
+        // CAT-007 commit phase: the pending mode transition has been bundled into
+        // the wire frame. Reset pending and update last_emit_mode so the next
+        // advance computes the diff from this point.
+        state.pending_modes_added.clear();
+        state.pending_modes_removed.clear();
+        state.last_emit_mode = *state.term.mode();
     }
 
     coalescer.disarm();
@@ -375,7 +407,6 @@ pub(crate) async fn run_bridge_task(
             Some(AbortOnDropHandle::new(handle));
     }
     let mut coalescer = Coalescer::new();
-    let mut window_open_mode: Option<alacritty_terminal::term::TermMode> = None;
 
     loop {
         tokio::select! {
@@ -389,29 +420,33 @@ pub(crate) async fn run_bridge_task(
                 // advance calls until reset_damage).
                 {
                     let mut state = vt_state.lock().expect("vt_state poisoned");
-                    let pre_advance_mode = *state.term.mode();
                     while let Ok(chunk) = pty_rx.try_recv() {
                         if !chunk.is_empty() {
                             state.advance(&chunk);
+                            // CAT-007: recompute mode transition against last_emit_mode. OVERWRITE
+                            // semantics (never append) keep the net transition correct across A→B→A.
+                            let curr_mode = *state.term.mode();
+                            let diff = crate::vt::mode_diff::diff_mode(state.last_emit_mode, curr_mode);
+                            state.pending_modes_added = diff.added;
+                            state.pending_modes_removed = diff.removed;
                         }
-                    }
-                    if window_open_mode.is_none() {
-                        window_open_mode = Some(pre_advance_mode);
                     }
                     state.pending_damage = Some(collect_dirty_rows(&mut state.term));
                 }
-                emit_now(&vt_state, &mut coalescer, &mut window_open_mode);
+                emit_now(&vt_state, &mut coalescer);
             }
             chunk = pty_rx.recv() => {
                 let Some(chunk) = chunk else { break };
                 let should_flush = {
                     let mut state = vt_state.lock().expect("vt_state poisoned");
-                    let pre_advance_mode = *state.term.mode();
                     if !chunk.is_empty() {
                         state.advance(&chunk);
-                    }
-                    if !coalescer.is_armed() && window_open_mode.is_none() {
-                        window_open_mode = Some(pre_advance_mode);
+                        // CAT-007: recompute mode transition against last_emit_mode. OVERWRITE
+                        // semantics (never append) keep the net transition correct across A→B→A.
+                        let curr_mode = *state.term.mode();
+                        let diff = crate::vt::mode_diff::diff_mode(state.last_emit_mode, curr_mode);
+                        state.pending_modes_added = diff.added;
+                        state.pending_modes_removed = diff.removed;
                     }
                     let dirty = collect_dirty_rows(&mut state.term);
                     let verdict = classify_damage(&dirty, state.cursor_changed());
@@ -435,7 +470,7 @@ pub(crate) async fn run_bridge_task(
                     flush
                 };
                 if should_flush {
-                    emit_now(&vt_state, &mut coalescer, &mut window_open_mode);
+                    emit_now(&vt_state, &mut coalescer);
                 } else {
                     coalescer.arm_or_extend(Instant::now());
                 }
