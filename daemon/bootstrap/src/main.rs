@@ -123,9 +123,8 @@ fn install_panic_hook() {
 /// inside an active Tokio runtime.
 fn spawn_signal_listener(stop_tx_slot: Arc<Mutex<Option<oneshot::Sender<()>>>>) {
     tokio::spawn(async move {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("install SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT received"),
             _ = sigterm.recv() => tracing::info!("SIGTERM received"),

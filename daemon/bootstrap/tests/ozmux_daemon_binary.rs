@@ -11,7 +11,11 @@ fn ozmux_daemon_path() -> std::path::PathBuf {
     p.pop(); // bootstrap → daemon
     p.pop(); // daemon → workspace root
     p.push("target");
-    p.push(if cfg!(debug_assertions) { "debug" } else { "release" });
+    p.push(if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    });
     p.push("ozmux-daemon");
     p
 }

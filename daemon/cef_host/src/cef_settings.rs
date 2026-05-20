@@ -101,8 +101,8 @@ pub fn in_bundle_helper() -> Option<PathBuf> {
 /// returns so the OS lock is not released early.
 pub fn acquire_data_root() -> (PathBuf, Option<DataRootLock>) {
     let browser_data_root = profile::browser_data_root();
-    let data_root_lock = profile::acquire_data_root_lock(&browser_data_root)
-        .expect("create browser data root");
+    let data_root_lock =
+        profile::acquire_data_root_lock(&browser_data_root).expect("create browser data root");
     if data_root_lock.is_none() {
         tracing::warn!(
             root = %browser_data_root.display(),

@@ -240,6 +240,41 @@ pub enum HostEvent {
         /// `true` when this frame belongs to a popup overlay.
         is_popup: bool,
     },
+    /// In-process screencast frame carrying its pixel payload inline as
+    /// `bytes::Bytes` (Plan 3 Task 11+12). Replaces `FrameDescriptor` on the
+    /// in-process path: the cef_host render handler copies the BGRA buffer
+    /// into a recycled `Vec<u8>` from `FrameBufferPool`, wraps it in `Bytes`,
+    /// and sends this event so the event pump can push a `FrameEnvelope`
+    /// straight into the per-activity `FrameRing` without any shm hop.
+    ///
+    /// Fields mirror `FrameEnvelope` 1:1 to avoid a circular `ozmux_browser`
+    /// dependency on this crate. Plan 5 Task 22 will retire `FrameDescriptor`.
+    FrameProduced {
+        /// Activity identifier.
+        aid: ActivityId,
+        /// Daemon-wide session identifier stamped on this frame.
+        session_id: u64,
+        /// Monotonic epoch counter; increments on cef_host respawn.
+        epoch: u32,
+        /// Monotonic frame sequence counter within the current epoch.
+        frame_seq: u64,
+        /// Wall-clock capture timestamp in microseconds.
+        captured_at_us: u64,
+        /// Frame width in pixels.
+        width: u32,
+        /// Frame height in pixels.
+        height: u32,
+        /// `true` for keyframes that can begin a decode chain.
+        is_keyframe: bool,
+        /// Damaged pixel regions within the frame.
+        damage_rects: Vec<Rect>,
+        /// `true` when this frame belongs to a popup overlay.
+        is_popup: bool,
+        /// Raw BGRA pixel data (full frame for keyframes; concatenated
+        /// damaged-row strips for deltas).
+        #[serde(with = "crate::bytes_serde")]
+        bgra: Bytes,
+    },
     /// Navigation state changed (URL, title, back/forward availability).
     NavStateChanged {
         /// Activity identifier.

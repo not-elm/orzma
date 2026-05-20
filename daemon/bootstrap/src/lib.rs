@@ -97,7 +97,8 @@ pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
 
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
-    let cef_dispatcher = acquire_cef_host(&runtime).await;
+    let browser_cef = Arc::new(BrowserCefRegistry::new());
+    let cef_dispatcher = acquire_cef_host(&runtime, browser_cef.session_id()).await;
 
     let state = AppState::new(
         terminal.clone(),
@@ -107,6 +108,7 @@ pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
         Arc::clone(&configs),
         titles.clone(),
         Arc::clone(&cef_dispatcher),
+        Arc::clone(&browser_cef),
     );
 
     let event_pump = spawn_event_pump(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
@@ -225,8 +227,10 @@ async fn init_runtime() -> anyhow::Result<Arc<RuntimeRoot>> {
 /// via the in-process create_browser path (Plan 3 Task 12).
 async fn acquire_cef_host(
     _runtime: &RuntimeRoot,
+    session_id: u64,
 ) -> Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> {
     use ozmux_browser_cef_protocol::wire::HostEvent;
+    use ozmux_cef_host::FrameBufferPool;
     use ozmux_cef_host::pool::BrowserPool;
     use ozmux_cef_host::post_command::PoolHandle;
     use ozmux_cef_host::profile;
@@ -247,13 +251,18 @@ async fn acquire_cef_host(
     });
 
     let browser_data_root = profile::browser_data_root();
+    // 60-frame budget matches the FrameRing budget in `frame_ring.rs`; under
+    // sustained 60 fps × 33 MB (4K BGRA) load this caps in-flight pool
+    // allocations at ~2 GB before the recycler stabilises.
+    let frame_pool = Arc::new(FrameBufferPool::new(60));
     // Persistent disk profiles are paused pool-wide (see BrowserPool docs); the
     // flag is preserved so the lock plumbing stays in place for future work.
-    let pool = BrowserPool::new(unb_tx, browser_data_root, false);
+    let pool = BrowserPool::new(unb_tx, browser_data_root, false, session_id, frame_pool);
     let pool_handle = PoolHandle::new(pool);
 
     Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
-        pool_handle, bnd_rx,
+        pool_handle,
+        bnd_rx,
     ))
 }
 

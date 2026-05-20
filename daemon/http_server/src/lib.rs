@@ -80,6 +80,7 @@ pub(crate) mod test_helpers {
             Arc::new(ozmux_configs::OzmuxConfigs::default()),
             crate::activity_titles::ActivityTitles::default(),
             cef_host,
+            Arc::new(ozmux_browser::cef_registry::BrowserCefRegistry::new()),
         )
     }
 

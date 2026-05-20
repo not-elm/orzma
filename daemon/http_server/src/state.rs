@@ -93,6 +93,10 @@ impl AppState {
     /// intentionally not derived so callers cannot silently produce a state
     /// whose `TerminalService`, `ExtensionRegistry`, or `LayoutBroadcaster`
     /// are detached from the daemon's runtime root.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "AppState aggregates every daemon subsystem; threading them through a builder would just rename the noise"
+    )]
     pub fn new(
         terminal: TerminalService,
         extensions: ExtensionRegistry,
@@ -101,6 +105,7 @@ impl AppState {
         configs: Arc<OzmuxConfigs>,
         titles: ActivityTitles,
         cef_host: Arc<dyn CefDispatcher>,
+        browser_cef: Arc<BrowserCefRegistry>,
     ) -> Self {
         Self {
             multiplexer: MultiplexerService::default(),
@@ -110,7 +115,7 @@ impl AppState {
             session_broadcast,
             configs,
             titles,
-            browser_cef: Arc::new(BrowserCefRegistry::new()),
+            browser_cef,
             cef_host,
         }
     }

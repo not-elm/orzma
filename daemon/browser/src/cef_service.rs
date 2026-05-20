@@ -236,9 +236,7 @@ fn default_cef_host_bin() -> std::path::PathBuf {
 /// daemon unit tests that build `AppState` but never exercise the cef path.
 /// Must be called from within a Tokio runtime context.
 #[doc(hidden)]
-#[deprecated(
-    note = "Use ozmux_browser::cef_dispatcher::stub::StubCefDispatcher::dead() instead"
-)]
+#[deprecated(note = "Use ozmux_browser::cef_dispatcher::stub::StubCefDispatcher::dead() instead")]
 pub fn stub_for_tests() -> CefHostHandles {
     let (tx, _rx) = mpsc::channel::<HostCommand>(8);
     let (_ev_tx, ev_rx) = mpsc::channel::<HostEvent>(8);
@@ -259,9 +257,7 @@ pub fn stub_for_tests() -> CefHostHandles {
 /// by the daemon-bootstrap fallback when `spawn_and_handshake` fails — terminal
 /// activities continue to function and every Browser Activity request is
 /// short-circuited with `BrowserUnavailable` by the existing `is_dead` checks.
-#[deprecated(
-    note = "Live dispatcher's failure path now returns Arc<dyn CefDispatcher> directly"
-)]
+#[deprecated(note = "Live dispatcher's failure path now returns Arc<dyn CefDispatcher> directly")]
 pub fn dead_handles_after_spawn_failure() -> CefHostHandles {
     let (tx, _rx) = mpsc::channel::<HostCommand>(8);
     let (_ev_tx, ev_rx) = mpsc::channel::<HostEvent>(8);
@@ -459,9 +455,44 @@ async fn event_pump_loop(mut events: mpsc::Receiver<HostEvent>, registry: Arc<Br
                     tracing::debug!(error = %e, "cursor_publish: aid not in registry");
                 }
             }
-            // On each frame cef_host writes to shm and emits a FrameDescriptor;
-            // the pump reads the named slot and publishes it into the ring so
-            // WS subscribers receive a Screencast.
+            // In-process screencast frame (Plan 3 Task 11+12): the cef_host
+            // render handler already copied the BGRA payload through
+            // `FrameBufferPool`, so we just wrap the fields in a `FrameEnvelope`
+            // and push into the per-activity ring.
+            HostEvent::FrameProduced {
+                aid,
+                session_id,
+                epoch,
+                frame_seq,
+                captured_at_us,
+                width,
+                height,
+                is_keyframe,
+                damage_rects,
+                is_popup,
+                bgra,
+            } => {
+                let Some(ring) = registry.frame_ring(&aid) else {
+                    tracing::debug!(aid = %aid.0, "FrameProduced: aid not in registry");
+                    continue;
+                };
+                ring.push(Arc::new(FrameEnvelope {
+                    session_id,
+                    epoch,
+                    frame_seq,
+                    captured_at_us,
+                    width,
+                    height,
+                    is_keyframe,
+                    damage_rects,
+                    is_popup,
+                    bgra,
+                }));
+            }
+            // Legacy out-of-process path: cef_host writes the frame to shm and
+            // emits a `FrameDescriptor`; the pump reads the slot and publishes
+            // it. Retained while Plan 3 in-process work co-exists with the OoP
+            // wiring; Plan 5 Task 22 retires this arm together with shm.
             HostEvent::FrameDescriptor {
                 aid,
                 slot_idx,

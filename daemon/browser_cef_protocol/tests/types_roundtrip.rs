@@ -343,6 +343,28 @@ fn host_event_frame_descriptor_with_popup_roundtrips() {
 }
 
 #[test]
+fn host_event_frame_produced_roundtrips() {
+    wire_roundtrip(HostEvent::FrameProduced {
+        aid: ActivityId("a1".into()),
+        session_id: 1_700_000_000_000_000,
+        epoch: 3,
+        frame_seq: 7,
+        captured_at_us: 1_700_000_000_000_777,
+        width: 1920,
+        height: 1080,
+        is_keyframe: true,
+        damage_rects: vec![Rect {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        }],
+        is_popup: false,
+        bgra: bytes::Bytes::from(vec![0xab; 64]),
+    });
+}
+
+#[test]
 fn host_event_nav_state_changed_roundtrips() {
     wire_roundtrip(HostEvent::NavStateChanged {
         aid: ActivityId("a1".into()),

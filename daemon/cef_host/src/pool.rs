@@ -5,6 +5,7 @@
 //! `cef::post_task(ThreadId::UI, ExecuteTask)`; `BrowserPool::execute` runs on
 //! the UI thread under the `PoolHandle` mutex.
 
+use crate::frame_buffer_pool::FrameBufferPool;
 use crate::handlers::client::OzmuxClient;
 use crate::handlers::context_menu::OzmuxContextMenuHandler;
 use crate::handlers::display::{NavInner, OzmuxDisplayHandler};
@@ -128,6 +129,14 @@ pub struct BrowserPool {
     /// after construction. Used by the cookie-install callback to re-post
     /// `CreateBrowserAfterCookies` back to the UI thread from the CEF IO thread.
     pub(crate) pool_handle: Option<PoolHandle>,
+    /// Daemon-wide session identifier stamped onto every emitted
+    /// `HostEvent::FrameProduced`. The matching `FrameRing` is constructed with
+    /// the same id so subscribers can detect a daemon restart via mismatch.
+    session_id: u64,
+    /// Recycler for the BGRA buffers produced by `RenderHandler::on_paint`.
+    /// Shared across every browser in the pool so 60 fps × 33 MB-frame loads
+    /// reuse allocations instead of stressing the global allocator.
+    frame_pool: Arc<FrameBufferPool>,
     /// Disk-persistent named-profile request contexts, keyed by profile name.
     /// Shared across activities naming the same profile; ref-counted by
     /// `named_refcounts` and dropped when the last activity closes.
@@ -170,16 +179,27 @@ impl BrowserPool {
     ///
     /// `persistent_profiles_enabled` is `false` when another daemon holds the
     /// data-root lock; named profiles are then demoted to incognito storage.
+    ///
+    /// `session_id` is the daemon-wide identifier stamped onto every
+    /// `HostEvent::FrameProduced`; the matching `BrowserCefRegistry` is built
+    /// with the same id.
+    ///
+    /// `frame_pool` recycles the BGRA buffers each `RenderHandler::on_paint`
+    /// allocates, shared across every browser in this pool.
     pub fn new(
         event_tx: mpsc::UnboundedSender<HostEvent>,
         root_cache_path: PathBuf,
         persistent_profiles_enabled: bool,
+        session_id: u64,
+        frame_pool: Arc<FrameBufferPool>,
     ) -> Self {
         Self {
             browsers: HashMap::new(),
             event_tx,
             shutdown_requested: false,
             pool_handle: None,
+            session_id,
+            frame_pool,
             named_contexts: HashMap::new(),
             named_refcounts: HashMap::new(),
             pending_contexts: HashMap::new(),
@@ -458,8 +478,10 @@ impl BrowserPool {
         let mut client = build_client(
             aid.clone(),
             self.event_tx.clone(),
-            Arc::clone(&shm),
             Arc::clone(&render_state),
+            Arc::clone(&self.frame_pool),
+            self.session_id,
+            epoch,
         );
         let window_info = build_window_info();
         let browser_settings = build_browser_settings();
@@ -627,10 +649,19 @@ fn unmap_and_close(ptr: *mut libc::c_void, total_size: usize, shm_fd: RawFd) {
 fn build_client(
     aid: ActivityId,
     event_tx: mpsc::UnboundedSender<HostEvent>,
-    shm: Arc<ShmWriter>,
     render_state: Arc<RenderHandlerState>,
+    frame_pool: Arc<FrameBufferPool>,
+    session_id: u64,
+    epoch: u32,
 ) -> Client {
-    let render_handler = OzmuxRenderHandler::new(aid.clone(), shm, render_state, event_tx.clone());
+    let render_handler = OzmuxRenderHandler::new(
+        aid.clone(),
+        render_state,
+        event_tx.clone(),
+        frame_pool,
+        session_id,
+        epoch,
+    );
     let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone());
     let nav_inner = NavInner::new(aid, event_tx);
     let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
