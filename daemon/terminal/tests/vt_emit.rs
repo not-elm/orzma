@@ -95,7 +95,14 @@ async fn second_chunk_emits_a_delta() {
 }
 
 #[tokio::test]
-async fn mode_change_text_frame_emitted_before_binary() {
+async fn mode_change_inlines_into_next_binary_delta() {
+    // CAT-007: mode transitions are inlined into the next binary FrameDelta
+    // rather than emitted as a separate WireMessage::Text frame.
+    //
+    // Bracketed-paste mode (\x1b[?2004h) toggles a mode bit without triggering
+    // DirtyRows::Full, so the emit path is a Delta (not a Snapshot). The
+    // trailing printable byte 'X' dirties one row, causing the bridge to flush
+    // a Delta that carries modes_added=["bracketed-paste"].
     let svc = TerminalService::default();
     let pane = PaneId::new();
     let aid = ActivityId::new();
@@ -114,35 +121,58 @@ async fn mode_change_text_frame_emitted_before_binary() {
     .await
     .unwrap();
 
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
     let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
-    // Skim past the initial snapshot.
-    let _ = collect_binary(&mut rx, std::time::Duration::from_secs(2)).await;
 
-    // Send ?1049 enter alt-screen escape via printf so the shell echoes the bytes.
-    svc.write(&aid, b"printf '\\033[?1049h'\n").await.unwrap();
-
-    // The bridge should emit a Text(mode) BEFORE the Binary(delta) caused by the same chunk.
-    let mut saw_text_first = false;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    // Drain bootstrap frames so subsequent receives are caused only by the test input.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(300);
     while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
-            Ok(Ok(WireMessage::Text(s))) if s.contains("\"alt-screen\"") => {
-                saw_text_first = true;
-                // Next message must be Binary.
-                match tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv()).await {
-                    Ok(Ok(WireMessage::Binary { .. })) => break,
-                    other => panic!("expected Binary after Text(mode); got {other:?}"),
-                }
-            }
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(30), rx.recv()).await;
+    }
+
+    // Send bracketed-paste enable + one printable byte in a single chunk.
+    chunk_tx
+        .send(bytes::Bytes::from_static(b"\x1b[?2004hX"))
+        .await
+        .unwrap();
+
+    // Collect all binary frames arriving within 500 ms.
+    let mut binary_frames: Vec<bytes::Bytes> = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(30), rx.recv()).await {
+            Ok(Ok(WireMessage::Binary { encoded, .. })) => binary_frames.push(encoded),
             Ok(Ok(_)) => continue,
             Ok(Err(_)) => break,
             Err(_) => continue,
         }
     }
+
     assert!(
-        saw_text_first,
-        "Text(mode) with alt-screen must appear before Binary delta"
+        !binary_frames.is_empty(),
+        "expected at least one binary frame on the broadcast"
     );
+
+    let first_delta_with_modes = binary_frames
+        .into_iter()
+        .find_map(|bytes| {
+            let frame: ozmux_terminal::vt::RenderFrame = rmp_serde::from_slice(&bytes).ok()?;
+            match frame {
+                ozmux_terminal::vt::RenderFrame::Delta(d) if !d.modes_added.is_empty() => Some(d),
+                _ => None,
+            }
+        })
+        .expect("no FrameDelta with inlined modes_added found");
+
+    assert!(
+        first_delta_with_modes
+            .modes_added
+            .iter()
+            .any(|m| m == "bracketed-paste"),
+        "modes_added should contain bracketed-paste; got {:?}",
+        first_delta_with_modes.modes_added
+    );
+
     svc.kill(&aid).await.unwrap();
 }
 

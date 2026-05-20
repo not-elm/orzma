@@ -76,7 +76,15 @@ async fn binary_delta_ring_entry_count_matches_broadcast_count() {
 }
 
 #[tokio::test]
-async fn mode_change_ring_entry_count_matches_broadcast_count() {
+async fn mode_change_inlined_no_separate_ring_entry() {
+    // Under CAT-007 the bridge does NOT push a separate mode entry to the
+    // ring; the mode transition is inlined into the next binary FrameDelta.
+    // Invariant: broadcast_send_count == ring_entries_count, AND the
+    // FrameDelta carries modes_added=["bracketed-paste"].
+    //
+    // Bracketed-paste (\x1b[?2004h) + one byte is used instead of alt-screen
+    // (\x1b[?1049h). Alt-screen triggers DirtyRows::Full → Snapshot, which
+    // routes through FrameSnapshot.modes rather than FrameDelta.modes_added.
     let (svc, aid) = spawn_svc(80, 24).await;
     let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
     let mut rx = svc.subscribe_wire_broadcast(&aid).await.unwrap();
@@ -85,11 +93,10 @@ async fn mode_change_ring_entry_count_matches_broadcast_count() {
     drain_all(&mut rx, Duration::from_millis(300)).await;
     let ring_after_bootstrap = svc.frame_ring_entries_len(&aid).await.unwrap();
 
-    // Enter alt-screen — this triggers a mode change (ALT_SCREEN flag toggles)
-    // alongside the binary frame. The bridge should push both a mode entry and
-    // a binary entry to the ring, and broadcast both Text(mode) + Binary.
+    // Send bracketed-paste enable + one printable byte so the bridge flushes a
+    // Delta with modes_added inlined — no separate mode entry on the ring.
     chunk_tx
-        .send(Bytes::from_static(b"\x1b[?1049h"))
+        .send(Bytes::from_static(b"\x1b[?2004hX"))
         .await
         .unwrap();
 
@@ -99,7 +106,7 @@ async fn mode_change_ring_entry_count_matches_broadcast_count() {
 
     assert_eq!(
         broadcast_count, ring_delta,
-        "mode change: broadcast_count={broadcast_count} ring_delta={ring_delta}"
+        "mode change inlined: broadcast_count={broadcast_count} ring_delta={ring_delta}"
     );
 
     svc.kill(&aid).await.unwrap();
