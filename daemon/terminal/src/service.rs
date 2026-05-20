@@ -209,6 +209,10 @@ impl TerminalService {
             // because cells map to different Line indices after column/row resize.
             // The next emit will be a forced Snapshot which repopulates row_hashes.
             state.row_hashes.clear();
+            // PR-E2a: attribute the upcoming snapshot to a resize event.
+            // The bridge would otherwise see this as a Deadline-arm emit
+            // and tag it `reason="threshold"`.
+            state.pending_emit_reason = Some(crate::vt::bridge::EmitReason::Resize);
         }
 
         handle
