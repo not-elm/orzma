@@ -1024,4 +1024,12 @@ mod tests {
         assert!(json.contains("\"category\":\"frame_size_exceeded\""));
         assert!(json.contains("\"seq\":42"));
     }
+
+    #[test]
+    fn emit_reason_as_static_str_covers_all_variants() {
+        assert_eq!(EmitReason::Initial.as_static_str(),   "initial");
+        assert_eq!(EmitReason::Resize.as_static_str(),    "resize");
+        assert_eq!(EmitReason::Immediate.as_static_str(), "immediate");
+        assert_eq!(EmitReason::Deadline.as_static_str(),  "deadline");
+    }
 }
