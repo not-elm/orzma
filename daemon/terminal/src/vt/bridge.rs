@@ -413,6 +413,7 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
         .pending_emit_reason
         .take()
         .unwrap_or(EmitReason::Deadline);
+    let emit_start = std::time::Instant::now();
 
     let Some(mut dirty) = state.pending_damage.take() else {
         coalescer.disarm();
@@ -551,6 +552,12 @@ fn emit_now(vt_state: &Arc<std::sync::Mutex<VtState>>, coalescer: &mut Coalescer
         tracing::Span::current().record("reason", reason.as_static_str());
         tracing::Span::current().record("frame_seq", binary_seq);
         counter!("ozmux_frames_emit_total", "kind" => kind_label).increment(1);
+        let emit_elapsed = emit_start.elapsed().as_secs_f64();
+        match kind_label {
+            "snapshot" => state.metrics.emit_duration_snapshot.record(emit_elapsed),
+            "delta" => state.metrics.emit_duration_delta.record(emit_elapsed),
+            _ => unreachable!("kind_label is only 'snapshot' or 'delta'"),
+        }
 
         // CAT-007 commit phase: the pending mode transition has been bundled into
         // the wire frame. Reset pending and update last_emit_mode so the next
