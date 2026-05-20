@@ -3,8 +3,38 @@
 //! installed per-test via metrics::set_default_local_recorder, then
 //! snapshots Counter and Histogram values by name + labels.
 
+use bytes::Bytes;
 use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
+use ozmux_multiplexer::{ActivityId, PaneId};
+use ozmux_terminal::{SpawnOptions, TerminalService};
 use std::collections::HashMap;
+use std::time::Duration;
+
+/// Spawns a TerminalService + bootstrap activity at the given dimensions
+/// and waits ~150 ms for the bridge to come up and emit its initial
+/// snapshot. Mirrors the `spawn_terminal` helper used in `vt_emit.rs`.
+async fn spawn_with_emit(cols: u16, rows: u16) -> (TerminalService, ActivityId) {
+    let svc = TerminalService::default();
+    let pane = PaneId::new();
+    let aid = ActivityId::new();
+    svc.spawn(
+        pane,
+        aid.clone(),
+        SpawnOptions {
+            cols,
+            rows,
+            shell: "/bin/sh".to_string(),
+            cwd: None,
+            window_id: None,
+            session_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    // Give the bridge time to run the first emit (Initial snapshot).
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    (svc, aid)
+}
 
 /// Creates a fresh `DebuggingRecorder` + `Snapshotter` pair. The caller
 /// keeps the recorder alive on its own stack and installs it via
@@ -47,7 +77,6 @@ fn counter_value(
 }
 
 /// Returns the histogram sample count for `name` + `labels`, or None.
-#[expect(dead_code, reason = "consumed by tests added in later commits in this PR")]
 fn histogram_count(
     snapshotter: &Snapshotter,
     name: &str,
@@ -81,4 +110,54 @@ async fn install_recorder_helper_works() {
     let _guard = metrics::set_default_local_recorder(&recorder);
     metrics::counter!("__test_smoke").increment(1);
     assert_eq!(counter_value(&snapshotter, "__test_smoke", &[]), Some(1));
+}
+
+#[tokio::test]
+async fn emit_duration_recorded_on_initial_snapshot() {
+    let (recorder, snapshotter) = new_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let (svc, aid) = spawn_with_emit(80, 24).await;
+    // Drive any chunk to guarantee the bridge has gone through at least
+    // one emit_now call. The initial-emit path records a snapshot sample.
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+    chunk_tx.send(Bytes::from_static(b"hello\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let n = histogram_count(
+        &snapshotter,
+        "ozmux_terminal_emit_duration_seconds",
+        &[("kind", "snapshot")],
+    );
+    assert!(
+        n.unwrap_or(0) >= 1,
+        "expected >= 1 snapshot emit_duration sample, got {n:?}"
+    );
+    svc.kill(&aid).await.unwrap();
+}
+
+#[tokio::test]
+async fn emit_duration_recorded_on_delta_emit() {
+    let (recorder, snapshotter) = new_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
+
+    let (svc, aid) = spawn_with_emit(80, 24).await;
+    let chunk_tx = svc.vt_chunk_sender_for_test(&aid).await.unwrap();
+
+    // First chunk -> initial snapshot. Second chunk -> at least one delta.
+    chunk_tx.send(Bytes::from_static(b"first\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    chunk_tx.send(Bytes::from_static(b"second\n")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let n = histogram_count(
+        &snapshotter,
+        "ozmux_terminal_emit_duration_seconds",
+        &[("kind", "delta")],
+    );
+    assert!(
+        n.unwrap_or(0) >= 1,
+        "expected >= 1 delta emit_duration sample, got {n:?}"
+    );
+    svc.kill(&aid).await.unwrap();
 }
