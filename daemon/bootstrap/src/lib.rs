@@ -23,6 +23,9 @@ use tokio::signal::unix::{SignalKind, signal};
 /// `is_process_alive` and a `PidFileGuard` RAII helper.
 pub mod pidfile;
 
+/// CEF initialize / shutdown helpers invoked by the daemon main thread.
+pub mod cef_lifecycle;
+
 mod builtin_commands;
 
 /// Address the daemon's HTTP server binds to.

@@ -17,11 +17,13 @@ path = "src/main.rs"
 
 [dependencies]
 ozmux_browser = { path = "../browser" }
+ozmux_cef_host = { path = "../cef_host" }
 ozmux_configs = { path = "../configs" }
 ozmux_extension = { path = "../extension" }
 ozmux_http_server = { path = "../http_server" }
 ozmux_multiplexer = { path = "../multiplexer" }
 ozmux_terminal = { path = "../terminal" }
+cef = "148.1.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

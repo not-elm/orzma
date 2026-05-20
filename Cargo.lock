@@ -1235,9 +1235,11 @@ name = "daemon_bootstrap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cef",
  "libc",
  "nix 0.29.0",
  "ozmux_browser",
+ "ozmux_cef_host",
  "ozmux_configs",
  "ozmux_extension",
  "ozmux_http_server",
