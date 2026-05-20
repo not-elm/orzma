@@ -28,6 +28,12 @@ pub(crate) const MSG_SUB_CANCEL: &str = "ozmux.sub.cancel";
 /// Browser → render: a `sub.data` / `sub.complete` / `sub.error` event.
 pub(crate) const MSG_SUB_EVENT: &str = "ozmux.sub.event";
 
+// NOTE: CallRequest/SubOpen/SubCancel are the render→browser payloads. The
+// browser-side `OzmuxClient::on_process_message_received` does not deserialize
+// them into these structs — it forwards the raw JSON string straight onto the
+// extension UDS after a kind-field re-stamp. The types are kept here so the
+// V8-side encoder (Task 7c) can build payloads from the same definitions.
+#[allow(dead_code, reason = "render-side payload types consumed by V8 binding in Task 7c")]
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct CallRequest {
     pub id: String,
@@ -49,6 +55,7 @@ pub(crate) enum CallResponse {
     },
 }
 
+#[allow(dead_code, reason = "render-side payload types consumed by V8 binding in Task 7c")]
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct SubOpen {
     pub id: String,
@@ -56,6 +63,7 @@ pub(crate) struct SubOpen {
     pub params: Value,
 }
 
+#[allow(dead_code, reason = "render-side payload types consumed by V8 binding in Task 7c")]
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub(crate) struct SubCancel {
     pub id: String,

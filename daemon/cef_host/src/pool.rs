@@ -5,6 +5,7 @@
 //! `cef::post_task(ThreadId::UI, ExecuteTask)`; `BrowserPool::execute` runs on
 //! the UI thread under the `PoolHandle` mutex.
 
+use crate::extension_bridge::{BridgeDispatch, ExtensionBridge};
 use crate::frame_buffer_pool::FrameBufferPool;
 use crate::handlers::client::OzmuxClient;
 use crate::handlers::context_menu::OzmuxContextMenuHandler;
@@ -16,8 +17,9 @@ use crate::post_command::PoolHandle;
 use crate::profile::resolve_cache_path;
 use cef::{
     Browser, BrowserSettings, CefString, Client, ImplBrowser, ImplBrowserHost, ImplFrame,
-    ImplRequestContext, RequestContext, RequestContextSettings, WindowInfo,
-    browser_host_create_browser_sync, request_context_create_context,
+    ImplListValue, ImplProcessMessage, ImplRequestContext, ProcessId, RequestContext,
+    RequestContextSettings, WindowInfo, browser_host_create_browser_sync,
+    process_message_create, request_context_create_context,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::{
@@ -78,6 +80,12 @@ pub enum CefCommand {
     PauseScreencast { aid: ActivityId },
     /// Resume screencast frame production for an activity and force a keyframe.
     ResumeScreencast { aid: ActivityId },
+    /// Dispatch a decoded extension response (call result or sub event) back
+    /// to the originating render frame as a CEF process message. Posted by
+    /// the `ExtensionBridge` UDS reader on the Tokio runtime; the UI thread
+    /// then performs the `Frame::send_process_message` because Browser/Frame
+    /// are CEF-thread-bound.
+    DispatchExtensionResponse { dispatch: BridgeDispatch },
     /// No-op command. Used by the in-process dispatcher to absorb
     /// daemon-facing `HostCommand` variants that are not meaningful in-process
     /// (the OoP handshake `Ready`, the `BrowserCreate` path that goes through
@@ -164,6 +172,10 @@ pub struct BrowserPool {
     /// `ExtensionRegistry` is itself `Arc<RwLock<...>>`-backed; cloning is
     /// cheap and shares the same underlying state with every other holder.
     extensions: ExtensionRegistry,
+    /// Bridge from CEF render-process messages (call / subscribe) to the
+    /// owning extension's UDS handlers socket. `None` only in test
+    /// constructors that opt out of the V8 ↔ extension path.
+    bridge: Option<ExtensionBridge>,
 }
 
 impl BrowserPool {
@@ -215,7 +227,23 @@ impl BrowserPool {
             root_cache_path,
             persistent_profiles_enabled,
             extensions,
+            bridge: None,
         }
+    }
+
+    /// Installs the V8↔extension bridge after construction. Called from the
+    /// daemon bootstrap once the Tokio runtime handle and `PoolHandle` are
+    /// available (the bridge needs both, and `PoolHandle::new` plants its
+    /// own back-reference into the pool — so the bridge must be installed
+    /// after that planting completes to avoid a cycle in `BrowserPool::new`).
+    pub fn set_bridge(&mut self, bridge: ExtensionBridge) {
+        self.bridge = Some(bridge);
+    }
+
+    /// Returns the configured bridge, if any. Used by `OzmuxClient` to
+    /// forward render-side process messages onto the extension UDS.
+    pub fn bridge(&self) -> Option<&ExtensionBridge> {
+        self.bridge.as_ref()
     }
 
     /// Drains and executes a single command. Must be called from the CEF UI thread.
@@ -252,8 +280,39 @@ impl BrowserPool {
             }
             CefCommand::PauseScreencast { aid } => self.handle_pause_screencast(aid),
             CefCommand::ResumeScreencast { aid } => self.handle_resume_screencast(aid),
+            CefCommand::DispatchExtensionResponse { dispatch } => {
+                self.handle_dispatch_extension_response(dispatch);
+            }
             CefCommand::Noop => {}
         }
+    }
+
+    /// Forwards a decoded extension response to the originating renderer by
+    /// constructing a CEF `ProcessMessage` with a single string argument
+    /// (the JSON payload) and calling `frame.send_process_message(RENDERER, …)`
+    /// on the browser's main frame.
+    fn handle_dispatch_extension_response(&self, dispatch: BridgeDispatch) {
+        let aid = dispatch.aid();
+        let Some(entry) = self.browsers.get(aid) else {
+            tracing::warn!(?aid, "DispatchExtensionResponse: unknown activity");
+            return;
+        };
+        let Some(frame) = entry.browser.main_frame() else {
+            tracing::warn!(?aid, "DispatchExtensionResponse: no main frame");
+            return;
+        };
+        let name = CefString::from(dispatch.message_name());
+        let Some(mut msg) = process_message_create(Some(&name)) else {
+            tracing::error!(?aid, "process_message_create returned None");
+            return;
+        };
+        let Some(args) = msg.argument_list() else {
+            tracing::error!(?aid, "process_message argument_list returned None");
+            return;
+        };
+        let payload = dispatch.payload_json();
+        args.set_string(0, Some(&CefString::from(payload.as_str())));
+        frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
     }
 
     /// Handles `CefCommand::BrowserCreate` by seeding cookies and posting `CreateBrowserAfterCookies`.
@@ -475,6 +534,7 @@ impl BrowserPool {
             Arc::clone(&self.frame_pool),
             self.session_id,
             epoch,
+            self.bridge.clone(),
         );
         let window_info = build_window_info();
         let browser_settings = build_browser_settings();
@@ -631,7 +691,10 @@ fn build_client(
     frame_pool: Arc<FrameBufferPool>,
     session_id: u64,
     epoch: u32,
+    bridge: Option<ExtensionBridge>,
 ) -> Client {
+    use crate::handlers::client::ClientBrowserMap;
+    let browser_map = Arc::new(ClientBrowserMap::default());
     let render_handler = OzmuxRenderHandler::new(
         aid.clone(),
         render_state,
@@ -640,7 +703,7 @@ fn build_client(
         session_id,
         epoch,
     );
-    let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone());
+    let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone(), Arc::clone(&browser_map));
     let nav_inner = NavInner::new(aid, event_tx);
     let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
     let load_handler = OzmuxLoadHandler::new(nav_inner);
@@ -651,6 +714,8 @@ fn build_client(
         display_handler,
         load_handler,
         context_menu_handler,
+        bridge,
+        browser_map,
     )
 }
 

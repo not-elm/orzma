@@ -261,9 +261,19 @@ async fn acquire_cef_host(
         false,
         session_id,
         frame_pool,
-        extensions,
+        extensions.clone(),
     );
     let pool_handle = PoolHandle::new(pool);
+
+    // Install the V8↔extension bridge. Must happen after `PoolHandle::new`
+    // plants its back-reference: the bridge holds a `PoolHandle` clone to
+    // post `DispatchExtensionResponse` commands from its UDS reader.
+    let bridge = ozmux_cef_host::extension_bridge::ExtensionBridge::new(
+        tokio::runtime::Handle::current(),
+        extensions,
+        pool_handle.clone(),
+    );
+    pool_handle.install_bridge(bridge);
 
     Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
         pool_handle,

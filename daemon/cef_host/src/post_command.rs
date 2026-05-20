@@ -61,6 +61,18 @@ impl PoolHandle {
         self.pool.lock().expect("pool poisoned").shutdown_requested = true;
     }
 
+    /// Installs the V8↔extension bridge on the wrapped pool. Called once at
+    /// daemon startup after `PoolHandle::new` plants its back-reference; the
+    /// bridge needs a `PoolHandle` clone to post UDS-read responses back onto
+    /// the UI thread, so the wiring order is:
+    /// `BrowserPool::new` → `PoolHandle::new` → `install_bridge`.
+    pub fn install_bridge(&self, bridge: crate::extension_bridge::ExtensionBridge) {
+        self.pool
+            .lock()
+            .expect("pool poisoned")
+            .set_bridge(bridge);
+    }
+
     /// Test-only helper: runs a closure with mutable access to the inner pool.
     ///
     /// # Note
