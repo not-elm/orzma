@@ -35,7 +35,10 @@ async fn mark_unavailable_per_aid_observable_to_subscriber() {
     let mut rx = d.unavailable_subscribe();
 
     let aid = ActivityId("a-ext-7".into());
-    d.mark_unavailable(Some(aid.clone()), BrowserUnavailableReason::ExtensionDisconnected);
+    d.mark_unavailable(
+        Some(aid.clone()),
+        BrowserUnavailableReason::ExtensionDisconnected,
+    );
 
     let ev = tokio::time::timeout(Duration::from_millis(500), rx.recv())
         .await

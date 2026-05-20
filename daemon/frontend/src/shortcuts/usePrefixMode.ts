@@ -19,7 +19,7 @@ import { type KeyChord, type Prefix, parseShortcuts } from './wire';
  * The hook also owns the fetch lifecycle for `GET /configs/shortcuts`.
  * Bindings are derived from the parsed `Shortcuts.bindings` and
  * `actionToHandler`. Until the fetch resolves, `shared` is `null` and
- * the dispatcher (if attached by `useIframeKeydownBridge`) early-returns.
+ * the dispatcher early-returns.
  */
 export interface PrefixModeState {
   isArmed: boolean;
@@ -95,7 +95,7 @@ function ensureDispatcher() {
       return;
     }
 
-    // NOTE: in armed mode consume every event so it cannot leak to xterm.js or iframes.
+    // NOTE: in armed mode consume every event so it cannot leak to the terminal.
     e.preventDefault();
     e.stopPropagation();
 
@@ -120,17 +120,6 @@ function ensureDispatcher() {
   };
   dispatcher = createKeyDispatcher(handler);
   return dispatcher;
-}
-
-/** Attach an additional EventTarget (e.g. an iframe contentDocument) to the prefix dispatcher. */
-export function attachKeydownTarget(target: EventTarget) {
-  ensureDispatcher().attachTo(target);
-}
-
-/** Detach a previously attached target. */
-export function detachKeydownTarget(target: EventTarget) {
-  if (!dispatcher) return;
-  dispatcher.detachFrom(target);
 }
 
 export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {

@@ -22,12 +22,11 @@
 use cef::rc::Rc as _;
 use cef::sys::cef_v8_propertyattribute_t;
 use cef::{
-    CefString, DictionaryValue, ImplDictionaryValue, ImplFrame, ImplListValue,
-    ImplProcessMessage, ImplV8Context, ImplV8Handler, ImplV8Value, ProcessId, V8Context,
-    V8Handler, V8Propertyattribute, V8Value, WrapV8Handler, dictionary_value_create,
-    list_value_create, process_message_create, v8_value_create_function,
-    v8_value_create_null, v8_value_create_object, v8_value_create_promise,
-    v8_value_create_string, wrap_v8_handler,
+    CefString, DictionaryValue, ImplDictionaryValue, ImplFrame, ImplListValue, ImplProcessMessage,
+    ImplV8Context, ImplV8Handler, ImplV8Value, ProcessId, V8Context, V8Handler,
+    V8Propertyattribute, V8Value, WrapV8Handler, dictionary_value_create, list_value_create,
+    process_message_create, v8_value_create_function, v8_value_create_null, v8_value_create_object,
+    v8_value_create_promise, v8_value_create_string, wrap_v8_handler,
 };
 use ozmux_browser_cef_protocol::wire::{BrowserExtraContext, BrowserRole};
 use std::cell::RefCell;
@@ -80,15 +79,15 @@ pub(crate) fn deliver_call_response(payload_json: &str) {
             return;
         }
     };
-    let id = parsed.get("id").and_then(|v| v.as_str()).map(str::to_string);
+    let id = parsed
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let Some(id) = id else {
         tracing::warn!("call response missing id field");
         return;
     };
-    let kind = parsed
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let kind = parsed.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let promise = RENDER_STATE.with(|cell| cell.borrow_mut().pending_calls.remove(&id));
     let Some(promise) = promise else {
         tracing::warn!(id = %id, "call response for unknown id (dropped)");
@@ -134,12 +133,19 @@ pub(crate) fn deliver_sub_event(payload_json: &str) {
             return;
         }
     };
-    let id = parsed.get("id").and_then(|v| v.as_str()).map(str::to_string);
+    let id = parsed
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let Some(id) = id else {
         tracing::warn!("sub event missing id field");
         return;
     };
-    let kind = parsed.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let kind = parsed
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     RENDER_STATE.with(|cell| {
         let mut state = cell.borrow_mut();
         let Some(ch) = state.pending_subs.get_mut(&id) else {
@@ -244,8 +250,12 @@ pub(crate) fn context_to_dict(ctx: &BrowserExtraContext) -> Option<DictionaryVal
 /// `ctx.enter()` and is responsible for the matching `ctx.exit()`.
 pub(crate) fn install_window_ozmux(ctx: &mut V8Context, state: &RenderState) {
     let Some(global) = ctx.global() else { return };
-    let Some(ozmux) = v8_value_create_object(None, None) else { return };
-    let Some(context_obj) = build_context_object(state) else { return };
+    let Some(ozmux) = v8_value_create_object(None, None) else {
+        return;
+    };
+    let Some(context_obj) = build_context_object(state) else {
+        return;
+    };
     set_readonly(&ozmux, "context", context_obj);
 
     let call_name = CefString::from("__native_call");
@@ -268,7 +278,14 @@ pub(crate) fn install_window_ozmux(ctx: &mut V8Context, state: &RenderState) {
     let code = CefString::from(WRAPPER_JS);
     let mut retval: Option<V8Value> = None;
     let mut exception: Option<cef::V8Exception> = None;
-    if ctx.eval(Some(&code), Some(&url), 0, Some(&mut retval), Some(&mut exception)) == 0 {
+    if ctx.eval(
+        Some(&code),
+        Some(&url),
+        0,
+        Some(&mut retval),
+        Some(&mut exception),
+    ) == 0
+    {
         tracing::error!("install_window_ozmux: wrapper eval failed");
     }
 }
@@ -628,7 +645,11 @@ fn set_readonly(obj: &V8Value, key: &str, mut value: V8Value) {
 
 fn set_value(obj: &V8Value, key: &str, mut value: V8Value) {
     let cef_key = CefString::from(key);
-    obj.set_value_bykey(Some(&cef_key), Some(&mut value), V8Propertyattribute::default());
+    obj.set_value_bykey(
+        Some(&cef_key),
+        Some(&mut value),
+        V8Propertyattribute::default(),
+    );
 }
 
 fn set_readonly_str(obj: &V8Value, key: &str, value: &str) {
@@ -682,5 +703,4 @@ mod tests {
         deliver_call_response("not json");
         deliver_sub_event("not json");
     }
-
 }

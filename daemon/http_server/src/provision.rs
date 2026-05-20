@@ -34,9 +34,7 @@ pub(crate) async fn provision_activity_runtime(
             )
             .await
         }
-        ActivityKind::Extension { .. } => {
-            provision_extension_cef(state, wid, pid, aid).await
-        }
+        ActivityKind::Extension { .. } => provision_extension_cef(state, wid, pid, aid).await,
         ActivityKind::Browser {
             initial_url,
             profile,
@@ -115,7 +113,12 @@ async fn provision_extension_cef(
     };
     let initial_url = format!("ozmux-ext://{extension_name}/index.html");
     backend
-        .provision(&cef_aid, &initial_url, BrowserProfileWire::Incognito, context)
+        .provision(
+            &cef_aid,
+            &initial_url,
+            BrowserProfileWire::Incognito,
+            context,
+        )
         .await
         .map_err(|e| HttpError::Internal(format!("cef extension provision failed: {e}")))?;
     Ok(())

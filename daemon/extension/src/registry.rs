@@ -94,8 +94,8 @@ impl ExtensionRegistry {
     /// Record both the pane and the activity as owned by `name` under a
     /// single write lock. Used when a fresh extension Activity is created
     /// alongside a new Pane (the split path), where forgetting one of the
-    /// two would leave the iframe / handlers-WS routes unable to resolve
-    /// the owning extension.
+    /// two would leave the in-CEF extension client unable to resolve the
+    /// owning extension UDS.
     pub fn record_pane_and_activity_owners(
         &self,
         pane_id: &PaneId,

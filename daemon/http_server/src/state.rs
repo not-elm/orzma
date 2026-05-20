@@ -28,7 +28,7 @@ use std::sync::Arc;
 pub enum ActivityKindDiscriminant {
     /// Terminal PTY activity.
     Terminal,
-    /// Extension (iframe-served) activity.
+    /// Extension activity (hosted inside the in-CEF browser).
     Extension,
     /// Browser activity.
     Browser,
@@ -778,7 +778,7 @@ impl AppState {
     }
 
     /// Combined membership check for `/windows/:wid/panes/:pid/activities/:aid/*`
-    /// that also returns the resolved `Activity`. Callers like `iframe_serve`
+    /// that also returns the resolved `Activity`. Callers like `ensure_activity_kind`
     /// need both the validation and the activity metadata; doing them in one
     /// helper avoids a second Window lock acquisition.
     pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
@@ -800,20 +800,6 @@ impl AppState {
                 })
             })?;
         Ok(activity)
-    }
-
-    /// Membership-only variant for handlers that don't need the Activity
-    /// payload (terminal WS, handlers WS).
-    pub(crate) async fn ensure_activity_in_pane_in_window(
-        &self,
-        wid: &WindowId,
-        pid: &PaneId,
-        aid: &ActivityId,
-    ) -> HttpResult<()> {
-        let _ = self
-            .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
-            .await?;
-        Ok(())
     }
 
     /// Like [`Self::ensure_activity_in_pane_in_window_and_fetch`], but also

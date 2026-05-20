@@ -225,8 +225,8 @@ mod tests {
     #[tokio::test]
     async fn split_with_extension_activity_records_owner_in_registry() {
         // PR7 regression guard: the daemon must populate the extension registry
-        // when a split lands an Extension-kind activity, otherwise the iframe's
-        // handlers-WS upgrade gets a 404 (handlers_ws calls activity_owner).
+        // when a split lands an Extension-kind activity, otherwise the
+        // in-CEF extension client cannot resolve the owning extension UDS.
         let state = fresh_state();
         let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
         state
@@ -258,10 +258,11 @@ mod tests {
 
     #[tokio::test]
     async fn split_with_extension_activity_does_not_spawn_pty() {
-        // Extension activities live in an iframe, not a PTY. Spawning a shell
-        // for them leaks an orphan child whose output nothing reads. The
-        // TerminalService refuses duplicate spawns, so the simplest assertion
-        // is "subscriber_count returns NotFound for the new aid".
+        // Extension activities live inside the in-CEF browser, not a PTY.
+        // Spawning a shell for them leaks an orphan child whose output
+        // nothing reads. The TerminalService refuses duplicate spawns, so
+        // the simplest assertion is "subscriber_count returns NotFound for
+        // the new aid".
         let state = fresh_state();
         let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
         state

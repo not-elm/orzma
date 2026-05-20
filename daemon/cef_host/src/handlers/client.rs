@@ -18,9 +18,7 @@
 )]
 
 use crate::extension_bridge::ExtensionBridge;
-use crate::process_message::{
-    MSG_CALL_REQUEST, MSG_SUB_CANCEL, MSG_SUB_OPEN,
-};
+use crate::process_message::{MSG_CALL_REQUEST, MSG_SUB_CANCEL, MSG_SUB_OPEN};
 use cef::rc::Rc as _;
 use cef::{
     Browser, CefString, Client, ContextMenuHandler, DisplayHandler, Frame, ImplBrowser, ImplClient,

@@ -2,9 +2,9 @@
 //!
 //! Translates V8 binding requests (received as CEF process messages in the
 //! browser-process `OzmuxClient::on_process_message_received`) into the
-//! `{ aid, frame }` JSON-Lines envelope that the existing
-//! `handlers_ws.rs` path already uses, and forwards extension responses
-//! back to the originating render process as CEF process messages.
+//! `{ aid, frame }` JSON-Lines envelope that the Node extension UDS
+//! protocol uses, and forwards extension responses back to the originating
+//! render process as CEF process messages.
 //!
 //! Threading model:
 //!
@@ -21,9 +21,7 @@
 
 use crate::pool::CefCommand;
 use crate::post_command::{self, PoolHandle};
-use crate::process_message::{
-    CallResponse, MSG_CALL_RESPONSE, MSG_SUB_EVENT, SubEvent,
-};
+use crate::process_message::{CallResponse, MSG_CALL_RESPONSE, MSG_SUB_EVENT, SubEvent};
 use futures_util::{SinkExt, StreamExt};
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::BrowserUnavailableReason;
@@ -68,7 +66,6 @@ enum HandlerUdsFrameIn {
         message: String,
     },
 }
-
 
 #[derive(Debug, Deserialize)]
 struct EnvelopeIn {
@@ -190,14 +187,19 @@ impl ExtensionBridge {
             frame_json
         );
         let tx = self.ensure_connection(aid).await?;
-        tx.send(line).await.map_err(|_| "channel closed".to_string())
+        tx.send(line)
+            .await
+            .map_err(|_| "channel closed".to_string())
     }
 
-    async fn ensure_connection(
-        &self,
-        aid: &ActivityId,
-    ) -> Result<mpsc::Sender<String>, String> {
-        if let Some(tx) = self.inner.lock().expect("bridge poisoned").get(aid).cloned() {
+    async fn ensure_connection(&self, aid: &ActivityId) -> Result<mpsc::Sender<String>, String> {
+        if let Some(tx) = self
+            .inner
+            .lock()
+            .expect("bridge poisoned")
+            .get(aid)
+            .cloned()
+        {
             return Ok(tx);
         }
         let sock_path = self.lookup_sock_path(aid)?;
@@ -233,12 +235,7 @@ impl ExtensionBridge {
             .ok_or_else(|| format!("extension {} not running (no sock path)", ext_name))
     }
 
-    fn spawn_connection(
-        &self,
-        aid: ActivityId,
-        stream: UnixStream,
-        rx: mpsc::Receiver<String>,
-    ) {
+    fn spawn_connection(&self, aid: ActivityId, stream: UnixStream, rx: mpsc::Receiver<String>) {
         let pool = self.pool.clone();
         let inner = self.inner.clone();
         let cb = self.unavailable_cb.clone();
@@ -306,8 +303,7 @@ async fn run_connection(
 /// response kind (defensive — extension can only emit handler kinds).
 fn decode_envelope(line: &str) -> Result<Option<BridgeDispatchInner>, String> {
     let env: EnvelopeIn = serde_json::from_str(line).map_err(|e| e.to_string())?;
-    let frame: HandlerUdsFrameIn =
-        serde_json::from_value(env.frame).map_err(|e| e.to_string())?;
+    let frame: HandlerUdsFrameIn = serde_json::from_value(env.frame).map_err(|e| e.to_string())?;
     Ok(Some(match frame {
         HandlerUdsFrameIn::Result { id, payload } => {
             BridgeDispatchInner::CallResponse(CallResponse::Result { id, payload })
@@ -416,18 +412,15 @@ mod tests {
         let aid = ActivityId("a-eof".into());
         // ozmux_multiplexer::ActivityId has a private inner field; construct
         // via deserialization to get a stable string-keyed id.
-        let mux_aid: ozmux_multiplexer::ActivityId =
-            serde_json::from_str(r#""a-eof""#).unwrap();
+        let mux_aid: ozmux_multiplexer::ActivityId = serde_json::from_str(r#""a-eof""#).unwrap();
         registry.record_activity_owner(&mux_aid, ext_name);
 
         // Build a bridge with a counting callback. The bridge needs a
         // PoolHandle to post DispatchExtensionResponse — provide a real
         // one constructed from a BrowserPool stub.
-        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel::<
-            ozmux_browser_cef_protocol::wire::HostEvent,
-        >();
-        let frame_pool =
-            std::sync::Arc::new(crate::frame_buffer_pool::FrameBufferPool::new(2));
+        let (event_tx, _) =
+            tokio::sync::mpsc::unbounded_channel::<ozmux_browser_cef_protocol::wire::HostEvent>();
+        let frame_pool = std::sync::Arc::new(crate::frame_buffer_pool::FrameBufferPool::new(2));
         let pool = crate::pool::BrowserPool::new(
             event_tx,
             std::env::temp_dir(),
@@ -447,17 +440,16 @@ mod tests {
             *last_cb.lock().unwrap() = Some(reason);
         });
 
-        let bridge = ExtensionBridge::new(
-            tokio::runtime::Handle::current(),
-            registry,
-            pool_handle,
-        )
-        .with_unavailable_callback(cb);
+        let bridge = ExtensionBridge::new(tokio::runtime::Handle::current(), registry, pool_handle)
+            .with_unavailable_callback(cb);
 
         // Trigger the forward → connect → spawn-reader flow. The server
         // will drop the accepted stream, so the reader sees EOF and the
         // spawn_connection wrapper fires the callback.
-        bridge.forward(aid.clone(), r#"{"kind":"result","id":"c","payload":{}}"#.to_string());
+        bridge.forward(
+            aid.clone(),
+            r#"{"kind":"result","id":"c","payload":{}}"#.to_string(),
+        );
 
         // Wait until callback fires (best-effort poll loop).
         for _ in 0..50 {

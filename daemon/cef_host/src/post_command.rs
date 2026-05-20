@@ -67,10 +67,7 @@ impl PoolHandle {
     /// the UI thread, so the wiring order is:
     /// `BrowserPool::new` → `PoolHandle::new` → `install_bridge`.
     pub fn install_bridge(&self, bridge: crate::extension_bridge::ExtensionBridge) {
-        self.pool
-            .lock()
-            .expect("pool poisoned")
-            .set_bridge(bridge);
+        self.pool.lock().expect("pool poisoned").set_bridge(bridge);
     }
 
     /// Test-only helper: runs a closure with mutable access to the inner pool.

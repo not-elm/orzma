@@ -18,8 +18,8 @@ use crate::profile::resolve_cache_path;
 use cef::{
     Browser, BrowserSettings, CefString, Client, ImplBrowser, ImplBrowserHost, ImplFrame,
     ImplListValue, ImplProcessMessage, ImplRequestContext, ProcessId, RequestContext,
-    RequestContextSettings, WindowInfo, browser_host_create_browser_sync,
-    process_message_create, request_context_create_context,
+    RequestContextSettings, WindowInfo, browser_host_create_browser_sync, process_message_create,
+    request_context_create_context,
 };
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::{
@@ -711,8 +711,7 @@ fn build_client(
         session_id,
         epoch,
     );
-    let life_span_handler =
-        OzmuxLifeSpanHandler::new(aid.clone(), role, Arc::clone(&browser_map));
+    let life_span_handler = OzmuxLifeSpanHandler::new(aid.clone(), role, Arc::clone(&browser_map));
     let nav_inner = NavInner::new(aid, event_tx);
     let display_handler = OzmuxDisplayHandler::new(nav_inner.clone());
     let load_handler = OzmuxLoadHandler::new(nav_inner);

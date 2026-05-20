@@ -1,8 +1,7 @@
 use ozmux_browser_cef_protocol::types::{ActivityId, FrameKey, Rect};
 use ozmux_browser_cef_protocol::wire::{
-    BrowserClientMsg, BrowserExtraContext, BrowserRole, BrowserServerMsg,
-    BrowserUnavailableReason, CursorKind, FrameSubscriptionReply, InputEvent, MouseButton,
-    MustRestartReason,
+    BrowserClientMsg, BrowserExtraContext, BrowserRole, BrowserServerMsg, BrowserUnavailableReason,
+    CursorKind, FrameSubscriptionReply, InputEvent, MouseButton, MustRestartReason,
 };
 
 #[test]

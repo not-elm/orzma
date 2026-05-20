@@ -42,7 +42,9 @@ pub(super) async fn cef_screencast_ws(
     if !crate::origin_guard::is_allowed_origin(origin) {
         return Err(HttpError::ForbiddenOrigin);
     }
-    let _activity = state.ensure_activity_kind(&wid, &pid, &aid, expected).await?;
+    let _activity = state
+        .ensure_activity_kind(&wid, &pid, &aid, expected)
+        .await?;
     let ws = WebSocketUpgrade::from_request(req, &())
         .await
         .map_err(|e| HttpError::Forbidden(e.to_string()))?;

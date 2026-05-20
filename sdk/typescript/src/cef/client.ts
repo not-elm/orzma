@@ -1,8 +1,7 @@
 // Browser-only ambient type — `window.ozmux` is installed by the cef_host
 // render process for extension main frames. This SDK module is a thin wrapper
 // over that V8 binding: it adds type hints and a stable `createClient()`
-// surface so extensions can be ported off `./iframe` without rewriting
-// every call site.
+// surface that extensions program against.
 //
 // The SDK package's tsconfig deliberately excludes the DOM lib (server code
 // shares the same tsconfig). Declare the small browser surface we use.
@@ -28,12 +27,12 @@ export interface OzmuxContext {
   extensionName?: string;
 }
 
-/** Subscribe call options. Mirrors the `./iframe` SDK's shape. */
+/** Subscribe call options. */
 export interface SubscribeOptions {
   signal?: MinimalAbortSignal;
 }
 
-/** Client surface. Mirrors `./iframe` so callers can swap the import. */
+/** Client surface exposed to extension code. */
 export interface Client {
   call<Req, Resp>(name: string, payload: Req): Promise<Resp>;
   subscribe<Params, Event>(
