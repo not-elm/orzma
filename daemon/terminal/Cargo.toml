@@ -34,6 +34,11 @@ name = "frame_ring_push_invariant"
 path = "tests/frame_ring_push_invariant.rs"
 required-features = ["test-helpers"]
 
+[[test]]
+name = "observability_metrics"
+path = "tests/observability_metrics.rs"
+required-features = ["test-helpers"]
+
 [[example]]
 name = "generate_tape"
 required-features = ["test-helpers"]
