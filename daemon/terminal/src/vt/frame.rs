@@ -183,6 +183,15 @@ pub struct FrameDelta {
     /// to keep existing wire fixtures byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub produced_at_us: Option<u64>,
+    /// Mode names that transitioned unset → set since the previous emit.
+    /// Empty when no mode change is bundled with this delta. Omitted on
+    /// the wire when empty so existing wire fixtures stay byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes_added: Vec<String>,
+    /// Mode names that transitioned set → unset since the previous emit.
+    /// Empty/omitted on the wire when no mode change is bundled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes_removed: Vec<String>,
 }
 
 /// Wire-level render frame, dispatched by the `kind` tag.
@@ -414,6 +423,8 @@ mod tests {
             hyperlinks: vec![],
             display_offset: 0,
             produced_at_us: None,
+            modes_added: vec![],
+            modes_removed: vec![],
         };
         let bytes = encode(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
@@ -438,6 +449,8 @@ mod tests {
             }],
             display_offset: 0,
             produced_at_us: None,
+            modes_added: vec![],
+            modes_removed: vec![],
         };
         let bytes = encode(&delta).unwrap();
         let decoded: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
@@ -544,6 +557,8 @@ mod tests {
             hyperlinks: vec![],
             display_offset: 12,
             produced_at_us: None,
+            modes_added: vec![],
+            modes_removed: vec![],
         };
         let bytes = encode(&RenderFrame::Delta(delta.clone())).unwrap();
         let decoded: RenderFrame = rmp_serde::from_slice(&bytes).unwrap();
@@ -622,5 +637,46 @@ mod tests {
         let back: FrameSnapshot = rmp_serde::from_slice(&bytes_a).unwrap();
         let bytes_b = encode(&back).unwrap();
         assert_eq!(bytes_a, bytes_b, "skip_serializing_if must omit None field");
+    }
+
+    fn sample_delta() -> FrameDelta {
+        FrameDelta {
+            seq: 1,
+            cursor: Cursor {
+                x: 0,
+                y: 0,
+                shape: CursorShape::Block,
+                blinking: false,
+                visible: true,
+            },
+            dirty_rows: vec![],
+            hyperlinks: vec![],
+            display_offset: 0,
+            produced_at_us: None,
+            modes_added: vec![],
+            modes_removed: vec![],
+        }
+    }
+
+    #[test]
+    fn frame_delta_round_trip_with_modes_added_removed() {
+        let mut d = sample_delta();
+        d.modes_added = vec!["bracketed-paste".to_string()];
+        d.modes_removed = vec!["alt-screen".to_string()];
+        let bytes = encode(&d).unwrap();
+        let back: FrameDelta = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back.modes_added, vec!["bracketed-paste".to_string()]);
+        assert_eq!(back.modes_removed, vec!["alt-screen".to_string()]);
+    }
+
+    #[test]
+    fn frame_delta_round_trip_without_modes_is_byte_identical() {
+        let d = sample_delta();
+        assert!(d.modes_added.is_empty());
+        assert!(d.modes_removed.is_empty());
+        let bytes_a = encode(&d).unwrap();
+        let back: FrameDelta = rmp_serde::from_slice(&bytes_a).unwrap();
+        let bytes_b = encode(&back).unwrap();
+        assert_eq!(bytes_a, bytes_b, "skip_serializing_if must omit empty mode fields");
     }
 }

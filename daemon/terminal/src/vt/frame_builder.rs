@@ -122,6 +122,8 @@ pub(super) fn build_delta<T>(
             .collect(),
         display_offset: term.grid().display_offset() as u32,
         produced_at_us,
+        modes_added: vec![],
+        modes_removed: vec![],
     }
 }
 
