@@ -93,11 +93,7 @@ impl BrowserCefRegistry {
     ///
     /// Returns the `watch::Receiver<NavState>` for the caller; also accessible
     /// later via [`nav_subscribe`](Self::nav_subscribe).
-    pub fn insert(
-        &self,
-        aid: CefActivityId,
-        ring: Arc<FrameRing>,
-    ) -> watch::Receiver<NavState> {
+    pub fn insert(&self, aid: CefActivityId, ring: Arc<FrameRing>) -> watch::Receiver<NavState> {
         let (nav_tx, nav_rx) = watch::channel(NavState::default());
         let (cursor_tx, _) = watch::channel(CursorKind::Default);
         let entry = BrowserCefEntry {

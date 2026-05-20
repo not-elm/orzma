@@ -32,6 +32,7 @@ anyhow = { workspace = true }
 libc = { workspace = true }
 percent-encoding = "2"
 serde_json = { workspace = true }
+which = "6"
 
 [dev-dependencies]
 tempfile = { workspace = true }

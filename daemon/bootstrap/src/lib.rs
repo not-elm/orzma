@@ -316,23 +316,23 @@ async fn run_until_shutdown(state: AppState) -> anyhow::Result<()> {
 }
 
 /// Place the `ozmux` CLI binary at `runtime/bin/ozmux/ozmux` so PTY-spawned
-/// shells can invoke it directly via PATH. Best-effort: logs a warning and
-/// skips if the binary cannot be found.
+/// shells can invoke it directly via PATH. Resolution uses a 4-level
+/// fallback:
+/// 1. `OZMUX_CLI_BIN` env override
+/// 2. macOS-only: if the current executable lives inside an
+///    `*.app/Contents/MacOS/` bundle, climb 4 parents up (out of the app
+///    bundle and its parent dir) and look for a sibling `ozmux`
+/// 3. Sibling `ozmux` next to the current executable
+/// 4. `which::which("ozmux")` against `PATH`
+///
+/// Best-effort: logs a warning and skips if no candidate is found.
 fn place_cli_shim(runtime: &RuntimeRoot) -> std::io::Result<()> {
-    let me = std::env::current_exe()?;
-    let Some(parent) = me.parent() else {
-        tracing::warn!("self exe has no parent dir; skipping ozmux CLI shim");
-        return Ok(());
-    };
-    // NOTE: the CLI binary is named `ozmux` (from cli/Cargo.toml's [[bin]] name).
-    let cli_src = parent.join("ozmux");
-    if !cli_src.exists() {
+    let Some(cli_src) = resolve_ozmux_cli() else {
         tracing::warn!(
-            path = %cli_src.display(),
-            "ozmux CLI binary not found next to bootstrap; `ozmux browser` will not be on PATH"
+            "ozmux CLI binary could not be resolved; `ozmux browser` will not be on PATH"
         );
         return Ok(());
-    }
+    };
     let shim_dir = runtime.root().join("bin").join("ozmux");
     std::fs::create_dir_all(&shim_dir)?;
     let shim = shim_dir.join("ozmux");
@@ -342,6 +342,49 @@ fn place_cli_shim(runtime: &RuntimeRoot) -> std::io::Result<()> {
     #[cfg(not(unix))]
     std::fs::copy(&cli_src, &shim)?;
     Ok(())
+}
+
+/// Resolves the path to the `ozmux` CLI binary using the layered fallback
+/// described on `place_cli_shim`. Returns `None` when no candidate exists.
+fn resolve_ozmux_cli() -> Option<std::path::PathBuf> {
+    if let Some(v) = std::env::var_os("OZMUX_CLI_BIN") {
+        let p = std::path::PathBuf::from(v);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let me = std::env::current_exe().ok()?;
+    #[cfg(target_os = "macos")]
+    if let Some(p) = resolve_ozmux_cli_from_app_bundle(&me) {
+        return Some(p);
+    }
+    if let Some(parent) = me.parent() {
+        let sibling = parent.join("ozmux");
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+    which::which("ozmux").ok()
+}
+
+/// macOS-only resolver step: when `me` lives inside an `*.app/Contents/MacOS/`
+/// bundle, climb up four ancestors (`MacOS` → `Contents` → `*.app` →
+/// containing dir) and probe for a sibling `ozmux` binary next to the bundle.
+/// This matches the layout produced by `make dev` (the `.app` and `ozmux`
+/// land side-by-side in `$CARGO_BIN_DIR`) and the dev tree (`target/debug/`
+/// holds both `ozmux-daemon.app` and `ozmux`).
+#[cfg(target_os = "macos")]
+fn resolve_ozmux_cli_from_app_bundle(me: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut ancestor = me;
+    for _ in 0..3 {
+        ancestor = ancestor.parent()?;
+    }
+    let extension = ancestor.extension()?.to_str()?;
+    if extension != "app" {
+        return None;
+    }
+    let sibling = ancestor.parent()?.join("ozmux");
+    sibling.is_file().then_some(sibling)
 }
 
 fn longest_extension_name() -> std::io::Result<String> {

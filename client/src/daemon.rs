@@ -11,9 +11,18 @@ pub(crate) const DAEMON_BASE_URL: &str = "http://127.0.0.1:3200";
 /// invoking `ozmux daemon start`. The CLI handles probing, locking,
 /// detaching, and readiness polling internally, so this function only
 /// needs to wait for the wrapper to exit.
+///
+/// `OZMUX_DAEMON_BIN` is propagated from the Tauri process environment when
+/// set so the CLI can resolve a developer-built `ozmux-daemon` outside of
+/// PATH; absent that, the CLI's own resolver (sibling app bundle, sibling
+/// binary, or PATH) is used.
 pub(crate) async fn ensure_running() -> Result<()> {
-    let status = Command::new("ozmux")
-        .args(["daemon", "start"])
+    let mut cmd = Command::new("ozmux");
+    cmd.args(["daemon", "start"]);
+    if let Some(v) = std::env::var_os("OZMUX_DAEMON_BIN") {
+        cmd.env("OZMUX_DAEMON_BIN", v);
+    }
+    let status = cmd
         .status()
         .await
         .context("invoke `ozmux daemon start` (is `ozmux` on PATH?)")?;

@@ -11,6 +11,10 @@ use std::time::{Duration, Instant};
 
 use crate::commands::CommandExecute;
 
+const DAEMON_BIN_NAME: &str = "ozmux-daemon";
+#[cfg(target_os = "macos")]
+const DAEMON_APP_BUNDLE: &str = "ozmux-daemon.app";
+
 const PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -30,11 +34,7 @@ pub(crate) struct StartArgs {
 impl CommandExecute for StartArgs {
     async fn run(self) -> anyhow::Result<()> {
         if self.foreground {
-            #[expect(
-                deprecated,
-                reason = "Plan 3 Task 8 will route --foreground through serve(stop_rx)"
-            )]
-            return daemon_bootstrap::run().await;
+            return exec_daemon_binary();
         }
         match super::ensure_running().await? {
             super::DaemonStartOutcome::AlreadyRunning => {
@@ -97,20 +97,68 @@ pub(super) async fn acquire_lock() -> anyhow::Result<File> {
 }
 
 pub(super) fn spawn_detached() -> anyhow::Result<()> {
-    let exe = std::env::current_exe().context("resolve current executable")?;
+    let daemon_bin = resolve_daemon_binary()?;
     let (log, log_err) = open_daemon_log_pair()?;
 
-    let mut cmd = std::process::Command::new(exe);
-    cmd.args(["daemon", "start", "--foreground"])
-        .stdin(Stdio::null())
+    let mut cmd = std::process::Command::new(&daemon_bin);
+    // NOTE: ozmux-daemon takes no CLI arguments; pass none.
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err));
     crate::process::detach::configure_detached(&mut cmd);
 
-    cmd.spawn().context("fork detached daemon")?;
+    cmd.spawn()
+        .with_context(|| format!("fork detached daemon at {}", daemon_bin.display()))?;
     // NOTE: drop the child handle without waiting; the daemon is intentionally
     // orphaned and init/launchd will adopt it.
     Ok(())
+}
+
+/// Replaces the current CLI process with the resolved `ozmux-daemon` binary.
+/// On success this never returns; the daemon takes over the CLI's pid and
+/// stdio. Used by `ozmux daemon start --foreground`.
+fn exec_daemon_binary() -> anyhow::Result<()> {
+    use std::os::unix::process::CommandExt as _;
+
+    let daemon_bin = resolve_daemon_binary()?;
+    let err = std::process::Command::new(&daemon_bin).exec();
+    Err(anyhow::Error::new(err).context(format!("exec ozmux-daemon at {}", daemon_bin.display())))
+}
+
+/// Resolves the path to the `ozmux-daemon` binary using a layered fallback:
+/// 1. `OZMUX_DAEMON_BIN` env override
+/// 2. macOS-only: an `ozmux-daemon.app/Contents/MacOS/ozmux-daemon` bundle
+///    sitting next to the running `ozmux` executable
+/// 3. A plain sibling `ozmux-daemon` next to the running `ozmux` executable
+/// 4. `which::which("ozmux-daemon")` against `PATH`
+fn resolve_daemon_binary() -> anyhow::Result<PathBuf> {
+    if let Some(v) = std::env::var_os("OZMUX_DAEMON_BIN") {
+        return Ok(PathBuf::from(v));
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        #[cfg(target_os = "macos")]
+        {
+            let bundled = parent
+                .join(DAEMON_APP_BUNDLE)
+                .join("Contents")
+                .join("MacOS")
+                .join(DAEMON_BIN_NAME);
+            if bundled.is_file() {
+                return Ok(bundled);
+            }
+        }
+        let sibling = parent.join(DAEMON_BIN_NAME);
+        if sibling.is_file() {
+            return Ok(sibling);
+        }
+    }
+    which::which(DAEMON_BIN_NAME).with_context(|| {
+        format!(
+            "resolve `{DAEMON_BIN_NAME}` binary (set OZMUX_DAEMON_BIN, install via `make dev`, or add to PATH)"
+        )
+    })
 }
 
 fn open_daemon_log_pair() -> anyhow::Result<(File, File)> {
