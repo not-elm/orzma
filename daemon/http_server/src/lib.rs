@@ -154,8 +154,6 @@ mod tests {
     #[tokio::test]
     async fn close_activity_removes_cef_ring() {
         use ozmux_browser::frame_ring::FrameRing;
-        use ozmux_browser::shm_alloc::{SLOT_PAYLOAD_MAX, create_shm_for_activity};
-        use ozmux_browser::shm_reader::OwnedShmReader;
         use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
         use std::sync::Arc;
 
@@ -165,11 +163,9 @@ mod tests {
         // to remove the last activity, so seed a second one to be the target.
         let extra = test_helpers::add_activity_via_window(&state, &wid, &pid).await;
         let cef_aid = CefActivityId(extra.to_string());
-        let shm_fd = create_shm_for_activity(&cef_aid.0, SLOT_PAYLOAD_MAX).expect("shm alloc");
-        let reader = Arc::new(OwnedShmReader::map(&shm_fd, SLOT_PAYLOAD_MAX).expect("shm map"));
         state
             .browser_cef
-            .insert(cef_aid.clone(), Arc::new(FrameRing::new(123, 1)), reader);
+            .insert(cef_aid.clone(), Arc::new(FrameRing::new(123, 1)));
         assert!(state.browser_cef.frame_ring(&cef_aid).is_some());
 
         state.close_activity(&wid, &pid, &extra).await.unwrap();

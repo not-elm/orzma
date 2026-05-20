@@ -7,7 +7,10 @@
 //! flows through the in-process pool + `Bytes` instead.
 
 use crate::frame_buffer_pool::FrameBufferPool;
-use crate::shm_writer::MAX_DAMAGE_RECTS;
+
+/// Upper bound on damage rectangles in a single delta frame. Beyond this we
+/// promote the frame to a keyframe instead of carrying an unbounded list.
+const MAX_DAMAGE_RECTS: usize = 16;
 use cef::rc::Rc as _;
 use cef::{
     Browser, ImplRenderHandler, PaintElementType, Rect, RenderHandler, ScreenInfo,

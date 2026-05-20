@@ -7,10 +7,7 @@ pub mod cef_service;
 pub mod cookie_extractor;
 pub mod error;
 pub mod frame_ring;
-pub mod shm_alloc;
-pub mod shm_reader;
 
-pub use cef_service::{CefHostHandles, CefHostSupervisor};
 pub use error::{BrowserError, BrowserResult};
 pub use frame_ring::{FrameEnvelope, FrameRing, FrameSubscription};
 pub use ozmux_browser_cef_protocol::wire::BrowserUnavailableReason;

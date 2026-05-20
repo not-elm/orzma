@@ -1,7 +1,6 @@
 //! Library entry for the ozmux cef_host crate. Exposes the CEF host machinery
-//! (CEF settings, app implementation, browser pool, UDS control plane,
-//! handlers, IPC) consumed by the `ozmux-daemon` binary and the `cef_helper`
-//! subprocess.
+//! (CEF settings, app implementation, browser pool, handlers) consumed by the
+//! `ozmux-daemon` binary and the `cef_helper` subprocess.
 //!
 //! # Code discipline
 //!
@@ -15,7 +14,6 @@ use cef::ImplCommandLine;
 
 pub mod browser_app;
 pub mod cef_settings;
-pub mod control;
 pub mod cookies;
 pub mod frame_buffer_pool;
 pub mod handlers;
@@ -23,7 +21,6 @@ pub mod input;
 pub mod pool;
 pub mod post_command;
 pub mod profile;
-pub mod shm_writer;
 
 pub use browser_app::BrowserApp;
 pub use cef_settings::{acquire_data_root, build_cef_settings, load_cef_framework};

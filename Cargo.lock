@@ -3735,14 +3735,9 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "decrypt-cookies",
- "libc",
- "nix 0.29.0",
  "ozmux_browser_cef_protocol",
  "ozmux_cef_host",
  "ozmux_multiplexer",
- "rmp-serde",
- "sendfd",
- "serde",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3769,14 +3764,8 @@ dependencies = [
  "cef",
  "cef-dll-sys",
  "crossbeam-queue",
- "decrypt-cookies",
  "fs2",
- "libc",
- "nix 0.29.0",
  "ozmux_browser_cef_protocol",
- "rmp-serde",
- "sendfd",
- "serde",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5014,15 +5003,6 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 dependencies = [
  "serde",
  "serde_core",
-]
-
-[[package]]
-name = "sendfd"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b183bfd5b1bc64ab0c1ef3ee06b008a9ef1b68a7d3a99ba566fbfe7a7c6d745b"
-dependencies = [
- "libc",
 ]
 
 [[package]]

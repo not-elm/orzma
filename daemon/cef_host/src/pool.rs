@@ -14,7 +14,6 @@ use crate::handlers::load::OzmuxLoadHandler;
 use crate::handlers::render::{OzmuxRenderHandler, RenderHandlerState};
 use crate::post_command::PoolHandle;
 use crate::profile::resolve_cache_path;
-use crate::shm_writer::ShmWriter;
 use cef::{
     Browser, BrowserSettings, CefString, Client, ImplBrowser, ImplBrowserHost, ImplFrame,
     RequestContext, RequestContextSettings, WindowInfo, browser_host_create_browser_sync,
@@ -23,7 +22,6 @@ use cef::{
 use ozmux_browser_cef_protocol::types::ActivityId;
 use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, CefCookieDto, HostEvent, InputEvent};
 use std::collections::HashMap;
-use std::os::fd::RawFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -36,12 +34,10 @@ pub enum CefCommand {
     /// On receipt, cookies are installed via `CefCookieManager::set_cookie`.
     /// After all cookies complete, a `CreateBrowserAfterCookies` is re-posted
     /// back to the UI thread before calling `browser_host_create_browser_sync`.
-    /// `shm_fd` arrives per-BrowserCreate via SCM_RIGHTS.
     BrowserCreate {
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
-        shm_fd: RawFd,
         cookies: Vec<CefCookieDto>,
         profile: BrowserProfileWire,
     },
@@ -54,7 +50,6 @@ pub enum CefCommand {
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
-        shm_fd: RawFd,
         profile: BrowserProfileWire,
     },
     /// Resize the browser viewport.
@@ -89,9 +84,7 @@ pub enum CefCommand {
 pub struct BrowserEntry {
     pub aid: ActivityId,
     pub epoch: u32,
-    pub shm_fd: RawFd,
     pub browser: Browser,
-    pub shm: Arc<ShmWriter>,
     /// Render-handler state — width / height / dpr / force_keyframe — shared
     /// with the active `OzmuxRenderHandler` so `CefCommand::Resize` can
     /// update the viewport without rebuilding the handler.
@@ -101,12 +94,9 @@ pub struct BrowserEntry {
     pub profile: BrowserProfileWire,
 }
 
-/// Per-slot payload budget: a 4K (3840×2160) BGRA frame + 4 KiB slack.
-/// MUST stay byte-identical to `ozmux_browser::shm_alloc::SLOT_PAYLOAD_MAX`.
-const SLOT_PAYLOAD_MAX: usize = 3840 * 2160 * 4 + 4096;
-
-/// Maximum viewport the fixed shm slot can hold, in device pixels. The Resize
-/// handler clamps to this; a pane larger than 4K device pixels renders clipped.
+/// Maximum viewport, in device pixels. The Resize handler clamps to this so
+/// a single in-process frame stays within a few hundred MB even on 4K
+/// displays.
 const MAX_VIEWPORT_W: u32 = 3840;
 /// Maximum viewport height in device pixels. See [`MAX_VIEWPORT_W`].
 const MAX_VIEWPORT_H: u32 = 2160;
@@ -216,17 +206,15 @@ impl BrowserPool {
                 aid,
                 initial_url,
                 epoch,
-                shm_fd,
                 cookies,
                 profile,
-            } => self.handle_browser_create(aid, initial_url, epoch, shm_fd, cookies, profile),
+            } => self.handle_browser_create(aid, initial_url, epoch, cookies, profile),
             CefCommand::CreateBrowserAfterCookies {
                 aid,
                 initial_url,
                 epoch,
-                shm_fd,
                 profile,
-            } => self.handle_create_after_cookies(aid, initial_url, epoch, shm_fd, profile),
+            } => self.handle_create_after_cookies(aid, initial_url, epoch, profile),
             CefCommand::Resize {
                 aid,
                 css_w,
@@ -252,7 +240,6 @@ impl BrowserPool {
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
-        shm_fd: RawFd,
         cookies: Vec<CefCookieDto>,
         profile: BrowserProfileWire,
     ) {
@@ -268,9 +255,6 @@ impl BrowserPool {
             .expect("pool_handle not set; PoolHandle::new must plant it before commands arrive");
         let Some(ctx) = self.request_context_for(&profile) else {
             tracing::error!(?aid, "RequestContext unavailable; aborting BrowserCreate");
-            // SAFETY: shm_fd was duped from the daemon side via
-            // SCM_RIGHTS and is owned here; close it before bailing.
-            unsafe { libc::close(shm_fd) };
             return;
         };
         self.pending_contexts.insert(aid.clone(), ctx.clone());
@@ -281,16 +265,15 @@ impl BrowserPool {
                     aid: aid2,
                     initial_url,
                     epoch,
-                    shm_fd,
                     profile,
                 },
             ) {
                 tracing::error!(error = %e, "failed to post CreateBrowserAfterCookies");
-                // TODO: on post() failure both shm_fd and the
-                // pending_contexts[aid] entry leak until process exit;
-                // cleaning up requires re-entering the pool from this
-                // closure (e.g. another post_command::post of a cleanup
-                // command). Out of scope for the cookie-context wiring.
+                // TODO: on post() failure the pending_contexts[aid] entry
+                // leaks until process exit; cleaning up requires re-entering
+                // the pool from this closure (e.g. another post_command::post
+                // of a cleanup command). Out of scope for the cookie-context
+                // wiring.
             }
         });
     }
@@ -301,10 +284,9 @@ impl BrowserPool {
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
-        shm_fd: RawFd,
         profile: BrowserProfileWire,
     ) {
-        self.create_browser(aid, initial_url, epoch, shm_fd, profile);
+        self.create_browser(aid, initial_url, epoch, profile);
     }
 
     /// Handles `CefCommand::Resize` by clamping to `MAX_VIEWPORT_W`/`MAX_VIEWPORT_H` and updating render state.
@@ -347,10 +329,6 @@ impl BrowserPool {
             let host = entry.browser.host();
             if let Some(h) = host {
                 h.close_browser(1);
-            }
-            // SAFETY: shm_fd was duped from the daemon side and is owned here.
-            unsafe {
-                libc::close(entry.shm_fd);
             }
             self.release_profile(&entry.profile);
         }
@@ -445,21 +423,11 @@ impl BrowserPool {
         aid: ActivityId,
         initial_url: String,
         epoch: u32,
-        shm_fd: RawFd,
         profile: BrowserProfileWire,
     ) {
-        tracing::info!(?aid, %initial_url, epoch, shm_fd, "BrowserCreate");
+        tracing::info!(?aid, %initial_url, epoch, "BrowserCreate");
 
         let effective_profile = self.effective_profile(&profile);
-
-        let total_size = ShmWriter::required_region_size(SLOT_PAYLOAD_MAX);
-        let Some(ptr) = map_shm_region(shm_fd, total_size) else {
-            tracing::error!(?aid, "mmap failed for shm_fd={shm_fd}");
-            return;
-        };
-        // SAFETY: ptr is a valid mmap region of total_size bytes, writable,
-        // and we are the sole writer on the CEF UI thread.
-        let shm = Arc::new(unsafe { ShmWriter::from_mmap(ptr as *mut u8, SLOT_PAYLOAD_MAX) });
 
         let mut request_context = match self.take_pending_context(&aid) {
             Some(c) => c,
@@ -468,7 +436,6 @@ impl BrowserPool {
                     ?aid,
                     "pending RequestContext evicted by Close; aborting BrowserCreate"
                 );
-                unmap_and_close(ptr, total_size, shm_fd);
                 self.discard_unretained_context(&effective_profile);
                 return;
             }
@@ -509,9 +476,7 @@ impl BrowserPool {
                     BrowserEntry {
                         aid,
                         epoch,
-                        shm_fd,
                         browser: b,
-                        shm,
                         render_state,
                         profile: effective_profile,
                     },
@@ -519,7 +484,6 @@ impl BrowserPool {
             }
             None => {
                 tracing::error!(?aid, "browser_host_create_browser_sync returned None");
-                unmap_and_close(ptr, total_size, shm_fd);
                 self.discard_unretained_context(&effective_profile);
             }
         }
@@ -608,41 +572,6 @@ impl BrowserPool {
     pub fn browser_count(&self) -> usize {
         self.browsers.len()
     }
-}
-
-/// Maps `shm_fd` into the process for `total_size` bytes. Returns `None` on
-/// `MAP_FAILED`; the caller still owns `shm_fd` in that case.
-fn map_shm_region(shm_fd: RawFd, total_size: usize) -> Option<*mut libc::c_void> {
-    // SAFETY: shm_fd is a valid mmap-able fd received from the daemon side
-    // via SCM_RIGHTS in `control::recv_command_with_fd` (per-BrowserCreate
-    // since Task A5). We map it shared so the daemon can read frames
-    // written by the CEF UI thread.
-    let ptr = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            total_size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            shm_fd,
-            0,
-        )
-    };
-    if ptr == libc::MAP_FAILED {
-        None
-    } else {
-        Some(ptr)
-    }
-}
-
-/// Unmaps `ptr` (of `total_size` bytes) and closes `shm_fd`. Used by every
-/// `create_browser` error path to release the region the daemon dup'd over.
-fn unmap_and_close(ptr: *mut libc::c_void, total_size: usize, shm_fd: RawFd) {
-    // SAFETY: ptr came from a successful libc::mmap of total_size bytes; no
-    // BrowserEntry took ownership on this path.
-    unsafe { libc::munmap(ptr, total_size) };
-    // SAFETY: shm_fd was duped from the daemon side via SCM_RIGHTS; no
-    // BrowserEntry owns it on this path.
-    unsafe { libc::close(shm_fd) };
 }
 
 /// Builds the `OzmuxClient` wrapping every per-browser handler.

@@ -368,23 +368,14 @@ impl AppState {
 
     /// Drops the per-activity cef ring (no-op if the activity was never
     /// provisioned via cef) and tells cef_host to close its browser handle.
-    /// Failure to reach cef_host is logged but never propagated. When the
-    /// dispatcher does not expose underlying OoP handles (stub / future
-    /// in-process), we only drop the ring from the registry.
+    /// Failure to reach cef_host is logged but never propagated.
     async fn cef_close_activity(&self, aid: &ActivityId) {
         let cef_aid = CefActivityId(aid.to_string());
-        match self.cef_host.handles() {
-            Some(handles) => {
-                let backend = CefBackend {
-                    handles: Arc::clone(handles),
-                    registry: Arc::clone(&self.browser_cef),
-                };
-                backend.close(&cef_aid).await;
-            }
-            None => {
-                self.browser_cef.remove(&cef_aid);
-            }
-        }
+        let backend = CefBackend {
+            dispatcher: Arc::clone(&self.cef_host),
+            registry: Arc::clone(&self.browser_cef),
+        };
+        backend.close(&cef_aid).await;
     }
 
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and

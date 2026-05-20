@@ -1,12 +1,11 @@
 //! Daemon-side glue for the cef BrowserActivity path. Sits between
-//! `AppState::add_activity_to_pane` and the `CefHostHandles` +
+//! `AppState::add_activity_to_pane` and the in-process `CefDispatcher` +
 //! `BrowserCefRegistry` pair.
 
+use crate::cef_dispatcher::CefDispatcher;
 use crate::cef_registry::BrowserCefRegistry;
-use crate::cef_service::CefHostHandles;
+use crate::cef_service::DispatchError;
 use crate::frame_ring::FrameRing;
-use crate::shm_alloc::{self, SLOT_PAYLOAD_MAX};
-use crate::shm_reader::OwnedShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_browser_cef_protocol::wire::{BrowserProfileWire, HostCommand};
 use std::sync::Arc;
@@ -14,31 +13,25 @@ use std::sync::Arc;
 /// Errors returned by the cef provisioning hook.
 #[derive(thiserror::Error, Debug)]
 pub enum CefBackendError {
-    /// `shm_alloc::create_shm_for_activity` failed.
-    #[error("shm allocation failed: {0}")]
-    ShmAlloc(std::io::Error),
-    /// Mapping the shm region for daemon-side reading failed.
-    #[error("shm mmap failed: {0}")]
-    ShmMap(std::io::Error),
-    /// `CefHostHandles::request_browser_create` reported a closed control channel.
+    /// `CefDispatcher::dispatch` reported a closed control channel.
     #[error("cef_host control channel closed: {0}")]
-    ControlSendFailed(std::io::Error),
+    ControlSendFailed(DispatchError),
 }
 
-/// Pair of handles to the cef_host + ring registry used by the daemon side
-/// to drive `BrowserCreate` lifecycle.
+/// Pair of handles to the cef dispatcher + ring registry used by the daemon
+/// side to drive `BrowserCreate` lifecycle.
 pub struct CefBackend {
-    /// Handle to the running cef_host supervisor channels.
-    pub handles: Arc<CefHostHandles>,
+    /// In-process `CefDispatcher` that posts commands to the CEF UI thread.
+    pub dispatcher: Arc<dyn CefDispatcher>,
     /// Registry of per-activity `FrameRing`s.
     pub registry: Arc<BrowserCefRegistry>,
 }
 
 impl CefBackend {
-    /// Allocates a per-activity shm region, registers a `FrameRing` in the
-    /// registry, then dispatches `HostCommand::BrowserCreate` to cef_host with
-    /// the shm fd as ancillary data via SCM_RIGHTS. Returns the epoch chosen
-    /// for the ring (always 1 in Plan 2; respawn changes this in Plan 3).
+    /// Registers a `FrameRing` in the registry, then dispatches
+    /// `HostCommand::BrowserCreate` to the CEF UI thread. Returns the epoch
+    /// chosen for the ring (always 1 in Plan 2; respawn changes this in
+    /// Plan 3).
     ///
     /// Cookies for `initial_url` are extracted from the host Chrome profile
     /// (macOS only) and forwarded inline in `BrowserCreate`. On failure the
@@ -62,27 +55,20 @@ impl CefBackend {
                 Vec::new()
             });
 
-        let shm_fd = shm_alloc::create_shm_for_activity(&aid.0, SLOT_PAYLOAD_MAX)
-            .map_err(CefBackendError::ShmAlloc)?;
-        let reader = Arc::new(
-            OwnedShmReader::map(&shm_fd, SLOT_PAYLOAD_MAX).map_err(CefBackendError::ShmMap)?,
-        );
         let epoch = 1;
         let ring = Arc::new(FrameRing::new(self.registry.session_id(), epoch));
         // NOTE: the returned nav receiver is discarded here; WS handlers subscribe
         // independently via registry.nav_subscribe() after BrowserCreate completes.
-        let _nav_rx = self.registry.insert(aid.clone(), ring, reader);
+        let _nav_rx = self.registry.insert(aid.clone(), ring);
 
-        self.handles
-            .request_browser_create(
-                aid.clone(),
-                initial_url.to_string(),
+        self.dispatcher
+            .dispatch(HostCommand::BrowserCreate {
+                aid: aid.clone(),
+                initial_url: initial_url.to_string(),
                 epoch,
                 cookies,
                 profile,
-                shm_fd,
-            )
-            .await
+            })
             .map_err(CefBackendError::ControlSendFailed)?;
 
         Ok(epoch)
@@ -94,11 +80,10 @@ impl CefBackend {
     pub async fn close(&self, aid: &CefActivityId) {
         self.registry.remove(aid);
         if let Err(e) = self
-            .handles
-            .send_command(HostCommand::Close { aid: aid.clone() })
-            .await
+            .dispatcher
+            .dispatch(HostCommand::Close { aid: aid.clone() })
         {
-            tracing::warn!(?aid, error = %e, "cef_host Close failed");
+            tracing::warn!(?aid, error = %e, "cef_host Close dispatch failed");
         }
     }
 }

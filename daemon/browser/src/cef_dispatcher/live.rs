@@ -1,9 +1,8 @@
 //! Production `CefDispatcher` that dispatches directly to in-process CEF via
-//! `cef::post_task(ThreadId::UI, ExecuteTask)`. Plan 3 Phase 4: replaces the
-//! Plan 1-2 OoP UDS implementation.
+//! `cef::post_task(ThreadId::UI, ExecuteTask)`.
 
 use super::CefDispatcher;
-use crate::cef_service::{CefHostHandles, DispatchError};
+use crate::cef_service::DispatchError;
 use ozmux_browser_cef_protocol::wire::{BrowserUnavailableReason, HostCommand, HostEvent};
 use ozmux_cef_host::pool::CefCommand;
 use ozmux_cef_host::post_command::{PoolHandle, post as cef_post};
@@ -52,31 +51,31 @@ impl CefDispatcher for LiveCefDispatcher {
         self.is_dead.load(std::sync::atomic::Ordering::Acquire)
     }
 
-    fn is_dead_handle(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.is_dead)
-    }
-
-    fn take_child(&self) -> Option<tokio::process::Child> {
-        None
-    }
-
     fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableReason> {
         self.unavailable_tx.subscribe()
-    }
-
-    fn handles(&self) -> Option<&Arc<CefHostHandles>> {
-        // NOTE: in-process — no CefHostHandles exists. Plan 3 Task 13/14 removes
-        // the last consumer of `handles()` via the in-process create_browser path.
-        None
     }
 }
 
 /// Converts a daemon-facing `HostCommand` into the cef_host-internal
-/// `CefCommand`. `BrowserCreate` is **not** routed through here — it must go
-/// via a dedicated path (Plan 3 Task 12) so the shm fd and cookies are taken
-/// in-process rather than reconstructed from wire bytes.
+/// `CefCommand`. `BrowserCreate` is routed straight through to
+/// `CefCommand::BrowserCreate`; the in-process path uses
+/// `FrameBufferPool`/`HostEvent::FrameProduced` for screencast frames so no
+/// shm fd is required (Plan 3 Phase 5).
 fn into_cef_command(cmd: HostCommand) -> CefCommand {
     match cmd {
+        HostCommand::BrowserCreate {
+            aid,
+            initial_url,
+            epoch,
+            cookies,
+            profile,
+        } => CefCommand::BrowserCreate {
+            aid,
+            initial_url,
+            epoch,
+            cookies,
+            profile,
+        },
         HostCommand::Navigate { aid, url } => CefCommand::Navigate { aid, url },
         HostCommand::NavigateHistory { aid, delta } => CefCommand::NavigateHistory { aid, delta },
         HostCommand::SendInput { aid, input } => CefCommand::SendInput { aid, event: input },
@@ -95,22 +94,8 @@ fn into_cef_command(cmd: HostCommand) -> CefCommand {
         HostCommand::ResumeScreencast { aid } => CefCommand::ResumeScreencast { aid },
         HostCommand::Close { aid } => CefCommand::Close { aid },
         HostCommand::Shutdown => CefCommand::Shutdown,
-        HostCommand::BrowserCreate { .. } => {
-            // NOTE: BrowserCreate carries an SCM_RIGHTS shm fd in the OoP path;
-            // in-process it must take a real RawFd via a dedicated path (Plan 3
-            // Task 12). Reaching this branch via `dispatch()` is a bug.
-            tracing::error!(
-                "HostCommand::BrowserCreate routed through dispatch(); use the in-process create_browser path instead"
-            );
-            CefCommand::Noop
-        }
-        HostCommand::Ready { .. } => {
-            // Handshake artifact — meaningless in-process.
-            CefCommand::Noop
-        }
         // TODO: implement RecreateShm, GetSelection, SetClipboard for the
-        // in-process backend. cef_host control.rs currently treats these
-        // as unimplemented; we mirror that until Plan 3 wires them up.
+        // in-process backend.
         HostCommand::RecreateShm { .. } => {
             tracing::warn!("unimplemented HostCommand::RecreateShm; ignoring");
             CefCommand::Noop

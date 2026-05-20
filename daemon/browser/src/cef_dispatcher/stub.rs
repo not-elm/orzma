@@ -3,7 +3,7 @@
 //! tests of `http_server` without spawning cef_host.
 
 use super::CefDispatcher;
-use crate::cef_service::{CefHostHandles, DispatchError};
+use crate::cef_service::DispatchError;
 use ozmux_browser_cef_protocol::wire::{BrowserUnavailableReason, HostCommand, HostEvent};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,20 +60,8 @@ impl CefDispatcher for StubCefDispatcher {
         self.is_dead.load(Ordering::Acquire)
     }
 
-    fn is_dead_handle(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.is_dead)
-    }
-
-    fn take_child(&self) -> Option<tokio::process::Child> {
-        None
-    }
-
     fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableReason> {
         self.unavailable_tx.subscribe()
-    }
-
-    fn handles(&self) -> Option<&Arc<CefHostHandles>> {
-        None
     }
 }
 

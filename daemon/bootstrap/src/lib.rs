@@ -4,7 +4,6 @@
 //! the tokio runtime themselves and call `run().await`.
 
 use anyhow::Context;
-use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
 use ozmux_browser::cef_service::spawn_event_pump;
 use ozmux_configs::OzmuxConfigs;
@@ -16,7 +15,6 @@ use ozmux_http_server::activity_titles::ActivityTitles;
 use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use tokio::signal::unix::{SignalKind, signal};
 
 /// PID file management for the daemon process: write/read/remove plus
@@ -55,14 +53,12 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
 }
 
 /// RAII bundle that owns daemon subsystem handles (runtime root, extension
-/// child processes, event pump task, CEF crash watcher task, PID file
-/// guard). Dropping the bundle tears every subsystem down in the right
-/// order: background tasks abort first, then `PidFileGuard`'s `Drop`
-/// removes the PID file, then the runtime root cleans up its scratch
-/// directory.
+/// child processes, event pump task, PID file guard). Dropping the bundle
+/// tears every subsystem down in the right order: background tasks abort
+/// first, then `PidFileGuard`'s `Drop` removes the PID file, then the runtime
+/// root cleans up its scratch directory.
 pub struct RuntimeHandles {
     event_pump: tokio::task::JoinHandle<()>,
-    crash_watcher: tokio::task::JoinHandle<()>,
     _ext_handles: ExtensionHandles,
     _pid_guard: pidfile::PidFileGuard,
     _runtime: Arc<RuntimeRoot>,
@@ -74,7 +70,6 @@ impl Drop for RuntimeHandles {
         // PidFileGuard / RuntimeRoot teardown by trying to touch state that
         // is about to disappear.
         self.event_pump.abort();
-        self.crash_watcher.abort();
     }
 }
 
@@ -112,8 +107,6 @@ pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
     );
 
     let event_pump = spawn_event_pump(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
-    let crash_watcher =
-        spawn_cef_crash_watcher(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
     spawn_terminal_title_bridge(terminal, titles, state.multiplexer.clone());
 
     let pid_guard = pidfile::PidFileGuard::create(std::process::id())?;
@@ -121,7 +114,6 @@ pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
         state,
         RuntimeHandles {
             event_pump,
-            crash_watcher,
             _ext_handles: ext_handles,
             _pid_guard: pid_guard,
             _runtime: runtime,
@@ -321,33 +313,6 @@ async fn run_until_shutdown(state: AppState) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Spawns a task that watches for unexpected `cef_host` exit and notifies
-/// all connected WS clients via `BrowserCefRegistry::broadcast_unavailable`.
-///
-/// On exit the task sets `CefHostHandles::is_dead` (Release) then broadcasts
-/// `BrowserUnavailableReason::RetryExhausted` carrying the process status.
-/// No respawn is attempted — that is Plan 3 territory.
-fn spawn_cef_crash_watcher(
-    cef_host: Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher>,
-    registry: Arc<BrowserCefRegistry>,
-) -> tokio::task::JoinHandle<()> {
-    let Some(mut child) = cef_host.take_child() else {
-        tracing::warn!("cef_host child already taken; crash-watcher not started");
-        return tokio::spawn(async {});
-    };
-    let is_dead = cef_host.is_dead_handle();
-    tokio::spawn(async move {
-        let status = child.wait().await;
-        is_dead.store(true, Ordering::Release);
-        let last_error = match &status {
-            Ok(s) => format!("cef_host exited: {s:?}"),
-            Err(e) => format!("cef_host wait error: {e}"),
-        };
-        tracing::error!(status = ?status, "cef_host exited unexpectedly");
-        registry.broadcast_unavailable(BrowserUnavailableReason::RetryExhausted { last_error });
-    })
 }
 
 /// Place the `ozmux` CLI binary at `runtime/bin/ozmux/ozmux` so PTY-spawned

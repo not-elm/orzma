@@ -46,19 +46,8 @@ pub(crate) async fn provision_activity_runtime(
                     },
                 ));
             }
-            // NOTE: BrowserCreate uses SCM_RIGHTS to pass a shm fd, which the
-            // CefDispatcher trait does not expose. We reach for the underlying
-            // OoP handles here; stub/in-process dispatchers report
-            // BrowserUnavailable instead. Plan 3 removes this last caller.
-            let Some(handles) = state.cef_host.handles() else {
-                return Err(HttpError::CefHostDead(
-                    BrowserUnavailableReason::RetryExhausted {
-                        last_error: "cef_host transport does not expose OoP handles".into(),
-                    },
-                ));
-            };
             let backend = CefBackend {
-                handles: Arc::clone(handles),
+                dispatcher: Arc::clone(&state.cef_host),
                 registry: Arc::clone(&state.browser_cef),
             };
             let cef_aid = CefActivityId(aid.to_string());
