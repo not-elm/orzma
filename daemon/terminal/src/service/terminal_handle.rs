@@ -87,7 +87,7 @@ impl TerminalHandle {
     ) -> Self {
         let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
         let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
-        let (frame_broadcast, _frame_rx) = broadcast::channel::<WireMessage>(256);
+        let (frame_broadcast, _frame_rx) = broadcast::channel::<WireMessage>(2048);
         let drop_counter = Arc::new(DropCounter::new());
 
         let listener = TermListener {
