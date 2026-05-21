@@ -3,20 +3,26 @@
 //! Phase 1 advances `Term` only; frame emission and PtyWrite/control routing
 //! are wired in Phase 2.
 
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Instant;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::Line;
 use alacritty_terminal::term::Config;
+use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor, Rgb};
 use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::vt::coalescer::{Coalescer, DamageVerdict};
-use crate::vt::frame::{Cursor, RenderFrame, SnapshotReason, encode};
+use crate::vt::frame::{Cursor, CursorShape, RenderFrame, SnapshotReason, encode};
 use crate::vt::frame_builder::{
     DirtyRows, build_delta, build_mode, build_snapshot, collect_dirty_rows, extract_cursor,
+    viewport_row_to_line,
 };
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
@@ -63,6 +69,19 @@ pub(crate) struct VtState {
     /// title has been set / after `ResetTitle`. Read by
     /// `TerminalService::all_titles` for tab labels.
     pub title: Option<String>,
+    /// Reusable scratch buffer for dirty row indices collected from
+    /// `Term::damage()`. Lives on `VtState` so the heap allocation
+    /// persists across emit cycles instead of being freshly allocated
+    /// on each call to `collect_dirty_rows`.
+    pub(crate) scratch_dirty: Vec<u16>,
+    /// Per-grid-line content hash captured at the time of the most recent
+    /// emit. The bridge filters `DirtyRows::Rows` against these hashes
+    /// before `decide_frame_kind` so cosmetic re-damage of unchanged rows
+    /// (e.g., alacritty's cursor-row implicit re-damage) does not inflate
+    /// the row count past the snapshot threshold or burn coalesce wins on
+    /// no-op deltas. Keyed by alacritty `Line(i32)` so scrollback rows
+    /// (negative indices) can be tracked too.
+    pub(crate) row_hashes: HashMap<i32, u64>,
 }
 
 impl VtState {
@@ -90,6 +109,8 @@ impl VtState {
             hyperlinks: HyperlinkInterner::new(),
             wire_broadcast,
             title: None,
+            scratch_dirty: Vec::new(),
+            row_hashes: HashMap::new(),
         }
     }
 
@@ -124,7 +145,7 @@ fn classify_damage(dirty: &DirtyRows, cursor_changed: bool) -> DamageVerdict {
             }
         }
         DirtyRows::Rows(rows) if rows.len() <= 1 => DamageVerdict::AtMostOneRow,
-        DirtyRows::Rows(_) => DamageVerdict::ManyRows,
+        DirtyRows::Rows(rows) => DamageVerdict::ManyRows { rows: rows.len() },
     }
 }
 
@@ -139,7 +160,7 @@ enum FrameKind {
 /// Policy, in priority order:
 /// 1. `state.first_emit` → `Snapshot { reason: Initial }` (bootstrap frame).
 /// 2. `DirtyRows::Full` → `Snapshot { reason: Resize }` (full damage after resize or clear).
-/// 3. Partial damage ≥ 70 % of total rows → `Snapshot { reason: Resize }` (bandwidth crossover).
+/// 3. Partial damage ≥ 85 % of total rows → `Snapshot { reason: Resize }` (bandwidth crossover).
 /// 4. Otherwise → `Delta { rows }`.
 fn decide_frame_kind(state: &VtState, dirty: DirtyRows) -> FrameKind {
     let total_rows = state.term.screen_lines() as u16;
@@ -153,7 +174,7 @@ fn decide_frame_kind(state: &VtState, dirty: DirtyRows) -> FrameKind {
             reason: SnapshotReason::Resize,
         },
         DirtyRows::Rows(rows) => {
-            if (rows.len() as u32) * 10 >= (total_rows as u32) * 7 {
+            if (rows.len() as u32) * 20 >= (total_rows as u32) * 17 {
                 FrameKind::Snapshot {
                     reason: SnapshotReason::Resize,
                 }
@@ -179,6 +200,78 @@ fn emit_frame_size_error(wb: &broadcast::Sender<WireMessage>, seq: u32) {
     let _ = wb.send(WireMessage::Text(json.to_string()));
 }
 
+/// Hashes a vte `NamedColor` discriminant into `h`.
+///
+/// vte `NamedColor` derives `Ord`/`PartialOrd` but NOT `Hash`. Discriminants
+/// are explicit (Foreground=256, etc.), so the `u32` cast preserves identity.
+fn hash_named_color(n: NamedColor, h: &mut DefaultHasher) {
+    (n as u32).hash(h);
+}
+
+/// Hashes a vte `Rgb` triple into `h` by walking its public fields, since
+/// `Rgb` derives `PartialEq`/`Default` but NOT `Hash`.
+fn hash_rgb(rgb: &Rgb, h: &mut DefaultHasher) {
+    rgb.r.hash(h);
+    rgb.g.hash(h);
+    rgb.b.hash(h);
+}
+
+/// Hashes a vte `Color` (`AColor`) value into `h` by walking the
+/// discriminant and payload, since `AColor` does NOT derive `Hash`.
+fn hash_acolor(c: &AColor, h: &mut DefaultHasher) {
+    match c {
+        AColor::Named(n) => {
+            0u8.hash(h);
+            hash_named_color(*n, h);
+        }
+        AColor::Spec(rgb) => {
+            1u8.hash(h);
+            hash_rgb(rgb, h);
+        }
+        AColor::Indexed(i) => {
+            2u8.hash(h);
+            i.hash(h);
+        }
+    }
+}
+
+/// Hashes an ozmux wire `CursorShape` into `h` by mapping the variant to a
+/// `u8`, since the wire type does NOT derive `Hash`.
+fn hash_cursor_shape(s: CursorShape, h: &mut DefaultHasher) {
+    let n: u8 = match s {
+        CursorShape::Block => 0,
+        CursorShape::Underline => 1,
+        CursorShape::Bar => 2,
+    };
+    n.hash(h);
+}
+
+/// Computes a content hash for a single grid row, including the cursor
+/// overlay if the cursor is visible and rendered on this `viewport_y`.
+fn hash_row<T>(term: &Term<T>, line: Line, cursor: &Cursor, viewport_y: u16) -> u64 {
+    let mut h = DefaultHasher::new();
+    for cell in &term.grid()[line] {
+        cell.c.hash(&mut h);
+        hash_acolor(&cell.fg, &mut h);
+        hash_acolor(&cell.bg, &mut h);
+        cell.flags.bits().hash(&mut h);
+        if let Some(hyp) = cell.hyperlink().as_ref() {
+            1u8.hash(&mut h);
+            hyp.uri().hash(&mut h);
+            hyp.id().hash(&mut h);
+        } else {
+            0u8.hash(&mut h);
+        }
+    }
+    if cursor.visible && viewport_y == cursor.y {
+        cursor.x.hash(&mut h);
+        cursor.y.hash(&mut h);
+        hash_cursor_shape(cursor.shape, &mut h);
+        cursor.blinking.hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Emits a frame for the damage stashed on `VtState` and disarms the
 /// Coalescer. Called by [`run_bridge_task`] from both the chunk-immediate-flush
 /// path and the deadline-fires path. The `window_open_mode` is consumed via
@@ -190,7 +283,7 @@ fn emit_now(
 ) {
     let mut state = vt_state.lock().expect("vt_state poisoned");
 
-    let Some(dirty) = state.pending_damage.take() else {
+    let Some(mut dirty) = state.pending_damage.take() else {
         coalescer.disarm();
         *window_open_mode = None;
         return;
@@ -206,8 +299,33 @@ fn emit_now(
         .as_ref()
         .is_some_and(|prev| *prev == curr_cursor);
 
+    // NOTE: hash-filter DirtyRows::Rows BEFORE decide_frame_kind — otherwise
+    // the row-count threshold check false-promotes unchanged rows to Snapshot.
+    let mut kept_hashes: Vec<(i32, u64)> = Vec::new();
+    if let DirtyRows::Rows(rows) = &mut dirty {
+        let VtState {
+            ref term,
+            ref row_hashes,
+            ..
+        } = *state;
+        rows.retain(|&viewport_y| {
+            let line = viewport_row_to_line(term, viewport_y as i32);
+            let h = hash_row(term, line, &curr_cursor, viewport_y);
+            let stale = row_hashes.get(&line.0).copied();
+            if Some(h) == stale {
+                false
+            } else {
+                kept_hashes.push((line.0, h));
+                true
+            }
+        });
+    }
+
     let dirty_is_empty = matches!(&dirty, DirtyRows::Rows(r) if r.is_empty());
     if dirty_is_empty && prev_mode == curr_mode && cursor_unchanged && !state.first_emit {
+        // Reset alacritty's damage tracker so we don't re-walk the same
+        // damage on the next coalescer flush.
+        state.term.reset_damage();
         coalescer.disarm();
         return;
     }
@@ -215,6 +333,10 @@ fn emit_now(
     let kind = decide_frame_kind(&state, dirty);
     state.first_emit = false;
     let seq = state.frame_seq;
+
+    // NOTE: we track the consumed rows Vec from FrameKind::Delta so capacity
+    // can be reclaimed into scratch_dirty after the emit completes.
+    let mut consumed_rows: Option<Vec<u16>> = None;
     let frame = {
         let VtState {
             ref term,
@@ -226,7 +348,9 @@ fn emit_now(
                 RenderFrame::Snapshot(build_snapshot(term, seq, reason, hyperlinks))
             }
             FrameKind::Delta { rows } => {
-                RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks))
+                let frame = RenderFrame::Delta(build_delta(term, seq, &rows, hyperlinks));
+                consumed_rows = Some(rows);
+                frame
             }
         }
     };
@@ -257,6 +381,33 @@ fn emit_now(
             seq: binary_seq,
             encoded,
         });
+
+        match &frame {
+            RenderFrame::Delta(_) => {
+                for (line_i32, h) in kept_hashes {
+                    state.row_hashes.insert(line_i32, h);
+                }
+            }
+            RenderFrame::Snapshot(_) => {
+                state.row_hashes.clear();
+                let screen_rows = state.term.grid().screen_lines() as u16;
+                let snap_cursor = extract_cursor(&state.term);
+                let VtState {
+                    ref term,
+                    ref mut row_hashes,
+                    ..
+                } = *state;
+                for viewport_y in 0..screen_rows {
+                    let line = viewport_row_to_line(term, viewport_y as i32);
+                    let h = hash_row(term, line, &snap_cursor, viewport_y);
+                    row_hashes.insert(line.0, h);
+                }
+            }
+        }
+    }
+
+    if let Some(v) = consumed_rows {
+        state.scratch_dirty = v;
     }
 
     coalescer.disarm();
@@ -303,7 +454,9 @@ pub(crate) async fn run_bridge_task(
                     if window_open_mode.is_none() {
                         window_open_mode = Some(pre_advance_mode);
                     }
-                    state.pending_damage = Some(collect_dirty_rows(&mut state.term));
+                    let mut scratch = std::mem::take(&mut state.scratch_dirty);
+                    state.pending_damage = Some(collect_dirty_rows(&mut state.term, &mut scratch));
+                    state.scratch_dirty = scratch;
                 }
                 emit_now(&vt_state, &mut coalescer, &mut window_open_mode);
             }
@@ -318,7 +471,9 @@ pub(crate) async fn run_bridge_task(
                     if !coalescer.is_armed() && window_open_mode.is_none() {
                         window_open_mode = Some(pre_advance_mode);
                     }
-                    let dirty = collect_dirty_rows(&mut state.term);
+                    let mut scratch = std::mem::take(&mut state.scratch_dirty);
+                    let dirty = collect_dirty_rows(&mut state.term, &mut scratch);
+                    state.scratch_dirty = scratch;
                     let verdict = classify_damage(&dirty, state.cursor_changed());
                     let flush = coalescer.should_flush_immediately(
                         state.first_emit,

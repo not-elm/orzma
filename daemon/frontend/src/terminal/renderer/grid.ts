@@ -1,6 +1,14 @@
 import type { Color, Cursor, FrameDelta, FrameSnapshot, RenderFrame, Run } from '../protocol/frame';
 import { widthOfGrapheme } from './font';
 
+/**
+ * Module-scoped grapheme segmenter. Constructing `Intl.Segmenter` is expensive
+ * (browser allocates per-locale ICU data); hoisting to module scope amortizes
+ * the construction across every `expandRunsToRow` call for the lifetime of the
+ * page. Safe to share — `Intl.Segmenter.segment()` returns a fresh iterator.
+ */
+const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
 /** One terminal cell. */
 export interface Cell {
   text: string;
@@ -179,9 +187,8 @@ function applyDelta(grid: Grid, frame: FrameDelta): void {
 /** Reverses run coalescing: returns one Cell per grapheme cluster. */
 export function expandRunsToRow(runs: readonly Run[], _cols: number): Cell[] {
   const cells: Cell[] = [];
-  const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
   for (const run of runs) {
-    for (const { segment } of segmenter.segment(run.text)) {
+    for (const { segment } of GRAPHEME_SEGMENTER.segment(run.text)) {
       const w = widthOfGrapheme(segment);
       cells.push({
         text: segment,

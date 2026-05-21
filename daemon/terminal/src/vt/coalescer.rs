@@ -18,8 +18,9 @@ pub enum DamageVerdict {
     Full,
     /// At most one row is dirty (interactive echo / cursor-only motion).
     AtMostOneRow,
-    /// Many rows dirty — must be coalesced.
-    ManyRows,
+    /// Two or more rows dirty. The row count drives the PR-E2b
+    /// immediate-flush cap in `Coalescer::should_flush_immediately`.
+    ManyRows { rows: usize },
     /// No rows dirty and cursor unchanged.
     Idle,
 }
@@ -44,6 +45,13 @@ impl Coalescer {
     pub const IDLE: Duration = Duration::from_millis(3);
     /// Hard ceiling: maximum time the first pending chunk waits.
     pub const MAX_CAP: Duration = Duration::from_millis(12);
+    /// Row-count cap for the immediate-flush branch that fires on
+    /// `ManyRows + pending_user_input`. NeoVim 1-line scroll in a TUI
+    /// dirties scrolled-in row + status line + (sometimes) tabline =
+    /// 2-3 rows; cap of 4 leaves headroom while still excluding bigger
+    /// redraws (`:redraw!`, mode-line transitions) from bypassing the
+    /// debounce window.
+    const MANY_ROWS_INSTANT_CAP: usize = 4;
 
     /// Constructs a disarmed Coalescer.
     pub fn new() -> Self {
@@ -82,7 +90,7 @@ impl Coalescer {
     ///
     /// `pending_user_input` is consumed *by the caller* on a `true` return —
     /// the caller flips the bool before invoking this method only when the
-    /// verdict is `AtMostOneRow`. This method is pure: it does not mutate state.
+    /// verdict warrants. This method is pure: it does not mutate state.
     ///
     /// # Invariants
     ///
@@ -93,6 +101,9 @@ impl Coalescer {
     /// rows blank) before content arrives. Routing Full through the coalescer
     /// window lets `wait_deadline`'s `try_recv` drain absorb the row-content
     /// chunk into the same emit.
+    ///
+    /// PR-E2b extends this with a `ManyRows` branch gated on a row cap and
+    /// the coalescer NOT being armed — see spec § 2 and § 7.
     pub fn should_flush_immediately(
         &self,
         is_bootstrap: bool,
@@ -102,10 +113,19 @@ impl Coalescer {
         if is_bootstrap {
             return true;
         }
-        if pending_user_input && matches!(verdict, DamageVerdict::AtMostOneRow) {
-            return true;
+        if !pending_user_input {
+            return false;
         }
-        false
+        match verdict {
+            DamageVerdict::AtMostOneRow => true,
+            // NOTE: the `armed_at.is_none()` guard protects post-Full coalescing —
+            // if a prior Full chunk is already debouncing, its window must run to
+            // completion rather than be cut short by a follow-up ManyRows chunk.
+            DamageVerdict::ManyRows { rows } if *rows <= Self::MANY_ROWS_INSTANT_CAP => {
+                self.armed_at.is_none()
+            }
+            _ => false,
+        }
     }
 
     /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
@@ -173,7 +193,7 @@ mod tests {
     fn should_flush_immediately_on_bootstrap() {
         let c = Coalescer::new();
         assert!(c.should_flush_immediately(true, &DamageVerdict::Idle, false));
-        assert!(c.should_flush_immediately(true, &DamageVerdict::ManyRows, false));
+        assert!(c.should_flush_immediately(true, &DamageVerdict::ManyRows { rows: 5 }, false));
     }
 
     #[test]
@@ -196,7 +216,7 @@ mod tests {
     #[test]
     fn should_not_flush_user_input_with_many_rows() {
         let c = Coalescer::new();
-        assert!(!c.should_flush_immediately(false, &DamageVerdict::ManyRows, true));
+        assert!(!c.should_flush_immediately(false, &DamageVerdict::ManyRows { rows: 8 }, true));
     }
 
     #[test]
