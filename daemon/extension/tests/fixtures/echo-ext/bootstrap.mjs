@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { bootstrap } from "@ozmux/sdk/server";
 
 await bootstrap({
@@ -9,3 +11,4 @@ await bootstrap({
     },
   },
 });
+writeFileSync(join(process.env.OZMUX_BIN_DIR, "pid"), String(process.pid));
