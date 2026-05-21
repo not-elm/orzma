@@ -16,6 +16,8 @@ tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",
   "io-util",
+  "process",
+  "time",
 ] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
