@@ -4,9 +4,8 @@
 //! the tokio runtime themselves and call `run().await`.
 
 use anyhow::Context;
-use ozmux_browser::BrowserUnavailableReason;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
-use ozmux_browser::cef_service::{CefHostSupervisor, spawn_event_pump};
+use ozmux_browser::cef_service::spawn_event_pump;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::handle::ExtensionHandles;
 use ozmux_extension::registry::ExtensionRegistry;
@@ -16,7 +15,6 @@ use ozmux_http_server::activity_titles::ActivityTitles;
 use ozmux_multiplexer::MultiplexerService;
 use ozmux_terminal::TerminalService;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -25,6 +23,9 @@ use tracing_subscriber::{EnvFilter, Registry, fmt};
 /// PID file management for the daemon process: write/read/remove plus
 /// `is_process_alive` and a `PidFileGuard` RAII helper.
 pub mod pidfile;
+
+/// CEF initialize / shutdown helpers invoked by the daemon main thread.
+pub mod cef_lifecycle;
 
 mod builtin_commands;
 
@@ -54,11 +55,11 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
     Ok(dir)
 }
 
-/// Guard returned by `init_tracing`. Holds the tracing-chrome `FlushGuard`
+/// Guard returned by [`init_tracing`]. Holds the tracing-chrome `FlushGuard`
 /// (when active) so its `Drop` impl flushes the writer thread on daemon
-/// shutdown. **Must be held as a local variable in `run()` for the entire
-/// daemon lifetime — storing it in a `static` or `OnceLock` would prevent
-/// the flush because statics never drop.**
+/// shutdown. **Must be held as a local variable in the daemon's main / serve
+/// scope for the entire daemon lifetime — storing it in a `static` or
+/// `OnceLock` would prevent the flush because statics never drop.**
 pub enum TraceGuard {
     /// No Chrome trace active; tracing uses the plain `fmt` layer only.
     None,
@@ -67,26 +68,49 @@ pub enum TraceGuard {
     Chrome(tracing_chrome::FlushGuard),
 }
 
-/// Runs the ozmux daemon to completion. Initialises tracing, cleans up any
-/// stale PID file, loads configuration and extensions, then serves HTTP on
-/// `127.0.0.1:3200` until `SIGINT` or `SIGTERM` is received.
+/// RAII bundle that owns daemon subsystem handles (runtime root, extension
+/// child processes, event pump task, PID file guard). Dropping the bundle
+/// tears every subsystem down in the right order: background tasks abort
+/// first, then `PidFileGuard`'s `Drop` removes the PID file, then the runtime
+/// root cleans up its scratch directory.
+pub struct RuntimeHandles {
+    event_pump: tokio::task::JoinHandle<()>,
+    _ext_handles: ExtensionHandles,
+    _pid_guard: pidfile::PidFileGuard,
+    _runtime: Arc<RuntimeRoot>,
+}
+
+impl Drop for RuntimeHandles {
+    fn drop(&mut self) {
+        // NOTE: abort the background tasks first so they cannot race with
+        // PidFileGuard / RuntimeRoot teardown by trying to touch state that
+        // is about to disappear.
+        self.event_pump.abort();
+    }
+}
+
+/// Builds the daemon's `AppState` together with a `RuntimeHandles` bundle.
 ///
-/// Writes the daemon PID to `$TMPDIR/ozmux/daemon.pid` before entering the
-/// serve loop and removes it on any exit path — graceful shutdown, error
-/// propagation, or panic — via a `PidFileGuard` RAII helper.
-pub async fn run() -> anyhow::Result<()> {
-    let _trace_guard = init_tracing();
+/// Performs every startup step that does not require an active HTTP serve
+/// loop: stale PID cleanup, config + runtime root initialisation, extension
+/// discovery, terminal/title services, CEF host acquisition, AppState
+/// construction, plus the event pump, CEF crash watcher, terminal title
+/// bridge, and PID file guard. Does **not** initialise tracing — callers
+/// own that side effect (so the returned `TraceGuard` stays in their scope).
+pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
     pidfile::cleanup_if_stale()?;
 
     let configs = load_configs().await?;
     let runtime = init_runtime().await?;
 
     let registry = ExtensionRegistry::default();
-    let _ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
+    let ext_handles = ExtensionHandles::load(&runtime, registry.clone())?;
 
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
-    let cef_host = acquire_cef_host(&runtime).await;
+    let browser_cef = Arc::new(BrowserCefRegistry::new());
+    let cef_dispatcher =
+        acquire_cef_host(&runtime, browser_cef.session_id(), registry.clone()).await;
 
     let state = AppState::new(
         terminal.clone(),
@@ -95,29 +119,74 @@ pub async fn run() -> anyhow::Result<()> {
         ozmux_http_server::session_broadcast::SessionBroadcaster::from_env(),
         Arc::clone(&configs),
         titles.clone(),
-        cef_host,
+        Arc::clone(&cef_dispatcher),
+        Arc::clone(&browser_cef),
     );
 
-    let _event_pump = spawn_event_pump(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
-    spawn_cef_crash_watcher(Arc::clone(&state.cef_host), Arc::clone(&state.browser_cef));
+    let event_pump = spawn_event_pump(Arc::clone(&cef_dispatcher), Arc::clone(&state.browser_cef));
     spawn_terminal_title_bridge(terminal, titles, state.multiplexer.clone());
 
-    let _pid_guard = pidfile::PidFileGuard::create(std::process::id())?;
-    let result = run_until_shutdown(state).await;
-    drop(runtime);
-    result
+    let pid_guard = pidfile::PidFileGuard::create(std::process::id())?;
+    Ok((
+        state,
+        RuntimeHandles {
+            event_pump,
+            _ext_handles: ext_handles,
+            _pid_guard: pid_guard,
+            _runtime: runtime,
+        },
+    ))
+}
+
+/// Serves the ozmux daemon HTTP API until `stop_rx` fires or the serve
+/// future returns. Initialises tracing, calls `build_state`, and runs the
+/// axum server. Signal handling is the caller's responsibility — pass a
+/// `oneshot::Receiver` whose sender is tripped by whatever shutdown
+/// orchestration the host (CEF-aware main, integration test, …) uses.
+pub async fn serve(stop_rx: tokio::sync::oneshot::Receiver<()>) -> anyhow::Result<()> {
+    let _trace_guard = init_tracing();
+    let (state, _handles) = build_state().await?;
+    let serve = ozmux_http_server::serve(state);
+    tokio::select! {
+        result = serve => result?,
+        _ = stop_rx => {
+            tracing::info!("serve: stop signal received");
+        }
+    }
+    Ok(())
+}
+
+/// Runs the ozmux daemon to completion using built-in `SIGINT`/`SIGTERM`
+/// signal handling. Initialises tracing, builds the state bundle, and
+/// serves HTTP on `127.0.0.1:3200` until a signal arrives.
+///
+/// Writes the daemon PID to `$TMPDIR/ozmux/daemon.pid` for the lifetime of
+/// the call and removes it on any exit path — graceful shutdown, error
+/// propagation, or panic — via the `RuntimeHandles` bundle's RAII drop.
+#[deprecated(note = "Use `serve(stop_rx)` from a CEF-aware main with explicit signal handling")]
+pub async fn run() -> anyhow::Result<()> {
+    let _trace_guard = init_tracing();
+    let (state, _handles) = build_state().await?;
+    run_until_shutdown(state).await
 }
 
 /// Initialises `tracing-subscriber` with a Registry-based stack and returns a
 /// [`TraceGuard`] that the caller must hold for the daemon lifetime.
 ///
 /// Layer order: `EnvFilter → fmt → chrome` (when the `tracing-chrome` feature
-/// is active and `OZMUX_PERF_TRACE` names an output path).
+/// is active and `OZMUX_PERF_TRACE` names an output path). Without the
+/// feature, setting `OZMUX_PERF_TRACE` is a hard error — the daemon prints
+/// a clear message and exits rather than silently producing no trace file.
 ///
-/// Without the feature, setting `OZMUX_PERF_TRACE` is a hard error — the
-/// daemon prints a clear message and exits rather than silently producing no
-/// trace file.
-fn init_tracing() -> TraceGuard {
+/// Idempotent: a second call (e.g. from `serve` after `ozmux-daemon::main`
+/// already installed tracing pre-CEF-init) is a no-op for the subscriber
+/// and returns [`TraceGuard::None`]. The original chrome `FlushGuard` (if
+/// any) must remain in the first caller's scope to flush on shutdown.
+///
+/// Public so that `ozmux-daemon::main` can install tracing BEFORE
+/// `cef::initialize`, ensuring CEF-init log lines (framework paths,
+/// subprocess path, success/failure) reach stderr / daemon.log.
+pub fn init_tracing() -> TraceGuard {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("info,hyper=warn,tower=warn,tokio_tungstenite=warn,tungstenite=warn")
     });
@@ -130,12 +199,16 @@ fn init_tracing() -> TraceGuard {
                 .file(path)
                 .include_args(true)
                 .build();
-            Registry::default()
+            if Registry::default()
                 .with(env_filter)
                 .with(fmt_layer)
                 .with(chrome_layer)
-                .init();
-            return TraceGuard::Chrome(guard);
+                .try_init()
+                .is_ok()
+            {
+                return TraceGuard::Chrome(guard);
+            }
+            return TraceGuard::None;
         }
     }
 
@@ -151,7 +224,10 @@ fn init_tracing() -> TraceGuard {
         }
     }
 
-    Registry::default().with(env_filter).with(fmt_layer).init();
+    let _ = Registry::default()
+        .with(env_filter)
+        .with(fmt_layer)
+        .try_init();
     TraceGuard::None
 }
 
@@ -196,42 +272,84 @@ async fn init_runtime() -> anyhow::Result<Arc<RuntimeRoot>> {
     Ok(runtime)
 }
 
-/// Spawns the CEF host child and handshakes with it, returning the
-/// resulting handles. On spawn error or handshake timeout, returns a
-/// pre-dead handle set so the daemon comes up with the browser
-/// backend disabled rather than blocking `/health`.
+/// Builds the in-process CEF dispatcher. CEF itself is initialised on the
+/// main thread by `cef_lifecycle::init_on_main` before the bg runtime spawns
+/// this function; here we only construct the daemon-side wrappers (`BrowserPool`,
+/// `PoolHandle`, and the host-event channel) and hand them to
+/// `LiveCefDispatcher`.
+///
+/// The pool starts empty; the first `HostCommand::BrowserCreate` populates it
+/// via the in-process create_browser path (Plan 3 Task 12).
 async fn acquire_cef_host(
-    runtime: &RuntimeRoot,
-) -> Arc<ozmux_browser::cef_service::CefHostHandles> {
-    // NOTE: cef_host startup can hang (binary missing → no UDS connect ever;
-    // missing CEF runtime libs → CefInitialize blocks). spawn_and_handshake
-    // only resolves once the child sends Hello, so we cap the wait — past it
-    // we proceed with the browser backend disabled rather than block the
-    // entire daemon (`/health` would never come up).
-    const CEF_HOST_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-    let socket = runtime.sock_dir().join("cef_host.sock");
-    let supervisor = CefHostSupervisor::new(socket);
-    let handles =
-        match tokio::time::timeout(CEF_HOST_HANDSHAKE_TIMEOUT, supervisor.spawn_and_handshake())
-            .await
-        {
-            Ok(Ok(h)) => h,
-            Ok(Err(e)) => {
-                tracing::error!(
-                    error = %e,
-                    "cef_host spawn_and_handshake failed; continuing with browser backend disabled"
-                );
-                ozmux_browser::cef_service::dead_handles_after_spawn_failure()
+    _runtime: &RuntimeRoot,
+    session_id: u64,
+    extensions: ExtensionRegistry,
+) -> Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> {
+    use ozmux_browser_cef_protocol::wire::HostEvent;
+    use ozmux_cef_host::FrameBufferPool;
+    use ozmux_cef_host::pool::BrowserPool;
+    use ozmux_cef_host::post_command::PoolHandle;
+    use ozmux_cef_host::profile;
+    use tokio::sync::mpsc;
+
+    // CEF handlers want an UnboundedSender (they fire from non-async callbacks
+    // on the CEF UI / IO threads where awaiting backpressure is not possible).
+    // The CefDispatcher trait surfaces a bounded mpsc::Receiver, so a tiny
+    // forwarder task bridges the two.
+    let (unb_tx, mut unb_rx) = mpsc::unbounded_channel::<HostEvent>();
+    let (bnd_tx, bnd_rx) = mpsc::channel::<HostEvent>(256);
+    tokio::spawn(async move {
+        while let Some(ev) = unb_rx.recv().await {
+            if bnd_tx.send(ev).await.is_err() {
+                break;
             }
-            Err(_elapsed) => {
-                tracing::error!(
-                    timeout_s = CEF_HOST_HANDSHAKE_TIMEOUT.as_secs(),
-                    "cef_host did not handshake in time; continuing with browser backend disabled"
-                );
-                ozmux_browser::cef_service::dead_handles_after_spawn_failure()
+        }
+    });
+
+    let browser_data_root = profile::browser_data_root();
+    // 60-frame budget matches the FrameRing budget in `frame_ring.rs`; under
+    // sustained 60 fps × 33 MB (4K BGRA) load this caps in-flight pool
+    // allocations at ~2 GB before the recycler stabilises.
+    let frame_pool = Arc::new(FrameBufferPool::new(60));
+    // Persistent disk profiles are paused pool-wide (see BrowserPool docs); the
+    // flag is preserved so the lock plumbing stays in place for future work.
+    let pool = BrowserPool::new(
+        unb_tx,
+        browser_data_root,
+        false,
+        session_id,
+        frame_pool,
+        extensions.clone(),
+    );
+    let pool_handle = PoolHandle::new(pool);
+
+    let dispatcher = Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
+        pool_handle.clone(),
+        bnd_rx,
+    ));
+
+    // Install the V8↔extension bridge. Must happen after `PoolHandle::new`
+    // plants its back-reference: the bridge holds a `PoolHandle` clone to
+    // post `DispatchExtensionResponse` commands from its UDS reader.
+    //
+    // The unavailable callback holds a `Weak<LiveCefDispatcher>` so the
+    // bridge does not keep the dispatcher alive after daemon shutdown.
+    let dispatcher_weak = Arc::downgrade(&dispatcher);
+    let unavailable_cb: ozmux_cef_host::extension_bridge::UnavailableCallback =
+        Arc::new(move |aid, reason| {
+            if let Some(d) = dispatcher_weak.upgrade() {
+                d.mark_unavailable(Some(aid), reason);
             }
-        };
-    Arc::new(handles)
+        });
+    let bridge = ozmux_cef_host::extension_bridge::ExtensionBridge::new(
+        tokio::runtime::Handle::current(),
+        extensions,
+        pool_handle.clone(),
+    )
+    .with_unavailable_callback(unavailable_cb);
+    pool_handle.install_bridge(bridge);
+
+    dispatcher as Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher>
 }
 
 /// Spawns the adapter task that bridges terminal title-change events
@@ -291,51 +409,24 @@ async fn run_until_shutdown(state: AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Spawns a task that watches for unexpected `cef_host` exit and notifies
-/// all connected WS clients via `BrowserCefRegistry::broadcast_unavailable`.
-///
-/// On exit the task sets `CefHostHandles::is_dead` (Release) then broadcasts
-/// `BrowserUnavailableReason::RetryExhausted` carrying the process status.
-/// No respawn is attempted — that is Plan 3 territory.
-fn spawn_cef_crash_watcher(
-    cef_host: Arc<ozmux_browser::cef_service::CefHostHandles>,
-    registry: Arc<BrowserCefRegistry>,
-) {
-    let Some(mut child) = cef_host.take_child() else {
-        tracing::warn!("cef_host child already taken; crash-watcher not started");
-        return;
-    };
-    let is_dead = cef_host.is_dead_handle();
-    tokio::spawn(async move {
-        let status = child.wait().await;
-        is_dead.store(true, Ordering::Release);
-        let last_error = match &status {
-            Ok(s) => format!("cef_host exited: {s:?}"),
-            Err(e) => format!("cef_host wait error: {e}"),
-        };
-        tracing::error!(status = ?status, "cef_host exited unexpectedly");
-        registry.broadcast_unavailable(BrowserUnavailableReason::RetryExhausted { last_error });
-    });
-}
-
 /// Place the `ozmux` CLI binary at `runtime/bin/ozmux/ozmux` so PTY-spawned
-/// shells can invoke it directly via PATH. Best-effort: logs a warning and
-/// skips if the binary cannot be found.
+/// shells can invoke it directly via PATH. Resolution uses a 4-level
+/// fallback:
+/// 1. `OZMUX_CLI_BIN` env override
+/// 2. macOS-only: if the current executable lives inside an
+///    `*.app/Contents/MacOS/` bundle, climb 4 parents up (out of the app
+///    bundle and its parent dir) and look for a sibling `ozmux`
+/// 3. Sibling `ozmux` next to the current executable
+/// 4. `which::which("ozmux")` against `PATH`
+///
+/// Best-effort: logs a warning and skips if no candidate is found.
 fn place_cli_shim(runtime: &RuntimeRoot) -> std::io::Result<()> {
-    let me = std::env::current_exe()?;
-    let Some(parent) = me.parent() else {
-        tracing::warn!("self exe has no parent dir; skipping ozmux CLI shim");
-        return Ok(());
-    };
-    // NOTE: the CLI binary is named `ozmux` (from cli/Cargo.toml's [[bin]] name).
-    let cli_src = parent.join("ozmux");
-    if !cli_src.exists() {
+    let Some(cli_src) = resolve_ozmux_cli() else {
         tracing::warn!(
-            path = %cli_src.display(),
-            "ozmux CLI binary not found next to bootstrap; `ozmux browser` will not be on PATH"
+            "ozmux CLI binary could not be resolved; `ozmux browser` will not be on PATH"
         );
         return Ok(());
-    }
+    };
     let shim_dir = runtime.root().join("bin").join("ozmux");
     std::fs::create_dir_all(&shim_dir)?;
     let shim = shim_dir.join("ozmux");
@@ -345,6 +436,49 @@ fn place_cli_shim(runtime: &RuntimeRoot) -> std::io::Result<()> {
     #[cfg(not(unix))]
     std::fs::copy(&cli_src, &shim)?;
     Ok(())
+}
+
+/// Resolves the path to the `ozmux` CLI binary using the layered fallback
+/// described on `place_cli_shim`. Returns `None` when no candidate exists.
+fn resolve_ozmux_cli() -> Option<std::path::PathBuf> {
+    if let Some(v) = std::env::var_os("OZMUX_CLI_BIN") {
+        let p = std::path::PathBuf::from(v);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let me = std::env::current_exe().ok()?;
+    #[cfg(target_os = "macos")]
+    if let Some(p) = resolve_ozmux_cli_from_app_bundle(&me) {
+        return Some(p);
+    }
+    if let Some(parent) = me.parent() {
+        let sibling = parent.join("ozmux");
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+    which::which("ozmux").ok()
+}
+
+/// macOS-only resolver step: when `me` lives inside an `*.app/Contents/MacOS/`
+/// bundle, climb up four ancestors (`MacOS` → `Contents` → `*.app` →
+/// containing dir) and probe for a sibling `ozmux` binary next to the bundle.
+/// This matches the layout produced by `make dev` (the `.app` and `ozmux`
+/// land side-by-side in `$CARGO_BIN_DIR`) and the dev tree (`target/debug/`
+/// holds both `ozmux-daemon.app` and `ozmux`).
+#[cfg(target_os = "macos")]
+fn resolve_ozmux_cli_from_app_bundle(me: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut ancestor = me;
+    for _ in 0..3 {
+        ancestor = ancestor.parent()?;
+    }
+    let extension = ancestor.extension()?.to_str()?;
+    if extension != "app" {
+        return None;
+    }
+    let sibling = ancestor.parent()?.join("ozmux");
+    sibling.is_file().then_some(sibling)
 }
 
 fn longest_extension_name() -> std::io::Result<String> {
@@ -383,7 +517,15 @@ fn longest_extension_name() -> std::io::Result<String> {
 /// CLI shim and the built-in shims have consistent behaviour on
 /// error.
 async fn materialize_builtins(runtime: &RuntimeRoot) -> anyhow::Result<()> {
-    let ozmux_exe = std::env::current_exe().context("resolve current_exe")?;
+    // NOTE: shims must exec the `ozmux` CLI, not `current_exe()` — since the
+    // daemon is its own binary, `current_exe()` points at `ozmux-daemon` and
+    // would make `@browser` start a second daemon (lock contention panic).
+    let Some(ozmux_exe) = resolve_ozmux_cli() else {
+        tracing::warn!(
+            "ozmux CLI binary could not be resolved; built-in @-shims (e.g. @browser) will not be on PATH"
+        );
+        return Ok(());
+    };
     builtin_commands::validate_ozmux_exe(runtime.bin_dir(), &ozmux_exe).with_context(|| {
         format!(
             "ozmux_exe failed self-recursion check (path: {})",

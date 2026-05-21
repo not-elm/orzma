@@ -34,6 +34,9 @@ cmd_setup() {
   echo "setup: cargo build -p ozmux_cli" >&2
   (cd "${REPO_ROOT}" && cargo build -p ozmux_cli)
 
+  echo "setup: make bundle-ozmux-daemon" >&2
+  (cd "${REPO_ROOT}" && make bundle-ozmux-daemon)
+
   echo "setup: install Playwright Chromium" >&2
   (cd "${REPO_ROOT}" && npx -y playwright@1 install chromium)
 
@@ -65,7 +68,8 @@ cmd_start() {
 
   echo "start: launching daemon (logs: ${daemon_log})" >&2
   (cd "${REPO_ROOT}" && exec env OZMUX_EXTENSION_ROOT="${REPO_ROOT}/extensions" \
-    cargo run -p ozmux_cli -- daemon start --foreground) \
+    OZMUX_FRONTEND_DEV=1 \
+    "${REPO_ROOT}/target/debug/ozmux-daemon.app/Contents/MacOS/ozmux-daemon") \
     >"${daemon_log}" 2>&1 &
   local daemon_pid=$!
   printf '%s\n' "${daemon_pid}" >> "${PID_FILE}"

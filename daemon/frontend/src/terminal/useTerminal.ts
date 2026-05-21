@@ -14,7 +14,7 @@ import { setupPaste } from './input/paste';
 import { createOverlayStore, type OverlayStore } from './overlay-store';
 import { markStage } from './perf/marks';
 import { decodeFrame } from './protocol/frame';
-import { cellHeightOf, cellWidthOf, type FontMetrics } from './renderer/font';
+import { cellHeightOf, cellWidthOf, type FontMetrics, naturalCellWidthOf } from './renderer/font';
 import { applyFrame, createGrid, snapshotGrid } from './renderer/grid';
 import { createGridStore, type GridStore } from './renderer/grid-store';
 import { injectTerminalPalette } from './renderer/palette';
@@ -41,6 +41,7 @@ const DEFAULT_FM: FontMetrics = {
   baseline: 12,
   fontCss: '14px monospace',
   dpr: 1,
+  letterSpacing: 0,
 };
 
 function mapsEqual<K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>): boolean {
@@ -77,9 +78,7 @@ export function useTerminal(
   const [fm, setFm] = useState<FontMetrics>(DEFAULT_FM);
   const modesRef = useRef<ReadonlySet<string>>(gridRef.current.modes);
   const compositionState = useRef<CompositionState>({
-    isSendingComposition: false,
-    startValue: 0,
-    pendingTimer: null,
+    isComposing: false,
   });
 
   const gridStoreRef = useRef<GridStore | null>(null);
@@ -105,6 +104,7 @@ export function useTerminal(
     // Probes carry `font-mono ozmux-font-probe leading-none` (see font.ts) so
     // the measurements match what Row.tsx + TerminalGrid.tsx will actually render.
     const cellW = cellWidthOf(pane);
+    const naturalCellW = naturalCellWidthOf(pane);
     const cellH = cellHeightOf(pane) || DEFAULT_FM.cellH;
     const measuredFm: FontMetrics = {
       cellW,
@@ -112,6 +112,7 @@ export function useTerminal(
       baseline: Math.round(cellH * 0.8),
       fontCss: getComputedStyle(pane).font,
       dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+      letterSpacing: cellW - naturalCellW,
     };
     setFm(measuredFm);
 
@@ -249,7 +250,7 @@ export function useTerminal(
       cleanups.push(setupCopy(ta));
 
       const onKey = (e: KeyboardEvent): void => {
-        if (compositionState.current.isSendingComposition) return;
+        if (compositionState.current.isComposing) return;
         const bytes = handleKeyDown(e, gridRef.current.modes);
         if (!bytes) return;
         e.preventDefault();

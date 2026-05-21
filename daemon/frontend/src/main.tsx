@@ -2,13 +2,14 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/theme.css';
 import { App } from './App.tsx';
+import { loadBrowserConfig } from './config/browser';
 import { loadFontConfig, preloadFonts } from './config/font';
 import { installPerfReport } from './terminal/perf/report';
 
 installPerfReport();
 
 async function bootstrap(): Promise<void> {
-  await loadFontConfig();
+  await Promise.all([loadFontConfig(), loadBrowserConfig()]);
   await preloadFonts();
 
   const params = new URLSearchParams(window.location.search);

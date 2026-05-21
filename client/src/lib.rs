@@ -14,7 +14,7 @@ mod daemon;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let arg = std::env::args().nth(1);
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(move |app| {
             tauri::async_runtime::block_on(async {
                 daemon::ensure_running().await?;
@@ -27,8 +27,17 @@ pub fn run() {
             })?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, _event| {
+        #[cfg(debug_assertions)]
+        if let tauri::RunEvent::Exit = _event {
+            let _ = std::process::Command::new("ozmux")
+                .args(["daemon", "stop", "--force"])
+                .status();
+        }
+    });
 }
 
 /// Resolve the initial Webview URL given the CLI positional arg and the

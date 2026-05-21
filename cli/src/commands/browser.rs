@@ -6,11 +6,16 @@ use crate::daemon_client;
 use anyhow::{Context, Result};
 use clap::Args;
 
-/// `ozmux browser [URL]` — open a Browser Activity in the active pane.
+/// `ozmux browser [QUERY...]` — open a Browser Activity in the active pane.
 #[derive(Args)]
 pub struct Browser {
-    /// URL to open. Schemes are added automatically: `foo.com` → `https://foo.com`.
-    pub url: Option<String>,
+    /// URL or search query. A single token that looks like a URL
+    /// (`example.com`, `https://...`, `localhost:3000`) is opened
+    /// directly; anything else is sent to the configured search engine
+    /// (`[browser].search_template`, default DuckDuckGo). Mirrors the
+    /// toolbar's omnibox.
+    #[arg(trailing_var_arg = true)]
+    pub query: Vec<String>,
     /// Named storage profile to use. Defaults to `default`.
     #[arg(long, conflicts_with = "incognito")]
     pub profile: Option<String>,
@@ -67,7 +72,7 @@ pub async fn run(args: Browser) -> Result<()> {
         .context("OZMUX_WINDOW_ID not set (are you running inside an ozmux pane?)")?;
     let pid = std::env::var("OZMUX_PANE_ID")
         .context("OZMUX_PANE_ID not set (are you running inside an ozmux pane?)")?;
-    let url = args.url.as_deref().map(normalize_url);
+    let url = resolve_initial_url(&args.query).await;
     let profile = resolve_profile(args.profile.as_deref(), args.incognito);
 
     match args.split {
@@ -103,16 +108,22 @@ fn resolve_profile(profile: Option<&str>, incognito: bool) -> serde_json::Value 
     }
 }
 
-/// Add a default scheme to a URL-like input. Bare hosts get `https://`;
-/// inputs that already carry any scheme (`://` present) or start with
-/// `about:` pass through unchanged. This handles `ftp://`, `chrome://`,
-/// `file://`, etc. without incorrectly prepending `https://`.
-fn normalize_url(input: &str) -> String {
-    if input.contains("://") || input.starts_with("about:") {
-        input.to_string()
-    } else {
-        format!("https://{input}")
+/// Joins the positional `query` arguments and resolves them through the
+/// omnibox classifier (the same algorithm the toolbar URL bar uses).
+/// Returns `None` for empty input. Falls back to the default browser
+/// config when the user's config file is missing or fails to load — the
+/// CLI should still open a browser when only the daemon is reachable.
+async fn resolve_initial_url(query: &[String]) -> Option<String> {
+    let joined = query.join(" ");
+    if joined.trim().is_empty() {
+        return None;
     }
+    let cfg = ozmux_configs::OzmuxConfigs::load()
+        .await
+        .unwrap_or_default();
+    let resolved =
+        ozmux_configs::browser::resolve_omnibox_input(&joined, &cfg.browser.search_template);
+    (!resolved.is_empty()).then_some(resolved)
 }
 
 #[cfg(test)]
@@ -141,42 +152,40 @@ mod tests {
         serde_json::json!({ "kind": "named", "name": n })
     }
 
-    #[test]
-    fn already_https_passes_through() {
-        assert_eq!(normalize_url("https://x.com"), "https://x.com");
+    #[tokio::test]
+    async fn resolve_initial_url_returns_none_for_empty_args() {
+        assert_eq!(resolve_initial_url(&[]).await, None);
     }
 
-    #[test]
-    fn already_http_passes_through() {
-        assert_eq!(normalize_url("http://x.com"), "http://x.com");
+    #[tokio::test]
+    async fn resolve_initial_url_returns_none_for_whitespace_only() {
+        assert_eq!(resolve_initial_url(&["   ".into()]).await, None);
     }
 
-    #[test]
-    fn bare_host_gets_https() {
-        assert_eq!(normalize_url("x.com"), "https://x.com");
-    }
-
-    #[test]
-    fn about_blank_passes_through() {
-        assert_eq!(normalize_url("about:blank"), "about:blank");
-    }
-
-    #[test]
-    fn path_only_gets_https() {
+    #[tokio::test]
+    async fn resolve_initial_url_prepends_https_for_bare_host() {
         assert_eq!(
-            normalize_url("example.com/path"),
-            "https://example.com/path"
+            resolve_initial_url(&["example.com".into()]).await,
+            Some("https://example.com".to_string())
         );
     }
 
-    #[test]
-    fn ftp_scheme_passes_through() {
-        assert_eq!(normalize_url("ftp://x.com"), "ftp://x.com");
+    #[tokio::test]
+    async fn resolve_initial_url_joins_multi_word_query_as_search() {
+        let url = resolve_initial_url(&["rust".into(), "async".into(), "tutorial".into()])
+            .await
+            .expect("resolved URL");
+        assert!(url.starts_with("https://duckduckgo.com/?q="));
+        assert!(url.contains("rust"));
+        assert!(url.contains("async"));
     }
 
-    #[test]
-    fn chrome_scheme_passes_through() {
-        assert_eq!(normalize_url("chrome://settings"), "chrome://settings");
+    #[tokio::test]
+    async fn resolve_initial_url_passes_through_full_url() {
+        assert_eq!(
+            resolve_initial_url(&["https://example.com/path".into()]).await,
+            Some("https://example.com/path".to_string())
+        );
     }
 
     #[test]

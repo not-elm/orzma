@@ -4,7 +4,14 @@ import { __resetGlyphWidthCacheForTests } from './font';
 import type { Cell } from './grid';
 import { Row } from './Row';
 
-const fakeFm = { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 };
+const fakeFm = {
+  cellW: 8,
+  cellH: 16,
+  baseline: 12,
+  fontCss: '14px monospace',
+  dpr: 1,
+  letterSpacing: 0,
+};
 const noHyperlinks = new Map<number, string>();
 
 function makeCell(over: Partial<Cell> = {}): Cell {
@@ -67,6 +74,37 @@ describe('Row basic structure', () => {
     // F3: line-height locks the line-box height to cellH so glyphs don't
     // drift vertically across runs of mixed metrics.
     expect(row.style.lineHeight).toBe('16px');
+  });
+
+  it('applies fm.letterSpacing on the row container so cursor.x * cellW aligns with rendered text', () => {
+    const fm = { ...fakeFm, letterSpacing: -0.22 };
+    const { container: out } = render(
+      <Row
+        cells={[makeCell()]}
+        version={1}
+        fm={fm}
+        hyperlinks={noHyperlinks}
+        probeRef={container}
+      />,
+    );
+    const row = out.firstElementChild as HTMLElement;
+    // jsdom normalises the value; just assert it round-trips through CSS as the same number.
+    expect(row.style.letterSpacing).toBe('-0.22px');
+  });
+
+  it('defaults row letter-spacing to 0px when fm.letterSpacing is unset', () => {
+    const fm = { cellW: 8, cellH: 16 };
+    const { container: out } = render(
+      <Row
+        cells={[makeCell()]}
+        version={1}
+        fm={fm}
+        hyperlinks={noHyperlinks}
+        probeRef={container}
+      />,
+    );
+    const row = out.firstElementChild as HTMLElement;
+    expect(row.style.letterSpacing).toBe('0px');
   });
 
   it('wide char (width=2) goes into its own <span> with letter-spacing applied', () => {

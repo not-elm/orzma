@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 
 await build({
-  entryPoints: [resolve(here, "iframe-entry.ts")],
+  entryPoints: [resolve(here, "cef-entry.ts")],
   bundle: true,
   format: "esm",
   platform: "browser",

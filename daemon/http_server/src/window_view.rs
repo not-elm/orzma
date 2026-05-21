@@ -32,7 +32,6 @@ pub enum ActivityView {
     Extension {
         id: ActivityId,
         title: String,
-        iframe_url: String,
     },
     Browser {
         id: ActivityId,
@@ -53,7 +52,7 @@ impl WindowView {
                 window
                     .panes
                     .get(pid)
-                    .map(|p| PaneView::from_pane(p, &window.id, titles))
+                    .map(|p| PaneView::from_pane(p, titles))
             })
             .collect();
         let layout = build_layout(&window.root_cell, &window.cells)?;
@@ -69,11 +68,11 @@ impl WindowView {
 }
 
 impl PaneView {
-    fn from_pane(pane: &Pane, wid: &WindowId, titles: &HashMap<ActivityId, String>) -> Self {
+    fn from_pane(pane: &Pane, titles: &HashMap<ActivityId, String>) -> Self {
         let activities = pane
             .activities
             .iter()
-            .map(|a| ActivityView::from_activity(a, wid, &pane.id, titles))
+            .map(|a| ActivityView::from_activity(a, titles))
             .collect();
         Self {
             id: pane.id.clone(),
@@ -84,12 +83,7 @@ impl PaneView {
 }
 
 impl ActivityView {
-    fn from_activity(
-        activity: &Activity,
-        wid: &WindowId,
-        pid: &PaneId,
-        titles: &HashMap<ActivityId, String>,
-    ) -> Self {
+    fn from_activity(activity: &Activity, titles: &HashMap<ActivityId, String>) -> Self {
         match &activity.kind {
             ActivityKind::Terminal => Self::Terminal {
                 id: activity.id.clone(),
@@ -102,10 +96,6 @@ impl ActivityView {
             ActivityKind::Extension { .. } => Self::Extension {
                 id: activity.id.clone(),
                 title: activity.name.clone(),
-                iframe_url: format!(
-                    "/windows/{}/panes/{}/activities/{}/iframe/index.html",
-                    wid, pid, activity.id
-                ),
             },
             ActivityKind::Browser { initial_url, .. } => Self::Browser {
                 id: activity.id.clone(),

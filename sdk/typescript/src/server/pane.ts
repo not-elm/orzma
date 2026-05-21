@@ -67,9 +67,9 @@ export class Pane {
 
   /**
    * Atomic split: generate UUIDs, prime local handler/channel registries,
-   * then POST. The pre-POST register is what makes the iframe race-free —
-   * see plan §5.3 "race-free invariant". On POST failure we roll the local
-   * registries back so no stale entries survive.
+   * then POST. The pre-POST register is what makes the in-CEF extension
+   * client race-free — see plan §5.3 "race-free invariant". On POST failure
+   * we roll the local registries back so no stale entries survive.
    */
   async split(args: SplitArgs): Promise<Pane> {
     const newPaneId: PaneId = crypto.randomUUID();
@@ -165,8 +165,8 @@ function buildActivityPayload(
   if (spec.kind === "terminal") {
     base.kind = { type: "terminal" };
   } else {
-    // `extension_name` lets the daemon populate its ExtensionRegistry so the
-    // iframe's handlers-WS upgrade can resolve the owning extension's UDS.
+    // `extension_name` lets the daemon populate its ExtensionRegistry so
+    // the in-CEF extension client can resolve the owning extension's UDS.
     // Resolved lazily from the env to match `daemon-client.ts`'s pattern; the
     // SDK is only ever used from inside a bootstrap()-driven extension process
     // where this is guaranteed to be set.

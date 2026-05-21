@@ -100,7 +100,7 @@ export function handleSubOpen(
       writeServerFrame(conn, aid, { kind: "sub.complete", id: open.id });
     } catch (e) {
       // An abort-driven throw is a normal cancel; emit `sub.complete`. Other
-      // throws are reported as `sub.error` so the iframe sees the failure.
+      // throws are reported as `sub.error` so the extension client sees the failure.
       if (ac.signal.aborted && isAbortError(e)) {
         writeServerFrame(conn, aid, { kind: "sub.complete", id: open.id });
       } else {

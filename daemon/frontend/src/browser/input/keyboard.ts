@@ -1,11 +1,15 @@
 // DOM keyboard → InputEvent::Key bridge for the cef-backed BrowserActivity.
 //
-// RawKeyDown carries the windows key code (VK_* values for common keys, falling
-// back to the deprecated `keyCode` for letters/digits/punctuation). When a
-// single-character key produces a printable character, a follow-up `Char`
-// event delivers the typed character to cef_host — Chromium needs both
-// `RawKeyDown` (for shortcut handlers) and `Char` (for text input) in
-// sequence.
+// On macOS (the platform cef_host targets) press events are sent as
+// `KEYEVENT_CHAR` — not `KEYEVENT_RAWKEYDOWN`. CEF's macOS OSR path lacks
+// the `_hasUnhandledKeyDownEvent` safeguard that Chromium's own
+// `BridgedContentView` uses, so `RAWKEYDOWN` causes editor commands (e.g.
+// DeleteForward) to fire BOTH via Blink's `keyDownCommandsMap` AND via
+// AppKit's `interpretKeyEvents:`-routed `doCommandBySelector:` — i.e. one
+// press deletes two characters. `KEYEVENT_CHAR` enters Blink's
+// `keyPressCommandsMap`, which has no Delete/Backspace bindings, so only
+// the AppKit-side path fires (once). Reference implementation:
+// `bevy_cef/.../browsers/keyboard.rs::create_cef_key_events`.
 
 import type { InputEvent } from '../protocol/input';
 
@@ -76,14 +80,18 @@ export interface KeyboardAttachOpts {
 
 /** Attaches keydown/keyup listeners and returns a detach closure. */
 export function attachKeyboard({ send, element, focusOnEditable }: KeyboardAttachOpts): () => void {
-  const onKey = (eventType: 'raw_key_down' | 'key_up') => (e: KeyboardEvent) => {
+  const onKey = (eventType: 'char' | 'key_up') => (e: KeyboardEvent) => {
     // NOTE: capture-phase consumers (the global prefix dispatcher in
     // `shortcuts/usePrefixMode.ts`) signal "do not forward to CEF" via
     // `preventDefault()`; `isComposing` keystrokes belong to the IME path
     // (`browser/input/ime.ts`) and would double-emit if we forwarded them.
-    // Skipping both keeps prefix shortcuts and IME composition from leaking
-    // into the embedded browser.
     if (e.defaultPrevented || e.isComposing) return;
+    // NOTE: macOS auto-repeat fires keydown at the OS-configured rate.
+    // Forwarding each as a fresh CEF event runs the editor command per
+    // repeat, so even a short tap of Delete deletes 2+ chars. Drop repeats
+    // so 1 physical press = 1 wire event.
+    if (e.repeat) return;
+    const charCode = e.key.length === 1 ? e.key.charCodeAt(0) : 0;
     send({
       kind: 'key',
       event_type: eventType,
@@ -91,25 +99,13 @@ export function attachKeyboard({ send, element, focusOnEditable }: KeyboardAttac
       // NOTE: native scan code is not exposed by the DOM KeyboardEvent — leave 0.
       native_key_code: 0,
       modifiers: modifiers(e),
-      character: e.key.length === 1 ? e.key.charCodeAt(0) : 0,
-      unmodified_character: 0,
+      character: charCode,
+      unmodified_character: e.key.length === 1 ? e.key.toLowerCase().charCodeAt(0) : 0,
       focus_on_editable_field: focusOnEditable(),
     });
-    if (eventType === 'raw_key_down' && e.key.length === 1) {
-      send({
-        kind: 'key',
-        event_type: 'char',
-        windows_key_code: e.key.charCodeAt(0),
-        native_key_code: 0,
-        modifiers: modifiers(e),
-        character: e.key.charCodeAt(0),
-        unmodified_character: e.key.toLowerCase().charCodeAt(0),
-        focus_on_editable_field: focusOnEditable(),
-      });
-    }
   };
 
-  const down = onKey('raw_key_down');
+  const down = onKey('char');
   const up = onKey('key_up');
   element.addEventListener('keydown', down);
   element.addEventListener('keyup', up);

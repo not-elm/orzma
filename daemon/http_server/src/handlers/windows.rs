@@ -40,7 +40,6 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation, WindowId};
-    use std::path::PathBuf;
     use tower::ServiceExt;
 
     async fn split_via_window(state: &AppState, wid: &WindowId, target: &PaneId) -> PaneId {
@@ -256,54 +255,5 @@ mod tests {
         assert_eq!(split["orientation"].as_str(), Some("horizontal"));
         assert!(split["lhs"].is_object());
         assert!(split["rhs"].is_object());
-    }
-
-    #[tokio::test]
-    async fn get_window_includes_iframe_url_for_extension_activity() {
-        let state = fresh_state();
-        let (_sid, wid, bootstrap_pane, _aid) = bootstrap_default(&state).await;
-        let activity = Activity::extension(ActivityId::new(), "ext", PathBuf::from("/tmp"));
-        let activity_id = activity.id.clone();
-        let new_pane = PaneId::new();
-        state
-            .multiplexer
-            .with_window_or_404(&wid, |w| {
-                w.split_pane(
-                    &bootstrap_pane,
-                    new_pane.clone(),
-                    activity,
-                    Side::After,
-                    SplitOrientation::Horizontal,
-                )
-            })
-            .await
-            .unwrap();
-        state
-            .multiplexer
-            .pane_owner_window
-            .insert(new_pane.clone(), wid.clone());
-
-        let (router, _) = router_with(state);
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/windows/{}", wid))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let panes = v["panes"].as_array().unwrap();
-        let ext_pane = panes
-            .iter()
-            .find(|p| p["activities"][0]["kind"].as_str() == Some("extension"))
-            .expect("extension pane not found");
-        let iframe_url = ext_pane["activities"][0]["iframe_url"].as_str().unwrap();
-        assert_eq!(
-            iframe_url,
-            format!("/windows/{wid}/panes/{new_pane}/activities/{activity_id}/iframe/index.html")
-        );
     }
 }

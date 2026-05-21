@@ -11,9 +11,9 @@ pub mod activate;
 pub mod add_to_pane;
 pub mod break_to_pane;
 pub mod browser_ws;
+mod cef_screencast;
 pub mod close_activity;
-pub mod handlers_ws;
-pub mod iframe_serve;
+pub mod extension_cef_ws;
 pub mod terminal_ws;
 mod vt_ws;
 
@@ -29,9 +29,8 @@ fn activity_id_router() -> Router<AppState> {
         .route("/activate", post(activate::activate))
         .route("/break-to-pane", post(break_to_pane::break_to_pane))
         .route("/browser/ws", get(browser_ws::browser_ws))
+        .route("/extension/cef/ws", get(extension_cef_ws::extension_cef_ws))
         .route("/terminal/ws", get(terminal_ws::terminal_ws))
-        .route("/handlers/ws", get(handlers_ws::handlers_ws))
-        .route("/iframe/{*path}", get(iframe_serve::iframe_serve))
 }
 
 #[derive(Deserialize)]
@@ -49,10 +48,10 @@ pub enum ActivityKindInput {
     Extension {
         html_root: PathBuf,
         /// Owning extension's name. The daemon uses this to populate the
-        /// `ExtensionRegistry` so subsequent iframe / handlers-WS requests
-        /// can route to the right extension UDS. Required for the Extension
-        /// variant; the SDK fills it from the bootstrap-time `EXTENSION_NAME`
-        /// env var.
+        /// `ExtensionRegistry` so the in-CEF extension client can route
+        /// V8-binding RPCs to the right extension UDS. Required for the
+        /// Extension variant; the SDK fills it from the bootstrap-time
+        /// `EXTENSION_NAME` env var.
         extension_name: String,
     },
     Browser {
@@ -182,8 +181,9 @@ pub(crate) mod test_support {
     }
 
     /// Build a router with the bootstrap session plus an extension Activity
-    /// hosted inside the initial Pane so the hierarchical iframe / WS routes
-    /// can validate (wid, pid, aid) and serve files from `html_root`.
+    /// hosted inside the initial Pane so the hierarchical activity routes
+    /// can validate (wid, pid, aid) against an Extension-kind activity whose
+    /// `html_root` points at a real directory.
     pub(crate) async fn setup_hierarchical_extension(
         html_body: &[u8],
     ) -> (

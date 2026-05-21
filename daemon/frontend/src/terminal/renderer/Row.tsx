@@ -21,7 +21,7 @@ interface RowProps {
   /** Bumped by Grid.applyFrame when the row content changes. React.memo
    *  compares this to short-circuit re-renders. */
   version: number;
-  fm: { cellW: number; cellH: number };
+  fm: { cellW: number; cellH: number; letterSpacing?: number };
   hyperlinks: ReadonlyMap<number, string>;
   /** DOM container used for glyph width probes. In production this is the
    *  terminal-grid root; tests inject their own. */
@@ -208,8 +208,12 @@ export const Row = memo(function Row({ cells, fm, hyperlinks, probeRef }: RowPro
   return (
     <div
       className="block whitespace-pre"
-      // biome-ignore lint/plugin: row height + line-height locked to measured cellH (F3)
-      style={{ height: `${fm.cellH}px`, lineHeight: `${fm.cellH}px` }}
+      // biome-ignore lint/plugin: row height/line-height locked to measured cellH (F3); letter-spacing compresses natural glyph advance into the rounded cellW grid so the cursor's `cursor.x * cellW` position stays aligned with rendered text (xterm.js DomRenderer parity)
+      style={{
+        height: `${fm.cellH}px`,
+        lineHeight: `${fm.cellH}px`,
+        letterSpacing: `${fm.letterSpacing ?? 0}px`,
+      }}
     >
       {runs.map((run) => {
         const fgClass = !Array.isArray(run.fg)

@@ -3,7 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { createOverlayStore, OverlayStoreContext, useOverlayState } from './overlay-store';
 
 const baseCursor = { x: 0, y: 0, shape: 'block' as const, blinking: false, visible: true };
-const baseFm = { cellW: 8, cellH: 16, baseline: 12, fontCss: '14px monospace', dpr: 1 };
+const baseFm = {
+  cellW: 8,
+  cellH: 16,
+  baseline: 12,
+  fontCss: '14px monospace',
+  dpr: 1,
+  letterSpacing: 0,
+};
 
 function withStore(store: ReturnType<typeof createOverlayStore>) {
   return ({ children }: { children: React.ReactNode }) => (

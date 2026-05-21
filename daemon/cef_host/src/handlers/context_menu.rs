@@ -1,6 +1,6 @@
 //! cef_host context menu handler. Clears the model so CEF does not show its
 //! native OS context menu — the frontend draws its own React menu on
-//! right-click instead (Phase B Task B11).
+//! right-click instead.
 
 use cef::rc::Rc as _;
 use cef::{

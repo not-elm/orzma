@@ -7,8 +7,8 @@ use crate::window_view::WindowView;
 use crate::{HttpError, HttpResult};
 use axum::extract::FromRef;
 use ozmux_browser::cef_backend::CefBackend;
+use ozmux_browser::cef_dispatcher::CefDispatcher;
 use ozmux_browser::cef_registry::BrowserCefRegistry;
-use ozmux_browser::cef_service::CefHostHandles;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
 use ozmux_configs::OzmuxConfigs;
 use ozmux_extension::ExtensionRegistry;
@@ -28,7 +28,7 @@ use std::sync::Arc;
 pub enum ActivityKindDiscriminant {
     /// Terminal PTY activity.
     Terminal,
-    /// Extension (iframe-served) activity.
+    /// Extension activity (hosted inside the in-CEF browser).
     Extension,
     /// Browser activity.
     Browser,
@@ -81,8 +81,10 @@ pub struct AppState {
     pub titles: ActivityTitles,
     /// CEF-backed BrowserActivity registry.
     pub browser_cef: Arc<BrowserCefRegistry>,
-    /// Handle to the cef_host child process and its command/event channels.
-    pub cef_host: Arc<CefHostHandles>,
+    /// Dispatcher for the cef_host transport. Production wires
+    /// `LiveCefDispatcher`; tests wire `StubCefDispatcher`. Plan 3 swaps the
+    /// live impl for in-process.
+    pub cef_host: Arc<dyn CefDispatcher>,
 }
 
 impl AppState {
@@ -91,6 +93,10 @@ impl AppState {
     /// intentionally not derived so callers cannot silently produce a state
     /// whose `TerminalService`, `ExtensionRegistry`, or `LayoutBroadcaster`
     /// are detached from the daemon's runtime root.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "AppState aggregates every daemon subsystem; threading them through a builder would just rename the noise"
+    )]
     pub fn new(
         terminal: TerminalService,
         extensions: ExtensionRegistry,
@@ -98,7 +104,8 @@ impl AppState {
         session_broadcast: SessionBroadcaster,
         configs: Arc<OzmuxConfigs>,
         titles: ActivityTitles,
-        cef_host: Arc<CefHostHandles>,
+        cef_host: Arc<dyn CefDispatcher>,
+        browser_cef: Arc<BrowserCefRegistry>,
     ) -> Self {
         Self {
             multiplexer: MultiplexerService::default(),
@@ -108,7 +115,7 @@ impl AppState {
             session_broadcast,
             configs,
             titles,
-            browser_cef: Arc::new(BrowserCefRegistry::new()),
+            browser_cef,
             cef_host,
         }
     }
@@ -159,9 +166,9 @@ impl AppState {
         Some(kind)
     }
 
-    /// On active-activity change, pause screencast for the previous Browser
-    /// activity and resume it for the next Browser activity. Both calls are
-    /// missing-ok.
+    /// On active-activity change, pause screencast for the previous CEF-backed
+    /// activity (Browser or Extension) and resume it for the next one. Both
+    /// calls are missing-ok.
     pub(crate) async fn toggle_screencast_on_active_change(
         &self,
         wid: &WindowId,
@@ -172,30 +179,24 @@ impl AppState {
         if let Some(prev) = prev
             && matches!(
                 self.activity_kind_in_pane(wid, pid, prev).await,
-                Some(ActivityKindDiscriminant::Browser)
+                Some(ActivityKindDiscriminant::Browser | ActivityKindDiscriminant::Extension)
             )
         {
-            let _ = self
-                .cef_host
-                .send_command(
-                    ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
-                        aid: CefActivityId(prev.to_string()),
-                    },
-                )
-                .await;
+            let _ = self.cef_host.dispatch(
+                ozmux_browser_cef_protocol::wire::HostCommand::PauseScreencast {
+                    aid: CefActivityId(prev.to_string()),
+                },
+            );
         }
         if matches!(
             self.activity_kind_in_pane(wid, pid, next).await,
-            Some(ActivityKindDiscriminant::Browser)
+            Some(ActivityKindDiscriminant::Browser | ActivityKindDiscriminant::Extension)
         ) {
-            let _ = self
-                .cef_host
-                .send_command(
-                    ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
-                        aid: CefActivityId(next.to_string()),
-                    },
-                )
-                .await;
+            let _ = self.cef_host.dispatch(
+                ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
+                    aid: CefActivityId(next.to_string()),
+                },
+            );
         }
     }
 
@@ -369,11 +370,12 @@ impl AppState {
     /// provisioned via cef) and tells cef_host to close its browser handle.
     /// Failure to reach cef_host is logged but never propagated.
     async fn cef_close_activity(&self, aid: &ActivityId) {
+        let cef_aid = CefActivityId(aid.to_string());
         let backend = CefBackend {
-            handles: Arc::clone(&self.cef_host),
+            dispatcher: Arc::clone(&self.cef_host),
             registry: Arc::clone(&self.browser_cef),
         };
-        backend.close(&CefActivityId(aid.to_string())).await;
+        backend.close(&cef_aid).await;
     }
 
     /// Split `target_pane_id` in `wid`, seat the activity from `input`, and
@@ -572,6 +574,11 @@ impl AppState {
                 w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
             })
             .await?;
+        // NOTE: extension owner row is recorded *before* provisioning; if
+        // provisioning fails it must be forgotten here, otherwise
+        // `activity_owner(aid)` keeps returning a stale name for an activity
+        // that no longer exists in the multiplexer.
+        self.extensions.forget_activity(aid);
         Ok(())
     }
 
@@ -583,8 +590,15 @@ impl AppState {
             .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
             .await;
         match activities {
-            Ok(_aids) => {
+            Ok(aids) => {
                 self.multiplexer.pane_owner_window.remove(new_pane_id);
+                // NOTE: split records pane+activity owners up-front (see
+                // `split_pane`); on rollback both must be forgotten or
+                // `activity_owner` / `pane_owner` return stale names.
+                self.extensions.forget_pane(new_pane_id);
+                for aid in &aids {
+                    self.extensions.forget_activity(aid);
+                }
             }
             Err(_) => {
                 tracing::warn!(
@@ -764,7 +778,7 @@ impl AppState {
     }
 
     /// Combined membership check for `/windows/:wid/panes/:pid/activities/:aid/*`
-    /// that also returns the resolved `Activity`. Callers like `iframe_serve`
+    /// that also returns the resolved `Activity`. Callers like `ensure_activity_kind`
     /// need both the validation and the activity metadata; doing them in one
     /// helper avoids a second Window lock acquisition.
     pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
@@ -786,20 +800,6 @@ impl AppState {
                 })
             })?;
         Ok(activity)
-    }
-
-    /// Membership-only variant for handlers that don't need the Activity
-    /// payload (terminal WS, handlers WS).
-    pub(crate) async fn ensure_activity_in_pane_in_window(
-        &self,
-        wid: &WindowId,
-        pid: &PaneId,
-        aid: &ActivityId,
-    ) -> HttpResult<()> {
-        let _ = self
-            .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
-            .await?;
-        Ok(())
     }
 
     /// Like [`Self::ensure_activity_in_pane_in_window_and_fetch`], but also
@@ -900,7 +900,7 @@ impl FromRef<AppState> for Arc<BrowserCefRegistry> {
     }
 }
 
-impl FromRef<AppState> for Arc<CefHostHandles> {
+impl FromRef<AppState> for Arc<dyn CefDispatcher> {
     fn from_ref(input: &AppState) -> Self {
         Arc::clone(&input.cef_host)
     }

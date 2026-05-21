@@ -6,7 +6,6 @@
 use crate::types::{ActivityId, FrameKey, Rect};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// SameSite policy for a cookie transferred to cef_host at BrowserCreate time.
 /// Task A5 reads these from the `decrypt-cookies` crate output and forwards
@@ -92,6 +91,37 @@ pub struct CefCookieDto {
     pub same_site: SameSite,
 }
 
+/// Role tag baked into `BrowserExtraContext`. Drives the V8 binding install
+/// guard in the render process and the Browser-side navigation policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserRole {
+    /// A user-facing Browser Activity.
+    Browser,
+    /// An Extension Activity hosted in the embedded browser.
+    Extension,
+}
+
+/// Context payload forwarded into CEF's `extra_info` so the render process can
+/// build `window.ozmux.context` synchronously in `on_context_created` without
+/// a round-trip to the browser process.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserExtraContext {
+    /// Whether this browser hosts a Browser Activity or an Extension.
+    pub role: BrowserRole,
+    /// Owning session id, if the activity is attached to a session.
+    pub session_id: Option<String>,
+    /// Owning window id.
+    pub window_id: String,
+    /// Owning pane id.
+    pub pane_id: String,
+    /// Activity id this browser was created for.
+    pub activity_id: String,
+    /// Extension name for `BrowserRole::Extension`; `None` for `BrowserRole::Browser`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_name: Option<String>,
+}
+
 /// Wire representation of a Browser Activity storage profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -106,31 +136,28 @@ pub enum BrowserProfileWire {
 }
 
 /// daemon → cef_host commands (spec §5).
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Clone, Debug)]
 pub enum HostCommand {
-    /// Initial daemon → cef_host configuration after Hello handshake.
-    Ready {
-        /// Absolute path to the per-PID runtime root directory.
-        runtime_root: String,
-    },
-    /// Create a new BrowserActivity. The shm fd is passed out-of-band via
-    /// SCM_RIGHTS; cookies are forwarded inline so cef_host can seed the
-    /// cookie store (Task B12).
+    /// Create a new BrowserActivity. Frame transport is in-process via
+    /// `HostEvent::FrameProduced`; cookies are forwarded inline so cef_host
+    /// can seed the cookie store before the first navigation.
     BrowserCreate {
         /// Activity identifier.
         aid: ActivityId,
         /// URL to navigate to on creation.
         initial_url: String,
-        /// Epoch counter for the associated shm ring.
+        /// Epoch counter for the associated frame ring.
         epoch: u32,
         /// Cookies to seed into the browser's cookie store.
         cookies: Vec<CefCookieDto>,
         /// Storage profile for this activity's browser.
         profile: BrowserProfileWire,
+        /// Identity payload forwarded into CEF `extra_info` so the render
+        /// process can build `window.ozmux.context` synchronously.
+        context: BrowserExtraContext,
     },
-    /// Replace the shm ring for an existing activity (e.g. after a cef_host
-    /// respawn). The new shm fd is passed via SCM_RIGHTS.
+    /// Reset the frame ring for an existing activity. Retained as a stub for
+    /// future in-process respawn handling.
     RecreateShm {
         /// Activity identifier.
         aid: ActivityId,
@@ -201,18 +228,8 @@ pub enum HostCommand {
 }
 
 /// cef_host → daemon events (spec §5).
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug)]
 pub enum HostEvent {
-    /// Initial handshake greeting from cef_host.
-    Hello {
-        /// Chromium / CEF version string.
-        cef_version: String,
-        /// Protocol ABI version for compatibility checking.
-        abi_version: u32,
-        /// PID of the cef_host process.
-        pid: u32,
-    },
     /// Outcome of a `BrowserCreate` command.
     BrowserReady {
         /// Activity identifier.
@@ -220,25 +237,39 @@ pub enum HostEvent {
         /// `Ok(())` on success; `Err(msg)` if creation failed.
         ok_or_err: Result<(), String>,
     },
-    /// New frame written to shm. `lap` is the monotonic ring counter,
-    /// `slot_idx = lap % NUM_SLOTS`.
-    FrameDescriptor {
+    /// In-process screencast frame carrying its pixel payload inline as
+    /// `bytes::Bytes` (Plan 3 Task 11+12). The cef_host render handler copies
+    /// the BGRA buffer into a recycled `Vec<u8>` from `FrameBufferPool`, wraps
+    /// it in `Bytes`, and sends this event so the event pump can push a
+    /// `FrameEnvelope` straight into the per-activity `FrameRing` without any
+    /// shm hop.
+    ///
+    /// Fields mirror `FrameEnvelope` 1:1 to avoid a circular `ozmux_browser`
+    /// dependency on this crate.
+    FrameProduced {
         /// Activity identifier.
         aid: ActivityId,
-        /// Monotonic lap counter across all shm slots.
-        lap: u64,
-        /// Index of the shm slot holding this frame (`lap % NUM_SLOTS`).
-        slot_idx: u8,
-        /// Monotonic frame sequence within the current epoch.
+        /// Daemon-wide session identifier stamped on this frame.
+        session_id: u64,
+        /// Monotonic epoch counter; increments on cef_host respawn.
+        epoch: u32,
+        /// Monotonic frame sequence counter within the current epoch.
         frame_seq: u64,
         /// Wall-clock capture timestamp in microseconds.
         captured_at_us: u64,
+        /// Frame width in pixels.
+        width: u32,
+        /// Frame height in pixels.
+        height: u32,
         /// `true` for keyframes that can begin a decode chain.
         is_keyframe: bool,
         /// Damaged pixel regions within the frame.
         damage_rects: Vec<Rect>,
         /// `true` when this frame belongs to a popup overlay.
         is_popup: bool,
+        /// Raw BGRA pixel data (full frame for keyframes; concatenated
+        /// damaged-row strips for deltas).
+        bgra: Bytes,
     },
     /// Navigation state changed (URL, title, back/forward availability).
     NavStateChanged {
@@ -565,9 +596,27 @@ pub enum BrowserServerMsg {
     },
     /// The browser backend is not available and cannot recover.
     BrowserUnavailable {
+        /// When `Some(aid)`, the event is scoped to a single activity (e.g.
+        /// its owning extension disconnected). `None` indicates a daemon-wide
+        /// failure that should fan out to every browser activity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        aid: Option<ActivityId>,
         /// Why the browser is unavailable.
         reason: BrowserUnavailableReason,
     },
+}
+
+/// In-process broadcast payload for permanent-unavailable signals.
+///
+/// Mirrors the on-wire `BrowserServerMsg::BrowserUnavailable` variant but
+/// is kept as a separate type so the broadcast channel and the WS handler
+/// can share filtering logic without going through msgpack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserUnavailableEvent {
+    /// `Some(aid)` → scoped to a single activity. `None` → daemon-wide.
+    pub aid: Option<ActivityId>,
+    /// Why the browser is unavailable.
+    pub reason: BrowserUnavailableReason,
 }
 
 /// Reason sent in `BrowserServerMsg::BrowserUnavailable` (spec §5).
@@ -579,23 +628,10 @@ pub enum BrowserUnavailableReason {
         /// The last error message that caused the final failure.
         last_error: String,
     },
-    /// The cef_host binary was not found at the expected path.
-    BinaryNotFound {
-        /// Absolute path that was searched.
-        path: PathBuf,
-    },
-    /// `CefInitialize` returned a failure exit code.
-    CefInitFailed {
-        /// The exit code returned by cef_host.
-        exit_code: i32,
-    },
-    /// cef_host reported an ABI version incompatible with the daemon.
-    ProtocolMismatch {
-        /// ABI version the daemon requires.
-        expected: u32,
-        /// ABI version cef_host advertised.
-        got: u32,
-    },
+    /// The activity's owning extension UDS connection dropped or failed to
+    /// open. The activity-scoped browser is unusable until the extension
+    /// reconnects.
+    ExtensionDisconnected,
 }
 
 /// Result of `subscribe_frames` inside `BrowserServerMsg::SubscribeReply`

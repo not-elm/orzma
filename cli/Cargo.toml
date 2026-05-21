@@ -25,6 +25,8 @@ serde_json = { workspace = true }
 libc = { workspace = true }
 uuid = { workspace = true }
 daemon_bootstrap = { path = "../daemon/bootstrap" }
+ozmux_configs = { path = "../daemon/configs" }
+which = "6"
 
 [dev-dependencies]
 reqwest = { workspace = true }

@@ -1,9 +1,8 @@
 //! Per-process registry of cef-backed BrowserActivity rings and nav state.
 
 use crate::frame_ring::FrameRing;
-use crate::shm_reader::OwnedShmReader;
 use ozmux_browser_cef_protocol::types::ActivityId as CefActivityId;
-use ozmux_browser_cef_protocol::wire::{BrowserUnavailableReason, CursorKind};
+use ozmux_browser_cef_protocol::wire::{BrowserUnavailableEvent, CursorKind};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, watch};
@@ -25,10 +24,9 @@ pub struct NavState {
     pub can_forward: bool,
 }
 
-/// One entry in the registry, owning the frame ring, the nav state channel,
-/// and the read-only mapping of the activity's shm region.
+/// One entry in the registry, owning the frame ring and the nav state channel.
 pub struct BrowserCefEntry {
-    /// Shared frame ring the event pump fills from `reader` on `FrameDescriptor`.
+    /// Shared frame ring the event pump pushes `FrameProduced` payloads into.
     pub ring: Arc<FrameRing>,
     /// Per-activity nav state sender. The pump task updates this; each WS
     /// subscriber holds a `Receiver` and pushes `BrowserServerMsg::Nav` on change.
@@ -37,15 +35,12 @@ pub struct BrowserCefEntry {
     /// `HostEvent::CursorChanged`; each WS subscriber pushes
     /// `BrowserServerMsg::Cursor` on change.
     pub cursor_tx: watch::Sender<CursorKind>,
-    /// Read-only view of the shm region cef_host writes BGRA frames into. The
-    /// event pump calls `read_stable` / `read_popup` on `FrameDescriptor`.
-    pub reader: Arc<OwnedShmReader>,
 }
 
 /// PoC scope: holds a single `session_id` for the process and a
-/// `HashMap<CefActivityId, BrowserCefEntry>`. Plan 2 promotes this to a richer
-/// supervisor that owns the `CefHostSupervisor` and ties ring lifecycle to
-/// BrowserCreate / Close commands.
+/// `HashMap<CefActivityId, BrowserCefEntry>`. Future work promotes this to
+/// a richer supervisor that ties ring lifecycle to BrowserCreate / Close
+/// commands.
 pub struct BrowserCefRegistry {
     session_id: u64,
     entries: Mutex<HashMap<CefActivityId, BrowserCefEntry>>,
@@ -53,7 +48,7 @@ pub struct BrowserCefRegistry {
     /// permanently unavailable. Seeded in [`new`](Self::new) with capacity 16;
     /// sent by the crash-watcher task in bootstrap; subscribed by each
     /// connected cef WS handler.
-    unavailable_tx: broadcast::Sender<BrowserUnavailableReason>,
+    unavailable_tx: broadcast::Sender<BrowserUnavailableEvent>,
 }
 
 impl BrowserCefRegistry {
@@ -75,17 +70,19 @@ impl BrowserCefRegistry {
 
     /// Returns a new `broadcast::Receiver` that fires when the cef backend
     /// signals permanent unavailability. Subscribe once per WS connection
-    /// before entering the main select loop.
-    pub fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableReason> {
+    /// before entering the main select loop. Subscribers must filter on
+    /// `aid` to ignore events targeted at other activities; an `aid` of
+    /// `None` is daemon-wide and applies to every subscriber.
+    pub fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableEvent> {
         self.unavailable_tx.subscribe()
     }
 
-    /// Broadcasts a `BrowserUnavailableReason` to all current subscribers.
+    /// Broadcasts a `BrowserUnavailableEvent` to all current subscribers.
     ///
-    /// A `SendError` (no receivers) is silently ignored — the reason is
+    /// A `SendError` (no receivers) is silently ignored — the event is
     /// informational and no subscriber is a valid steady state.
-    pub fn broadcast_unavailable(&self, reason: BrowserUnavailableReason) {
-        let _ = self.unavailable_tx.send(reason);
+    pub fn broadcast_unavailable(&self, event: BrowserUnavailableEvent) {
+        let _ = self.unavailable_tx.send(event);
     }
 
     /// The session id stamped on every `SubscribeReply` / `Screencast` message
@@ -94,24 +91,17 @@ impl BrowserCefRegistry {
         self.session_id
     }
 
-    /// Registers a ring + shm reader for `aid`, creating a fresh `NavState`
-    /// watch channel.
+    /// Registers a ring for `aid`, creating a fresh `NavState` watch channel.
     ///
     /// Returns the `watch::Receiver<NavState>` for the caller; also accessible
     /// later via [`nav_subscribe`](Self::nav_subscribe).
-    pub fn insert(
-        &self,
-        aid: CefActivityId,
-        ring: Arc<FrameRing>,
-        reader: Arc<OwnedShmReader>,
-    ) -> watch::Receiver<NavState> {
+    pub fn insert(&self, aid: CefActivityId, ring: Arc<FrameRing>) -> watch::Receiver<NavState> {
         let (nav_tx, nav_rx) = watch::channel(NavState::default());
         let (cursor_tx, _) = watch::channel(CursorKind::Default);
         let entry = BrowserCefEntry {
             ring,
             nav_tx,
             cursor_tx,
-            reader,
         };
         self.entries
             .lock()
@@ -127,19 +117,6 @@ impl BrowserCefRegistry {
             .expect("browser_cef entries poisoned")
             .get(aid)
             .map(|e| Arc::clone(&e.ring))
-    }
-
-    /// Looks up the `(ring, reader)` pair for `aid`, if registered. The event
-    /// pump uses this on `FrameDescriptor` to read a shm slot into the ring.
-    pub fn ring_and_reader(
-        &self,
-        aid: &CefActivityId,
-    ) -> Option<(Arc<FrameRing>, Arc<OwnedShmReader>)> {
-        self.entries
-            .lock()
-            .expect("browser_cef entries poisoned")
-            .get(aid)
-            .map(|e| (Arc::clone(&e.ring), Arc::clone(&e.reader)))
     }
 
     /// Returns a new `watch::Receiver<NavState>` that tracks nav state for `aid`.
