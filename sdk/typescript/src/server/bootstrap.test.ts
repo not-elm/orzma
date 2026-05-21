@@ -155,8 +155,6 @@ describe("bootstrap()", () => {
     const harness = `
       import { bootstrap } from ${JSON.stringify(fileURLToPath(new URL("./bootstrap.ts", import.meta.url)))};
       bootstrap({ commands: { memo: async () => {} } }).catch((e) => { console.error(e); process.exit(11); });
-      // keep alive
-      setInterval(() => {}, 1000);
     `;
     const child = spawn(process.execPath, ["--input-type=module", "-e", harness], {
       env: {

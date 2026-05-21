@@ -1,19 +1,27 @@
+//! Extension Node process lifecycle: spawn at daemon startup, graceful
+//! shutdown via stdin EOF with SIGKILL fallback after a 500ms grace period.
+
 use crate::{
     error::ExtensionResult, handle::package_json::PackageJson, registry::ExtensionRegistry,
     runtime::RuntimeRoot,
 };
-use std::{
-    path::Path,
-    process::{Child, Command, Stdio},
-};
+use std::{path::Path, process::Stdio, time::Duration};
+use tokio::process::{Child, Command};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 mod package_json;
 
+/// Owns every Node extension child process spawned by the daemon and is
+/// responsible for tearing them down on daemon shutdown via [`Self::shutdown`].
 pub struct ExtensionHandles {
-    _node_handles: Vec<Child>,
+    children: Vec<Child>,
 }
 
 impl ExtensionHandles {
+    /// Discovers extensions under `OZMUX_EXTENSION_ROOT`, spawns each as a
+    /// Node child process, and returns a handle owning them. Returns an
+    /// empty handle if the env var is unset or empty.
     pub fn load(runtime: &RuntimeRoot, registry: ExtensionRegistry) -> ExtensionResult<Self> {
         const OZMUX_EXTENSION_ROOT: &str = "OZMUX_EXTENSION_ROOT";
         let root = match std::env::var(OZMUX_EXTENSION_ROOT) {
@@ -22,25 +30,44 @@ impl ExtensionHandles {
                 tracing::info!(
                     "{OZMUX_EXTENSION_ROOT} is not set; daemon will run without extensions"
                 );
-                return Ok(Self {
-                    _node_handles: vec![],
-                });
+                return Ok(Self { children: vec![] });
             }
         };
-        let mut handles = Vec::new();
+        let mut children = Vec::new();
         tracing::info!("extension root dir={root}");
         for entry in std::fs::read_dir(root)?.filter_map(|r| r.ok()) {
             let extension_dir = entry.path();
             match load_package_json(&extension_dir).and_then(|package| {
                 node_handle(package.clone(), &extension_dir, runtime, &registry)
             }) {
-                Ok(h) => handles.push(h),
+                Ok(h) => children.push(h),
                 Err(e) => tracing::error!("{e}"),
             }
         }
-        Ok(Self {
-            _node_handles: handles,
-        })
+        Ok(Self { children })
+    }
+
+    /// Gracefully shuts down every spawned extension. For each child:
+    /// `tokio::process::Child::wait()` drops the stdin handle first, which
+    /// closes the pipe and triggers the Node-side EOF cleanup handler. If
+    /// the child does not exit within `SHUTDOWN_TIMEOUT`, it is SIGKILLed
+    /// and reaped. Idempotent: leaves the internal vector empty.
+    pub async fn shutdown(&mut self) {
+        for child in std::mem::take(&mut self.children) {
+            shutdown_one(child).await;
+        }
+    }
+}
+
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
+
+async fn shutdown_one(mut child: Child) {
+    match tokio::time::timeout(SHUTDOWN_TIMEOUT, child.wait()).await {
+        Ok(Ok(_status)) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "extension wait failed"),
+        Err(_) => {
+            let _ = child.kill().await;
+        }
     }
 }
 
@@ -64,7 +91,6 @@ fn node_handle(
     std::fs::create_dir_all(&bin_dir)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o700))?;
     }
 
@@ -82,6 +108,7 @@ fn node_handle(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn();
 
     match spawn_result {

@@ -249,26 +249,36 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
 
   const handlersServer = await bindHandlersServer(env.handlersSockPath);
 
-  let cleaningUp = false;
-  const cleanup = async () => {
-    if (cleaningUp) return;
-    cleaningUp = true;
-    await Promise.all([
-      new Promise<void>((res) => server.close(() => res())),
-      new Promise<void>((res) => handlersServer.close(() => res())),
-    ]);
-    await Promise.all([
-      fs.rm(env.binDir, { recursive: true, force: true }),
-      fs.unlink(env.sockPath).catch(() => {}),
-      fs.unlink(env.handlersSockPath).catch(() => {}),
-    ]);
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = (): Promise<void> => {
+    cleanupPromise ??= (async () => {
+      await Promise.all([
+        new Promise<void>((res) => server.close(() => res())),
+        new Promise<void>((res) => handlersServer.close(() => res())),
+      ]);
+      await Promise.all([
+        fs.rm(env.binDir, { recursive: true, force: true }),
+        fs.unlink(env.sockPath).catch(() => {}),
+        fs.unlink(env.handlersSockPath).catch(() => {}),
+      ]);
+      // NOTE: required for the SIGTERM/SIGINT and inherited-stdin paths —
+      // server.close() releases the server refs but process.stdin.resume()
+      // still pins the event loop. Without destroy() the process hangs
+      // after cleanup completes.
+      process.stdin.destroy();
+    })();
+    return cleanupPromise;
   };
+
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
-    process.on(sig, () => {
-      cleanup().finally(() => process.exit(0));
+    process.once(sig, () => {
+      void cleanup();
     });
   }
-  process.on("beforeExit", () => {
-    cleanup();
+  // NOTE: extension stdin is reserved by the SDK as a parent-death channel —
+  // any other consumer that reads stdin will steal the EOF and break shutdown.
+  process.stdin.once("end", () => {
+    void cleanup();
   });
+  process.stdin.resume();
 }

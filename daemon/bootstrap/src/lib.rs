@@ -53,22 +53,39 @@ pub fn runtime_dir() -> std::io::Result<std::path::PathBuf> {
 }
 
 /// RAII bundle that owns daemon subsystem handles (runtime root, extension
-/// child processes, event pump task, PID file guard). Dropping the bundle
-/// tears every subsystem down in the right order: background tasks abort
-/// first, then `PidFileGuard`'s `Drop` removes the PID file, then the runtime
-/// root cleans up its scratch directory.
+/// child processes, event pump task, PID file guard).
+///
+/// Graceful teardown is via [`Self::shutdown`], which aborts the event pump
+/// and runs `ExtensionHandles::shutdown()` (closing each extension's stdin
+/// to trigger Node-side cleanup with a SIGKILL fallback). The `Drop` impl
+/// is a panic/cancellation safety net that aborts the event pump only —
+/// extension reap is left to `kill_on_drop(true)` on the children, which
+/// races the tokio runtime drop and may leave zombies (but never running
+/// processes).
 pub struct RuntimeHandles {
     event_pump: tokio::task::JoinHandle<()>,
-    _ext_handles: ExtensionHandles,
+    ext_handles: ExtensionHandles,
     _pid_guard: pidfile::PidFileGuard,
     _runtime: Arc<RuntimeRoot>,
 }
 
+impl RuntimeHandles {
+    /// Gracefully tears down every owned subsystem in order: event pump,
+    /// extension processes, then (via Drop) the PID file guard and runtime
+    /// root. Consumes self so it cannot be invoked twice.
+    pub async fn shutdown(mut self) {
+        self.event_pump.abort();
+        self.ext_handles.shutdown().await;
+    }
+}
+
 impl Drop for RuntimeHandles {
     fn drop(&mut self) {
-        // NOTE: abort the background tasks first so they cannot race with
-        // PidFileGuard / RuntimeRoot teardown by trying to touch state that
-        // is about to disappear.
+        // NOTE: Drop runs on every path including after shutdown() consumes
+        // self; abort() is idempotent so the double-call is safe. The
+        // meaningful difference is on the panic / early-return path:
+        // ext_handles.shutdown() is skipped, so extension cleanup falls back
+        // to kill_on_drop(true) on each Child (best-effort, may zombie).
         self.event_pump.abort();
     }
 }
@@ -115,7 +132,7 @@ pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
         state,
         RuntimeHandles {
             event_pump,
-            _ext_handles: ext_handles,
+            ext_handles,
             _pid_guard: pid_guard,
             _runtime: runtime,
         },
@@ -123,21 +140,25 @@ pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
 }
 
 /// Serves the ozmux daemon HTTP API until `stop_rx` fires or the serve
-/// future returns. Initialises tracing, calls `build_state`, and runs the
-/// axum server. Signal handling is the caller's responsibility — pass a
-/// `oneshot::Receiver` whose sender is tripped by whatever shutdown
-/// orchestration the host (CEF-aware main, integration test, …) uses.
+/// future returns. Initialises tracing, calls `build_state`, runs the
+/// axum server, then runs the graceful shutdown sequence (extension
+/// processes via stdin EOF) before returning. Signal handling is the
+/// caller's responsibility — pass a `oneshot::Receiver` whose sender is
+/// tripped by whatever shutdown orchestration the host (CEF-aware main,
+/// integration test, …) uses.
 pub async fn serve(stop_rx: tokio::sync::oneshot::Receiver<()>) -> anyhow::Result<()> {
     init_tracing();
-    let (state, _handles) = build_state().await?;
+    let (state, handles) = build_state().await?;
     let serve = ozmux_http_server::serve(state);
-    tokio::select! {
-        result = serve => result?,
+    let result: anyhow::Result<()> = tokio::select! {
+        result = serve => result.map_err(Into::into),
         _ = stop_rx => {
             tracing::info!("serve: stop signal received");
+            Ok(())
         }
-    }
-    Ok(())
+    };
+    handles.shutdown().await;
+    result
 }
 
 /// Runs the ozmux daemon to completion using built-in `SIGINT`/`SIGTERM`

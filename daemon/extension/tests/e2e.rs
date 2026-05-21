@@ -289,3 +289,45 @@ async fn builtin_browser_shim_is_on_path() {
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
+
+/// Verifies that `ExtensionHandles::shutdown()` triggers the Node-side
+/// cleanup() handler via stdin EOF. We assert binDir and sock removal
+/// (not just child exit) because a simple `waitpid(_, WNOHANG) == ECHILD`
+/// would also pass if the EOF path were broken — the 500ms-then-SIGKILL
+/// fallback would still reap.
+#[tokio::test]
+async fn shutdown_runs_graceful_node_cleanup() {
+    let parent = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
+    unsafe {
+        std::env::set_var("OZMUX_EXTENSION_ROOT", fixture_root());
+    }
+    let mut handles = ExtensionHandles::load(&runtime, ExtensionRegistry::default()).unwrap();
+
+    // Wait for the clock-ext fixture to finish bootstrap (signalled by the
+    // pid file). Using clock-ext (not crash-ext) so the fixture stays alive
+    // until shutdown() arrives.
+    let bin_dir = runtime.bin_dir().join("clock-ext");
+    let sock_path = runtime.sock_dir().join("clock-ext.sock");
+    let pid_file = bin_dir.join("pid");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !pid_file.exists() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(pid_file.exists(), "clock-ext never wrote its pid file");
+    assert!(bin_dir.exists(), "clock-ext binDir should exist pre-shutdown");
+    assert!(sock_path.exists(), "clock-ext sock should exist pre-shutdown");
+
+    handles.shutdown().await;
+
+    // Graceful EOF path runs Node cleanup which unlinks both. SIGKILL
+    // fallback would NOT remove them. This asserts the EOF path fired.
+    assert!(
+        !bin_dir.exists(),
+        "clock-ext binDir should be removed by Node cleanup()"
+    );
+    assert!(
+        !sock_path.exists(),
+        "clock-ext sock should be unlinked by Node cleanup()"
+    );
+}
