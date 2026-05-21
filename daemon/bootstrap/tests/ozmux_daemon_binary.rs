@@ -21,7 +21,7 @@ fn ozmux_daemon_path() -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "requires bundled cef_host.app and free port 3200; run via `cargo test --test ozmux_daemon_binary -- --ignored`"]
+#[ignore = "requires bundled ozmux-daemon.app and free port 3200; run via `cargo test --test ozmux_daemon_binary -- --ignored`"]
 fn ozmux_daemon_starts_serves_health_and_shuts_down() {
     let bin = ozmux_daemon_path();
     assert!(
