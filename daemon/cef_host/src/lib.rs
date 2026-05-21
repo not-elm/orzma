@@ -15,12 +15,16 @@ use cef::ImplCommandLine;
 pub mod browser_app;
 pub mod cef_settings;
 pub mod cookies;
+pub mod extension_bridge;
 pub mod frame_buffer_pool;
 pub mod handlers;
 pub mod input;
 pub mod pool;
 pub mod post_command;
+pub(crate) mod process_message;
 pub mod profile;
+pub mod scheme;
+pub(crate) mod v8_binding;
 
 pub use browser_app::BrowserApp;
 pub use cef_settings::{acquire_data_root, build_cef_settings, load_cef_framework};

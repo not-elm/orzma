@@ -29,12 +29,6 @@ pub enum HttpError {
     #[error("pane not owned by caller")]
     PaneNotOwned,
 
-    #[error("invalid html path: {0}")]
-    InvalidHtmlPath(String),
-
-    #[error("iframe file not found: {0}")]
-    IframeFileNotFound(String),
-
     #[error("forbidden: {0}")]
     Forbidden(String),
 
@@ -129,8 +123,6 @@ impl axum::response::IntoResponse for HttpError {
             HttpError::UnknownExtension(_) => (StatusCode::FORBIDDEN, "UNKNOWN_EXTENSION"),
             HttpError::ActivityNotOwned => (StatusCode::FORBIDDEN, "ACTIVITY_NOT_OWNED"),
             HttpError::PaneNotOwned => (StatusCode::FORBIDDEN, "PANE_NOT_OWNED"),
-            HttpError::InvalidHtmlPath(_) => (StatusCode::BAD_REQUEST, "INVALID_HTML_PATH"),
-            HttpError::IframeFileNotFound(_) => (StatusCode::NOT_FOUND, "IFRAME_FILE_NOT_FOUND"),
             HttpError::Forbidden(_) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             HttpError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             HttpError::ServiceUnavailable(_) => {
@@ -268,18 +260,6 @@ mod tests {
     fn pane_not_owned_maps_to_403() {
         let err = HttpError::PaneNotOwned;
         assert_eq!(err.into_response().status(), StatusCode::FORBIDDEN);
-    }
-
-    #[test]
-    fn invalid_html_path_maps_to_400() {
-        let err = HttpError::InvalidHtmlPath("../etc/passwd".into());
-        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn iframe_file_not_found_maps_to_404() {
-        let err = HttpError::IframeFileNotFound("missing.html".into());
-        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

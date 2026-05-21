@@ -92,17 +92,6 @@ pub(crate) mod test_helpers {
         (daemon_router(state.clone()), state)
     }
 
-    pub(crate) fn router_with_registry(
-        state: AppState,
-        registry: ozmux_extension::ExtensionRegistry,
-    ) -> (Router, AppState) {
-        let state = AppState {
-            extensions: registry,
-            ..state
-        };
-        (daemon_router(state.clone()), state)
-    }
-
     /// Bootstrap test fixture: registers one Session with one Window
     /// (one Pane, one Activity). Returns the four ids.
     pub(crate) async fn bootstrap_default(

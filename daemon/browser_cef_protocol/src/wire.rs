@@ -91,6 +91,37 @@ pub struct CefCookieDto {
     pub same_site: SameSite,
 }
 
+/// Role tag baked into `BrowserExtraContext`. Drives the V8 binding install
+/// guard in the render process and the Browser-side navigation policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserRole {
+    /// A user-facing Browser Activity.
+    Browser,
+    /// An Extension Activity hosted in the embedded browser.
+    Extension,
+}
+
+/// Context payload forwarded into CEF's `extra_info` so the render process can
+/// build `window.ozmux.context` synchronously in `on_context_created` without
+/// a round-trip to the browser process.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserExtraContext {
+    /// Whether this browser hosts a Browser Activity or an Extension.
+    pub role: BrowserRole,
+    /// Owning session id, if the activity is attached to a session.
+    pub session_id: Option<String>,
+    /// Owning window id.
+    pub window_id: String,
+    /// Owning pane id.
+    pub pane_id: String,
+    /// Activity id this browser was created for.
+    pub activity_id: String,
+    /// Extension name for `BrowserRole::Extension`; `None` for `BrowserRole::Browser`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension_name: Option<String>,
+}
+
 /// Wire representation of a Browser Activity storage profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -121,6 +152,9 @@ pub enum HostCommand {
         cookies: Vec<CefCookieDto>,
         /// Storage profile for this activity's browser.
         profile: BrowserProfileWire,
+        /// Identity payload forwarded into CEF `extra_info` so the render
+        /// process can build `window.ozmux.context` synchronously.
+        context: BrowserExtraContext,
     },
     /// Reset the frame ring for an existing activity. Retained as a stub for
     /// future in-process respawn handling.
@@ -562,9 +596,27 @@ pub enum BrowserServerMsg {
     },
     /// The browser backend is not available and cannot recover.
     BrowserUnavailable {
+        /// When `Some(aid)`, the event is scoped to a single activity (e.g.
+        /// its owning extension disconnected). `None` indicates a daemon-wide
+        /// failure that should fan out to every browser activity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        aid: Option<ActivityId>,
         /// Why the browser is unavailable.
         reason: BrowserUnavailableReason,
     },
+}
+
+/// In-process broadcast payload for permanent-unavailable signals.
+///
+/// Mirrors the on-wire `BrowserServerMsg::BrowserUnavailable` variant but
+/// is kept as a separate type so the broadcast channel and the WS handler
+/// can share filtering logic without going through msgpack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserUnavailableEvent {
+    /// `Some(aid)` → scoped to a single activity. `None` → daemon-wide.
+    pub aid: Option<ActivityId>,
+    /// Why the browser is unavailable.
+    pub reason: BrowserUnavailableReason,
 }
 
 /// Reason sent in `BrowserServerMsg::BrowserUnavailable` (spec §5).
@@ -576,6 +628,10 @@ pub enum BrowserUnavailableReason {
         /// The last error message that caused the final failure.
         last_error: String,
     },
+    /// The activity's owning extension UDS connection dropped or failed to
+    /// open. The activity-scoped browser is unusable until the extension
+    /// reconnects.
+    ExtensionDisconnected,
 }
 
 /// Result of `subscribe_frames` inside `BrowserServerMsg::SubscribeReply`

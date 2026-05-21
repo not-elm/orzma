@@ -3,7 +3,10 @@
 
 use super::CefDispatcher;
 use crate::cef_service::DispatchError;
-use ozmux_browser_cef_protocol::wire::{BrowserUnavailableReason, HostCommand, HostEvent};
+use ozmux_browser_cef_protocol::types::ActivityId;
+use ozmux_browser_cef_protocol::wire::{
+    BrowserUnavailableEvent, BrowserUnavailableReason, HostCommand, HostEvent,
+};
 use ozmux_cef_host::pool::CefCommand;
 use ozmux_cef_host::post_command::{PoolHandle, post as cef_post};
 use std::sync::atomic::AtomicBool;
@@ -17,7 +20,7 @@ pub struct LiveCefDispatcher {
     pool_handle: PoolHandle,
     events: Mutex<Option<mpsc::Receiver<HostEvent>>>,
     is_dead: Arc<AtomicBool>,
-    unavailable_tx: broadcast::Sender<BrowserUnavailableReason>,
+    unavailable_tx: broadcast::Sender<BrowserUnavailableEvent>,
 }
 
 impl LiveCefDispatcher {
@@ -33,6 +36,21 @@ impl LiveCefDispatcher {
             events: Mutex::new(Some(events)),
             is_dead: Arc::new(AtomicBool::new(false)),
             unavailable_tx,
+        }
+    }
+
+    /// Publishes a `BrowserUnavailable` signal to all WS subscribers.
+    ///
+    /// `aid = Some(_)` scopes the event to a single activity (e.g. an
+    /// extension UDS disconnect); `aid = None` indicates a daemon-wide
+    /// outage that every browser subscriber should react to.
+    pub fn mark_unavailable(&self, aid: Option<ActivityId>, reason: BrowserUnavailableReason) {
+        let ev = BrowserUnavailableEvent { aid, reason };
+        if self.unavailable_tx.send(ev).is_err() {
+            // No live subscribers — informational only, not a fault.
+            tracing::debug!(
+                "LiveCefDispatcher::mark_unavailable: no active subscribers, dropping event"
+            );
         }
     }
 }
@@ -51,7 +69,7 @@ impl CefDispatcher for LiveCefDispatcher {
         self.is_dead.load(std::sync::atomic::Ordering::Acquire)
     }
 
-    fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableReason> {
+    fn unavailable_subscribe(&self) -> broadcast::Receiver<BrowserUnavailableEvent> {
         self.unavailable_tx.subscribe()
     }
 }
@@ -69,12 +87,14 @@ fn into_cef_command(cmd: HostCommand) -> CefCommand {
             epoch,
             cookies,
             profile,
+            context,
         } => CefCommand::BrowserCreate {
             aid,
             initial_url,
             epoch,
             cookies,
             profile,
+            context,
         },
         HostCommand::Navigate { aid, url } => CefCommand::Navigate { aid, url },
         HostCommand::NavigateHistory { aid, delta } => CefCommand::NavigateHistory { aid, delta },

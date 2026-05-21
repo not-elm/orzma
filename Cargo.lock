@@ -3744,6 +3744,7 @@ dependencies = [
  "decrypt-cookies",
  "ozmux_browser_cef_protocol",
  "ozmux_cef_host",
+ "ozmux_extension",
  "ozmux_multiplexer",
  "tempfile",
  "thiserror 2.0.18",
@@ -3761,6 +3762,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_bytes",
+ "serde_json",
 ]
 
 [[package]]
@@ -3772,11 +3774,20 @@ dependencies = [
  "cef-dll-sys",
  "crossbeam-queue",
  "fs2",
+ "futures-util",
+ "mime_guess",
  "ozmux_browser_cef_protocol",
+ "ozmux_extension",
+ "ozmux_multiplexer",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

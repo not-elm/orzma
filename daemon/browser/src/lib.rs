@@ -10,7 +10,7 @@ pub mod frame_ring;
 
 pub use error::{BrowserError, BrowserResult};
 pub use frame_ring::{FrameEnvelope, FrameRing, FrameSubscription};
-pub use ozmux_browser_cef_protocol::wire::BrowserUnavailableReason;
+pub use ozmux_browser_cef_protocol::wire::{BrowserUnavailableEvent, BrowserUnavailableReason};
 
 /// Returns `true` when `OZMUX_TEST_REAL_CHROME=1` is set in the environment.
 /// Tests that require a live Chromium process should skip themselves when this

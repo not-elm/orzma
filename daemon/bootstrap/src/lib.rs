@@ -93,7 +93,8 @@ pub async fn build_state() -> anyhow::Result<(AppState, RuntimeHandles)> {
     let terminal = TerminalService::with_runtime_root(Arc::clone(&runtime));
     let titles = ActivityTitles::default();
     let browser_cef = Arc::new(BrowserCefRegistry::new());
-    let cef_dispatcher = acquire_cef_host(&runtime, browser_cef.session_id()).await;
+    let cef_dispatcher =
+        acquire_cef_host(&runtime, browser_cef.session_id(), registry.clone()).await;
 
     let state = AppState::new(
         terminal.clone(),
@@ -224,6 +225,7 @@ async fn init_runtime() -> anyhow::Result<Arc<RuntimeRoot>> {
 async fn acquire_cef_host(
     _runtime: &RuntimeRoot,
     session_id: u64,
+    extensions: ExtensionRegistry,
 ) -> Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher> {
     use ozmux_browser_cef_protocol::wire::HostEvent;
     use ozmux_cef_host::FrameBufferPool;
@@ -253,13 +255,43 @@ async fn acquire_cef_host(
     let frame_pool = Arc::new(FrameBufferPool::new(60));
     // Persistent disk profiles are paused pool-wide (see BrowserPool docs); the
     // flag is preserved so the lock plumbing stays in place for future work.
-    let pool = BrowserPool::new(unb_tx, browser_data_root, false, session_id, frame_pool);
+    let pool = BrowserPool::new(
+        unb_tx,
+        browser_data_root,
+        false,
+        session_id,
+        frame_pool,
+        extensions.clone(),
+    );
     let pool_handle = PoolHandle::new(pool);
 
-    Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
-        pool_handle,
+    let dispatcher = Arc::new(ozmux_browser::cef_dispatcher::live::LiveCefDispatcher::new(
+        pool_handle.clone(),
         bnd_rx,
-    ))
+    ));
+
+    // Install the V8↔extension bridge. Must happen after `PoolHandle::new`
+    // plants its back-reference: the bridge holds a `PoolHandle` clone to
+    // post `DispatchExtensionResponse` commands from its UDS reader.
+    //
+    // The unavailable callback holds a `Weak<LiveCefDispatcher>` so the
+    // bridge does not keep the dispatcher alive after daemon shutdown.
+    let dispatcher_weak = Arc::downgrade(&dispatcher);
+    let unavailable_cb: ozmux_cef_host::extension_bridge::UnavailableCallback =
+        Arc::new(move |aid, reason| {
+            if let Some(d) = dispatcher_weak.upgrade() {
+                d.mark_unavailable(Some(aid), reason);
+            }
+        });
+    let bridge = ozmux_cef_host::extension_bridge::ExtensionBridge::new(
+        tokio::runtime::Handle::current(),
+        extensions,
+        pool_handle.clone(),
+    )
+    .with_unavailable_callback(unavailable_cb);
+    pool_handle.install_bridge(bridge);
+
+    dispatcher as Arc<dyn ozmux_browser::cef_dispatcher::CefDispatcher>
 }
 
 /// Spawns the adapter task that bridges terminal title-change events

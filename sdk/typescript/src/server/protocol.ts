@@ -47,7 +47,7 @@ export interface HandlerErrorFrame {
   message: string;
 }
 
-// Channel frames (one-way: extension → iframe; iframe sends open/cancel only in v1)
+// Channel frames (one-way: extension → client; client sends open/cancel only in v1)
 export interface SubOpenFrame {
   kind: "sub.open";
   id: string;

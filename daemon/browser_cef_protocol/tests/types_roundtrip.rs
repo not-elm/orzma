@@ -1,7 +1,7 @@
 use ozmux_browser_cef_protocol::types::{ActivityId, FrameKey, Rect};
 use ozmux_browser_cef_protocol::wire::{
-    BrowserClientMsg, BrowserServerMsg, BrowserUnavailableReason, CursorKind,
-    FrameSubscriptionReply, InputEvent, MouseButton, MustRestartReason,
+    BrowserClientMsg, BrowserExtraContext, BrowserRole, BrowserServerMsg, BrowserUnavailableReason,
+    CursorKind, FrameSubscriptionReply, InputEvent, MouseButton, MustRestartReason,
 };
 
 #[test]
@@ -253,8 +253,68 @@ fn browser_server_msg_renderer_terminated_roundtrips() {
 #[test]
 fn browser_server_msg_browser_unavailable_all_reasons_roundtrips() {
     wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
+        aid: None,
         reason: BrowserUnavailableReason::RetryExhausted {
             last_error: "spawn failed".into(),
         },
     });
+}
+
+#[test]
+fn browser_unavailable_per_aid_round_trip() {
+    // daemon-wide
+    wire_roundtrip(BrowserServerMsg::BrowserUnavailable {
+        aid: None,
+        reason: BrowserUnavailableReason::ExtensionDisconnected,
+    });
+    // per-aid
+    let bytes = rmp_serde::to_vec_named(&BrowserServerMsg::BrowserUnavailable {
+        aid: Some(ActivityId("a-extension-99".into())),
+        reason: BrowserUnavailableReason::ExtensionDisconnected,
+    })
+    .unwrap();
+    let back: BrowserServerMsg = rmp_serde::from_slice(&bytes).unwrap();
+    match back {
+        BrowserServerMsg::BrowserUnavailable { aid, reason } => {
+            assert_eq!(aid, Some(ActivityId("a-extension-99".into())));
+            assert!(matches!(
+                reason,
+                BrowserUnavailableReason::ExtensionDisconnected
+            ));
+        }
+        _ => panic!("expected BrowserUnavailable"),
+    }
+}
+
+#[test]
+fn browser_extra_context_round_trips_extension_role() {
+    let ctx = BrowserExtraContext {
+        role: BrowserRole::Extension,
+        session_id: Some("s1".into()),
+        window_id: "w1".into(),
+        pane_id: "p1".into(),
+        activity_id: "a1".into(),
+        extension_name: Some("memo".into()),
+    };
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["role"], "extension");
+    assert_eq!(json["extension_name"], "memo");
+    let back: BrowserExtraContext = serde_json::from_value(json).unwrap();
+    assert!(matches!(back.role, BrowserRole::Extension));
+    assert_eq!(back.extension_name.as_deref(), Some("memo"));
+}
+
+#[test]
+fn browser_extra_context_browser_role_has_no_extension_name() {
+    let ctx = BrowserExtraContext {
+        role: BrowserRole::Browser,
+        session_id: None,
+        window_id: "w1".into(),
+        pane_id: "p1".into(),
+        activity_id: "a1".into(),
+        extension_name: None,
+    };
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["role"], "browser");
+    assert!(json["extension_name"].is_null());
 }

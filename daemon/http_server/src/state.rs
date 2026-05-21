@@ -28,7 +28,7 @@ use std::sync::Arc;
 pub enum ActivityKindDiscriminant {
     /// Terminal PTY activity.
     Terminal,
-    /// Extension (iframe-served) activity.
+    /// Extension activity (hosted inside the in-CEF browser).
     Extension,
     /// Browser activity.
     Browser,
@@ -166,9 +166,9 @@ impl AppState {
         Some(kind)
     }
 
-    /// On active-activity change, pause screencast for the previous Browser
-    /// activity and resume it for the next Browser activity. Both calls are
-    /// missing-ok.
+    /// On active-activity change, pause screencast for the previous CEF-backed
+    /// activity (Browser or Extension) and resume it for the next one. Both
+    /// calls are missing-ok.
     pub(crate) async fn toggle_screencast_on_active_change(
         &self,
         wid: &WindowId,
@@ -179,7 +179,7 @@ impl AppState {
         if let Some(prev) = prev
             && matches!(
                 self.activity_kind_in_pane(wid, pid, prev).await,
-                Some(ActivityKindDiscriminant::Browser)
+                Some(ActivityKindDiscriminant::Browser | ActivityKindDiscriminant::Extension)
             )
         {
             let _ = self.cef_host.dispatch(
@@ -190,7 +190,7 @@ impl AppState {
         }
         if matches!(
             self.activity_kind_in_pane(wid, pid, next).await,
-            Some(ActivityKindDiscriminant::Browser)
+            Some(ActivityKindDiscriminant::Browser | ActivityKindDiscriminant::Extension)
         ) {
             let _ = self.cef_host.dispatch(
                 ozmux_browser_cef_protocol::wire::HostCommand::ResumeScreencast {
@@ -574,6 +574,11 @@ impl AppState {
                 w.pane_mut(pid)?.remove_activity(aid).map(|_| ())
             })
             .await?;
+        // NOTE: extension owner row is recorded *before* provisioning; if
+        // provisioning fails it must be forgotten here, otherwise
+        // `activity_owner(aid)` keeps returning a stale name for an activity
+        // that no longer exists in the multiplexer.
+        self.extensions.forget_activity(aid);
         Ok(())
     }
 
@@ -585,8 +590,15 @@ impl AppState {
             .with_window_or_404(wid, |w| w.close_pane(new_pane_id))
             .await;
         match activities {
-            Ok(_aids) => {
+            Ok(aids) => {
                 self.multiplexer.pane_owner_window.remove(new_pane_id);
+                // NOTE: split records pane+activity owners up-front (see
+                // `split_pane`); on rollback both must be forgotten or
+                // `activity_owner` / `pane_owner` return stale names.
+                self.extensions.forget_pane(new_pane_id);
+                for aid in &aids {
+                    self.extensions.forget_activity(aid);
+                }
             }
             Err(_) => {
                 tracing::warn!(
@@ -766,7 +778,7 @@ impl AppState {
     }
 
     /// Combined membership check for `/windows/:wid/panes/:pid/activities/:aid/*`
-    /// that also returns the resolved `Activity`. Callers like `iframe_serve`
+    /// that also returns the resolved `Activity`. Callers like `ensure_activity_kind`
     /// need both the validation and the activity metadata; doing them in one
     /// helper avoids a second Window lock acquisition.
     pub(crate) async fn ensure_activity_in_pane_in_window_and_fetch(
@@ -788,20 +800,6 @@ impl AppState {
                 })
             })?;
         Ok(activity)
-    }
-
-    /// Membership-only variant for handlers that don't need the Activity
-    /// payload (terminal WS, handlers WS).
-    pub(crate) async fn ensure_activity_in_pane_in_window(
-        &self,
-        wid: &WindowId,
-        pid: &PaneId,
-        aid: &ActivityId,
-    ) -> HttpResult<()> {
-        let _ = self
-            .ensure_activity_in_pane_in_window_and_fetch(wid, pid, aid)
-            .await?;
-        Ok(())
     }
 
     /// Like [`Self::ensure_activity_in_pane_in_window_and_fetch`], but also

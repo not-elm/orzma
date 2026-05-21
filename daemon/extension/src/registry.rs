@@ -29,12 +29,28 @@ pub struct ExtensionInfo {
 
 impl ExtensionRegistry {
     pub fn register(&self, name: &str, launch_dir: &Path) {
+        let canonical = match launch_dir.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                // NOTE: when canonicalize fails (broken symlink, missing dir,
+                // permission), the scheme handler's `starts_with(base)` check
+                // will reject every ozmux-ext:// request against a non-canonical
+                // base and the user will see silent 404s. Surface it.
+                tracing::warn!(
+                    extension = name,
+                    path = %launch_dir.display(),
+                    error = %e,
+                    "canonicalize launch_dir failed; ozmux-ext requests under this extension may 404",
+                );
+                launch_dir.to_path_buf()
+            }
+        };
         let mut g = self.inner.write().expect("registry poisoned");
         g.by_name.insert(
             name.to_string(),
             ExtensionInfo {
                 name: name.to_string(),
-                launch_dir: launch_dir.to_path_buf(),
+                launch_dir: canonical,
                 handlers_sock_path: None,
             },
         );
@@ -78,8 +94,8 @@ impl ExtensionRegistry {
     /// Record both the pane and the activity as owned by `name` under a
     /// single write lock. Used when a fresh extension Activity is created
     /// alongside a new Pane (the split path), where forgetting one of the
-    /// two would leave the iframe / handlers-WS routes unable to resolve
-    /// the owning extension.
+    /// two would leave the in-CEF extension client unable to resolve the
+    /// owning extension UDS.
     pub fn record_pane_and_activity_owners(
         &self,
         pane_id: &PaneId,
@@ -170,6 +186,20 @@ mod tests {
         let cloned = reg.clone();
         reg.register("memo", Path::new("/tmp/memo"));
         assert!(cloned.get("memo").is_some());
+    }
+
+    #[test]
+    fn register_stores_canonical_launch_dir() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        let outer = tmp.path().to_path_buf();
+        let inner = outer.join("ext");
+        std::fs::create_dir(&inner).unwrap();
+        let weird = outer.join("ext").join(".");
+        let reg = ExtensionRegistry::default();
+        reg.register("memo", &weird);
+        let info = reg.get("memo").expect("registered");
+        assert_eq!(info.launch_dir, inner.canonicalize().unwrap());
     }
 
     #[test]

@@ -6,6 +6,7 @@
 use cef::rc::Rc as _;
 use cef::{App, ImplApp, WrapApp, wrap_app};
 
+use crate::scheme::register_ozmux_ext;
 use crate::{append_flag, append_flag_value};
 
 wrap_app! {
@@ -44,6 +45,16 @@ wrap_app! {
                     );
                 }
             }
+        }
+
+        fn on_register_custom_schemes(
+            &self,
+            registrar: Option<&mut cef::SchemeRegistrar>,
+        ) {
+            let Some(registrar) = registrar else {
+                return;
+            };
+            register_ozmux_ext(registrar);
         }
     }
 }

@@ -1,10 +1,7 @@
 //! CefRenderHandler — copies OnPaint BGRA frames out of CEF via the
 //! `FrameBufferPool` and emits `HostEvent::FrameProduced` to the daemon.
-//!
-//! Plan 3 Task 11+12: replaces the Plan 1-2 shm-ring path. The handler still
-//! holds an `Arc<ShmWriter>` so the legacy `FrameDescriptor` writer is kept
-//! around for Plan 5 Task 22 to remove cleanly; on the hot path each frame
-//! flows through the in-process pool + `Bytes` instead.
+//! On the hot path each frame flows through the in-process pool and
+//! reaches the daemon as a `Bytes`.
 
 use crate::frame_buffer_pool::FrameBufferPool;
 
