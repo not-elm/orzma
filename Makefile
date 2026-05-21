@@ -1,4 +1,4 @@
-.PHONY: build dev-frontend dev-backend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-cef-host bundle-cef-host-release bundle-ozmux-daemon bundle-ozmux-daemon-release
+.PHONY: build dev-frontend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-ozmux-daemon bundle-ozmux-daemon-release
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/http_server/src/handlers
@@ -8,13 +8,9 @@ CARGO_BIN_DIR := $(if $(CARGO_HOME),$(CARGO_HOME)/bin,$(HOME)/.cargo/bin)
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
-BUNDLE_CEF_HOST_DEP := bundle-cef-host
-BUNDLE_CEF_HOST_RELEASE_DEP := bundle-cef-host-release
 BUNDLE_OZMUX_DAEMON_DEP := bundle-ozmux-daemon
 BUNDLE_OZMUX_DAEMON_RELEASE_DEP := bundle-ozmux-daemon-release
 else
-BUNDLE_CEF_HOST_DEP :=
-BUNDLE_CEF_HOST_RELEASE_DEP :=
 BUNDLE_OZMUX_DAEMON_DEP :=
 BUNDLE_OZMUX_DAEMON_RELEASE_DEP :=
 endif
@@ -23,14 +19,11 @@ help:
 	@echo "Targets:"
 	@echo "  build              - Build frontend to single HTML, then build the ozmux CLI (which bundles the daemon)"
 	@echo "  dev-frontend       - Run vite dev server on :5173 with HMR"
-	@echo "  dev-backend        - Run the daemon on :3200 via 'ozmux daemon start --foreground'"
-	@echo "  dev-daemon         - Same as dev-backend but with OZMUX_EXTENSION_ROOT preset"
+	@echo "  dev-daemon         - Run the bundled ozmux-daemon.app with OZMUX_EXTENSION_ROOT preset"
 	@echo "  dev-tauri          - Build frontend + install ozmux on PATH, then run 'cargo tauri dev'"
 	@echo "  dev-e2e-setup      - One-time prerequisites for the Playwright UI verification harness"
 	@echo "  dev-e2e            - Launch vite + daemon for Playwright MCP verification (waits for ready)"
 	@echo "  dev-e2e-stop       - Stop the verification harness started by dev-e2e"
-	@echo "  bundle-cef-host    - Assemble target/debug/cef_host.app (macOS multi-process CEF requires a .app bundle) [legacy]"
-	@echo "  bundle-cef-host-release - Same as bundle-cef-host but for the release profile (target/release/cef_host.app) [legacy]"
 	@echo "  bundle-ozmux-daemon - Assemble target/debug/ozmux-daemon.app (in-process CEF daemon bundle, macOS)"
 	@echo "  bundle-ozmux-daemon-release - Same as bundle-ozmux-daemon but for the release profile"
 	@echo "  kill-daemon        - Kill the daemon listening on :3200 and any stray ozmux-daemon helpers"
@@ -56,19 +49,6 @@ build:
 
 dev-frontend:
 	pnpm --dir $(FRONTEND_DIR) dev
-
-dev-backend:
-	@echo "error: 'make dev-backend' is deprecated — bare 'cargo run' cannot host CEF on macOS." >&2
-	@echo "       Use 'make dev-daemon' (runs the bundled target/debug/ozmux-daemon.app)." >&2
-	@exit 1
-
-bundle-cef-host:
-	cargo build -p ozmux_cef_host
-	cargo run -p xtask -- bundle-cef-host
-
-bundle-cef-host-release:
-	cargo build --release -p ozmux_cef_host
-	cargo run -p xtask -- bundle-cef-host --release
 
 bundle-ozmux-daemon:
 	cargo build -p daemon_bootstrap --bin ozmux-daemon
