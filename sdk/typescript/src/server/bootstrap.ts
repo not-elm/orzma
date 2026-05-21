@@ -261,9 +261,10 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
         fs.unlink(env.sockPath).catch(() => {}),
         fs.unlink(env.handlersSockPath).catch(() => {}),
       ]);
-      // NOTE: destroy stdin after cleanup so the event loop can drain
-      // regardless of whether EOF already fired (pipe closed by daemon)
-      // or stdin is still open (e.g. inherited in tests / manual runs).
+      // NOTE: required for the SIGTERM/SIGINT and inherited-stdin paths —
+      // server.close() releases the server refs but process.stdin.resume()
+      // still pins the event loop. Without destroy() the process hangs
+      // after cleanup completes.
       process.stdin.destroy();
     })();
     return cleanupPromise;

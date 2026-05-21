@@ -81,10 +81,11 @@ impl RuntimeHandles {
 
 impl Drop for RuntimeHandles {
     fn drop(&mut self) {
-        // NOTE: shutdown() is the graceful path; this Drop only fires on
-        // panic / early return where shutdown() was skipped. Abort the
-        // event pump so it cannot touch PidFileGuard / RuntimeRoot state
-        // that is about to disappear.
+        // NOTE: Drop runs on every path including after shutdown() consumes
+        // self; abort() is idempotent so the double-call is safe. The
+        // meaningful difference is on the panic / early-return path:
+        // ext_handles.shutdown() is skipped, so extension cleanup falls back
+        // to kill_on_drop(true) on each Child (best-effort, may zombie).
         self.event_pump.abort();
     }
 }
