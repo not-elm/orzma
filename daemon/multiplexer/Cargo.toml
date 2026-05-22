@@ -9,9 +9,7 @@ publish.workspace = true
 
 [dependencies]
 ozmux_macros = { path = "../macros" }
-dashmap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 thiserror = { workspace = true }
 uuid = { workspace = true }

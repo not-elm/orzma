@@ -1,19 +1,40 @@
+[package]
+name = "ozmux-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ozmux-gui"
+path = "src/main.rs"
+
+[dependencies]
+bevy = { version = "0.18", default-features = true }
+bevy_egui = "=0.39.1"
+ozmux_multiplexer = { path = "daemon/multiplexer" }
+tracing = { workspace = true }
+
 [workspace]
 resolver = "2"
 members = [
+  "daemon/configs",
+  "daemon/macros",
+  "daemon/multiplexer",
+  "xtask",
+]
+exclude = [
   "cli",
   "daemon/bootstrap",
   "daemon/browser",
   "daemon/browser_cef_protocol",
   "daemon/cef_host",
-  "daemon/configs",
   "daemon/extension",
   "daemon/http_server",
-  "daemon/macros",
-  "daemon/multiplexer",
   "daemon/terminal",
   "client",
-  "xtask",
 ]
 
 [workspace.package]

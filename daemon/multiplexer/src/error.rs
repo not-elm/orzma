@@ -65,6 +65,9 @@ pub enum MultiplexerError {
     #[error("window {0} is not attached to any session")]
     WindowNotAttachedToSession(WindowId),
 
+    #[error("session {0} has no active window")]
+    SessionHasNoActiveWindow(SessionId),
+
     #[error("activity not found: {0}")]
     ActivityNotFound(ActivityId),
 
