@@ -1,24 +1,54 @@
-//! Egui layout helpers: `draw_cell_recursive` descends the `LayoutCellState`
-//! tree of an `ozmux_multiplexer::Window` and renders each cell in egui's
-//! immediate-mode API. `split_horizontal` / `split_vertical` divide a `Rect`
-//! proportionally for split panes.
+//! Cell-tree → Bevy UI Node builders. `build_cell_recursive` descends the
+//! `LayoutCellState` and emits `Cell::Pane` / `Cell::Split` nodes as flex
+//! containers; `split_ratio_to_flex_grows` is the math that normalizes
+//! `lhs_weight` / `rhs_weight` into a `(flex_grow_lhs, flex_grow_rhs)`
+//! pair so that `lhs_weight == rhs_weight == 0` falls back to 0.5/0.5.
 
-use crate::{theme::PANE_BORDER_PX, ui::egui_theme::palette};
-use bevy_egui::egui;
-use ozmux_multiplexer::{Cell, CellId, SplitOrientation, Window};
+use crate::theme;
+use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::{PaneFrame, StructuralNode, palette};
+use bevy::prelude::*;
+use bevy::ui::{FlexDirection, UiRect, Val};
+use ozmux_multiplexer::{ActivityId, Cell, CellId, LayoutCellState, SplitOrientation, Window};
+use std::collections::HashSet;
 
-/// Egui draw of one Cell (recurses through Split into two `scope_builder`
-/// child regions, leaves at Pane). The recursion shape mirrors Phase 2
-/// `build_cell` but uses egui's `scope_builder` API instead of bevy_ui Nodes.
-pub(crate) fn draw_cell_recursive(ui: &mut egui::Ui, window: &Window, cell_id: &CellId) {
-    let Ok(cell) = window.cells.cell(cell_id) else {
-        tracing::warn!(
-            target: "ozmux_gui::layout",
-            "cell {} missing from window {}",
-            cell_id,
-            window.id,
-        );
-        return;
+/// Convert `(lhs_weight, rhs_weight)` into the `flex_grow` pair to set on
+/// the two split children. Routes through `LayoutCellState::split_ratio`
+/// so zero-total weight falls back to 0.5/0.5 (avoiding the flex-collapse
+/// that raw `(0.0, 0.0)` would cause).
+pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f32, f32) {
+    let ratio = LayoutCellState::split_ratio(lhs_weight, rhs_weight);
+    (ratio, 1.0 - ratio)
+}
+
+/// Recursively build the Bevy UI tree for one Cell subtree under `parent`.
+/// Walks `Cell::Split` → two children, lands on `Cell::Pane` to spawn the
+/// pane frame + tab bar + activity host slot.
+///
+/// `Cell::Root` appearing mid-recursion is treated as an invariant
+/// violation (warn-and-skip); the entry point in
+/// `rebuild_structure_on_change` is expected to unwrap into
+/// `RootCell::child` first.
+pub(crate) fn build_cell_recursive(
+    commands: &mut Commands,
+    parent: Entity,
+    window: &Window,
+    cell_id: &CellId,
+    registry: &mut ActivityEntityRegistry,
+    live_activity_ids: &mut HashSet<ActivityId>,
+) {
+    let cell = match window.cells.cell(cell_id) {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::warn!(
+                target: "ozmux_gui::layout",
+                "cell {} missing from window {} ({:?})",
+                cell_id,
+                window.id,
+                err,
+            );
+            return;
+        }
     };
 
     match cell {
@@ -29,49 +59,78 @@ pub(crate) fn draw_cell_recursive(ui: &mut egui::Ui, window: &Window, cell_id: &
                 cell_id,
             );
         }
-        Cell::Pane(p) => draw_pane(ui, window, p),
+        Cell::Pane(p) => build_pane(commands, parent, window, p, registry, live_activity_ids),
         Cell::Split(s) => {
-            let avail = ui.available_rect_before_wrap();
-            let lhs_frac =
-                ozmux_multiplexer::LayoutCellState::split_ratio(s.lhs_weight, s.rhs_weight);
-            let (lhs_rect, rhs_rect) = match s.orientation {
-                SplitOrientation::Horizontal => split_horizontal(avail, lhs_frac),
-                SplitOrientation::Vertical => split_vertical(avail, lhs_frac),
+            let (lhs_grow, rhs_grow) = split_ratio_to_flex_grows(s.lhs_weight, s.rhs_weight);
+            let dir = match s.orientation {
+                SplitOrientation::Horizontal => FlexDirection::Row,
+                SplitOrientation::Vertical => FlexDirection::Column,
             };
 
-            ui.scope_builder(egui::UiBuilder::new().max_rect(lhs_rect), |ui| {
-                draw_cell_recursive(ui, window, &s.lhs_cell);
-            });
-            ui.scope_builder(egui::UiBuilder::new().max_rect(rhs_rect), |ui| {
-                draw_cell_recursive(ui, window, &s.rhs_cell);
-            });
+            let container = commands
+                .spawn((
+                    Node {
+                        flex_direction: dir,
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    StructuralNode,
+                    ChildOf(parent),
+                ))
+                .id();
+
+            let lhs = commands
+                .spawn((
+                    Node {
+                        flex_grow: lhs_grow,
+                        flex_basis: Val::Px(0.0),
+                        ..default()
+                    },
+                    StructuralNode,
+                    ChildOf(container),
+                ))
+                .id();
+            build_cell_recursive(
+                commands,
+                lhs,
+                window,
+                &s.lhs_cell,
+                registry,
+                live_activity_ids,
+            );
+
+            let rhs = commands
+                .spawn((
+                    Node {
+                        flex_grow: rhs_grow,
+                        flex_basis: Val::Px(0.0),
+                        ..default()
+                    },
+                    StructuralNode,
+                    ChildOf(container),
+                ))
+                .id();
+            build_cell_recursive(
+                commands,
+                rhs,
+                window,
+                &s.rhs_cell,
+                registry,
+                live_activity_ids,
+            );
         }
     }
 }
 
-/// Split a `Rect` along the x-axis. `lhs_frac` ∈ [0.0, 1.0] is the
-/// fraction of the rect's width allocated to the left half.
-fn split_horizontal(rect: egui::Rect, lhs_frac: f32) -> (egui::Rect, egui::Rect) {
-    let split_x = rect.left() + rect.width() * lhs_frac;
-    (
-        egui::Rect::from_min_max(rect.left_top(), egui::pos2(split_x, rect.bottom())),
-        egui::Rect::from_min_max(egui::pos2(split_x, rect.top()), rect.right_bottom()),
-    )
-}
-
-/// Split a `Rect` along the y-axis. `top_frac` ∈ [0.0, 1.0] is the
-/// fraction of the rect's height allocated to the top half.
-fn split_vertical(rect: egui::Rect, top_frac: f32) -> (egui::Rect, egui::Rect) {
-    let split_y = rect.top() + rect.height() * top_frac;
-    (
-        egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.right(), split_y)),
-        egui::Rect::from_min_max(egui::pos2(rect.left(), split_y), rect.right_bottom()),
-    )
-}
-
-/// Egui draw of one `Cell::Pane` — pane chrome (border) + tab bar + active
-/// activity placeholder.
-fn draw_pane(ui: &mut egui::Ui, window: &Window, pane_cell: &ozmux_multiplexer::PaneCell) {
+fn build_pane(
+    commands: &mut Commands,
+    parent: Entity,
+    window: &Window,
+    pane_cell: &ozmux_multiplexer::PaneCell,
+    registry: &mut ActivityEntityRegistry,
+    live_activity_ids: &mut HashSet<ActivityId>,
+) {
     let Some(pane) = window.panes.get(&pane_cell.pane) else {
         tracing::warn!(
             target: "ozmux_gui::layout",
@@ -82,21 +141,47 @@ fn draw_pane(ui: &mut egui::Ui, window: &Window, pane_cell: &ozmux_multiplexer::
     };
     let is_active_pane = pane_cell.pane == window.active_pane;
 
-    egui::Frame::default()
-        .stroke(egui::Stroke::new(PANE_BORDER_PX, palette().border))
-        .show(ui, |ui| {
-            ui.expand_to_include_rect(ui.max_rect());
-            ui.vertical(|ui| {
-                crate::ui::tab_bar::draw_pane_tab_bar(ui, pane, is_active_pane);
-                if let Some(active) = pane
-                    .activities
-                    .iter()
-                    .find(|a| a.id == pane.active_activity)
-                {
-                    crate::ui::activity::draw_activity_placeholder(ui, active);
-                }
-            });
-        });
+    let pane_frame = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                border: UiRect::all(Val::Px(theme::PANE_BORDER_PX)),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BorderColor::all(palette::BORDER),
+            BackgroundColor(palette::BACKGROUND),
+            StructuralNode,
+            PaneFrame,
+            ChildOf(parent),
+        ))
+        .id();
+
+    crate::ui::tab_bar::build_pane_tab_bar(commands, pane_frame, pane, is_active_pane);
+
+    let activity_slot = commands
+        .spawn((
+            Node {
+                flex_grow: 1.0,
+                width: Val::Percent(100.0),
+                ..default()
+            },
+            StructuralNode,
+            ChildOf(pane_frame),
+        ))
+        .id();
+
+    if let Some(activity) = pane
+        .activities
+        .iter()
+        .find(|a| a.id == pane.active_activity)
+    {
+        let host = registry.get_or_spawn(commands, &activity.id, &activity.kind);
+        commands.entity(host).insert(ChildOf(activity_slot));
+        crate::ui::activity::build_activity_host_children(commands, host, activity);
+        live_activity_ids.insert(activity.id.clone());
+    }
 }
 
 #[cfg(test)]
@@ -104,22 +189,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_horizontal_at_half_divides_evenly() {
-        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 50.0));
-        let (lhs, rhs) = split_horizontal(rect, 0.5);
-        assert_eq!(lhs.min, egui::pos2(0.0, 0.0));
-        assert_eq!(lhs.max, egui::pos2(50.0, 50.0));
-        assert_eq!(rhs.min, egui::pos2(50.0, 0.0));
-        assert_eq!(rhs.max, egui::pos2(100.0, 50.0));
+    fn zero_weight_split_uses_half_half_ratio() {
+        let (lhs, rhs) = split_ratio_to_flex_grows(0.0, 0.0);
+        assert!((lhs - 0.5).abs() < f32::EPSILON);
+        assert!((rhs - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn split_vertical_at_third_divides_proportionally() {
-        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 90.0));
-        let (top, bottom) = split_vertical(rect, 1.0 / 3.0);
-        assert_eq!(top.min, egui::pos2(0.0, 0.0));
-        assert_eq!(top.max.y, 30.0);
-        assert_eq!(bottom.min.y, 30.0);
-        assert_eq!(bottom.max, egui::pos2(100.0, 90.0));
+    fn non_zero_weights_pass_through_split_ratio() {
+        let (lhs, rhs) = split_ratio_to_flex_grows(1.0, 3.0);
+        assert!((lhs - 0.25).abs() < f32::EPSILON);
+        assert!((rhs - 0.75).abs() < f32::EPSILON);
     }
 }

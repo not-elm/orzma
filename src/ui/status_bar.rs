@@ -1,58 +1,83 @@
-//! Egui status bar rendering: `draw_status_bar` renders the session name and
-//! a list of window chips into a `TopBottomPanel::bottom`. The active window's
-//! chip is filled with ACCENT background.
+//! Status bar Bevy UI builder. Spawns one Row Node containing the session
+//! name + one chip per linked window. The active window's chip gets
+//! `palette::ACCENT` background.
 
+use crate::theme;
+use crate::ui::StructuralNode;
+use crate::ui::palette;
+use bevy::color::Color;
+use bevy::prelude::*;
+use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
+use ozmux_multiplexer::{Session, Window, WindowId};
 use std::collections::HashMap;
 
-use bevy_egui::egui;
-use ozmux_multiplexer::{Session, Window, WindowId};
-
-/// Egui draw of the status bar (rendered into a `TopBottomPanel::bottom`).
-/// Same content as Phase 2: session name + window chips, with the active
-/// window chip filled in ACCENT.
-pub(crate) fn draw_status_bar(
-    ui: &mut egui::Ui,
+/// Spawn the status bar (session name + window chips) as a child of `parent`.
+pub(crate) fn build_status_bar(
+    commands: &mut Commands,
+    parent: Entity,
     session: &Session,
     active_wid: &WindowId,
     windows: &HashMap<WindowId, Window>,
 ) {
-    let p = crate::ui::egui_theme::palette();
-    egui::Frame::default()
-        .fill(p.panel)
-        .inner_margin(egui::Margin::symmetric(
-            crate::theme::ELEMENT_PADDING_PX as i8,
-            0,
+    let bar = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                width: Val::Percent(100.0),
+                align_items: AlignItems::Center,
+                padding: UiRect::axes(Val::Px(theme::ELEMENT_PADDING_PX), Val::Px(0.0)),
+                ..default()
+            },
+            BackgroundColor(palette::PANEL),
+            StructuralNode,
+            ChildOf(parent),
         ))
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.colored_label(p.foreground, &session.name);
+        .id();
 
-                ui.add_space(crate::theme::ELEMENT_PADDING_PX);
+    commands.spawn((
+        Text::new(session.name.clone()),
+        TextColor(palette::FOREGROUND),
+        StructuralNode,
+        ChildOf(bar),
+    ));
 
-                for wid in &session.linked_windows {
-                    let fallback;
-                    let label: &str = match windows.get(wid) {
-                        Some(w) => w.name.as_str(),
-                        None => {
-                            fallback = wid.to_string();
-                            &fallback
-                        }
-                    };
-                    let chip_bg = if wid == active_wid {
-                        p.accent
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
-                    egui::Frame::default()
-                        .fill(chip_bg)
-                        .inner_margin(egui::Margin::symmetric(
-                            crate::theme::ELEMENT_PADDING_PX as i8,
-                            0,
-                        ))
-                        .show(ui, |ui| {
-                            ui.colored_label(p.foreground, label);
-                        });
-                }
-            });
-        });
+    commands.spawn((
+        Node {
+            width: Val::Px(theme::ELEMENT_PADDING_PX),
+            ..default()
+        },
+        StructuralNode,
+        ChildOf(bar),
+    ));
+
+    for wid in &session.linked_windows {
+        let label = windows
+            .get(wid)
+            .map(|w| w.name.clone())
+            .unwrap_or_else(|| wid.to_string());
+        let bg = if wid == active_wid {
+            palette::ACCENT
+        } else {
+            Color::NONE
+        };
+
+        let chip = commands
+            .spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(theme::ELEMENT_PADDING_PX), Val::Px(0.0)),
+                    ..default()
+                },
+                BackgroundColor(bg),
+                StructuralNode,
+                ChildOf(bar),
+            ))
+            .id();
+
+        commands.spawn((
+            Text::new(label),
+            TextColor(palette::FOREGROUND),
+            StructuralNode,
+            ChildOf(chip),
+        ));
+    }
 }

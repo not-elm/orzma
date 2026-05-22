@@ -1,36 +1,42 @@
-//! Egui tab bar rendering for panes: `draw_pane_tab_bar` renders one tab per
-//! `Activity` in a row. `tab_colors` encapsulates the active/inactive color
-//! logic.
+//! Tab bar Bevy UI builder for a Pane. `build_pane_tab_bar` spawns one
+//! Row Node per Pane with one child per Activity. `tab_colors` computes
+//! the (background, indicator, text) color triple for a single tab.
 
-use bevy_egui::egui;
+use crate::theme;
+use crate::ui::StructuralNode;
+use crate::ui::palette;
+use bevy::color::Color;
+use bevy::prelude::*;
+use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, UiRect, Val};
 use ozmux_multiplexer::{Activity, Pane};
 
-/// Color set computed from a tab's active state and its pane's active state.
-pub(crate) struct TabColors {
-    /// Background color of the tab.
-    pub bg: egui::Color32,
-    /// Top indicator color (bright when both tab and pane are active).
-    pub indicator: egui::Color32,
-    /// Text color of the tab label.
-    pub text: egui::Color32,
+/// Color triple for one tab.
+struct TabColors {
+    bg: Color,
+    indicator: Color,
+    text: Color,
 }
 
-/// Compute the (background, top-indicator, text) color triple for a single tab.
-/// The indicator is bright `ACCENT` only when both the tab and its pane are
-/// active; an active tab inside an inactive pane gets the muted `BORDER`.
-pub(crate) fn tab_colors(is_active: bool, is_active_pane: bool) -> TabColors {
-    let p = crate::ui::egui_theme::palette();
+/// Compute the (background, top-indicator, text) color triple for one tab.
+/// Indicator is `palette::ACCENT` only when the tab and its pane are both
+/// active; an active tab inside an inactive pane gets `palette::BORDER`;
+/// inactive tabs get `Color::NONE`.
+fn tab_colors(is_active: bool, is_active_pane: bool) -> TabColors {
     let bg = if is_active {
-        p.tab_active_bg
+        palette::TAB_ACTIVE_BG
     } else {
-        egui::Color32::TRANSPARENT
+        Color::NONE
     };
     let indicator = match (is_active, is_active_pane) {
-        (true, true) => p.accent,
-        (true, false) => p.border,
-        (false, _) => egui::Color32::TRANSPARENT,
+        (true, true) => palette::ACCENT,
+        (true, false) => palette::BORDER,
+        (false, _) => Color::NONE,
     };
-    let text = if is_active { p.foreground } else { p.muted };
+    let text = if is_active {
+        palette::FOREGROUND
+    } else {
+        palette::MUTED
+    };
     TabColors {
         bg,
         indicator,
@@ -38,61 +44,72 @@ pub(crate) fn tab_colors(is_active: bool, is_active_pane: bool) -> TabColors {
     }
 }
 
-/// Egui draw of the per-pane tab bar (one tab per Activity, laid out left-to-right).
-pub(crate) fn draw_pane_tab_bar(ui: &mut egui::Ui, pane: &Pane, is_active_pane: bool) {
-    egui::Frame::default()
-        .fill(crate::ui::egui_theme::palette().tab_bar_bg)
-        .inner_margin(egui::Margin::same(0))
-        .show(ui, |ui| {
-            // NOTE: `expand_to_include_rect(ui.max_rect())` is required —
-            // egui::Frame sizes its outer_rect from `content_ui.min_rect()`,
-            // and `ui.horizontal` only advances the parent by its child's
-            // min_rect (not the child's max_rect, see egui Ui::scope_dyn).
-            // Without this expansion the bar collapses to the tabs' natural
-            // width, leaving the rest of the pane unfilled.
-            ui.expand_to_include_rect(ui.max_rect());
-            ui.horizontal(|ui| {
-                for activity in &pane.activities {
-                    let is_active = activity.id == pane.active_activity;
-                    draw_tab(ui, activity, is_active, is_active_pane);
-                }
-            });
-        });
+/// Spawn the per-pane tab bar (one tab per Activity) as a child of `parent`.
+/// Every spawned Entity carries `StructuralNode`.
+pub(crate) fn build_pane_tab_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    pane: &Pane,
+    is_active_pane: bool,
+) {
+    let bar = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                width: Val::Percent(100.0),
+                height: Val::Auto,
+                padding: UiRect::ZERO,
+                ..default()
+            },
+            BackgroundColor(palette::TAB_BAR_BG),
+            StructuralNode,
+            ChildOf(parent),
+        ))
+        .id();
+
+    for activity in &pane.activities {
+        let is_active = activity.id == pane.active_activity;
+        build_tab(commands, bar, activity, is_active, is_active_pane);
+    }
 }
 
-fn draw_tab(
-    ui: &mut egui::Ui,
+fn build_tab(
+    commands: &mut Commands,
+    parent: Entity,
     activity: &Activity,
     is_active: bool,
     is_active_pane: bool,
-) -> egui::Response {
+) {
     let colors = tab_colors(is_active, is_active_pane);
 
-    let inner = egui::Frame::NONE
-        .fill(colors.bg)
-        .corner_radius(egui::CornerRadius {
-            nw: crate::theme::TAB_BORDER_RADIUS_PX as u8,
-            ne: crate::theme::TAB_BORDER_RADIUS_PX as u8,
-            sw: 0,
-            se: 0,
-        })
-        .inner_margin(egui::Margin::symmetric(
-            crate::theme::TAB_PADDING_X_PX as i8,
-            4,
+    let tab = commands
+        .spawn((
+            Node {
+                padding: UiRect::axes(Val::Px(theme::TAB_PADDING_X_PX), Val::Px(4.0)),
+                border: UiRect::top(Val::Px(theme::TAB_INDICATOR_PX)),
+                border_radius: BorderRadius {
+                    top_left: Val::Px(theme::TAB_BORDER_RADIUS_PX),
+                    top_right: Val::Px(theme::TAB_BORDER_RADIUS_PX),
+                    bottom_left: Val::Px(0.0),
+                    bottom_right: Val::Px(0.0),
+                },
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(colors.bg),
+            BorderColor::all(colors.indicator),
+            StructuralNode,
+            ChildOf(parent),
         ))
-        .show(ui, |ui| {
-            ui.colored_label(colors.text, &activity.name);
-        });
+        .id();
 
-    if colors.indicator != egui::Color32::TRANSPARENT {
-        let rect = inner.response.rect;
-        ui.painter().line_segment(
-            [rect.left_top(), rect.right_top()],
-            egui::Stroke::new(crate::theme::TAB_INDICATOR_PX, colors.indicator),
-        );
-    }
-
-    inner.response
+    commands.spawn((
+        Text::new(activity.name.clone()),
+        TextColor(colors.text),
+        StructuralNode,
+        ChildOf(tab),
+    ));
 }
 
 #[cfg(test)]
@@ -102,23 +119,23 @@ mod tests {
     #[test]
     fn tab_colors_active_in_active_pane_uses_accent_indicator() {
         let c = tab_colors(true, true);
-        assert_eq!(c.bg, crate::ui::egui_theme::palette().tab_active_bg);
-        assert_eq!(c.indicator, crate::ui::egui_theme::palette().accent);
-        assert_eq!(c.text, crate::ui::egui_theme::palette().foreground);
+        assert_eq!(c.bg, palette::TAB_ACTIVE_BG);
+        assert_eq!(c.indicator, palette::ACCENT);
+        assert_eq!(c.text, palette::FOREGROUND);
     }
 
     #[test]
     fn tab_colors_active_in_inactive_pane_uses_border_indicator() {
         let c = tab_colors(true, false);
-        assert_eq!(c.bg, crate::ui::egui_theme::palette().tab_active_bg);
-        assert_eq!(c.indicator, crate::ui::egui_theme::palette().border);
+        assert_eq!(c.bg, palette::TAB_ACTIVE_BG);
+        assert_eq!(c.indicator, palette::BORDER);
     }
 
     #[test]
     fn tab_colors_inactive_is_fully_transparent() {
         let c = tab_colors(false, true);
-        assert_eq!(c.bg, egui::Color32::TRANSPARENT);
-        assert_eq!(c.indicator, egui::Color32::TRANSPARENT);
-        assert_eq!(c.text, crate::ui::egui_theme::palette().muted);
+        assert_eq!(c.bg, Color::NONE);
+        assert_eq!(c.indicator, Color::NONE);
+        assert_eq!(c.text, palette::MUTED);
     }
 }

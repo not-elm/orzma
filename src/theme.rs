@@ -1,4 +1,4 @@
-//! Hardcoded palette + size constants for the egui UI. Token loading from
+//! Hardcoded palette + size constants for the Bevy UI. Token loading from
 //! daemon/configs::theme is deferred to a later phase.
 //!
 //! Values are tuned to approximate cmux/tmux-style chrome: cool blue-grey

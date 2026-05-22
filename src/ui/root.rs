@@ -1,50 +1,51 @@
-//! Per-GUI-window egui context setup: spawns Camera2d (targeting the window)
-//! with `EguiContext` + `EguiMultipassSchedule` for every Window entity that
-//! gains `AttachedSession`, and applies the ozmux palette to each new context.
+//! Per-GUI-window Camera + UiRoot setup. Spawned once at Startup AFTER
+//! `bootstrap` has attached `AttachedSession` to the primary Window.
 
 use crate::multiplexer::AttachedSession;
+use crate::ui::UiRoot;
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
-use bevy::window::WindowRef;
-use bevy_egui::{EguiContext, EguiMultipassSchedule, EguiPrimaryContextPass};
+use bevy::ui::IsDefaultUiCamera;
+use bevy::window::{PrimaryWindow, WindowRef};
 
-/// Marker for `Camera2d` entities that target exactly one GUI window. One per
-/// `(Window, AttachedSession)` pair.
-#[derive(Component, Debug)]
+/// Marker for the `Camera2d` entity that renders the primary GUI window.
+#[derive(Component)]
 pub(crate) struct WindowCamera;
 
-/// Filter type for the `new_attached` query in `setup_egui_for_window`.
-type NewEguiWindowFilter = (With<Window>, Added<AttachedSession>);
-
-/// Reacts to `Added<AttachedSession>` on `Window` entities. For each newly
-/// attached window, spawns a `WindowCamera` (`Camera2d` targeting the window)
-/// with `EguiContext` + `EguiMultipassSchedule` so the per-window egui draw
-/// systems fire inside the `EguiPrimaryContextPass` schedule. Only the primary
-/// (single) window is in scope for Phase 2→3; secondary windows would require
-/// a distinct schedule label, which is deferred.
-pub(crate) fn setup_egui_for_window(
+/// Spawn the per-window `Camera2d` (tagged `IsDefaultUiCamera` so root
+/// `Node`s without explicit `UiTargetCamera` resolve to it) and the
+/// `UiRoot` Node entity. Reads `AttachedSession` to confirm bootstrap
+/// ran first; logs a warn and returns early if missing (system-ordering
+/// safety net — the Plugin orders `.after(bootstrap)` so this is rare).
+pub(crate) fn setup_root_camera_and_ui_root(
     mut commands: Commands,
-    new_attached: Query<Entity, NewEguiWindowFilter>,
+    primary: Query<Entity, (With<PrimaryWindow>, With<AttachedSession>)>,
 ) {
-    for window_entity in &new_attached {
-        commands.spawn((
-            Camera2d,
-            RenderTarget::Window(WindowRef::Entity(window_entity)),
-            WindowCamera,
-            EguiContext::default(),
-            EguiMultipassSchedule::new(EguiPrimaryContextPass),
-        ));
-    }
-}
+    let Ok(window_entity) = primary.single() else {
+        tracing::warn!(
+            target: "ozmux_gui::ui",
+            "setup_root_camera_and_ui_root: primary window without AttachedSession — bootstrap order?",
+        );
+        return;
+    };
 
-/// Applies the ozmux egui palette to each newly added `EguiContext`. Runs in
-/// `Update` so it catches the freshly-spawned context before its first draw pass.
-pub(crate) fn apply_visuals_for_new_contexts(
-    mut new_contexts: Query<&mut EguiContext, Added<EguiContext>>,
-) {
-    for mut ctx_component in &mut new_contexts {
-        ctx_component
-            .get_mut()
-            .set_visuals(crate::ui::egui_theme::ozmux_visuals());
-    }
+    commands.spawn((
+        Camera2d,
+        RenderTarget::Window(WindowRef::Entity(window_entity)),
+        WindowCamera,
+        IsDefaultUiCamera,
+    ));
+
+    commands.spawn((
+        Node {
+            flex_direction: bevy::ui::FlexDirection::Column,
+            width: bevy::ui::Val::Percent(100.0),
+            height: bevy::ui::Val::Percent(100.0),
+            ..default()
+        },
+        UiRoot,
+        // NOTE: UiRoot does NOT carry StructuralNode — it must persist
+        // across rebuilds. Its children carry StructuralNode and are
+        // recycled by `rebuild_structure_on_change`.
+    ));
 }

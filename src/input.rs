@@ -6,7 +6,6 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::{Timer, TimerMode};
-use bevy_egui::input::EguiWantsInput;
 use ozmux_configs::shortcuts::{KeyChord, Modifiers, Prefix, Shortcuts};
 use std::time::Duration;
 
@@ -34,9 +33,8 @@ impl PrefixState {
 
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline:
 /// `tick_prefix_state` (Stage A) and `dispatch_focused_key` (Stage B)
-/// chained in the `Update` schedule. The egui keyboard gate is enforced
-/// inside `dispatch_focused_key` (not via `run_if`) so the
-/// `MessageReader` cursor stays in sync — see the comment there.
+/// chained in the `Update` schedule. No focus gating — the migrated UI
+/// has no text inputs that consume keyboard focus.
 pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
@@ -63,7 +61,6 @@ fn tick_prefix_state(time: Res<Time<Virtual>>, mut q: Query<&mut PrefixState>) {
 pub(crate) fn dispatch_focused_key(
     mut events: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
-    egui_wants: Option<Res<EguiWantsInput>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
     mut mux: ResMut<crate::multiplexer::Multiplexer>,
     mut q: Query<(
@@ -72,24 +69,6 @@ pub(crate) fn dispatch_focused_key(
         &Window,
     )>,
 ) {
-    if egui_wants
-        .as_ref()
-        .is_some_and(|e| e.wants_keyboard_input())
-    {
-        // NOTE: drain the reader so stale events from the egui-focused frame
-        // do not re-emerge after focus is released. The MessageReader cursor
-        // must advance every frame this system runs.
-        events.read().for_each(drop);
-        // NOTE: cancel any armed prefix while egui owns the keyboard. Without
-        // this, a Ctrl-B armed before egui claimed focus would still be armed
-        // when egui releases focus, and the user's next normal keystroke would
-        // unexpectedly trigger an action.
-        for (_, mut prefix, _) in &mut q {
-            prefix.armed = false;
-        }
-        return;
-    }
-
     let shortcuts = &configs.shortcuts;
     let mods = current_modifiers(&keys);
 

@@ -20,7 +20,7 @@ impl Plugin for OzmuxBootstrapPlugin {
     }
 }
 
-fn bootstrap(
+pub(crate) fn bootstrap(
     mut commands: Commands,
     mut mux: ResMut<Multiplexer>,
     configs: Res<OzmuxConfigsResource>,

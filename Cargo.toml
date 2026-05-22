@@ -13,7 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 bevy = { version = "0.18", default-features = true }
-bevy_egui = "=0.39.1"
 ozmux_configs = { path = "daemon/configs" }
 ozmux_multiplexer = { path = "daemon/multiplexer" }
 tracing = { workspace = true }
