@@ -2,6 +2,7 @@
 //! seeds the initial Session/Window/Pane/Activity and attaches the per-
 //! window components to the primary GUI window.
 
+use crate::configs::OzmuxConfigsResource;
 use crate::input::PrefixState;
 use crate::multiplexer::{AttachedSession, Multiplexer};
 use bevy::prelude::*;
@@ -22,6 +23,7 @@ impl Plugin for OzmuxBootstrapPlugin {
 fn bootstrap(
     mut commands: Commands,
     mut mux: ResMut<Multiplexer>,
+    configs: Res<OzmuxConfigsResource>,
     primary: Single<Entity, With<PrimaryWindow>>,
 ) {
     let sid = mux.create_session(Some("default".into()));
@@ -29,21 +31,29 @@ fn bootstrap(
         tracing::error!(?err, "bootstrap: create_window failed");
         return;
     }
+    let prefix_state = PrefixState::from_prefix(&configs.shortcuts.prefix);
     commands
         .entity(*primary)
-        .insert((AttachedSession(sid), PrefixState::default()));
+        .insert((AttachedSession(sid), prefix_state));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::window::{Window, WindowResolution};
+    use std::time::Duration;
 
     #[test]
     fn bootstrap_inserts_components_on_primary_window() {
+        let _guard = crate::configs::env_guard();
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(crate::multiplexer::OzmuxMultiplexerPlugin)
+            .add_plugins(crate::configs::OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin);
 
         let primary = app
@@ -63,9 +73,14 @@ mod tests {
             app.world().get::<AttachedSession>(primary).is_some(),
             "AttachedSession must be inserted on the primary window"
         );
-        assert!(
-            app.world().get::<PrefixState>(primary).is_some(),
-            "PrefixState must be inserted on the primary window"
+        let prefix = app
+            .world()
+            .get::<PrefixState>(primary)
+            .expect("PrefixState must be inserted on the primary window");
+        assert_eq!(
+            prefix.timeout.duration(),
+            Duration::from_millis(2000),
+            "PrefixState timeout must come from Shortcuts::default().prefix.timeout_ms (2000)"
         );
 
         let mux = app.world().resource::<Multiplexer>();

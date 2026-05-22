@@ -1,47 +1,47 @@
-//! Keyboard shortcut handling: PrefixState Component and dispatcher systems.
-//! `Action` enum lives under `input/action.rs`.
+//! Keyboard shortcut handling: `PrefixState` Component and dispatcher
+//! systems. The shortcut binding table (prefix + bindings) comes from
+//! the loaded `OzmuxConfigsResource`; this module owns no chord data.
 
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::{Timer, TimerMode};
 use bevy_egui::input::EguiWantsInput;
+use ozmux_configs::shortcuts::{KeyChord, Modifiers, Prefix, Shortcuts};
+use std::time::Duration;
 
-/// `Action` enum produced by the shortcut dispatcher.
-pub mod action;
-
-/// Per-GUI-window prefix-mode state. `armed` flips to true the frame
-/// Ctrl-B is pressed and the 2-second `timeout` is reset; it flips back to
-/// false when the timeout expires, an `Action` fires, or a non-modifier key
-/// cancels the prefix.
+/// Per-GUI-window prefix-mode state. `armed` flips to true the frame the
+/// configured prefix chord is pressed and the configured timeout is reset;
+/// it flips back to false when the timeout expires, a binding fires, or a
+/// non-modifier key cancels the prefix.
 #[derive(Component, Debug)]
 pub struct PrefixState {
     pub(crate) armed: bool,
     pub(crate) timeout: Timer,
 }
 
-impl Default for PrefixState {
-    fn default() -> Self {
+impl PrefixState {
+    /// Builds a fresh `PrefixState` whose timeout is sourced from the
+    /// `Shortcuts::prefix.timeout_ms` value (rather than a hard-coded
+    /// default).
+    pub fn from_prefix(prefix: &Prefix) -> Self {
         Self {
             armed: false,
-            timeout: Timer::from_seconds(2.0, TimerMode::Once),
+            timeout: Timer::new(Duration::from_millis(prefix.timeout_ms), TimerMode::Once),
         }
     }
 }
 
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline:
-/// `tick_prefix_state` (Stage A) and `dispatch_focused_key` (Stage B) chained
-/// in the `Update` schedule.
+/// `tick_prefix_state` (Stage A) and `dispatch_focused_key` (Stage B)
+/// chained in the `Update` schedule. The egui keyboard gate is enforced
+/// inside `dispatch_focused_key` (not via `run_if`) so the
+/// `MessageReader` cursor stays in sync — see the comment there.
 pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                tick_prefix_state,
-                dispatch_focused_key.run_if(egui_want_keyboard_input),
-            )
-                .chain(),
-        );
+        app.add_systems(Update, (tick_prefix_state, dispatch_focused_key).chain());
     }
 }
 
@@ -61,7 +61,10 @@ fn tick_prefix_state(time: Res<Time<Virtual>>, mut q: Query<&mut PrefixState>) {
 }
 
 pub(crate) fn dispatch_focused_key(
+    mut events: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
+    egui_wants: Option<Res<EguiWantsInput>>,
+    configs: Res<crate::configs::OzmuxConfigsResource>,
     mut mux: ResMut<crate::multiplexer::Multiplexer>,
     mut q: Query<(
         &crate::multiplexer::AttachedSession,
@@ -69,361 +72,183 @@ pub(crate) fn dispatch_focused_key(
         &Window,
     )>,
 ) {
-    for (attached, mut prefix, win) in &mut q {
+    if egui_wants
+        .as_ref()
+        .is_some_and(|e| e.wants_keyboard_input())
+    {
+        // NOTE: drain the reader so stale events from the egui-focused frame
+        // do not re-emerge after focus is released. The MessageReader cursor
+        // must advance every frame this system runs.
+        events.read().for_each(drop);
+        // NOTE: cancel any armed prefix while egui owns the keyboard. Without
+        // this, a Ctrl-B armed before egui claimed focus would still be armed
+        // when egui releases focus, and the user's next normal keystroke would
+        // unexpectedly trigger an action.
+        for (_, mut prefix, _) in &mut q {
+            prefix.armed = false;
+        }
+        return;
+    }
+
+    let shortcuts = &configs.shortcuts;
+    let mods = current_modifiers(&keys);
+
+    for ev in events.read() {
+        if ev.state != ButtonState::Pressed {
+            continue;
+        }
+        let Ok((attached, mut prefix, win)) = q.get_mut(ev.window) else {
+            continue;
+        };
         if !win.focused {
             continue;
         }
-        if !prefix.armed {
-            if (keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight))
-                && keys.just_pressed(KeyCode::KeyB)
-            {
-                prefix.armed = true;
-                prefix.timeout.reset();
-            }
+        if is_modifier_only_key(&ev.logical_key) {
             continue;
         }
-        if let Some(action) = decode_action(&keys) {
-            let mux_ref = mux.bypass_change_detection();
-            let mutated = crate::multiplexer::commands::apply(action, mux_ref, attached.0.clone());
-            if mutated {
-                mux.set_changed();
+        match bevy_to_configs_key(&ev.logical_key) {
+            Some(input_key) => {
+                handle_chord(
+                    &input_key,
+                    &mods,
+                    &mut prefix,
+                    shortcuts,
+                    &mut mux,
+                    attached,
+                );
             }
-            prefix.armed = false;
-        } else if just_pressed_non_modifier(&keys) {
-            prefix.armed = false;
+            None => prefix.armed = false,
         }
     }
 }
 
-fn egui_want_keyboard_input(egui_wants: Option<Res<EguiWantsInput>>) -> bool {
-    !egui_wants.is_some_and(|e| e.wants_keyboard_input())
+fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
+    Modifiers {
+        ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
+        shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
+        alt: keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight),
+        meta: keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight),
+    }
 }
 
-fn just_pressed_non_modifier(keys: &ButtonInput<KeyCode>) -> bool {
-    keys.get_just_pressed().any(|k| !is_modifier(*k))
+fn match_chord(
+    input_key: &ozmux_configs::shortcuts::Key,
+    mods: &Modifiers,
+    chord: &KeyChord,
+) -> bool {
+    input_key == &chord.key && mods == &chord.modifiers
 }
 
-fn is_modifier(k: KeyCode) -> bool {
+fn mods_subtract(current: &Modifiers, to_remove: &Modifiers) -> Modifiers {
+    Modifiers {
+        ctrl: current.ctrl && !to_remove.ctrl,
+        shift: current.shift && !to_remove.shift,
+        alt: current.alt && !to_remove.alt,
+        meta: current.meta && !to_remove.meta,
+    }
+}
+
+fn is_modifier_only_key(key: &Key) -> bool {
+    // Only keys that are HELD WHILE the chord follow-up is typed should bypass
+    // the disarm logic. Toggle-style lock keys (CapsLock / NumLock / ScrollLock /
+    // FnLock / SymbolLock) are intentional discrete presses and should disarm,
+    // matching the original `is_modifier` set in `src/input.rs` pre-rewrite.
     matches!(
-        k,
-        KeyCode::ShiftLeft
-            | KeyCode::ShiftRight
-            | KeyCode::ControlLeft
-            | KeyCode::ControlRight
-            | KeyCode::AltLeft
-            | KeyCode::AltRight
-            | KeyCode::SuperLeft
-            | KeyCode::SuperRight
+        key,
+        Key::Shift
+            | Key::Control
+            | Key::Alt
+            | Key::Super
+            | Key::Meta
+            | Key::Hyper
+            | Key::AltGraph
+            | Key::Fn
+            | Key::Symbol
     )
 }
 
-fn decode_action(keys: &ButtonInput<KeyCode>) -> Option<action::Action> {
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    if keys.just_pressed(KeyCode::KeyC) {
-        return Some(action::Action::NewWindow);
+fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
+    use ozmux_configs::shortcuts::Key as CKey;
+    Some(match key {
+        Key::Character(s) => {
+            let mut chars = s.chars();
+            let c = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            let normalized = if c.is_ascii_alphabetic() {
+                c.to_ascii_lowercase()
+            } else {
+                c
+            };
+            CKey::Char(normalized)
+        }
+        Key::Escape => CKey::Escape,
+        Key::Enter => CKey::Enter,
+        Key::Tab => CKey::Tab,
+        Key::Backspace => CKey::Backspace,
+        Key::Space => CKey::Space,
+        Key::ArrowUp => CKey::ArrowUp,
+        Key::ArrowDown => CKey::ArrowDown,
+        Key::ArrowLeft => CKey::ArrowLeft,
+        Key::ArrowRight => CKey::ArrowRight,
+        _ => return None,
+    })
+}
+
+fn handle_chord(
+    input_key: &ozmux_configs::shortcuts::Key,
+    mods: &Modifiers,
+    prefix: &mut PrefixState,
+    shortcuts: &Shortcuts,
+    mux: &mut ResMut<crate::multiplexer::Multiplexer>,
+    attached: &crate::multiplexer::AttachedSession,
+) {
+    if !prefix.armed {
+        if match_chord(input_key, mods, &shortcuts.prefix.chord) {
+            prefix.armed = true;
+            prefix.timeout.reset();
+        }
+        return;
     }
-    if shift && keys.just_pressed(KeyCode::Quote) {
-        return Some(action::Action::SplitPaneHorizontal);
+    let mods_without_prefix = mods_subtract(mods, &shortcuts.prefix.chord.modifiers);
+    if let Some(binding) = shortcuts
+        .bindings
+        .iter()
+        .find(|b| match_chord(input_key, &mods_without_prefix, &b.chord))
+    {
+        let mux_ref = mux.bypass_change_detection();
+        let mutated = crate::multiplexer::commands::apply(
+            binding.action.clone(),
+            mux_ref,
+            attached.0.clone(),
+        );
+        if mutated {
+            mux.set_changed();
+        }
     }
-    if shift && keys.just_pressed(KeyCode::Digit5) {
-        return Some(action::Action::SplitPaneVertical);
-    }
-    if keys.just_pressed(KeyCode::KeyT) {
-        return Some(action::Action::NewActivity);
-    }
-    None
+    prefix.armed = false;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::configs::OzmuxConfigsResource;
+    use crate::multiplexer::{AttachedSession, Multiplexer, OzmuxMultiplexerPlugin};
+    use bevy::input::ButtonState;
+    use bevy::input::keyboard::{Key as Bk, KeyboardInput, NativeKeyCode};
+    use bevy::window::{Window, WindowResolution};
+    use ozmux_configs::OzmuxConfigs;
+    use ozmux_configs::shortcuts::{Key as CKey, Modifiers};
 
-    #[test]
-    fn default_prefix_state_starts_disarmed_with_2s_timer() {
-        let p = PrefixState::default();
-        assert!(!p.armed);
-        assert_eq!(p.timeout.duration().as_secs(), 2);
-        assert_eq!(p.timeout.mode(), TimerMode::Once);
-    }
-
-    #[test]
-    fn tick_prefix_state_expires_armed_after_timeout() {
-        use bevy::time::TimeUpdateStrategy;
-        use std::time::Duration;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_systems(Update, tick_prefix_state);
-
-        let entity = app
-            .world_mut()
-            .spawn(PrefixState {
-                armed: true,
-                timeout: Timer::from_seconds(2.0, TimerMode::Once),
-            })
-            .id();
-
-        app.world_mut()
-            .resource_mut::<Time<Virtual>>()
-            .set_max_delta(Duration::from_secs(60));
-
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
-        app.update();
-        assert!(
-            app.world().get::<PrefixState>(entity).unwrap().armed,
-            "armed must still be true before tick"
-        );
-
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(3)));
-        app.update();
-
-        assert!(
-            !app.world().get::<PrefixState>(entity).unwrap().armed,
-            "armed must flip to false after timer expires"
-        );
-    }
-
-    #[test]
-    fn tick_prefix_state_leaves_disarmed_alone() {
-        use bevy::time::TimeUpdateStrategy;
-        use std::time::Duration;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_systems(Update, tick_prefix_state);
-
-        let entity = app.world_mut().spawn(PrefixState::default()).id();
-        app.world_mut()
-            .resource_mut::<Time<Virtual>>()
-            .set_max_delta(Duration::from_secs(60));
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(10)));
-        app.update();
-
-        let p = app.world().get::<PrefixState>(entity).unwrap();
-        assert!(!p.armed);
-    }
-
-    #[test]
-    fn ctrl_b_arms_prefix_state_on_focused_window() {
-        use bevy::window::{Window, WindowResolution};
-
-        use crate::multiplexer::{AttachedSession, Multiplexer, OzmuxMultiplexerPlugin};
-        use ozmux_multiplexer::SessionId;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(OzmuxMultiplexerPlugin)
-            .add_systems(Update, dispatch_focused_key);
-
-        app.insert_resource(ButtonInput::<KeyCode>::default());
-
-        let entity = app
-            .world_mut()
-            .spawn((
-                Window {
-                    focused: true,
-                    resolution: WindowResolution::new(800, 600),
-                    ..default()
-                },
-                AttachedSession(SessionId::new()),
-                PrefixState::default(),
-            ))
-            .id();
-
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.press(KeyCode::ControlLeft);
-            keys.press(KeyCode::KeyB);
-        }
-        app.update();
-
-        let p = app.world().get::<PrefixState>(entity).unwrap();
-        assert!(p.armed, "Ctrl-B must arm the prefix state");
-        assert!(!p.timeout.is_finished());
-
-        assert!(
-            app.world().resource::<Multiplexer>().sessions.is_empty(),
-            "arming alone must not mutate domain state"
-        );
-    }
-
-    #[test]
-    fn ctrl_b_on_unfocused_window_does_not_arm() {
-        use bevy::window::{Window, WindowResolution};
-
-        use crate::multiplexer::{AttachedSession, OzmuxMultiplexerPlugin};
-        use ozmux_multiplexer::SessionId;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(OzmuxMultiplexerPlugin)
-            .add_systems(Update, dispatch_focused_key);
-
-        app.insert_resource(ButtonInput::<KeyCode>::default());
-
-        let entity = app
-            .world_mut()
-            .spawn((
-                Window {
-                    focused: false,
-                    resolution: WindowResolution::new(800, 600),
-                    ..default()
-                },
-                AttachedSession(SessionId::new()),
-                PrefixState::default(),
-            ))
-            .id();
-
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.press(KeyCode::ControlLeft);
-            keys.press(KeyCode::KeyB);
-        }
-        app.update();
-
-        assert!(!app.world().get::<PrefixState>(entity).unwrap().armed);
-    }
-
-    #[test]
-    fn armed_then_c_fires_new_window() {
-        use bevy::window::{Window, WindowResolution};
-
-        use crate::multiplexer::{AttachedSession, Multiplexer, OzmuxMultiplexerPlugin};
-
+    fn make_app(window_focused: bool, armed: bool) -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(OzmuxMultiplexerPlugin)
             .add_systems(Update, dispatch_focused_key);
         app.insert_resource(ButtonInput::<KeyCode>::default());
-
-        let sid = {
-            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
-            mux.create_session(Some("default".into()))
-        };
-
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                resolution: WindowResolution::new(800, 600),
-                ..default()
-            },
-            AttachedSession(sid.clone()),
-            PrefixState {
-                armed: true,
-                timeout: Timer::from_seconds(2.0, TimerMode::Once),
-            },
-        ));
-
-        let windows_before = app.world().resource::<Multiplexer>().windows.len();
-
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.press(KeyCode::KeyC);
-        }
-        app.update();
-
-        let mux = app.world().resource::<Multiplexer>();
-        assert_eq!(mux.windows.len(), windows_before + 1);
-    }
-
-    #[test]
-    fn armed_then_unrelated_key_cancels_without_firing() {
-        use bevy::window::{Window, WindowResolution};
-
-        use crate::multiplexer::{AttachedSession, Multiplexer, OzmuxMultiplexerPlugin};
-        use ozmux_multiplexer::SessionId;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(OzmuxMultiplexerPlugin)
-            .add_systems(Update, dispatch_focused_key);
-        app.insert_resource(ButtonInput::<KeyCode>::default());
-
-        let entity = app
-            .world_mut()
-            .spawn((
-                Window {
-                    focused: true,
-                    resolution: WindowResolution::new(800, 600),
-                    ..default()
-                },
-                AttachedSession(SessionId::new()),
-                PrefixState {
-                    armed: true,
-                    timeout: Timer::from_seconds(2.0, TimerMode::Once),
-                },
-            ))
-            .id();
-
-        let windows_before = app.world().resource::<Multiplexer>().windows.len();
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.press(KeyCode::KeyZ);
-        }
-        app.update();
-
-        let p = app.world().get::<PrefixState>(entity).unwrap();
-        assert!(!p.armed, "unrelated key must disarm");
-        let mux = app.world().resource::<Multiplexer>();
-        assert_eq!(
-            mux.windows.len(),
-            windows_before,
-            "unrelated key must not mutate Multiplexer"
-        );
-    }
-
-    #[test]
-    fn shift_press_alone_does_not_disarm_prefix() {
-        use bevy::window::{Window, WindowResolution};
-
-        use crate::multiplexer::{AttachedSession, OzmuxMultiplexerPlugin};
-        use ozmux_multiplexer::SessionId;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(OzmuxMultiplexerPlugin)
-            .add_systems(Update, dispatch_focused_key);
-        app.insert_resource(ButtonInput::<KeyCode>::default());
-
-        let entity = app
-            .world_mut()
-            .spawn((
-                Window {
-                    focused: true,
-                    resolution: WindowResolution::new(800, 600),
-                    ..default()
-                },
-                AttachedSession(SessionId::new()),
-                PrefixState {
-                    armed: true,
-                    timeout: Timer::from_seconds(2.0, TimerMode::Once),
-                },
-            ))
-            .id();
-
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.press(KeyCode::ShiftLeft);
-        }
-        app.update();
-
-        assert!(
-            app.world().get::<PrefixState>(entity).unwrap().armed,
-            "Shift alone must not disarm; it is a modifier needed for \" and %"
-        );
-    }
-
-    #[test]
-    fn armed_then_shift_quote_fires_split_horizontal() {
-        use bevy::window::{Window, WindowResolution};
-
-        use crate::multiplexer::{AttachedSession, Multiplexer, OzmuxMultiplexerPlugin};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(OzmuxMultiplexerPlugin)
-            .add_systems(Update, dispatch_focused_key);
-        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
+        app.add_message::<KeyboardInput>();
 
         let sid = {
             let mut mux = app.world_mut().resource_mut::<Multiplexer>();
@@ -431,73 +256,359 @@ mod tests {
             mux.create_window(Some(&sid), Some("main".into())).unwrap();
             sid
         };
+        let prefix_state = {
+            let mut ps = PrefixState::from_prefix(
+                &app.world()
+                    .resource::<OzmuxConfigsResource>()
+                    .shortcuts
+                    .prefix,
+            );
+            ps.armed = armed;
+            ps
+        };
+        let entity = app
+            .world_mut()
+            .spawn((
+                Window {
+                    focused: window_focused,
+                    resolution: WindowResolution::new(800, 600),
+                    ..default()
+                },
+                AttachedSession(sid),
+                prefix_state,
+            ))
+            .id();
+        (app, entity)
+    }
 
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                resolution: WindowResolution::new(800, 600),
-                ..default()
-            },
-            AttachedSession(sid.clone()),
-            PrefixState {
-                armed: true,
-                timeout: Timer::from_seconds(2.0, TimerMode::Once),
-            },
+    fn press(app: &mut App, window: Entity, key: Bk) {
+        let ev = KeyboardInput {
+            key_code: KeyCode::Unidentified(NativeKeyCode::Unidentified),
+            logical_key: key,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window,
+        };
+        let mut events = app
+            .world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>();
+        events.write(ev);
+    }
+
+    #[test]
+    fn default_prefix_state_from_default_prefix_has_2s_timer() {
+        let cfg = OzmuxConfigs::default();
+        let p = PrefixState::from_prefix(&cfg.shortcuts.prefix);
+        assert!(!p.armed);
+        assert_eq!(p.timeout.duration().as_millis(), 2000);
+        assert_eq!(p.timeout.mode(), TimerMode::Once);
+    }
+
+    #[test]
+    fn match_chord_matches_char_with_no_modifiers() {
+        let chord = KeyChord {
+            key: CKey::Char('b'),
+            modifiers: Modifiers::default(),
+        };
+        assert!(match_chord(&CKey::Char('b'), &Modifiers::default(), &chord));
+        assert!(!match_chord(
+            &CKey::Char('c'),
+            &Modifiers::default(),
+            &chord
         ));
+    }
 
-        let wid = app
-            .world()
-            .resource::<Multiplexer>()
-            .sessions
-            .get(&sid)
+    #[test]
+    fn match_chord_requires_matching_modifiers() {
+        let chord = KeyChord {
+            key: CKey::Char('c'),
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        };
+        assert!(match_chord(
+            &CKey::Char('c'),
+            &Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            &chord,
+        ));
+        assert!(!match_chord(
+            &CKey::Char('c'),
+            &Modifiers::default(),
+            &chord,
+        ));
+    }
+
+    #[test]
+    fn bevy_to_configs_key_lowercases_ascii_alphabet() {
+        assert_eq!(
+            bevy_to_configs_key(&Bk::Character("S".into())),
+            Some(CKey::Char('s'))
+        );
+        assert_eq!(
+            bevy_to_configs_key(&Bk::Character("s".into())),
+            Some(CKey::Char('s'))
+        );
+    }
+
+    #[test]
+    fn bevy_to_configs_key_preserves_symbols() {
+        assert_eq!(
+            bevy_to_configs_key(&Bk::Character("&".into())),
+            Some(CKey::Char('&'))
+        );
+        assert_eq!(
+            bevy_to_configs_key(&Bk::Character("{".into())),
+            Some(CKey::Char('{'))
+        );
+    }
+
+    #[test]
+    fn bevy_to_configs_key_rejects_multichar_payload() {
+        assert_eq!(bevy_to_configs_key(&Bk::Character("ab".into())), None);
+    }
+
+    #[test]
+    fn bevy_to_configs_key_maps_named_keys() {
+        assert_eq!(bevy_to_configs_key(&Bk::Escape), Some(CKey::Escape));
+        assert_eq!(bevy_to_configs_key(&Bk::Enter), Some(CKey::Enter));
+        assert_eq!(bevy_to_configs_key(&Bk::ArrowUp), Some(CKey::ArrowUp));
+        assert_eq!(bevy_to_configs_key(&Bk::Tab), Some(CKey::Tab));
+    }
+
+    #[test]
+    fn bevy_to_configs_key_returns_none_for_modifier_and_f_keys() {
+        assert_eq!(bevy_to_configs_key(&Bk::Shift), None);
+        assert_eq!(bevy_to_configs_key(&Bk::Control), None);
+        assert_eq!(bevy_to_configs_key(&Bk::F1), None);
+    }
+
+    #[test]
+    fn is_modifier_only_key_detects_held_modifiers_only() {
+        assert!(is_modifier_only_key(&Bk::Shift));
+        assert!(is_modifier_only_key(&Bk::Control));
+        assert!(is_modifier_only_key(&Bk::Alt));
+        assert!(is_modifier_only_key(&Bk::Super));
+        assert!(is_modifier_only_key(&Bk::Meta));
+        assert!(is_modifier_only_key(&Bk::Hyper));
+        assert!(is_modifier_only_key(&Bk::AltGraph));
+        assert!(is_modifier_only_key(&Bk::Fn));
+        assert!(is_modifier_only_key(&Bk::Symbol));
+        assert!(
+            !is_modifier_only_key(&Bk::CapsLock),
+            "CapsLock is a toggle press, not a held modifier — it must disarm"
+        );
+        assert!(!is_modifier_only_key(&Bk::NumLock));
+        assert!(!is_modifier_only_key(&Bk::ScrollLock));
+        assert!(!is_modifier_only_key(&Bk::FnLock));
+        assert!(!is_modifier_only_key(&Bk::SymbolLock));
+        assert!(!is_modifier_only_key(&Bk::Character("a".into())));
+        assert!(!is_modifier_only_key(&Bk::F1));
+    }
+
+    #[test]
+    fn ctrl_b_arms_prefix_on_focused_window() {
+        let (mut app, entity) = make_app(true, false);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::ControlLeft);
+        }
+        press(&mut app, entity, Bk::Character("b".into()));
+        app.update();
+        let p = app.world().get::<PrefixState>(entity).unwrap();
+        assert!(p.armed, "Ctrl-B must arm the prefix state");
+        assert_eq!(
+            app.world().resource::<Multiplexer>().sessions.len(),
+            1,
+            "arming alone must not change session count"
+        );
+    }
+
+    #[test]
+    fn ctrl_b_on_unfocused_window_does_not_arm() {
+        let (mut app, entity) = make_app(false, false);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::ControlLeft);
+        }
+        press(&mut app, entity, Bk::Character("b".into()));
+        app.update();
+        assert!(!app.world().get::<PrefixState>(entity).unwrap().armed);
+    }
+
+    #[test]
+    fn armed_then_c_fires_new_terminal_activity() {
+        let (mut app, entity) = make_app(true, true);
+        let activities_before = {
+            let mux = app.world().resource::<Multiplexer>();
+            let wid = mux.windows.keys().next().unwrap().clone();
+            let window = mux.windows.get(&wid).unwrap();
+            window
+                .pane(&window.active_pane)
+                .unwrap()
+                .activity_ids()
+                .count()
+        };
+        press(&mut app, entity, Bk::Character("c".into()));
+        app.update();
+
+        let mux = app.world().resource::<Multiplexer>();
+        let wid = mux.windows.keys().next().unwrap().clone();
+        let window = mux.windows.get(&wid).unwrap();
+        let activities_after = window
+            .pane(&window.active_pane)
             .unwrap()
-            .linked_windows[0]
-            .clone();
-        let panes_before = app
-            .world()
-            .resource::<Multiplexer>()
-            .windows
-            .get(&wid)
-            .unwrap()
-            .pane_ids()
+            .activity_ids()
             .count();
+        assert_eq!(activities_after, activities_before + 1);
+        assert!(!app.world().get::<PrefixState>(entity).unwrap().armed);
+    }
+
+    #[test]
+    fn armed_then_c_still_fires_when_ctrl_is_held_through_prefix() {
+        let (mut app, entity) = make_app(true, true);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::ControlLeft);
+        }
+        let activities_before = {
+            let mux = app.world().resource::<Multiplexer>();
+            let wid = mux.windows.keys().next().unwrap().clone();
+            let window = mux.windows.get(&wid).unwrap();
+            window
+                .pane(&window.active_pane)
+                .unwrap()
+                .activity_ids()
+                .count()
+        };
+        press(&mut app, entity, Bk::Character("c".into()));
+        app.update();
+
+        let mux = app.world().resource::<Multiplexer>();
+        let wid = mux.windows.keys().next().unwrap().clone();
+        let window = mux.windows.get(&wid).unwrap();
+        let activities_after = window
+            .pane(&window.active_pane)
+            .unwrap()
+            .activity_ids()
+            .count();
+        assert_eq!(
+            activities_after,
+            activities_before + 1,
+            "Ctrl held through Ctrl+B then C must still fire NewTerminalActivity"
+        );
+    }
+
+    #[test]
+    fn armed_then_shift_c_fires_new_window_via_uppercase_logical_key() {
+        let (mut app, entity) = make_app(true, true);
+        let windows_before = app.world().resource::<Multiplexer>().windows.len();
 
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::ShiftLeft);
         }
+        press(&mut app, entity, Bk::Character("C".into()));
         app.update();
 
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.press(KeyCode::Quote);
-        }
-        app.update();
-
-        let panes_after = app
-            .world()
-            .resource::<Multiplexer>()
-            .windows
-            .get(&wid)
-            .unwrap()
-            .pane_ids()
-            .count();
+        let mux = app.world().resource::<Multiplexer>();
         assert_eq!(
-            panes_after,
-            panes_before + 1,
-            "Shift held + Quote pressed must fire SplitPaneHorizontal"
+            mux.windows.len(),
+            windows_before + 1,
+            "Shift+C (logical 'C') must lowercase-match config 'c'+shift binding"
         );
     }
 
     #[test]
-    fn shortcut_plugin_registers_systems_without_panic() {
-        use crate::multiplexer::OzmuxMultiplexerPlugin;
+    fn armed_then_caps_lock_disarms() {
+        let (mut app, entity) = make_app(true, true);
+        press(&mut app, entity, Bk::CapsLock);
+        app.update();
+        assert!(
+            !app.world().get::<PrefixState>(entity).unwrap().armed,
+            "CapsLock is a toggle press, not a held modifier — it must disarm"
+        );
+    }
 
+    #[test]
+    fn armed_then_shift_alone_does_not_disarm() {
+        let (mut app, entity) = make_app(true, true);
+        press(&mut app, entity, Bk::Shift);
+        app.update();
+        assert!(
+            app.world().get::<PrefixState>(entity).unwrap().armed,
+            "modifier-only key must not disarm an armed prefix"
+        );
+    }
+
+    #[test]
+    fn armed_then_f1_disarms_without_firing_any_action() {
+        let (mut app, entity) = make_app(true, true);
+        let windows_before = app.world().resource::<Multiplexer>().windows.len();
+        press(&mut app, entity, Bk::F1);
+        app.update();
+        assert!(
+            !app.world().get::<PrefixState>(entity).unwrap().armed,
+            "unmapped key (F1) must disarm"
+        );
+        assert_eq!(
+            app.world().resource::<Multiplexer>().windows.len(),
+            windows_before,
+            "F1 must not fire any action"
+        );
+    }
+
+    #[test]
+    fn armed_then_unbound_lowercase_z_disarms_without_firing() {
+        let (mut app, entity) = make_app(true, true);
+        let windows_before = app.world().resource::<Multiplexer>().windows.len();
+        press(&mut app, entity, Bk::Character("z".into()));
+        app.update();
+        assert!(!app.world().get::<PrefixState>(entity).unwrap().armed);
+        assert_eq!(
+            app.world().resource::<Multiplexer>().windows.len(),
+            windows_before
+        );
+    }
+
+    #[test]
+    fn unimplemented_action_does_not_panic_or_mutate() {
+        let (mut app, entity) = make_app(true, true);
+        let windows_before = app.world().resource::<Multiplexer>().windows.len();
+        press(&mut app, entity, Bk::Character("x".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Multiplexer>().windows.len(),
+            windows_before,
+            "ClosePane is not yet implemented; warn-only"
+        );
+        assert!(
+            !app.world().get::<PrefixState>(entity).unwrap().armed,
+            "dispatched chord still disarms"
+        );
+    }
+
+    #[test]
+    fn prefix_timeout_uses_config_value() {
+        let mut cfg = OzmuxConfigs::default();
+        cfg.shortcuts.prefix.timeout_ms = 1500;
+        let p = PrefixState::from_prefix(&cfg.shortcuts.prefix);
+        assert_eq!(p.timeout.duration().as_millis(), 1500);
+    }
+
+    #[test]
+    fn shortcut_plugin_registers_systems_without_panic() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(OzmuxMultiplexerPlugin)
+            .add_plugins(crate::configs::OzmuxConfigsPlugin)
             .add_plugins(OzmuxShortcutPlugin);
         app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.add_message::<KeyboardInput>();
         app.update();
     }
 }

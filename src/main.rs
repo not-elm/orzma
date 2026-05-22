@@ -1,6 +1,7 @@
 //! ozmux Bevy GUI entry point.
 
 mod bootstrap;
+mod configs;
 mod input;
 mod multiplexer;
 mod theme;
@@ -8,6 +9,7 @@ mod ui;
 
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
+use configs::OzmuxConfigsPlugin;
 use input::OzmuxShortcutPlugin;
 use multiplexer::OzmuxMultiplexerPlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
@@ -18,6 +20,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugins((
             OzmuxMultiplexerPlugin,
+            OzmuxConfigsPlugin,
             OzmuxLayoutLogPlugin,
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,

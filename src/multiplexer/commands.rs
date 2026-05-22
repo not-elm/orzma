@@ -1,28 +1,42 @@
-//! Pure (Bevy-independent) functions that apply an `Action` to the
+//! Pure (Bevy-independent) functions that apply a `configs::Action` to the
 //! domain `MultiplexerService`. Called by the shortcut dispatcher.
 
-use crate::input::action::Action;
+use ozmux_configs::shortcuts::{Action, SplitDirection};
 use ozmux_multiplexer::{
     Activity, ActivityId, MultiplexerService, PaneId, SessionId, Side, SplitOrientation,
 };
 
-/// Apply `action` to the domain `MultiplexerService` for the given session.
+/// Applies `action` to the domain `MultiplexerService` for the given session.
 /// Returns `true` if the domain state was mutated (caller may then trip
-/// Bevy change detection); `false` if the action could not be applied or
-/// short-circuited on validation. Bevy-independent so it can be unit-tested
-/// without an `App`.
+/// Bevy change detection); `false` if the action could not be applied,
+/// short-circuited on validation, or is not implemented yet in this branch.
+/// Bevy-independent so it can be unit-tested without an `App`.
 pub fn apply(action: Action, mux: &mut MultiplexerService, session: SessionId) -> bool {
     match action {
-        Action::NewWindow => match mux.create_window(Some(&session), None) {
-            Ok(_) => true,
-            Err(err) => {
-                tracing::warn!(target: "ozmux_gui::commands", ?err, "NewWindow failed");
-                false
-            }
-        },
-        Action::SplitPaneHorizontal => apply_split(mux, &session, SplitOrientation::Horizontal),
-        Action::SplitPaneVertical => apply_split(mux, &session, SplitOrientation::Vertical),
-        Action::NewActivity => apply_new_activity(mux, &session),
+        Action::NewWindow => apply_new_window(mux, &session),
+        Action::SplitPane { direction } => apply_split(mux, &session, split_orientation(direction)),
+        Action::NewTerminalActivity => apply_new_activity(mux, &session),
+        other => {
+            tracing::debug!(target: "ozmux_gui::commands", ?other, "shortcut action not yet implemented");
+            false
+        }
+    }
+}
+
+fn split_orientation(d: SplitDirection) -> SplitOrientation {
+    match d {
+        SplitDirection::Horizontal => SplitOrientation::Horizontal,
+        SplitDirection::Vertical => SplitOrientation::Vertical,
+    }
+}
+
+fn apply_new_window(mux: &mut MultiplexerService, session: &SessionId) -> bool {
+    match mux.create_window(Some(session), None) {
+        Ok(_) => true,
+        Err(err) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "NewWindow failed");
+            false
+        }
     }
 }
 
@@ -126,7 +140,13 @@ mod tests {
         let panes_before = svc.windows.get(&wid).unwrap().pane_ids().count();
         let original_pane = svc.windows.get(&wid).unwrap().active_pane.clone();
 
-        apply(Action::SplitPaneHorizontal, &mut svc, sid.clone());
+        apply(
+            Action::SplitPane {
+                direction: SplitDirection::Horizontal,
+            },
+            &mut svc,
+            sid.clone(),
+        );
 
         let window = svc.windows.get(&wid).unwrap();
         assert_eq!(window.pane_ids().count(), panes_before + 1);
@@ -146,7 +166,13 @@ mod tests {
         let panes_before = svc.windows.get(&wid).unwrap().pane_ids().count();
         let original_pane = svc.windows.get(&wid).unwrap().active_pane.clone();
 
-        apply(Action::SplitPaneVertical, &mut svc, sid);
+        apply(
+            Action::SplitPane {
+                direction: SplitDirection::Vertical,
+            },
+            &mut svc,
+            sid,
+        );
 
         let window = svc.windows.get(&wid).unwrap();
         assert_eq!(window.pane_ids().count(), panes_before + 1);
@@ -157,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn new_activity_action_adds_and_activates_activity_on_active_pane() {
+    fn new_terminal_activity_adds_and_activates_activity_on_active_pane() {
         let mut svc = MultiplexerService::default();
         let sid = svc.create_session(Some("default".into()));
         apply(Action::NewWindow, &mut svc, sid.clone());
@@ -174,11 +200,32 @@ mod tests {
             .activity_ids()
             .count();
 
-        apply(Action::NewActivity, &mut svc, sid);
+        apply(Action::NewTerminalActivity, &mut svc, sid);
 
         let pane = svc.windows.get(&wid).unwrap().pane(&pid).unwrap();
         assert_eq!(pane.activity_ids().count(), activities_before + 1);
         let new_active = pane.active_activity.clone();
         assert!(pane.has_activity(&new_active));
+    }
+
+    #[test]
+    fn unimplemented_action_returns_false_without_state_change() {
+        use ozmux_configs::shortcuts::Direction;
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let windows_before = svc.windows.len();
+
+        let mutated = apply(
+            Action::FocusPane {
+                direction: Direction::Left,
+            },
+            &mut svc,
+            sid,
+        );
+
+        assert!(!mutated, "unimplemented variant must return false");
+        assert_eq!(svc.windows.len(), windows_before);
     }
 }

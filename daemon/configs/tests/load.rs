@@ -125,3 +125,26 @@ async fn unknown_action_surfaces_parse_toml() {
         .unwrap_err();
     assert!(matches!(err, OzmuxConfigsError::ParseToml { .. }));
 }
+
+#[test]
+fn load_blocking_missing_file_yields_defaults() {
+    use ozmux_configs::test_support::load_blocking_with_overrides;
+    let nonexistent = fixture("does_not_exist.toml");
+    let configs = load_blocking_with_overrides(Some(nonexistent), None, None).unwrap();
+    let defaults = OzmuxConfigs::default();
+    assert_eq!(
+        configs.shortcuts.bindings.len(),
+        defaults.shortcuts.bindings.len()
+    );
+}
+
+#[test]
+fn load_blocking_syntax_error_returns_parse_toml_with_path() {
+    use ozmux_configs::test_support::load_blocking_with_overrides;
+    let path = fixture("syntax_error.toml");
+    let err = load_blocking_with_overrides(Some(path.clone()), None, None).unwrap_err();
+    match err {
+        OzmuxConfigsError::ParseToml { path: p, .. } => assert_eq!(p, path),
+        other => panic!("expected ParseToml, got {other:?}"),
+    }
+}
