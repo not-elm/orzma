@@ -1,9 +1,12 @@
 //! Pure (Bevy-independent) functions that apply a `configs::Action` to the
 //! domain `MultiplexerService`. Called by the shortcut dispatcher.
 
-use ozmux_configs::shortcuts::{Action, SplitDirection};
+use ozmux_configs::shortcuts::{
+    Action, Direction as ConfigDirection, SplitDirection, SwapOffset as ConfigSwapOffset,
+};
 use ozmux_multiplexer::{
-    Activity, ActivityId, MultiplexerService, PaneId, SessionId, Side, SplitOrientation,
+    Activity, ActivityId, MultiplexerResult, MultiplexerService, PaneDirection, PaneId, SessionId,
+    SetActiveOutcome, Side, SplitOrientation, SwapOffset, SwapOutcome,
 };
 
 /// Applies `action` to the domain `MultiplexerService` for the given session.
@@ -16,6 +19,10 @@ pub fn apply(action: Action, mux: &mut MultiplexerService, session: SessionId) -
         Action::NewWindow => apply_new_window(mux, &session),
         Action::SplitPane { direction } => apply_split(mux, &session, split_orientation(direction)),
         Action::NewTerminalActivity => apply_new_activity(mux, &session),
+        Action::FocusPane { direction } => {
+            apply_focus_pane(mux, &session, focus_direction(direction))
+        }
+        Action::SwapPane { offset } => apply_swap_pane(mux, &session, swap_offset(offset)),
         other => {
             tracing::debug!(target: "ozmux_gui::commands", ?other, "shortcut action not yet implemented");
             false
@@ -27,6 +34,22 @@ fn split_orientation(d: SplitDirection) -> SplitOrientation {
     match d {
         SplitDirection::Horizontal => SplitOrientation::Horizontal,
         SplitDirection::Vertical => SplitOrientation::Vertical,
+    }
+}
+
+fn focus_direction(d: ConfigDirection) -> PaneDirection {
+    match d {
+        ConfigDirection::Up => PaneDirection::Up,
+        ConfigDirection::Down => PaneDirection::Down,
+        ConfigDirection::Left => PaneDirection::Left,
+        ConfigDirection::Right => PaneDirection::Right,
+    }
+}
+
+fn swap_offset(o: ConfigSwapOffset) -> SwapOffset {
+    match o {
+        ConfigSwapOffset::Prev => SwapOffset::Prev,
+        ConfigSwapOffset::Next => SwapOffset::Next,
     }
 }
 
@@ -93,7 +116,7 @@ fn apply_new_activity(mux: &mut MultiplexerService, session: &SessionId) -> bool
     let activity = Activity::terminal(new_id.clone());
     let outcome = mux.with_window(
         &active_window,
-        |w| -> Result<(), ozmux_multiplexer::MultiplexerError> {
+        |w| -> MultiplexerResult<()> {
             let pane = w.pane_mut(&active_pane)?;
             pane.add_activity(activity)?;
             let _ = pane.set_active_activity(&new_id)?;
@@ -108,6 +131,65 @@ fn apply_new_activity(mux: &mut MultiplexerService, session: &SessionId) -> bool
         }
         None => {
             tracing::warn!(target: "ozmux_gui::commands", ?active_window, "NewActivity: window vanished");
+            false
+        }
+    }
+}
+
+fn apply_focus_pane(
+    mux: &mut MultiplexerService,
+    session: &SessionId,
+    direction: PaneDirection,
+) -> bool {
+    let (wid, current) = match mux.active_pane_of_session(session) {
+        Ok(target) => target,
+        Err(err) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusPane: resolve active pane failed");
+            return false;
+        }
+    };
+    let outcome = mux.with_window(&wid, |w| -> MultiplexerResult<bool> {
+        let Some(target) = w.pane_in_direction(&current, direction)? else {
+            return Ok(false);
+        };
+        // NOTE: Treat "already active" as a no-op so change detection is
+        // only tripped on real focus moves.
+        Ok(matches!(
+            w.set_active_pane(&target)?,
+            SetActiveOutcome::Changed
+        ))
+    });
+    match outcome {
+        Some(Ok(mutated)) => mutated,
+        Some(Err(err)) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusPane failed");
+            false
+        }
+        None => {
+            tracing::warn!(target: "ozmux_gui::commands", ?wid, "FocusPane: window vanished");
+            false
+        }
+    }
+}
+
+fn apply_swap_pane(mux: &mut MultiplexerService, session: &SessionId, offset: SwapOffset) -> bool {
+    let (wid, current) = match mux.active_pane_of_session(session) {
+        Ok(target) => target,
+        Err(err) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "SwapPane: resolve active pane failed");
+            return false;
+        }
+    };
+    let outcome = mux.with_window(&wid, |w| w.swap_pane(&current, offset));
+    match outcome {
+        Some(Ok(SwapOutcome::Swapped { .. })) => true,
+        Some(Ok(SwapOutcome::NoOp)) => false,
+        Some(Err(err)) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "SwapPane failed");
+            false
+        }
+        None => {
+            tracing::warn!(target: "ozmux_gui::commands", ?wid, "SwapPane: window vanished");
             false
         }
     }
@@ -210,12 +292,37 @@ mod tests {
 
     #[test]
     fn unimplemented_action_returns_false_without_state_change() {
-        use ozmux_configs::shortcuts::Direction;
         let mut svc = MultiplexerService::default();
         let sid = svc.create_session(Some("default".into()));
         apply(Action::NewWindow, &mut svc, sid.clone());
 
         let windows_before = svc.windows.len();
+
+        let mutated = apply(Action::ZoomPane, &mut svc, sid);
+
+        assert!(!mutated, "unimplemented variant must return false");
+        assert_eq!(svc.windows.len(), windows_before);
+    }
+
+    #[test]
+    fn focus_pane_left_moves_active_to_left_neighbor() {
+        use ozmux_configs::shortcuts::Direction;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        // After SplitPane{Horizontal}, the new (right-side) pane becomes active.
+        apply(
+            Action::SplitPane {
+                direction: SplitDirection::Horizontal,
+            },
+            &mut svc,
+            sid.clone(),
+        );
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let right_pane = svc.windows.get(&wid).unwrap().active_pane.clone();
 
         let mutated = apply(
             Action::FocusPane {
@@ -225,7 +332,120 @@ mod tests {
             sid,
         );
 
-        assert!(!mutated, "unimplemented variant must return false");
-        assert_eq!(svc.windows.len(), windows_before);
+        assert!(mutated, "FocusPane Left from right pane must mutate");
+        let new_active = svc.windows.get(&wid).unwrap().active_pane.clone();
+        assert_ne!(new_active, right_pane, "active_pane must change");
+    }
+
+    #[test]
+    fn focus_pane_with_no_neighbor_returns_false_and_keeps_active() {
+        use ozmux_configs::shortcuts::Direction;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let original_active = svc.windows.get(&wid).unwrap().active_pane.clone();
+
+        // Single-pane window — no neighbor in any direction.
+        let mutated = apply(
+            Action::FocusPane {
+                direction: Direction::Up,
+            },
+            &mut svc,
+            sid,
+        );
+
+        assert!(!mutated, "single-pane window: FocusPane must return false");
+        assert_eq!(
+            svc.windows.get(&wid).unwrap().active_pane,
+            original_active,
+            "active_pane must not change"
+        );
+    }
+
+    #[test]
+    fn swap_pane_next_swaps_cells_keeps_active_pane_id() {
+        use ozmux_configs::shortcuts::SwapOffset;
+        use ozmux_multiplexer::PaneDirection;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+        apply(
+            Action::SplitPane {
+                direction: SplitDirection::Horizontal,
+            },
+            &mut svc,
+            sid.clone(),
+        );
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let active_before = svc.windows.get(&wid).unwrap().active_pane.clone();
+        // Capture the other pane id for the post-swap assertion.
+        let other_before = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane_in_direction(&active_before, PaneDirection::Left)
+            .unwrap()
+            .expect("left neighbor must exist after horizontal split");
+
+        let mutated = apply(
+            Action::SwapPane {
+                offset: SwapOffset::Next,
+            },
+            &mut svc,
+            sid,
+        );
+
+        assert!(mutated, "SwapPane on 2-pane window must mutate");
+        let active_after = svc.windows.get(&wid).unwrap().active_pane.clone();
+        assert_eq!(
+            active_after, active_before,
+            "active_pane PaneId is unchanged — only the cell moves"
+        );
+
+        // After Next-swap the active pane sits to the geometric left, so the
+        // other pane is now its Right neighbor (no wrap-around needed).
+        let right_neighbor = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane_in_direction(&active_after, PaneDirection::Right)
+            .unwrap()
+            .expect("right neighbor must exist after swap");
+        assert_eq!(
+            right_neighbor, other_before,
+            "the other pane is now to the right of the (still-same-id) active pane"
+        );
+    }
+
+    #[test]
+    fn swap_pane_in_single_pane_window_returns_false() {
+        use ozmux_configs::shortcuts::SwapOffset;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let panes_before = svc.windows.get(&wid).unwrap().pane_ids().count();
+
+        let mutated = apply(
+            Action::SwapPane {
+                offset: SwapOffset::Prev,
+            },
+            &mut svc,
+            sid,
+        );
+
+        assert!(!mutated, "single-pane window: SwapPane must return false");
+        assert_eq!(
+            svc.windows.get(&wid).unwrap().pane_ids().count(),
+            panes_before,
+            "pane count must not change"
+        );
     }
 }
