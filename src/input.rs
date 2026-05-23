@@ -555,19 +555,64 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_action_does_not_panic_or_mutate() {
+    fn armed_then_x_closes_active_pane() {
         let (mut app, entity) = make_app(true, true);
-        let windows_before = app.world().resource::<Multiplexer>().windows.len();
+        let sid = app
+            .world()
+            .resource::<Multiplexer>()
+            .sessions
+            .iter()
+            .next()
+            .map(|(id, _)| id)
+            .unwrap()
+            .clone();
+        {
+            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
+            crate::multiplexer::commands::apply(
+                ozmux_configs::shortcuts::Action::SplitPane {
+                    direction: ozmux_configs::shortcuts::SplitDirection::Horizontal,
+                },
+                mux.bypass_change_detection(),
+                sid.clone(),
+            );
+        }
+        let wid = app
+            .world()
+            .resource::<Multiplexer>()
+            .sessions
+            .get(&sid)
+            .unwrap()
+            .linked_windows[0]
+            .clone();
+        let panes_before = app
+            .world()
+            .resource::<Multiplexer>()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane_ids()
+            .count();
+        assert_eq!(panes_before, 2);
+
         press(&mut app, entity, Bk::Character("x".into()));
         app.update();
+
+        let panes_after = app
+            .world()
+            .resource::<Multiplexer>()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane_ids()
+            .count();
         assert_eq!(
-            app.world().resource::<Multiplexer>().windows.len(),
-            windows_before,
-            "ClosePane is not yet implemented; warn-only"
+            panes_after,
+            panes_before - 1,
+            "armed Ctrl+B then x must close the active pane"
         );
         assert!(
             !app.world().get::<PrefixState>(entity).unwrap().armed,
-            "dispatched chord still disarms"
+            "dispatched chord must disarm the prefix state"
         );
     }
 

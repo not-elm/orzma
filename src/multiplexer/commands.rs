@@ -34,6 +34,8 @@ pub fn apply(action: Action, mux: &mut MultiplexerService, session: SessionId) -
             }
         },
         Action::SwapPane { offset } => apply_swap_pane(mux, &session, swap_offset(offset)),
+        Action::ClosePane => apply_close_pane(mux, &session),
+        Action::CloseActivity => apply_close_activity(mux, &session),
         other => {
             tracing::debug!(target: "ozmux_gui::commands", ?other, "shortcut action not yet implemented");
             false
@@ -238,6 +240,58 @@ fn apply_swap_pane(mux: &mut MultiplexerService, session: &SessionId, offset: Sw
         }
         None => {
             tracing::warn!(target: "ozmux_gui::commands", ?wid, "SwapPane: window vanished");
+            false
+        }
+    }
+}
+
+fn apply_close_pane(mux: &mut MultiplexerService, session: &SessionId) -> bool {
+    let (wid, pid) = match mux.active_pane_of_session(session) {
+        Ok(target) => target,
+        Err(err) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "ClosePane: resolve active pane failed");
+            return false;
+        }
+    };
+    let outcome = mux.with_window(&wid, |w| w.close_pane(&pid));
+    match outcome {
+        Some(Ok(_destroyed)) => {
+            mux.pane_owner_window.remove(&pid);
+            true
+        }
+        Some(Err(err)) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "ClosePane failed");
+            false
+        }
+        None => {
+            tracing::warn!(target: "ozmux_gui::commands", ?wid, "ClosePane: window vanished");
+            false
+        }
+    }
+}
+
+fn apply_close_activity(mux: &mut MultiplexerService, session: &SessionId) -> bool {
+    let (wid, pid) = match mux.active_pane_of_session(session) {
+        Ok(target) => target,
+        Err(err) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "CloseActivity: resolve active pane failed");
+            return false;
+        }
+    };
+    let outcome = mux.with_window(&wid, |w| -> MultiplexerResult<()> {
+        let pane = w.pane_mut(&pid)?;
+        let aid = pane.active_activity.clone();
+        pane.remove_activity(&aid)?;
+        Ok(())
+    });
+    match outcome {
+        Some(Ok(())) => true,
+        Some(Err(err)) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "CloseActivity failed");
+            false
+        }
+        None => {
+            tracing::warn!(target: "ozmux_gui::commands", ?wid, "CloseActivity: window vanished");
             false
         }
     }
@@ -495,6 +549,172 @@ mod tests {
             panes_before,
             "pane count must not change"
         );
+    }
+
+    #[test]
+    fn close_pane_action_removes_pane_and_promotes_survivor() {
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+        apply(
+            Action::SplitPane {
+                direction: SplitDirection::Horizontal,
+            },
+            &mut svc,
+            sid.clone(),
+        );
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let panes_before = svc.windows.get(&wid).unwrap().pane_ids().count();
+        let target_pane = svc.windows.get(&wid).unwrap().active_pane.clone();
+
+        let mutated = apply(Action::ClosePane, &mut svc, sid);
+
+        assert!(mutated, "ClosePane on a 2-pane window must mutate");
+        let window = svc.windows.get(&wid).unwrap();
+        assert_eq!(window.pane_ids().count(), panes_before - 1);
+        assert_ne!(
+            window.active_pane, target_pane,
+            "active_pane must promote to the surviving pane"
+        );
+    }
+
+    #[test]
+    fn close_pane_action_removes_pane_owner_window_entry() {
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+        apply(
+            Action::SplitPane {
+                direction: SplitDirection::Horizontal,
+            },
+            &mut svc,
+            sid.clone(),
+        );
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let closed_pane = svc.windows.get(&wid).unwrap().active_pane.clone();
+        assert!(
+            svc.pane_owner_window.contains_key(&closed_pane),
+            "split must register the new pane in pane_owner_window"
+        );
+
+        let mutated = apply(Action::ClosePane, &mut svc, sid);
+
+        assert!(mutated);
+        assert!(
+            !svc.pane_owner_window.contains_key(&closed_pane),
+            "close_pane must remove the closed pane from pane_owner_window"
+        );
+    }
+
+    #[test]
+    fn close_pane_in_single_pane_window_returns_false() {
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let panes_before = svc.windows.get(&wid).unwrap().pane_ids().count();
+        let active_before = svc.windows.get(&wid).unwrap().active_pane.clone();
+
+        let mutated = apply(Action::ClosePane, &mut svc, sid);
+
+        assert!(
+            !mutated,
+            "single-pane window: ClosePane must return false (warn-only)"
+        );
+        let window = svc.windows.get(&wid).unwrap();
+        assert_eq!(window.pane_ids().count(), panes_before);
+        assert_eq!(window.active_pane, active_before);
+    }
+
+    #[test]
+    fn close_activity_action_removes_active_activity() {
+        use ozmux_multiplexer::Activity as MxActivity;
+        use ozmux_multiplexer::ActivityId as MxActivityId;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let pid = svc.windows.get(&wid).unwrap().active_pane.clone();
+
+        let appended_id = MxActivityId::new();
+        let appended = MxActivity::terminal(appended_id.clone());
+        svc.with_window(&wid, |w| -> MultiplexerResult<()> {
+            let pane = w.pane_mut(&pid)?;
+            pane.add_activity(appended)?;
+            let _ = pane.set_active_activity(&appended_id)?;
+            Ok(())
+        })
+        .expect("window exists")
+        .expect("add_activity + set_active_activity succeeded");
+
+        let activities_before = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .activity_ids()
+            .count();
+        assert_eq!(activities_before, 2);
+
+        let mutated = apply(Action::CloseActivity, &mut svc, sid);
+
+        assert!(mutated, "CloseActivity on a 2-activity pane must mutate");
+        let pane = svc.windows.get(&wid).unwrap().pane(&pid).unwrap();
+        assert_eq!(pane.activity_ids().count(), activities_before - 1);
+        assert!(
+            !pane.has_activity(&appended_id),
+            "the previously-active appended activity must be gone"
+        );
+        assert_ne!(
+            pane.active_activity, appended_id,
+            "active_activity must rebase to the remaining activity"
+        );
+    }
+
+    #[test]
+    fn close_activity_in_single_activity_pane_returns_false() {
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let pid = svc.windows.get(&wid).unwrap().active_pane.clone();
+        let activities_before = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .activity_ids()
+            .count();
+        let active_before = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .active_activity
+            .clone();
+        assert_eq!(
+            activities_before, 1,
+            "fresh pane must have exactly 1 activity"
+        );
+
+        let mutated = apply(Action::CloseActivity, &mut svc, sid);
+
+        assert!(
+            !mutated,
+            "single-activity pane: CloseActivity must return false (warn-only)"
+        );
+        let pane = svc.windows.get(&wid).unwrap().pane(&pid).unwrap();
+        assert_eq!(pane.activity_ids().count(), activities_before);
+        assert_eq!(pane.active_activity, active_before);
     }
 
     #[test]
