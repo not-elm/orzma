@@ -17,7 +17,7 @@ pub const TAB_BAR_BG: Color = Color::srgb(0.086, 0.094, 0.125);
 /// Active tab background — slightly lighter than the tab bar.
 pub const TAB_ACTIVE_BG: Color = Color::srgb(0.145, 0.157, 0.188);
 /// Pane border — cool blue-grey, intentionally subtle.
-pub const BORDER: Color = Color::srgb(0.165, 0.176, 0.227);
+pub const BORDER: Color = Color::srgb(0.333, 0.333, 0.333);
 /// Primary text color.
 pub const FOREGROUND: Color = Color::srgb(0.870, 0.870, 0.890);
 /// Secondary / muted text color (inactive tab text).
@@ -43,3 +43,4 @@ pub const TAB_PADDING_X_PX: f32 = 8.0;
 pub const TAB_BORDER_RADIUS_PX: f32 = 4.0;
 /// Top indicator thickness on the active pane tab.
 pub const TAB_INDICATOR_PX: f32 = 2.0;
+pub const BORDER_PX: f32 = 1.0;

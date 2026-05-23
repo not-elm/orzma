@@ -16,15 +16,11 @@ bevy = { version = "0.18", default-features = true }
 ozmux_configs = { path = "daemon/configs" }
 ozmux_multiplexer = { path = "daemon/multiplexer" }
 tracing = { workspace = true }
+bevy-inspector-egui = { version = "0.36.0" }
 
 [workspace]
 resolver = "2"
-members = [
-  "daemon/configs",
-  "daemon/macros",
-  "daemon/multiplexer",
-  "xtask",
-]
+members = ["daemon/configs", "daemon/macros", "daemon/multiplexer", "xtask"]
 exclude = [
   "cli",
   "daemon/bootstrap",
@@ -71,4 +67,7 @@ unicode-width = "0.2"
 bytes = "1"
 tokio-util = "0.7"
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls",
+  "json",
+] }

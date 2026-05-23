@@ -135,6 +135,7 @@ fn rebuild_structure_on_change(
             Node {
                 flex_grow: 1.0,
                 width: bevy::ui::Val::Percent(100.0),
+                padding: UiRect::all(Val::Px(2.0)),
                 ..default()
             },
             StructuralNode,

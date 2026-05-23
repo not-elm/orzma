@@ -84,9 +84,15 @@ fn build_tab(
 
     let tab = commands
         .spawn((
+            Name::new("Tab"),
             Node {
                 padding: UiRect::axes(Val::Px(theme::TAB_PADDING_X_PX), Val::Px(4.0)),
-                border: UiRect::top(Val::Px(theme::TAB_INDICATOR_PX)),
+                border: UiRect {
+                    top: Val::Px(theme::TAB_INDICATOR_PX),
+                    right: Val::Px(theme::BORDER_PX),
+                    left: Val::Px(theme::BORDER_PX),
+                    bottom: Val::ZERO,
+                },
                 border_radius: BorderRadius {
                     top_left: Val::Px(theme::TAB_BORDER_RADIUS_PX),
                     top_right: Val::Px(theme::TAB_BORDER_RADIUS_PX),
@@ -98,7 +104,12 @@ fn build_tab(
                 ..default()
             },
             BackgroundColor(colors.bg),
-            BorderColor::all(colors.indicator),
+            BorderColor {
+                top: colors.indicator,
+                left: theme::BORDER,
+                right: theme::BORDER,
+                bottom: Color::NONE,
+            },
             StructuralNode,
             ChildOf(parent),
         ))
@@ -107,6 +118,10 @@ fn build_tab(
     commands.spawn((
         Text::new(activity.name.clone()),
         TextColor(colors.text),
+        TextFont {
+            font_size: 12.0,
+            ..default()
+        },
         StructuralNode,
         ChildOf(tab),
     ));

@@ -143,14 +143,14 @@ fn build_pane(
 
     let pane_frame = commands
         .spawn((
+            Name::new(format!("Pane({})", window.name)),
             Node {
                 flex_direction: FlexDirection::Column,
-                border: UiRect::all(Val::Px(theme::PANE_BORDER_PX)),
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
+                padding: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
-            BorderColor::all(palette::BORDER),
             BackgroundColor(palette::BACKGROUND),
             StructuralNode,
             PaneFrame,
@@ -164,10 +164,12 @@ fn build_pane(
         .spawn((
             Node {
                 flex_grow: 1.0,
+                border: UiRect::all(Val::Px(theme::PANE_BORDER_PX)),
                 width: Val::Percent(100.0),
                 ..default()
             },
             StructuralNode,
+            BorderColor::all(palette::BORDER),
             ChildOf(pane_frame),
         ))
         .id();

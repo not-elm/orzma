@@ -3,10 +3,9 @@
 
 use crate::multiplexer::AttachedSession;
 use crate::ui::UiRoot;
-use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::ui::IsDefaultUiCamera;
-use bevy::window::{PrimaryWindow, WindowRef};
+use bevy::window::PrimaryWindow;
 
 /// Marker for the `Camera2d` entity that renders the primary GUI window.
 #[derive(Component)]
@@ -21,7 +20,7 @@ pub(crate) fn setup_root_camera_and_ui_root(
     mut commands: Commands,
     primary: Query<Entity, (With<PrimaryWindow>, With<AttachedSession>)>,
 ) {
-    let Ok(window_entity) = primary.single() else {
+    let Ok(_window_entity) = primary.single() else {
         tracing::warn!(
             target: "ozmux_gui::ui",
             "setup_root_camera_and_ui_root: primary window without AttachedSession — bootstrap order?",
@@ -31,7 +30,7 @@ pub(crate) fn setup_root_camera_and_ui_root(
 
     commands.spawn((
         Camera2d,
-        RenderTarget::Window(WindowRef::Entity(window_entity)),
+        // RenderTarget::Window(WindowRef::Entity(window_entity)),
         WindowCamera,
         IsDefaultUiCamera,
     ));
