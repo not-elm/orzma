@@ -127,7 +127,12 @@ fn rebuild_structure_on_change(
     }
 
     for entity in structural_q.iter() {
-        commands.entity(entity).despawn();
+        // NOTE: try_despawn is required because the queue applies parent
+        // despawns first, cascading their descendants (also StructuralNodes);
+        // subsequent iterations of this loop then target already-cascaded
+        // entities. Plain despawn() warns on those; try_despawn() is the
+        // Bevy 0.18 idiom for "despawn if still alive".
+        commands.entity(entity).try_despawn();
     }
 
     let content = commands

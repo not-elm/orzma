@@ -2,11 +2,12 @@
 //! domain `MultiplexerService`. Called by the shortcut dispatcher.
 
 use ozmux_configs::shortcuts::{
-    Action, Direction as ConfigDirection, SplitDirection, SwapOffset as ConfigSwapOffset,
+    Action, ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, SplitDirection,
+    SwapOffset as ConfigSwapOffset,
 };
 use ozmux_multiplexer::{
-    Activity, ActivityId, MultiplexerResult, MultiplexerService, PaneDirection, PaneId, SessionId,
-    SetActiveOutcome, Side, SplitOrientation, SwapOffset, SwapOutcome,
+    Activity, ActivityId, CycleDirection, MultiplexerResult, MultiplexerService, PaneDirection,
+    PaneId, SessionId, SetActiveOutcome, Side, SplitOrientation, SwapOffset, SwapOutcome,
 };
 
 /// Applies `action` to the domain `MultiplexerService` for the given session.
@@ -22,6 +23,16 @@ pub fn apply(action: Action, mux: &mut MultiplexerService, session: SessionId) -
         Action::FocusPane { direction } => {
             apply_focus_pane(mux, &session, focus_direction(direction))
         }
+        Action::FocusActivity { offset } => match cycle_direction(offset) {
+            Some(direction) => apply_focus_activity(mux, &session, direction),
+            None => {
+                tracing::debug!(
+                    target: "ozmux_gui::commands",
+                    "FocusActivity::Last not yet implemented"
+                );
+                false
+            }
+        },
         Action::SwapPane { offset } => apply_swap_pane(mux, &session, swap_offset(offset)),
         other => {
             tracing::debug!(target: "ozmux_gui::commands", ?other, "shortcut action not yet implemented");
@@ -50,6 +61,14 @@ fn swap_offset(o: ConfigSwapOffset) -> SwapOffset {
     match o {
         ConfigSwapOffset::Prev => SwapOffset::Prev,
         ConfigSwapOffset::Next => SwapOffset::Next,
+    }
+}
+
+fn cycle_direction(o: ConfigActivityOffset) -> Option<CycleDirection> {
+    match o {
+        ConfigActivityOffset::Next => Some(CycleDirection::Next),
+        ConfigActivityOffset::Prev => Some(CycleDirection::Prev),
+        ConfigActivityOffset::Last => None,
     }
 }
 
@@ -114,15 +133,12 @@ fn apply_new_activity(mux: &mut MultiplexerService, session: &SessionId) -> bool
 
     let new_id = ActivityId::new();
     let activity = Activity::terminal(new_id.clone());
-    let outcome = mux.with_window(
-        &active_window,
-        |w| -> MultiplexerResult<()> {
-            let pane = w.pane_mut(&active_pane)?;
-            pane.add_activity(activity)?;
-            let _ = pane.set_active_activity(&new_id)?;
-            Ok(())
-        },
-    );
+    let outcome = mux.with_window(&active_window, |w| -> MultiplexerResult<()> {
+        let pane = w.pane_mut(&active_pane)?;
+        pane.add_activity(activity)?;
+        let _ = pane.set_active_activity(&new_id)?;
+        Ok(())
+    });
     match outcome {
         Some(Ok(())) => true,
         Some(Err(err)) => {
@@ -167,6 +183,38 @@ fn apply_focus_pane(
         }
         None => {
             tracing::warn!(target: "ozmux_gui::commands", ?wid, "FocusPane: window vanished");
+            false
+        }
+    }
+}
+
+fn apply_focus_activity(
+    mux: &mut MultiplexerService,
+    session: &SessionId,
+    direction: CycleDirection,
+) -> bool {
+    let (wid, pid) = match mux.active_pane_of_session(session) {
+        Ok(target) => target,
+        Err(err) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusActivity: resolve active pane failed");
+            return false;
+        }
+    };
+    let outcome = mux.with_window(&wid, |w| -> MultiplexerResult<bool> {
+        let pane = w.pane_mut(&pid)?;
+        Ok(matches!(
+            pane.cycle_active_activity(direction)?,
+            SetActiveOutcome::Changed
+        ))
+    });
+    match outcome {
+        Some(Ok(mutated)) => mutated,
+        Some(Err(err)) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusActivity failed");
+            false
+        }
+        None => {
+            tracing::warn!(target: "ozmux_gui::commands", ?wid, "FocusActivity: window vanished");
             false
         }
     }
@@ -446,6 +494,202 @@ mod tests {
             svc.windows.get(&wid).unwrap().pane_ids().count(),
             panes_before,
             "pane count must not change"
+        );
+    }
+
+    #[test]
+    fn focus_activity_next_advances_active_activity() {
+        use ozmux_configs::shortcuts::ActivityOffset;
+        use ozmux_multiplexer::Activity as MxActivity;
+        use ozmux_multiplexer::ActivityId as MxActivityId;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let pid = svc.windows.get(&wid).unwrap().active_pane.clone();
+
+        let appended_id = MxActivityId::new();
+        let appended = MxActivity::terminal(appended_id.clone());
+        svc.with_window(&wid, |w| -> MultiplexerResult<()> {
+            w.pane_mut(&pid)?.add_activity(appended)?;
+            Ok(())
+        })
+        .expect("window exists")
+        .expect("add_activity succeeded");
+
+        let active_before = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .active_activity
+            .clone();
+
+        let mutated = apply(
+            Action::FocusActivity {
+                offset: ActivityOffset::Next,
+            },
+            &mut svc,
+            sid,
+        );
+
+        assert!(
+            mutated,
+            "FocusActivity Next on a 2-activity pane must mutate"
+        );
+        let active_after = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .active_activity
+            .clone();
+        assert_ne!(active_after, active_before, "active_activity must advance");
+        assert_eq!(
+            active_after, appended_id,
+            "Next from index 0 must land on the appended (index 1) activity"
+        );
+    }
+
+    #[test]
+    fn focus_activity_prev_wraps_to_last() {
+        use ozmux_configs::shortcuts::ActivityOffset;
+        use ozmux_multiplexer::Activity as MxActivity;
+        use ozmux_multiplexer::ActivityId as MxActivityId;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let pid = svc.windows.get(&wid).unwrap().active_pane.clone();
+
+        let appended_id = MxActivityId::new();
+        let appended = MxActivity::terminal(appended_id.clone());
+        svc.with_window(&wid, |w| -> MultiplexerResult<()> {
+            w.pane_mut(&pid)?.add_activity(appended)?;
+            Ok(())
+        })
+        .expect("window exists")
+        .expect("add_activity succeeded");
+
+        let mutated = apply(
+            Action::FocusActivity {
+                offset: ActivityOffset::Prev,
+            },
+            &mut svc,
+            sid,
+        );
+
+        assert!(
+            mutated,
+            "FocusActivity Prev on a 2-activity pane must mutate"
+        );
+        let active_after = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .active_activity
+            .clone();
+        assert_eq!(
+            active_after, appended_id,
+            "Prev from index 0 must wrap to the last (appended) activity"
+        );
+    }
+
+    #[test]
+    fn focus_activity_in_single_activity_pane_returns_false() {
+        use ozmux_configs::shortcuts::ActivityOffset;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let pid = svc.windows.get(&wid).unwrap().active_pane.clone();
+        let active_before = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .active_activity
+            .clone();
+
+        let mutated = apply(
+            Action::FocusActivity {
+                offset: ActivityOffset::Next,
+            },
+            &mut svc,
+            sid,
+        );
+
+        assert!(
+            !mutated,
+            "single-activity pane: FocusActivity must return false (no change-detection trip)"
+        );
+        let active_after = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .active_activity
+            .clone();
+        assert_eq!(
+            active_after, active_before,
+            "active_activity must not change"
+        );
+    }
+
+    #[test]
+    fn focus_activity_last_returns_false_without_state_change() {
+        use ozmux_configs::shortcuts::ActivityOffset;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let wid = svc.sessions.get(&sid).unwrap().linked_windows[0].clone();
+        let pid = svc.windows.get(&wid).unwrap().active_pane.clone();
+        let active_before = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .active_activity
+            .clone();
+
+        let mutated = apply(
+            Action::FocusActivity {
+                offset: ActivityOffset::Last,
+            },
+            &mut svc,
+            sid,
+        );
+
+        assert!(
+            !mutated,
+            "FocusActivity::Last must return false (unimplemented)"
+        );
+        let active_after = svc
+            .windows
+            .get(&wid)
+            .unwrap()
+            .pane(&pid)
+            .unwrap()
+            .active_activity
+            .clone();
+        assert_eq!(
+            active_after, active_before,
+            "Last must not change active_activity"
         );
     }
 }
