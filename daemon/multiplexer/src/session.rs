@@ -1,4 +1,4 @@
-use crate::window::WindowId;
+use crate::window::{CycleDirection, SetActiveOutcome, WindowId};
 use crate::{MultiplexerError, error::MultiplexerResult};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
@@ -93,6 +93,45 @@ impl Session {
         self.linked_windows.push(window_id);
     }
 
+    /// Step `active_window` to the next or previous entry in
+    /// `linked_windows` with wrap-around. Returns `Unchanged` for
+    /// empty and single-window sessions. Defensively rebases to the
+    /// first linked window when `active_window` is `None` (or no
+    /// longer in `linked_windows`) despite the list being non-empty —
+    /// that case is an invariant violation but the recovery is
+    /// silent, mirroring `detach_window`'s own first-window fallback.
+    pub fn cycle_active_window(
+        &mut self,
+        direction: CycleDirection,
+    ) -> MultiplexerResult<SetActiveOutcome> {
+        let len = self.linked_windows.len();
+        if len == 0 {
+            return Ok(SetActiveOutcome::Unchanged);
+        }
+        if len == 1 {
+            return Ok(SetActiveOutcome::Unchanged);
+        }
+
+        let current_idx = self
+            .active_window
+            .as_ref()
+            .and_then(|w| self.linked_windows.iter().position(|x| x == w));
+
+        let Some(idx) = current_idx else {
+            let target = self.linked_windows[0].clone();
+            self.active_window = Some(target);
+            return Ok(SetActiveOutcome::Changed);
+        };
+
+        let new_idx = match direction {
+            CycleDirection::Next => (idx + 1) % len,
+            CycleDirection::Prev => idx.checked_sub(1).unwrap_or(len - 1),
+        };
+        let target = self.linked_windows[new_idx].clone();
+        self.active_window = Some(target);
+        Ok(SetActiveOutcome::Changed)
+    }
+
     /// Remove `window_id` from `linked_windows`; if it was active, fall back to the
     /// first remaining window (or `None` if empty).
     pub fn detach_window(&mut self, window_id: &WindowId) {
@@ -100,5 +139,95 @@ impl Session {
         if self.active_window.as_ref() == Some(window_id) {
             self.active_window = self.linked_windows.first().cloned();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_session() -> Session {
+        Session::empty(SessionId::new(), "test")
+    }
+
+    #[test]
+    fn cycle_active_window_empty_session_returns_unchanged() {
+        let mut s = fresh_session();
+        let outcome = s.cycle_active_window(CycleDirection::Next).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Unchanged));
+        assert!(s.active_window.is_none());
+        assert!(s.linked_windows.is_empty());
+    }
+
+    #[test]
+    fn cycle_active_window_single_window_returns_unchanged() {
+        let mut s = fresh_session();
+        let only = WindowId::new();
+        s.attach_window(only.clone());
+        let outcome = s.cycle_active_window(CycleDirection::Next).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Unchanged));
+        assert_eq!(s.active_window, Some(only));
+    }
+
+    #[test]
+    fn cycle_active_window_next_advances_with_wrap() {
+        let mut s = fresh_session();
+        let w0 = WindowId::new();
+        let w1 = WindowId::new();
+        s.attach_window(w0.clone());
+        s.attach_window(w1.clone());
+        assert_eq!(s.active_window, Some(w0.clone()));
+
+        let outcome = s.cycle_active_window(CycleDirection::Next).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Changed));
+        assert_eq!(s.active_window, Some(w1.clone()));
+
+        let outcome = s.cycle_active_window(CycleDirection::Next).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Changed));
+        assert_eq!(s.active_window, Some(w0));
+    }
+
+    #[test]
+    fn cycle_active_window_prev_wraps_to_last() {
+        let mut s = fresh_session();
+        let w0 = WindowId::new();
+        let w1 = WindowId::new();
+        s.attach_window(w0.clone());
+        s.attach_window(w1.clone());
+        let outcome = s.cycle_active_window(CycleDirection::Prev).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Changed));
+        assert_eq!(s.active_window, Some(w1));
+    }
+
+    #[test]
+    fn cycle_active_window_rebases_when_active_missing() {
+        let mut s = fresh_session();
+        let w0 = WindowId::new();
+        let w1 = WindowId::new();
+        s.attach_window(w0.clone());
+        s.attach_window(w1.clone());
+        s.active_window = Some(WindowId::new());
+
+        let outcome = s.cycle_active_window(CycleDirection::Next).unwrap();
+        assert!(matches!(outcome, SetActiveOutcome::Changed));
+        assert_eq!(
+            s.active_window,
+            Some(w0),
+            "silent rebase must land on linked_windows[0]"
+        );
+    }
+
+    #[test]
+    fn cycle_active_window_single_window_with_stale_active_returns_unchanged() {
+        let mut s = fresh_session();
+        let only = WindowId::new();
+        s.attach_window(only.clone());
+        s.active_window = Some(WindowId::new());
+
+        let outcome = s.cycle_active_window(CycleDirection::Next).unwrap();
+        assert!(
+            matches!(outcome, SetActiveOutcome::Unchanged),
+            "single-window session must always be Unchanged, even with stale active"
+        );
     }
 }

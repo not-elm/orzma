@@ -617,6 +617,70 @@ mod tests {
     }
 
     #[test]
+    fn armed_then_n_focuses_next_window() {
+        let (mut app, entity) = make_app(true, true);
+        let sid = app
+            .world()
+            .resource::<Multiplexer>()
+            .sessions
+            .iter()
+            .next()
+            .map(|(id, _)| id)
+            .unwrap()
+            .clone();
+        {
+            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
+            crate::multiplexer::commands::apply(
+                ozmux_configs::shortcuts::Action::NewWindow,
+                mux.bypass_change_detection(),
+                sid.clone(),
+            );
+        }
+        let linked_count_before = app
+            .world()
+            .resource::<Multiplexer>()
+            .sessions
+            .get(&sid)
+            .unwrap()
+            .linked_windows
+            .len();
+        assert_eq!(
+            linked_count_before, 2,
+            "setup must produce exactly 2 windows"
+        );
+        let active_before = app
+            .world()
+            .resource::<Multiplexer>()
+            .sessions
+            .get(&sid)
+            .unwrap()
+            .active_window
+            .clone()
+            .unwrap();
+
+        press(&mut app, entity, Bk::Character("n".into()));
+        app.update();
+
+        let active_after = app
+            .world()
+            .resource::<Multiplexer>()
+            .sessions
+            .get(&sid)
+            .unwrap()
+            .active_window
+            .clone()
+            .unwrap();
+        assert_ne!(
+            active_after, active_before,
+            "armed Ctrl+B then n must advance active_window"
+        );
+        assert!(
+            !app.world().get::<PrefixState>(entity).unwrap().armed,
+            "dispatched chord must disarm the prefix state"
+        );
+    }
+
+    #[test]
     fn prefix_timeout_uses_config_value() {
         let mut cfg = OzmuxConfigs::default();
         cfg.shortcuts.prefix.timeout_ms = 1500;

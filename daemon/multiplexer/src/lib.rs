@@ -187,6 +187,16 @@ impl MultiplexerService {
         Err(MultiplexerError::WindowNotAttachedToSession(wid.clone()))
     }
 
+    /// Cycle the active window of `sid` by `direction`. Thin delegate
+    /// to `Session::cycle_active_window` after resolving the session.
+    pub fn cycle_active_window(
+        &mut self,
+        sid: &SessionId,
+        direction: CycleDirection,
+    ) -> MultiplexerResult<SetActiveOutcome> {
+        self.sessions.get_mut(sid)?.cycle_active_window(direction)
+    }
+
     /// Resolve which Window currently owns `pid`. Returns `PaneNotFound`
     /// when the pane has no recorded owner.
     pub fn lookup_pane_window(&self, pid: &PaneId) -> MultiplexerResult<WindowId> {

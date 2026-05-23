@@ -3,7 +3,7 @@
 
 use ozmux_configs::shortcuts::{
     Action, ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, SplitDirection,
-    SwapOffset as ConfigSwapOffset,
+    SwapOffset as ConfigSwapOffset, WindowOffset,
 };
 use ozmux_multiplexer::{
     Activity, ActivityId, CycleDirection, MultiplexerResult, MultiplexerService, PaneDirection,
@@ -34,6 +34,16 @@ pub fn apply(action: Action, mux: &mut MultiplexerService, session: SessionId) -
             }
         },
         Action::SwapPane { offset } => apply_swap_pane(mux, &session, swap_offset(offset)),
+        Action::FocusWindow { offset } => match window_cycle_direction(offset) {
+            Some(direction) => apply_focus_window(mux, &session, direction),
+            None => {
+                tracing::debug!(
+                    target: "ozmux_gui::commands",
+                    "FocusWindow::Last not yet implemented"
+                );
+                false
+            }
+        },
         Action::ClosePane => apply_close_pane(mux, &session),
         Action::CloseActivity => apply_close_activity(mux, &session),
         other => {
@@ -292,6 +302,29 @@ fn apply_close_activity(mux: &mut MultiplexerService, session: &SessionId) -> bo
         }
         None => {
             tracing::warn!(target: "ozmux_gui::commands", ?wid, "CloseActivity: window vanished");
+            false
+        }
+    }
+}
+
+fn window_cycle_direction(o: WindowOffset) -> Option<CycleDirection> {
+    match o {
+        WindowOffset::Next => Some(CycleDirection::Next),
+        WindowOffset::Prev => Some(CycleDirection::Prev),
+        WindowOffset::Last => None,
+    }
+}
+
+fn apply_focus_window(
+    mux: &mut MultiplexerService,
+    session: &SessionId,
+    direction: CycleDirection,
+) -> bool {
+    match mux.cycle_active_window(session, direction) {
+        Ok(SetActiveOutcome::Changed) => true,
+        Ok(SetActiveOutcome::Unchanged) => false,
+        Err(err) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusWindow failed");
             false
         }
     }
@@ -910,6 +943,147 @@ mod tests {
         assert_eq!(
             active_after, active_before,
             "Last must not change active_activity"
+        );
+    }
+
+    #[test]
+    fn focus_window_next_advances_active_window() {
+        use ozmux_configs::shortcuts::WindowOffset;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let active_before = svc
+            .sessions
+            .get(&sid)
+            .unwrap()
+            .active_window
+            .clone()
+            .expect("session must have an active window after NewWindow");
+        assert_eq!(
+            svc.sessions.get(&sid).unwrap().linked_windows.len(),
+            2,
+            "setup must produce exactly 2 windows"
+        );
+
+        let mutated = apply(
+            Action::FocusWindow {
+                offset: WindowOffset::Next,
+            },
+            &mut svc,
+            sid.clone(),
+        );
+
+        assert!(mutated, "FocusWindow Next on 2-window session must mutate");
+        let active_after = svc
+            .sessions
+            .get(&sid)
+            .unwrap()
+            .active_window
+            .clone()
+            .unwrap();
+        assert_ne!(active_after, active_before, "active_window must advance");
+    }
+
+    #[test]
+    fn focus_window_prev_wraps_to_last() {
+        use ozmux_configs::shortcuts::WindowOffset;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let linked = svc.sessions.get(&sid).unwrap().linked_windows.clone();
+        assert_eq!(linked.len(), 2);
+        let w_last = linked[1].clone();
+
+        let mutated = apply(
+            Action::FocusWindow {
+                offset: WindowOffset::Prev,
+            },
+            &mut svc,
+            sid.clone(),
+        );
+
+        assert!(mutated, "FocusWindow Prev on 2-window session must mutate");
+        assert_eq!(
+            svc.sessions.get(&sid).unwrap().active_window,
+            Some(w_last),
+            "Prev from index 0 must wrap to last window"
+        );
+    }
+
+    #[test]
+    fn focus_window_in_single_window_session_returns_false() {
+        use ozmux_configs::shortcuts::WindowOffset;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let active_before = svc
+            .sessions
+            .get(&sid)
+            .unwrap()
+            .active_window
+            .clone()
+            .unwrap();
+
+        let mutated = apply(
+            Action::FocusWindow {
+                offset: WindowOffset::Next,
+            },
+            &mut svc,
+            sid.clone(),
+        );
+
+        assert!(
+            !mutated,
+            "single-window session: FocusWindow Next must return false"
+        );
+        assert_eq!(
+            svc.sessions.get(&sid).unwrap().active_window,
+            Some(active_before),
+            "active_window must not change"
+        );
+    }
+
+    #[test]
+    fn focus_window_last_returns_false_without_state_change() {
+        use ozmux_configs::shortcuts::WindowOffset;
+
+        let mut svc = MultiplexerService::default();
+        let sid = svc.create_session(Some("default".into()));
+        apply(Action::NewWindow, &mut svc, sid.clone());
+        apply(Action::NewWindow, &mut svc, sid.clone());
+
+        let active_before = svc
+            .sessions
+            .get(&sid)
+            .unwrap()
+            .active_window
+            .clone()
+            .unwrap();
+
+        let mutated = apply(
+            Action::FocusWindow {
+                offset: WindowOffset::Last,
+            },
+            &mut svc,
+            sid.clone(),
+        );
+
+        assert!(
+            !mutated,
+            "FocusWindow Last must return false (unimplemented)"
+        );
+        assert_eq!(
+            svc.sessions.get(&sid).unwrap().active_window,
+            Some(active_before),
+            "Last must not change active_window"
         );
     }
 }
