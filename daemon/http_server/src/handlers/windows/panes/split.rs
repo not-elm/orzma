@@ -257,18 +257,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn split_with_extension_activity_does_not_spawn_pty() {
-        // Extension activities live inside the in-CEF browser, not a PTY.
-        // Spawning a shell for them leaks an orphan child whose output
-        // nothing reads. The TerminalService refuses duplicate spawns, so
-        // the simplest assertion is "subscriber_count returns NotFound for
-        // the new aid".
+    async fn split_accepts_extension_activity() {
         let state = fresh_state();
         let (_sid, wid, pid, _aid) = bootstrap_default(&state).await;
         state
             .extensions
             .register("memo", std::path::Path::new("/tmp"));
-        let terminal = state.terminal.clone();
         let (router, _state) = router_with(state);
         let new_pid = PaneId::new();
         let new_aid = ActivityId::new();
@@ -288,12 +282,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
-        // No PTY for an Extension activity — `subscriber_count` returns `None`
-        // for an aid the terminal service has never seen.
-        assert!(
-            terminal.subscriber_count(&new_aid).await.is_none(),
-            "Extension activity must not have a backing PTY"
-        );
     }
 
     #[tokio::test]

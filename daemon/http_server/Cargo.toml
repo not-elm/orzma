@@ -30,7 +30,6 @@ mime_guess = { workspace = true }
 dashmap = { workspace = true }
 
 [dev-dependencies]
-ozmux_terminal = { path = "../terminal", features = ["test-helpers"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tokio-tungstenite = "0.29"

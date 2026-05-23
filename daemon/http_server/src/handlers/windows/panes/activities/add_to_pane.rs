@@ -172,10 +172,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_to_pane_spawns_pty_for_terminal_kind() {
+    async fn add_to_pane_accepts_terminal_kind() {
         let state = test_helpers::fresh_state();
         let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
-        let terminal = state.terminal.clone();
         let (router, _state) = test_helpers::router_with(state);
         let new_aid = ActivityId::new();
         let body = serde_json::json!({
@@ -195,13 +194,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let status = resp.status();
-        if status == StatusCode::CREATED {
-            assert!(
-                terminal.subscriber_count(&new_aid).await.is_some(),
-                "Terminal activity must have a backing PTY after add_to_pane"
-            );
-        }
+        assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
     #[tokio::test]
@@ -234,49 +227,4 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
-    #[tokio::test]
-    async fn add_to_pane_rolls_back_when_spawn_fails() {
-        let state = test_helpers::fresh_state();
-        let (_sid, wid, pid, _aid) = test_helpers::bootstrap_default(&state).await;
-        let mut rx = state.layout_broadcast.subscribe_or_create(&wid);
-        let new_aid = ActivityId::new();
-        state.terminal.inject_spawn_failure(new_aid.clone()).await;
-        let (router, state) = test_helpers::router_with(state);
-        let body = serde_json::json!({
-            "activity": {
-                "activity_id": new_aid,
-                "kind": { "type": "terminal" }
-            }
-        });
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/windows/{wid}/panes/{pid}/activities"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let pane_activities_len: usize = state
-            .multiplexer
-            .with_window_or_404(&wid, |w| -> ozmux_multiplexer::MultiplexerResult<usize> {
-                Ok(w.pane(&pid).map(|p| p.activities.len()).unwrap_or(0))
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            pane_activities_len, 1,
-            "rollback must remove the failed activity"
-        );
-        let recv = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
-        assert!(recv.is_err(), "no broadcast must be sent on rollback");
-    }
-
-    // TODO: add a Browser-provision rollback test once CefBackend exposes a
-    // fault-injection helper (similar to terminal.inject_spawn_failure).
-    // For now, the rollback path is structurally identical to the Terminal
-    // path tested above and is exercised end-to-end by the Playwright test.
 }

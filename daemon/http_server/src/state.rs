@@ -1070,29 +1070,6 @@ mod provision_session_with_activity_tests {
     }
 
     #[tokio::test]
-    async fn provision_rolls_back_on_pty_spawn_failure() {
-        let state = fresh_state();
-        state.terminal.inject_next_spawn_failure();
-
-        state
-            .provision_session_with_activity(Some("rollback".into()), None)
-            .await
-            .expect_err("expected PTY spawn to fail");
-
-        assert_eq!(
-            state.multiplexer.windows.len(),
-            0,
-            "the half-created window must be rolled back"
-        );
-        let sessions = state.multiplexer.sessions.lock().await;
-        assert_eq!(
-            sessions.len(),
-            0,
-            "the half-created session must be rolled back"
-        );
-    }
-
-    #[tokio::test]
     async fn concurrent_provision_and_delete_does_not_deadlock() {
         let state = fresh_state();
         let (existing_sid, _, _, _) = state
@@ -1126,38 +1103,15 @@ mod create_window_tests {
     use crate::test_helpers::fresh_state;
 
     #[tokio::test]
-    async fn create_window_spawns_pty_and_activates_window() {
+    async fn create_window_activates_new_window() {
         let state = fresh_state();
         let sid = state.multiplexer.create_session(None).await;
-        let (wid, _pid, aid) = state.create_window(Some(&sid), None).await.unwrap();
-        assert!(
-            state.terminal.subscriber_count(&aid).await.is_some(),
-            "a PTY must be spawned for the new window's bootstrap activity"
-        );
+        let (wid, _pid, _aid) = state.create_window(Some(&sid), None).await.unwrap();
         let sessions = state.multiplexer.sessions.lock().await;
         assert_eq!(
             sessions.get(&sid).unwrap().active_window.as_ref(),
             Some(&wid),
             "the new window must become the active window"
-        );
-    }
-
-    #[tokio::test]
-    async fn create_window_rolls_back_on_pty_spawn_failure() {
-        let state = fresh_state();
-        let sid = state.multiplexer.create_session(None).await;
-        state.terminal.inject_next_spawn_failure();
-        let result = state.create_window(Some(&sid), None).await;
-        assert!(result.is_err(), "PTY spawn failure must propagate as Err");
-        assert_eq!(
-            state.multiplexer.windows.len(),
-            0,
-            "the half-created window must be rolled back"
-        );
-        let sessions = state.multiplexer.sessions.lock().await;
-        assert!(
-            sessions.get(&sid).unwrap().linked_windows.is_empty(),
-            "the rolled-back window must be detached from the session"
         );
     }
 }

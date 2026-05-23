@@ -30,10 +30,7 @@ pub(crate) struct TerminalHandle {
     /// Bundled VT state (Term + Parser + FrameRing + pending_user_input),
     /// wrapped in `std::sync::Mutex` for short-held locks per PTY chunk in
     /// the bridge task. Read by `TerminalService::write`, `resize`,
-    /// `subscribe_frames`, `read_geometry`, and the
-    /// `cfg(any(test, feature = "test-helpers"))` helpers (`inspect_row`,
-    /// `inspect_damage_and_reset`, `peek_pending_user_input`) in
-    /// `service/test_helpers.rs`.
+    /// `subscribe_frames`, and `read_geometry`.
     pub(super) vt_state: Arc<std::sync::Mutex<VtState>>,
 
     /// Reply-required events from `TermListener` (unbounded; must-not-drop

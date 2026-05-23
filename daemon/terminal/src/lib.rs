@@ -10,6 +10,3 @@ pub use error::{PtyErrorBridge, TerminalError, TerminalResult};
 pub use event::TerminalEvent;
 pub use service::TerminalService;
 pub use service::types::{FrameSubscription, SpawnOptions, TerminalGeometry};
-
-#[cfg(any(test, feature = "test-helpers"))]
-pub use service::test_helpers::DamageSnapshot;

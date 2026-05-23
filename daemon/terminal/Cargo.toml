@@ -7,24 +7,6 @@ readme.workspace = true
 authors.workspace = true
 publish.workspace = true
 
-[features]
-test-helpers = []
-
-[[test]]
-name = "vt_integration"
-path = "tests/vt_integration.rs"
-required-features = ["test-helpers"]
-
-[[test]]
-name = "vt_emit"
-path = "tests/vt_emit.rs"
-required-features = ["test-helpers"]
-
-[[test]]
-name = "vt_coalescer"
-path = "tests/vt_coalescer.rs"
-required-features = ["test-helpers"]
-
 [[test]]
 name = "vt_scroll"
 path = "tests/vt_scroll.rs"

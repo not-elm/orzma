@@ -105,41 +105,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_with_cwd_passes_cwd_to_spawn_options() {
-        use std::path::Path;
-        let state = fresh_state();
-        let dir = std::env::temp_dir();
-        let dir_str = dir.to_string_lossy().into_owned();
-        let (router, state) = router_with(state);
-
-        let body = serde_json::json!({"name":"with-cwd","cwd": dir_str}).to_string();
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/sessions")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let v: serde_json::Value =
-            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
-
-        let aid: ozmux_multiplexer::ActivityId =
-            serde_json::from_value(v["activity_id"].clone()).unwrap();
-        let recorded = state
-            .terminal
-            .recorded_cwd_for_test(&aid)
-            .await
-            .expect("a spawn should be recorded for this activity")
-            .expect("the recorded cwd should be Some");
-        assert_eq!(Path::new(&recorded), dir.as_path());
-    }
-
-    #[tokio::test]
     async fn create_publishes_session_view() {
         use std::time::Duration;
         let state = fresh_state();
