@@ -27,6 +27,12 @@ fn kind_color(kind: &ActivityKind) -> Color {
 /// the activity name + short id. The host's `Node` is set with
 /// `commands.entity(host).insert(...)` so the existing entity remains;
 /// children are spawned fresh.
+///
+/// For `ActivityKind::Terminal` the placeholder children are skipped
+/// because the renderer-side `MaterialNode<TerminalUiMaterial>` covers
+/// the host node entirely. The terminal-colored `BackgroundColor` still
+/// shows briefly between activity creation and material readiness, which
+/// is useful when spawning fails.
 pub(crate) fn build_activity_host_children(
     commands: &mut Commands,
     host: Entity,
@@ -43,6 +49,10 @@ pub(crate) fn build_activity_host_children(
         },
         BackgroundColor(kind_color(&activity.kind)),
     ));
+
+    if matches!(activity.kind, ActivityKind::Terminal) {
+        return;
+    }
 
     let row = commands
         .spawn((

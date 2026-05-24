@@ -18,6 +18,20 @@ use bevy::{
 
 mod state;
 
+/// Render-side public SystemSet anchor for `update_terminal_material`.
+///
+/// `sync_atlas_image` in `glyph.rs` is ordered with
+/// `.after(TerminalMaterialSystems::UpdateMaterial)` so that any glyphs
+/// rasterized this frame are mirrored into the `Image` asset before the
+/// next ExtractSchedule, keeping atlas pixels and material params in
+/// lock-step with the bind group rebuild. Exposed `pub` so consumers
+/// (e.g., ozmux-gui's `resize_terminals_to_node`) can sequence
+/// layout-driven grid resizes `.before(Self::UpdateMaterial)`.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub enum TerminalMaterialSystems {
+    UpdateMaterial,
+}
+
 const TERMINAL_SHADER_HANDLE: Handle<Shader> = uuid_handle!("98195199-3092-42b6-b370-77dfc2ef83f9");
 
 /// Registers the custom material and embeds its WGSL shader into the binary.
@@ -33,15 +47,23 @@ impl Plugin for TerminalMaterialPlugin {
             Shader::from_wgsl
         );
         app.add_plugins(UiMaterialPlugin::<TerminalUiMaterial>::default())
-            .add_systems(Update, update_terminal_material);
+            .add_plugins(state::TerminalMaterialStatePlugin)
+            // NOTE: Scheduled in `PostUpdate` (not `Update`) so it runs after
+            // `ui_layout_system` has written the current frame's
+            // `ComputedNode.size`. The downstream consumer
+            // `resize_terminals_to_node` in ozmux-gui depends on layout being
+            // settled before terminal grid params propagate; keeping the
+            // material write in the same schedule avoids a cross-frame split
+            // where `grid_size`/`cell_size_px` lag layout by one tick.
+            .add_systems(
+                PostUpdate,
+                update_terminal_material.in_set(TerminalMaterialSystems::UpdateMaterial),
+            );
     }
 }
 
-#[derive(Debug, Clone, Component)]
-pub struct TerminalUiMaterialHandle(pub Handle<TerminalUiMaterial>);
-
 /// Custom UI material backing the full-screen terminal node.
-#[derive(AsBindGroup, Asset, TypePath, Clone)]
+#[derive(AsBindGroup, Asset, TypePath, Clone, Default)]
 pub struct TerminalUiMaterial {
     #[uniform(0)]
     params: TerminalParams,
@@ -206,20 +228,27 @@ fn update_terminal_material(
     mut atlas: ResMut<GlyphAtlas>,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
-    mut terminals: Query<
-        (
-            &TerminalUiMaterialHandle,
-            &mut TerminalMaterialState,
-            &TerminalGrid,
-        ),
-        Changed<TerminalGrid>,
-    >,
+    mut terminals: Query<(
+        &MaterialNode<TerminalUiMaterial>,
+        &mut TerminalMaterialState,
+        &TerminalGrid,
+    )>,
     fonts: Res<TerminalFonts>,
     palette_time: Res<Time>,
     windows: Query<&Window>,
 ) {
-    //TODO: 設定ファイルからロードするようにする。
+    // TODO: load font size from config.
     const FONT_SIZE_PX: f32 = 12.0;
+    // NOTE: This system runs unconditionally — *not* gated by
+    // `Changed<TerminalGrid>`. The `mat.params = ...` write at the end is
+    // load-bearing for rendering correctness: it forces `AssetEvent::Modified`
+    // on the material every frame so `PreparedUiMaterial::prepare_asset` runs
+    // and rebuilds the bind group against the latest `GpuImage` /
+    // `GpuShaderStorageBuffer`. Without this, the bind group keeps a stale
+    // reference to the initial (empty) atlas texture even after
+    // `sync_atlas_image` re-uploads pixels — the glyphs are present on GPU
+    // but the shader's `textureSampleLevel` returns 0. The actual GPU upload
+    // cost is bounded by `needs_rebuild` below.
     for (handle, mut state, grid) in terminals.iter_mut() {
         let dpr = windows.single().map(|w| w.scale_factor()).unwrap_or(1.0);
         let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
@@ -242,8 +271,9 @@ fn update_terminal_material(
         let grid_changed = grid.last_seq != state.last_grid_seq;
         let needs_rebuild = !state.initialized || grid_changed || atlas_invalidated || dims_changed;
 
-        let Some((cells_handle, glyphs_handle)) =
-            materials.get(&handle.0).map(|m| (m.cells.clone(), m.glyphs.clone()))
+        let Some((cells_handle, glyphs_handle)) = materials
+            .get(&handle.0)
+            .map(|m| (m.cells.clone(), m.glyphs.clone()))
         else {
             continue;
         };
@@ -286,7 +316,6 @@ fn update_terminal_material(
         }
 
         const CELL_W: f32 = 8.0;
-        /// Logical pixel height of one terminal cell.
         const CELL_H: f32 = 16.0;
         if let Some(mat) = materials.get_mut(&handle.0) {
             mat.params = TerminalParams::new(

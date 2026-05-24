@@ -1,15 +1,12 @@
-//! GridPlugin — applies snapshots and deltas to `Resource<TerminalGrid>`.
-//!
-//! Reads `FrameReceived` messages produced by `WirePlugin`, expands run
-//! text into per-grapheme cells via `unicode-segmentation` +
-//! `unicode-width`, and stores the result for downstream rendering plugins.
+//! `TerminalGridPlugin` — applies snapshots and deltas to the per-entity
+//! `TerminalGrid` Component via two `EntityEvent` observers.
 
 use crate::schema::{Cell, FrameDelta, FrameSnapshot, Run, TerminalGrid};
-use bevy::{ecs::event::Trigger, prelude::*};
+use bevy::prelude::*;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// Plugin: maintains `TerminalGrid` from `FrameReceived`.
+/// Registers the `apply_snapshot` and `apply_delta` observers.
 #[derive(Default)]
 pub struct TerminalGridPlugin;
 
@@ -80,32 +77,3 @@ fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
     }
     out
 }
-
-// /// Decoded shape of a `kind: "mode"` text frame.
-// #[derive(serde::Deserialize)]
-// struct ModeFrame {
-//     kind: String,
-//     added: Vec<String>,
-//     removed: Vec<String>,
-// }
-//
-// fn apply_mode_changes(mut grid: ResMut<TerminalGrid>, mut texts: MessageReader<TextFrame>) {
-//     for TextFrame(s) in texts.read() {
-//         let Ok(parsed) = serde_json::from_str::<ModeFrame>(s) else {
-//             continue;
-//         };
-//         if parsed.kind != "mode" {
-//             continue;
-//         }
-//         for r in &parsed.removed {
-//             if let Some(pos) = grid.modes.iter().position(|m| m == r) {
-//                 grid.modes.swap_remove(pos);
-//             }
-//         }
-//         for a in parsed.added {
-//             if !grid.modes.contains(&a) {
-//                 grid.modes.push(a);
-//             }
-//         }
-//     }
-// }

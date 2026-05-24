@@ -19,6 +19,7 @@ pub(crate) mod registry;
 pub(crate) mod root;
 pub(crate) mod status_bar;
 pub(crate) mod tab_bar;
+pub(crate) mod terminal;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
 /// never despawned; rebuilds replace its descendants only.
@@ -46,6 +47,17 @@ pub(crate) struct ActivityHostNode(
     pub(crate) ActivityId,
 );
 
+/// Marks an Activity Host whose `kind` is `Terminal`. `finish_terminal_setup`
+/// queries for `With<TerminalActivityMarker>` to find hosts that need a
+/// `TerminalBundle` + `TerminalRenderBundle` attached.
+#[derive(Component)]
+pub(crate) struct TerminalActivityMarker;
+
+/// Records that `TerminalBundle::spawn` failed for this host, so
+/// `finish_terminal_setup` will not retry on subsequent frames.
+#[derive(Component)]
+pub(crate) struct TerminalSpawnFailed;
+
 /// Marker for the pane frame Node (the outermost Node of one
 /// `Cell::Pane` subtree). Used by tests; not load-bearing for runtime.
 #[derive(Component)]
@@ -68,7 +80,29 @@ impl Plugin for OzmuxUiPlugin {
                 Startup,
                 root::setup_root_camera_and_ui_root.after(crate::bootstrap::bootstrap),
             )
-            .add_systems(Update, rebuild_structure_on_change);
+            .add_systems(Update, rebuild_structure_on_change)
+            .add_systems(
+                Update,
+                terminal::finish_terminal_setup.after(rebuild_structure_on_change),
+            )
+            // NOTE: `resize_terminals_to_node` reads `ComputedNode.size`, which
+            // is written by `ui_layout_system` in `PostUpdate :: UiSystems::Layout`.
+            // Placing this system in `Update` would always read the *previous*
+            // frame's layout, producing a 1-tick lag where the pane border has
+            // jumped to its new size but the terminal grid hasn't caught up —
+            // visible as a strip of shader-fallback teal at the pane edge during
+            // a window drag. Running it in `PostUpdate .after(UiSystems::Layout)`
+            // makes WindowResized → layout → terminal resize converge in one
+            // frame. The `.before(TerminalMaterialSystems::UpdateMaterial)`
+            // anchors the same-frame chain into the renderer crate so the
+            // `grid_size` uniform is written this tick, not next.
+            .add_systems(
+                PostUpdate,
+                terminal::resize_terminals_to_node
+                    .after(bevy::ui::UiSystems::Layout)
+                    .before(bevy::ui::UiSystems::PostLayout)
+                    .before(bevy_terminal_renderer::material::TerminalMaterialSystems::UpdateMaterial),
+            );
     }
 }
 
@@ -188,7 +222,11 @@ mod tests {
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
     use crate::multiplexer::OzmuxMultiplexerPlugin;
+    use bevy::asset::AssetPlugin;
+    use bevy::image::ImagePlugin;
+    use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
+    use bevy_terminal_renderer::material::TerminalUiMaterial;
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::configs::env_guard();
@@ -197,8 +235,17 @@ mod tests {
             std::env::remove_var("OZMUX_CONFIG");
         }
 
+        // NOTE: `finish_terminal_setup` takes `ResMut<Assets<TerminalUiMaterial>>`,
+        // so `Assets<TerminalUiMaterial>` (and its `ShaderStorageBuffer`
+        // dependency) must exist as resources before `OzmuxUiPlugin` runs.
+        // Production wires this via `TerminalRendererPlugin`; the headless
+        // tests register the assets directly to avoid the WGPU stack.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .add_plugins(ImagePlugin::default())
+            .init_asset::<TerminalUiMaterial>()
+            .init_asset::<ShaderStorageBuffer>()
             .add_plugins(OzmuxMultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)

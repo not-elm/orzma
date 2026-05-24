@@ -13,7 +13,7 @@ impl Plugin for TerminalGlyphAtlasPlugin {
 
 /// Position and size of a rasterized glyph inside the atlas, plus the
 /// rasterizer's reported origin offset.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GlyphRect {
     /// Left column of the glyph in atlas pixels.
     pub u: u16,
@@ -112,13 +112,15 @@ impl GlyphAtlas {
             self.pixels.fill(0);
             self.glyphs.clear();
         }
+        let u = self.shelves.shelf.x as u16;
+        let v = self.shelves.y as u16;
         self.write_outline_pixels(&outlined);
         self.shelves.advance_x(w);
         self.shelves.adjust_shelf_height(h);
         self.generation = self.generation.wrapping_add(1);
         let rect = GlyphRect {
-            u: self.shelves.shelf.x as u16,
-            v: self.shelves.y as u16,
+            u,
+            v,
             w,
             h,
             offset_x: bounds.min.x.floor() as i16,
@@ -215,5 +217,41 @@ struct Shelf {
 impl Shelf {
     pub fn reset(&mut self) {
         self.x = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
+
+    #[test]
+    fn returned_rect_matches_written_pixels() {
+        let mut atlas = GlyphAtlas::new(256, 256);
+        let fonts = TerminalFonts::default();
+        let key = GlyphKey {
+            face: FontFace::Regular,
+            codepoint: 'A' as u32,
+            size_px: 24,
+        };
+
+        let rect = atlas
+            .get_or_insert(key, &fonts)
+            .expect("ASCII glyph should rasterize");
+        assert_eq!(rect.u, 0, "first glyph must start at the left edge");
+        assert_eq!(rect.v, 0, "first glyph must start at the top edge");
+
+        let has_ink = (rect.v as u32..(rect.v as u32 + rect.h as u32)).any(|y| {
+            (rect.u as u32..(rect.u as u32 + rect.w as u32)).any(|x| {
+                let idx = (y * atlas.width() + x) as usize;
+                atlas.pixels[idx] > 0
+            })
+        });
+        assert!(has_ink, "returned rect must cover rasterized pixels");
+
+        let rect2 = atlas
+            .get_or_insert(key, &fonts)
+            .expect("cached glyph lookup should succeed");
+        assert_eq!(rect, rect2);
     }
 }

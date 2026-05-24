@@ -1,6 +1,6 @@
 use crate::{
-    glyph::{AtlasImage, font::GlyphKey},
-    material::{GpuCell, GpuGlyph, TerminalParams, TerminalUiMaterial, TerminalUiMaterialHandle},
+    glyph::{font::GlyphKey, AtlasImage},
+    material::{GpuCell, GpuGlyph, TerminalParams, TerminalUiMaterial},
 };
 use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
@@ -9,13 +9,14 @@ use bevy::{
     render::storage::ShaderStorageBuffer,
 };
 
-pub struct TemrinalMaterialStatePlugin;
+/// Registers a `MaterialNode<TerminalUiMaterial>` on-add hook that seeds the SSBO buffers, attaches the glyph atlas image, and inserts the per-entity [`TerminalMaterialState`] cache.
+pub struct TerminalMaterialStatePlugin;
 
-impl Plugin for TemrinalMaterialStatePlugin {
+impl Plugin for TerminalMaterialStatePlugin {
     fn build(&self, app: &mut App) {
         app.world_mut()
-            .register_component_hooks::<TerminalUiMaterialHandle>()
-            .on_add(on_add_terminal_handle);
+            .register_component_hooks::<MaterialNode<TerminalUiMaterial>>()
+            .on_add(on_add_material_node);
     }
 }
 
@@ -24,7 +25,7 @@ impl Plugin for TemrinalMaterialStatePlugin {
 /// SSBO handles and the atlas texture live on [`TerminalUiMaterial`]; this
 /// component stores only the cached LUT and per-frame bookkeeping.
 #[derive(Component)]
-pub(super) struct TerminalMaterialState {
+pub(crate) struct TerminalMaterialState {
     pub glyph_index_map: HashMap<GlyphKey, u32>,
     pub cpu_cells: Vec<GpuCell>,
     pub cpu_glyphs: Vec<GpuGlyph>,
@@ -34,11 +35,11 @@ pub(super) struct TerminalMaterialState {
     pub initialized: bool,
 }
 
-fn on_add_terminal_handle(mut world: DeferredWorld, ctx: HookContext) {
+fn on_add_material_node(mut world: DeferredWorld, ctx: HookContext) {
     let material_handle = world
         .entity(ctx.entity)
-        .get::<TerminalUiMaterialHandle>()
-        .expect("hook fires after TerminalUiMaterialHandle insertion")
+        .get::<MaterialNode<TerminalUiMaterial>>()
+        .expect("hook fires after MaterialNode<TerminalUiMaterial> insertion")
         .0
         .clone();
     let atlas_handle = world.resource::<AtlasImage>().handle.clone();

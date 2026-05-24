@@ -17,7 +17,6 @@ bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
 ozmux_configs = { path = "daemon/configs" }
 ozmux_multiplexer = { path = "daemon/multiplexer" }
-ozmux_terminal = { path = "daemon/terminal", features = ["bevy"] }
 tracing = { workspace = true }
 
 [workspace]

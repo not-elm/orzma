@@ -18,9 +18,15 @@ impl Plugin for TerminalGlyphPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.add_plugins((TerminalGlyphAtlasPlugin, TerminalFontPlugin))
             .add_systems(Startup, init_atlas_image)
+            // NOTE: Must run in the same schedule as
+            // `update_terminal_material` (now `PostUpdate`) so the `.after`
+            // ordering is honoured by Bevy's executor — cross-schedule
+            // `.after` is silently ignored.
             .add_systems(
-                Update,
-                sync_atlas_image.run_if(resource_changed::<GlyphAtlas>),
+                PostUpdate,
+                sync_atlas_image
+                    .after(crate::material::TerminalMaterialSystems::UpdateMaterial)
+                    .run_if(resource_changed::<GlyphAtlas>),
             );
     }
 }

@@ -25,14 +25,16 @@ impl ActivityEntityRegistry {
         &mut self,
         commands: &mut Commands,
         id: &ActivityId,
-        _kind: &ActivityKind,
+        kind: &ActivityKind,
     ) -> Entity {
         if let Some(&existing) = self.entities.get(id) {
             return existing;
         }
-        // TODO: Phase 3+ will branch on `_kind` to spawn kind-specific bundles
-        // (e.g., MaterialNode<TerminalMaterial> for ActivityKind::Terminal).
-        let entity = commands.spawn(crate::ui::ActivityHostNode(id.clone())).id();
+        let mut spawn = commands.spawn(crate::ui::ActivityHostNode(id.clone()));
+        if matches!(kind, ActivityKind::Terminal) {
+            spawn.insert(crate::ui::TerminalActivityMarker);
+        }
+        let entity = spawn.id();
         self.entities.insert(id.clone(), entity);
         entity
     }
@@ -131,6 +133,54 @@ mod tests {
         assert!(
             world.get_entity(drop_entity.unwrap()).is_err(),
             "dropped Activity Entity must be despawned"
+        );
+    }
+
+    #[test]
+    fn get_or_spawn_inserts_terminal_marker_for_terminal_kind() {
+        use crate::ui::TerminalActivityMarker;
+        let mut world = World::new();
+        world.insert_resource(ActivityEntityRegistry::default());
+        let id = ActivityId::new();
+        let kind = ActivityKind::Terminal;
+
+        let mut entity = None;
+        drive(&mut world, |commands, registry| {
+            entity = Some(registry.get_or_spawn(commands, &id, &kind));
+        });
+
+        assert!(
+            world
+                .entity(entity.unwrap())
+                .get::<TerminalActivityMarker>()
+                .is_some(),
+            "Terminal kind must carry TerminalActivityMarker"
+        );
+    }
+
+    #[test]
+    fn get_or_spawn_omits_terminal_marker_for_browser_kind() {
+        use crate::ui::TerminalActivityMarker;
+        use ozmux_multiplexer::BrowserProfile;
+        let mut world = World::new();
+        world.insert_resource(ActivityEntityRegistry::default());
+        let id = ActivityId::new();
+        let kind = ActivityKind::Browser {
+            initial_url: None,
+            profile: BrowserProfile::default(),
+        };
+
+        let mut entity = None;
+        drive(&mut world, |commands, registry| {
+            entity = Some(registry.get_or_spawn(commands, &id, &kind));
+        });
+
+        assert!(
+            world
+                .entity(entity.unwrap())
+                .get::<TerminalActivityMarker>()
+                .is_none(),
+            "Browser kind must NOT carry TerminalActivityMarker"
         );
     }
 }

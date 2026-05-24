@@ -8,7 +8,8 @@ mod theme;
 mod ui;
 
 use bevy::prelude::*;
-use bevy_terminal::TerminalPlugin;
+use bevy_terminal::TerminalHandlePlugin;
+use bevy_terminal_renderer::TerminalRendererPlugin;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
 use input::OzmuxShortcutPlugin;
@@ -20,7 +21,8 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins((
-            TerminalPlugin,
+            TerminalHandlePlugin,
+            TerminalRendererPlugin,
             OzmuxMultiplexerPlugin,
             OzmuxConfigsPlugin,
             OzmuxLayoutLogPlugin,
