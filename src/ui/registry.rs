@@ -56,14 +56,25 @@ impl ActivityEntityRegistry {
         }
     }
 
+    /// Looks up the host entity registered for `id`. Returns `None` when
+    /// no host has been spawned yet (e.g. the activity was just created
+    /// and the next `rebuild_structure_on_change` has not run).
+    pub(crate) fn get(&self, id: &ActivityId) -> Option<Entity> {
+        self.entities.get(id).copied()
+    }
+
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entities.len()
     }
 
+    /// Inserts a pre-existing Entity for `id` without going through
+    /// `get_or_spawn`. Test-only: lets `src/input.rs` tests register a
+    /// fake activity host so forwarding paths can be exercised without
+    /// the UI rebuild pipeline.
     #[cfg(test)]
-    pub(crate) fn get(&self, id: &ActivityId) -> Option<Entity> {
-        self.entities.get(id).copied()
+    pub(crate) fn insert_for_test(&mut self, id: ActivityId, entity: Entity) {
+        self.entities.insert(id, entity);
     }
 }
 

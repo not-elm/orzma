@@ -101,7 +101,9 @@ impl Plugin for OzmuxUiPlugin {
                 terminal::resize_terminals_to_node
                     .after(bevy::ui::UiSystems::Layout)
                     .before(bevy::ui::UiSystems::PostLayout)
-                    .before(bevy_terminal_renderer::material::TerminalMaterialSystems::UpdateMaterial),
+                    .before(
+                        bevy_terminal_renderer::material::TerminalMaterialSystems::UpdateMaterial,
+                    ),
             );
     }
 }
@@ -182,7 +184,40 @@ fn rebuild_structure_on_change(
         ))
         .id();
 
-    let mut live_activity_ids: HashSet<ActivityId> = HashSet::new();
+    // Hidden parent for inactive Activity hosts. Setting Display::None on
+    // the *stash* (rather than on each host) gives taffy a consistent
+    // parent-child hierarchy: every host has a valid `ChildOf` every
+    // frame. An unparented host (with the auto-inserted `Node` from
+    // `MaterialNode`'s `#[require(Node)]`) would otherwise be a top-level
+    // UI root, and toggling its `Node.display` between rebuilds destabilises
+    // taffy's internal SlotMap (panic: "invalid SlotMap key used") —
+    // observed when switching focus between two terminal Activities
+    // hosting interactive programs like neovim.
+    let hidden_stash = commands
+        .spawn((
+            Node {
+                display: bevy::ui::Display::None,
+                ..default()
+            },
+            StructuralNode,
+            ChildOf(ui_root),
+        ))
+        .id();
+
+    // Collect every Activity that exists in the multiplexer domain — across
+    // ALL windows, not just the currently focused one. This is the set
+    // `registry.prune` will preserve. Walking the domain (rather than
+    // collecting from the just-built UI tree) keeps hosts of inactive
+    // tabs and unfocused windows alive across rebuilds; their
+    // `TerminalHandle` / `PtyHandle` / alacritty `Term` would otherwise
+    // be despawned on every focus switch and `finish_terminal_setup`
+    // would re-spawn a fresh PTY, blowing away grid + scrollback.
+    let live_activity_ids: HashSet<ActivityId> = mux
+        .windows
+        .values()
+        .flat_map(|w| w.pane_ids().filter_map(|pid| w.pane(pid).ok()))
+        .flat_map(|p| p.activity_ids().cloned())
+        .collect();
     match window.cells.cell(&window.root_cell) {
         Ok(Cell::Root(root)) => {
             layout::build_cell_recursive(
@@ -191,7 +226,7 @@ fn rebuild_structure_on_change(
                 window,
                 &root.child,
                 &mut registry,
-                &mut live_activity_ids,
+                hidden_stash,
             );
         }
         Ok(_) => {
@@ -491,5 +526,170 @@ mod tests {
             app.world().get_entity(entity_before).is_ok(),
             "host entity must still exist after rebuild — load-bearing for stable handles"
         );
+    }
+
+    #[test]
+    fn inactive_activity_host_persists_across_focus_switch() {
+        use ozmux_multiplexer::Activity;
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        // Add a SECOND Activity to the bootstrap pane and capture both
+        // ActivityIds.
+        let (bootstrap_id, second_id) = {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let wid = {
+                let (_sid, session) = mux.sessions.iter().next().expect("session");
+                session.active_window.clone().expect("active window")
+            };
+            let (active_pane, bootstrap_aid) = {
+                let window = mux.windows.get(&wid).expect("window");
+                let active_pane = window.active_pane.clone();
+                let pane = window.pane(&active_pane).expect("pane");
+                (active_pane, pane.active_activity.clone())
+            };
+            let second_aid = ActivityId::new();
+            mux.with_window(&wid, |w| {
+                w.pane_mut(&active_pane)
+                    .expect("pane_mut")
+                    .add_activity(Activity::terminal(second_aid.clone()))
+            })
+            .expect("with_window")
+            .expect("add_activity");
+            (bootstrap_aid, second_aid)
+        };
+        app.update();
+
+        // Both Activity hosts must be in the registry — even though only
+        // one is the active tab.
+        let (bootstrap_entity, second_entity) = {
+            let registry = app.world().resource::<ActivityEntityRegistry>();
+            let b = registry.get(&bootstrap_id).expect(
+                "bootstrap activity host must remain in registry while inactive sibling exists",
+            );
+            let s = registry
+                .get(&second_id)
+                .expect("newly-added activity host must be in registry");
+            (b, s)
+        };
+
+        // Switch focus to the second activity.
+        {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let wid = {
+                let (_sid, session) = mux.sessions.iter().next().expect("session");
+                session.active_window.clone().expect("active window")
+            };
+            let active_pane = mux
+                .windows
+                .get(&wid)
+                .expect("window")
+                .active_pane
+                .clone();
+            let _outcome = mux
+                .with_window(&wid, |w| {
+                    w.pane_mut(&active_pane)
+                        .expect("pane_mut")
+                        .set_active_activity(&second_id)
+                })
+                .expect("with_window")
+                .expect("set_active_activity");
+        }
+        app.update();
+
+        // The ORIGINAL (now inactive) host Entity must survive the
+        // focus-switch rebuild. Without the domain-driven
+        // `live_activity_ids`, `registry.prune` would despawn it and the
+        // terminal's PTY child + alacritty grid + scrollback would be
+        // lost — the bug this test guards against.
+        let registry = app.world().resource::<ActivityEntityRegistry>();
+        assert_eq!(
+            registry.get(&bootstrap_id),
+            Some(bootstrap_entity),
+            "inactive Activity must keep the SAME host Entity after focus switches away from it"
+        );
+        assert_eq!(
+            registry.get(&second_id),
+            Some(second_entity),
+            "newly-active Activity must keep the SAME host Entity (no respawn)"
+        );
+        assert!(
+            app.world().get_entity(bootstrap_entity).is_ok(),
+            "inactive host Entity must still exist in the world"
+        );
+
+        // Inactive host MUST be parented to a hidden stash (a StructuralNode
+        // with Display::None). Without a valid `ChildOf`, the host's
+        // auto-inserted Node (from `MaterialNode`'s `#[require(Node)]`)
+        // would render as a full-screen UI root; with the parent being
+        // Display::None the entire subtree is laid out as hidden.
+        let bootstrap_parent = app
+            .world()
+            .get::<ChildOf>(bootstrap_entity)
+            .expect("inactive host must have a parent (the hidden stash)")
+            .parent();
+        let stash_node = app
+            .world()
+            .get::<bevy::ui::Node>(bootstrap_parent)
+            .expect("hidden stash parent must have a Node component");
+        assert_eq!(
+            stash_node.display,
+            bevy::ui::Display::None,
+            "inactive host's parent must be Display::None (the hidden stash)"
+        );
+
+        // Toggle focus back and forth several times — this exercises
+        // the case the original taffy "invalid SlotMap key used" panic
+        // was reproduced under (alternating focus between two terminal
+        // Activities). The hierarchy must stay valid each frame:
+        // both hosts have valid parents, the previously-active host
+        // moves to the hidden stash, the newly-active host moves to
+        // the visible slot.
+        for target_id in [&bootstrap_id, &second_id, &bootstrap_id, &second_id] {
+            {
+                let world = app.world_mut();
+                let mut mux = world.resource_mut::<Multiplexer>();
+                let wid = {
+                    let (_sid, session) = mux.sessions.iter().next().expect("session");
+                    session.active_window.clone().expect("active window")
+                };
+                let active_pane = mux
+                    .windows
+                    .get(&wid)
+                    .expect("window")
+                    .active_pane
+                    .clone();
+                let _outcome = mux
+                    .with_window(&wid, |w| {
+                        w.pane_mut(&active_pane)
+                            .expect("pane_mut")
+                            .set_active_activity(target_id)
+                    })
+                    .expect("with_window")
+                    .expect("set_active_activity");
+            }
+            app.update();
+
+            // After every switch both hosts must still be alive and
+            // have a valid parent.
+            for (id, expected_entity) in
+                [(&bootstrap_id, bootstrap_entity), (&second_id, second_entity)]
+            {
+                let registry = app.world().resource::<ActivityEntityRegistry>();
+                assert_eq!(
+                    registry.get(id),
+                    Some(expected_entity),
+                    "host Entity for {id} must stay stable across focus toggles"
+                );
+                assert!(
+                    app.world().get::<ChildOf>(expected_entity).is_some(),
+                    "host {id} must have a ChildOf every frame (active = activity_slot, inactive = hidden stash)"
+                );
+            }
+        }
     }
 }

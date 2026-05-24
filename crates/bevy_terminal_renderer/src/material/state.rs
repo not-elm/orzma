@@ -1,5 +1,5 @@
 use crate::{
-    glyph::{font::GlyphKey, AtlasImage},
+    glyph::{AtlasImage, font::GlyphKey},
     material::{GpuCell, GpuGlyph, TerminalParams, TerminalUiMaterial},
 };
 use bevy::{

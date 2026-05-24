@@ -9,8 +9,7 @@ use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{PaneFrame, StructuralNode, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, UiRect, Val};
-use ozmux_multiplexer::{ActivityId, Cell, CellId, LayoutCellState, SplitOrientation, Window};
-use std::collections::HashSet;
+use ozmux_multiplexer::{Cell, CellId, LayoutCellState, SplitOrientation, Window};
 
 /// Convert `(lhs_weight, rhs_weight)` into the `flex_grow` pair to set on
 /// the two split children. Routes through `LayoutCellState::split_ratio`
@@ -35,7 +34,7 @@ pub(crate) fn build_cell_recursive(
     window: &Window,
     cell_id: &CellId,
     registry: &mut ActivityEntityRegistry,
-    live_activity_ids: &mut HashSet<ActivityId>,
+    hidden_stash: Entity,
 ) {
     let cell = match window.cells.cell(cell_id) {
         Ok(c) => c,
@@ -59,7 +58,7 @@ pub(crate) fn build_cell_recursive(
                 cell_id,
             );
         }
-        Cell::Pane(p) => build_pane(commands, parent, window, p, registry, live_activity_ids),
+        Cell::Pane(p) => build_pane(commands, parent, window, p, registry, hidden_stash),
         Cell::Split(s) => {
             let (lhs_grow, rhs_grow) = split_ratio_to_flex_grows(s.lhs_weight, s.rhs_weight);
             let dir = match s.orientation {
@@ -91,14 +90,7 @@ pub(crate) fn build_cell_recursive(
                     ChildOf(container),
                 ))
                 .id();
-            build_cell_recursive(
-                commands,
-                lhs,
-                window,
-                &s.lhs_cell,
-                registry,
-                live_activity_ids,
-            );
+            build_cell_recursive(commands, lhs, window, &s.lhs_cell, registry, hidden_stash);
 
             let rhs = commands
                 .spawn((
@@ -111,14 +103,7 @@ pub(crate) fn build_cell_recursive(
                     ChildOf(container),
                 ))
                 .id();
-            build_cell_recursive(
-                commands,
-                rhs,
-                window,
-                &s.rhs_cell,
-                registry,
-                live_activity_ids,
-            );
+            build_cell_recursive(commands, rhs, window, &s.rhs_cell, registry, hidden_stash);
         }
     }
 }
@@ -129,7 +114,7 @@ fn build_pane(
     window: &Window,
     pane_cell: &ozmux_multiplexer::PaneCell,
     registry: &mut ActivityEntityRegistry,
-    live_activity_ids: &mut HashSet<ActivityId>,
+    hidden_stash: Entity,
 ) {
     let Some(pane) = window.panes.get(&pane_cell.pane) else {
         tracing::warn!(
@@ -174,15 +159,27 @@ fn build_pane(
         ))
         .id();
 
-    if let Some(activity) = pane
-        .activities
-        .iter()
-        .find(|a| a.id == pane.active_activity)
-    {
+    // NOTE: every Activity in this pane gets `get_or_spawn` so its host
+    // Entity (and the `TerminalBundle` / `PtyHandle` / alacritty `Term`
+    // attached by `finish_terminal_setup`) survives focus changes.
+    //
+    // The active activity is parented onto `activity_slot` and gets its
+    // visible Node bundle via `build_activity_host_children`. Inactive
+    // hosts are parented onto `hidden_stash` — a Display::None container
+    // owned by `rebuild_structure_on_change`. The stash approach keeps
+    // every host with a valid `ChildOf` every frame, which taffy's UI
+    // layout requires: toggling `Node.display` on an unparented host
+    // panics taffy with "invalid SlotMap key used" when the same host
+    // alternates between active and inactive across rebuilds (seen when
+    // switching focus between two terminal Activities running neovim).
+    for activity in &pane.activities {
         let host = registry.get_or_spawn(commands, &activity.id, &activity.kind);
-        commands.entity(host).insert(ChildOf(activity_slot));
-        crate::ui::activity::build_activity_host_children(commands, host, activity);
-        live_activity_ids.insert(activity.id.clone());
+        if activity.id == pane.active_activity {
+            commands.entity(host).insert(ChildOf(activity_slot));
+            crate::ui::activity::build_activity_host_children(commands, host, activity);
+        } else {
+            commands.entity(host).insert(ChildOf(hidden_stash));
+        }
     }
 }
 

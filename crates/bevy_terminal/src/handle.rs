@@ -201,6 +201,13 @@ impl TerminalHandle {
         (cols, rows, cursor)
     }
 
+    /// True iff `TermMode::APP_CURSOR` (DECCKM) is set on the inner term.
+    /// Used by `input_codec::encode_key` to choose between `ESC [ A/B/C/D`
+    /// and `ESC O A/B/C/D` for arrow keys.
+    pub fn is_app_cursor_keys(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
     /// Advance with a PTY chunk: capture pre-advance mode (for window
     /// arming), advance Term, collect damage, classify the verdict,
     /// and decide whether to flush immediately. Returns `true` when

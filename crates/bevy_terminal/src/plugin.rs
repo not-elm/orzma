@@ -1,11 +1,13 @@
 //! `TerminalHandlePlugin` — registers the 4 chained Bevy systems.
 
 use crate::coalescer::Coalescer;
-use crate::events::TerminalChildExit;
+use crate::events::{TerminalChildExit, TerminalKeyInput};
 use crate::handle::TerminalHandle;
+use crate::input_codec::encode_key;
 use crate::pty::PtyHandle;
 use crate::title::TerminalTitle;
 use bevy::ecs::entity::Entity;
+use bevy::ecs::observer::On;
 use bevy::ecs::system::ParallelCommands;
 use bevy::prelude::*;
 use std::time::Instant;
@@ -26,6 +28,7 @@ impl Plugin for TerminalHandlePlugin {
             )
                 .chain(),
         );
+        app.add_observer(on_terminal_key_input);
     }
 }
 
@@ -142,4 +145,24 @@ fn process_control_events(
     par_commands.command_scope(|mut commands| {
         handle.drain_control_events(&mut commands, entity, title);
     });
+}
+
+/// Observer for `TerminalKeyInput`. Encodes the key using the entity's
+/// `Term::mode()` (for app-cursor-keys lookup) and writes the resulting
+/// VT bytes to the PTY via `TerminalHandle::write`, which also sets
+/// `pending_user_input = true` so the coalescer immediate-flush path
+/// fires on the next PTY chunk.
+fn on_terminal_key_input(
+    ev: On<TerminalKeyInput>,
+    mut q: Query<(&mut TerminalHandle, &mut PtyHandle)>,
+) {
+    let Ok((mut handle, mut pty)) = q.get_mut(ev.entity) else {
+        return;
+    };
+    let Some(bytes) = encode_key(&ev.key, &ev.modifiers, handle.is_app_cursor_keys()) else {
+        return;
+    };
+    if let Err(e) = handle.write(&mut pty, &bytes) {
+        tracing::warn!(?e, entity = ?ev.entity, "terminal key input write failed");
+    }
 }

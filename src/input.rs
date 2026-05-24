@@ -6,7 +6,9 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::{Timer, TimerMode};
+use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{KeyChord, Modifiers, Prefix, Shortcuts};
+use ozmux_multiplexer::SessionId;
 use std::time::Duration;
 
 /// Per-GUI-window prefix-mode state. `armed` flips to true the frame the
@@ -59,9 +61,11 @@ fn tick_prefix_state(time: Res<Time<Virtual>>, mut q: Query<&mut PrefixState>) {
 }
 
 pub(crate) fn dispatch_focused_key(
+    mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
+    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
     mut mux: ResMut<crate::multiplexer::Multiplexer>,
     mut q: Query<(
         &crate::multiplexer::AttachedSession,
@@ -85,18 +89,42 @@ pub(crate) fn dispatch_focused_key(
         if is_modifier_only_key(&ev.logical_key) {
             continue;
         }
-        match bevy_to_configs_key(&ev.logical_key) {
-            Some(input_key) => {
-                handle_chord(
-                    &input_key,
-                    &mods,
-                    &mut prefix,
-                    shortcuts,
-                    &mut mux,
-                    attached,
-                );
+        let outcome = match bevy_to_configs_key(&ev.logical_key) {
+            Some(input_key) => handle_chord(
+                &input_key,
+                &mods,
+                &mut prefix,
+                shortcuts,
+                &mut mux,
+                attached,
+            ),
+            None => {
+                // NOTE: when prefix was armed, return Fired (consumed) rather
+                // than NotMatched, so keys absent from `bevy_to_configs_key`
+                // but present in `bevy_to_terminal_key` (Home/End/PageUp/
+                // PageDown/Delete) cannot leak to the terminal during an
+                // armed prefix — the "armed prefix consumes the next key"
+                // invariant must hold for ALL keys.
+                if prefix.armed {
+                    prefix.armed = false;
+                    ChordOutcome::Fired
+                } else {
+                    ChordOutcome::NotMatched
+                }
             }
-            None => prefix.armed = false,
+        };
+        if matches!(outcome, ChordOutcome::NotMatched)
+            && !prefix.armed
+            && let Some(tk) = bevy_to_terminal_key(&ev.logical_key)
+        {
+            forward_to_active_terminal(
+                &mut commands,
+                &mux,
+                &registry,
+                &attached.0,
+                tk,
+                shortcut_mods_to_terminal_mods(&mods),
+            );
         }
     }
 }
@@ -175,6 +203,56 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
     })
 }
 
+/// Translates a Bevy logical key into the `TerminalKey` variant the
+/// `bevy_terminal` codec accepts. Returns `None` for keys the terminal
+/// does not consume (F-keys, modifier-only keys, etc. — those keys are
+/// silently dropped).
+fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
+    Some(match key {
+        Key::Character(s) => TerminalKey::Text(s.to_string()),
+        Key::Space => TerminalKey::Text(" ".into()),
+        Key::Enter => TerminalKey::Enter,
+        Key::Backspace => TerminalKey::Backspace,
+        Key::Tab => TerminalKey::Tab,
+        Key::Escape => TerminalKey::Escape,
+        Key::Delete => TerminalKey::Delete,
+        Key::ArrowUp => TerminalKey::ArrowUp,
+        Key::ArrowDown => TerminalKey::ArrowDown,
+        Key::ArrowLeft => TerminalKey::ArrowLeft,
+        Key::ArrowRight => TerminalKey::ArrowRight,
+        Key::Home => TerminalKey::Home,
+        Key::End => TerminalKey::End,
+        Key::PageUp => TerminalKey::PageUp,
+        Key::PageDown => TerminalKey::PageDown,
+        _ => return None,
+    })
+}
+
+/// Converts shortcut-layer `Modifiers` into the `TerminalModifiers` carried
+/// on the `TerminalKeyInput` EntityEvent. MVP only reads `ctrl` on the
+/// receiving side; the other fields are forwarded for future use.
+fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
+    TerminalModifiers {
+        ctrl: m.ctrl,
+        shift: m.shift,
+        alt: m.alt,
+        meta: m.meta,
+    }
+}
+
+/// Outcome of feeding one key event to the shortcut dispatcher. The caller
+/// uses this to decide whether to forward the key to the active terminal.
+enum ChordOutcome {
+    /// The key armed the prefix; consume it (do not forward to the terminal).
+    Armed,
+    /// The key was processed inside an armed prefix (matched or unmatched);
+    /// it consumed the prefix state and must not be forwarded to the terminal.
+    Fired,
+    /// The key was not relevant to the shortcut system; the caller may forward
+    /// it to the active terminal if the prefix is not armed.
+    NotMatched,
+}
+
 fn handle_chord(
     input_key: &ozmux_configs::shortcuts::Key,
     mods: &Modifiers,
@@ -182,13 +260,14 @@ fn handle_chord(
     shortcuts: &Shortcuts,
     mux: &mut ResMut<crate::multiplexer::Multiplexer>,
     attached: &crate::multiplexer::AttachedSession,
-) {
+) -> ChordOutcome {
     if !prefix.armed {
         if match_chord(input_key, mods, &shortcuts.prefix.chord) {
             prefix.armed = true;
             prefix.timeout.reset();
+            return ChordOutcome::Armed;
         }
-        return;
+        return ChordOutcome::NotMatched;
     }
     let mods_without_prefix = mods_subtract(mods, &shortcuts.prefix.chord.modifiers);
     if let Some(binding) = shortcuts
@@ -207,6 +286,37 @@ fn handle_chord(
         }
     }
     prefix.armed = false;
+    ChordOutcome::Fired
+}
+
+/// Resolves the active activity entity for `sid` and triggers a
+/// `TerminalKeyInput` on it. Silently no-ops when the session has no
+/// active window/pane/activity yet, or when the target entity has no
+/// `TerminalHandle` (e.g. Browser Activity) — the `bevy_terminal`
+/// observer handles that case by also no-op'ing.
+fn forward_to_active_terminal(
+    commands: &mut Commands,
+    mux: &crate::multiplexer::Multiplexer,
+    registry: &crate::ui::registry::ActivityEntityRegistry,
+    sid: &SessionId,
+    key: TerminalKey,
+    mods: TerminalModifiers,
+) {
+    let Ok((wid, pid)) = mux.active_pane_of_session(sid) else {
+        return;
+    };
+    let Some(window) = mux.windows.get(&wid) else {
+        return;
+    };
+    let Ok(pane) = window.pane(&pid) else { return };
+    let Some(entity) = registry.get(&pane.active_activity) else {
+        return;
+    };
+    commands.trigger(TerminalKeyInput {
+        entity,
+        key,
+        modifiers: mods,
+    });
 }
 
 #[cfg(test)]
@@ -227,6 +337,7 @@ mod tests {
             .add_systems(Update, dispatch_focused_key);
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
+        app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
         app.add_message::<KeyboardInput>();
 
         let sid = {
@@ -273,6 +384,38 @@ mod tests {
             .world_mut()
             .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>();
         events.write(ev);
+    }
+
+    use bevy::ecs::observer::On;
+    use bevy_terminal::TerminalKeyInput;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Resource, Default, Clone)]
+    struct CapturedKeys(Arc<Mutex<Vec<TerminalKeyInput>>>);
+
+    fn capture_key_input(ev: On<TerminalKeyInput>, captured: Res<CapturedKeys>) {
+        captured.0.lock().unwrap().push((*ev).clone());
+    }
+
+    /// Spawns a registry-registered Terminal Activity entity inside the
+    /// active pane of the only window in the test app, returning its Entity id.
+    /// The entity carries NO `TerminalHandle`, so the `bevy_terminal`
+    /// observer no-ops on the missing component — the test capture
+    /// observer still records the trigger regardless of observer order.
+    fn install_active_terminal_activity(app: &mut App) -> Entity {
+        let entity = app.world_mut().spawn_empty().id();
+        let activity_id = {
+            let mux = app.world().resource::<Multiplexer>();
+            let wid = mux.windows.keys().next().unwrap().clone();
+            let window = mux.windows.get(&wid).unwrap();
+            let pane = window.pane(&window.active_pane).unwrap();
+            pane.active_activity.clone()
+        };
+        let mut registry = app
+            .world_mut()
+            .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
+        registry.insert_for_test(activity_id, entity);
+        entity
     }
 
     #[test]
@@ -696,7 +839,140 @@ mod tests {
             .add_plugins(crate::configs::OzmuxConfigsPlugin)
             .add_plugins(OzmuxShortcutPlugin);
         app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
         app.add_message::<KeyboardInput>();
         app.update();
+    }
+
+    #[test]
+    fn unbound_key_when_prefix_unarmed_forwards_to_terminal() {
+        let (mut app, window_entity) = make_app(true, false);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let _activity_entity = install_active_terminal_activity(&mut app);
+
+        press(&mut app, window_entity, Bk::Character("h".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "single 'h' must produce exactly one TerminalKeyInput"
+        );
+        assert!(
+            matches!(&captured[0].key, bevy_terminal::TerminalKey::Text(s) if s == "h"),
+            "captured key was {:?}",
+            captured[0].key
+        );
+    }
+
+    #[test]
+    fn enter_when_prefix_unarmed_forwards_as_terminal_enter() {
+        let (mut app, window_entity) = make_app(true, false);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+
+        press(&mut app, window_entity, Bk::Enter);
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!(matches!(captured[0].key, bevy_terminal::TerminalKey::Enter));
+    }
+
+    #[test]
+    fn ctrl_b_arming_prefix_does_not_forward_to_terminal() {
+        let (mut app, window_entity) = make_app(true, false);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::ControlLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("b".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "Ctrl+B (prefix arm) must not forward to terminal; captured: {:?}",
+            captured
+        );
+    }
+
+    #[test]
+    fn armed_then_bound_chord_does_not_forward_to_terminal() {
+        let (mut app, window_entity) = make_app(true, true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+
+        press(&mut app, window_entity, Bk::Character("c".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "armed Ctrl+B then 'c' must not forward to terminal; captured: {:?}",
+            captured
+        );
+    }
+
+    #[test]
+    fn armed_then_unbound_disarms_and_does_not_forward() {
+        let (mut app, window_entity) = make_app(true, true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+
+        press(&mut app, window_entity, Bk::Character("z".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "armed prefix consumes the next key even when unbound; captured: {:?}",
+            captured
+        );
+        assert!(!app.world().get::<PrefixState>(window_entity).unwrap().armed);
+    }
+
+    #[test]
+    fn armed_then_home_disarms_and_does_not_forward() {
+        let (mut app, window_entity) = make_app(true, true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+
+        press(&mut app, window_entity, Bk::Home);
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "Home while prefix armed must not leak to terminal (Home is in bevy_to_terminal_key but not bevy_to_configs_key); captured: {:?}",
+            captured
+        );
+        assert!(
+            !app.world().get::<PrefixState>(window_entity).unwrap().armed,
+            "Home must disarm the prefix"
+        );
+    }
+
+    #[test]
+    fn no_active_terminal_entity_means_no_panic_just_silent_drop() {
+        let (mut app, window_entity) = make_app(true, false);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+
+        press(&mut app, window_entity, Bk::Character("h".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(captured.is_empty(), "no registry entry → no trigger");
     }
 }

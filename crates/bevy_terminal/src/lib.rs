@@ -6,6 +6,7 @@ mod bundle;
 mod coalescer;
 mod events;
 mod handle;
+mod input_codec;
 mod palette;
 mod plugin;
 mod pty;
@@ -15,8 +16,8 @@ mod vt;
 pub use bundle::{SpawnOptions, TerminalBundle};
 pub use coalescer::Coalescer;
 pub use events::{
-    TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalModeChanged,
-    TerminalTitleChanged,
+    TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalKey, TerminalKeyInput,
+    TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
 pub use handle::TerminalHandle;
 pub use plugin::TerminalHandlePlugin;

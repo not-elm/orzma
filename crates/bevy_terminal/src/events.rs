@@ -1,4 +1,8 @@
-//! `EntityEvent` types this crate triggers on terminal entities.
+//! `EntityEvent` types for terminal entities — both outbound events
+//! triggered by this crate (`TerminalBell`, `TerminalTitleChanged`,
+//! `TerminalModeChanged`, `TerminalClipboardStore`, `TerminalChildExit`)
+//! and inbound commands triggered by the host UI and observed by
+//! `TerminalHandlePlugin` (`TerminalKeyInput`).
 //!
 //! Frame events (`FrameSnapshot`, `FrameDelta`) come from
 //! `bevy_terminal_renderer::schema` and are emitted via
@@ -51,4 +55,48 @@ pub struct TerminalChildExit {
     #[event_target]
     pub entity: Entity,
     pub code: Option<i32>,
+}
+
+/// Subset of keys the terminal input codec understands. Keeps the public
+/// surface stable and tells callers exactly which keys are wired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalKey {
+    /// UTF-8 text (single char or multi-codepoint dead-key composition).
+    Text(String),
+    Enter,
+    Backspace,
+    Tab,
+    Escape,
+    Delete,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+}
+
+/// Modifier flags carried alongside `TerminalKey`. MVP only reads `ctrl`;
+/// `shift` / `alt` / `meta` are reserved for future CSI u / modifyOtherKeys
+/// support.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TerminalModifiers {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub meta: bool,
+}
+
+/// Fired by the host UI to forward a key press to a specific Terminal
+/// Activity entity. The observer registered by `TerminalHandlePlugin`
+/// encodes the key using the entity's `Term::mode()` and writes the
+/// resulting VT bytes to the PTY.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct TerminalKeyInput {
+    #[event_target]
+    pub entity: Entity,
+    pub key: TerminalKey,
+    pub modifiers: TerminalModifiers,
 }

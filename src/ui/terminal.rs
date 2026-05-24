@@ -11,12 +11,14 @@ use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, Terminal
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 
-/// Logical-pixel width of one terminal cell. Mirrors the constant inside the
-/// renderer's `update_terminal_material`; both sides must agree for the
-/// shader's `grid_size * cell_size_px` to match the activity host's pixel
-/// extents exactly.
+/// Natural logical-pixel width of one glyph cell, mirrors the constant
+/// inside the renderer's `update_terminal_material`. Used here only to
+/// estimate the maximum cols that fit in the pane; the GPU side stretches
+/// each cell's pitch to `node_size / grid_size` (see
+/// `terminal_ui_material.wgsl::cell_pitch_px`) so the grid fills the pane
+/// edge-to-edge with zero remainder.
 const CELL_W_LOGICAL_PX: f32 = 8.0;
-/// Logical-pixel height of one terminal cell. See `CELL_W_LOGICAL_PX`.
+/// Natural logical-pixel height of one glyph cell. See `CELL_W_LOGICAL_PX`.
 const CELL_H_LOGICAL_PX: f32 = 16.0;
 
 /// Spawns a `TerminalBundle` and attaches `TerminalRenderBundle` for each
@@ -89,13 +91,15 @@ pub(crate) fn resize_terminals_to_node(
         // `ComputedNode.size` is physical pixels; cell sizes are logical px.
         let logical_w = (computed.size.x / dpr).max(0.0);
         let logical_h = (computed.size.y / dpr).max(0.0);
-        // NOTE: `ceil` (not `floor`) so the grid extends just past the pane
-        // when its size isn't an exact multiple of the cell size. The
-        // overflow is clipped by the pane boundary and is invisible, whereas
-        // `floor` leaves a strip of shader-fallback teal between the last
-        // row and the pane edge.
-        let cols = ((logical_w / CELL_W_LOGICAL_PX).ceil() as u16).max(1);
-        let rows = ((logical_h / CELL_H_LOGICAL_PX).ceil() as u16).max(1);
+        // Pick the largest cols / rows that fit the pane in natural cell
+        // metrics. The shader then stretches each cell's pitch to
+        // `node_size / grid_size` so the grid fills the pane exactly —
+        // no sub-cell strip on the right or bottom. Glyph bitmaps stay
+        // at their native 8x16 logical px (centered within the stretched
+        // pitch and pixel-snapped), so the only visible distortion is a
+        // sub-pixel change in inter-cell spacing.
+        let cols = ((logical_w / CELL_W_LOGICAL_PX).floor() as u16).max(1);
+        let rows = ((logical_h / CELL_H_LOGICAL_PX).floor() as u16).max(1);
         let (cur_cols, cur_rows, _) = handle.read_geometry();
         if cur_cols == cols && cur_rows == rows {
             continue;
