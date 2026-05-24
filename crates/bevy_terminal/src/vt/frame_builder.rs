@@ -14,7 +14,7 @@ use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use bevy::ecs::entity::Entity;
 use bevy::prelude::Color;
-use bevy_terminal_render::prelude::{
+use bevy_terminal_renderer::prelude::{
     Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri,
     Row, Run, SnapshotReason,
 };

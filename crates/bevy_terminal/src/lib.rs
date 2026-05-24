@@ -1,6 +1,6 @@
 //! Bevy-native terminal: PTY ownership, alacritty VT emulation, and
 //! coalesced `FrameSnapshot` / `FrameDelta` emission against the
-//! `bevy_terminal_render` schema.
+//! `bevy_terminal_renderer` schema.
 
 mod bundle;
 mod coalescer;

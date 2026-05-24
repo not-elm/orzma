@@ -1,7 +1,7 @@
 //! `EntityEvent` types this crate triggers on terminal entities.
 //!
 //! Frame events (`FrameSnapshot`, `FrameDelta`) come from
-//! `bevy_terminal_render::schema` and are emitted via
+//! `bevy_terminal_renderer::schema` and are emitted via
 //! `commands.trigger(FrameSnapshot { entity, .. })` — the
 //! `#[event_target] entity` field routes the trigger to the
 //! correct observer.

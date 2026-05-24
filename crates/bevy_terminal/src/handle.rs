@@ -20,7 +20,7 @@ use alacritty_terminal::vte::ansi::{Color as AColor, Rgb};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Commands;
-use bevy_terminal_render::prelude::{Cursor, CursorShape, SnapshotReason};
+use bevy_terminal_renderer::prelude::{Cursor, CursorShape, SnapshotReason};
 use crossbeam_channel::Receiver;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;

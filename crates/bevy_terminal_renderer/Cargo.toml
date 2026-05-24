@@ -1,5 +1,5 @@
 [package]
-name = "bevy_terminal"
+name = "bevy_terminal_renderer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,14 +9,13 @@ publish.workspace = true
 
 [dependencies]
 bevy = { workspace = true }
-bevy_terminal_renderer = { path = "../bevy_terminal_renderer" }
-alacritty_terminal = "0.26"
-vte = "0.15"
-portable-pty = { workspace = true }
-crossbeam-channel = "0.5"
+ab_glyph = "0.2"
+unicode-segmentation = "1"
 unicode-width = { workspace = true }
-anyhow = { workspace = true }
-tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_bytes = "0.11"
+rmp-serde = "1"
 
 [lints]
 workspace = true
