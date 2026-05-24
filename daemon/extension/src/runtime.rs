@@ -99,6 +99,39 @@ impl RuntimeRoot {
         }
         Ok(())
     }
+
+    pub fn extension_path_prefix(&self) -> Option<String> {
+        let bin_dir = self.bin_dir();
+        let entries: Vec<String> = std::fs::read_dir(bin_dir)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
+            .map(|e| e.path().to_string_lossy().into_owned())
+            .collect();
+        build_path_prefix(entries)
+    }
+}
+
+/// Builds the colon-joined PATH prefix from a list of bin dir paths,
+/// pinning `__builtin` to the head so built-in shims always win over
+/// extensions of the same name. Extracted as a pure free function so
+/// the ordering can be unit-tested without spinning up a real
+/// `RuntimeRoot`. The name `__builtin` is the canonical reserved bin
+/// dir for built-in shims (defined as `BUILTIN_DIR_NAME` in
+/// `daemon/bootstrap/src/builtin_commands.rs`); inlined here to
+/// avoid a daemon_terminal → daemon_bootstrap dep cycle.
+fn build_path_prefix(entries: Vec<String>) -> Option<String> {
+    const BUILTIN_DIR_NAME: &str = "__builtin";
+    let (mut builtin, mut rest): (Vec<String>, Vec<String>) = entries.into_iter().partition(|p| {
+        std::path::Path::new(p).file_name().and_then(|n| n.to_str()) == Some(BUILTIN_DIR_NAME)
+    });
+    rest.sort();
+    builtin.append(&mut rest);
+    if builtin.is_empty() {
+        None
+    } else {
+        Some(builtin.join(":"))
+    }
 }
 
 #[cfg(unix)]

@@ -29,8 +29,6 @@ impl std::fmt::Debug for ReplyFrame {
 /// be bounded; `try_send` may drop. `DropCounter` aggregates drop counts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlFrame {
-    Title(String),
-    ResetTitle,
     Bell,
     Clipboard {
         content: String,

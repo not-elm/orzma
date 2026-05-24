@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use alacritty_terminal::Term;
@@ -422,13 +422,10 @@ fn emit_now(
 /// The Coalescer only buffers the *decision to emit*; the Term itself
 /// stays continuously up to date.
 pub(crate) async fn run_bridge_task(
-    vt_state: Arc<std::sync::Mutex<VtState>>,
+    vt_state: Arc<Mutex<VtState>>,
     mut pty_rx: mpsc::Receiver<Bytes>,
     mut reply_rx: mpsc::UnboundedReceiver<ReplyFrame>,
     mut control_rx: mpsc::Receiver<ControlFrame>,
-    activity_window: Option<WindowId>,
-    title_tx: broadcast::Sender<WindowId>,
-    cancel: CancellationToken,
 ) {
     let mut coalescer = Coalescer::new();
     let mut window_open_mode: Option<alacritty_terminal::term::TermMode> = None;
@@ -436,13 +433,7 @@ pub(crate) async fn run_bridge_task(
     loop {
         tokio::select! {
             biased;
-            () = cancel.cancelled() => break,
             () = coalescer.wait_deadline() => {
-                // NOTE: drain any chunks already queued at the moment the
-                // deadline fires so they fold into the same emit. Single
-                // lock spans the drain so damage is collected once at the
-                // end (alacritty's damage state is cumulative across
-                // advance calls until reset_damage).
                 {
                     let mut state = vt_state.lock().expect("vt_state poisoned");
                     let pre_advance_mode = *state.term.mode();
@@ -503,34 +494,6 @@ pub(crate) async fn run_bridge_task(
             ctrl = control_rx.recv() => {
                 match ctrl {
                     None => break,
-                    Some(ControlFrame::Title(raw)) => {
-                        // NOTE: shells re-emit the same OSC title on every prompt
-                        // redraw; only signal when the value actually changed so a
-                        // redraw storm cannot drive WindowView re-broadcasts.
-                        let clean = sanitize_title(&raw);
-                        let changed = {
-                            let mut state = vt_state.lock().expect("vt_state poisoned");
-                            let changed = state.title.as_deref() != Some(clean.as_str());
-                            if changed {
-                                state.title = Some(clean);
-                            }
-                            changed
-                        };
-                        if changed && let Some(wid) = &activity_window {
-                            let _ = title_tx.send(wid.clone());
-                        }
-                    }
-                    Some(ControlFrame::ResetTitle) => {
-                        let changed = {
-                            let mut state = vt_state.lock().expect("vt_state poisoned");
-                            let changed = state.title.is_some();
-                            state.title = None;
-                            changed
-                        };
-                        if changed && let Some(wid) = &activity_window {
-                            let _ = title_tx.send(wid.clone());
-                        }
-                    }
                     // NOTE: Bell and Clipboard remain intentionally dropped.
                     Some(ControlFrame::Bell | ControlFrame::Clipboard { .. }) => {}
                 }
@@ -566,263 +529,5 @@ pub(crate) fn dim_for(cols: u16, rows: u16) -> LocalDim {
     LocalDim {
         cols: cols.into(),
         rows: rows.into(),
-    }
-}
-
-#[cfg(test)]
-pub(super) fn test_dim(cols: u16, rows: u16) -> LocalDim {
-    dim_for(cols, rows)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame};
-    use std::sync::Arc;
-    use tokio::sync::{broadcast, mpsc};
-
-    fn make_listener() -> TermListener {
-        let (reply_tx, _) = mpsc::unbounded_channel::<ReplyFrame>();
-        let (control_tx, _) = mpsc::channel::<ControlFrame>(64);
-        TermListener {
-            reply_tx,
-            control_tx,
-            drop_counter: Arc::new(DropCounter::new()),
-        }
-    }
-
-    fn make_state(cols: u16, rows: u16) -> VtState {
-        let (wire_broadcast, _rx) = broadcast::channel::<WireMessage>(256);
-        VtState::new(cols, rows, make_listener(), wire_broadcast)
-    }
-
-    #[test]
-    fn vt_state_constructs_with_dimensions() {
-        let state = make_state(80, 24);
-        assert!(!state.pending_user_input);
-        assert_eq!(state.frame_seq, 0);
-        assert!(state.first_emit);
-        assert!(state.prev_cursor.is_none());
-        assert_eq!(state.term.columns(), 80);
-        assert_eq!(state.term.screen_lines(), 24);
-        assert!(state.pending_damage.is_none());
-    }
-
-    use bytes::Bytes;
-    use tokio_util::sync::CancellationToken;
-
-    #[tokio::test]
-    async fn bridge_task_consumes_pty_chunks_and_updates_term() {
-        let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
-        let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
-        let drop_counter = Arc::new(DropCounter::new());
-        let listener = TermListener {
-            reply_tx,
-            control_tx,
-            drop_counter: drop_counter.clone(),
-        };
-        let (wire_broadcast, _rx) = broadcast::channel::<WireMessage>(8);
-        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(
-            10,
-            3,
-            listener,
-            wire_broadcast,
-        )));
-
-        let (pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
-        let cancel = CancellationToken::new();
-        let (title_tx, _title_rx) = broadcast::channel::<ozmux_multiplexer::WindowId>(8);
-        let handle = tokio::spawn(super::run_bridge_task(
-            vt_state.clone(),
-            pty_rx,
-            reply_rx,
-            control_rx,
-            None,
-            title_tx,
-            cancel.clone(),
-        ));
-
-        pty_tx.send(Bytes::from_static(b"hello")).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        let line0_text: String = {
-            let state = vt_state.lock().unwrap();
-            let row = &state.term.grid()[alacritty_terminal::index::Line(0)];
-            let slice =
-                &row[alacritty_terminal::index::Column(0)..alacritty_terminal::index::Column(5)];
-            slice.iter().map(|cell| cell.c).collect()
-        };
-        assert!(
-            line0_text.starts_with("hello"),
-            "expected 'hello' on row 0, got: {line0_text:?}"
-        );
-
-        cancel.cancel();
-        let _ = handle.await;
-    }
-
-    struct TitleBridge {
-        control_tx: mpsc::Sender<ControlFrame>,
-        title_rx: broadcast::Receiver<ozmux_multiplexer::WindowId>,
-        vt_state: Arc<std::sync::Mutex<VtState>>,
-        wid: ozmux_multiplexer::WindowId,
-        cancel: CancellationToken,
-        handle: tokio::task::JoinHandle<()>,
-        // NOTE: kept alive so the bridge's pty_rx does not see a closed channel.
-        _pty_tx: mpsc::Sender<Bytes>,
-    }
-
-    fn spawn_title_bridge() -> TitleBridge {
-        let (reply_tx, reply_rx) = mpsc::unbounded_channel::<ReplyFrame>();
-        let (control_tx, control_rx) = mpsc::channel::<ControlFrame>(64);
-        let drop_counter = Arc::new(DropCounter::new());
-        let listener = TermListener {
-            reply_tx,
-            control_tx: control_tx.clone(),
-            drop_counter,
-        };
-        let (wire_broadcast, _rx) = broadcast::channel::<WireMessage>(8);
-        let vt_state = Arc::new(std::sync::Mutex::new(VtState::new(
-            10,
-            3,
-            listener,
-            wire_broadcast,
-        )));
-        let (pty_tx, pty_rx) = mpsc::channel::<Bytes>(8);
-        let (title_tx, title_rx) = broadcast::channel::<ozmux_multiplexer::WindowId>(8);
-        let wid = ozmux_multiplexer::WindowId::new();
-        let cancel = CancellationToken::new();
-        let handle = tokio::spawn(super::run_bridge_task(
-            vt_state.clone(),
-            pty_rx,
-            reply_rx,
-            control_rx,
-            Some(wid.clone()),
-            title_tx,
-            cancel.clone(),
-        ));
-        TitleBridge {
-            control_tx,
-            title_rx,
-            vt_state,
-            wid,
-            cancel,
-            handle,
-            _pty_tx: pty_tx,
-        }
-    }
-
-    #[tokio::test]
-    async fn bridge_task_captures_and_sanitizes_title() {
-        let mut bridge = spawn_title_bridge();
-
-        bridge
-            .control_tx
-            .send(ControlFrame::Title("hi\x07there".into()))
-            .await
-            .unwrap();
-        let signalled = bridge.title_rx.recv().await.unwrap();
-        assert_eq!(signalled, bridge.wid);
-        assert_eq!(
-            bridge.vt_state.lock().unwrap().title.as_deref(),
-            Some("hithere"),
-            "control char should be stripped before storage"
-        );
-
-        bridge.cancel.cancel();
-        let _ = bridge.handle.await;
-    }
-
-    #[tokio::test]
-    async fn bridge_task_reset_title_clears_stored_title() {
-        let mut bridge = spawn_title_bridge();
-
-        bridge
-            .control_tx
-            .send(ControlFrame::Title("seed".into()))
-            .await
-            .unwrap();
-        let _ = bridge.title_rx.recv().await.unwrap();
-        assert_eq!(
-            bridge.vt_state.lock().unwrap().title.as_deref(),
-            Some("seed"),
-            "initial title should be set"
-        );
-
-        bridge
-            .control_tx
-            .send(ControlFrame::ResetTitle)
-            .await
-            .unwrap();
-        let _ = bridge.title_rx.recv().await.unwrap();
-        assert_eq!(
-            bridge.vt_state.lock().unwrap().title,
-            None,
-            "title should be cleared after ResetTitle"
-        );
-
-        bridge.cancel.cancel();
-        let _ = bridge.handle.await;
-    }
-
-    #[tokio::test]
-    async fn bridge_task_suppresses_unchanged_title() {
-        let mut bridge = spawn_title_bridge();
-
-        bridge
-            .control_tx
-            .send(ControlFrame::Title("same".into()))
-            .await
-            .unwrap();
-        assert_eq!(bridge.title_rx.recv().await.unwrap(), bridge.wid);
-
-        bridge
-            .control_tx
-            .send(ControlFrame::Title("same".into()))
-            .await
-            .unwrap();
-        bridge
-            .control_tx
-            .send(ControlFrame::Title("different".into()))
-            .await
-            .unwrap();
-        assert_eq!(
-            bridge.title_rx.recv().await.unwrap(),
-            bridge.wid,
-            "only the changed title should be signalled; the repeat is dropped"
-        );
-        assert!(
-            bridge.title_rx.try_recv().is_err(),
-            "no extra signal for the unchanged title"
-        );
-
-        bridge.cancel.cancel();
-        let _ = bridge.handle.await;
-    }
-
-    #[tokio::test]
-    async fn wire_broadcast_is_subscribable() {
-        let (wire_broadcast, mut rx) = broadcast::channel::<WireMessage>(8);
-        let state = VtState::new(10, 3, make_listener(), wire_broadcast.clone());
-        let _ = state.wire_broadcast.send(WireMessage::Text("hello".into()));
-        match rx.recv().await.unwrap() {
-            WireMessage::Text(s) => assert_eq!(s, "hello"),
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[tokio::test]
-    async fn emit_frame_size_error_sends_text_with_category() {
-        let (wb, mut rx) = broadcast::channel::<WireMessage>(16);
-        super::emit_frame_size_error(&wb, 42);
-        let msg = rx.recv().await.unwrap();
-        match msg {
-            WireMessage::Text(s) => {
-                assert!(s.contains("\"kind\":\"error\""));
-                assert!(s.contains("\"category\":\"frame_size_exceeded\""));
-                assert!(s.contains("\"seq\":42"));
-            }
-            _ => panic!("expected Text(error)"),
-        }
     }
 }

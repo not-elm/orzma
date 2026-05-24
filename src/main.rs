@@ -8,7 +8,7 @@ mod theme;
 mod ui;
 
 use bevy::prelude::*;
-use bevy_inspector_egui::bevy_egui::EguiPlugin;
+use bevy_terminal::TerminalPlugin;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
 use input::OzmuxShortcutPlugin;
@@ -20,10 +20,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins((
-            EguiPlugin::default(),
-            bevy_inspector_egui::quick::WorldInspectorPlugin::default(),
-        ))
-        .add_plugins((
+            TerminalPlugin,
             OzmuxMultiplexerPlugin,
             OzmuxConfigsPlugin,
             OzmuxLayoutLogPlugin,

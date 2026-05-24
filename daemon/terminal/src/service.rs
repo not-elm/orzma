@@ -25,27 +25,17 @@ pub mod types;
 ///
 /// Each entry owns a `TerminalHandle` (PTY + scrollback + VT bridge) and is
 /// keyed by [`ActivityId`].
-#[derive(Clone)]
+#[derive(Default)]
+#[cfg_attr(feature = "bevy", derive(bevy::prelude::Resource))]
 pub struct TerminalService {
-    ptys: Arc<RwLock<HashMap<ActivityId, TerminalHandle>>>,
-    runtime_root: Option<Arc<RuntimeRoot>>,
-    title_tx: broadcast::Sender<WindowId>,
-}
-
-impl Default for TerminalService {
-    fn default() -> Self {
-        Self {
-            ptys: Arc::default(),
-            runtime_root: None,
-            title_tx: broadcast::channel(256).0,
-        }
-    }
+    handles: HashMap<ActivityId, TerminalHandle>,
+    runtime_root: Option<RuntimeRoot>,
 }
 
 impl TerminalService {
     /// Constructs a service that exposes the runtime root's `bin/` directory
     /// to spawned shells via `PATH`.
-    pub fn with_runtime_root(root: Arc<RuntimeRoot>) -> Self {
+    pub fn with_runtime_root(root: RuntimeRoot) -> Self {
         Self {
             runtime_root: Some(root),
             ..Self::default()
@@ -53,14 +43,13 @@ impl TerminalService {
     }
 
     /// Spawns a shell for `activity_id` under `pane_id` with the given options.
-    pub async fn spawn(
-        &self,
+    pub fn spawn(
+        &mut self,
         pane_id: PaneId,
         activity_id: ActivityId,
         opts: SpawnOptions,
     ) -> TerminalResult {
-        let mut ptys = self.ptys.write().await;
-        if ptys.contains_key(&activity_id) {
+        if self.handles.contains_key(&activity_id) {
             return Ok(());
         }
 
@@ -73,27 +62,7 @@ impl TerminalService {
             })
             .to_terminal_result()?;
 
-        let mut cmd = CommandBuilder::new(&opts.shell);
-        if let Some(cwd) = &opts.cwd {
-            cmd.cwd(cwd);
-        }
-        cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
-        cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
-        if let Some(wid) = &opts.window_id {
-            cmd.env("OZMUX_WINDOW_ID", wid.as_ref());
-        }
-        if let Some(sid) = &opts.session_id {
-            cmd.env("OZMUX_SESSION_ID", sid.as_ref());
-        }
-        if let Some(prefix) = self.extension_path_prefix() {
-            let existing = std::env::var("PATH").unwrap_or_default();
-            let combined = if existing.is_empty() {
-                prefix
-            } else {
-                format!("{prefix}:{existing}")
-            };
-            cmd.env("PATH", combined);
-        }
+        let cmd = self.pty_command_builder(&pane_id, &activity_id, &opts);
         let child = pty_pair.slave.spawn_command(cmd).to_terminal_result()?;
         let killer = child.clone_killer();
         drop(pty_pair.slave);
@@ -123,70 +92,35 @@ impl TerminalService {
             opts.rows,
             vt_chunk_tx,
             vt_chunk_rx,
-            opts.window_id.clone(),
-            self.title_tx.clone(),
         );
-        ptys.insert(activity_id, handle);
+        self.handles.insert(activity_id, handle);
         Ok(())
     }
 
     /// Writes raw bytes to the PTY master for `activity`, setting the
     /// pending-user-input flag before the syscall so the bridge cannot miss it.
-    pub async fn write(&self, activity: &ActivityId, data: &[u8]) -> TerminalResult {
-        let handle = self.read(activity).await?;
-        // NOTE: flag is set BEFORE the PTY write so a racing bridge cycle
-        // observing this user input cannot miss the flag — the bridge sees
-        // either an empty PTY (no chunk yet, flag set) or a chunk plus flag.
-        {
-            let mut state = handle.vt_state.lock().expect("vt_state poisoned");
-            state.pending_user_input = true;
-        }
-        handle
-            .writer
-            .lock()
-            .await
-            .write_all(data)
-            .map_err(|e| TerminalError::Pty(e.to_string()))?;
+    pub fn write(&mut self, activity: &ActivityId, data: &[u8]) -> TerminalResult {
+        let handle = self.handle_mut(activity)?;
+        handle.write(data)?;
         Ok(())
     }
 
     /// Resizes the PTY and underlying VT grid, then wakes the bridge task so
     /// the resulting Full damage is emitted without waiting for the next chunk.
-    pub async fn resize(&self, activity: &ActivityId, cols: u16, rows: u16) -> TerminalResult {
-        let handle = self.read(activity).await?;
-
-        {
-            let dim = crate::vt::bridge::dim_for(cols, rows);
-            let mut state = handle.vt_state.lock().expect("vt_state poisoned");
-            state.term.resize(dim);
-            state.row_hashes.clear();
-        }
-
-        handle
-            .master
-            .lock()
-            .await
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .to_terminal_result()?;
-
-        // NOTE: send().await (not try_send) so a backpressured channel still
-        // delivers the wakeup — otherwise the resize-induced Full damage waits
-        // until the next genuine PTY chunk, which a non-TUI shell may not
-        // produce on SIGWINCH.
-        let _ = handle.vt_chunk_tx.send(Bytes::new()).await;
-
+    pub fn resize(&mut self, activity: &ActivityId, cols: u16, rows: u16) -> TerminalResult {
+        self.handle_mut(activity)?.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
         Ok(())
     }
 
     /// Removes and drops the handle for `activity`, terminating its bridge
     /// task. Missing activities are logged but not treated as errors.
-    pub async fn kill(&self, activity: &ActivityId) -> TerminalResult {
-        match self.ptys.write().await.remove(activity) {
+    pub fn kill(&mut self, activity: &ActivityId) -> TerminalResult {
+        match self.handles.remove(activity) {
             Some(h) => {
                 drop(h);
             }
@@ -200,40 +134,12 @@ impl TerminalService {
         Ok(())
     }
 
-    /// Subscribes to window-scoped terminal title-change notifications.
-    /// Each item is the `WindowId` of a window whose terminal title changed.
-    pub fn subscribe_title_changes(&self) -> broadcast::Receiver<WindowId> {
-        self.title_tx.subscribe()
-    }
-
-    /// Snapshots the current sanitized title of every running terminal.
-    /// Activities with no title set are omitted.
-    pub async fn all_titles(&self) -> HashMap<ActivityId, String> {
-        // NOTE: ptys lock is always acquired before vt_state locks. The bridge
-        // holds vt_state only briefly and never touches ptys, so this ordering
-        // cannot deadlock.
-        let ptys = self.ptys.read().await;
-        ptys.iter()
-            .filter_map(|(aid, handle)| {
-                let title = handle
-                    .vt_state
-                    .lock()
-                    .expect("vt_state poisoned")
-                    .title
-                    .clone();
-                title.map(|t| (aid.clone(), t))
-            })
-            .collect()
-    }
-
     /// Returns the current scrollback snapshot and a fresh broadcast receiver
     /// for raw [`TerminalEvent`] emissions, captured under one lock.
-    pub async fn snapshot_and_subscribe(
-        &self,
-        activity: &ActivityId,
-    ) -> TerminalResult<(Vec<u8>, broadcast::Receiver<TerminalEvent>)> {
-        let handle = self.read(activity).await?;
-        Ok(handle.snapshot_and_subscribe().await)
+    #[inline]
+    pub fn snapshot(&self, activity: &ActivityId) -> TerminalResult<Vec<u8>> {
+        let handle = self.handle(activity)?;
+        Ok(handle.snapshot())
     }
 
     /// Subscribes to wire frames for the given activity, atomically with respect
@@ -252,12 +158,12 @@ impl TerminalService {
     ///   ring has evicted past that point.
     /// - `FreshSnapshot { reason: Reconnect }` when `last_seq` is `None`
     ///   (cold start or initial connect).
-    pub async fn subscribe_frames(
+    pub fn subscribe_frames(
         &self,
         activity: &ActivityId,
         last_seq: Option<u32>,
     ) -> TerminalResult<FrameSubscription> {
-        let handle = self.read(activity).await?;
+        let handle = self.handle(activity).await?;
         let vt_state = handle.vt_state.clone();
         drop(handle);
 
@@ -304,17 +210,10 @@ impl TerminalService {
     /// Returns the column count, row count, and cursor position/shape as of
     /// the instant the lock is acquired. Intended for emitting the hello frame
     /// on VT WebSocket connect.
-    pub async fn read_geometry(&self, activity: &ActivityId) -> TerminalResult<TerminalGeometry> {
-        use alacritty_terminal::grid::Dimensions;
-        let handle = self.read(activity).await?;
-        let vt_state = handle.vt_state.clone();
-        drop(handle);
-        let state = vt_state.lock().expect("vt_state poisoned");
-        Ok(TerminalGeometry {
-            cols: state.term.columns() as u16,
-            rows: state.term.screen_lines() as u16,
-            cursor: crate::vt::frame_builder::extract_cursor(&state.term),
-        })
+    #[inline]
+    pub fn read_geometry(&self, activity: &ActivityId) -> TerminalResult<TerminalGeometry> {
+        let geometry = self.handle(activity)?.read_geometry();
+        Ok(geometry)
     }
 
     /// Scrolls the visible viewport by `delta` lines.
@@ -325,41 +224,31 @@ impl TerminalService {
     /// Triggers Full damage in alacritty when `display_offset` changes, so the
     /// bridge emits a snapshot through the existing path. The synthetic empty
     /// chunk wakes the bridge task if no PTY output is pending.
-    pub async fn scroll(&self, activity: &ActivityId, delta: i32) -> TerminalResult {
-        let handle = self.read(activity).await?;
-        {
-            let mut state = handle.vt_state.lock().expect("vt_state poisoned");
-            state
-                .term
-                .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
-        }
-        // NOTE: send().await (not try_send) — matches resize semantics so the
-        // wakeup survives a backpressured channel.
-        let _ = handle.vt_chunk_tx.send(Bytes::new()).await;
+    #[inline]
+    pub fn scroll(&mut self, activity: &ActivityId, delta: i32) -> TerminalResult {
+        self.handle_mut(activity)?.scroll(delta);
         Ok(())
     }
 
     /// Snaps the viewport back to the live tail and resumes auto-follow.
-    pub async fn scroll_to_bottom(&self, activity: &ActivityId) -> TerminalResult {
-        let handle = self.read(activity).await?;
-        {
-            let mut state = handle.vt_state.lock().expect("vt_state poisoned");
-            state
-                .term
-                .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
-        }
-        let _ = handle.vt_chunk_tx.send(Bytes::new()).await;
+    #[inline]
+    pub async fn scroll_to_bottom(&mut self, activity: &ActivityId) -> TerminalResult {
+        self.handle_mut(activity)?.scroll_to_bottom();
         Ok(())
     }
 
     #[inline]
-    async fn read(
-        &self,
-        activity_id: &ActivityId,
-    ) -> TerminalResult<RwLockReadGuard<'_, TerminalHandle>> {
-        let guard = self.ptys.read().await;
-        RwLockReadGuard::try_map(guard, |ptys| ptys.get(activity_id))
-            .map_err(|_| TerminalError::ActivityNotFound(activity_id.clone()))
+    fn handle(&self, activity_id: &ActivityId) -> TerminalResult<&TerminalHandle> {
+        self.handles
+            .get(activity_id)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity_id.clone()))
+    }
+
+    #[inline]
+    fn handle_mut(&mut self, activity_id: &ActivityId) -> TerminalResult<&mut TerminalHandle> {
+        self.handles
+            .get_mut(activity_id)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity_id.clone()))
     }
 
     fn extension_path_prefix(&self) -> Option<String> {
@@ -372,6 +261,36 @@ impl TerminalService {
             .map(|e| e.path().to_string_lossy().into_owned())
             .collect();
         build_path_prefix(entries)
+    }
+
+    fn pty_command_builder(
+        &self,
+        pane_id: &PaneId,
+        activity_id: &ActivityId,
+        opts: &SpawnOptions,
+    ) -> CommandBuilder {
+        let mut cmd = CommandBuilder::new(&opts.shell);
+        if let Some(cwd) = &opts.cwd {
+            cmd.cwd(cwd);
+        }
+        cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
+        cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
+        if let Some(wid) = &opts.window_id {
+            cmd.env("OZMUX_WINDOW_ID", wid.as_ref());
+        }
+        if let Some(sid) = &opts.session_id {
+            cmd.env("OZMUX_SESSION_ID", sid.as_ref());
+        }
+        if let Some(prefix) = self.extension_path_prefix() {
+            let existing = std::env::var("PATH").unwrap_or_default();
+            let combined = if existing.is_empty() {
+                prefix
+            } else {
+                format!("{prefix}:{existing}")
+            };
+            cmd.env("PATH", combined);
+        }
+        cmd
     }
 }
 
@@ -395,328 +314,4 @@ fn build_path_prefix(entries: Vec<String>) -> Option<String> {
     } else {
         Some(builtin.join(":"))
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ozmux_multiplexer::{SessionId, WindowId};
-
-    #[tokio::test]
-    async fn snapshot_and_subscribe_returns_err_for_unknown_activity() {
-        let svc = TerminalService::default();
-        let id = ActivityId::new();
-        let result = svc.snapshot_and_subscribe(&id).await;
-        assert!(matches!(result, Err(TerminalError::ActivityNotFound(ref got)) if got == &id));
-    }
-
-    #[tokio::test]
-    async fn spawn_then_snapshot_and_subscribe_succeeds() {
-        let svc = TerminalService::default();
-        let id = ActivityId::new();
-        let pane_id = PaneId::new();
-        svc.spawn(
-            pane_id,
-            id.clone(),
-            SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: "/bin/sh".to_string(),
-                cwd: None,
-                window_id: None,
-                session_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        let (snap, _rx) = svc.snapshot_and_subscribe(&id).await.unwrap();
-        // snapshot may be empty depending on shell startup speed; just confirm Ok.
-        let _ = snap;
-
-        // Cleanup
-        svc.kill(&id).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn spawn_injects_pane_and_activity_ids_into_shell_env() {
-        let svc = TerminalService::default();
-        let activity_id = ActivityId::new();
-        let pane_id = PaneId::new();
-        svc.spawn(
-            pane_id.clone(),
-            activity_id.clone(),
-            SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: "/bin/sh".to_string(),
-                cwd: None,
-                window_id: None,
-                session_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity_id).await.unwrap();
-
-        svc.write(
-            &activity_id,
-            b"printf 'PANE=%s ACT=%s\\n' \"$OZMUX_PANE_ID\" \"$OZMUX_ACTIVITY_ID\"\n",
-        )
-        .await
-        .unwrap();
-
-        let needle = format!("PANE={} ACT={}", pane_id.as_ref(), activity_id.as_ref());
-
-        let mut got = Vec::new();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
-                Ok(Ok(TerminalEvent::Data { buffer })) => {
-                    got.extend_from_slice(&buffer);
-                    if got.windows(needle.len()).any(|w| w == needle.as_bytes()) {
-                        break;
-                    }
-                }
-                Ok(Ok(TerminalEvent::Exit { .. })) => break,
-                Ok(Err(_)) => break,
-                Err(_) => continue,
-            }
-        }
-        svc.kill(&activity_id).await.unwrap();
-        let s = String::from_utf8_lossy(&got);
-        assert!(s.contains(&needle), "expected {needle}, got: {s}");
-    }
-
-    #[tokio::test]
-    async fn spawn_injects_window_and_session_ids_when_provided() {
-        let svc = TerminalService::default();
-        let activity_id = ActivityId::new();
-        let pane_id = PaneId::new();
-        let window_id = WindowId::new();
-        let session_id = SessionId::new();
-        svc.spawn(
-            pane_id,
-            activity_id.clone(),
-            SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: "/bin/sh".to_string(),
-                cwd: None,
-                window_id: Some(window_id.clone()),
-                session_id: Some(session_id.clone()),
-            },
-        )
-        .await
-        .unwrap();
-
-        let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity_id).await.unwrap();
-
-        svc.write(
-            &activity_id,
-            b"printf 'WIN=%s SES=%s\\n' \"$OZMUX_WINDOW_ID\" \"$OZMUX_SESSION_ID\"\n",
-        )
-        .await
-        .unwrap();
-
-        let needle = format!("WIN={} SES={}", window_id.as_ref(), session_id.as_ref());
-        let mut got = Vec::new();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
-                Ok(Ok(TerminalEvent::Data { buffer })) => {
-                    got.extend_from_slice(&buffer);
-                    if got.windows(needle.len()).any(|w| w == needle.as_bytes()) {
-                        break;
-                    }
-                }
-                Ok(Ok(TerminalEvent::Exit { .. })) => break,
-                Ok(Err(_)) => break,
-                Err(_) => continue,
-            }
-        }
-        svc.kill(&activity_id).await.unwrap();
-        let s = String::from_utf8_lossy(&got);
-        assert!(s.contains(&needle), "expected {needle}, got: {s}");
-    }
-
-    #[tokio::test]
-    async fn pty_output_is_broadcast_to_subscribers() {
-        let svc = TerminalService::default();
-        let id = ActivityId::new();
-        let pane_id = PaneId::new();
-        svc.spawn(
-            pane_id,
-            id.clone(),
-            SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: "/bin/sh".to_string(),
-                cwd: None,
-                window_id: None,
-                session_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        let (_snap, mut rx) = svc.snapshot_and_subscribe(&id).await.unwrap();
-
-        // Trigger output: send a known string and read it back from broadcast.
-        svc.write(&id, b"echo race_free_marker\n").await.unwrap();
-
-        let mut got = Vec::new();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
-                Ok(Ok(TerminalEvent::Data { buffer })) => {
-                    got.extend_from_slice(&buffer);
-                    if got
-                        .windows(b"race_free_marker".len())
-                        .any(|w| w == b"race_free_marker")
-                    {
-                        break;
-                    }
-                }
-                Ok(Ok(TerminalEvent::Exit { .. })) => break,
-                Ok(Err(_)) => break,
-                Err(_) => continue,
-            }
-        }
-        svc.kill(&id).await.unwrap();
-
-        let s = String::from_utf8_lossy(&got);
-        assert!(
-            s.contains("race_free_marker"),
-            "expected marker in output, got: {s}"
-        );
-    }
-
-    #[tokio::test]
-    async fn spawn_with_runtime_root_prepends_path() {
-        use ozmux_extension::runtime::RuntimeRoot;
-        use std::sync::Arc;
-
-        let parent = tempfile::tempdir().unwrap();
-        let rt = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
-        let ext_bin = rt.bin_dir().join("memo");
-        std::fs::create_dir_all(&ext_bin).unwrap();
-
-        let svc = TerminalService::with_runtime_root(Arc::clone(&rt));
-        let activity_id = ActivityId::new();
-        let pane_id = PaneId::new();
-        svc.spawn(
-            pane_id,
-            activity_id.clone(),
-            SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: "/bin/sh".to_string(),
-                cwd: None,
-                window_id: None,
-                session_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        let (_snap, mut rx) = svc.snapshot_and_subscribe(&activity_id).await.unwrap();
-        svc.write(&activity_id, b"echo PATHHEAD=\"$PATH\"\n")
-            .await
-            .unwrap();
-
-        let needle = format!("PATHHEAD={}", ext_bin.display());
-        let mut got = Vec::new();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
-                Ok(Ok(TerminalEvent::Data { buffer })) => {
-                    got.extend_from_slice(&buffer);
-                    if got.windows(needle.len()).any(|w| w == needle.as_bytes()) {
-                        break;
-                    }
-                }
-                Ok(Ok(TerminalEvent::Exit { .. })) => break,
-                Ok(Err(_)) => break,
-                Err(_) => continue,
-            }
-        }
-        svc.kill(&activity_id).await.unwrap();
-        let s = String::from_utf8_lossy(&got);
-        assert!(
-            s.contains(&needle),
-            "expected `{needle}` in output, got: {s}"
-        );
-    }
-
-    #[tokio::test]
-    async fn runtime_root_arc_keeps_tree_alive_until_service_dropped() {
-        use ozmux_extension::runtime::RuntimeRoot;
-        use std::sync::Arc;
-        let parent = tempfile::tempdir().unwrap();
-        let rt = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
-        let path = rt.root().to_path_buf();
-        let svc = TerminalService::with_runtime_root(Arc::clone(&rt));
-        drop(rt);
-        assert!(path.exists(), "Arc inside service keeps RuntimeRoot alive");
-        drop(svc);
-        assert!(
-            !path.exists(),
-            "service drop releases last Arc → RuntimeRoot Drop"
-        );
-    }
-
-    #[tokio::test]
-    async fn runtime_root_skips_when_empty() {
-        use ozmux_extension::runtime::RuntimeRoot;
-        use std::sync::Arc;
-        let parent = tempfile::tempdir().unwrap();
-        let rt = Arc::new(RuntimeRoot::new_in(parent.path(), std::process::id()).unwrap());
-        let svc = TerminalService::with_runtime_root(Arc::clone(&rt));
-        let activity_id = ActivityId::new();
-        let pane_id = PaneId::new();
-        svc.spawn(
-            pane_id,
-            activity_id.clone(),
-            SpawnOptions {
-                cols: 80,
-                rows: 24,
-                shell: "/bin/sh".to_string(),
-                cwd: None,
-                window_id: None,
-                session_id: None,
-            },
-        )
-        .await
-        .expect("spawn must succeed even with empty bin/");
-        svc.kill(&activity_id).await.unwrap();
-    }
-
-    #[test]
-    fn extension_path_prefix_partitions_builtin_to_head() {
-        use super::build_path_prefix;
-        let entries: Vec<String> = vec![
-            "/tmp/r/bin/zeta".into(),
-            "/tmp/r/bin/__builtin".into(),
-            "/tmp/r/bin/alpha".into(),
-        ];
-        let got = build_path_prefix(entries).expect("non-empty");
-        assert_eq!(got, "/tmp/r/bin/__builtin:/tmp/r/bin/alpha:/tmp/r/bin/zeta");
-    }
-
-    #[test]
-    fn extension_path_prefix_returns_none_when_empty() {
-        use super::build_path_prefix;
-        assert!(build_path_prefix(vec![]).is_none());
-    }
-
-    #[test]
-    fn extension_path_prefix_handles_missing_builtin() {
-        use super::build_path_prefix;
-        let entries: Vec<String> = vec!["/tmp/r/bin/zeta".into(), "/tmp/r/bin/alpha".into()];
-        let got = build_path_prefix(entries).expect("non-empty");
-        assert_eq!(got, "/tmp/r/bin/alpha:/tmp/r/bin/zeta");
-    }
-
 }

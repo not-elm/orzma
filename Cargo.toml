@@ -12,15 +12,25 @@ name = "ozmux-gui"
 path = "src/main.rs"
 
 [dependencies]
-bevy = { version = "0.18", default-features = true }
+bevy = { workspace = true }
+bevy_terminal_render = { path = "daemon/bevy_terminal_render" }
+bevy_terminal = { path = "crates/bevy_terminal" }
 ozmux_configs = { path = "daemon/configs" }
 ozmux_multiplexer = { path = "daemon/multiplexer" }
+ozmux_terminal = { path = "daemon/terminal", features = ["bevy"] }
 tracing = { workspace = true }
-bevy-inspector-egui = { version = "0.36.0" }
 
 [workspace]
 resolver = "2"
-members = ["daemon/configs", "daemon/macros", "daemon/multiplexer", "xtask"]
+members = [
+  "daemon/bevy_terminal_render",
+  "daemon/terminal",
+  "daemon/configs",
+  "daemon/macros",
+  "daemon/multiplexer",
+  "crates/*",
+  "xtask",
+]
 exclude = [
   "cli",
   "daemon/bootstrap",
@@ -29,7 +39,6 @@ exclude = [
   "daemon/cef_host",
   "daemon/extension",
   "daemon/http_server",
-  "daemon/terminal",
   "client",
 ]
 
@@ -42,6 +51,7 @@ authors = ["notelm"]
 publish = false
 
 [workspace.dependencies]
+bevy = { version = "0.18" }
 tokio = { version = "1.52" }
 anyhow = { version = "1" }
 dashmap = "6"
@@ -71,3 +81,6 @@ reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "json",
 ] }
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"
