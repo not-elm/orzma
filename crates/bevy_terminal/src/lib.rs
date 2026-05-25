@@ -21,7 +21,7 @@ pub use events::{
     TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalKey, TerminalKeyInput,
     TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
-pub use handle::TerminalHandle;
+pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::TerminalTitle;
