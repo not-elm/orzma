@@ -58,10 +58,7 @@ fn attach_indicator_to_activity_host(
                     position_type: PositionType::Absolute,
                     top: Val::Px(0.0),
                     right: Val::Px(0.0),
-                    padding: UiRect::axes(
-                        Val::Px(theme::ELEMENT_PADDING_PX),
-                        Val::Px(0.0),
-                    ),
+                    padding: UiRect::axes(Val::Px(theme::ELEMENT_PADDING_PX), Val::Px(0.0)),
                     display: Display::None,
                     ..default()
                 },
@@ -203,11 +200,7 @@ mod tests {
             .world()
             .get::<Node>(chip)
             .expect("chip must have a Node");
-        assert_eq!(
-            chip_node.display,
-            Display::None,
-            "chip starts hidden"
-        );
+        assert_eq!(chip_node.display, Display::None, "chip starts hidden");
         let cache = app
             .world()
             .get::<IndicatorCache>(chip)
@@ -279,9 +272,7 @@ mod tests {
             let mut handle = entity
                 .take::<TerminalHandle>()
                 .expect("TerminalHandle on host");
-            let mut coalescer = entity
-                .take::<Coalescer>()
-                .expect("Coalescer on host");
+            let mut coalescer = entity.take::<Coalescer>().expect("Coalescer on host");
             handle.enter_vi_mode(&mut coalescer);
             handle.scroll_page_up(&mut coalescer);
             entity.insert((handle, coalescer));
@@ -439,8 +430,7 @@ mod tests {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
             let wid = {
-                let (_sid, session) =
-                    mux.sessions.iter().next().expect("session");
+                let (_sid, session) = mux.sessions.iter().next().expect("session");
                 session.active_window.clone().expect("active window")
             };
             mux.rename_window(&wid, "renamed".into()).expect("rename");
@@ -479,8 +469,7 @@ mod tests {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
             let wid = {
-                let (_sid, session) =
-                    mux.sessions.iter().next().expect("session");
+                let (_sid, session) = mux.sessions.iter().next().expect("session");
                 session.active_window.clone().expect("active window")
             };
             let (active_pane, bootstrap_aid) = {
@@ -508,12 +497,10 @@ mod tests {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
             let wid = {
-                let (_sid, session) =
-                    mux.sessions.iter().next().expect("session");
+                let (_sid, session) = mux.sessions.iter().next().expect("session");
                 session.active_window.clone().expect("active window")
             };
-            let active_pane =
-                mux.windows.get(&wid).expect("window").active_pane.clone();
+            let active_pane = mux.windows.get(&wid).expect("window").active_pane.clone();
             let _ = mux
                 .with_window(&wid, |w| {
                     w.pane_mut(&active_pane)
@@ -545,10 +532,7 @@ mod tests {
             .get::<ChildOf>(bootstrap_host)
             .expect("host parent")
             .parent();
-        let stash_node = app
-            .world()
-            .get::<Node>(host_parent)
-            .expect("stash Node");
+        let stash_node = app.world().get::<Node>(host_parent).expect("stash Node");
         assert_eq!(
             stash_node.display,
             Display::None,
