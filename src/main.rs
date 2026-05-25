@@ -31,6 +31,7 @@ fn main() {
             OzmuxUiPlugin,
             CopyModePlugin,
             CopyModeIndicatorPlugin,
+            crate::input::mouse_wheel::MouseWheelInputPlugin,
         ))
         .run();
 }
