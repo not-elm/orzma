@@ -61,6 +61,21 @@ impl Dimensions for LocalDim {
     }
 }
 
+/// Snapshot of the data the copy-mode indicator needs.
+///
+/// Reading `Term` directly (rather than the renderer-side `TerminalGrid`
+/// component) is deliberate: `FrameDelta` does not carry `history_size`,
+/// so a `TerminalGrid` mirror would be stale between snapshots and the
+/// indicator would briefly display the wrong `total` under sustained
+/// PTY output.
+#[derive(Debug, Clone, Copy)]
+pub struct ViIndicatorSnapshot {
+    /// 0-based scroll offset from the live tail (0 = bottom).
+    pub scroll_offset: usize,
+    /// Total scrollback length, matching tmux's `[offset/total]`.
+    pub total_lines: usize,
+}
+
 /// All VT / bridge state for a single terminal entity.
 #[derive(Component)]
 pub struct TerminalHandle {
@@ -347,6 +362,15 @@ impl TerminalHandle {
     /// and `ESC O A/B/C/D` for arrow keys.
     pub fn is_app_cursor_keys(&self) -> bool {
         self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
+    /// Returns the current scroll offset and history length for the
+    /// copy-mode indicator's `[offset/total]` chip.
+    pub fn vi_indicator_snapshot(&self) -> ViIndicatorSnapshot {
+        ViIndicatorSnapshot {
+            scroll_offset: self.term.grid().display_offset(),
+            total_lines: self.term.history_size(),
+        }
     }
 
     /// Advance with a PTY chunk: capture pre-advance mode (for window
@@ -1098,6 +1122,38 @@ mod tests {
         assert!(
             s_after.contains("klmno"),
             "Lines selection must REACH row 1 (current vi cursor), got {s_after:?}",
+        );
+    }
+
+    #[test]
+    fn vi_indicator_snapshot_reads_current_offset_and_history_size() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        let opts = SpawnOptions {
+            cols: 10,
+            rows: 5,
+            shell: "/bin/sh".into(),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
+        let mut h = bundle.handle;
+        let mut coalescer = bundle.coalescer;
+
+        let snap0 = h.vi_indicator_snapshot();
+        assert_eq!(snap0.scroll_offset, 0, "fresh terminal at live tail");
+
+        h.enter_vi_mode(&mut coalescer);
+        h.scroll_page_up(&mut coalescer);
+
+        let snap1 = h.vi_indicator_snapshot();
+        assert!(
+            snap1.scroll_offset > 0 || snap1.total_lines == 0,
+            "after PageUp, offset must grow OR scrollback is empty (snapshot: {snap1:?})"
+        );
+        assert_eq!(
+            snap1.total_lines,
+            h.term.history_size(),
+            "total_lines must equal Term::history_size()"
         );
     }
 
