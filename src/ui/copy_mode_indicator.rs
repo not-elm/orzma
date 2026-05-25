@@ -277,4 +277,42 @@ mod tests {
         let expected = format_indicator(cache.offset, cache.total);
         assert_eq!(text.0, expected);
     }
+
+    #[test]
+    fn refresh_does_not_change_text_when_numeric_pair_unchanged() {
+        let mut app = make_app_with_plugin();
+        let host = spawn_terminal_entity(&mut app);
+        app.update();
+        app.world_mut()
+            .entity_mut(host)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        // First tick after CopyModeState insertion: chip becomes visible and
+        // Text is written from "" to "[0/0]" (becoming_visible path).
+        app.update();
+        // Capture the change tick of Text after the first reveal.
+        let chip = find_indicator_child(&app, host).expect("chip");
+
+        let before_tick = app
+            .world()
+            .entity(chip)
+            .get_change_ticks::<Text>()
+            .expect("Text has change ticks")
+            .changed;
+
+        // Second tick: quiescent terminal, numeric pair unchanged, chip
+        // already visible. Text must NOT be rewritten.
+        app.update();
+
+        let after_tick = app
+            .world()
+            .entity(chip)
+            .get_change_ticks::<Text>()
+            .expect("Text has change ticks")
+            .changed;
+
+        assert_eq!(
+            before_tick, after_tick,
+            "Text must not be re-written when (offset, total) is unchanged"
+        );
+    }
 }
