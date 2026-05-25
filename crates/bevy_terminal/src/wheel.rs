@@ -188,7 +188,14 @@ pub fn route_wheel(
         return WheelAction::WriteToPty(buf);
     }
 
-    if modes.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) && !mods.shift {
+    // NOTE: no Shift bypass to host scrollback here. `scroll_display`
+    // would act on the active (alt) buffer, which alacritty_terminal
+    // keeps without scrollback history, so the gesture would silently
+    // no-op. wezterm / foot / kitty all route alt-screen wheel
+    // straight to arrow keys; we match that convention. To view host
+    // scrollback while inside an alt-screen app, use copy mode or
+    // exit the app.
+    if modes.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
         let lines_per = if mods.fine { cfg.fine_lines } else { cfg.lines_per_notch };
         let n = notches.unsigned_abs().saturating_mul(lines_per);
         if n == 0 {
@@ -374,11 +381,27 @@ mod route_tests {
     }
 
     #[test]
-    fn alt_screen_with_shift_bypasses_to_scrollback() {
+    fn alt_screen_shift_alone_still_translates_to_arrows() {
+        // No Shift-bypass: pressing Shift without the fine modifier set
+        // does not change routing — alt-screen still receives arrow keys
+        // at the normal lines_per_notch rate.
         let modes = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
         let mods = WheelModifiers { shift: true, ..Default::default() };
         let action = route_wheel(modes, -1, cell(), mods, &cfg_default());
-        assert_eq!(action, WheelAction::ScrollViewport(3));
+        assert_eq!(action, WheelAction::WriteToPty(b"\x1bOA\x1bOA\x1bOA".to_vec()));
+    }
+
+    #[test]
+    fn alt_screen_fine_modifier_sends_fewer_arrows() {
+        // Shift+wheel under default config sets `mods.fine = true` so the
+        // alt-screen path emits `fine_lines` arrows per notch instead of
+        // `lines_per_notch`. Matches wezterm's `alternate_buffer_wheel_scroll_speed`
+        // policy and lets users slow-scroll inside vim/less.
+        let modes = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        let mods = WheelModifiers { shift: true, fine: true, ..Default::default() };
+        let action = route_wheel(modes, -1, cell(), mods, &cfg_default());
+        // -1 notch * fine_lines=1 = 1 up arrow
+        assert_eq!(action, WheelAction::WriteToPty(b"\x1bOA".to_vec()));
     }
 
     #[test]
