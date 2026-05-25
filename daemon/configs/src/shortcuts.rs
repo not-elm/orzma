@@ -665,6 +665,100 @@ impl Default for Shortcuts {
     }
 }
 
+/// User-facing shortcut configuration. Each Action gets its own named
+/// `Option<KeyChord>` field:
+///   - `Some(chord)` = bound to that chord
+///   - `None`        = explicitly unbound (via TOML `""`)
+///
+/// TOML reads the `[shortcuts.bindings]` table; the `kebab-case` serde
+/// rename maps each `close-pane = "Cmd+Shift+D"` line to the matching
+/// field. `#[serde(default)]` at struct level seeds missing fields from
+/// `Bindings::default()` (the 17 defaults). `deny_unknown_fields` rejects
+/// typos and unimplemented-action keys at load time.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
+pub struct Bindings {
+    /// Close the active pane.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub close_pane: Option<KeyChord>,
+    /// Move pane focus left.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub focus_pane_left: Option<KeyChord>,
+    /// Move pane focus down.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub focus_pane_down: Option<KeyChord>,
+    /// Move pane focus up.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub focus_pane_up: Option<KeyChord>,
+    /// Move pane focus right.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub focus_pane_right: Option<KeyChord>,
+    /// Split the active pane vertically.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub split_pane_vertical: Option<KeyChord>,
+    /// Split the active pane horizontally.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub split_pane_horizontal: Option<KeyChord>,
+    /// Swap the active pane with the previous sibling.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub swap_pane_prev: Option<KeyChord>,
+    /// Swap the active pane with the next sibling.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub swap_pane_next: Option<KeyChord>,
+    /// Close the active activity.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub close_activity: Option<KeyChord>,
+    /// Spawn a new terminal activity in the active pane.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub new_terminal_activity: Option<KeyChord>,
+    /// Cycle activity focus to the previous one.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub focus_activity_prev: Option<KeyChord>,
+    /// Cycle activity focus to the next one.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub focus_activity_next: Option<KeyChord>,
+    /// Enter tmux-style copy mode on the active terminal activity.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub enter_copy_mode: Option<KeyChord>,
+    /// Create a new window in the active session.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub new_window: Option<KeyChord>,
+    /// Cycle window focus to the previous one.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub focus_window_prev: Option<KeyChord>,
+    /// Cycle window focus to the next one.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub focus_window_next: Option<KeyChord>,
+}
+
+fn parse_default_chord(s: &str) -> KeyChord {
+    parse_key_chord(s).unwrap_or_else(|e| panic!("invalid default chord {s:?}: {e}"))
+}
+
+impl Default for Bindings {
+    fn default() -> Self {
+        Bindings {
+            close_pane: Some(parse_default_chord("Cmd+Shift+D")),
+            focus_pane_left: Some(parse_default_chord("Cmd+H")),
+            focus_pane_down: Some(parse_default_chord("Cmd+J")),
+            focus_pane_up: Some(parse_default_chord("Cmd+K")),
+            focus_pane_right: Some(parse_default_chord("Cmd+L")),
+            split_pane_vertical: Some(parse_default_chord("Cmd+I")),
+            split_pane_horizontal: Some(parse_default_chord("Cmd+O")),
+            swap_pane_prev: Some(parse_default_chord("Cmd+B")),
+            swap_pane_next: Some(parse_default_chord("Cmd+N")),
+            close_activity: Some(parse_default_chord("Cmd+Shift+F")),
+            new_terminal_activity: Some(parse_default_chord("Cmd+T")),
+            focus_activity_prev: Some(parse_default_chord("Cmd+[")),
+            focus_activity_next: Some(parse_default_chord("Cmd+]")),
+            enter_copy_mode: Some(parse_default_chord("Cmd+U")),
+            new_window: Some(parse_default_chord("Cmd+R")),
+            focus_window_prev: Some(parse_default_chord("Cmd+Shift+[")),
+            focus_window_next: Some(parse_default_chord("Cmd+Shift+]")),
+        }
+    }
+}
+
 /// Prefix chord and timeout used to "arm" the shortcut dispatcher.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Prefix {
@@ -1314,6 +1408,46 @@ mod tests {
     struct OptionWrapper {
         #[serde(deserialize_with = "deser_chord_or_unbind")]
         v: Option<KeyChord>,
+    }
+
+    #[test]
+    fn bindings_default_has_all_17_fields_some() {
+        let b = Bindings::default();
+        assert!(b.close_pane.is_some());
+        assert!(b.focus_pane_left.is_some());
+        assert!(b.focus_pane_down.is_some());
+        assert!(b.focus_pane_up.is_some());
+        assert!(b.focus_pane_right.is_some());
+        assert!(b.split_pane_vertical.is_some());
+        assert!(b.split_pane_horizontal.is_some());
+        assert!(b.swap_pane_prev.is_some());
+        assert!(b.swap_pane_next.is_some());
+        assert!(b.close_activity.is_some());
+        assert!(b.new_terminal_activity.is_some());
+        assert!(b.focus_activity_prev.is_some());
+        assert!(b.focus_activity_next.is_some());
+        assert!(b.enter_copy_mode.is_some());
+        assert!(b.new_window.is_some());
+        assert!(b.focus_window_prev.is_some());
+        assert!(b.focus_window_next.is_some());
+    }
+
+    #[test]
+    fn bindings_default_focus_pane_left_is_cmd_h() {
+        let b = Bindings::default();
+        let chord = b.focus_pane_left.as_ref().unwrap();
+        assert_eq!(chord.key, Key::Char('h'));
+        assert!(chord.modifiers.meta);
+        assert!(!chord.modifiers.shift);
+    }
+
+    #[test]
+    fn bindings_default_close_pane_is_cmd_shift_d() {
+        let b = Bindings::default();
+        let chord = b.close_pane.as_ref().unwrap();
+        assert_eq!(chord.key, Key::Char('d'));
+        assert!(chord.modifiers.meta);
+        assert!(chord.modifiers.shift);
     }
 
     #[test]
