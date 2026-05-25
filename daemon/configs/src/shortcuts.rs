@@ -25,6 +25,8 @@ pub enum Key {
     ArrowLeft,
     /// `ArrowRight`.
     ArrowRight,
+    /// `+` literal key (named to disambiguate from the `+` separator in `"Cmd+Plus"`).
+    Plus,
     /// Forward-compatibility variant for unknown logical key names.
     Other(String),
 }
@@ -41,6 +43,7 @@ impl Key {
             "ArrowDown" => Key::ArrowDown,
             "ArrowLeft" => Key::ArrowLeft,
             "ArrowRight" => Key::ArrowRight,
+            "Plus" => Key::Plus,
             other => {
                 let mut chars = other.chars();
                 match (chars.next(), chars.next()) {
@@ -68,6 +71,7 @@ impl serde::Serialize for Key {
             Key::ArrowDown => ser.serialize_str("ArrowDown"),
             Key::ArrowLeft => ser.serialize_str("ArrowLeft"),
             Key::ArrowRight => ser.serialize_str("ArrowRight"),
+            Key::Plus => ser.serialize_str("Plus"),
             Key::Other(s) => ser.serialize_str(s),
         }
     }
@@ -675,6 +679,21 @@ mod tests {
     fn key_parses_unknown_as_other() {
         let v: Key = serde_json::from_str("\"f12\"").unwrap();
         assert_eq!(v, Key::Other("f12".to_string()));
+    }
+
+    #[test]
+    fn key_parses_named_plus() {
+        let v: Key = serde_json::from_str("\"Plus\"").unwrap();
+        assert_eq!(v, Key::Plus);
+    }
+
+    #[test]
+    fn key_plus_roundtrip() {
+        let key = Key::Plus;
+        let s = serde_json::to_string(&key).unwrap();
+        assert_eq!(s, "\"Plus\"");
+        let back: Key = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, key);
     }
 
     #[test]
