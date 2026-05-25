@@ -872,4 +872,62 @@ mod tests {
             captured,
         );
     }
+
+    #[test]
+    fn direct_dispatch_cmd_j_fires_focus_pane_down() {
+        let (mut app, window_entity) = make_app(true);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("j".into()));
+        app.update();
+        let mux = app.world().resource::<crate::multiplexer::Multiplexer>();
+        assert!(!mux.windows.is_empty());
+    }
+
+    #[test]
+    fn key_repeat_event_is_ignored() {
+        let (mut app, window_entity) = make_app(true);
+        install_active_terminal_activity(&mut app);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        let ev = KeyboardInput {
+            key_code: KeyCode::Unidentified(NativeKeyCode::Unidentified),
+            logical_key: Bk::Character("d".into()),
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: true,
+            window: window_entity,
+        };
+        let mut events = app
+            .world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>();
+        events.write(ev);
+        drop(events);
+        app.update();
+        let mux = app.world().resource::<crate::multiplexer::Multiplexer>();
+        assert!(!mux.windows.is_empty());
+    }
+
+    #[test]
+    fn unbound_chord_falls_through_to_terminal_passthrough() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+        press(&mut app, window_entity, Bk::Character("a".into()));
+        app.update();
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.iter().any(|ev| matches!(
+                &ev.key,
+                bevy_terminal::TerminalKey::Text(s) if s == "a"
+            )),
+            "plain 'a' must forward to the terminal; captured: {:?}",
+            captured,
+        );
+    }
 }
