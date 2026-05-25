@@ -75,9 +75,15 @@ fn mouse_wheel_system(
     let mut had_input = false;
     for ev in wheel_msgs.read() {
         had_input = true;
+        // NOTE: winit reports positive `y` when natural scrolling moves the
+        // viewport content downward (revealing older lines above). Our router
+        // uses the opposite sign convention — `notches < 0` means "up / older".
+        // Without this negation, a normal upward scroll produces a negative
+        // `ScrollViewport` delta that no-ops at the live tail, and the user
+        // sees nothing.
         let cells = match ev.unit {
-            MouseScrollUnit::Line => ev.y,
-            MouseScrollUnit::Pixel => ev.y / CELL_H_LOGICAL_PX,
+            MouseScrollUnit::Line => -ev.y,
+            MouseScrollUnit::Pixel => -ev.y / CELL_H_LOGICAL_PX,
         };
         delta_y += cells;
     }
