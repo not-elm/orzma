@@ -110,6 +110,35 @@ pub(crate) fn encode_sgr_wheel(
     format!("\x1b[<{};{};{}M", b, cell.col.max(1), cell.row.max(1)).into_bytes()
 }
 
+/// Encodes a single legacy X10 wheel report.
+///
+/// Wire format: `CSI M <b+32> <col+32> <row+32>`. Each coordinate
+/// byte caps at 223 (`255 - 32`) — the X10 protocol cannot represent
+/// larger cells; wheel reports for huge terminals must use SGR
+/// (`SGR_MOUSE`).
+pub(crate) fn encode_x10_wheel(
+    direction: WheelDir,
+    mods: WheelModifiers,
+    cell: CellCoord,
+) -> Vec<u8> {
+    let mut b: u32 = 64;
+    if matches!(direction, WheelDir::Down) {
+        b += 1;
+    }
+    if mods.shift {
+        b += 4;
+    }
+    if mods.alt {
+        b += 8;
+    }
+    if mods.ctrl {
+        b += 16;
+    }
+    let col_clamped = cell.col.clamp(1, 223) as u8;
+    let row_clamped = cell.row.clamp(1, 223) as u8;
+    vec![0x1b, b'[', b'M', (b + 32) as u8, col_clamped + 32, row_clamped + 32]
+}
+
 #[cfg(test)]
 mod sgr_tests {
     use super::*;
@@ -145,5 +174,39 @@ mod sgr_tests {
     fn sgr_zero_col_row_clamps_to_one() {
         let bytes = encode_sgr_wheel(WheelDir::Up, WheelModifiers::default(), CellCoord { col: 0, row: 0 });
         assert_eq!(bytes, b"\x1b[<64;1;1M");
+    }
+}
+
+#[cfg(test)]
+mod x10_tests {
+    use super::*;
+
+    #[test]
+    fn x10_up_origin() {
+        let bytes = encode_x10_wheel(WheelDir::Up, WheelModifiers::default(), CellCoord { col: 1, row: 1 });
+        // ESC [ M  b(64+32=96)  x(1+32=33)  y(1+32=33)
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 96, 33, 33]);
+    }
+
+    #[test]
+    fn x10_down_cell() {
+        let bytes = encode_x10_wheel(WheelDir::Down, WheelModifiers::default(), CellCoord { col: 10, row: 5 });
+        // b = 65 + 32 = 97
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 97, 42, 37]);
+    }
+
+    #[test]
+    fn x10_clamps_beyond_223() {
+        let bytes = encode_x10_wheel(WheelDir::Up, WheelModifiers::default(), CellCoord { col: 300, row: 300 });
+        // 223 + 32 = 255
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 96, 255, 255]);
+    }
+
+    #[test]
+    fn x10_with_shift_ctrl() {
+        let mods = WheelModifiers { shift: true, ctrl: true, ..Default::default() };
+        let bytes = encode_x10_wheel(WheelDir::Down, mods, CellCoord { col: 1, row: 1 });
+        // 65 + 4 + 16 = 85, + 32 = 117
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 117, 33, 33]);
     }
 }
