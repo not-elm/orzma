@@ -1,5 +1,6 @@
 //! Shortcut domain types: keys, modifiers, chords, prefix, bindings, actions.
 
+use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -229,12 +230,11 @@ pub fn deser_chord_or_unbind<'de, D>(d: D) -> Result<Option<KeyChord>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::de::Error;
     let s = String::deserialize(d)?;
     if s.is_empty() {
         return Ok(None);
     }
-    parse_key_chord(&s).map(Some).map_err(Error::custom)
+    parse_key_chord(&s).map(Some).map_err(DeError::custom)
 }
 
 /// One chord-collision entry. Carried inside
