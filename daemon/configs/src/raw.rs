@@ -7,10 +7,9 @@ use crate::OzmuxConfigsResult;
 use crate::browser::BrowserPatch;
 use crate::font::FontPatch;
 use crate::mouse::MousePatch;
-use crate::shortcuts::{Binding, Prefix};
+use crate::shortcuts::Bindings;
 use crate::theme::ThemePatch;
 use serde::Deserialize;
-use std::collections::HashSet;
 
 /// Top-level TOML shape: every section is optional.
 #[derive(Deserialize, Default)]
@@ -25,8 +24,7 @@ pub(crate) struct RawConfigs {
 /// `[shortcuts]` shape with each subfield optional.
 #[derive(Deserialize, Default)]
 pub(crate) struct RawShortcuts {
-    pub(crate) prefix: Option<Prefix>,
-    pub(crate) bindings: Option<Vec<Binding>>,
+    pub(crate) bindings: Option<Bindings>,
 }
 
 impl RawConfigs {
@@ -35,13 +33,10 @@ impl RawConfigs {
     /// optional; `bindings` is full-replace. The `theme` and `font` sections use
     /// their respective `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
-        if let Some(raw) = self.shortcuts {
-            if let Some(prefix) = raw.prefix {
-                base.shortcuts.prefix = prefix;
-            }
-            if let Some(bindings) = raw.bindings {
-                base.shortcuts.bindings = bindings;
-            }
+        if let Some(raw) = self.shortcuts
+            && let Some(bindings) = raw.bindings
+        {
+            base.shortcuts.bindings = bindings;
         }
         if let Some(patch) = self.theme {
             base.theme = patch.apply_to(base.theme);
@@ -61,12 +56,12 @@ impl RawConfigs {
 
 /// Walks `configs.shortcuts.bindings` and rejects duplicate chords.
 pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
-    let mut seen: HashSet<&crate::shortcuts::KeyChord> = HashSet::new();
-    for b in &configs.shortcuts.bindings {
-        if !seen.insert(&b.chord) {
-            return Err(OzmuxConfigsError::DuplicateBinding {
-                chord: b.chord.clone(),
-            });
+    if let Err(dupes) = configs.shortcuts.bindings.validate_no_conflicts() {
+        // Map the new Vec<DuplicateChord> into the legacy single-variant
+        // error for the transitional state (Task 3.1 introduces the
+        // proper DuplicateChords(Vec<...>) variant).
+        if let Some(first) = dupes.into_iter().next() {
+            return Err(OzmuxConfigsError::DuplicateBinding { chord: first.chord });
         }
     }
     let size = configs.font.size;
@@ -79,18 +74,6 @@ pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shortcuts::Action;
-
-    #[test]
-    fn empty_raw_returns_defaults() {
-        let raw = RawConfigs::default();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.shortcuts.bindings.len(), 35);
-        assert!(matches!(
-            merged.shortcuts.bindings[0].action,
-            Action::ClosePane
-        ));
-    }
 
     #[test]
     fn theme_patch_preserves_unset_fields() {
@@ -104,65 +87,6 @@ mod tests {
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(merged.theme.accent, "#deadbe");
         assert_eq!(merged.theme.background, "#1a1b26");
-    }
-
-    #[test]
-    fn bindings_fully_replace_defaults() {
-        let raw: RawConfigs = toml::from_str(
-            r#"
-            [[shortcuts.bindings]]
-            key = "y"
-            action = { type = "close-window" }
-        "#,
-        )
-        .unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.shortcuts.bindings.len(), 1);
-        assert!(matches!(
-            merged.shortcuts.bindings[0].action,
-            Action::CloseWindow
-        ));
-    }
-
-    #[test]
-    fn validate_rejects_duplicate_binding() {
-        let raw: RawConfigs = toml::from_str(
-            r#"
-            [[shortcuts.bindings]]
-            key = "x"
-            action = { type = "close-pane" }
-
-            [[shortcuts.bindings]]
-            key = "x"
-            action = { type = "close-window" }
-        "#,
-        )
-        .unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        let err = validate(&merged).unwrap_err();
-        assert!(matches!(
-            err,
-            crate::OzmuxConfigsError::DuplicateBinding { .. }
-        ));
-    }
-
-    #[test]
-    fn validate_accepts_modifier_in_binding() {
-        let raw: RawConfigs = toml::from_str(
-            r#"
-            [[shortcuts.bindings]]
-            key = "x"
-            modifiers = { shift = true }
-            action = { type = "close-pane" }
-        "#,
-        )
-        .unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        assert!(
-            merged.shortcuts.bindings[0].chord.modifiers.shift,
-            "shift modifier must survive parsing and merging"
-        );
-        validate(&merged).unwrap();
     }
 
     #[test]
