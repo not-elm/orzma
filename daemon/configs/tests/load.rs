@@ -1,4 +1,4 @@
-use ozmux_configs::shortcuts::{Action, Key};
+use ozmux_configs::shortcuts::Key;
 use ozmux_configs::test_support::load_with_overrides;
 use ozmux_configs::{OzmuxConfigs, OzmuxConfigsError};
 use std::path::PathBuf;
@@ -17,8 +17,8 @@ async fn missing_file_yields_defaults() {
         .unwrap();
     let defaults = OzmuxConfigs::default();
     assert_eq!(
-        configs.shortcuts.bindings.len(),
-        defaults.shortcuts.bindings.len()
+        configs.shortcuts.bindings.iter().count(),
+        defaults.shortcuts.bindings.iter().count()
     );
 }
 
@@ -29,44 +29,33 @@ async fn empty_file_yields_defaults() {
         .unwrap();
     let defaults = OzmuxConfigs::default();
     assert_eq!(
-        configs.shortcuts.bindings.len(),
-        defaults.shortcuts.bindings.len()
+        configs.shortcuts.bindings.iter().count(),
+        defaults.shortcuts.bindings.iter().count()
     );
-    assert!(matches!(
-        configs.shortcuts.bindings[0].action,
-        Action::ClosePane
-    ));
+    assert!(
+        configs.shortcuts.bindings.close_pane.is_some(),
+        "close-pane must have a default binding"
+    );
 }
 
 #[tokio::test]
-async fn prefix_override_keeps_default_bindings() {
-    let configs = load_with_overrides(Some(fixture("prefix_only.toml")), None, None)
-        .await
-        .unwrap();
-    assert_eq!(configs.shortcuts.prefix.chord.key, Key::Char('a'));
-    assert_eq!(configs.shortcuts.prefix.timeout_ms, 3000);
-    let defaults = OzmuxConfigs::default();
-    assert_eq!(
-        configs.shortcuts.bindings.len(),
-        defaults.shortcuts.bindings.len()
-    );
-    assert!(matches!(
-        configs.shortcuts.bindings[0].action,
-        Action::ClosePane
-    ));
-}
-
-#[tokio::test]
-async fn bindings_section_fully_replaces_defaults() {
+async fn bindings_section_overrides_one_binding_keeps_others() {
     let configs = load_with_overrides(Some(fixture("bindings_replace.toml")), None, None)
         .await
         .unwrap();
-    assert_eq!(configs.shortcuts.bindings.len(), 1);
-    assert_eq!(configs.shortcuts.bindings[0].chord.key, Key::Char('y'));
-    assert!(matches!(
-        configs.shortcuts.bindings[0].action,
-        Action::CloseWindow
-    ));
+    let close = configs
+        .shortcuts
+        .bindings
+        .close_pane
+        .as_ref()
+        .expect("bindings_replace fixture rebinds close-pane");
+    assert_eq!(close.key, Key::Char('y'));
+    assert!(close.modifiers.meta, "Cmd modifier must be set");
+    let defaults = OzmuxConfigs::default();
+    assert_eq!(
+        configs.shortcuts.bindings.focus_pane_left, defaults.shortcuts.bindings.focus_pane_left,
+        "unspecified bindings must remain at defaults"
+    );
 }
 
 #[tokio::test]
@@ -83,11 +72,16 @@ async fn theme_patch_preserves_other_fields() {
 }
 
 #[tokio::test]
-async fn duplicate_binding_rejected() {
+async fn duplicate_chord_rejected() {
     let err = load_with_overrides(Some(fixture("duplicate_binding.toml")), None, None)
         .await
         .unwrap_err();
-    assert!(matches!(err, OzmuxConfigsError::DuplicateBinding { .. }));
+    match err {
+        OzmuxConfigsError::DuplicateChords(dupes) => {
+            assert!(!dupes.is_empty(), "must report at least one duplicate");
+        }
+        other => panic!("expected DuplicateChords, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -95,14 +89,13 @@ async fn modifier_binding_accepted() {
     let configs = load_with_overrides(Some(fixture("modifier_binding.toml")), None, None)
         .await
         .unwrap();
-    assert!(
-        configs
-            .shortcuts
-            .bindings
-            .iter()
-            .any(|b| b.chord.modifiers.shift),
-        "a shift-modifier binding must load successfully"
-    );
+    let close = configs
+        .shortcuts
+        .bindings
+        .close_pane
+        .as_ref()
+        .expect("modifier_binding fixture rebinds close-pane");
+    assert!(close.modifiers.shift, "the fixture's binding carries Shift");
 }
 
 #[tokio::test]
@@ -133,8 +126,8 @@ fn load_blocking_missing_file_yields_defaults() {
     let configs = load_blocking_with_overrides(Some(nonexistent), None, None).unwrap();
     let defaults = OzmuxConfigs::default();
     assert_eq!(
-        configs.shortcuts.bindings.len(),
-        defaults.shortcuts.bindings.len()
+        configs.shortcuts.bindings.iter().count(),
+        defaults.shortcuts.bindings.iter().count()
     );
 }
 

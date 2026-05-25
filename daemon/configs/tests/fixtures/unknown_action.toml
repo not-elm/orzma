@@ -1,3 +1,2 @@
-[[shortcuts.bindings]]
-key = "x"
-action = { type = "no-such-action" }
+[shortcuts.bindings]
+no-such-action = "Cmd+X"
