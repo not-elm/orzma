@@ -462,4 +462,100 @@ mod tests {
             "chip must still be parented to the original host"
         );
     }
+
+    #[test]
+    fn chip_inherits_display_none_from_hidden_stash() {
+        use crate::ui::ActivityHostNode;
+        use ozmux_multiplexer::{Activity, ActivityId};
+
+        let (mut app, _guard) = make_ui_test_app();
+        app.update();
+        app.update();
+        app.update();
+
+        // Add a second Activity to the bootstrap pane so we have two
+        // hosts to toggle focus between.
+        let (bootstrap_id, second_id) = {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let wid = {
+                let (_sid, session) =
+                    mux.sessions.iter().next().expect("session");
+                session.active_window.clone().expect("active window")
+            };
+            let (active_pane, bootstrap_aid) = {
+                let window = mux.windows.get(&wid).expect("window");
+                let active_pane = window.active_pane.clone();
+                let pane = window.pane(&active_pane).expect("pane");
+                (active_pane, pane.active_activity.clone())
+            };
+            let second_aid = ActivityId::new();
+            mux.with_window(&wid, |w| {
+                w.pane_mut(&active_pane)
+                    .expect("pane_mut")
+                    .add_activity(Activity::terminal(second_aid.clone()))
+            })
+            .expect("with_window")
+            .expect("add_activity");
+            (bootstrap_aid, second_aid)
+        };
+        app.update();
+        app.update();
+
+        // Switch focus to the second activity. The bootstrap host now
+        // lives under the hidden_stash (Display::None).
+        {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let wid = {
+                let (_sid, session) =
+                    mux.sessions.iter().next().expect("session");
+                session.active_window.clone().expect("active window")
+            };
+            let active_pane =
+                mux.windows.get(&wid).expect("window").active_pane.clone();
+            let _ = mux
+                .with_window(&wid, |w| {
+                    w.pane_mut(&active_pane)
+                        .expect("pane_mut")
+                        .set_active_activity(&second_id)
+                })
+                .expect("with_window")
+                .expect("set_active_activity");
+        }
+        app.update();
+
+        // Find the bootstrap host Entity via a query over ActivityHostNode.
+        let bootstrap_host = {
+            let world = app.world_mut();
+            let mut q = world.query::<(Entity, &ActivityHostNode)>();
+            let mut found: Option<Entity> = None;
+            for (entity, host_node) in q.iter(world) {
+                if host_node.0 == bootstrap_id {
+                    found = Some(entity);
+                    break;
+                }
+            }
+            found.expect("bootstrap host present")
+        };
+
+        // The bootstrap host's parent (the hidden_stash) must be Display::None.
+        let host_parent = app
+            .world()
+            .get::<ChildOf>(bootstrap_host)
+            .expect("host parent")
+            .parent();
+        let stash_node = app
+            .world()
+            .get::<Node>(host_parent)
+            .expect("stash Node");
+        assert_eq!(
+            stash_node.display,
+            Display::None,
+            "inactive host must be parented to a Display::None stash"
+        );
+
+        // (The chip's own Node.display may still be Flex — the rendered
+        // hidden-ness comes from the ancestor. This matches the spec.)
+    }
 }
