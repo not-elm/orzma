@@ -45,17 +45,17 @@ pub(crate) struct WheelAccumulator {
 }
 
 /// Bevy Plugin that registers `WheelAccumulator` and the
-/// `mouse_wheel_system` against the `Update` schedule.
+/// `dispatch_mouse_wheel` system against the `Update` schedule.
 pub(crate) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WheelAccumulator>()
-            .add_systems(Update, mouse_wheel_system);
+            .add_systems(Update, dispatch_mouse_wheel);
     }
 }
 
-fn mouse_wheel_system(
+fn dispatch_mouse_wheel(
     mut wheel_msgs: MessageReader<MouseWheel>,
     mut accumulator: ResMut<WheelAccumulator>,
     mut handles: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
@@ -67,121 +67,163 @@ fn mouse_wheel_system(
     sessions: Query<&crate::multiplexer::AttachedSession>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs) else {
+        return;
+    };
+    let Some(entity) = resolve_focused_terminal(&sessions, &mux, &registry) else {
+        return;
+    };
+    if copy_mode_q.get(entity).is_ok() {
+        return;
+    }
+    let mouse_cfg = &configs.mouse;
+    let Some(notches) =
+        consume_notches(&mut accumulator, entity, delta_y, mouse_cfg.cells_per_notch)
+    else {
+        return;
+    };
+    let mods = build_wheel_modifiers(&keys, mouse_cfg.fine_modifier);
+    let cursor = cursor_cell(&windows);
+    let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
+        return;
+    };
+    let action = route_wheel(
+        handle.current_modes(),
+        notches,
+        cursor,
+        mods,
+        &wheel_config(mouse_cfg),
+    );
+    apply_wheel_action(action, &mut handle, &mut pty, &mut coalescer, entity);
+}
+
+/// Aggregates a frame's `MouseWheel` events into a single signed
+/// cell-delta. Returns `None` when no events arrived.
+///
+/// winit reports positive `y` when natural scrolling moves the
+/// viewport content downward (revealing older lines above); our
+/// router uses the opposite convention (`notches < 0` = up / older),
+/// so the sign is flipped here.
+fn aggregate_wheel_delta(events: &mut MessageReader<MouseWheel>) -> Option<f32> {
     let mut delta_y = 0.0f32;
     let mut had_input = false;
-    for ev in wheel_msgs.read() {
+    for ev in events.read() {
         had_input = true;
-        // NOTE: winit reports positive `y` when natural scrolling moves the
-        // viewport content downward (revealing older lines above). Our router
-        // uses the opposite sign convention — `notches < 0` means "up / older".
-        // Without this negation, a normal upward scroll produces a negative
-        // `ScrollViewport` delta that no-ops at the live tail, and the user
-        // sees nothing.
         let cells = match ev.unit {
             MouseScrollUnit::Line => -ev.y,
             MouseScrollUnit::Pixel => -ev.y / CELL_H_LOGICAL_PX,
         };
         delta_y += cells;
     }
-    if !had_input {
-        return;
-    }
+    had_input.then_some(delta_y)
+}
 
-    let Some(attached) = sessions.iter().next() else {
-        return;
-    };
-    let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0) else {
-        return;
-    };
-    let Some(window_state) = mux.windows.get(&wid) else {
-        return;
-    };
-    let Ok(pane) = window_state.pane(&pid) else {
-        return;
-    };
-    let Some(entity) = registry.get(&pane.active_activity) else {
-        return;
-    };
+/// Resolves the focused activity's entity via the session →
+/// multiplexer → registry chain (mirrors `dispatch_focused_key`).
+fn resolve_focused_terminal(
+    sessions: &Query<&crate::multiplexer::AttachedSession>,
+    mux: &crate::multiplexer::Multiplexer,
+    registry: &crate::ui::registry::ActivityEntityRegistry,
+) -> Option<Entity> {
+    let attached = sessions.iter().next()?;
+    let (wid, pid) = mux.active_pane_of_session(&attached.0).ok()?;
+    let window = mux.windows.get(&wid)?;
+    let pane = window.pane(&pid).ok()?;
+    registry.get(&pane.active_activity)
+}
 
-    if copy_mode_q.get(entity).is_ok() {
-        return;
-    }
-
+/// Updates the per-frame accumulator and returns the integer notch
+/// count to dispatch, or `None` when the residual hasn't crossed the
+/// notch threshold yet.
+///
+/// Resets the residual on focus change or sign flip — both signal
+/// that any prior momentum is stale.
+fn consume_notches(
+    accumulator: &mut WheelAccumulator,
+    entity: Entity,
+    delta_y: f32,
+    cells_per_notch: f32,
+) -> Option<i32> {
     if accumulator.last_entity != Some(entity) {
         accumulator.residual_y = 0.0;
         accumulator.last_entity = Some(entity);
-    } else if accumulator.residual_y.signum() != delta_y.signum() && accumulator.residual_y != 0.0 {
+    } else if accumulator.residual_y.signum() != delta_y.signum() && accumulator.residual_y != 0.0
+    {
         accumulator.residual_y = 0.0;
     }
-
-    let mouse_cfg = &configs.mouse;
-    let cells_per_notch = mouse_cfg.cells_per_notch.max(f32::EPSILON);
+    let threshold = cells_per_notch.max(f32::EPSILON);
     accumulator.residual_y += delta_y;
-    let notches = (accumulator.residual_y / cells_per_notch).trunc() as i32;
+    let notches = (accumulator.residual_y / threshold).trunc() as i32;
     if notches == 0 {
-        return;
+        return None;
     }
-    accumulator.residual_y -= notches as f32 * cells_per_notch;
+    accumulator.residual_y -= notches as f32 * threshold;
+    Some(notches)
+}
 
-    let fine_pressed = match mouse_cfg.fine_modifier {
-        FineModifier::Shift => {
-            keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight)
-        }
-        FineModifier::Ctrl => {
-            keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
-        }
-        FineModifier::Alt => keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight),
+/// Captures the current keyboard modifier state, resolving
+/// `mods.fine` against the configured `fine_modifier`.
+fn build_wheel_modifiers(
+    keys: &ButtonInput<KeyCode>,
+    fine_modifier: FineModifier,
+) -> WheelModifiers {
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+    let fine = match fine_modifier {
+        FineModifier::Shift => shift,
+        FineModifier::Ctrl => ctrl,
+        FineModifier::Alt => alt,
         FineModifier::None => false,
     };
-    let mods = WheelModifiers {
-        shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
-        alt: keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight),
-        fine: fine_pressed,
-    };
+    WheelModifiers { shift, ctrl, alt, fine }
+}
 
-    let cursor_cell = windows
+/// Translates the window cursor position into a 1-indexed cell
+/// coordinate. Falls back to `(1, 1)` when no cursor position is
+/// available (cursor outside the window, no primary window matched).
+fn cursor_cell(windows: &Query<&Window, With<PrimaryWindow>>) -> CellCoord {
+    windows
         .iter()
         .next()
         .and_then(|w| w.cursor_position())
         .map(|pos| CellCoord {
-            col: ((pos.x / CELL_W_LOGICAL_PX) as u32)
-                .saturating_add(1)
-                .max(1),
-            row: ((pos.y / CELL_H_LOGICAL_PX) as u32)
-                .saturating_add(1)
-                .max(1),
+            col: ((pos.x / CELL_W_LOGICAL_PX) as u32).saturating_add(1).max(1),
+            row: ((pos.y / CELL_H_LOGICAL_PX) as u32).saturating_add(1).max(1),
         })
-        .unwrap_or(CellCoord { col: 1, row: 1 });
+        .unwrap_or(CellCoord { col: 1, row: 1 })
+}
 
-    let wheel_cfg = WheelConfig {
-        lines_per_notch: mouse_cfg.lines_per_notch,
-        fine_lines: mouse_cfg.fine_lines,
-        max_protocol_events_per_frame: mouse_cfg.max_protocol_events_per_frame,
-    };
+/// Projects the runtime `MouseConfig` onto the router's `WheelConfig`
+/// (the per-call subset the pure router needs).
+fn wheel_config(cfg: &ozmux_configs::mouse::MouseConfig) -> WheelConfig {
+    WheelConfig {
+        lines_per_notch: cfg.lines_per_notch,
+        fine_lines: cfg.fine_lines,
+        max_protocol_events_per_frame: cfg.max_protocol_events_per_frame,
+    }
+}
 
-    let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
-        return;
-    };
-
-    let action = route_wheel(
-        handle.current_modes(),
-        notches,
-        cursor_cell,
-        mods,
-        &wheel_cfg,
-    );
-
+/// Applies a router-decided `WheelAction` to the focused terminal —
+/// either scrolls the viewport or writes pre-encoded bytes to the
+/// PTY (snapping to live tail first for the write path).
+fn apply_wheel_action(
+    action: WheelAction,
+    handle: &mut TerminalHandle,
+    pty: &mut PtyHandle,
+    coalescer: &mut Coalescer,
+    entity: Entity,
+) {
     match action {
         WheelAction::Noop => {}
         WheelAction::ScrollViewport(delta) => {
-            handle.scroll(&mut coalescer, delta);
+            handle.scroll(coalescer, delta);
         }
         WheelAction::WriteToPty(bytes) => {
             if !handle.is_at_bottom() {
-                handle.scroll_to_bottom(&mut coalescer);
+                handle.scroll_to_bottom(coalescer);
             }
-            if let Err(e) = handle.write(&mut pty, &bytes) {
+            if let Err(e) = handle.write(pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse wheel write failed");
             }
         }
