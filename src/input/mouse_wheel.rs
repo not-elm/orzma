@@ -22,6 +22,7 @@
 //! 7. Call `bevy_terminal::route_wheel` once; dispatch the returned
 //!    `WheelAction` to the focused entity's `TerminalHandle`.
 
+use crate::ui::terminal::{CELL_H_LOGICAL_PX, CELL_W_LOGICAL_PX};
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::KeyCode;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -32,8 +33,6 @@ use bevy_terminal::{
     route_wheel,
 };
 use ozmux_configs::mouse::FineModifier;
-
-use crate::ui::terminal::{CELL_H_LOGICAL_PX, CELL_W_LOGICAL_PX};
 
 /// Per-frame accumulator that carries fractional Pixel deltas across
 /// frames and tracks the entity the residual was earned on (so a focus
@@ -147,8 +146,7 @@ fn consume_notches(
     if accumulator.last_entity != Some(entity) {
         accumulator.residual_y = 0.0;
         accumulator.last_entity = Some(entity);
-    } else if accumulator.residual_y.signum() != delta_y.signum() && accumulator.residual_y != 0.0
-    {
+    } else if accumulator.residual_y.signum() != delta_y.signum() && accumulator.residual_y != 0.0 {
         accumulator.residual_y = 0.0;
     }
     let threshold = cells_per_notch.max(f32::EPSILON);
@@ -176,7 +174,12 @@ fn build_wheel_modifiers(
         FineModifier::Alt => alt,
         FineModifier::None => false,
     };
-    WheelModifiers { shift, ctrl, alt, fine }
+    WheelModifiers {
+        shift,
+        ctrl,
+        alt,
+        fine,
+    }
 }
 
 /// Translates the window cursor position into a 1-indexed cell
@@ -188,8 +191,12 @@ fn cursor_cell(windows: &Query<&Window, With<PrimaryWindow>>) -> CellCoord {
         .next()
         .and_then(|w| w.cursor_position())
         .map(|pos| CellCoord {
-            col: ((pos.x / CELL_W_LOGICAL_PX) as u32).saturating_add(1).max(1),
-            row: ((pos.y / CELL_H_LOGICAL_PX) as u32).saturating_add(1).max(1),
+            col: ((pos.x / CELL_W_LOGICAL_PX) as u32)
+                .saturating_add(1)
+                .max(1),
+            row: ((pos.y / CELL_H_LOGICAL_PX) as u32)
+                .saturating_add(1)
+                .max(1),
         })
         .unwrap_or(CellCoord { col: 1, row: 1 })
 }
