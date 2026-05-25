@@ -118,9 +118,17 @@ Required:
 
 - Default to private. Add visibility modifiers only when a real caller
   forces it.
-- When a `pub` item turns out to have only in-crate callers, demote it to
-  `pub(crate)` (or narrower). Re-narrow during refactors, not just on
-  the way up.
+- **MANDATORY:** any item (regardless of current visibility) whose only
+  callers live inside its defining module MUST be private (no
+  visibility modifier). This applies symmetrically to `pub` items
+  used only in one module, `pub(crate)` items used only in one
+  module, `pub(super)` items used only in one module, and so on.
+  Re-narrow during refactors, not just on the way up.
+- For `pub` items used cross-module but not cross-crate, demoting to
+  `pub(crate)` is **recommended but not required** — library crates
+  may legitimately expose APIs that no in-workspace consumer
+  references yet. Apply judgement based on whether the item is part
+  of the crate's intended external API.
 - Struct fields stay private unless an external constructor or pattern
   match requires them. Prefer accessor methods over `pub` fields.
 - Helper modules used by only one parent should be declared inside that
@@ -146,9 +154,15 @@ Forbidden:
 
 | Pattern | Why |
 | --- | --- |
-| `pub` on items with no out-of-module callers | Inflates the public surface and forces doc comments that need not exist |
+| Any visibility wider than private on items with no out-of-module callers | The item is only used inside its defining module; it must be private. Applies symmetrically to `pub`, `pub(crate)`, `pub(super)`, `pub(in path)` |
 | `pub` fields on structs with invariants | Bypasses any validation in constructors / setters |
 | `pub use` re-exports for items that no external consumer references | Same as above; widens the surface for no caller |
+
+Not forbidden (but recommended to review):
+
+| Pattern | Why it's not strict |
+| --- | --- |
+| `pub` on items with cross-module-but-not-cross-crate callers | Library crates may publish APIs for downstream consumers we don't see in this workspace. Demote to `pub(crate)` when you're confident the item is not part of the intended external surface; keep `pub` otherwise |
 
 Recommended workflow when adding a new item:
 
@@ -161,16 +175,26 @@ Recommended workflow when adding a new item:
 
 Recommended workflow when reviewing existing code:
 
-- For any `pub` item, grep for cross-crate callers. If there are none,
-  demote to `pub(crate)`. If there are no callers outside the current
-  module, demote further.
+- **MANDATORY check:** for any item (any current visibility), grep for
+  callers outside the defining module. If there are none, demote to
+  private. This is non-negotiable; module-scoped items must be
+  private.
+- **Optional check:** for `pub` items with no cross-crate callers,
+  demoting to `pub(crate)` is encouraged when you are confident the
+  item is not part of the crate's intended external API. For library
+  crates where the future-consumer set is open, keeping `pub` is
+  acceptable.
 
 Tooling note: `#![warn(unreachable_pub)]` catches `pub` items that
 nothing outside the crate can reach. It is useful for one-off audits
-but is *not* enabled crate-wide here — the exception above (associated
-items on `pub(crate)` containers stay `pub`) would create persistent
-noise. Run it locally when you want to audit a crate, then turn it back
-off.
+of the *optional* `pub` → `pub(crate)` narrowing, but it does **not**
+catch the *mandatory* "module-scoped items must be private" rule —
+the lint only fires for items reachable from outside the crate, not
+for items reachable from outside their module but still inside the
+crate. For the mandatory rule, manual grep-based review is the only
+tool today. Run `unreachable_pub` locally for crate-export audits,
+then turn it back off — the container exception above would create
+persistent noise.
 
 ## Item ordering — private items last
 
@@ -228,7 +252,8 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - File-level module `//!` requirement
 - "No blank lines between import groups"
 - `#[expect]` preference over `#[allow]`
-- Visibility minimization — `pub` items demoted to `pub(crate)` / narrower when no cross-crate caller exists, with the "container already narrow" exception above. `#![warn(unreachable_pub)]` can be enabled temporarily to audit but is not on by default.
+- Visibility minimization (MANDATORY axis) — any item (any current visibility) with no callers outside its defining module MUST be private. Manual grep-based check; the `unreachable_pub` lint does NOT catch this.
+- Visibility minimization (OPTIONAL axis) — `pub` items with no cross-crate caller may be demoted to `pub(crate)`; library crates may keep `pub` for intentional API surface. The "container already narrow" exception above still applies. `#![warn(unreachable_pub)]` can be enabled temporarily to audit this axis but is not on by default.
 - Item ordering — private (no-modifier) items declared after `pub` / exported ones (see "Item ordering — private items last")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
