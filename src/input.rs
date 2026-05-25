@@ -276,12 +276,37 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
             if chars.next().is_some() {
                 return None;
             }
-            let normalized = if c.is_ascii_alphabetic() {
-                c.to_ascii_lowercase()
-            } else {
-                c
-            };
-            CKey::Char(normalized)
+            if c.is_ascii_alphabetic() {
+                return Some(CKey::Char(c.to_ascii_lowercase()));
+            }
+            // NOTE: Symbol+Shift reverse-normalize on US ASCII layout. macOS
+            // reports the shifted glyph (e.g., '{' when Shift+'[' is pressed),
+            // but our bindings target the unshifted glyph and carry Shift in
+            // modifiers. Without this map, `Cmd+Shift+[` defaults never match.
+            match c {
+                '{' => CKey::Char('['),
+                '}' => CKey::Char(']'),
+                '<' => CKey::Char(','),
+                '>' => CKey::Char('.'),
+                '?' => CKey::Char('/'),
+                ':' => CKey::Char(';'),
+                '"' => CKey::Char('\''),
+                '|' => CKey::Char('\\'),
+                '~' => CKey::Char('`'),
+                '_' => CKey::Char('-'),
+                '+' => CKey::Plus,
+                '!' => CKey::Char('1'),
+                '@' => CKey::Char('2'),
+                '#' => CKey::Char('3'),
+                '$' => CKey::Char('4'),
+                '%' => CKey::Char('5'),
+                '^' => CKey::Char('6'),
+                '&' => CKey::Char('7'),
+                '*' => CKey::Char('8'),
+                '(' => CKey::Char('9'),
+                ')' => CKey::Char('0'),
+                _ => CKey::Char(c),
+            }
         }
         Key::Escape => CKey::Escape,
         Key::Enter => CKey::Enter,
@@ -614,14 +639,14 @@ mod tests {
     }
 
     #[test]
-    fn bevy_to_configs_key_preserves_symbols() {
+    fn bevy_to_configs_key_normalizes_shift_symbols() {
         assert_eq!(
             bevy_to_configs_key(&Bk::Character("&".into())),
-            Some(CKey::Char('&'))
+            Some(CKey::Char('7'))
         );
         assert_eq!(
             bevy_to_configs_key(&Bk::Character("{".into())),
-            Some(CKey::Char('{'))
+            Some(CKey::Char('['))
         );
     }
 
@@ -643,6 +668,27 @@ mod tests {
         assert_eq!(bevy_to_configs_key(&Bk::Shift), None);
         assert_eq!(bevy_to_configs_key(&Bk::Control), None);
         assert_eq!(bevy_to_configs_key(&Bk::F1), None);
+    }
+
+    #[test]
+    fn bevy_to_configs_key_normalizes_shifted_left_bracket() {
+        use ozmux_configs::shortcuts::Key as CKey;
+        let k = bevy_to_configs_key(&bevy::input::keyboard::Key::Character("{".into()));
+        assert_eq!(k, Some(CKey::Char('[')));
+    }
+
+    #[test]
+    fn bevy_to_configs_key_normalizes_shifted_right_bracket() {
+        use ozmux_configs::shortcuts::Key as CKey;
+        let k = bevy_to_configs_key(&bevy::input::keyboard::Key::Character("}".into()));
+        assert_eq!(k, Some(CKey::Char(']')));
+    }
+
+    #[test]
+    fn bevy_to_configs_key_maps_plus_character_to_key_plus() {
+        use ozmux_configs::shortcuts::Key as CKey;
+        let k = bevy_to_configs_key(&bevy::input::keyboard::Key::Character("+".into()));
+        assert_eq!(k, Some(CKey::Plus));
     }
 
     #[test]
