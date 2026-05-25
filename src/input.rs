@@ -208,6 +208,23 @@ fn is_modifier_only_key(key: &Key) -> bool {
     )
 }
 
+/// Returns `true` when the (key, mods) pair is the OS paste shortcut
+/// `Cmd+V`. The match is strict on modifiers — exactly `meta` is held,
+/// and `ctrl` / `shift` / `alt` are all absent. The `v` character match
+/// is case-sensitive (uppercase `V` does not bind, since Shift+Cmd+V
+/// is not a paste shortcut on macOS).
+///
+/// Inlined into the dispatcher at the special-case position; see the
+/// `Action::EnterCopyMode` precedent inside `handle_chord` for the
+/// same shape.
+fn is_paste_chord(key: &Key, mods: &Modifiers) -> bool {
+    let Key::Character(s) = key else { return false };
+    if s.as_str() != "v" {
+        return false;
+    }
+    mods.meta && !mods.ctrl && !mods.shift && !mods.alt
+}
+
 fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
     use ozmux_configs::shortcuts::Key as CKey;
     Some(match key {
@@ -578,6 +595,58 @@ mod tests {
         assert!(!is_modifier_only_key(&Bk::SymbolLock));
         assert!(!is_modifier_only_key(&Bk::Character("a".into())));
         assert!(!is_modifier_only_key(&Bk::F1));
+    }
+
+    #[test]
+    fn is_paste_chord_matches_meta_v_only() {
+        assert!(super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers { meta: true, ..Default::default() },
+        ));
+    }
+
+    #[test]
+    fn is_paste_chord_rejects_plain_v() {
+        assert!(!super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers::default(),
+        ));
+    }
+
+    #[test]
+    fn is_paste_chord_rejects_meta_plus_extra_modifier() {
+        assert!(!super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers { meta: true, ctrl: true, ..Default::default() },
+        ));
+        assert!(!super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers { meta: true, shift: true, ..Default::default() },
+        ));
+        assert!(!super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers { meta: true, alt: true, ..Default::default() },
+        ));
+    }
+
+    #[test]
+    fn is_paste_chord_rejects_uppercase_v() {
+        assert!(!super::is_paste_chord(
+            &Bk::Character("V".into()),
+            &Modifiers { meta: true, ..Default::default() },
+        ));
+    }
+
+    #[test]
+    fn is_paste_chord_rejects_other_keys() {
+        assert!(!super::is_paste_chord(
+            &Bk::Character("c".into()),
+            &Modifiers { meta: true, ..Default::default() },
+        ));
+        assert!(!super::is_paste_chord(
+            &Bk::Escape,
+            &Modifiers { meta: true, ..Default::default() },
+        ));
     }
 
     #[test]
