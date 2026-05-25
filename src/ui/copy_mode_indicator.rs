@@ -5,9 +5,11 @@
 //! pane's top-right corner.
 
 use crate::theme;
+use crate::ui::copy_mode::CopyModeState;
 use crate::ui::palette;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
+use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 
 /// Marker for the chip Node child of an Activity host. Exactly one
@@ -66,13 +68,57 @@ fn attach_indicator_to_activity_host(
     }
 }
 
+/// Updates each visible chip's `Text` and `IndicatorCache` from the
+/// host's `TerminalHandle::vi_indicator_snapshot()`. Gated by
+/// `any_with_component::<CopyModeState>` so the schedule short-circuits
+/// when nothing is in copy mode.
+// NOTE: the chip's Display::Flex is set lazily here on first sight of
+// CopyModeState. Hiding on exit is the `On<Remove, CopyModeState>`
+// observer's job (Task 7), not this poll.
+fn refresh_indicator(
+    hosts: Query<(&bevy_terminal::TerminalHandle, &Children), With<CopyModeState>>,
+    mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<CopyModeIndicator>>,
+) {
+    for (handle, children) in hosts.iter() {
+        let Some(chip) = children.iter().find(|c| chips.get(*c).is_ok()) else {
+            continue;
+        };
+        let Ok((mut text, mut node, mut cache)) = chips.get_mut(chip) else {
+            continue;
+        };
+        let snap = handle.vi_indicator_snapshot();
+        let (offset, total) = (snap.scroll_offset as u32, snap.history_size as u32);
+        let new_cache = IndicatorCache { offset, total };
+        // NOTE: the first-show path (Display::None → Flex) must always
+        // write the text even when the cache already matches the snapshot,
+        // because the chip's Text starts empty and the cache defaults to
+        // {0, 0} — the same as a fresh terminal's snapshot.
+        let becoming_visible = node.display != Display::Flex;
+        if *cache != new_cache || becoming_visible {
+            text.0 = format_indicator(offset, total);
+            *cache = new_cache;
+        }
+        if becoming_visible {
+            node.display = Display::Flex;
+        }
+    }
+}
+
 /// Bevy Plugin: wires the copy-mode indicator's attach + refresh systems
 /// and the exit observer.
 pub struct CopyModeIndicatorPlugin;
 
 impl Plugin for CopyModeIndicatorPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, attach_indicator_to_activity_host);
+        app.add_systems(
+            Update,
+            (
+                attach_indicator_to_activity_host,
+                refresh_indicator
+                    .after(attach_indicator_to_activity_host)
+                    .run_if(any_with_component::<CopyModeState>),
+            ),
+        );
     }
 }
 
@@ -162,5 +208,73 @@ mod tests {
             .filter(|c| world.get::<CopyModeIndicator>(*c).is_some())
             .count();
         assert_eq!(indicator_count, 1, "exactly one chip after 10 ticks");
+    }
+
+    use bevy_terminal::{Coalescer, TerminalHandle};
+
+    #[test]
+    fn refresh_shows_when_copy_mode_state_inserted() {
+        let mut app = make_app_with_plugin();
+        let host = spawn_terminal_entity(&mut app);
+        app.update();
+
+        app.world_mut()
+            .entity_mut(host)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        app.update();
+
+        let chip = find_indicator_child(&app, host).expect("chip");
+        let chip_node = app.world().get::<Node>(chip).expect("Node");
+        assert_eq!(
+            chip_node.display,
+            Display::Flex,
+            "chip becomes visible while CopyModeState is on the host"
+        );
+        let text = app.world().get::<Text>(chip).expect("Text");
+        // Fresh /bin/sh: offset = 0, history may be 0.
+        assert!(
+            text.0 == "[0/0]" || text.0.starts_with("[0/"),
+            "initial text is [0/N] (got {:?})",
+            text.0
+        );
+        let cache = app.world().get::<IndicatorCache>(chip).expect("cache");
+        assert_eq!(cache.offset, 0);
+    }
+
+    #[test]
+    fn refresh_updates_text_after_scroll_page_up() {
+        let mut app = make_app_with_plugin();
+        let host = spawn_terminal_entity(&mut app);
+        app.update();
+
+        // Enter copy mode then PageUp via direct handle mutation, mimicking
+        // what dispatch_key does.
+        {
+            let mut entity = app.world_mut().entity_mut(host);
+            let mut handle = entity
+                .take::<TerminalHandle>()
+                .expect("TerminalHandle on host");
+            let mut coalescer = entity
+                .take::<Coalescer>()
+                .expect("Coalescer on host");
+            handle.enter_vi_mode(&mut coalescer);
+            handle.scroll_page_up(&mut coalescer);
+            entity.insert((handle, coalescer));
+            entity.insert(crate::ui::copy_mode::CopyModeState);
+        }
+        app.update();
+
+        let chip = find_indicator_child(&app, host).expect("chip");
+        let cache = app.world().get::<IndicatorCache>(chip).expect("cache");
+        let text = app.world().get::<Text>(chip).expect("Text");
+        assert!(
+            text.0.starts_with('['),
+            "text body must look like [N/M] (got {:?})",
+            text.0
+        );
+        // The cache must agree with the text — proves cache + format went
+        // through the same code path.
+        let expected = format_indicator(cache.offset, cache.total);
+        assert_eq!(text.0, expected);
     }
 }
