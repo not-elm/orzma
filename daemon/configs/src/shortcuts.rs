@@ -2,10 +2,11 @@
 
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// Logical key. v0 covers ASCII characters and a small set of named keys.
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
 pub enum Key {
     /// Single character key (`Key::Char('b')` for `"b"`).
     Char(char),
@@ -87,7 +88,7 @@ impl<'de> serde::Deserialize<'de> for Key {
 }
 
 /// Modifier flags accompanying a `Key`.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Modifiers {
     /// `Ctrl` is held.
@@ -101,7 +102,7 @@ pub struct Modifiers {
 }
 
 /// A single keyboard chord (key plus modifier set).
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
 pub struct KeyChord {
     /// Logical key.
     pub key: Key,
@@ -756,6 +757,149 @@ impl Default for Bindings {
             focus_window_prev: Some(parse_default_chord("Cmd+Shift+[")),
             focus_window_next: Some(parse_default_chord("Cmd+Shift+]")),
         }
+    }
+}
+
+impl Bindings {
+    /// Yields `(action_label, &Option<KeyChord>, Action)` for every
+    /// implemented Action. Single source of truth for `lookup()`,
+    /// `validate_no_conflicts()`, and external counters
+    /// (e.g., daemon bootstrap binding count).
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &Option<KeyChord>, Action)> + '_ {
+        [
+            ("close-pane", &self.close_pane, Action::ClosePane),
+            (
+                "focus-pane-left",
+                &self.focus_pane_left,
+                Action::FocusPane {
+                    direction: Direction::Left,
+                },
+            ),
+            (
+                "focus-pane-down",
+                &self.focus_pane_down,
+                Action::FocusPane {
+                    direction: Direction::Down,
+                },
+            ),
+            (
+                "focus-pane-up",
+                &self.focus_pane_up,
+                Action::FocusPane {
+                    direction: Direction::Up,
+                },
+            ),
+            (
+                "focus-pane-right",
+                &self.focus_pane_right,
+                Action::FocusPane {
+                    direction: Direction::Right,
+                },
+            ),
+            (
+                "split-pane-vertical",
+                &self.split_pane_vertical,
+                Action::SplitPane {
+                    direction: SplitDirection::Vertical,
+                },
+            ),
+            (
+                "split-pane-horizontal",
+                &self.split_pane_horizontal,
+                Action::SplitPane {
+                    direction: SplitDirection::Horizontal,
+                },
+            ),
+            (
+                "swap-pane-prev",
+                &self.swap_pane_prev,
+                Action::SwapPane {
+                    offset: SwapOffset::Prev,
+                },
+            ),
+            (
+                "swap-pane-next",
+                &self.swap_pane_next,
+                Action::SwapPane {
+                    offset: SwapOffset::Next,
+                },
+            ),
+            (
+                "close-activity",
+                &self.close_activity,
+                Action::CloseActivity,
+            ),
+            (
+                "new-terminal-activity",
+                &self.new_terminal_activity,
+                Action::NewTerminalActivity,
+            ),
+            (
+                "focus-activity-prev",
+                &self.focus_activity_prev,
+                Action::FocusActivity {
+                    offset: ActivityOffset::Prev,
+                },
+            ),
+            (
+                "focus-activity-next",
+                &self.focus_activity_next,
+                Action::FocusActivity {
+                    offset: ActivityOffset::Next,
+                },
+            ),
+            (
+                "enter-copy-mode",
+                &self.enter_copy_mode,
+                Action::EnterCopyMode,
+            ),
+            ("new-window", &self.new_window, Action::NewWindow),
+            (
+                "focus-window-prev",
+                &self.focus_window_prev,
+                Action::FocusWindow {
+                    offset: WindowOffset::Prev,
+                },
+            ),
+            (
+                "focus-window-next",
+                &self.focus_window_next,
+                Action::FocusWindow {
+                    offset: WindowOffset::Next,
+                },
+            ),
+        ]
+        .into_iter()
+    }
+
+    /// KeyChord -> Action reverse lookup. Linear scan of 17 entries.
+    /// Hot path; cheap given the fixed size. HashMap caching deferred per spec.
+    pub fn lookup(&self, chord: &KeyChord) -> Option<Action> {
+        self.iter().find_map(|(_, bound, action)| {
+            if bound.as_ref() == Some(chord) {
+                Some(action)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Detects chord collisions across fields. Returns a `Vec` sorted by chord
+    /// (via BTreeMap key order) for deterministic error output. Caller maps
+    /// the Vec into `OzmuxConfigsError::DuplicateChords`.
+    pub fn validate_no_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
+        let mut by_chord: BTreeMap<KeyChord, Vec<&'static str>> = BTreeMap::new();
+        for (label, bound, _action) in self.iter() {
+            if let Some(chord) = bound {
+                by_chord.entry(chord.clone()).or_default().push(label);
+            }
+        }
+        let dupes: Vec<DuplicateChord> = by_chord
+            .into_iter()
+            .filter(|(_, labels)| labels.len() >= 2)
+            .map(|(chord, actions)| DuplicateChord { chord, actions })
+            .collect();
+        if dupes.is_empty() { Ok(()) } else { Err(dupes) }
     }
 }
 
@@ -1448,6 +1592,56 @@ mod tests {
         assert_eq!(chord.key, Key::Char('d'));
         assert!(chord.modifiers.meta);
         assert!(chord.modifiers.shift);
+    }
+
+    #[test]
+    fn lookup_default_cmd_j_returns_focus_pane_down() {
+        let b = Bindings::default();
+        let chord = parse_key_chord("Cmd+J").unwrap();
+        let action = b.lookup(&chord).expect("Cmd+J must resolve");
+        assert!(matches!(
+            action,
+            Action::FocusPane {
+                direction: Direction::Down
+            }
+        ));
+    }
+
+    #[test]
+    fn lookup_unbound_chord_returns_none() {
+        let b = Bindings::default();
+        let chord = parse_key_chord("Cmd+Shift+Z").unwrap();
+        assert!(b.lookup(&chord).is_none());
+    }
+
+    #[test]
+    fn lookup_after_field_unbind_returns_none() {
+        let mut b = Bindings::default();
+        let chord = b.close_pane.clone().unwrap();
+        b.close_pane = None;
+        assert!(b.lookup(&chord).is_none());
+    }
+
+    #[test]
+    fn validate_no_conflicts_default_ok() {
+        let b = Bindings::default();
+        assert!(b.validate_no_conflicts().is_ok());
+    }
+
+    #[test]
+    fn validate_no_conflicts_detects_user_conflict() {
+        let mut b = Bindings::default();
+        b.close_pane = Some(parse_key_chord("Cmd+J").unwrap());
+        let err = b.validate_no_conflicts().unwrap_err();
+        assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
+        assert!(err[0].actions.contains(&"close-pane"));
+        assert!(err[0].actions.contains(&"focus-pane-down"));
+    }
+
+    #[test]
+    fn iter_yields_17_entries() {
+        let b = Bindings::default();
+        assert_eq!(b.iter().count(), 17);
     }
 
     #[test]
