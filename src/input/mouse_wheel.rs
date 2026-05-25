@@ -119,14 +119,15 @@ fn mouse_wheel_system(
         accumulator.residual_y = 0.0;
     }
 
+    let mouse_cfg = &configs.mouse;
+    let cells_per_notch = mouse_cfg.cells_per_notch.max(f32::EPSILON);
     accumulator.residual_y += delta_y;
-    let notches = accumulator.residual_y.trunc() as i32;
+    let notches = (accumulator.residual_y / cells_per_notch).trunc() as i32;
     if notches == 0 {
         return;
     }
-    accumulator.residual_y -= notches as f32;
+    accumulator.residual_y -= notches as f32 * cells_per_notch;
 
-    let mouse_cfg = &configs.mouse;
     let fine_pressed = match mouse_cfg.fine_modifier {
         FineModifier::Shift => {
             keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight)

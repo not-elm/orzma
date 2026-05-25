@@ -21,7 +21,7 @@ pub enum FineModifier {
 /// Fully-resolved `[mouse]` config block. Consumed by the Bevy
 /// mouse-wheel input system; mapped 1:1 to `bevy_terminal::WheelConfig`
 /// for the routing layer.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MouseConfig {
     /// Lines scrolled per notch in the scrollback / alt-screen paths.
     pub lines_per_notch: u32,
@@ -33,6 +33,15 @@ pub struct MouseConfig {
     /// protects the PTY from input bursts when the user spins the
     /// wheel rapidly while an app has SGR mouse tracking enabled.
     pub max_protocol_events_per_frame: u32,
+    /// Wheel-input accumulation threshold expressed in cells of input
+    /// per emitted "notch". Lower = more responsive (each small wheel
+    /// movement fires a notch sooner).
+    ///
+    /// Default `0.5` works well for macOS smooth-scroll devices
+    /// (Magic Mouse, high-resolution wheels, trackpads) which emit
+    /// fractional line deltas; raise to `1.0` for a traditional
+    /// discrete-notch wheel that already emits `y = 1.0` per click.
+    pub cells_per_notch: f32,
 }
 
 impl Default for MouseConfig {
@@ -42,6 +51,7 @@ impl Default for MouseConfig {
             fine_modifier: FineModifier::Shift,
             fine_lines: 1,
             max_protocol_events_per_frame: 8,
+            cells_per_notch: 0.5,
         }
     }
 }
@@ -54,6 +64,7 @@ pub(crate) struct MousePatch {
     pub(crate) fine_modifier: Option<FineModifier>,
     pub(crate) fine_lines: Option<u32>,
     pub(crate) max_protocol_events_per_frame: Option<u32>,
+    pub(crate) cells_per_notch: Option<f32>,
 }
 
 impl MousePatch {
@@ -70,6 +81,9 @@ impl MousePatch {
         if let Some(v) = self.max_protocol_events_per_frame {
             base.max_protocol_events_per_frame = v;
         }
+        if let Some(v) = self.cells_per_notch {
+            base.cells_per_notch = v;
+        }
         base
     }
 }
@@ -85,6 +99,7 @@ mod tests {
         assert_eq!(cfg.fine_modifier, FineModifier::Shift);
         assert_eq!(cfg.fine_lines, 1);
         assert_eq!(cfg.max_protocol_events_per_frame, 8);
+        assert_eq!(cfg.cells_per_notch, 0.5);
     }
 
     #[test]
