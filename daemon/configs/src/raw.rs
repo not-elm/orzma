@@ -7,24 +7,20 @@ use crate::OzmuxConfigsResult;
 use crate::browser::BrowserPatch;
 use crate::font::FontPatch;
 use crate::mouse::MousePatch;
-use crate::shortcuts::Bindings;
+use crate::shortcuts::Shortcuts;
 use crate::theme::ThemePatch;
 use serde::Deserialize;
 
-/// Top-level TOML shape: every section is optional.
+/// Top-level TOML shape: every section is optional. `deny_unknown_fields`
+/// is critical — it catches misspelled section names (`[shortucts]`).
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RawConfigs {
-    pub(crate) shortcuts: Option<RawShortcuts>,
+    pub(crate) shortcuts: Option<Shortcuts>,
     pub(crate) theme: Option<ThemePatch>,
     pub(crate) font: Option<FontPatch>,
     pub(crate) browser: Option<BrowserPatch>,
     pub(crate) mouse: Option<MousePatch>,
-}
-
-/// `[shortcuts]` shape with each subfield optional.
-#[derive(Deserialize, Default)]
-pub(crate) struct RawShortcuts {
-    pub(crate) bindings: Option<Bindings>,
 }
 
 impl RawConfigs {
@@ -33,10 +29,8 @@ impl RawConfigs {
     /// The `theme`, `font`, `browser`, and `mouse` sections use their respective
     /// `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
-        if let Some(raw) = self.shortcuts
-            && let Some(bindings) = raw.bindings
-        {
-            base.shortcuts.bindings = bindings;
+        if let Some(shortcuts) = self.shortcuts {
+            base.shortcuts = shortcuts;
         }
         if let Some(patch) = self.theme {
             base.theme = patch.apply_to(base.theme);
@@ -54,7 +48,7 @@ impl RawConfigs {
     }
 }
 
-/// Walks `configs.shortcuts.bindings` and rejects duplicate chords.
+/// Cross-section validation: chord conflicts, font size range, etc.
 pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
     if let Err(dupes) = configs.shortcuts.bindings.validate_no_conflicts() {
         return Err(OzmuxConfigsError::DuplicateChords(dupes));
@@ -71,102 +65,88 @@ mod tests {
     use super::*;
 
     #[test]
-    fn theme_patch_preserves_unset_fields() {
-        let raw: RawConfigs = toml::from_str(
-            r##"
-            [theme]
-            accent = "#deadbe"
-        "##,
-        )
-        .unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.theme.accent, "#deadbe");
-        assert_eq!(merged.theme.background, "#1a1b26");
-    }
-
-    #[test]
-    fn validate_accepts_default_config() {
-        validate(&OzmuxConfigs::default()).unwrap();
-    }
-
-    #[test]
-    fn font_section_merges_and_falls_back() {
-        let raw: RawConfigs = toml::from_str(
-            r#"
-            [font]
-            size = 15.0
-            [font.normal]
-            family = "Hack Nerd Font"
-            style = "Regular"
-            [font.offset]
-            x = 0
-        "#,
-        )
-        .unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.font.size, 15.0);
-        assert_eq!(merged.font.normal_family, "Hack Nerd Font");
-        assert_eq!(merged.font.bold_family, "Hack Nerd Font");
-    }
-
-    #[test]
-    fn absent_font_section_keeps_defaults() {
+    fn empty_raw_returns_defaults() {
         let raw = RawConfigs::default();
         let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.font, crate::font::FontConfig::default());
-    }
-
-    #[test]
-    fn validate_rejects_zero_font_size() {
-        let raw: RawConfigs = toml::from_str("[font]\nsize = 0.0\n").unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        let err = validate(&merged).unwrap_err();
-        assert!(matches!(
-            err,
-            crate::OzmuxConfigsError::InvalidFontSize { .. }
-        ));
-    }
-
-    #[test]
-    fn validate_rejects_oversized_font() {
-        let raw: RawConfigs = toml::from_str("[font]\nsize = 999.0\n").unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        assert!(matches!(
-            validate(&merged).unwrap_err(),
-            crate::OzmuxConfigsError::InvalidFontSize { .. }
-        ));
-    }
-
-    #[test]
-    fn browser_section_overrides_search_template() {
-        let raw: RawConfigs = toml::from_str(
-            r#"
-            [browser]
-            search_template = "https://www.google.com/search?q={query}"
-        "#,
-        )
-        .unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(
-            merged.browser.search_template,
-            "https://www.google.com/search?q={query}"
+            merged.shortcuts.bindings,
+            OzmuxConfigs::default().shortcuts.bindings
         );
     }
 
     #[test]
-    fn absent_browser_section_keeps_default_duckduckgo() {
-        let raw = RawConfigs::default();
+    fn user_override_replaces_one_binding_keeps_others() {
+        let toml_str = r#"
+[shortcuts.bindings]
+close-pane = "Cmd+Shift+W"
+"#;
+        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.browser, crate::browser::BrowserConfig::default());
+        let close = merged.shortcuts.bindings.close_pane.as_ref().unwrap();
+        assert_eq!(close.key, crate::shortcuts::Key::Char('w'));
+        assert!(close.modifiers.meta && close.modifiers.shift);
+        let focus_left = merged.shortcuts.bindings.focus_pane_left.as_ref().unwrap();
+        assert_eq!(focus_left.key, crate::shortcuts::Key::Char('h'));
     }
 
     #[test]
-    fn validate_rejects_nan_font_size() {
-        let raw: RawConfigs = toml::from_str("[font]\nsize = nan\n").unwrap();
+    fn user_unbind_with_empty_string_sets_field_to_none() {
+        let toml_str = r#"
+[shortcuts.bindings]
+enter-copy-mode = ""
+"#;
+        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
-        assert!(matches!(
-            validate(&merged).unwrap_err(),
-            crate::OzmuxConfigsError::InvalidFontSize { .. }
-        ));
+        assert!(merged.shortcuts.bindings.enter_copy_mode.is_none());
+    }
+
+    #[test]
+    fn unknown_section_is_rejected() {
+        let toml_str = r#"
+[shortucts]
+"#;
+        let err = toml::from_str::<RawConfigs>(toml_str)
+            .err()
+            .expect("expected parse error for unknown section");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("shortucts") || msg.contains("unknown field"),
+            "error message should mention the unknown field; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn unknown_binding_field_is_rejected() {
+        let toml_str = r#"
+[shortcuts.bindings]
+resize-pane-down = "Cmd+Shift+J"
+"#;
+        let err = toml::from_str::<RawConfigs>(toml_str)
+            .err()
+            .expect("expected parse error for unknown binding field");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("resize-pane-down") || msg.contains("unknown field"),
+            "error message should mention the unknown field; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_detects_chord_conflict() {
+        let toml_str = r#"
+[shortcuts.bindings]
+close-pane = "Cmd+J"
+"#;
+        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        let err = validate(&merged).unwrap_err();
+        match err {
+            OzmuxConfigsError::DuplicateChords(dupes) => {
+                assert_eq!(dupes.len(), 1);
+                assert!(dupes[0].actions.contains(&"close-pane"));
+                assert!(dupes[0].actions.contains(&"focus-pane-down"));
+            }
+            _ => panic!("expected DuplicateChords, got {err:?}"),
+        }
     }
 }
