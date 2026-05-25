@@ -2,6 +2,8 @@
 //! systems. The shortcut binding table (prefix + bindings) comes from
 //! the loaded `OzmuxConfigsResource`; this module owns no chord data.
 
+pub(crate) mod mouse_wheel;
+
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
