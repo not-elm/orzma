@@ -1,6 +1,7 @@
 //! Loads `OzmuxConfigs` synchronously at app build time and exposes it as
-//! a Bevy Resource. Falls back to defaults on any I/O or parse error so
-//! the GUI never refuses to start because of a malformed config.
+//! a Bevy Resource. Falls back to defaults only when the config file does
+//! not exist; parse and validation errors are fatal (exit 2) so the GUI
+//! never silently runs with a misinterpreted config.
 
 use bevy::prelude::*;
 use ozmux_configs::OzmuxConfigs;
@@ -16,9 +17,20 @@ pub(crate) struct OzmuxConfigsPlugin;
 
 impl Plugin for OzmuxConfigsPlugin {
     fn build(&self, app: &mut App) {
-        let configs = OzmuxConfigs::load_blocking().unwrap_or_else(|err| {
-            tracing::warn!(?err, "configs: load failed, using defaults");
-            OzmuxConfigs::default()
+        let configs = OzmuxConfigs::load_blocking().unwrap_or_else(|err| match &err {
+            // File-not-found is the only acceptable fallback: empty user config
+            // means "use defaults". `OzmuxConfigsError::Io` is { path, source };
+            // drill into source.kind() to inspect ErrorKind (no `kind` field on Io).
+            ozmux_configs::OzmuxConfigsError::Io { source, .. }
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                OzmuxConfigs::default()
+            }
+            // Any other parse / validation error is fatal.
+            _ => {
+                eprintln!("ozmux-gui: shortcut config error:\n  {err}");
+                std::process::exit(2);
+            }
         });
         app.insert_resource(OzmuxConfigsResource(configs));
     }
@@ -55,17 +67,17 @@ mod tests {
             .get_resource::<OzmuxConfigsResource>()
             .expect("plugin must insert resource");
         let defaults = OzmuxConfigs::default();
-        assert_eq!(res.shortcuts.prefix, defaults.shortcuts.prefix);
+        assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
     }
 
     #[test]
-    fn plugin_falls_back_to_defaults_on_broken_toml() {
+    fn plugin_falls_back_to_defaults_when_file_not_found() {
         let _guard = env_guard();
-        let tmp = std::env::temp_dir().join("ozmux_configs_resource_broken.toml");
-        std::fs::write(&tmp, "this = is not valid }{ toml").unwrap();
-        // SAFETY: env mutations are serialized by ENV_GUARD for this crate's tests.
+        let nonexistent = std::env::temp_dir().join("ozmux_configs_does_not_exist.toml");
+        let _ = std::fs::remove_file(&nonexistent);
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
         unsafe {
-            std::env::set_var("OZMUX_CONFIG", &tmp);
+            std::env::set_var("OZMUX_CONFIG", &nonexistent);
         }
 
         let mut app = App::new();
@@ -73,17 +85,13 @@ mod tests {
         let res = app
             .world()
             .get_resource::<OzmuxConfigsResource>()
-            .expect("plugin must still insert a resource on load failure");
+            .expect("plugin must insert resource on NotFound");
         let defaults = OzmuxConfigs::default();
-        assert_eq!(
-            res.shortcuts.prefix, defaults.shortcuts.prefix,
-            "fallback must use defaults"
-        );
+        assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
 
-        // SAFETY: cleanup under the same env guard.
+        // SAFETY: env mutation cleanup under the same env_guard.
         unsafe {
             std::env::remove_var("OZMUX_CONFIG");
         }
-        let _ = std::fs::remove_file(&tmp);
     }
 }
