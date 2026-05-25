@@ -57,6 +57,13 @@ pub(crate) enum CopyOp {
 /// Pure mapping from Bevy logical key + modifiers to a `CopyOp`.
 /// Returns `None` for any key not bound in copy mode — those keys are
 /// silently swallowed by `dispatch_key`.
+///
+/// Modifier discipline: copy-mode keys (h/j/k/l/w/b/e/0/^/$/g/G/v/V/y/q)
+/// only match when `meta`, `ctrl`, and `alt` are all false. `shift`
+/// remains in scope because the existing uppercase bindings (`V`, `G`)
+/// rely on it. Without this gate, Cmd+V would trigger
+/// `ToggleSelection(Simple)` while in copy mode instead of falling
+/// through to the paste pipeline.
 pub(crate) fn map_key_to_copy_op(key: &Key, mods: Modifiers) -> Option<CopyOp> {
     match key {
         Key::Escape => return Some(CopyOp::ExitCancel),
@@ -68,6 +75,9 @@ pub(crate) fn map_key_to_copy_op(key: &Key, mods: Modifiers) -> Option<CopyOp> {
         Key::PageDown => return Some(CopyOp::ScrollPageDown),
         Key::Character(_) => {}
         _ => return None,
+    }
+    if mods.meta || mods.ctrl || mods.alt {
+        return None;
     }
     let Key::Character(s) = key else { return None };
     let mut chars = s.chars();
@@ -292,6 +302,52 @@ mod tests {
         assert!(op.is_none());
         let op = map_key_to_copy_op(&Bk::Character("z".into()), Modifiers::default());
         assert!(op.is_none());
+    }
+
+    #[test]
+    fn map_v_with_meta_modifier_returns_none() {
+        let op = map_key_to_copy_op(
+            &Bk::Character("v".into()),
+            Modifiers { meta: true, ..Default::default() },
+        );
+        assert!(
+            op.is_none(),
+            "Cmd+V (meta+v) must NOT toggle simple selection; it is the OS paste shortcut and must fall through to the paste gate",
+        );
+    }
+
+    #[test]
+    fn map_y_with_ctrl_modifier_returns_none() {
+        let op = map_key_to_copy_op(
+            &Bk::Character("y".into()),
+            Modifiers { ctrl: true, ..Default::default() },
+        );
+        assert!(
+            op.is_none(),
+            "Ctrl+Y must not be treated as the copy-mode yank — modifiers other than shift must be rejected",
+        );
+    }
+
+    #[test]
+    fn map_h_with_alt_modifier_returns_none() {
+        let op = map_key_to_copy_op(
+            &Bk::Character("h".into()),
+            Modifiers { alt: true, ..Default::default() },
+        );
+        assert!(op.is_none(), "Alt+H must not move the vi cursor left");
+    }
+
+    #[test]
+    fn map_uppercase_v_with_shift_still_returns_toggle_lines() {
+        // Sanity: tightening must not regress the existing Shift+V binding.
+        let op = map_key_to_copy_op(
+            &Bk::Character("V".into()),
+            Modifiers { shift: true, ..Default::default() },
+        );
+        assert!(matches!(
+            op,
+            Some(CopyOp::ToggleSelection(SelectionType::Lines))
+        ));
     }
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
