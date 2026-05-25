@@ -4,15 +4,23 @@ use serde::{Deserialize, Serialize};
 
 /// Which modifier triggers "fine" scrolling (1 line per notch instead
 /// of `lines_per_notch`).
+///
+/// Default is `Alt`. Shift is deliberately not the default because
+/// macOS converts Shift+wheel into a horizontal-scroll event at the
+/// system level (vertical y becomes x), so Shift+wheel reaches the
+/// app as `ev.y == 0` and the fine path never fires. Alt+wheel passes
+/// through unchanged on macOS, Linux, and Windows.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum FineModifier {
-    /// Shift key activates fine scrolling.
-    #[default]
+    /// Shift key activates fine scrolling. **Broken on macOS** —
+    /// system converts Shift+wheel to horizontal scroll.
     Shift,
-    /// Ctrl key activates fine scrolling.
+    /// Ctrl key activates fine scrolling. May collide with future
+    /// font-zoom shortcuts (kitty / Windows Terminal convention).
     Ctrl,
-    /// Alt key activates fine scrolling.
+    /// Alt key activates fine scrolling. Default.
+    #[default]
     Alt,
     /// No modifier required; fine scrolling is always active.
     None,
@@ -48,7 +56,7 @@ impl Default for MouseConfig {
     fn default() -> Self {
         Self {
             lines_per_notch: 3,
-            fine_modifier: FineModifier::Shift,
+            fine_modifier: FineModifier::Alt,
             fine_lines: 1,
             max_protocol_events_per_frame: 8,
             cells_per_notch: 0.5,
@@ -96,7 +104,7 @@ mod tests {
     fn defaults_match_expected_values() {
         let cfg = MouseConfig::default();
         assert_eq!(cfg.lines_per_notch, 3);
-        assert_eq!(cfg.fine_modifier, FineModifier::Shift);
+        assert_eq!(cfg.fine_modifier, FineModifier::Alt);
         assert_eq!(cfg.fine_lines, 1);
         assert_eq!(cfg.max_protocol_events_per_frame, 8);
         assert_eq!(cfg.cells_per_notch, 0.5);
@@ -110,7 +118,7 @@ mod tests {
         };
         let merged = patch.apply_to(MouseConfig::default());
         assert_eq!(merged.lines_per_notch, 5);
-        assert_eq!(merged.fine_modifier, FineModifier::Shift);
+        assert_eq!(merged.fine_modifier, FineModifier::Alt);
         assert_eq!(merged.fine_lines, 1);
     }
 
