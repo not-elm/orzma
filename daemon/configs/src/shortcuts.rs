@@ -140,6 +140,121 @@ impl fmt::Display for KeyChord {
     }
 }
 
+/// Reason a `parse_key_chord` invocation failed. Surfaced via
+/// `D::Error::custom` from serde's `deserialize_with`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum KeyChordParseError {
+    /// Consecutive `+` or trailing `+` produced an empty token between separators.
+    #[error("empty token in chord string (consecutive '+' or trailing '+')")]
+    EmptyToken,
+    /// A token that is neither a known modifier nor a known named key.
+    #[error("unknown named key: {0:?}")]
+    UnknownNamedKey(String),
+    /// The same modifier bit was set twice. Catches both literal duplicates
+    /// (`"Cmd+Cmd+S"`) and alias collisions (`"Cmd+Meta+S"`, both set `meta`).
+    #[error("duplicate modifier {token:?} (normalized to {normalized_bit})")]
+    DuplicateModifier {
+        /// The offending token as it appeared in the input.
+        token: String,
+        /// Which `Modifiers` bit was already set.
+        normalized_bit: &'static str,
+    },
+    /// More than one non-modifier token appeared in the chord.
+    #[error("multiple key tokens in chord string")]
+    MultipleKeyTokens,
+}
+
+/// Parses `"Cmd+Shift+S"`-shape strings into a `KeyChord`.
+///
+/// Modifier names are case-insensitive. Aliases: `Cmd` / `Command` / `Meta` /
+/// `Super` all set `meta`; `Alt` / `Opt` / `Option` all set `alt`. ASCII letter
+/// keys are normalized to lowercase (Shift is held in `Modifiers`, never in
+/// key case). Empty string is NOT accepted here; the field-level
+/// `deser_chord_or_unbind` handles the unbind case before calling this.
+pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
+    if s.is_empty() {
+        return Err(KeyChordParseError::EmptyToken);
+    }
+    let tokens: Vec<&str> = s.split('+').collect();
+    if tokens.iter().any(|t| t.is_empty()) {
+        return Err(KeyChordParseError::EmptyToken);
+    }
+    let mut mods = Modifiers::default();
+    let mut key: Option<Key> = None;
+    for token in tokens {
+        if let Some((bit, name)) = parse_modifier_to_bit(token) {
+            let already_set = (bit.meta && mods.meta)
+                || (bit.ctrl && mods.ctrl)
+                || (bit.alt && mods.alt)
+                || (bit.shift && mods.shift);
+            if already_set {
+                return Err(KeyChordParseError::DuplicateModifier {
+                    token: token.to_string(),
+                    normalized_bit: name,
+                });
+            }
+            mods.meta = mods.meta || bit.meta;
+            mods.ctrl = mods.ctrl || bit.ctrl;
+            mods.alt = mods.alt || bit.alt;
+            mods.shift = mods.shift || bit.shift;
+        } else {
+            if key.is_some() {
+                return Err(KeyChordParseError::MultipleKeyTokens);
+            }
+            let k = Key::from_token(token);
+            if let Key::Other(name) = &k {
+                return Err(KeyChordParseError::UnknownNamedKey(name.clone()));
+            }
+            let k = if let Key::Char(c) = k {
+                Key::Char(c.to_ascii_lowercase())
+            } else {
+                k
+            };
+            key = Some(k);
+        }
+    }
+    let key = key.ok_or(KeyChordParseError::EmptyToken)?;
+    Ok(KeyChord {
+        key,
+        modifiers: mods,
+    })
+}
+
+fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
+    let lower = token.to_ascii_lowercase();
+    match lower.as_str() {
+        "cmd" | "command" | "meta" | "super" => Some((
+            Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+            "meta",
+        )),
+        "ctrl" => Some((
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            "ctrl",
+        )),
+        "shift" => Some((
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            "shift",
+        )),
+        "alt" | "opt" | "option" => Some((
+            Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+            "alt",
+        )),
+        _ => None,
+    }
+}
+
 /// User-facing shortcut configuration.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Shortcuts {
@@ -1066,6 +1181,90 @@ mod tests {
             },
         };
         assert_eq!(c.to_string(), "Cmd+Ctrl+Alt+Shift+A");
+    }
+
+    #[test]
+    fn parse_simple_cmd_shift_s() {
+        let c = parse_key_chord("Cmd+Shift+S").unwrap();
+        assert_eq!(c.key, Key::Char('s'));
+        assert!(c.modifiers.meta && c.modifiers.shift);
+        assert!(!c.modifiers.ctrl && !c.modifiers.alt);
+    }
+
+    #[test]
+    fn parse_lowercases_letter() {
+        let upper = parse_key_chord("Cmd+S").unwrap();
+        let lower = parse_key_chord("Cmd+s").unwrap();
+        assert_eq!(upper, lower);
+        assert_eq!(upper.key, Key::Char('s'));
+    }
+
+    #[test]
+    fn parse_modifier_aliases() {
+        let cmd = parse_key_chord("Cmd+A").unwrap();
+        let command = parse_key_chord("Command+A").unwrap();
+        let meta = parse_key_chord("Meta+A").unwrap();
+        let super_ = parse_key_chord("Super+A").unwrap();
+        assert_eq!(cmd, command);
+        assert_eq!(cmd, meta);
+        assert_eq!(cmd, super_);
+    }
+
+    #[test]
+    fn parse_named_keys() {
+        assert_eq!(parse_key_chord("Escape").unwrap().key, Key::Escape);
+        assert_eq!(parse_key_chord("Cmd+ArrowUp").unwrap().key, Key::ArrowUp);
+        assert_eq!(parse_key_chord("Space").unwrap().key, Key::Space);
+    }
+
+    #[test]
+    fn parse_accepts_plus_as_named_key() {
+        let c = parse_key_chord("Cmd+Plus").unwrap();
+        assert_eq!(c.key, Key::Plus);
+        assert!(c.modifiers.meta);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_named_key() {
+        assert!(parse_key_chord("Cmd+Foo").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_modifier_literal() {
+        assert!(parse_key_chord("Cmd+Cmd+S").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_modifier_alias() {
+        assert!(parse_key_chord("Cmd+Meta+S").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_modifier_alias_super() {
+        assert!(parse_key_chord("Cmd+Super+S").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_multiple_keys() {
+        assert!(parse_key_chord("Cmd+S+T").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_trailing_plus() {
+        assert!(parse_key_chord("Cmd+").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_consecutive_plus() {
+        assert!(parse_key_chord("Cmd++").is_err());
+    }
+
+    #[test]
+    fn parse_modifier_case_insensitive() {
+        assert_eq!(
+            parse_key_chord("cmd+s").unwrap(),
+            parse_key_chord("CMD+S").unwrap()
+        );
     }
 
     #[test]
