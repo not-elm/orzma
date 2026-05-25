@@ -47,9 +47,6 @@ pub(crate) fn dispatch_focused_key(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        if ev.repeat {
-            continue;
-        }
 
         let Ok((attached, win)) = q.get_mut(ev.window) else {
             continue;
@@ -124,6 +121,10 @@ pub(crate) fn dispatch_focused_key(
                 modifiers: mods.clone(),
             };
             if let Some(action) = bindings.lookup(&chord) {
+                // OS key-repeat suppression: only block shortcut actions, not terminal input.
+                if ev.repeat {
+                    continue;
+                }
                 execute_action(action, &mut commands, &mut mux, attached, &registry);
                 continue;
             }
@@ -927,6 +928,37 @@ mod tests {
                 bevy_terminal::TerminalKey::Text(s) if s == "a"
             )),
             "plain 'a' must forward to the terminal; captured: {:?}",
+            captured,
+        );
+    }
+
+    #[test]
+    fn key_repeat_event_forwards_to_terminal() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+        let ev = KeyboardInput {
+            key_code: KeyCode::Unidentified(NativeKeyCode::Unidentified),
+            logical_key: Bk::Character("j".into()),
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: true,
+            window: window_entity,
+        };
+        let mut events = app
+            .world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>();
+        events.write(ev);
+        drop(events);
+        app.update();
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.iter().any(|ev| matches!(
+                &ev.key,
+                bevy_terminal::TerminalKey::Text(s) if s == "j"
+            )),
+            "repeat=true 'j' must still forward to the terminal; captured: {:?}",
             captured,
         );
     }
