@@ -118,6 +118,34 @@ pub(crate) fn dispatch_focused_key(
             }
             continue;
         }
+        // Cmd+V → paste, inline special case (mirrors Action::EnterCopyMode
+        // handling inside handle_chord around line 314-323).
+        if is_paste_chord(&ev.logical_key, &mods) {
+            if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
+                && let Some(window) = mux.windows.get(&wid)
+                && let Ok(pane) = window.pane(&pid)
+                && let Some(entity) = registry.get(&pane.active_activity)
+                && let Ok((mut handle, mut pty, _coalescer)) = handles.get_mut(entity)
+                && let Some(text) = clipboard.read()
+                && !text.is_empty()
+            {
+                let bracketed = handle.bracketed_paste_enabled();
+                let bytes = crate::ui::clipboard::build_paste_bytes(&text, bracketed);
+                if let Err(err) = handle.write(&mut pty, &bytes) {
+                    tracing::warn!(
+                        target: "ozmux_gui::input",
+                        ?err,
+                        "paste PTY write failed",
+                    );
+                }
+            }
+            // NOTE: a consumed key must disarm any armed prefix, otherwise
+            // the next keystroke leaks into the prefix flow with stale
+            // state (mirrors handle_chord's discipline at the bottom of
+            // its match arm).
+            prefix.armed = false;
+            continue;
+        }
         if is_modifier_only_key(&ev.logical_key) {
             continue;
         }
@@ -206,6 +234,23 @@ fn is_modifier_only_key(key: &Key) -> bool {
             | Key::Fn
             | Key::Symbol
     )
+}
+
+/// Returns `true` when the (key, mods) pair is the OS paste shortcut
+/// `Cmd+V`. The match is strict on modifiers — exactly `meta` is held,
+/// and `ctrl` / `shift` / `alt` are all absent. The `v` character match
+/// is case-sensitive (uppercase `V` does not bind, since Shift+Cmd+V
+/// is not a paste shortcut on macOS).
+///
+/// Inlined into the dispatcher at the special-case position; see the
+/// `Action::EnterCopyMode` precedent inside `handle_chord` for the
+/// same shape.
+fn is_paste_chord(key: &Key, mods: &Modifiers) -> bool {
+    let Key::Character(s) = key else { return false };
+    if s.as_str() != "v" {
+        return false;
+    }
+    mods.meta && !mods.ctrl && !mods.shift && !mods.alt
 }
 
 fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
@@ -466,6 +511,35 @@ mod tests {
         entity
     }
 
+    /// Spawns a registry-registered Terminal Activity entity that carries
+    /// a real `TerminalHandle` / `PtyHandle` / `Coalescer` (via
+    /// `TerminalBundle::spawn`). Used by the paste-gate integration tests
+    /// that need to observe `pending_user_input` flipping after the gate
+    /// runs.
+    fn install_active_terminal_activity_with_handle(app: &mut App) -> Entity {
+        let opts = bevy_terminal::SpawnOptions {
+            cols: 10,
+            rows: 5,
+            shell: "/bin/sh".into(),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = bevy_terminal::TerminalBundle::spawn(opts).expect("spawn /bin/sh");
+        let entity = app.world_mut().spawn(bundle).id();
+        let activity_id = {
+            let mux = app.world().resource::<Multiplexer>();
+            let wid = mux.windows.keys().next().unwrap().clone();
+            let window = mux.windows.get(&wid).unwrap();
+            let pane = window.pane(&window.active_pane).unwrap();
+            pane.active_activity.clone()
+        };
+        let mut registry = app
+            .world_mut()
+            .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
+        registry.insert_for_test(activity_id, entity);
+        entity
+    }
+
     #[test]
     fn default_prefix_state_from_default_prefix_has_2s_timer() {
         let cfg = OzmuxConfigs::default();
@@ -578,6 +652,82 @@ mod tests {
         assert!(!is_modifier_only_key(&Bk::SymbolLock));
         assert!(!is_modifier_only_key(&Bk::Character("a".into())));
         assert!(!is_modifier_only_key(&Bk::F1));
+    }
+
+    #[test]
+    fn is_paste_chord_matches_meta_v_only() {
+        assert!(super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+        ));
+    }
+
+    #[test]
+    fn is_paste_chord_rejects_plain_v() {
+        assert!(!super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers::default(),
+        ));
+    }
+
+    #[test]
+    fn is_paste_chord_rejects_meta_plus_extra_modifier() {
+        assert!(!super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers {
+                meta: true,
+                ctrl: true,
+                ..Default::default()
+            },
+        ));
+        assert!(!super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers {
+                meta: true,
+                shift: true,
+                ..Default::default()
+            },
+        ));
+        assert!(!super::is_paste_chord(
+            &Bk::Character("v".into()),
+            &Modifiers {
+                meta: true,
+                alt: true,
+                ..Default::default()
+            },
+        ));
+    }
+
+    #[test]
+    fn is_paste_chord_rejects_uppercase_v() {
+        assert!(!super::is_paste_chord(
+            &Bk::Character("V".into()),
+            &Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+        ));
+    }
+
+    #[test]
+    fn is_paste_chord_rejects_other_keys() {
+        assert!(!super::is_paste_chord(
+            &Bk::Character("c".into()),
+            &Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+        ));
+        assert!(!super::is_paste_chord(
+            &Bk::Escape,
+            &Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+        ));
     }
 
     #[test]
@@ -1116,6 +1266,157 @@ mod tests {
         assert!(
             !app.world().get::<PrefixState>(window_entity).unwrap().armed,
             "EnterCopyMode must disarm the prefix",
+        );
+    }
+
+    #[test]
+    fn cmd_v_with_bracketed_paste_off_writes_to_pty_and_consumes_key() {
+        let (mut app, window_entity) = make_app(true, false);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let _activity_entity = install_active_terminal_activity_with_handle(&mut app);
+        {
+            let mut clipboard = app
+                .world_mut()
+                .resource_mut::<crate::ui::clipboard::Clipboard>();
+            clipboard.write("hello\nworld".to_string());
+        }
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("v".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "Cmd+V must NOT forward as TerminalKeyInput; captured: {:?}",
+            captured,
+        );
+    }
+
+    #[test]
+    fn cmd_v_with_bracketed_paste_on_wraps_bytes_when_clipboard_has_text() {
+        let (mut app, window_entity) = make_app(true, false);
+        let activity_entity = install_active_terminal_activity_with_handle(&mut app);
+        let clipboard_available = {
+            let cb = app.world().resource::<crate::ui::clipboard::Clipboard>();
+            cb.is_available_for_test()
+        };
+        if !clipboard_available {
+            eprintln!("skipping: arboard unavailable in this environment (e.g. headless CI)");
+            return;
+        }
+        {
+            let mut clipboard = app
+                .world_mut()
+                .resource_mut::<crate::ui::clipboard::Clipboard>();
+            clipboard.write("hi".to_string());
+        }
+        {
+            let mut handle = app
+                .world_mut()
+                .get_mut::<bevy_terminal::TerminalHandle>(activity_entity)
+                .unwrap();
+            handle.advance(b"\x1b[?2004h");
+        }
+        assert!(
+            !app.world()
+                .get::<bevy_terminal::TerminalHandle>(activity_entity)
+                .unwrap()
+                .pending_user_input(),
+            "precondition: no pending input before paste",
+        );
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("v".into()));
+        app.update();
+
+        assert!(
+            app.world()
+                .get::<bevy_terminal::TerminalHandle>(activity_entity)
+                .unwrap()
+                .pending_user_input(),
+            "after Cmd+V with bracketed paste on and seeded clipboard, handle.write must have been called (flipping pending_user_input to true)",
+        );
+    }
+
+    #[test]
+    fn cmd_v_in_copy_mode_does_not_invoke_paste() {
+        let (mut app, window_entity) = make_app(true, false);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let activity_entity = install_active_terminal_activity_with_handle(&mut app);
+        app.world_mut()
+            .entity_mut(activity_entity)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        assert!(
+            !app.world()
+                .get::<bevy_terminal::TerminalHandle>(activity_entity)
+                .unwrap()
+                .pending_user_input()
+        );
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("v".into()));
+        app.update();
+
+        assert!(
+            !app.world()
+                .get::<bevy_terminal::TerminalHandle>(activity_entity)
+                .unwrap()
+                .pending_user_input(),
+            "copy-mode gate must consume Cmd+V before the paste gate; no write should occur",
+        );
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "Cmd+V in copy mode must not leak to the terminal",
+        );
+    }
+
+    #[test]
+    fn cmd_v_disarms_prefix_then_next_key_treated_as_fresh() {
+        let (mut app, window_entity) = make_app(true, true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity_with_handle(&mut app);
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("v".into()));
+        app.update();
+
+        assert!(
+            !app.world().get::<PrefixState>(window_entity).unwrap().armed,
+            "Cmd+V must disarm the prefix (matches handle_chord's discipline)",
+        );
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("a".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.iter().any(|ev| matches!(
+                &ev.key,
+                bevy_terminal::TerminalKey::Text(s) if s == "a"
+            )),
+            "after the gate disarms, the next plain 'a' must forward to the terminal as a fresh key; captured: {:?}",
+            captured,
         );
     }
 }
