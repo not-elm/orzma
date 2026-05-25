@@ -167,7 +167,6 @@ pub fn route_wheel(
     }
     let direction = if notches < 0 { WheelDir::Up } else { WheelDir::Down };
 
-    // Path 1: app-driven mouse protocol.
     let any_mouse = modes.intersects(
         TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
     );
@@ -189,7 +188,6 @@ pub fn route_wheel(
         return WheelAction::WriteToPty(buf);
     }
 
-    // Path 2: alt-screen translation (?1007), Shift bypasses.
     if modes.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) && !mods.shift {
         let lines_per = if mods.fine { cfg.fine_lines } else { cfg.lines_per_notch };
         let n = notches.unsigned_abs().saturating_mul(lines_per);
@@ -199,7 +197,6 @@ pub fn route_wheel(
         return WheelAction::WriteToPty(alt_screen_arrow_bytes(direction, n));
     }
 
-    // Path 3: host scrollback. Upward notches grow display_offset, so flip the sign.
     let lines_per = if mods.fine { cfg.fine_lines } else { cfg.lines_per_notch } as i32;
     let viewport_delta = -notches * lines_per;
     WheelAction::ScrollViewport(viewport_delta)
@@ -361,6 +358,14 @@ mod route_tests {
     }
 
     #[test]
+    fn alt_screen_translates_down_arrows() {
+        let modes = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        let action = route_wheel(modes, 1, cell(), WheelModifiers::default(), &cfg_default());
+        // +1 notch * 3 lines = 3 down arrows
+        assert_eq!(action, WheelAction::WriteToPty(b"\x1bOB\x1bOB\x1bOB".to_vec()));
+    }
+
+    #[test]
     fn alt_screen_without_alternate_scroll_falls_back_to_scrollback() {
         // App disabled ?1007 — scrollback wins
         let modes = TermMode::ALT_SCREEN;
@@ -413,6 +418,14 @@ mod route_tests {
             expected.extend_from_slice(one);
         }
         assert_eq!(action, WheelAction::WriteToPty(expected));
+    }
+
+    #[test]
+    fn sgr_mouse_with_zero_cap_returns_noop() {
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let cfg = WheelConfig { max_protocol_events_per_frame: 0, ..WheelConfig::default() };
+        let action = route_wheel(modes, 5, cell(), WheelModifiers::default(), &cfg);
+        assert_eq!(action, WheelAction::Noop);
     }
 
     #[test]
