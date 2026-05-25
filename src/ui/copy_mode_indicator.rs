@@ -52,13 +52,20 @@ fn attach_indicator_to_activity_host(
                 CopyModeIndicator,
                 IndicatorCache::default(),
                 Text::new(""),
+                TextFont {
+                    font_size: theme::COPY_MODE_INDICATOR_FONT_SIZE_PX,
+                    ..default()
+                },
                 BackgroundColor(palette::COPY_MODE_INDICATOR_BG),
                 TextColor(palette::COPY_MODE_INDICATOR_FG),
                 Node {
                     position_type: PositionType::Absolute,
                     top: Val::Px(0.0),
                     right: Val::Px(0.0),
-                    padding: UiRect::axes(Val::Px(theme::ELEMENT_PADDING_PX), Val::Px(0.0)),
+                    padding: UiRect::axes(
+                        Val::Px(theme::COPY_MODE_INDICATOR_PADDING_X_PX),
+                        Val::Px(0.0),
+                    ),
                     display: Display::None,
                     ..default()
                 },
