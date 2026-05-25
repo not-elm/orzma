@@ -14,7 +14,7 @@ use bevy::ecs::resource::Resource;
 /// still see the selection — but `y` does not modify the host
 /// clipboard.
 #[derive(Resource)]
-pub(crate) struct Clipboard {
+pub struct Clipboard {
     inner: Option<arboard::Clipboard>,
 }
 
@@ -25,7 +25,7 @@ impl Default for Clipboard {
 }
 
 impl Clipboard {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         match arboard::Clipboard::new() {
             Ok(cb) => Self { inner: Some(cb) },
             Err(e) => {
@@ -42,7 +42,7 @@ impl Clipboard {
     /// Writes `text` to the system clipboard. No-op when arboard is
     /// unavailable. Failures are logged at warn but never propagated —
     /// copy mode must not panic on a clipboard failure.
-    pub(crate) fn write(&mut self, text: String) {
+    pub fn write(&mut self, text: String) {
         let Some(cb) = self.inner.as_mut() else {
             tracing::debug!(
                 target: "ozmux_gui::clipboard",
@@ -71,7 +71,7 @@ impl Clipboard {
     /// `None`, the `Ok("")` path returns `Some("")`); either way the
     /// caller's `text.is_empty()` check at the dispatcher swallows it
     /// without reaching the PTY.
-    pub(crate) fn read(&mut self) -> Option<String> {
+    pub fn read(&mut self) -> Option<String> {
         let Some(cb) = self.inner.as_mut() else {
             tracing::debug!(
                 target: "ozmux_gui::clipboard",
@@ -227,8 +227,7 @@ mod tests {
         // the fixed-point loop must strip both.
         let out = build_paste_bytes("\x1b[\x1b[201~201~", true);
         assert_eq!(
-            out,
-            b"\x1b[200~\x1b[201~",
+            out, b"\x1b[200~\x1b[201~",
             "fixed-point loop must keep stripping until the body is stable",
         );
     }
