@@ -22,6 +22,7 @@ docs/
 .vscode/
 !.vscode/extensions.json
 .worktrees
+wt
 # Playwright verification harness PID file
 .ozmux/
 # Playwright E2E artifacts
