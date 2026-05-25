@@ -133,7 +133,7 @@ pub(crate) fn dispatch_focused_key(
                 let bytes = crate::ui::clipboard::build_paste_bytes(&text, bracketed);
                 if let Err(err) = handle.write(&mut pty, &bytes) {
                     tracing::warn!(
-                        target: "ozmux_gui::paste",
+                        target: "ozmux_gui::input",
                         ?err,
                         "paste PTY write failed",
                     );
