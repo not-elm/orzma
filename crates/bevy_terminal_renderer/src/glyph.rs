@@ -9,8 +9,8 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 
-pub mod atlas;
-pub mod font;
+pub(crate) mod atlas;
+pub(crate) mod font;
 
 pub struct TerminalGlyphPlugin;
 

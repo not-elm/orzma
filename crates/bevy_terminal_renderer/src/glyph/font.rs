@@ -7,7 +7,13 @@ pub struct TerminalFontPlugin;
 
 impl Plugin for TerminalFontPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(TerminalFonts::default());
+        let fonts = TerminalFonts::default();
+        let default_metrics = fonts.cell_metrics_px(12);
+        app.insert_resource(fonts);
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: default_metrics,
+            phys_font_size: 12,
+        });
     }
 }
 
@@ -40,6 +46,23 @@ pub struct CellMetrics {
     pub underline_position_phys: f32,
     /// Underline stroke thickness in physical pixels.
     pub underline_thickness_phys: f32,
+}
+
+/// Cross-crate public Resource exposing the current `CellMetrics` for
+/// `ozmux-gui::resize_terminals_to_node` and any other consumer that needs
+/// the canonical cell pitch / advance values.
+///
+/// Initialized at `Startup` with DPR=1.0 defaults; updated every time
+/// `update_terminal_material` recomputes metrics (DPR or font-size change).
+/// Consumers reading this Resource on a frame between Startup and the first
+/// `update_terminal_material` invocation will see DPR=1.0 values; the spec
+/// documents this 1-frame jitter as an accepted Tier 1 trade-off.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct TerminalCellMetricsResource {
+    /// Current cell pitch and typographic measurements in physical pixels.
+    pub metrics: CellMetrics,
+    /// Physical font size (in pixels) that `metrics` was computed at.
+    pub phys_font_size: u16,
 }
 
 #[derive(Resource, Clone)]
@@ -202,5 +225,19 @@ mod tests {
         let m24 = fonts.cell_metrics_px(24);
         assert!((m24.advance_phys - m12.advance_phys * 2.0).abs() < 0.5);
         assert!((m24.line_height_phys - m12.line_height_phys * 2.0).abs() < 0.5);
+    }
+
+    /// `TerminalFontPlugin` inserts `TerminalCellMetricsResource` at Startup
+    /// with the DPR=1.0 / FONT_SIZE_PX=12 default values, so gui-side
+    /// consumers can read non-None metrics on the first frame.
+    #[test]
+    fn font_plugin_inserts_default_cell_metrics_resource() {
+        let mut app = App::new();
+        app.add_plugins(TerminalFontPlugin);
+        app.update();
+        let res = app.world().get_resource::<TerminalCellMetricsResource>()
+            .expect("TerminalCellMetricsResource should be inserted by Startup");
+        assert_eq!(res.phys_font_size, 12);
+        assert!(res.metrics.advance_phys > 5.0 && res.metrics.advance_phys < 6.0);
     }
 }

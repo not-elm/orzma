@@ -5,10 +5,12 @@ use crate::{
 };
 
 mod bundle;
-mod glyph;
+pub mod glyph;
 mod grid;
 pub mod material;
 pub mod schema;
+
+pub use crate::glyph::font::{CellMetrics, TerminalCellMetricsResource};
 
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
