@@ -136,7 +136,14 @@ pub(crate) fn encode_x10_wheel(
     }
     let col_clamped = cell.col.clamp(1, 223) as u8;
     let row_clamped = cell.row.clamp(1, 223) as u8;
-    vec![0x1b, b'[', b'M', (b + 32) as u8, col_clamped + 32, row_clamped + 32]
+    vec![
+        0x1b,
+        b'[',
+        b'M',
+        (b + 32) as u8,
+        col_clamped + 32,
+        row_clamped + 32,
+    ]
 }
 
 /// Decides what to do with a discrete wheel input.
@@ -165,11 +172,14 @@ pub fn route_wheel(
     if notches == 0 {
         return WheelAction::Noop;
     }
-    let direction = if notches < 0 { WheelDir::Up } else { WheelDir::Down };
+    let direction = if notches < 0 {
+        WheelDir::Up
+    } else {
+        WheelDir::Down
+    };
 
-    let any_mouse = modes.intersects(
-        TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
-    );
+    let any_mouse = modes
+        .intersects(TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION);
     if any_mouse {
         let count = (notches.unsigned_abs()).min(cfg.max_protocol_events_per_frame);
         if count == 0 {
@@ -196,7 +206,11 @@ pub fn route_wheel(
     // scrollback while inside an alt-screen app, use copy mode or
     // exit the app.
     if modes.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
-        let lines_per = if mods.fine { cfg.fine_lines } else { cfg.lines_per_notch };
+        let lines_per = if mods.fine {
+            cfg.fine_lines
+        } else {
+            cfg.lines_per_notch
+        };
         let n = notches.unsigned_abs().saturating_mul(lines_per);
         if n == 0 {
             return WheelAction::Noop;
@@ -204,7 +218,11 @@ pub fn route_wheel(
         return WheelAction::WriteToPty(alt_screen_arrow_bytes(direction, n));
     }
 
-    let lines_per = if mods.fine { cfg.fine_lines } else { cfg.lines_per_notch } as i32;
+    let lines_per = if mods.fine {
+        cfg.fine_lines
+    } else {
+        cfg.lines_per_notch
+    } as i32;
     let viewport_delta = -notches * lines_per;
     WheelAction::ScrollViewport(viewport_delta)
 }
@@ -233,26 +251,41 @@ mod sgr_tests {
 
     #[test]
     fn sgr_up_no_mods_origin() {
-        let bytes = encode_sgr_wheel(WheelDir::Up, WheelModifiers::default(), CellCoord { col: 1, row: 1 });
+        let bytes = encode_sgr_wheel(
+            WheelDir::Up,
+            WheelModifiers::default(),
+            CellCoord { col: 1, row: 1 },
+        );
         assert_eq!(bytes, b"\x1b[<64;1;1M");
     }
 
     #[test]
     fn sgr_down_no_mods_at_cell() {
-        let bytes = encode_sgr_wheel(WheelDir::Down, WheelModifiers::default(), CellCoord { col: 43, row: 11 });
+        let bytes = encode_sgr_wheel(
+            WheelDir::Down,
+            WheelModifiers::default(),
+            CellCoord { col: 43, row: 11 },
+        );
         assert_eq!(bytes, b"\x1b[<65;43;11M");
     }
 
     #[test]
     fn sgr_up_shift() {
-        let mods = WheelModifiers { shift: true, ..Default::default() };
+        let mods = WheelModifiers {
+            shift: true,
+            ..Default::default()
+        };
         let bytes = encode_sgr_wheel(WheelDir::Up, mods, CellCoord { col: 1, row: 1 });
         assert_eq!(bytes, b"\x1b[<68;1;1M");
     }
 
     #[test]
     fn sgr_up_ctrl_alt() {
-        let mods = WheelModifiers { ctrl: true, alt: true, ..Default::default() };
+        let mods = WheelModifiers {
+            ctrl: true,
+            alt: true,
+            ..Default::default()
+        };
         let bytes = encode_sgr_wheel(WheelDir::Up, mods, CellCoord { col: 1, row: 1 });
         // 64 + 8 (alt) + 16 (ctrl) = 88
         assert_eq!(bytes, b"\x1b[<88;1;1M");
@@ -260,7 +293,11 @@ mod sgr_tests {
 
     #[test]
     fn sgr_zero_col_row_clamps_to_one() {
-        let bytes = encode_sgr_wheel(WheelDir::Up, WheelModifiers::default(), CellCoord { col: 0, row: 0 });
+        let bytes = encode_sgr_wheel(
+            WheelDir::Up,
+            WheelModifiers::default(),
+            CellCoord { col: 0, row: 0 },
+        );
         assert_eq!(bytes, b"\x1b[<64;1;1M");
     }
 }
@@ -271,28 +308,44 @@ mod x10_tests {
 
     #[test]
     fn x10_up_origin() {
-        let bytes = encode_x10_wheel(WheelDir::Up, WheelModifiers::default(), CellCoord { col: 1, row: 1 });
+        let bytes = encode_x10_wheel(
+            WheelDir::Up,
+            WheelModifiers::default(),
+            CellCoord { col: 1, row: 1 },
+        );
         // ESC [ M  b(64+32=96)  x(1+32=33)  y(1+32=33)
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 96, 33, 33]);
     }
 
     #[test]
     fn x10_down_cell() {
-        let bytes = encode_x10_wheel(WheelDir::Down, WheelModifiers::default(), CellCoord { col: 10, row: 5 });
+        let bytes = encode_x10_wheel(
+            WheelDir::Down,
+            WheelModifiers::default(),
+            CellCoord { col: 10, row: 5 },
+        );
         // b = 65 + 32 = 97
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 97, 42, 37]);
     }
 
     #[test]
     fn x10_clamps_beyond_223() {
-        let bytes = encode_x10_wheel(WheelDir::Up, WheelModifiers::default(), CellCoord { col: 300, row: 300 });
+        let bytes = encode_x10_wheel(
+            WheelDir::Up,
+            WheelModifiers::default(),
+            CellCoord { col: 300, row: 300 },
+        );
         // 223 + 32 = 255
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 96, 255, 255]);
     }
 
     #[test]
     fn x10_with_shift_ctrl() {
-        let mods = WheelModifiers { shift: true, ctrl: true, ..Default::default() };
+        let mods = WheelModifiers {
+            shift: true,
+            ctrl: true,
+            ..Default::default()
+        };
         let bytes = encode_x10_wheel(WheelDir::Down, mods, CellCoord { col: 1, row: 1 });
         // 65 + 4 + 16 = 85, + 32 = 117
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 117, 33, 33]);
@@ -337,20 +390,35 @@ mod route_tests {
 
     #[test]
     fn noop_on_zero_notches() {
-        let action = route_wheel(TermMode::empty(), 0, cell(), WheelModifiers::default(), &cfg_default());
+        let action = route_wheel(
+            TermMode::empty(),
+            0,
+            cell(),
+            WheelModifiers::default(),
+            &cfg_default(),
+        );
         assert_eq!(action, WheelAction::Noop);
     }
 
     #[test]
     fn scrollback_when_no_special_mode() {
         // notches=-1 means scroll up (older); lines_per_notch=3 → scroll viewport by +3
-        let action = route_wheel(TermMode::empty(), -1, cell(), WheelModifiers::default(), &cfg_default());
+        let action = route_wheel(
+            TermMode::empty(),
+            -1,
+            cell(),
+            WheelModifiers::default(),
+            &cfg_default(),
+        );
         assert_eq!(action, WheelAction::ScrollViewport(3));
     }
 
     #[test]
     fn scrollback_fine_modifier_uses_fine_lines() {
-        let mods = WheelModifiers { fine: true, ..Default::default() };
+        let mods = WheelModifiers {
+            fine: true,
+            ..Default::default()
+        };
         let action = route_wheel(TermMode::empty(), -2, cell(), mods, &cfg_default());
         // fine_lines = 1, so -2 notches * 1 line/notch = -2 → ScrollViewport(+2)
         assert_eq!(action, WheelAction::ScrollViewport(2));
@@ -361,7 +429,10 @@ mod route_tests {
         let modes = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
         let action = route_wheel(modes, -1, cell(), WheelModifiers::default(), &cfg_default());
         // -1 notch * 3 lines = 3 up arrows
-        assert_eq!(action, WheelAction::WriteToPty(b"\x1bOA\x1bOA\x1bOA".to_vec()));
+        assert_eq!(
+            action,
+            WheelAction::WriteToPty(b"\x1bOA\x1bOA\x1bOA".to_vec())
+        );
     }
 
     #[test]
@@ -369,7 +440,10 @@ mod route_tests {
         let modes = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
         let action = route_wheel(modes, 1, cell(), WheelModifiers::default(), &cfg_default());
         // +1 notch * 3 lines = 3 down arrows
-        assert_eq!(action, WheelAction::WriteToPty(b"\x1bOB\x1bOB\x1bOB".to_vec()));
+        assert_eq!(
+            action,
+            WheelAction::WriteToPty(b"\x1bOB\x1bOB\x1bOB".to_vec())
+        );
     }
 
     #[test]
@@ -386,9 +460,15 @@ mod route_tests {
         // does not change routing — alt-screen still receives arrow keys
         // at the normal lines_per_notch rate.
         let modes = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
-        let mods = WheelModifiers { shift: true, ..Default::default() };
+        let mods = WheelModifiers {
+            shift: true,
+            ..Default::default()
+        };
         let action = route_wheel(modes, -1, cell(), mods, &cfg_default());
-        assert_eq!(action, WheelAction::WriteToPty(b"\x1bOA\x1bOA\x1bOA".to_vec()));
+        assert_eq!(
+            action,
+            WheelAction::WriteToPty(b"\x1bOA\x1bOA\x1bOA".to_vec())
+        );
     }
 
     #[test]
@@ -398,7 +478,11 @@ mod route_tests {
         // `lines_per_notch`. Matches wezterm's `alternate_buffer_wheel_scroll_speed`
         // policy and lets users slow-scroll inside vim/less.
         let modes = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
-        let mods = WheelModifiers { shift: true, fine: true, ..Default::default() };
+        let mods = WheelModifiers {
+            shift: true,
+            fine: true,
+            ..Default::default()
+        };
         let action = route_wheel(modes, -1, cell(), mods, &cfg_default());
         // -1 notch * fine_lines=1 = 1 up arrow
         assert_eq!(action, WheelAction::WriteToPty(b"\x1bOA".to_vec()));
@@ -407,21 +491,42 @@ mod route_tests {
     #[test]
     fn sgr_mouse_mode_emits_one_sgr_event() {
         let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
-        let action = route_wheel(modes, -1, CellCoord { col: 43, row: 11 }, WheelModifiers::default(), &cfg_default());
+        let action = route_wheel(
+            modes,
+            -1,
+            CellCoord { col: 43, row: 11 },
+            WheelModifiers::default(),
+            &cfg_default(),
+        );
         assert_eq!(action, WheelAction::WriteToPty(b"\x1b[<64;43;11M".to_vec()));
     }
 
     #[test]
     fn x10_mouse_mode_emits_one_x10_event() {
         let modes = TermMode::MOUSE_DRAG; // no SGR_MOUSE
-        let action = route_wheel(modes, 1, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &cfg_default());
-        assert_eq!(action, WheelAction::WriteToPty(vec![0x1b, b'[', b'M', 97, 33, 33]));
+        let action = route_wheel(
+            modes,
+            1,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &cfg_default(),
+        );
+        assert_eq!(
+            action,
+            WheelAction::WriteToPty(vec![0x1b, b'[', b'M', 97, 33, 33])
+        );
     }
 
     #[test]
     fn sgr_mouse_concats_multiple_notches() {
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
-        let action = route_wheel(modes, 3, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &cfg_default());
+        let action = route_wheel(
+            modes,
+            3,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &cfg_default(),
+        );
         let one = b"\x1b[<65;1;1M";
         let mut expected = Vec::new();
         expected.extend_from_slice(one);
@@ -433,8 +538,17 @@ mod route_tests {
     #[test]
     fn sgr_mouse_clamps_to_max_events_per_frame() {
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
-        let cfg = WheelConfig { max_protocol_events_per_frame: 4, ..WheelConfig::default() };
-        let action = route_wheel(modes, 20, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &cfg);
+        let cfg = WheelConfig {
+            max_protocol_events_per_frame: 4,
+            ..WheelConfig::default()
+        };
+        let action = route_wheel(
+            modes,
+            20,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &cfg,
+        );
         let one = b"\x1b[<65;1;1M";
         let mut expected = Vec::new();
         for _ in 0..4 {
@@ -446,15 +560,27 @@ mod route_tests {
     #[test]
     fn sgr_mouse_with_zero_cap_returns_noop() {
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
-        let cfg = WheelConfig { max_protocol_events_per_frame: 0, ..WheelConfig::default() };
+        let cfg = WheelConfig {
+            max_protocol_events_per_frame: 0,
+            ..WheelConfig::default()
+        };
         let action = route_wheel(modes, 5, cell(), WheelModifiers::default(), &cfg);
         assert_eq!(action, WheelAction::Noop);
     }
 
     #[test]
     fn mouse_protocol_takes_priority_over_alt_screen() {
-        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
-        let action = route_wheel(modes, 1, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &cfg_default());
+        let modes = TermMode::MOUSE_DRAG
+            | TermMode::SGR_MOUSE
+            | TermMode::ALT_SCREEN
+            | TermMode::ALTERNATE_SCROLL;
+        let action = route_wheel(
+            modes,
+            1,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &cfg_default(),
+        );
         assert_eq!(action, WheelAction::WriteToPty(b"\x1b[<65;1;1M".to_vec()));
     }
 }

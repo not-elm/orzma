@@ -118,7 +118,10 @@ impl TerminalFonts {
 
         let (underline_position_phys, underline_thickness_phys) =
             if let Some(u) = face.underline_metrics() {
-                (u.position as f32 * scale, (u.thickness as f32 * scale).max(1.0))
+                (
+                    u.position as f32 * scale,
+                    (u.thickness as f32 * scale).max(1.0),
+                )
             } else {
                 (-ascent_phys * 0.07, (ascent_phys / 14.0).max(1.0))
             };
@@ -138,8 +141,7 @@ impl Default for TerminalFonts {
     fn default() -> Self {
         const REGULAR_BYTES: &[u8] = include_bytes!("./JetBrainsMono-Regular.ttf");
         Self {
-            regular: FontArc::try_from_slice(REGULAR_BYTES)
-                .expect("JetBrainsMono-Regular load"),
+            regular: FontArc::try_from_slice(REGULAR_BYTES).expect("JetBrainsMono-Regular load"),
             bold: FontArc::try_from_slice(include_bytes!("./JetBrainsMono-Bold.ttf"))
                 .expect("JetBrainsMono-Bold load"),
             italic: FontArc::try_from_slice(include_bytes!("./JetBrainsMono-Italic.ttf"))
@@ -193,19 +195,36 @@ mod tests {
     fn jetbrains_mono_12px_metrics_are_sensible() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
-        assert!(m.advance_phys > 5.0 && m.advance_phys < 6.0,
-            "advance_phys = {}", m.advance_phys);
-        assert!(m.line_height_phys > 13.0 && m.line_height_phys < 16.0,
-            "line_height_phys = {}", m.line_height_phys);
-        assert!(m.ascent_phys > 9.0 && m.ascent_phys < 11.0,
-            "ascent_phys = {}", m.ascent_phys);
-        assert!(m.descent_phys > 1.0 && m.descent_phys < 4.0,
-            "descent_phys = {}", m.descent_phys);
-        assert!(m.underline_position_phys < 0.0,
+        assert!(
+            m.advance_phys > 5.0 && m.advance_phys < 6.0,
+            "advance_phys = {}",
+            m.advance_phys
+        );
+        assert!(
+            m.line_height_phys > 13.0 && m.line_height_phys < 16.0,
+            "line_height_phys = {}",
+            m.line_height_phys
+        );
+        assert!(
+            m.ascent_phys > 9.0 && m.ascent_phys < 11.0,
+            "ascent_phys = {}",
+            m.ascent_phys
+        );
+        assert!(
+            m.descent_phys > 1.0 && m.descent_phys < 4.0,
+            "descent_phys = {}",
+            m.descent_phys
+        );
+        assert!(
+            m.underline_position_phys < 0.0,
             "underline_position_phys = {} should be below baseline (negative)",
-            m.underline_position_phys);
-        assert!(m.underline_thickness_phys >= 1.0,
-            "underline_thickness_phys = {}", m.underline_thickness_phys);
+            m.underline_position_phys
+        );
+        assert!(
+            m.underline_thickness_phys >= 1.0,
+            "underline_thickness_phys = {}",
+            m.underline_thickness_phys
+        );
     }
 
     /// 24 px metrics are approximately double the 12 px ones.
@@ -226,7 +245,9 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(TerminalFontPlugin);
         app.update();
-        let res = app.world().get_resource::<TerminalCellMetricsResource>()
+        let res = app
+            .world()
+            .get_resource::<TerminalCellMetricsResource>()
             .expect("TerminalCellMetricsResource should be inserted by Startup");
         assert_eq!(res.phys_font_size, 12);
         assert!(res.metrics.advance_phys > 5.0 && res.metrics.advance_phys < 6.0);

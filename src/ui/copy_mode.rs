@@ -308,7 +308,10 @@ mod tests {
     fn map_v_with_meta_modifier_returns_none() {
         let op = map_key_to_copy_op(
             &Bk::Character("v".into()),
-            Modifiers { meta: true, ..Default::default() },
+            Modifiers {
+                meta: true,
+                ..Default::default()
+            },
         );
         assert!(
             op.is_none(),
@@ -320,7 +323,10 @@ mod tests {
     fn map_y_with_ctrl_modifier_returns_none() {
         let op = map_key_to_copy_op(
             &Bk::Character("y".into()),
-            Modifiers { ctrl: true, ..Default::default() },
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
         );
         assert!(
             op.is_none(),
@@ -332,7 +338,10 @@ mod tests {
     fn map_h_with_alt_modifier_returns_none() {
         let op = map_key_to_copy_op(
             &Bk::Character("h".into()),
-            Modifiers { alt: true, ..Default::default() },
+            Modifiers {
+                alt: true,
+                ..Default::default()
+            },
         );
         assert!(op.is_none(), "Alt+H must not move the vi cursor left");
     }
@@ -342,7 +351,10 @@ mod tests {
         // Sanity: tightening must not regress the existing Shift+V binding.
         let op = map_key_to_copy_op(
             &Bk::Character("V".into()),
-            Modifiers { shift: true, ..Default::default() },
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
         );
         assert!(matches!(
             op,

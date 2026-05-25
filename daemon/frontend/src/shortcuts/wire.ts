@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+// NAMED_KEYS must mirror the Rust `Key` enum's named variants (shortcuts.rs).
 export const NAMED_KEYS = [
   'Escape',
   'Space',
@@ -10,6 +11,7 @@ export const NAMED_KEYS = [
   'ArrowDown',
   'ArrowLeft',
   'ArrowRight',
+  'Plus',
 ] as const;
 
 export type NamedKey = (typeof NAMED_KEYS)[number];
@@ -43,6 +45,7 @@ const ActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('new-terminal-activity') }),
   z.object({ type: z.literal('close-activity') }),
   z.object({ type: z.literal('choose-tree') }),
+  z.object({ type: z.literal('enter-copy-mode') }),
   z.object({
     type: z.literal('focus-activity'),
     offset: z.enum(['next', 'prev']),
@@ -84,6 +87,10 @@ const ShortcutsRawSchema = z.object({
   repeat_timeout_ms: z.number().int().nonnegative().default(500),
 });
 
+const NewShortcutsRawSchema = z.object({
+  bindings: z.record(z.string(), z.unknown()),
+});
+
 export type KeyChord = z.infer<typeof KeyChordFieldsSchema>;
 export type Action = z.infer<typeof ActionSchema>;
 export type Prefix = z.infer<typeof PrefixSchema>;
@@ -93,27 +100,35 @@ export interface Binding {
   repeatable: boolean;
 }
 export interface Shortcuts {
-  prefix: Prefix;
+  prefix: Prefix | null;
   bindings: Binding[];
-  repeat_timeout_ms: number;
+  repeat_timeout_ms?: number;
 }
 
 /**
- * Parse a wire payload from `GET /configs/shortcuts` into a `Shortcuts`
- * value. Returns `null` when the top-level shape or the prefix is invalid.
- *
- * Per-binding parse failures are logged with `console.warn` and the
- * failing entry is dropped, so a single unsupported `Action` variant or a
- * key outside the known token set does not nuke the whole config.
+ * Parses the legacy prefix-mode shape OR the new named-field shape.
+ * Returns `null` on completely unrecognized input. For the new named-field
+ * shape (no `prefix` field), returns `{ prefix: null, bindings: [] }` so
+ * the dispatcher disables gracefully.
  */
 export function parseShortcuts(raw: unknown): Shortcuts | null {
-  const top = ShortcutsRawSchema.safeParse(raw);
-  if (!top.success) {
-    console.warn('parseShortcuts: top-level parse failed', top.error.issues);
-    return null;
+  const legacy = ShortcutsRawSchema.safeParse(raw);
+  if (legacy.success) {
+    return parseLegacyShortcuts(legacy.data);
   }
+  const fresh = NewShortcutsRawSchema.safeParse(raw);
+  if (fresh.success) {
+    // NOTE: new named-field shape; the React frontend is deprecated for shortcuts
+    // (see D2 in spec). Return a stub that disables prefix-mode dispatch.
+    return { prefix: null, bindings: [] };
+  }
+  console.warn('parseShortcuts: unrecognized shape', raw);
+  return null;
+}
+
+function parseLegacyShortcuts(data: z.infer<typeof ShortcutsRawSchema>): Shortcuts {
   const bindings: Binding[] = [];
-  for (const entry of top.data.bindings) {
+  for (const entry of data.bindings) {
     const parsed = BindingSchema.safeParse(entry);
     if (!parsed.success) {
       console.warn('parseShortcuts: dropping binding', { entry, issues: parsed.error.issues });
@@ -123,8 +138,8 @@ export function parseShortcuts(raw: unknown): Shortcuts | null {
     bindings.push({ chord: { key, modifiers }, action, repeatable });
   }
   return {
-    prefix: top.data.prefix,
+    prefix: data.prefix,
     bindings,
-    repeat_timeout_ms: top.data.repeat_timeout_ms,
+    repeat_timeout_ms: data.repeat_timeout_ms,
   };
 }

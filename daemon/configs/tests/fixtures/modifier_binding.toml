@@ -1,4 +1,2 @@
-[[shortcuts.bindings]]
-key = "x"
-modifiers = { shift = true }
-action = { type = "close-pane" }
+[shortcuts.bindings]
+close-pane = "Cmd+Shift+W"

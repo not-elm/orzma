@@ -1,3 +1,2 @@
-[[shortcuts.bindings]]
-key = "y"
-action = { type = "close-window" }
+[shortcuts.bindings]
+close-pane = "Cmd+Y"

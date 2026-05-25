@@ -315,8 +315,14 @@ async fn shutdown_runs_graceful_node_cleanup() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(pid_file.exists(), "clock-ext never wrote its pid file");
-    assert!(bin_dir.exists(), "clock-ext binDir should exist pre-shutdown");
-    assert!(sock_path.exists(), "clock-ext sock should exist pre-shutdown");
+    assert!(
+        bin_dir.exists(),
+        "clock-ext binDir should exist pre-shutdown"
+    );
+    assert!(
+        sock_path.exists(),
+        "clock-ext sock should exist pre-shutdown"
+    );
 
     handles.shutdown().await;
 
