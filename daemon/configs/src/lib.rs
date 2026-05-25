@@ -14,6 +14,7 @@ use std::path::Path;
 pub mod browser;
 pub mod error;
 pub mod font;
+pub mod mouse;
 mod path;
 mod raw;
 pub mod shortcuts;
@@ -30,6 +31,8 @@ pub struct OzmuxConfigs {
     pub font: FontConfig,
     /// Browser activity configuration.
     pub browser: BrowserConfig,
+    /// Mouse-input configuration.
+    pub mouse: mouse::MouseConfig,
 }
 
 impl OzmuxConfigs {
@@ -180,5 +183,35 @@ pub mod test_support {
             home: home_dir,
         };
         OzmuxConfigs::load_blocking_with_env(&env)
+    }
+}
+
+#[cfg(test)]
+mod mouse_integration_tests {
+    use super::*;
+
+    #[test]
+    fn parses_full_mouse_section() {
+        let toml_input = r#"
+[mouse]
+lines_per_notch = 5
+fine_modifier = "ctrl"
+fine_lines = 2
+max_protocol_events_per_frame = 16
+"#;
+        let raw: raw::RawConfigs = toml::from_str(toml_input).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.mouse.lines_per_notch, 5);
+        assert_eq!(merged.mouse.fine_modifier, mouse::FineModifier::Ctrl);
+        assert_eq!(merged.mouse.fine_lines, 2);
+        assert_eq!(merged.mouse.max_protocol_events_per_frame, 16);
+    }
+
+    #[test]
+    fn missing_mouse_section_uses_defaults() {
+        let toml_input = "";
+        let raw: raw::RawConfigs = toml::from_str(toml_input).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.mouse, mouse::MouseConfig::default());
     }
 }

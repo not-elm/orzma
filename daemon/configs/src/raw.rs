@@ -6,6 +6,7 @@ use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
 use crate::browser::BrowserPatch;
 use crate::font::FontPatch;
+use crate::mouse::MousePatch;
 use crate::shortcuts::{Binding, Prefix};
 use crate::theme::ThemePatch;
 use serde::Deserialize;
@@ -18,6 +19,7 @@ pub(crate) struct RawConfigs {
     pub(crate) theme: Option<ThemePatch>,
     pub(crate) font: Option<FontPatch>,
     pub(crate) browser: Option<BrowserPatch>,
+    pub(crate) mouse: Option<MousePatch>,
 }
 
 /// `[shortcuts]` shape with each subfield optional.
@@ -49,6 +51,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.browser {
             base.browser = patch.apply_to(base.browser);
+        }
+        if let Some(patch) = self.mouse {
+            base.mouse = patch.apply_to(base.mouse);
         }
         base
     }

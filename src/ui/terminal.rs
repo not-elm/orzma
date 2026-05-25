@@ -17,9 +17,9 @@ use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 /// each cell's pitch to `node_size / grid_size` (see
 /// `terminal_ui_material.wgsl::cell_pitch_px`) so the grid fills the pane
 /// edge-to-edge with zero remainder.
-const CELL_W_LOGICAL_PX: f32 = 8.0;
+pub(crate) const CELL_W_LOGICAL_PX: f32 = 8.0;
 /// Natural logical-pixel height of one glyph cell. See `CELL_W_LOGICAL_PX`.
-const CELL_H_LOGICAL_PX: f32 = 16.0;
+pub(crate) const CELL_H_LOGICAL_PX: f32 = 16.0;
 
 /// Spawns a `TerminalBundle` and attaches `TerminalRenderBundle` for each
 /// freshly-spawned Terminal Activity host. Runs every Update tick but only

@@ -152,16 +152,22 @@ fn process_control_events(
 /// VT bytes to the PTY via `TerminalHandle::write`, which also sets
 /// `pending_user_input = true` so the coalescer immediate-flush path
 /// fires on the next PTY chunk.
+///
+/// If the viewport is scrolled back when the key arrives, the view is
+/// snapped to the live tail before forwarding the keystroke to the PTY.
 fn on_terminal_key_input(
     ev: On<TerminalKeyInput>,
-    mut q: Query<(&mut TerminalHandle, &mut PtyHandle)>,
+    mut q: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
 ) {
-    let Ok((mut handle, mut pty)) = q.get_mut(ev.entity) else {
+    let Ok((mut handle, mut pty, mut coalescer)) = q.get_mut(ev.entity) else {
         return;
     };
     let Some(bytes) = encode_key(&ev.key, &ev.modifiers, handle.is_app_cursor_keys()) else {
         return;
     };
+    if !handle.is_at_bottom() {
+        handle.scroll_to_bottom(&mut coalescer);
+    }
     if let Err(e) = handle.write(&mut pty, &bytes) {
         tracing::warn!(?e, entity = ?ev.entity, "terminal key input write failed");
     }

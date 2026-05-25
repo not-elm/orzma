@@ -2,6 +2,8 @@
 //! systems. The shortcut binding table (prefix + bindings) comes from
 //! the loaded `OzmuxConfigsResource`; this module owns no chord data.
 
+pub(crate) mod mouse_wheel;
+
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -93,6 +95,18 @@ pub(crate) fn dispatch_focused_key(
             continue;
         };
         if !win.focused {
+            continue;
+        }
+        if matches!(ev.logical_key, Key::Escape)
+            && let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
+            && let Some(window) = mux.windows.get(&wid)
+            && let Ok(pane) = window.pane(&pid)
+            && let Some(entity) = registry.get(&pane.active_activity)
+            && copy_mode_q.get(entity).is_err()
+            && let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(entity)
+            && !handle.is_at_bottom()
+        {
+            handle.scroll_to_bottom(&mut coalescer);
             continue;
         }
         // NOTE: this gate MUST run before handle_chord and the terminal-forward
