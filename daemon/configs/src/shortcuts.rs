@@ -1,6 +1,7 @@
 //! Shortcut domain types: keys, modifiers, chords, prefix, bindings, actions.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Logical key. v0 covers ASCII characters and a small set of named keys.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -106,6 +107,37 @@ pub struct KeyChord {
     /// Held modifiers.
     #[serde(default)]
     pub modifiers: Modifiers,
+}
+
+impl fmt::Display for KeyChord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.modifiers.meta {
+            write!(f, "Cmd+")?;
+        }
+        if self.modifiers.ctrl {
+            write!(f, "Ctrl+")?;
+        }
+        if self.modifiers.alt {
+            write!(f, "Alt+")?;
+        }
+        if self.modifiers.shift {
+            write!(f, "Shift+")?;
+        }
+        match &self.key {
+            Key::Char(c) => write!(f, "{}", c.to_ascii_uppercase()),
+            Key::Escape => write!(f, "Escape"),
+            Key::Space => write!(f, "Space"),
+            Key::Enter => write!(f, "Enter"),
+            Key::Tab => write!(f, "Tab"),
+            Key::Backspace => write!(f, "Backspace"),
+            Key::ArrowUp => write!(f, "ArrowUp"),
+            Key::ArrowDown => write!(f, "ArrowDown"),
+            Key::ArrowLeft => write!(f, "ArrowLeft"),
+            Key::ArrowRight => write!(f, "ArrowRight"),
+            Key::Plus => write!(f, "Plus"),
+            Key::Other(s) => write!(f, "{s}"),
+        }
+    }
 }
 
 /// User-facing shortcut configuration.
@@ -985,6 +1017,55 @@ mod tests {
             semicolon_to_prev,
             "default bindings must include Prefix+; -> FocusActivity Prev"
         );
+    }
+
+    #[test]
+    fn keychord_display_simple() {
+        let c = KeyChord {
+            key: Key::Char('s'),
+            modifiers: Modifiers {
+                meta: true,
+                shift: true,
+                ctrl: false,
+                alt: false,
+            },
+        };
+        assert_eq!(c.to_string(), "Cmd+Shift+S");
+    }
+
+    #[test]
+    fn keychord_display_named_key() {
+        let c = KeyChord {
+            key: Key::Escape,
+            modifiers: Modifiers::default(),
+        };
+        assert_eq!(c.to_string(), "Escape");
+    }
+
+    #[test]
+    fn keychord_display_plus_key() {
+        let c = KeyChord {
+            key: Key::Plus,
+            modifiers: Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+        };
+        assert_eq!(c.to_string(), "Cmd+Plus");
+    }
+
+    #[test]
+    fn keychord_display_modifier_order_meta_ctrl_alt_shift_then_key() {
+        let c = KeyChord {
+            key: Key::Char('a'),
+            modifiers: Modifiers {
+                meta: true,
+                ctrl: true,
+                alt: true,
+                shift: true,
+            },
+        };
+        assert_eq!(c.to_string(), "Cmd+Ctrl+Alt+Shift+A");
     }
 
     #[test]
