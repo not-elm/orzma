@@ -5,10 +5,10 @@ use crate::{
     error::ExtensionResult, handle::package_json::PackageJson, registry::ExtensionRegistry,
     runtime::RuntimeRoot,
 };
-use std::{path::Path, process::Stdio, time::Duration};
-use tokio::process::{Child, Command};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::{path::Path, process::Stdio, time::Duration};
+use tokio::process::{Child, Command};
 
 mod package_json;
 

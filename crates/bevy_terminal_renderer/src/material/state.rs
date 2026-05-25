@@ -1,5 +1,8 @@
 use crate::{
-    glyph::{AtlasImage, font::{CellMetrics, GlyphKey}},
+    glyph::{
+        AtlasImage,
+        font::{CellMetrics, GlyphKey},
+    },
     material::{GpuCell, GpuGlyph, TerminalParams, TerminalUiMaterial},
 };
 use bevy::{
@@ -147,7 +150,11 @@ mod tests {
             initialized: true,
         };
         state.glyph_index_map.insert(
-            GlyphKey { face: FontFace::Regular, codepoint: 'A' as u32, size_px: 24 },
+            GlyphKey {
+                face: FontFace::Regular,
+                codepoint: 'A' as u32,
+                size_px: 24,
+            },
             7,
         );
         state

@@ -54,10 +54,6 @@ impl Plugin for MouseWheelInputPlugin {
     }
 }
 
-#[expect(
-    clippy::type_complexity,
-    reason = "Bevy system: independent queries + resources required for wheel routing"
-)]
 fn dispatch_mouse_wheel(
     mut wheel_msgs: MessageReader<MouseWheel>,
     mut accumulator: ResMut<WheelAccumulator>,
@@ -215,12 +211,8 @@ fn cursor_cell(
         .next()
         .and_then(|w| w.cursor_position())
         .map(|pos| CellCoord {
-            col: ((pos.x / cell_w_logical) as u32)
-                .saturating_add(1)
-                .max(1),
-            row: ((pos.y / cell_h_logical) as u32)
-                .saturating_add(1)
-                .max(1),
+            col: ((pos.x / cell_w_logical) as u32).saturating_add(1).max(1),
+            row: ((pos.y / cell_h_logical) as u32).saturating_add(1).max(1),
         })
         .unwrap_or(CellCoord { col: 1, row: 1 })
 }
