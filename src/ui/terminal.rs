@@ -8,9 +8,9 @@
 use crate::ui::{TerminalActivityMarker, TerminalSpawnFailed};
 use bevy::prelude::*;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
+use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
-use bevy_terminal_renderer::TerminalCellMetricsResource;
 
 /// Spawns a `TerminalBundle` and attaches `TerminalRenderBundle` for each
 /// freshly-spawned Terminal Activity host. Runs every Update tick but only
@@ -63,10 +63,6 @@ pub(crate) fn finish_terminal_setup(
 /// this short-circuit the new dimensions would only reach the shader after
 /// the next `FrameSnapshot` round-trip through alacritty + observers,
 /// adding a visible 1-frame lag at the pane edge during drag.
-#[expect(
-    clippy::type_complexity,
-    reason = "Bevy query: TerminalHandle / PtyHandle / Coalescer / TerminalGrid are independent components"
-)]
 pub(crate) fn resize_terminals_to_node(
     mut terminals: Query<(
         &ComputedNode,
