@@ -185,6 +185,22 @@ struct GpuCell {
     style_flags: u32,
 }
 
+/// Set on the right-half cell of a width=2 (CJK / wide) grapheme so the
+/// shader knows to render its glyph anchored to the left-half cell's
+/// origin. See `rebuild_cells` and `terminal_ui_material.wgsl`.
+///
+/// Bit allocation in `GpuCell.style_flags` (a `u32`):
+/// - Bits 0-15: wire-protocol style mirrored from
+///   `ozmux_terminal_protocol::style::*` (BOLD=1, ITALIC=2, UNDERLINE=4,
+///   STRIKE=8, REVERSE=16, DIM=32, HIDDEN=64; bits 7-15 reserved).
+/// - Bits 16+: renderer-only flags (this const), kept physically separate
+///   from the wire range so a future wire extension cannot collide.
+#[expect(
+    dead_code,
+    reason = "Used by Task 6 (rebuild_cells) within this PR — short-lived during incremental landing"
+)]
+const STYLE_WIDE_RIGHT_HALF: u32 = 0x1_0000;
+
 impl Default for GpuCell {
     // NOTE: glyph_index defaults to u32::MAX (GLYPH_NONE) — the shader's
     //       sentinel for "no glyph". A naive zero would collide with whatever

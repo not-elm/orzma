@@ -47,6 +47,9 @@ const STYLE_REVERSE: u32 = 16u;
 const STYLE_DIM: u32 = 32u;
 const STYLE_HIDDEN: u32 = 64u;
 
+// Renderer-only style bits (bit 16+) — see material.rs.
+const STYLE_WIDE_RIGHT_HALF: u32 = 0x10000u;
+
 const CURSOR_VISIBLE: u32 = 1u;
 const CURSOR_BLINKING: u32 = 8u;
 const CURSOR_SHAPE_BLOCK: u32 = 0u;
