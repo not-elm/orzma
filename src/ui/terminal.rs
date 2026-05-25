@@ -10,16 +10,7 @@ use bevy::prelude::*;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
-
-/// Natural logical-pixel width of one glyph cell, mirrors the constant
-/// inside the renderer's `update_terminal_material`. Used here only to
-/// estimate the maximum cols that fit in the pane; the GPU side stretches
-/// each cell's pitch to `node_size / grid_size` (see
-/// `terminal_ui_material.wgsl::cell_pitch_px`) so the grid fills the pane
-/// edge-to-edge with zero remainder.
-const CELL_W_LOGICAL_PX: f32 = 8.0;
-/// Natural logical-pixel height of one glyph cell. See `CELL_W_LOGICAL_PX`.
-const CELL_H_LOGICAL_PX: f32 = 16.0;
+use bevy_terminal_renderer::TerminalCellMetricsResource;
 
 /// Spawns a `TerminalBundle` and attaches `TerminalRenderBundle` for each
 /// freshly-spawned Terminal Activity host. Runs every Update tick but only
@@ -84,22 +75,22 @@ pub(crate) fn resize_terminals_to_node(
         &mut Coalescer,
         &mut TerminalGrid,
     )>,
-    windows: Query<&Window>,
+    metrics: Res<TerminalCellMetricsResource>,
 ) {
-    let dpr = windows.single().map(|w| w.scale_factor()).unwrap_or(1.0);
+    // NOTE: Cell pitch is font-derived physical px; DPR is already baked into
+    //       the metrics by `update_terminal_material`'s Resource write-back.
+    //       On the first frame after startup (or after a DPR change), the
+    //       Resource holds previous-frame values — accepted Tier 1 trade-off,
+    //       see `docs/plans/2026-05-25-bevy-font-render-design.md` Tier 2 #11.
+    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
+
     for (computed, mut handle, mut pty, mut coalescer, mut grid) in terminals.iter_mut() {
-        // `ComputedNode.size` is physical pixels; cell sizes are logical px.
-        let logical_w = (computed.size.x / dpr).max(0.0);
-        let logical_h = (computed.size.y / dpr).max(0.0);
-        // Pick the largest cols / rows that fit the pane in natural cell
-        // metrics. The shader then stretches each cell's pitch to
-        // `node_size / grid_size` so the grid fills the pane exactly —
-        // no sub-cell strip on the right or bottom. Glyph bitmaps stay
-        // at their native 8x16 logical px (centered within the stretched
-        // pitch and pixel-snapped), so the only visible distortion is a
-        // sub-pixel change in inter-cell spacing.
-        let cols = ((logical_w / CELL_W_LOGICAL_PX).floor() as u16).max(1);
-        let rows = ((logical_h / CELL_H_LOGICAL_PX).floor() as u16).max(1);
+        let node_phys_w = computed.size.x.max(0.0);
+        let node_phys_h = computed.size.y.max(0.0);
+        let cols = ((node_phys_w / cell_w_phys).floor() as u16).max(1);
+        let rows = ((node_phys_h / cell_h_phys).floor() as u16).max(1);
+
         let (cur_cols, cur_rows, _) = handle.read_geometry();
         if cur_cols == cols && cur_rows == rows {
             continue;
@@ -108,16 +99,12 @@ pub(crate) fn resize_terminals_to_node(
             tracing::warn!(?e, cols, rows, "TerminalHandle::resize failed");
             continue;
         }
-        // NOTE: load-bearing for zero-lag resize. `update_terminal_material`
-        // reads `grid.cols`/`grid.rows` for the `grid_size` uniform, but
-        // `TerminalGrid` is normally only refreshed when `apply_snapshot`
-        // observes a `FrameSnapshot` trigger emitted later by
-        // `check_deadline_flush`. Writing the new geometry here makes the
-        // shader see the correct grid size on the very next render this
-        // frame; the snapshot will still arrive a frame later and refresh
-        // the cell contents, which appear as activity-bg empty cells in the
-        // meantime — visually indistinguishable from the rest of the empty
-        // grid.
+        // NOTE: Load-bearing zero-lag short-circuit. Writing the new geometry
+        //       into `TerminalGrid` lets `update_terminal_material` use the
+        //       correct `grid_size` uniform in the SAME tick. Without it the
+        //       shader lags one FrameSnapshot round-trip behind the pane
+        //       resize — visible as a strip of shader-fallback color at the
+        //       pane edge during a window drag.
         grid.cols = cols;
         grid.rows = rows;
     }

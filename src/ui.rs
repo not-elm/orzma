@@ -264,6 +264,7 @@ mod tests {
     use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
     use bevy_terminal_renderer::material::TerminalUiMaterial;
+    use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::configs::env_guard();
@@ -277,12 +278,27 @@ mod tests {
         // dependency) must exist as resources before `OzmuxUiPlugin` runs.
         // Production wires this via `TerminalRendererPlugin`; the headless
         // tests register the assets directly to avoid the WGPU stack.
+        // `resize_terminals_to_node` requires `TerminalCellMetricsResource`;
+        // production inserts it via `TerminalFontPlugin` (inside
+        // `TerminalRendererPlugin`). Insert a DPR=1 / 12px fallback here so
+        // headless tests don't panic on "Resource does not exist".
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
             .add_plugins(ImagePlugin::default())
             .init_asset::<TerminalUiMaterial>()
             .init_asset::<ShaderStorageBuffer>()
+            .insert_resource(TerminalCellMetricsResource {
+                metrics: CellMetrics {
+                    advance_phys: 8.0,
+                    line_height_phys: 16.0,
+                    ascent_phys: 12.0,
+                    descent_phys: 4.0,
+                    underline_position_phys: -2.0,
+                    underline_thickness_phys: 1.0,
+                },
+                phys_font_size: 12,
+            })
             .add_plugins(OzmuxMultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
