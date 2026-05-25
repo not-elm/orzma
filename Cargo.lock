@@ -4600,6 +4600,7 @@ dependencies = [
  "libc",
  "ozmux_macros",
  "ozmux_multiplexer",
+ "ozmux_terminal",
  "serde",
  "serde_json",
  "tempfile",

@@ -25,6 +25,7 @@ resolver = "2"
 members = [
   "daemon/terminal",
   "daemon/configs",
+  "daemon/extension",
   "daemon/macros",
   "daemon/multiplexer",
   "crates/*",
@@ -36,7 +37,6 @@ exclude = [
   "daemon/browser",
   "daemon/browser_cef_protocol",
   "daemon/cef_host",
-  "daemon/extension",
   "daemon/http_server",
   "client",
 ]
