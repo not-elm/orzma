@@ -199,11 +199,13 @@ pub fn init_tracing() {
 async fn load_configs() -> anyhow::Result<Arc<OzmuxConfigs>> {
     match OzmuxConfigs::load().await {
         Ok(c) => {
-            tracing::info!(
-                prefix = ?c.shortcuts.prefix.chord,
-                bindings = c.shortcuts.bindings.len(),
-                "loaded ozmux config"
-            );
+            let bound_count = c
+                .shortcuts
+                .bindings
+                .iter()
+                .filter(|(_, chord, _)| chord.is_some())
+                .count();
+            tracing::info!(bound = bound_count, "loaded ozmux config");
             Ok(Arc::new(c))
         }
         Err(e) => {
