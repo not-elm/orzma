@@ -321,6 +321,37 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
     })
 }
 
+/// Executes a resolved `Action` against the multiplexer.
+///
+/// Preserves the existing `bypass_change_detection()` + selective
+/// `set_changed()` discipline so that ECS change detection only fires
+/// when a real domain mutation happens. `Action::EnterCopyMode` is
+/// handled specially because it triggers an observer rather than
+/// mutating the multiplexer.
+fn execute_action(
+    action: Action,
+    commands: &mut Commands,
+    mux: &mut ResMut<crate::multiplexer::Multiplexer>,
+    attached: &crate::multiplexer::AttachedSession,
+    registry: &crate::ui::registry::ActivityEntityRegistry,
+) {
+    if let Action::EnterCopyMode = action {
+        if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
+            && let Some(window) = mux.windows.get(&wid)
+            && let Ok(pane) = window.pane(&pid)
+            && let Some(entity) = registry.get(&pane.active_activity)
+        {
+            commands.trigger(crate::ui::copy_mode::EnterCopyModeRequest { entity });
+        }
+        return;
+    }
+    let mux_ref = mux.bypass_change_detection();
+    let mutated = crate::multiplexer::commands::apply(action, mux_ref, attached.0.clone());
+    if mutated {
+        mux.set_changed();
+    }
+}
+
 /// Translates a Bevy logical key into the `TerminalKey` variant the
 /// `bevy_terminal` codec accepts. Returns `None` for keys the terminal
 /// does not consume (F-keys, modifier-only keys, etc. — those keys are
