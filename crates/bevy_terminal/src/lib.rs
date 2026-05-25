@@ -12,6 +12,7 @@ mod plugin;
 mod pty;
 mod title;
 mod vt;
+mod wheel;
 
 pub use alacritty_terminal::selection::SelectionType;
 pub use alacritty_terminal::vi_mode::ViMotion;
@@ -21,7 +22,10 @@ pub use events::{
     TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalKey, TerminalKeyInput,
     TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
-pub use handle::TerminalHandle;
+pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::TerminalTitle;
+pub use wheel::{
+    route_wheel, CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers,
+};

@@ -44,3 +44,18 @@ pub const TAB_BORDER_RADIUS_PX: f32 = 4.0;
 /// Top indicator thickness on the active pane tab.
 pub const TAB_INDICATOR_PX: f32 = 2.0;
 pub const BORDER_PX: f32 = 1.0;
+
+/// Background color of the copy-mode indicator chip. tmux-style bright
+/// yellow so the chip reads as a deliberate HUD element on top of the
+/// terminal grid.
+pub const COPY_MODE_INDICATOR_BG: Color = Color::srgb(0.95, 0.85, 0.20);
+/// Foreground (text) color of the copy-mode indicator chip. Near-black
+/// for contrast against `COPY_MODE_INDICATOR_BG`.
+pub const COPY_MODE_INDICATOR_FG: Color = Color::srgb(0.10, 0.10, 0.10);
+/// Font size of the copy-mode indicator chip's text. Smaller than Bevy's
+/// 20px default so the chip reads as a compact HUD label instead of
+/// competing with the terminal grid.
+pub const COPY_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
+/// Horizontal padding inside the copy-mode indicator chip. Tighter than
+/// `ELEMENT_PADDING_PX` because the chip's text is also smaller.
+pub const COPY_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
