@@ -57,4 +57,59 @@ impl Clipboard {
             );
         }
     }
+
+    /// Reads text from the system clipboard. Returns `None` when
+    /// `arboard` is unavailable (headless) or when the clipboard does
+    /// not currently hold UTF-8 text. Empty strings are passed through
+    /// as `Some(String::new())`; the caller is responsible for treating
+    /// empty as a no-op.
+    ///
+    /// arboard's behavior on an empty clipboard is platform-dependent —
+    /// some backends return `Err(ContentNotAvailable)`, others return
+    /// `Ok("")`. Both shapes are handled here (the `Err` path returns
+    /// `None`, the `Ok("")` path returns `Some("")`); either way the
+    /// caller's `text.is_empty()` check at the dispatcher swallows it
+    /// without reaching the PTY.
+    pub(crate) fn read(&mut self) -> Option<String> {
+        let Some(cb) = self.inner.as_mut() else {
+            tracing::debug!(
+                target: "ozmux_gui::clipboard",
+                "clipboard read skipped: arboard unavailable",
+            );
+            return None;
+        };
+        match cb.get_text() {
+            Ok(text) => Some(text),
+            Err(arboard::Error::ContentNotAvailable) => {
+                tracing::debug!(
+                    target: "ozmux_gui::clipboard",
+                    "clipboard read: nothing available (empty / non-text)",
+                );
+                None
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "ozmux_gui::clipboard",
+                    error = ?err,
+                    "clipboard read failed",
+                );
+                None
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_returns_none_when_inner_is_unavailable() {
+        // Force the unavailable-backend branch by constructing the
+        // resource with `inner: None` directly. This mirrors what
+        // `Clipboard::new` would do on a headless host where
+        // `arboard::Clipboard::new()` fails.
+        let mut cb = Clipboard { inner: None };
+        assert!(cb.read().is_none(), "headless backend must yield None");
+    }
 }
