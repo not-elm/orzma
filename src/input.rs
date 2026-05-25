@@ -77,13 +77,11 @@ pub(crate) fn dispatch_focused_key(
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
-    mut q: Query<(
-        &crate::multiplexer::AttachedSession,
-        &mut PrefixState,
-        &Window,
-    )>,
+    mut q: Query<(&crate::multiplexer::AttachedSession, &Window)>,
 ) {
-    let shortcuts = &configs.shortcuts;
+    let bindings = &configs.shortcuts.bindings;
+    // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
+    // sees the same modifier snapshot. Read once outside the loop.
     let mods = current_modifiers(&keys);
     let mut just_exited: HashSet<Entity> = HashSet::new();
 
@@ -91,12 +89,17 @@ pub(crate) fn dispatch_focused_key(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        let Ok((attached, mut prefix, win)) = q.get_mut(ev.window) else {
+        if ev.repeat {
+            continue;
+        }
+
+        let Ok((attached, win)) = q.get_mut(ev.window) else {
             continue;
         };
         if !win.focused {
             continue;
         }
+
         if matches!(ev.logical_key, Key::Escape)
             && let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
             && let Some(window) = mux.windows.get(&wid)
@@ -109,9 +112,7 @@ pub(crate) fn dispatch_focused_key(
             handle.scroll_to_bottom(&mut coalescer);
             continue;
         }
-        // NOTE: this gate MUST run before handle_chord and the terminal-forward
-        // path. Moving it lower would let the prefix arm during copy mode, breaking
-        // the bypass invariant.
+
         if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
             && let Some(window) = mux.windows.get(&wid)
             && let Ok(pane) = window.pane(&pid)
@@ -132,8 +133,7 @@ pub(crate) fn dispatch_focused_key(
             }
             continue;
         }
-        // Cmd+V → paste, inline special case (mirrors Action::EnterCopyMode
-        // handling inside handle_chord around line 314-323).
+
         if is_paste_chord(&ev.logical_key, &mods) {
             if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
                 && let Some(window) = mux.windows.get(&wid)
@@ -153,46 +153,25 @@ pub(crate) fn dispatch_focused_key(
                     );
                 }
             }
-            // NOTE: a consumed key must disarm any armed prefix, otherwise
-            // the next keystroke leaks into the prefix flow with stale
-            // state (mirrors handle_chord's discipline at the bottom of
-            // its match arm).
-            prefix.armed = false;
             continue;
         }
+
         if is_modifier_only_key(&ev.logical_key) {
             continue;
         }
-        let outcome = match bevy_to_configs_key(&ev.logical_key) {
-            Some(input_key) => handle_chord(
-                &input_key,
-                &mods,
-                &mut prefix,
-                shortcuts,
-                &mut mux,
-                attached,
-                &mut commands,
-                &registry,
-            ),
-            None => {
-                // NOTE: when prefix was armed, return Fired (consumed) rather
-                // than NotMatched, so keys absent from `bevy_to_configs_key`
-                // but present in `bevy_to_terminal_key` (Home/End/PageUp/
-                // PageDown/Delete) cannot leak to the terminal during an
-                // armed prefix — the "armed prefix consumes the next key"
-                // invariant must hold for ALL keys.
-                if prefix.armed {
-                    prefix.armed = false;
-                    ChordOutcome::Fired
-                } else {
-                    ChordOutcome::NotMatched
-                }
+
+        if let Some(input_key) = bevy_to_configs_key(&ev.logical_key) {
+            let chord = KeyChord {
+                key: input_key,
+                modifiers: mods.clone(),
+            };
+            if let Some(action) = bindings.lookup(&chord) {
+                execute_action(action, &mut commands, &mut mux, attached, &registry);
+                continue;
             }
-        };
-        if matches!(outcome, ChordOutcome::NotMatched)
-            && !prefix.armed
-            && let Some(tk) = bevy_to_terminal_key(&ev.logical_key)
-        {
+        }
+
+        if let Some(tk) = bevy_to_terminal_key(&ev.logical_key) {
             forward_to_active_terminal(
                 &mut commands,
                 &mux,
