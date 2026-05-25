@@ -9,6 +9,8 @@ use crate::ui::copy_mode::CopyModeState;
 use crate::ui::palette;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
+use bevy::ecs::lifecycle::Remove;
+use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 
@@ -104,6 +106,28 @@ fn refresh_indicator(
     }
 }
 
+/// Observer for `On<Remove, CopyModeState>`. Hides the indicator chip
+/// belonging to the entity whose `CopyModeState` was just removed.
+/// Runs at the sync point that applies the remove, so the chip flips
+/// to `Display::None` before the next render — no per-frame poll needed.
+fn hide_indicator_on_copy_mode_exit(
+    ev: On<Remove, CopyModeState>,
+    hosts: Query<&Children>,
+    mut chips: Query<&mut Node, With<CopyModeIndicator>>,
+) {
+    let Ok(children) = hosts.get(ev.entity) else {
+        return;
+    };
+    for child in children.iter() {
+        if let Ok(mut node) = chips.get_mut(child) {
+            if node.display != Display::None {
+                node.display = Display::None;
+            }
+            return;
+        }
+    }
+}
+
 /// Bevy Plugin: wires the copy-mode indicator's attach + refresh systems
 /// and the exit observer.
 pub struct CopyModeIndicatorPlugin;
@@ -118,7 +142,8 @@ impl Plugin for CopyModeIndicatorPlugin {
                     .after(attach_indicator_to_activity_host)
                     .run_if(any_with_component::<CopyModeState>),
             ),
-        );
+        )
+        .add_observer(hide_indicator_on_copy_mode_exit);
     }
 }
 
@@ -313,6 +338,41 @@ mod tests {
         assert_eq!(
             before_tick, after_tick,
             "Text must not be re-written when (offset, total) is unchanged"
+        );
+    }
+
+    #[test]
+    fn exit_observer_hides_chip_when_copy_mode_state_removed() {
+        let mut app = make_app_with_plugin();
+        let host = spawn_terminal_entity(&mut app);
+        app.update();
+        app.world_mut()
+            .entity_mut(host)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        app.update();
+
+        // Sanity: chip is visible.
+        let chip = find_indicator_child(&app, host).expect("chip");
+        assert_eq!(
+            app.world().get::<Node>(chip).unwrap().display,
+            Display::Flex,
+            "chip is visible before remove"
+        );
+
+        // Remove the marker. The On<Remove> observer must hide the chip
+        // immediately (within the same Bevy command queue).
+        app.world_mut()
+            .entity_mut(host)
+            .remove::<crate::ui::copy_mode::CopyModeState>();
+        // Flush observers — observers run at the command queue sync point;
+        // call update() to be conservative.
+        app.update();
+
+        let chip_node = app.world().get::<Node>(chip).expect("Node");
+        assert_eq!(
+            chip_node.display,
+            Display::None,
+            "chip hides as soon as CopyModeState is removed"
         );
     }
 }
