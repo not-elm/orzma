@@ -375,4 +375,91 @@ mod tests {
             "chip hides as soon as CopyModeState is removed"
         );
     }
+
+    use crate::bootstrap::OzmuxBootstrapPlugin;
+    use crate::configs::OzmuxConfigsPlugin;
+    use crate::multiplexer::{Multiplexer, OzmuxMultiplexerPlugin};
+    use crate::ui::OzmuxUiPlugin;
+    use bevy::asset::AssetPlugin;
+    use bevy::image::ImagePlugin;
+    use bevy::render::storage::ShaderStorageBuffer;
+    use bevy::window::{PrimaryWindow, WindowResolution};
+    use bevy_terminal_renderer::material::TerminalUiMaterial;
+
+    fn make_ui_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
+        let guard = crate::configs::env_guard();
+        // SAFETY: env mutations serialized by env_guard.
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .add_plugins(ImagePlugin::default())
+            .init_asset::<TerminalUiMaterial>()
+            .init_asset::<ShaderStorageBuffer>()
+            .add_plugins(OzmuxMultiplexerPlugin)
+            .add_plugins(OzmuxConfigsPlugin)
+            .add_plugins(OzmuxBootstrapPlugin)
+            .add_plugins(OzmuxUiPlugin)
+            .add_plugins(CopyModeIndicatorPlugin);
+
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+
+        (app, guard)
+    }
+
+    #[test]
+    fn chip_survives_structural_rebuild() {
+        let (mut app, _guard) = make_ui_test_app();
+        app.update();
+        app.update();
+        app.update();
+
+        // Find a terminal Activity host with a chip.
+        let (host, chip) = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<(Entity, &ChildOf), With<CopyModeIndicator>>();
+            let (chip, child_of) = q
+                .iter(world)
+                .next()
+                .expect("at least one terminal host with a chip");
+            (child_of.parent(), chip)
+        };
+
+        // Rebuild structure by renaming the active window.
+        {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let wid = {
+                let (_sid, session) =
+                    mux.sessions.iter().next().expect("session");
+                session.active_window.clone().expect("active window")
+            };
+            mux.rename_window(&wid, "renamed".into()).expect("rename");
+        }
+        app.update();
+
+        // Chip Entity must still exist and still be a child of the same host.
+        assert!(
+            app.world().get_entity(chip).is_ok(),
+            "chip Entity must still exist after rebuild"
+        );
+        let parent = app
+            .world()
+            .get::<ChildOf>(chip)
+            .expect("chip must still have a parent");
+        assert_eq!(
+            parent.parent(),
+            host,
+            "chip must still be parented to the original host"
+        );
+    }
 }
