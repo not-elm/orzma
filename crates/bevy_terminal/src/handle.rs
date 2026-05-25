@@ -365,6 +365,23 @@ impl TerminalHandle {
         self.term.mode().contains(TermMode::APP_CURSOR)
     }
 
+    /// Returns `true` when the active `Term` has `TermMode::BRACKETED_PASTE`
+    /// enabled (the application has sent `\x1b[?2004h` and not yet sent the
+    /// matching `\x1b[?2004l`). The paste pipeline reads this to decide
+    /// whether to wrap clipboard contents in `\x1b[200~` / `\x1b[201~`.
+    pub fn bracketed_paste_enabled(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
+    /// Returns the current value of the `pending_user_input` flag set by
+    /// `write`. Exposed so cross-crate integration tests can confirm that a
+    /// PTY write took place without needing to read from the PTY master.
+    /// Production code paths inside `bevy_terminal` mutate this field
+    /// directly.
+    pub fn pending_user_input(&self) -> bool {
+        self.pending_user_input
+    }
+
     /// Returns the current scroll offset and history length for the
     /// copy-mode indicator's `[offset/total]` chip.
     pub fn vi_indicator_snapshot(&self) -> ViIndicatorSnapshot {
@@ -1162,6 +1179,58 @@ mod tests {
             snap1.history_size,
             h.term.history_size(),
             "history_size must equal Term::history_size()"
+        );
+    }
+
+    #[test]
+    fn bracketed_paste_enabled_reports_false_when_unset_and_true_after_set_sequence() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        let opts = SpawnOptions {
+            cols: 10,
+            rows: 5,
+            shell: "/bin/sh".into(),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
+        let mut handle = bundle.handle;
+        assert!(
+            !handle.bracketed_paste_enabled(),
+            "fresh Term must not have BRACKETED_PASTE set",
+        );
+        handle.advance(b"\x1b[?2004h");
+        assert!(
+            handle.bracketed_paste_enabled(),
+            "after advance(\\x1b[?2004h) BRACKETED_PASTE must be set",
+        );
+        handle.advance(b"\x1b[?2004l");
+        assert!(
+            !handle.bracketed_paste_enabled(),
+            "after advance(\\x1b[?2004l) BRACKETED_PASTE must be cleared",
+        );
+    }
+
+    #[test]
+    fn pending_user_input_flips_to_true_after_write() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        let opts = SpawnOptions {
+            cols: 10,
+            rows: 5,
+            shell: "/bin/sh".into(),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
+        let mut handle = bundle.handle;
+        let mut pty = bundle.pty;
+        assert!(
+            !handle.pending_user_input(),
+            "fresh handle must have no pending input"
+        );
+        handle.write(&mut pty, b"x").expect("write");
+        assert!(
+            handle.pending_user_input(),
+            "after write the flag must be true (used by tests to verify a PTY write happened)",
         );
     }
 
