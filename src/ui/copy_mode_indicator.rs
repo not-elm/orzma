@@ -34,7 +34,6 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 /// `Added<TerminalHandle>` filter fires exactly once per host because
 /// `ui::terminal::finish_terminal_setup` is the only `TerminalHandle`
 /// inserter on Activity hosts.
-//
 // NOTE: A second reader of `Added<TerminalHandle>` would not violate
 // the "exactly one chip per host" property (Added fires per-system),
 // but introducing one is a smell — the constraint is documented as
