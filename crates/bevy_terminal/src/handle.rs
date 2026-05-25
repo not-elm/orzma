@@ -72,8 +72,9 @@ impl Dimensions for LocalDim {
 pub struct ViIndicatorSnapshot {
     /// 0-based scroll offset from the live tail (0 = bottom).
     pub scroll_offset: usize,
-    /// Total scrollback length, matching tmux's `[offset/total]`.
-    pub total_lines: usize,
+    /// Scrollback history length, matching tmux's `[offset/total]`
+    /// denominator. Sourced from `Term::history_size()`.
+    pub history_size: usize,
 }
 
 /// All VT / bridge state for a single terminal entity.
@@ -369,7 +370,7 @@ impl TerminalHandle {
     pub fn vi_indicator_snapshot(&self) -> ViIndicatorSnapshot {
         ViIndicatorSnapshot {
             scroll_offset: self.term.grid().display_offset(),
-            total_lines: self.term.history_size(),
+            history_size: self.term.history_size(),
         }
     }
 
@@ -1142,18 +1143,25 @@ mod tests {
         let snap0 = h.vi_indicator_snapshot();
         assert_eq!(snap0.scroll_offset, 0, "fresh terminal at live tail");
 
+        // Seed the scrollback with more than one viewport's worth so PageUp
+        // actually shifts the viewport — mirrors scroll_page_up_grows_display_offset.
+        let mut payload = Vec::with_capacity(1024);
+        for i in 0..30u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        h.advance(&payload);
         h.enter_vi_mode(&mut coalescer);
         h.scroll_page_up(&mut coalescer);
 
         let snap1 = h.vi_indicator_snapshot();
         assert!(
-            snap1.scroll_offset > 0 || snap1.total_lines == 0,
-            "after PageUp, offset must grow OR scrollback is empty (snapshot: {snap1:?})"
+            snap1.scroll_offset > 0,
+            "PageUp after seeded scrollback must grow scroll_offset (snapshot: {snap1:?})"
         );
         assert_eq!(
-            snap1.total_lines,
+            snap1.history_size,
             h.term.history_size(),
-            "total_lines must equal Term::history_size()"
+            "history_size must equal Term::history_size()"
         );
     }
 
