@@ -1,7 +1,7 @@
 use crate::{
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
-        font::{FontFace, GlyphKey, TerminalFonts},
+        font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
     material::state::TerminalMaterialState,
     schema::{Cell, SelectionKind, TerminalGrid},
@@ -17,6 +17,16 @@ use bevy::{
 };
 
 mod state;
+
+/// Schema version of the `GpuGlyph` / `TerminalParams` layout. Bumped when
+/// the meaning of fields changes incompatibly so `TerminalMaterialState`
+/// can force a full LUT rebuild on the first frame after upgrade.
+///
+/// History: 0 = pre-Tier1 (logical-px `GpuGlyph`, hardcoded 8x16 cell,
+/// shader stretches `cell_pitch`); 1 = Tier 1 (physical-px schema,
+/// font-derived cell metrics, shader uses `params.cell_size_px` directly,
+/// `bg_padding_color` fallback, `STYLE_WIDE_RIGHT_HALF` cells).
+const SCHEMA_VERSION_TIER1: u32 = 1;
 
 /// Render-side public SystemSet anchor for `update_terminal_material`.
 ///
@@ -86,12 +96,44 @@ impl UiMaterial for TerminalUiMaterial {
 ///
 /// # Invariants
 ///
-/// "No cursor" is encoded by clearing the `CURSOR_VISIBLE` bit in
-/// `cursor_style` (and leaving `cursor_pos` at any value). The shader
-/// short-circuits on `cursor_visible == 0u`, so we deliberately keep
-/// `cursor_pos` as `UVec2` rather than introducing a signed sentinel —
-/// the existing visibility bit already does that job. The vi cursor in
-/// scrollback uses the same path: `cursor_visible = 0`.
+/// - All `_phys` fields are PHYSICAL pixels (no DPR division). The shader
+///   computes everything in physical-px space; `dpr` is provided for
+///   diagnostic purposes only (currently unused in shader after Tier 1
+///   `dpr_inv` removal).
+/// - `bg_padding_color` is the color the shader paints OUTSIDE the
+///   `grid_size * cell_size_px` rectangle (where the gui-side
+///   `resize_terminals_to_node` left padding).
+/// - "No cursor" is encoded by clearing the `CURSOR_VISIBLE` bit in
+///   `cursor_style` (and leaving `cursor_pos` at any value). The shader
+///   short-circuits on `cursor_visible == 0u`, so we deliberately keep
+///   `cursor_pos` as `UVec2` rather than introducing a signed sentinel —
+///   the existing visibility bit already does that job. The vi cursor in
+///   scrollback uses the same path: `cursor_visible = 0`.
+///
+/// # Layout (std140, encase derive)
+///
+/// Field offsets in bytes (encase auto-inserts 4 bytes of padding before
+/// `bg_padding_color` so the Vec4 lands at offset 80; total 96 bytes,
+/// 16-byte aligned):
+///
+/// | Offset | Field                       |
+/// |--------|-----------------------------|
+/// | 0      | `grid_size`                 |
+/// | 8      | `cell_size_px` (phys)       |
+/// | 16     | `atlas_size_px`             |
+/// | 24     | `ascent_px` (phys)          |
+/// | 28     | `dpr` (informational)       |
+/// | 32     | `cursor_pos`                |
+/// | 40     | `cursor_style`              |
+/// | 44     | `time_seconds`              |
+/// | 48     | `sel_start_row`             |
+/// | 52     | `sel_start_col`             |
+/// | 56     | `sel_end_row`               |
+/// | 60     | `sel_end_col`               |
+/// | 64     | `sel_kind`                  |
+/// | 68     | `underline_position_phys`   |
+/// | 72     | `underline_thickness_phys`  |
+/// | 80     | `bg_padding_color`          |
 #[derive(Clone, Copy, ShaderType, Default, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -111,8 +153,9 @@ struct TerminalParams {
     sel_end_col: u32,
     /// 0 = none, 1 = char, 2 = line. See `SelectionKind` in the wire protocol.
     sel_kind: u32,
-    /// Pad to a 16-byte multiple for WebGPU's std140 uniform layout.
-    _pad: u32,
+    underline_position_phys: f32,
+    underline_thickness_phys: f32,
+    bg_padding_color: Vec4,
 }
 
 impl TerminalParams {
@@ -133,6 +176,9 @@ impl TerminalParams {
         ascent_px: f32,
         dpr: f32,
         time_seconds: f32,
+        underline_position_phys: f32,
+        underline_thickness_phys: f32,
+        bg_padding_color: Vec4,
     ) -> Self {
         let cols = u32::from(grid.cols);
         let rows = u32::from(grid.rows);
@@ -167,7 +213,9 @@ impl TerminalParams {
             sel_end_row,
             sel_end_col,
             sel_kind,
-            _pad: 0,
+            underline_position_phys,
+            underline_thickness_phys,
+            bg_padding_color,
         }
     }
 }
@@ -195,10 +243,6 @@ struct GpuCell {
 ///   STRIKE=8, REVERSE=16, DIM=32, HIDDEN=64; bits 7-15 reserved).
 /// - Bits 16+: renderer-only flags (this const), kept physically separate
 ///   from the wire range so a future wire extension cannot collide.
-#[expect(
-    dead_code,
-    reason = "Used by Task 6 (rebuild_cells) within this PR — short-lived during incremental landing"
-)]
 const STYLE_WIDE_RIGHT_HALF: u32 = 0x1_0000;
 
 impl Default for GpuCell {
@@ -223,19 +267,21 @@ struct GpuGlyph {
     uv_min: Vec2,
     /// Bottom-right of the glyph rect in atlas physical px.
     uv_max: Vec2,
-    /// Bearing from the glyph origin in logical px (positive Y goes down).
+    /// Bearing from the glyph origin in physical px (positive Y goes down).
     offset_px: Vec2,
-    /// Rasterized bitmap size in logical px.
+    /// Rasterized bitmap size in physical px.
     size_px: Vec2,
 }
 
 impl GpuGlyph {
-    pub fn new(rect: GlyphRect, dpr: f32) -> Self {
+    /// Builds a `GpuGlyph` from an atlas rect. All offsets and sizes are in
+    /// physical pixels — the shader handles all DPR-aware geometry.
+    fn new(rect: GlyphRect) -> Self {
         Self {
             uv_min: Vec2::new(rect.u as f32, rect.v as f32),
             uv_max: Vec2::new((rect.u + rect.w) as f32, (rect.v + rect.h) as f32),
-            offset_px: Vec2::new(rect.offset_x as f32 / dpr, rect.offset_y as f32 / dpr),
-            size_px: Vec2::new(rect.w as f32 / dpr, rect.h as f32 / dpr),
+            offset_px: Vec2::new(rect.offset_x as f32, rect.offset_y as f32),
+            size_px: Vec2::new(rect.w as f32, rect.h as f32),
         }
     }
 }
@@ -252,9 +298,11 @@ fn update_terminal_material(
     fonts: Res<TerminalFonts>,
     palette_time: Res<Time>,
     windows: Query<&Window>,
+    mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
 ) {
     // TODO: load font size from config.
     const FONT_SIZE_PX: f32 = 12.0;
+
     // NOTE: This system runs unconditionally — *not* gated by
     // `Changed<TerminalGrid>`. The `mat.params = ...` write at the end is
     // load-bearing for rendering correctness: it forces `AssetEvent::Modified`
@@ -268,24 +316,62 @@ fn update_terminal_material(
     for (handle, mut state, grid) in terminals.iter_mut() {
         let dpr = windows.single().map(|w| w.scale_factor()).unwrap_or(1.0);
         let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
-        let ascent_logical = (fonts.ascent_px(phys_font_size) / dpr).round();
+
+        let atlas_invalidated = atlas.generation != state.last_atlas_generation;
+        let cols = grid.cols as u32;
+        let rows = grid.rows as u32;
+        let dims_changed = (grid.cols, grid.rows) != state.last_grid_dims;
+        let grid_changed = grid.last_seq != state.last_grid_seq;
+        let phys_size_changed = phys_font_size != state.last_phys_font_size;
+        let schema_changed = state.last_schema_version != SCHEMA_VERSION_TIER1;
+
+        let needs_rebuild = !state.initialized
+            || grid_changed
+            || atlas_invalidated
+            || dims_changed
+            || phys_size_changed
+            || schema_changed;
+
+        if phys_size_changed || schema_changed {
+            state.invalidate_all();
+            state.last_phys_font_size = phys_font_size;
+            state.last_schema_version = SCHEMA_VERSION_TIER1;
+        }
 
         // NOTE: atlas.generation can advance during this very system (via
-        //       get_or_insert), and a generation jump means the atlas pixel
-        //       buffer was wiped — every cached glyph index in cpu_cells is
-        //       now stale and would resolve to garbage texels. Clearing the
-        //       LUT here forces a full rerasterization on the rebuild path.
-        let atlas_invalidated = atlas.generation != state.last_atlas_generation;
+        //       get_or_insert in rebuild_cells), and a generation jump means
+        //       the atlas pixel buffer was wiped — every cached glyph index
+        //       in cpu_cells is now stale and would resolve to garbage
+        //       texels. Clearing the LUT here forces a full rerasterization
+        //       on the rebuild path.
         if atlas_invalidated {
             state.glyph_index_map.clear();
             state.cpu_glyphs.clear();
         }
 
-        let cols = grid.cols as u32;
-        let rows = grid.rows as u32;
-        let dims_changed = (grid.cols, grid.rows) != state.last_grid_dims;
-        let grid_changed = grid.last_seq != state.last_grid_seq;
-        let needs_rebuild = !state.initialized || grid_changed || atlas_invalidated || dims_changed;
+        let metrics = if let Some(cached) = state.cached_metrics {
+            cached
+        } else {
+            let m = fonts.cell_metrics_px(phys_font_size);
+            state.cached_metrics = Some(m);
+            m
+        };
+        let cell_w_phys = metrics.advance_phys.floor().max(1.0);
+        let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
+        let cell_size_phys = Vec2::new(cell_w_phys, cell_h_phys);
+        let ascent_phys = metrics.ascent_phys.round();
+
+        // NOTE: Write the metrics back to TerminalCellMetricsResource so
+        //       gui-side resize_terminals_to_node reads DPR-adjusted phys
+        //       values on the next frame. The OR condition also catches
+        //       the case where the Resource was reset externally (e.g.
+        //       hot-reload) even if our local state matches.
+        if phys_size_changed || cell_metrics_res.phys_font_size != phys_font_size {
+            *cell_metrics_res = TerminalCellMetricsResource {
+                metrics,
+                phys_font_size,
+            };
+        }
 
         let Some((cells_handle, glyphs_handle)) = materials
             .get(&handle.0)
@@ -300,15 +386,7 @@ fn update_terminal_material(
             state.cpu_cells.resize(cell_count, GpuCell::default());
 
             if cols > 0 && rows > 0 {
-                rebuild_cells(
-                    grid,
-                    &mut state,
-                    &fonts,
-                    &mut atlas,
-                    phys_font_size,
-                    dpr,
-                    cols,
-                );
+                rebuild_cells(grid, &mut state, &fonts, &mut atlas, phys_font_size, cols);
             }
 
             if state.cpu_cells.is_empty() {
@@ -331,16 +409,25 @@ fn update_terminal_material(
             state.initialized = true;
         }
 
-        const CELL_W: f32 = 8.0;
-        const CELL_H: f32 = 16.0;
+        // NOTE: Tier 1 conservative default — bg_padding_color matches the
+        //       pre-Tier1 fallback (opaque black) so the strip between the
+        //       grid's bottom-right edge and the host UI node edge looks
+        //       identical to the previous "out-of-grid fragment = black"
+        //       behavior. Theme-aware bg-color sourcing is a follow-up.
+        // TODO: source from a theme / TerminalGrid::default_bg instead of opaque black.
+        let bg_padding_color = Vec4::new(0.0, 0.0, 0.0, 1.0);
+
         if let Some(mat) = materials.get_mut(&handle.0) {
             mat.params = TerminalParams::new(
                 grid,
-                Vec2::new(CELL_W, CELL_H),
+                cell_size_phys,
                 Vec2::new(atlas.width() as f32, atlas.height() as f32),
-                ascent_logical,
+                ascent_phys,
                 dpr,
                 palette_time.elapsed_secs(),
+                metrics.underline_position_phys,
+                metrics.underline_thickness_phys.max(1.0),
+                bg_padding_color,
             );
         }
     }
@@ -352,7 +439,6 @@ fn rebuild_cells(
     fonts: &TerminalFonts,
     atlas: &mut GlyphAtlas,
     phys_font_size: u16,
-    dpr: f32,
     cols: u32,
 ) {
     for (row_idx, row) in grid.cells.iter().enumerate() {
@@ -370,10 +456,11 @@ fn rebuild_cells(
                 continue;
             }
             let cell_width = u32::from(cell.width);
-            let glyph_index = resolve_glyph_index(cell, state, fonts, atlas, phys_font_size, dpr);
+            let glyph_index = resolve_glyph_index(cell, state, fonts, atlas, phys_font_size);
             let fg = cell.fg.to_linear().as_u32();
             let bg = cell.bg.to_linear().as_u32();
             let style_flags = u32::from(cell.style) | style_bits_from_combining_marks(&cell.text);
+
             let target = (row_idx as u32 * cols + col) as usize;
             if let Some(slot) = state.cpu_cells.get_mut(target) {
                 *slot = GpuCell {
@@ -383,6 +470,28 @@ fn rebuild_cells(
                     style_flags,
                 };
             }
+
+            // NOTE: For width=2 (CJK / wide) cells we ALSO populate the
+            //       right-half slot with the same glyph_index + fg + bg
+            //       and set STYLE_WIDE_RIGHT_HALF. The shader uses the
+            //       bit to anchor the wide glyph to the left-half cell's
+            //       origin (`in_cell_px_eff = in_cell_px + vec2(cell_pitch_px.x, 0)`),
+            //       rendering a continuous wide glyph across both cells.
+            //       Without this, the right half stays at GpuCell::default
+            //       (bg=0 transparent, glyph_index=GLYPH_NONE) and CJK
+            //       characters render as half-glyphs with black gaps.
+            if cell_width == 2 && col + 1 < cols {
+                let right_target = (row_idx as u32 * cols + col + 1) as usize;
+                if let Some(right_slot) = state.cpu_cells.get_mut(right_target) {
+                    *right_slot = GpuCell {
+                        glyph_index,
+                        fg_packed: fg,
+                        bg_packed: bg,
+                        style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
+                    };
+                }
+            }
+
             col = col.saturating_add(cell_width);
         }
     }
@@ -430,7 +539,6 @@ fn resolve_glyph_index(
     fonts: &TerminalFonts,
     atlas: &mut GlyphAtlas,
     phys_font_size: u16,
-    dpr: f32,
 ) -> u32 {
     if cell.width == 0 || cell.text.is_empty() || cell.text.trim().is_empty() {
         return u32::MAX;
@@ -452,7 +560,7 @@ fn resolve_glyph_index(
         return idx;
     }
     let idx = state.cpu_glyphs.len() as u32;
-    state.cpu_glyphs.push(GpuGlyph::new(rect, dpr));
+    state.cpu_glyphs.push(GpuGlyph::new(rect));
     state.glyph_index_map.insert(key, idx);
     idx
 }

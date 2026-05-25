@@ -94,15 +94,6 @@ impl TerminalFonts {
         }
     }
 
-    /// Returns the typographic ascent of the regular face at the requested
-    /// pixel size. Positive value in pixels above the baseline.
-    #[inline]
-    pub fn ascent_px(&self, size_px: u16) -> f32 {
-        self.regular
-            .as_scaled(ab_glyph::PxScale::from(size_px as f32))
-            .ascent()
-    }
-
     /// Returns full pixel metrics for the regular face at the requested
     /// physical pixel size. See [`CellMetrics`] for individual field semantics.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {

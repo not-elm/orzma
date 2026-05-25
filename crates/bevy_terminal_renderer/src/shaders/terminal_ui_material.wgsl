@@ -15,7 +15,9 @@ struct TerminalParams {
     sel_end_row: i32,
     sel_end_col: u32,
     sel_kind: u32,
-    _pad: u32,
+    underline_position_phys: f32,
+    underline_thickness_phys: f32,
+    bg_padding_color: vec4<f32>,
 };
 
 struct Cell {
@@ -90,36 +92,30 @@ fn unpack_rgba(p: u32) -> vec4<f32> {
 
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
-    // NOTE: Opaque black for both pre-snapshot fragments and the
-    //       theoretical out-of-grid case. With the stretched cell-pitch
-    //       logic below, every in-bounds fragment lands on a valid cell,
-    //       so the out-of-grid fallback only fires on degenerate input
-    //       (zero-sized grid).
-    let fallback = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    // rev 4: out-of-grid fragments are painted with the bg_padding_color
+    // uniform (set by Rust-side TerminalParams::new) so the strip between
+    // the grid's bottom-right edge and the host UI node edge matches the
+    // terminal background. Replaces the old opaque-black fallback.
+    let fallback = params.bg_padding_color;
 
     if params.grid_size.x == 0u || params.grid_size.y == 0u {
         return fallback;
     }
 
-    // NOTE: `in.size` from `UiVertexOutput` is *physical* pixels (Bevy 0.18
-    //       `ComputedNode.size` doc), while `params.cell_size_px` is the
-    //       natural glyph cell metric (logical px). Divide by DPR so
-    //       every downstream calculation is in a single logical-px space.
-    let dpr = max(params.dpr, 1.0);
-    let dpr_inv = 1.0 / dpr;
-    let node_size_px = in.size * dpr_inv;
-    let grid_size_f = vec2<f32>(f32(params.grid_size.x), f32(params.grid_size.y));
+    // rev 4: shader runs entirely in PHYSICAL pixels. Bevy 0.18
+    // UiVertexOutput.size is physical px (verified in spec R1 audit), so
+    // we use it directly without dpr_inv conversion.
+    let p_px = in.uv * in.size;
+    let cell_pitch_px = params.cell_size_px;
 
-    // Effective cell pitch: stretches each cell so the grid fills the
-    // entire node with zero remainder. Used for cell lookup, cursor and
-    // selection boxes, underline / strike positioning. The glyph atlas
-    // is NOT stretched — glyph bitmaps remain `params.cell_size_px`
-    // (8 x 16 logical px) and are centered inside the slightly-larger
-    // stretched cell, then snapped to the physical pixel grid below so
-    // the bitmap stays sharp.
-    let cell_pitch_px = max(node_size_px / grid_size_f, vec2<f32>(1.0, 1.0));
+    // Out-of-grid right/bottom padding (the strip between
+    // grid_size * cell_size_px and the host UI node edge).
+    let grid_pixel_w = cell_pitch_px.x * f32(params.grid_size.x);
+    let grid_pixel_h = cell_pitch_px.y * f32(params.grid_size.y);
+    if p_px.x >= grid_pixel_w || p_px.y >= grid_pixel_h {
+        return fallback;
+    }
 
-    let p_px = in.uv * node_size_px;
     let col_f = p_px.x / cell_pitch_px.x;
     let row_f = p_px.y / cell_pitch_px.y;
     if col_f < 0.0 || row_f < 0.0 {
@@ -130,6 +126,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     if col >= params.grid_size.x || row >= params.grid_size.y {
         return fallback;
     }
+
     let idx = row * params.grid_size.x + col;
     if idx >= arrayLength(&cells) {
         return fallback;
@@ -161,22 +158,30 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let cell_top_left = vec2<f32>(f32(col), f32(row)) * cell_pitch_px;
     let in_cell_px = p_px - cell_top_left;
 
-    // Pad the natural glyph cell inside the stretched pitch so glyph
-    // bitmaps stay centered.
-    let glyph_pad_px = max((cell_pitch_px - params.cell_size_px) * 0.5, vec2<f32>(0.0, 0.0));
+    // rev 4: WIDE_RIGHT_HALF cells render the LEFT half's glyph but
+    // anchored to the left-half's origin (i.e. shifted +cell_pitch_px.x
+    // into "this cell" coordinates). This makes the wide glyph render
+    // continuously across both cells.
+    let cur_is_wide_right = (cell.style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
+    let in_cell_px_eff = select(
+        in_cell_px,
+        in_cell_px + vec2<f32>(cell_pitch_px.x, 0.0),
+        cur_is_wide_right,
+    );
 
+    // Primary glyph (this cell's own glyph_index, evaluated against
+    // in_cell_px_eff for wide-right-half cells).
     if cell.glyph_index != GLYPH_NONE && cell.glyph_index < arrayLength(&glyphs) {
         let glyph = glyphs[cell.glyph_index];
-        // Glyph origin in cell-local logical px (top-left of the natural
-        // 8x16 glyph box). `params.ascent_px` shifts down to the baseline,
-        // then `glyph.offset_px.y` lifts back up for the bitmap's bearing.
-        let glyph_origin_logical = glyph_pad_px
-            + vec2<f32>(glyph.offset_px.x, params.ascent_px + glyph.offset_px.y);
-        // Snap glyph origin to the physical pixel grid so the 8x16 atlas
-        // bitmap renders without resampling blur even when cell_pitch_px
-        // doesn't divide evenly into physical pixels.
-        let glyph_origin = floor(glyph_origin_logical * dpr + vec2<f32>(0.5, 0.5)) * dpr_inv;
-        let glyph_local = in_cell_px - glyph_origin;
+        // Glyph origin in cell-local PHYSICAL px. params.ascent_px shifts
+        // down to the baseline, then glyph.offset_px.y lifts back up to
+        // the bitmap top.
+        let glyph_origin = vec2<f32>(
+            glyph.offset_px.x,
+            params.ascent_px + glyph.offset_px.y,
+        );
+        let glyph_origin_phys = floor(glyph_origin + vec2<f32>(0.5, 0.5));
+        let glyph_local = in_cell_px_eff - glyph_origin_phys;
         if glyph_local.x >= 0.0 && glyph_local.y >= 0.0 &&
             glyph_local.x < glyph.size_px.x && glyph_local.y < glyph.size_px.y {
             let atlas_px = mix(glyph.uv_min, glyph.uv_max, glyph_local / glyph.size_px);
@@ -190,17 +195,58 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
+    // rev 4: glyph overdraw from the LEFT neighbor (for fonts where
+    // bbox.width > h_advance, e.g. JetBrains Mono `W`). Skip when:
+    //   (a) current cell is WIDE_RIGHT_HALF (already handled above), or
+    //   (b) left neighbor is WIDE_RIGHT_HALF (its glyph_index points to a
+    //       wide glyph that Change 4 already paints into the right-half
+    //       via in_cell_px_eff; re-evaluating here would double-paint).
+    if col >= 1u && !cur_is_wide_right {
+        let left_idx = row * params.grid_size.x + (col - 1u);
+        let left_cell = cells[left_idx];
+        let left_is_wide_right = (left_cell.style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
+        if !left_is_wide_right
+            && left_cell.glyph_index != GLYPH_NONE
+            && left_cell.glyph_index < arrayLength(&glyphs) {
+            let left_glyph = glyphs[left_cell.glyph_index];
+            let left_glyph_origin = vec2<f32>(
+                left_glyph.offset_px.x,
+                params.ascent_px + left_glyph.offset_px.y,
+            );
+            let left_origin_phys = floor(left_glyph_origin + vec2<f32>(0.5, 0.5));
+            // Left neighbor's cell-local coord = my in_cell_px + one cell to the left.
+            let left_glyph_local = in_cell_px + vec2<f32>(cell_pitch_px.x, 0.0) - left_origin_phys;
+            if left_glyph_local.x >= 0.0 && left_glyph_local.y >= 0.0
+                && left_glyph_local.x < left_glyph.size_px.x
+                && left_glyph_local.y < left_glyph.size_px.y {
+                let atlas_px = mix(left_glyph.uv_min, left_glyph.uv_max,
+                    left_glyph_local / left_glyph.size_px);
+                let atlas_uv = atlas_px / params.atlas_size_px;
+                let coverage = textureSampleLevel(atlas_tex, atlas_sampler, atlas_uv, 0.0).a;
+                let left_fg = unpack_rgba(left_cell.fg_packed);
+                color = mix(color, vec4<f32>(left_fg.rgb, max(left_fg.a, coverage)), coverage);
+            }
+        }
+    }
+
+    // rev 4: underline / strike use font-derived metrics from uniform
+    // rather than hardcoded cell_pitch.y - 1 / cell_pitch.y * 0.5.
     let style_underline = (style & STYLE_UNDERLINE) != 0u;
     let style_strike = (style & STYLE_STRIKE) != 0u;
     if style_underline {
-        let bottom = cell_pitch_px.y - 1.0;
-        if in_cell_px.y >= bottom - 1.0 && in_cell_px.y < bottom {
+        // underline_position_phys is negative (below baseline). The actual
+        // y in the cell is baseline + |underline_position|.
+        let underline_y_top = params.ascent_px - params.underline_position_phys;
+        let underline_y_bot = underline_y_top + params.underline_thickness_phys;
+        if in_cell_px.y >= underline_y_top && in_cell_px.y < underline_y_bot {
             color = vec4<f32>(fg.rgb, max(color.a, fg.a));
         }
     }
     if style_strike {
-        let center_y = cell_pitch_px.y * 0.5;
-        if in_cell_px.y >= center_y - 0.5 && in_cell_px.y < center_y + 0.5 {
+        // Strike sits at ~half of ascent, with same thickness as underline.
+        let strike_y_top = params.ascent_px * 0.5 - params.underline_thickness_phys * 0.5;
+        let strike_y_bot = strike_y_top + params.underline_thickness_phys;
+        if in_cell_px.y >= strike_y_top && in_cell_px.y < strike_y_bot {
             color = vec4<f32>(fg.rgb, max(color.a, fg.a));
         }
     }
