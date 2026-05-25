@@ -55,7 +55,10 @@ impl Plugin for MouseWheelInputPlugin {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Bevy system with many resources; splitting would require shared SystemParam struct"
+)]
 fn mouse_wheel_system(
     mut wheel_msgs: MessageReader<MouseWheel>,
     keys: Res<ButtonInput<KeyCode>>,
