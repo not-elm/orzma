@@ -220,6 +220,33 @@ pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
     })
 }
 
+/// serde field-level deserializer for `Option<KeyChord>` that interprets
+/// the empty string as `None` (unbind) and any other string as a chord
+/// to parse via `parse_key_chord`. Apply with
+/// `#[serde(deserialize_with = "deser_chord_or_unbind")]` on every
+/// `Option<KeyChord>` field of `Bindings`.
+pub fn deser_chord_or_unbind<'de, D>(d: D) -> Result<Option<KeyChord>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let s = String::deserialize(d)?;
+    if s.is_empty() {
+        return Ok(None);
+    }
+    parse_key_chord(&s).map(Some).map_err(Error::custom)
+}
+
+/// One chord-collision entry. Carried inside
+/// `OzmuxConfigsError::DuplicateChords` (defined in `error.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateChord {
+    /// The chord that has multiple bindings.
+    pub chord: KeyChord,
+    /// Action labels (kebab-case TOML keys) that share this chord. Length >= 2.
+    pub actions: Vec<&'static str>,
+}
+
 fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
     let lower = token.to_ascii_lowercase();
     match lower.as_str() {
@@ -1265,6 +1292,28 @@ mod tests {
             parse_key_chord("cmd+s").unwrap(),
             parse_key_chord("CMD+S").unwrap()
         );
+    }
+
+    #[test]
+    fn deser_chord_or_unbind_handles_empty_string() {
+        let json = r#"{"v":""}"#;
+        let parsed: OptionWrapper = serde_json::from_str(json).unwrap();
+        assert!(parsed.v.is_none());
+    }
+
+    #[test]
+    fn deser_chord_or_unbind_handles_valid_chord() {
+        let json = r#"{"v":"Cmd+S"}"#;
+        let parsed: OptionWrapper = serde_json::from_str(json).unwrap();
+        let c = parsed.v.unwrap();
+        assert_eq!(c.key, Key::Char('s'));
+        assert!(c.modifiers.meta);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct OptionWrapper {
+        #[serde(deserialize_with = "deser_chord_or_unbind")]
+        v: Option<KeyChord>,
     }
 
     #[test]
