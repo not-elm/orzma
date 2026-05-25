@@ -208,6 +208,21 @@ impl TerminalHandle {
         self.stage_full_damage_and_arm(coalescer);
     }
 
+    /// Returns true when the viewport is pinned to the live tail
+    /// (`display_offset == 0`). Used by the mouse-wheel input system
+    /// to decide whether keyboard input or Esc should trigger a
+    /// reset-to-bottom before forwarding.
+    pub fn is_at_bottom(&self) -> bool {
+        self.term.grid().display_offset() == 0
+    }
+
+    /// Returns the current `TermMode` bitflags. Used by the mouse-wheel
+    /// router to choose between SGR/X10 mouse-protocol output,
+    /// alt-screen arrow translation, and host scrollback.
+    pub fn current_modes(&self) -> alacritty_terminal::term::TermMode {
+        *self.term.mode()
+    }
+
     /// Enters vi (copy) mode. Idempotent — a second call while already
     /// in vi mode is a no-op rather than a toggle-off. Schedules a Full
     /// damage emit so the renderer observes the new mode (`Term::toggle_vi_mode`
@@ -1188,5 +1203,34 @@ mod tests {
             h.selection_type().is_none(),
             "no selection should be created"
         );
+    }
+}
+
+#[cfg(test)]
+mod accessor_tests {
+    use super::*;
+
+    fn new_handle() -> TerminalHandle {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        TerminalHandle::new(80, 24, listener, reply_rx, ctrl_rx)
+    }
+
+    #[test]
+    fn is_at_bottom_true_initially() {
+        let handle = new_handle();
+        assert!(handle.is_at_bottom(), "fresh terminal must be at bottom");
+    }
+
+    #[test]
+    fn current_modes_returns_term_mode() {
+        let handle = new_handle();
+        let modes = handle.current_modes();
+        assert!(!modes.contains(alacritty_terminal::term::TermMode::ALT_SCREEN));
     }
 }
