@@ -1,4 +1,4 @@
-//! Shortcut domain types: keys, modifiers, chords, prefix, bindings, actions.
+//! Shortcut domain types: keys, modifiers, chords, bindings, actions.
 
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};

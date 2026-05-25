@@ -29,9 +29,9 @@ pub(crate) struct RawShortcuts {
 
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
-    /// Within the `shortcuts` section, `prefix` and `bindings` are independently
-    /// optional; `bindings` is full-replace. The `theme` and `font` sections use
-    /// their respective `Patch::apply_to` for per-field merge.
+    /// Within the `shortcuts` section, `bindings` is full-replace when present.
+    /// The `theme`, `font`, `browser`, and `mouse` sections use their respective
+    /// `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(raw) = self.shortcuts
             && let Some(bindings) = raw.bindings
@@ -57,9 +57,7 @@ impl RawConfigs {
 /// Walks `configs.shortcuts.bindings` and rejects duplicate chords.
 pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
     if let Err(dupes) = configs.shortcuts.bindings.validate_no_conflicts() {
-        // Map the new Vec<DuplicateChord> into the legacy single-variant
-        // error for the transitional state (Task 3.1 introduces the
-        // proper DuplicateChords(Vec<...>) variant).
+        // TODO(Task 3.1): replace `DuplicateBinding` mapping with `DuplicateChords(Vec<...>)`.
         if let Some(first) = dupes.into_iter().next() {
             return Err(OzmuxConfigsError::DuplicateBinding { chord: first.chord });
         }
