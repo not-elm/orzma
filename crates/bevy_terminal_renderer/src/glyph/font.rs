@@ -96,34 +96,17 @@ impl TerminalFonts {
 
     /// Returns full pixel metrics for the regular face at the requested
     /// physical pixel size. See [`CellMetrics`] for individual field semantics.
-    ///
-    /// `phys_size_px` is interpreted as the **em-square** in physical pixels
-    /// (the convention used by macOS Terminal.app, iTerm2, Alacritty, and
-    /// CSS `font-size`). Internally we convert to `ab_glyph::PxScale` —
-    /// whose argument is the **ascent + |descent|** in pixels — by scaling
-    /// up by `(ascender − descender) / units_per_em` from the `hhea` table.
-    /// Without this conversion, JetBrains Mono at requested 12 px ends up
-    /// drawn at ~9 px em-square (its hhea metrics sum to ~1.32× upem), so
-    /// glyph advance and line height come out ~25% smaller than every
-    /// other terminal at the same nominal point size.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
-        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
-            .expect("JetBrainsMono-Regular ttf-parser parse");
-        let upem = face.units_per_em() as f32;
-        // NOTE: ab_glyph's PxScale::from(N) means "ascent + |descent| = N px",
-        // NOT "em-square = N px" as in CSS / macOS Terminal / Alacritty.
-        // Scale the input up so that our em-square-based `phys_size_px`
-        // produces the visual size users expect. JBM: factor ≈ 1.32.
-        let hhea_total_units = (face.ascender() - face.descender()) as f32;
-        let ab_scale_factor = hhea_total_units / upem;
-        let ab_scale = ab_glyph::PxScale::from(phys_size_px as f32 * ab_scale_factor);
-        let scaled = self.regular.as_scaled(ab_scale);
+        let scaled = self
+            .regular
+            .as_scaled(ab_glyph::PxScale::from(phys_size_px as f32));
         let advance_phys = scaled.h_advance(scaled.glyph_id('0'));
         let ascent_phys = scaled.ascent();
         let descent_phys = scaled.descent().abs();
 
-        // hhea-based scale for `post`-table conversions; this is the
-        // em-square-based ratio that matches the caller's `phys_size_px`.
+        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
+            .expect("JetBrainsMono-Regular ttf-parser parse");
+        let upem = face.units_per_em() as f32;
         let scale = phys_size_px as f32 / upem;
 
         // NOTE: ab_glyph's PxScale maps em-square exactly to px so
@@ -203,22 +186,20 @@ mod tests {
     use super::*;
 
     /// `cell_metrics_px(12)` returns sensible values for JetBrains Mono Regular 12px.
-    /// `phys_size_px` is em-square in physical px (CSS / Terminal.app convention).
-    /// At 12 px em-square, JBM ('0' h_advance = 600/1000 em) → advance ≈ 7.2 px.
-    /// ascent (hhea / em-square) = 1020/1000 × 12 = 12.24 px; descent = 0.30 × 12 = 3.6 px.
-    /// line_height (hhea: ascender − descender + line_gap) ≈ 1.32 × 12 ≈ 15.84 px.
+    /// Empirical reference values (`docs/plans/2026-05-25-bevy-font-render-design.md` Background):
+    ///   advance(`0`) ≈ 5.45,  line_height ≈ 14.4,  ascent ≈ 10.0,  descent ≈ 2.6
     /// underline_position is negative (below baseline), underline_thickness is positive.
     #[test]
     fn jetbrains_mono_12px_metrics_are_sensible() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
-        assert!(m.advance_phys > 6.5 && m.advance_phys < 8.0,
+        assert!(m.advance_phys > 5.0 && m.advance_phys < 6.0,
             "advance_phys = {}", m.advance_phys);
-        assert!(m.line_height_phys > 14.0 && m.line_height_phys < 17.0,
+        assert!(m.line_height_phys > 13.0 && m.line_height_phys < 16.0,
             "line_height_phys = {}", m.line_height_phys);
-        assert!(m.ascent_phys > 11.0 && m.ascent_phys < 13.5,
+        assert!(m.ascent_phys > 9.0 && m.ascent_phys < 11.0,
             "ascent_phys = {}", m.ascent_phys);
-        assert!(m.descent_phys > 2.5 && m.descent_phys < 4.5,
+        assert!(m.descent_phys > 1.0 && m.descent_phys < 4.0,
             "descent_phys = {}", m.descent_phys);
         assert!(m.underline_position_phys < 0.0,
             "underline_position_phys = {} should be below baseline (negative)",
@@ -248,6 +229,6 @@ mod tests {
         let res = app.world().get_resource::<TerminalCellMetricsResource>()
             .expect("TerminalCellMetricsResource should be inserted by Startup");
         assert_eq!(res.phys_font_size, 12);
-        assert!(res.metrics.advance_phys > 6.5 && res.metrics.advance_phys < 8.0);
+        assert!(res.metrics.advance_phys > 5.0 && res.metrics.advance_phys < 6.0);
     }
 }
