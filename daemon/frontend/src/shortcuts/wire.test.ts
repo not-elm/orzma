@@ -30,9 +30,9 @@ describe('parseShortcuts', () => {
   it('parses the default Shortcuts JSON', () => {
     const out = parseShortcuts(DEFAULT_JSON);
     expect(out).not.toBeNull();
-    expect(out?.prefix.key).toBe('b');
-    expect(out?.prefix.modifiers.ctrl).toBe(true);
-    expect(out?.prefix.timeout_ms).toBe(2000);
+    expect(out?.prefix?.key).toBe('b');
+    expect(out?.prefix?.modifiers.ctrl).toBe(true);
+    expect(out?.prefix?.timeout_ms).toBe(2000);
     expect(out?.bindings).toHaveLength(1);
     expect(out?.bindings[0]).toEqual({
       chord: {

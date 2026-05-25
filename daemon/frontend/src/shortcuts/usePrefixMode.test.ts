@@ -281,6 +281,33 @@ describe('usePrefixMode', () => {
       setRenamePromptOpen(false);
     }
   });
+
+  it('handles the new named-field schema by disabling dispatch', async () => {
+    const newShapePayload = {
+      bindings: {
+        'close-pane': {
+          key: 'd',
+          modifiers: { ctrl: false, shift: true, alt: false, meta: true },
+        },
+        'focus-pane-left': {
+          key: 'h',
+          modifiers: { ctrl: false, shift: false, alt: false, meta: true },
+        },
+      },
+    };
+    configFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => newShapePayload,
+    } as Response);
+    const { result } = renderHook(() => usePrefixMode(makeCtx()));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.prefix).toBeNull();
+    act(() => {
+      press({ key: 'b', ctrlKey: true });
+    });
+    expect(result.current.isArmed).toBe(false);
+  });
 });
 
 const REPEAT_PAYLOAD = {

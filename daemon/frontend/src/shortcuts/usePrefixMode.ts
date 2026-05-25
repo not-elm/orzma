@@ -153,6 +153,14 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
         setIfAlive({ status: 'error', prefix: null });
         return;
       }
+      if (parsed.prefix === null) {
+        // NOTE: new named-field shortcut backend; React frontend dispatcher
+        // is intentionally disabled here (see D2 in the design spec).
+        setIfAlive({ status: 'ready', prefix: null });
+        return;
+      }
+
+      const resolvedPrefix = parsed.prefix;
 
       const bindings: ChordBinding[] = [];
       for (const b of parsed.bindings) {
@@ -175,14 +183,14 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
               shared.prefixTimer = null;
             }
             setIsArmed(false);
-          }, parsed.prefix.timeout_ms);
+          }, resolvedPrefix.timeout_ms);
         }
       };
 
       shared = {
         bindings,
-        prefix: parsed.prefix,
-        repeatTimeoutMs: parsed.repeat_timeout_ms,
+        prefix: resolvedPrefix,
+        repeatTimeoutMs: parsed.repeat_timeout_ms ?? 500,
         armed: false,
         repeatMode: false,
         setArmed,
@@ -190,7 +198,7 @@ export function usePrefixMode(ctx: ShortcutContext): PrefixModeState {
         repeatTimer: null,
       };
       ensureDispatcher().attachTo(document);
-      setIfAlive({ status: 'ready', prefix: parsed.prefix });
+      setIfAlive({ status: 'ready', prefix: resolvedPrefix });
     })();
 
     return () => {

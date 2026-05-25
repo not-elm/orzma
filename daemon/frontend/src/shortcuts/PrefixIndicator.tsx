@@ -17,6 +17,7 @@ const NAMED_KEY_LABELS: Record<NamedKey, string> = {
   ArrowDown: '↓',
   ArrowLeft: '←',
   ArrowRight: '→',
+  Plus: '+',
 };
 
 function keyLabel(key: string): string {
