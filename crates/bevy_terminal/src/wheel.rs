@@ -139,6 +139,24 @@ pub(crate) fn encode_x10_wheel(
     vec![0x1b, b'[', b'M', (b + 32) as u8, col_clamped + 32, row_clamped + 32]
 }
 
+/// Emits `n` SS3-form arrow-key sequences for the alt-screen
+/// translation path. `Esc O A` (Up) and `Esc O B` (Down) are sent
+/// regardless of `APP_CURSOR` (DECCKM); this matches the convention
+/// in alacritty and wezterm — DECCKM affects keyboard-originated
+/// cursor keys, but wheel→arrow translation in alt-screen mode is
+/// unconditional SS3.
+pub(crate) fn alt_screen_arrow_bytes(direction: WheelDir, n: u32) -> Vec<u8> {
+    let suffix = match direction {
+        WheelDir::Up => b'A',
+        WheelDir::Down => b'B',
+    };
+    let mut out = Vec::with_capacity(n as usize * 3);
+    for _ in 0..n {
+        out.extend_from_slice(&[0x1b, b'O', suffix]);
+    }
+    out
+}
+
 #[cfg(test)]
 mod sgr_tests {
     use super::*;
@@ -208,5 +226,28 @@ mod x10_tests {
         let bytes = encode_x10_wheel(WheelDir::Down, mods, CellCoord { col: 1, row: 1 });
         // 65 + 4 + 16 = 85, + 32 = 117
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 117, 33, 33]);
+    }
+}
+
+#[cfg(test)]
+mod alt_screen_tests {
+    use super::*;
+
+    #[test]
+    fn alt_screen_up_three() {
+        let bytes = alt_screen_arrow_bytes(WheelDir::Up, 3);
+        assert_eq!(bytes, b"\x1bOA\x1bOA\x1bOA");
+    }
+
+    #[test]
+    fn alt_screen_down_one() {
+        let bytes = alt_screen_arrow_bytes(WheelDir::Down, 1);
+        assert_eq!(bytes, b"\x1bOB");
+    }
+
+    #[test]
+    fn alt_screen_zero_returns_empty() {
+        let bytes = alt_screen_arrow_bytes(WheelDir::Up, 0);
+        assert!(bytes.is_empty());
     }
 }
