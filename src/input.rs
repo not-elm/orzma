@@ -7,8 +7,9 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::{Timer, TimerMode};
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
-use ozmux_configs::shortcuts::{KeyChord, Modifiers, Prefix, Shortcuts};
+use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers, Prefix, Shortcuts};
 use ozmux_multiplexer::SessionId;
+use std::collections::HashSet;
 use std::time::Duration;
 
 /// Per-GUI-window prefix-mode state. `armed` flips to true the frame the
@@ -67,6 +68,13 @@ pub(crate) fn dispatch_focused_key(
     configs: Res<crate::configs::OzmuxConfigsResource>,
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
     mut mux: ResMut<crate::multiplexer::Multiplexer>,
+    copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+    mut clipboard: ResMut<crate::ui::clipboard::Clipboard>,
+    mut handles: Query<(
+        &mut bevy_terminal::TerminalHandle,
+        &mut bevy_terminal::PtyHandle,
+        &mut bevy_terminal::Coalescer,
+    )>,
     mut q: Query<(
         &crate::multiplexer::AttachedSession,
         &mut PrefixState,
@@ -75,6 +83,7 @@ pub(crate) fn dispatch_focused_key(
 ) {
     let shortcuts = &configs.shortcuts;
     let mods = current_modifiers(&keys);
+    let mut just_exited: HashSet<Entity> = HashSet::new();
 
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
@@ -84,6 +93,29 @@ pub(crate) fn dispatch_focused_key(
             continue;
         };
         if !win.focused {
+            continue;
+        }
+        // NOTE: this gate MUST run before handle_chord and the terminal-forward
+        // path. Moving it lower would let the prefix arm during copy mode, breaking
+        // the bypass invariant.
+        if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
+            && let Some(window) = mux.windows.get(&wid)
+            && let Ok(pane) = window.pane(&pid)
+            && let Some(entity) = registry.get(&pane.active_activity)
+            && copy_mode_q.get(entity).is_ok()
+            && !just_exited.contains(&entity)
+        {
+            let exited = crate::ui::copy_mode::dispatch_key(
+                &mut commands,
+                &mut handles,
+                &mut clipboard,
+                entity,
+                ev.logical_key.clone(),
+                mods.clone(),
+            );
+            if exited {
+                just_exited.insert(entity);
+            }
             continue;
         }
         if is_modifier_only_key(&ev.logical_key) {
@@ -97,6 +129,8 @@ pub(crate) fn dispatch_focused_key(
                 shortcuts,
                 &mut mux,
                 attached,
+                &mut commands,
+                &registry,
             ),
             None => {
                 // NOTE: when prefix was armed, return Fired (consumed) rather
@@ -260,6 +294,8 @@ fn handle_chord(
     shortcuts: &Shortcuts,
     mux: &mut ResMut<crate::multiplexer::Multiplexer>,
     attached: &crate::multiplexer::AttachedSession,
+    commands: &mut Commands,
+    registry: &crate::ui::registry::ActivityEntityRegistry,
 ) -> ChordOutcome {
     if !prefix.armed {
         if match_chord(input_key, mods, &shortcuts.prefix.chord) {
@@ -275,6 +311,17 @@ fn handle_chord(
         .iter()
         .find(|b| match_chord(input_key, &mods_without_prefix, &b.chord))
     {
+        if let Action::EnterCopyMode = binding.action {
+            if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
+                && let Some(window) = mux.windows.get(&wid)
+                && let Ok(pane) = window.pane(&pid)
+                && let Some(entity) = registry.get(&pane.active_activity)
+            {
+                commands.trigger(crate::ui::copy_mode::EnterCopyModeRequest { entity });
+            }
+            prefix.armed = false;
+            return ChordOutcome::Fired;
+        }
         let mux_ref = mux.bypass_change_detection();
         let mutated = crate::multiplexer::commands::apply(
             binding.action.clone(),
@@ -338,6 +385,7 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.insert_resource(crate::ui::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
 
         let sid = {
@@ -840,6 +888,7 @@ mod tests {
             .add_plugins(OzmuxShortcutPlugin);
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.insert_resource(crate::ui::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
         app.update();
     }
@@ -974,5 +1023,99 @@ mod tests {
 
         let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
         assert!(captured.is_empty(), "no registry entry → no trigger");
+    }
+
+    #[test]
+    fn key_consumed_by_copy_mode_gate_does_not_reach_terminal_or_chord() {
+        let (mut app, window_entity) = make_app(true, false);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let activity_entity = install_active_terminal_activity(&mut app);
+        app.world_mut()
+            .entity_mut(activity_entity)
+            .insert(crate::ui::copy_mode::CopyModeState);
+
+        press(&mut app, window_entity, Bk::Character("h".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "active CopyModeState must consume keys before terminal-forward (captured: {:?})",
+            captured,
+        );
+    }
+
+    #[test]
+    fn keys_after_y_in_same_frame_reach_terminal_not_copy_mode() {
+        let (mut app, window_entity) = make_app(true, false);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let activity_entity = install_active_terminal_activity(&mut app);
+        // Enter copy mode (insert state directly + seed a 1-cell selection
+        // so `y` actually runs the exit-copy branch).
+        app.world_mut()
+            .entity_mut(activity_entity)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        // We don't have a real TerminalHandle on the registry entity in
+        // this test harness, so `dispatch_key` will short-circuit on
+        // `q.get_mut(entity)`. That's fine — the gate-bypass tracking
+        // doesn't depend on dispatch_key's body succeeding; it only
+        // depends on `map_key_to_copy_op` mapping the key to an exit op,
+        // which dispatch_key reports via its bool return.
+
+        // Queue two KeyboardInput events in the same frame:
+        //   1. 'y' → CopyOp::ExitCopy → returns true (exited)
+        //   2. 'a' → should reach the terminal (gate bypassed)
+        press(&mut app, window_entity, Bk::Character("y".into()));
+        press(&mut app, window_entity, Bk::Character("a".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "expected exactly one TerminalKeyInput (for 'a' after 'y' exited copy mode), captured: {:?}",
+            captured,
+        );
+        assert!(
+            matches!(&captured[0].key, bevy_terminal::TerminalKey::Text(s) if s == "a"),
+            "captured key was {:?}, expected Text(\"a\")",
+            captured[0].key,
+        );
+    }
+
+    #[test]
+    fn prefix_then_open_bracket_triggers_enter_copy_mode_request() {
+        use crate::ui::copy_mode::EnterCopyModeRequest;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        #[derive(Resource, Default, Clone)]
+        struct CapturedEnters(Arc<Mutex<Vec<Entity>>>);
+
+        fn capture_enter(ev: On<EnterCopyModeRequest>, captured: Res<CapturedEnters>) {
+            captured.0.lock().unwrap().push(ev.entity);
+        }
+
+        let (mut app, window_entity) = make_app(true, true);
+        let activity_entity = install_active_terminal_activity(&mut app);
+        app.insert_resource(CapturedEnters::default());
+        app.add_observer(capture_enter);
+
+        press(&mut app, window_entity, Bk::Character("[".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedEnters>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "Prefix+[ must trigger EnterCopyModeRequest"
+        );
+        assert_eq!(captured[0], activity_entity);
+        assert!(
+            !app.world().get::<PrefixState>(window_entity).unwrap().armed,
+            "EnterCopyMode must disarm the prefix",
+        );
     }
 }

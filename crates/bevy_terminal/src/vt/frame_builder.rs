@@ -9,14 +9,15 @@ use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::mode_diff::TRACKED_MODES;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use bevy::ecs::entity::Entity;
 use bevy::prelude::Color;
 use bevy_terminal_renderer::prelude::{
     Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri,
-    Row, Run, SnapshotReason,
+    Row, Run, SelectionKind, SelectionRange, SnapshotReason, ViCursor, ViewportPoint,
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -67,8 +68,8 @@ pub(crate) fn build_snapshot<T>(
             .collect(),
         display_offset: term.grid().display_offset() as u32,
         history_size: term.history_size() as u32,
-        vi_cursor: None,
-        selection: None,
+        vi_cursor: extract_vi_cursor(term),
+        selection: extract_selection_range(term),
     }
 }
 
@@ -102,8 +103,8 @@ pub(crate) fn build_delta<T>(
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
         display_offset: term.grid().display_offset() as u32,
-        vi_cursor: None,
-        selection: None,
+        vi_cursor: extract_vi_cursor(term),
+        selection: extract_selection_range(term),
     }
 }
 
@@ -152,6 +153,76 @@ pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
         visible: term.mode().contains(TermMode::SHOW_CURSOR)
             && style.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden
             && in_viewport,
+    }
+}
+
+/// Builds a wire `ViCursor` from alacritty's vi-mode cursor.
+///
+/// Returns `None` when alacritty is NOT in vi mode (`TermMode::VI`
+/// unset). Otherwise translates `Term::vi_mode_cursor.point.line`
+/// (live-grid coords, may be negative for scrollback) into viewport
+/// coordinates via the current `display_offset`. When the resulting
+/// viewport row falls above the visible area, `in_scrollback` is
+/// set and `row` is clamped to `-1` per the schema convention at
+/// `crates/bevy_terminal_renderer/src/schema/cursor.rs:12`.
+pub(crate) fn extract_vi_cursor<T>(term: &Term<T>) -> Option<ViCursor> {
+    if !term.mode().contains(TermMode::VI) {
+        return None;
+    }
+    let p = term.vi_mode_cursor.point;
+    let off = term.grid().display_offset() as i32;
+    let screen_lines = term.screen_lines() as i32;
+    let viewport_row = p.line.0 + off;
+    if viewport_row < 0 {
+        return Some(ViCursor {
+            row: -1,
+            column: p.column.0 as u16,
+            in_scrollback: true,
+        });
+    }
+    let max_row = screen_lines.saturating_sub(1);
+    let row_clamped = viewport_row.min(max_row);
+    Some(ViCursor {
+        row: row_clamped as i16,
+        column: p.column.0 as u16,
+        in_scrollback: false,
+    })
+}
+
+/// Builds a wire `SelectionRange` from `term.selection`. Returns
+/// `None` when no selection is active or when the selection range is
+/// empty (alacritty's `Selection::to_range` returns `None` in that
+/// case; see `alacritty_terminal/selection.rs:332`).
+pub(crate) fn extract_selection_range<T>(term: &Term<T>) -> Option<SelectionRange> {
+    let sel = term.selection.as_ref()?;
+    let range = sel.to_range(term)?;
+    let kind = match sel.ty {
+        SelectionType::Lines => SelectionKind::Line,
+        SelectionType::Simple | SelectionType::Block | SelectionType::Semantic => {
+            SelectionKind::Char
+        }
+    };
+    Some(SelectionRange {
+        start: viewport_point_of(term, range.start),
+        end: viewport_point_of(term, range.end),
+        kind,
+    })
+}
+
+/// Maps an alacritty `Point` (live-grid Line; usize Column) into a
+/// wire `ViewportPoint`. Rows that resolve above the viewport are
+/// clamped to `-1`; rows that resolve below are clamped to `rows`.
+/// Caller is responsible for the column-bounds invariant (alacritty
+/// already keeps `point.column` in `[0, cols)` for vi cursor + selection
+/// endpoints, so a tighter assert is unnecessary).
+fn viewport_point_of<T>(term: &Term<T>, p: Point) -> ViewportPoint {
+    let off = term.grid().display_offset() as i32;
+    let screen_lines = term.screen_lines() as i32;
+    let viewport_row = p.line.0 + off;
+    let clamped = viewport_row.clamp(-1, screen_lines);
+    ViewportPoint {
+        row: clamped as i16,
+        column: p.column.0 as u16,
     }
 }
 
@@ -758,6 +829,94 @@ mod tests {
     }
 
     #[test]
+    fn extract_vi_cursor_none_when_not_in_vi_mode() {
+        let term = make_term(10, 5);
+        assert!(
+            extract_vi_cursor(&term).is_none(),
+            "vi cursor must be None when TermMode::VI is unset"
+        );
+    }
+
+    #[test]
+    fn extract_vi_cursor_returns_in_scrollback_true_for_negative_line() {
+        let cfg = Config {
+            scrolling_history: 100,
+            ..Config::default()
+        };
+        let mut term = make_term_with_config(cfg, 10, 5);
+        for _ in 0..20 {
+            install_text(&mut term, "x\r\n");
+        }
+        term.toggle_vi_mode();
+        assert_eq!(
+            term.grid().display_offset(),
+            0,
+            "test precondition: display_offset must be 0 so the negative-line clamp is the only path to in_scrollback",
+        );
+        term.vi_mode_cursor.point = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(-10),
+            alacritty_terminal::index::Column(3),
+        );
+        let vc = extract_vi_cursor(&term).expect("vi cursor present in vi mode");
+        assert!(
+            vc.in_scrollback,
+            "negative line + zero display_offset must report in_scrollback"
+        );
+        assert_eq!(vc.row, -1, "in_scrollback must clamp row to -1");
+        assert_eq!(vc.column, 3);
+    }
+
+    #[test]
+    fn extract_vi_cursor_clamps_row_to_last_visible_row_not_one_past() {
+        let mut term = make_term(10, 5);
+        term.toggle_vi_mode();
+        // Force vi cursor to a position that maps to viewport_row == screen_lines.
+        // With display_offset = 0 and screen_lines = 5, line == 5 maps to row 5
+        // (one past the last valid row).
+        term.vi_mode_cursor.point = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(5),
+            alacritty_terminal::index::Column(2),
+        );
+        let vc = extract_vi_cursor(&term).expect("vi mode on");
+        assert!(
+            vc.row < 5,
+            "vi cursor row must be < screen_lines (5), got {}",
+            vc.row,
+        );
+        assert_eq!(
+            vc.row, 4,
+            "vi cursor row must clamp to last visible row (screen_lines - 1)",
+        );
+    }
+
+    #[test]
+    fn extract_selection_range_returns_none_when_term_selection_is_none() {
+        let term = make_term(10, 5);
+        assert!(extract_selection_range(&term).is_none());
+    }
+
+    #[test]
+    fn extract_selection_range_kind_lines_when_selection_is_lines() {
+        use alacritty_terminal::index::Side;
+        use alacritty_terminal::selection::Selection;
+        let mut term = make_term(10, 5);
+        install_text(&mut term, "abc\r\ndef\r\nghi");
+        let start = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(0),
+        );
+        let end = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(1),
+            alacritty_terminal::index::Column(2),
+        );
+        let mut sel = Selection::new(SelectionType::Lines, start, Side::Left);
+        sel.update(end, Side::Right);
+        term.selection = Some(sel);
+        let range = extract_selection_range(&term).expect("selection present");
+        assert_eq!(range.kind, SelectionKind::Line);
+    }
+
+    #[test]
     fn extract_cursor_hidden_when_scrolled_past_live_grid() {
         let cfg = Config {
             scrolling_history: 200,
@@ -772,6 +931,46 @@ mod tests {
         assert!(
             !c.visible,
             "cursor should be hidden when display_offset >= screen_lines"
+        );
+    }
+
+    #[test]
+    fn build_snapshot_carries_vi_cursor_when_in_vi_mode() {
+        let mut term = make_term(10, 5);
+        install_text(&mut term, "abc");
+        term.toggle_vi_mode();
+        let mut interner = HyperlinkInterner::new();
+        let snap = build_snapshot(
+            &term,
+            Entity::PLACEHOLDER,
+            0,
+            SnapshotReason::Initial,
+            &mut interner,
+        );
+        assert!(
+            snap.vi_cursor.is_some(),
+            "vi mode on → snapshot must carry vi_cursor"
+        );
+    }
+
+    #[test]
+    fn build_delta_carries_selection_range_when_selection_present() {
+        use alacritty_terminal::index::Side;
+        use alacritty_terminal::selection::Selection;
+        let mut term = make_term(10, 3);
+        install_text(&mut term, "abc");
+        let p = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(0),
+        );
+        let mut sel = Selection::new(SelectionType::Simple, p, Side::Left);
+        sel.update(p, Side::Right);
+        term.selection = Some(sel);
+        let mut interner = HyperlinkInterner::new();
+        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, &[0u16], &mut interner);
+        assert!(
+            delta.selection.is_some(),
+            "selection present → delta must carry it"
         );
     }
 }

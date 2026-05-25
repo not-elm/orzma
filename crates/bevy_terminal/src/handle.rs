@@ -7,7 +7,10 @@ use crate::events::{
 use crate::pty::PtyHandle;
 use crate::title::{TerminalTitle, sanitize_title};
 use crate::vt::damage::{DamageVerdict, DirtyRows};
-use crate::vt::frame_builder::{build_delta, build_snapshot, extract_cursor, viewport_row_to_line};
+use crate::vt::frame_builder::{
+    build_delta, build_snapshot, extract_cursor, extract_selection_range, extract_vi_cursor,
+    viewport_row_to_line,
+};
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, TermListener};
 use crate::vt::mode_diff::diff_mode;
@@ -20,7 +23,9 @@ use alacritty_terminal::vte::ansi::{Color as AColor, Rgb};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Commands;
-use bevy_terminal_renderer::prelude::{Cursor, CursorShape, SnapshotReason};
+use bevy_terminal_renderer::prelude::{
+    Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor,
+};
 use crossbeam_channel::Receiver;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -63,6 +68,9 @@ pub struct TerminalHandle {
     parser: Processor,
     hyperlinks: HyperlinkInterner,
     prev_cursor: Option<Cursor>,
+    prev_vi_cursor: Option<ViCursor>,
+    prev_selection: Option<SelectionRange>,
+    selection_anchor: Option<alacritty_terminal::index::Point>,
     pending_user_input: bool,
     pending_damage: Option<DirtyRows>,
     first_emit: bool,
@@ -91,6 +99,9 @@ impl TerminalHandle {
             parser: Processor::new(),
             hyperlinks: HyperlinkInterner::new(),
             prev_cursor: None,
+            prev_vi_cursor: None,
+            prev_selection: None,
+            selection_anchor: None,
             pending_user_input: false,
             pending_damage: None,
             first_emit: true,
@@ -179,6 +190,136 @@ impl TerminalHandle {
     pub fn scroll_to_bottom(&mut self, coalescer: &mut Coalescer) {
         self.term.scroll_display(Scroll::Bottom);
         self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Enters vi (copy) mode. Idempotent — a second call while already
+    /// in vi mode is a no-op rather than a toggle-off. Schedules a Full
+    /// damage emit so the renderer observes the new mode (`Term::toggle_vi_mode`
+    /// itself does NOT damage the grid; without this the snapshot carrying
+    /// the new vi_cursor would never reach the renderer).
+    pub fn enter_vi_mode(&mut self, coalescer: &mut Coalescer) {
+        if !self.term.mode().contains(TermMode::VI) {
+            self.term.toggle_vi_mode();
+        }
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Exits vi mode and snaps the viewport to the live tail. Idempotent.
+    /// Schedules a Full damage emit so the renderer receives a frame with
+    /// `vi_cursor: None`.
+    pub fn exit_vi_mode(&mut self, coalescer: &mut Coalescer) {
+        if self.term.mode().contains(TermMode::VI) {
+            self.term.toggle_vi_mode();
+        }
+        self.term
+            .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Drives `Term::vi_motion(motion)`. Alacritty re-computes the
+    /// selection internally when one is active (`vi_mode_recompute_selection`),
+    /// so callers do not need to re-issue `selection_*` after motion.
+    /// Schedules a Full damage emit because vi-cursor moves are not
+    /// part of alacritty's `Term::damage()` (see is_noop_emit docs).
+    pub fn vi_motion(
+        &mut self,
+        coalescer: &mut Coalescer,
+        motion: alacritty_terminal::vi_mode::ViMotion,
+    ) {
+        self.term.vi_motion(motion);
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Scrolls the viewport one page up (`Scroll::PageUp`). Alacritty
+    /// clamps the vi cursor into the new viewport automatically. Stages
+    /// a Full damage emit.
+    pub fn scroll_page_up(&mut self, coalescer: &mut Coalescer) {
+        self.term
+            .scroll_display(alacritty_terminal::grid::Scroll::PageUp);
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Scrolls the viewport one page down (`Scroll::PageDown`).
+    pub fn scroll_page_down(&mut self, coalescer: &mut Coalescer) {
+        self.term
+            .scroll_display(alacritty_terminal::grid::Scroll::PageDown);
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Starts a selection of the given type at the current vi cursor.
+    ///
+    /// Internally seeds `Selection::new(ty, vi_cursor, Side::Left)` and
+    /// immediately calls `update(vi_cursor, Side::Right)` so the anchor
+    /// cell is included — a single `Selection::new` alone returns `None`
+    /// from `to_range` when start and end coincide, so
+    /// `selection_to_string` would yield `None`. See spec § 5 and
+    /// `alacritty_terminal/selection.rs:124,193,332`.
+    pub fn selection_start(
+        &mut self,
+        coalescer: &mut Coalescer,
+        ty: alacritty_terminal::selection::SelectionType,
+    ) {
+        let anchor = self.term.vi_mode_cursor.point;
+        let mut sel = alacritty_terminal::selection::Selection::new(
+            ty,
+            anchor,
+            alacritty_terminal::index::Side::Left,
+        );
+        sel.update(anchor, alacritty_terminal::index::Side::Right);
+        self.term.selection = Some(sel);
+        self.selection_anchor = Some(anchor);
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Drops the active selection and stages a Full damage emit so the
+    /// renderer's next frame carries `selection: None`.
+    pub fn selection_clear(&mut self, coalescer: &mut Coalescer) {
+        self.term.selection = None;
+        self.selection_anchor = None;
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Reads the active selection as a UTF-8 string via
+    /// `Term::selection_to_string`. Returns `None` when no selection is
+    /// set or the selection is empty.
+    pub fn selection_to_string(&self) -> Option<String> {
+        self.term.selection_to_string()
+    }
+
+    /// Returns the type of the active selection, if any. Used by the
+    /// v / V toggle predicate.
+    pub fn selection_type(&self) -> Option<alacritty_terminal::selection::SelectionType> {
+        self.term.selection.as_ref().map(|s| s.ty)
+    }
+
+    /// Switches the active selection's type while preserving the
+    /// original anchor (captured at `selection_start`). The new
+    /// selection spans from the stored anchor to the current vi
+    /// cursor, mirroring tmux's behaviour when the user switches
+    /// between `v` (Char) and `V` (Line) without exiting copy mode.
+    ///
+    /// Returns `false` when no selection anchor is stored (i.e. no
+    /// selection is currently active). In that case callers should
+    /// fall back to `selection_start`.
+    pub fn selection_change_type(
+        &mut self,
+        coalescer: &mut Coalescer,
+        ty: alacritty_terminal::selection::SelectionType,
+    ) -> bool {
+        let Some(anchor) = self.selection_anchor else {
+            return false;
+        };
+        let cursor = self.term.vi_mode_cursor.point;
+        let mut sel = alacritty_terminal::selection::Selection::new(
+            ty,
+            anchor,
+            alacritty_terminal::index::Side::Left,
+        );
+        sel.update(cursor, alacritty_terminal::index::Side::Right);
+        self.term.selection = Some(sel);
+        // anchor stays as-is — type change preserves it
+        self.stage_full_damage_and_arm(coalescer);
+        true
     }
 
     /// Captures the current `Term::damage()` state into
@@ -319,8 +460,17 @@ impl TerminalHandle {
         let curr_mode = *self.term.mode();
         let curr_cursor = extract_cursor(&self.term);
         let kept_hashes = self.filter_unchanged_dirty_rows(&mut dirty, &curr_cursor);
+        let curr_vi_cursor = extract_vi_cursor(&self.term);
+        let curr_selection = extract_selection_range(&self.term);
 
-        if self.is_noop_emit(&dirty, &curr_cursor, prev_mode, curr_mode) {
+        if self.is_noop_emit(
+            &dirty,
+            &curr_cursor,
+            prev_mode,
+            curr_mode,
+            curr_vi_cursor,
+            curr_selection,
+        ) {
             self.finalize_emit(coalescer);
             return;
         }
@@ -336,6 +486,8 @@ impl TerminalHandle {
         }
 
         self.prev_cursor = Some(curr_cursor);
+        self.prev_vi_cursor = curr_vi_cursor;
+        self.prev_selection = curr_selection;
         self.finalize_emit(coalescer);
     }
 
@@ -393,20 +545,39 @@ impl TerminalHandle {
 
     /// True when there is nothing observable to broadcast: no dirty
     /// rows remain after filtering, the mode is unchanged, the cursor
-    /// is unchanged, AND this is not the bootstrap emit.
+    /// is unchanged, the vi cursor is unchanged, the selection is
+    /// unchanged, AND this is not the bootstrap emit.
+    ///
+    /// # Invariants
+    ///
+    /// Vi cursor and selection are NOT part of `Term::damage()`
+    /// (alacritty docs at `term/mod.rs:450-456` exclude
+    /// "user-controlled elements"). Without these two AND conditions
+    /// a pure overlay change (e.g. user moves the vi cursor while a
+    /// selection is active) produces an empty `dirty` set after hash
+    /// filtering and would be silently dropped here.
     fn is_noop_emit(
         &self,
         dirty: &DirtyRows,
         curr_cursor: &Cursor,
         prev_mode: TermMode,
         curr_mode: TermMode,
+        curr_vi_cursor: Option<ViCursor>,
+        curr_selection: Option<SelectionRange>,
     ) -> bool {
         let dirty_is_empty = matches!(dirty, DirtyRows::Rows(r) if r.is_empty());
         let cursor_unchanged = self
             .prev_cursor
             .as_ref()
             .is_some_and(|prev| *prev == *curr_cursor);
-        dirty_is_empty && prev_mode == curr_mode && cursor_unchanged && !self.first_emit
+        let vi_unchanged = self.prev_vi_cursor == curr_vi_cursor;
+        let sel_unchanged = self.prev_selection == curr_selection;
+        dirty_is_empty
+            && prev_mode == curr_mode
+            && cursor_unchanged
+            && vi_unchanged
+            && sel_unchanged
+            && !self.first_emit
     }
 
     /// Returns the current `frame_seq`, advancing it via
@@ -603,4 +774,355 @@ fn hash_cursor_shape(s: CursorShape, h: &mut DefaultHasher) {
         CursorShape::Bar => 2,
     };
     n.hash(h);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_noop_emit_returns_false_when_only_selection_changed() {
+        use alacritty_terminal::index::Side;
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        h.first_emit = false;
+        h.prev_cursor = Some(extract_cursor(&h.term));
+        h.prev_selection = None;
+        let p = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(0),
+        );
+        let mut sel = Selection::new(SelectionType::Simple, p, Side::Left);
+        sel.update(p, Side::Right);
+        h.term.selection = Some(sel);
+        let dirty = crate::vt::damage::DirtyRows::Rows(Vec::new());
+        let curr_cursor = extract_cursor(&h.term);
+        let mode = *h.term.mode();
+        let curr_sel = extract_selection_range(&h.term);
+        let curr_vi = extract_vi_cursor(&h.term);
+        assert!(
+            !h.is_noop_emit(&dirty, &curr_cursor, mode, mode, curr_vi, curr_sel),
+            "selection appeared on prev_selection==None → must NOT be a no-op"
+        );
+    }
+
+    #[test]
+    fn is_noop_emit_returns_false_when_only_vi_cursor_changed() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        h.first_emit = false;
+        h.prev_cursor = Some(extract_cursor(&h.term));
+        h.prev_vi_cursor = None;
+        h.term.toggle_vi_mode();
+        let dirty = crate::vt::damage::DirtyRows::Rows(Vec::new());
+        let curr_cursor = extract_cursor(&h.term);
+        let mode = *h.term.mode();
+        let curr_sel = extract_selection_range(&h.term);
+        let curr_vi = extract_vi_cursor(&h.term);
+        assert!(curr_vi.is_some(), "vi mode on → curr_vi must be Some");
+        assert!(
+            !h.is_noop_emit(&dirty, &curr_cursor, mode, mode, curr_vi, curr_sel),
+            "vi cursor appeared on prev_vi_cursor==None → must NOT be a no-op"
+        );
+    }
+
+    #[test]
+    fn enter_vi_mode_sets_term_mode_vi_bit() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        assert!(!h.term.mode().contains(TermMode::VI));
+        h.enter_vi_mode(&mut coalescer);
+        assert!(h.term.mode().contains(TermMode::VI));
+    }
+
+    #[test]
+    fn enter_vi_mode_is_idempotent_when_already_in_vi() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        h.enter_vi_mode(&mut coalescer);
+        let was_vi = h.term.mode().contains(TermMode::VI);
+        h.enter_vi_mode(&mut coalescer);
+        assert!(
+            was_vi && h.term.mode().contains(TermMode::VI),
+            "second enter_vi_mode must leave VI bit set, not toggle it off"
+        );
+    }
+
+    #[test]
+    fn vi_motion_down_advances_vi_cursor_line_by_one() {
+        use alacritty_terminal::vi_mode::ViMotion;
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        h.enter_vi_mode(&mut coalescer);
+        let before = h.term.vi_mode_cursor.point.line.0;
+        h.vi_motion(&mut coalescer, ViMotion::Down);
+        let after = h.term.vi_mode_cursor.point.line.0;
+        assert_eq!(after, before + 1, "ViMotion::Down advances by 1 line");
+    }
+
+    #[test]
+    fn scroll_page_up_grows_display_offset() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        let mut parser = alacritty_terminal::vte::ansi::Processor::<
+            alacritty_terminal::vte::ansi::StdSyncHandler,
+        >::new();
+        for _ in 0..30 {
+            parser.advance(&mut h.term, b"x\r\n");
+        }
+        assert_eq!(h.term.grid().display_offset(), 0);
+        h.scroll_page_up(&mut coalescer);
+        assert!(
+            h.term.grid().display_offset() > 0,
+            "PageUp must grow display_offset"
+        );
+    }
+
+    #[test]
+    fn exit_vi_mode_clears_vi_and_snaps_to_live_tail() {
+        use alacritty_terminal::grid::Scroll;
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        let mut parser = alacritty_terminal::vte::ansi::Processor::<
+            alacritty_terminal::vte::ansi::StdSyncHandler,
+        >::new();
+        for _ in 0..20 {
+            parser.advance(&mut h.term, b"x\r\n");
+        }
+        h.term.scroll_display(Scroll::Top);
+        h.enter_vi_mode(&mut coalescer);
+        assert!(h.term.grid().display_offset() > 0);
+        h.exit_vi_mode(&mut coalescer);
+        assert!(!h.term.mode().contains(TermMode::VI));
+        assert_eq!(
+            h.term.grid().display_offset(),
+            0,
+            "exit must snap to live tail (display_offset == 0)"
+        );
+    }
+
+    #[test]
+    fn selection_start_simple_at_vi_cursor_includes_that_cell() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        // Put "X" at the cursor cell so selection_to_string yields a non-empty string.
+        let mut parser = alacritty_terminal::vte::ansi::Processor::<
+            alacritty_terminal::vte::ansi::StdSyncHandler,
+        >::new();
+        parser.advance(&mut h.term, b"X");
+        h.enter_vi_mode(&mut coalescer);
+        // After enter_vi_mode, vi_mode_cursor sits on the live cursor — column 1 (after "X").
+        // Move it left to the X cell.
+        h.vi_motion(&mut coalescer, alacritty_terminal::vi_mode::ViMotion::Left);
+        h.selection_start(
+            &mut coalescer,
+            alacritty_terminal::selection::SelectionType::Simple,
+        );
+        let s = h.selection_to_string().expect("non-empty 1-cell selection");
+        assert!(
+            s.contains('X'),
+            "selection text {s:?} must include the anchor cell glyph 'X'"
+        );
+    }
+
+    #[test]
+    fn selection_clear_drops_term_selection() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        h.enter_vi_mode(&mut coalescer);
+        h.selection_start(
+            &mut coalescer,
+            alacritty_terminal::selection::SelectionType::Simple,
+        );
+        assert!(h.term.selection.is_some());
+        h.selection_clear(&mut coalescer);
+        assert!(h.term.selection.is_none());
+    }
+
+    #[test]
+    fn selection_to_string_returns_none_when_no_selection() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        assert!(h.selection_to_string().is_none());
+    }
+
+    #[test]
+    fn selection_type_returns_ty_of_active_selection() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        h.enter_vi_mode(&mut coalescer);
+        assert!(h.selection_type().is_none());
+        h.selection_start(
+            &mut coalescer,
+            alacritty_terminal::selection::SelectionType::Lines,
+        );
+        assert!(matches!(
+            h.selection_type(),
+            Some(alacritty_terminal::selection::SelectionType::Lines)
+        ));
+    }
+
+    #[test]
+    fn selection_change_type_preserves_anchor_across_v_to_lines_switch() {
+        use alacritty_terminal::vi_mode::ViMotion;
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        // Push some content so selection_to_string is meaningful.
+        let mut parser = alacritty_terminal::vte::ansi::Processor::<
+            alacritty_terminal::vte::ansi::StdSyncHandler,
+        >::new();
+        parser.advance(&mut h.term, b"abcdefghij\r\nklmnopqrst\r\n");
+        h.enter_vi_mode(&mut coalescer);
+        // Place vi cursor on row 0 column 2 ('c').
+        h.term.vi_mode_cursor.point = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(2),
+        );
+        h.selection_start(
+            &mut coalescer,
+            alacritty_terminal::selection::SelectionType::Simple,
+        );
+        // Extend to row 1 column 7 ('r').
+        h.vi_motion(&mut coalescer, ViMotion::Down);
+        for _ in 0..5 {
+            h.vi_motion(&mut coalescer, ViMotion::Right);
+        }
+        let chars_before = h
+            .selection_to_string()
+            .expect("simple selection spans something")
+            .len();
+        assert!(
+            chars_before > 1,
+            "precondition: char-wise selection must be multi-char before type switch, got {chars_before} chars",
+        );
+        // Switch to Line type. Anchor (row 0 col 2) must be preserved;
+        // vi cursor (row 1 col 7) becomes the new end.
+        assert!(
+            h.selection_change_type(
+                &mut coalescer,
+                alacritty_terminal::selection::SelectionType::Lines,
+            ),
+            "selection_change_type must report success when a selection is active",
+        );
+        let s_after = h
+            .selection_to_string()
+            .expect("Lines selection still active after type change");
+        // Lines selection spanning rows 0-1 includes "abcdefghij\nklmnopqrst" (full rows + trailing spaces).
+        // Just assert the prefix is row 0 — that proves the anchor was preserved.
+        assert!(
+            s_after.starts_with("abc"),
+            "Lines selection must START at row 0 (preserved anchor), got {s_after:?}",
+        );
+        assert!(
+            s_after.contains("klmno"),
+            "Lines selection must REACH row 1 (current vi cursor), got {s_after:?}",
+        );
+    }
+
+    #[test]
+    fn selection_change_type_returns_false_when_no_selection_active() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx,
+        };
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut coalescer = Coalescer::default();
+        h.enter_vi_mode(&mut coalescer);
+        assert!(
+            !h.selection_change_type(
+                &mut coalescer,
+                alacritty_terminal::selection::SelectionType::Lines,
+            ),
+            "selection_change_type must return false when no selection anchor is stored",
+        );
+        assert!(
+            h.selection_type().is_none(),
+            "no selection should be created"
+        );
+    }
 }

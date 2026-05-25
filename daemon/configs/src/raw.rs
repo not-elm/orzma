@@ -80,7 +80,7 @@ mod tests {
     fn empty_raw_returns_defaults() {
         let raw = RawConfigs::default();
         let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.shortcuts.bindings.len(), 34);
+        assert_eq!(merged.shortcuts.bindings.len(), 35);
         assert!(matches!(
             merged.shortcuts.bindings[0].action,
             Action::ClosePane

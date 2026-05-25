@@ -13,6 +13,8 @@ use ozmux_multiplexer::{ActivityId, Cell};
 use std::collections::HashSet;
 
 pub(crate) mod activity;
+pub(crate) mod clipboard;
+pub(crate) mod copy_mode;
 pub(crate) mod layout;
 pub(crate) mod palette;
 pub(crate) mod registry;
@@ -584,12 +586,7 @@ mod tests {
                 let (_sid, session) = mux.sessions.iter().next().expect("session");
                 session.active_window.clone().expect("active window")
             };
-            let active_pane = mux
-                .windows
-                .get(&wid)
-                .expect("window")
-                .active_pane
-                .clone();
+            let active_pane = mux.windows.get(&wid).expect("window").active_pane.clone();
             let _outcome = mux
                 .with_window(&wid, |w| {
                     w.pane_mut(&active_pane)
@@ -657,12 +654,7 @@ mod tests {
                     let (_sid, session) = mux.sessions.iter().next().expect("session");
                     session.active_window.clone().expect("active window")
                 };
-                let active_pane = mux
-                    .windows
-                    .get(&wid)
-                    .expect("window")
-                    .active_pane
-                    .clone();
+                let active_pane = mux.windows.get(&wid).expect("window").active_pane.clone();
                 let _outcome = mux
                     .with_window(&wid, |w| {
                         w.pane_mut(&active_pane)
@@ -676,9 +668,10 @@ mod tests {
 
             // After every switch both hosts must still be alive and
             // have a valid parent.
-            for (id, expected_entity) in
-                [(&bootstrap_id, bootstrap_entity), (&second_id, second_entity)]
-            {
+            for (id, expected_entity) in [
+                (&bootstrap_id, bootstrap_entity),
+                (&second_id, second_entity),
+            ] {
                 let registry = app.world().resource::<ActivityEntityRegistry>();
                 assert_eq!(
                     registry.get(id),

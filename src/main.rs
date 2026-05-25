@@ -15,7 +15,7 @@ use configs::OzmuxConfigsPlugin;
 use input::OzmuxShortcutPlugin;
 use multiplexer::OzmuxMultiplexerPlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
-use ui::OzmuxUiPlugin;
+use ui::{OzmuxUiPlugin, copy_mode::CopyModePlugin};
 
 fn main() {
     App::new()
@@ -29,6 +29,7 @@ fn main() {
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
+            CopyModePlugin,
         ))
         .run();
 }
