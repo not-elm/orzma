@@ -12,6 +12,7 @@ mod plugin;
 mod pty;
 mod title;
 mod vt;
+mod wheel;
 
 pub use alacritty_terminal::selection::SelectionType;
 pub use alacritty_terminal::vi_mode::ViMotion;
