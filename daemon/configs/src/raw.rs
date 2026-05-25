@@ -57,10 +57,7 @@ impl RawConfigs {
 /// Walks `configs.shortcuts.bindings` and rejects duplicate chords.
 pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
     if let Err(dupes) = configs.shortcuts.bindings.validate_no_conflicts() {
-        // TODO(Task 3.1): replace `DuplicateBinding` mapping with `DuplicateChords(Vec<...>)`.
-        if let Some(first) = dupes.into_iter().next() {
-            return Err(OzmuxConfigsError::DuplicateBinding { chord: first.chord });
-        }
+        return Err(OzmuxConfigsError::DuplicateChords(dupes));
     }
     let size = configs.font.size;
     if !(size > 0.0 && size <= 200.0) {

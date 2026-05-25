@@ -28,12 +28,10 @@ pub enum OzmuxConfigsError {
         source: toml::de::Error,
     },
 
-    /// The same key chord appears more than once.
-    #[error("duplicate binding for chord {chord:?}")]
-    DuplicateBinding {
-        /// Chord that was duplicated.
-        chord: crate::shortcuts::KeyChord,
-    },
+    /// One or more KeyChord collisions across the `[shortcuts.bindings]` table.
+    /// Collected in a single pass; reported all-at-once to avoid whack-a-mole.
+    #[error("duplicate chord(s) in shortcuts.bindings: {}", format_dupes(.0))]
+    DuplicateChords(Vec<crate::shortcuts::DuplicateChord>),
 
     /// The configured font size is outside the supported range.
     #[error("font size {size} is out of range (expected 0 < size <= 200)")]
@@ -45,6 +43,14 @@ pub enum OzmuxConfigsError {
     /// Neither `$XDG_CONFIG_HOME` nor a home directory could be resolved.
     #[error("could not determine config directory (no $XDG_CONFIG_HOME and no home dir)")]
     HomeDirNotFound,
+}
+
+fn format_dupes(dupes: &[crate::shortcuts::DuplicateChord]) -> String {
+    dupes
+        .iter()
+        .map(|d| format!("{} = [{}]", d.chord, d.actions.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[cfg(test)]
