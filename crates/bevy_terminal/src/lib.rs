@@ -26,3 +26,6 @@ pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::TerminalTitle;
+pub use wheel::{
+    route_wheel, CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers,
+};
