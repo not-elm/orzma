@@ -57,13 +57,13 @@ impl Plugin for MouseWheelInputPlugin {
 
 fn mouse_wheel_system(
     mut wheel_msgs: MessageReader<MouseWheel>,
+    mut accumulator: ResMut<WheelAccumulator>,
+    mut handles: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
     mux: Res<crate::multiplexer::Multiplexer>,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
-    mut accumulator: ResMut<WheelAccumulator>,
-    mut handles: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
     sessions: Query<&crate::multiplexer::AttachedSession>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -110,8 +110,7 @@ fn mouse_wheel_system(
     if accumulator.last_entity != Some(entity) {
         accumulator.residual_y = 0.0;
         accumulator.last_entity = Some(entity);
-    } else if accumulator.residual_y.signum() != delta_y.signum() && accumulator.residual_y != 0.0
-    {
+    } else if accumulator.residual_y.signum() != delta_y.signum() && accumulator.residual_y != 0.0 {
         accumulator.residual_y = 0.0;
     }
 
@@ -146,8 +145,12 @@ fn mouse_wheel_system(
         .next()
         .and_then(|w| w.cursor_position())
         .map(|pos| CellCoord {
-            col: ((pos.x / CELL_W_LOGICAL_PX) as u32).saturating_add(1).max(1),
-            row: ((pos.y / CELL_H_LOGICAL_PX) as u32).saturating_add(1).max(1),
+            col: ((pos.x / CELL_W_LOGICAL_PX) as u32)
+                .saturating_add(1)
+                .max(1),
+            row: ((pos.y / CELL_H_LOGICAL_PX) as u32)
+                .saturating_add(1)
+                .max(1),
         })
         .unwrap_or(CellCoord { col: 1, row: 1 });
 
@@ -161,7 +164,13 @@ fn mouse_wheel_system(
         return;
     };
 
-    let action = route_wheel(handle.current_modes(), notches, cursor_cell, mods, &wheel_cfg);
+    let action = route_wheel(
+        handle.current_modes(),
+        notches,
+        cursor_cell,
+        mods,
+        &wheel_cfg,
+    );
 
     match action {
         WheelAction::Noop => {}
