@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 bevy = { workspace = true }
 ab_glyph = "0.2"
+ttf-parser = "0.25"
 unicode-segmentation = "1"
 unicode-width = { workspace = true }
 serde = { workspace = true }
