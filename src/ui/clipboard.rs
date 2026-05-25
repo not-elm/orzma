@@ -8,15 +8,13 @@ use bevy::ecs::resource::Resource;
 /// Resource wrapping a lazily-initialized `arboard::Clipboard`.
 ///
 /// `arboard::Clipboard::new()` can fail when no display is available
-/// (e.g. headless CI). In that case `inner` stays `None` and every
-/// `write` call becomes a no-op (logged at debug level once at init,
-/// then silently dropped). Copy-mode UI keeps working — the user can
-/// still see the selection — but `y` does not modify the host
-/// clipboard.
+/// (e.g. headless CI). In that case the inner `Option` stays `None`
+/// and every `write` call becomes a no-op (logged at debug level once
+/// at init, then silently dropped). Copy-mode UI keeps working — the
+/// user can still see the selection — but `y` does not modify the
+/// host clipboard.
 #[derive(Resource)]
-pub struct Clipboard {
-    inner: Option<arboard::Clipboard>,
-}
+pub struct Clipboard(Option<arboard::Clipboard>);
 
 impl Default for Clipboard {
     fn default() -> Self {
@@ -27,14 +25,14 @@ impl Default for Clipboard {
 impl Clipboard {
     pub fn new() -> Self {
         match arboard::Clipboard::new() {
-            Ok(cb) => Self { inner: Some(cb) },
+            Ok(cb) => Self(Some(cb)),
             Err(e) => {
                 tracing::warn!(
                     target: "ozmux_gui::clipboard",
                     error = ?e,
                     "arboard init failed; clipboard writes will no-op",
                 );
-                Self { inner: None }
+                Self(None)
             }
         }
     }
@@ -43,7 +41,7 @@ impl Clipboard {
     /// unavailable. Failures are logged at warn but never propagated —
     /// copy mode must not panic on a clipboard failure.
     pub fn write(&mut self, text: String) {
-        let Some(cb) = self.inner.as_mut() else {
+        let Some(cb) = self.0.as_mut() else {
             tracing::debug!(
                 target: "ozmux_gui::clipboard",
                 "clipboard write skipped: arboard unavailable",
@@ -72,7 +70,7 @@ impl Clipboard {
     /// caller's `text.is_empty()` check at the dispatcher swallows it
     /// without reaching the PTY.
     pub fn read(&mut self) -> Option<String> {
-        let Some(cb) = self.inner.as_mut() else {
+        let Some(cb) = self.0.as_mut() else {
             tracing::debug!(
                 target: "ozmux_gui::clipboard",
                 "clipboard read skipped: arboard unavailable",
@@ -101,7 +99,7 @@ impl Clipboard {
 
     #[cfg(test)]
     pub(crate) fn is_available_for_test(&self) -> bool {
-        self.inner.is_some()
+        self.0.is_some()
     }
 }
 
@@ -169,10 +167,10 @@ mod tests {
     #[test]
     fn read_returns_none_when_inner_is_unavailable() {
         // Force the unavailable-backend branch by constructing the
-        // resource with `inner: None` directly. This mirrors what
+        // resource with `Clipboard(None)` directly. This mirrors what
         // `Clipboard::new` would do on a headless host where
         // `arboard::Clipboard::new()` fails.
-        let mut cb = Clipboard { inner: None };
+        let mut cb = Clipboard(None);
         assert!(cb.read().is_none(), "headless backend must yield None");
     }
 
