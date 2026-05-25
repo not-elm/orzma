@@ -95,6 +95,18 @@ pub(crate) fn dispatch_focused_key(
         if !win.focused {
             continue;
         }
+        if matches!(ev.logical_key, Key::Escape)
+            && let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
+            && let Some(window) = mux.windows.get(&wid)
+            && let Ok(pane) = window.pane(&pid)
+            && let Some(entity) = registry.get(&pane.active_activity)
+            && copy_mode_q.get(entity).is_err()
+            && let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(entity)
+            && !handle.is_at_bottom()
+        {
+            handle.scroll_to_bottom(&mut coalescer);
+            continue;
+        }
         // NOTE: this gate MUST run before handle_chord and the terminal-forward
         // path. Moving it lower would let the prefix arm during copy mode, breaking
         // the bypass invariant.
