@@ -330,6 +330,7 @@ fn execute_action(
             let mux_ref = mux.bypass_change_detection();
             let mutated = crate::multiplexer::commands::apply(action, mux_ref, session_id);
             if mutated {
+                mux.bump_epoch(&session_id);
                 mux.set_changed();
             }
         }
@@ -396,6 +397,9 @@ fn dispatch_focus_session(
 
     commands.entity(current_entity).remove::<AttachedSession>();
     commands.entity(target_entity).insert(AttachedSession);
+    // NOTE: focus-session moves the AttachedSession marker only; no per-session
+    // domain state changes, so we do not bump any session epoch. The rebuild
+    // system intentionally ignores this signal; sync_active_session picks it up.
     mux.set_changed();
 }
 
@@ -426,6 +430,7 @@ fn dispatch_new_session(
         AttachedSession,
         Name::new(bevy_name),
     ));
+    mux.bump_epoch(&sid);
     mux.set_changed();
 }
 
