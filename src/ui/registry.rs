@@ -30,7 +30,7 @@ impl ActivityEntityRegistry {
         if let Some(&existing) = self.entities.get(id) {
             return existing;
         }
-        let mut spawn = commands.spawn(crate::ui::ActivityHostNode(id.clone()));
+        let mut spawn = commands.spawn(crate::ui::ActivityHostNode);
         if matches!(kind, ActivityKind::Terminal) {
             spawn.insert(crate::ui::TerminalActivityMarker);
         }
@@ -66,6 +66,15 @@ impl ActivityEntityRegistry {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entities.len()
+    }
+
+    /// Iterates `(&ActivityId, Entity)` over every registered host.
+    /// Test-only: lets tests snapshot the live host set without querying
+    /// the world (which would require a now-fieldless `ActivityHostNode`
+    /// to carry the id).
+    #[cfg(test)]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&ActivityId, Entity)> {
+        self.entities.iter().map(|(id, &entity)| (id, entity))
     }
 
     /// Inserts a pre-existing Entity for `id` without going through

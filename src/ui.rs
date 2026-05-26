@@ -13,7 +13,6 @@
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::prelude::*;
-use ozmux_multiplexer::ActivityId;
 
 pub(crate) mod activity;
 pub(crate) mod copy_mode;
@@ -48,11 +47,12 @@ pub(crate) struct SessionUiRoot;
 #[derive(Component)]
 pub(crate) struct StructuralNode;
 
-/// Marker for the stable per-activity host entity. Carries the
-/// ActivityId for registry reverse lookup. Survives structural
-/// rebuilds; re-parented via `ChildOf` each rebuild.
+/// Marker for the stable per-activity host entity. Survives structural
+/// rebuilds; re-parented via `ChildOf` each rebuild. The `ActivityId →
+/// Entity` mapping is owned by `ActivityEntityRegistry`; this marker
+/// exists only so queries can filter for activity hosts.
 #[derive(Component)]
-pub(crate) struct ActivityHostNode(pub(crate) ActivityId);
+pub(crate) struct ActivityHostNode;
 
 /// Marks an Activity Host whose `kind` is `Terminal`. `finish_terminal_setup`
 /// queries for `With<TerminalActivityMarker>` to find hosts that need a
@@ -106,6 +106,7 @@ mod tests {
     use bevy::window::{PrimaryWindow, WindowResolution};
     use bevy_terminal_renderer::material::TerminalUiMaterial;
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
+    use ozmux_multiplexer::ActivityId;
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::configs::env_guard();
@@ -195,15 +196,10 @@ mod tests {
         app.update();
 
         let first_snapshot: Vec<(ActivityId, Entity)> = {
-            let world = app.world_mut();
-            let mut q = world.query::<(Entity, &ActivityHostNode)>();
-            let hosts: Vec<(Entity, ActivityId)> =
-                q.iter(world).map(|(e, h)| (e, h.0.clone())).collect();
             let registry = app.world().resource::<ActivityEntityRegistry>();
-            hosts
-                .into_iter()
-                .filter(|(_, id)| registry.get(id).is_some())
-                .map(|(e, id)| (id, e))
+            registry
+                .iter()
+                .map(|(id, entity)| (id.clone(), entity))
                 .collect()
         };
         assert!(
@@ -352,11 +348,8 @@ mod tests {
 
         let entity_before = {
             let world = app.world_mut();
-            let mut q = world.query::<(Entity, &ActivityHostNode)>();
-            q.iter(world)
-                .next()
-                .map(|(e, _)| e)
-                .expect("at least one host")
+            let mut q = world.query_filtered::<Entity, With<ActivityHostNode>>();
+            q.iter(world).next().expect("at least one host")
         };
 
         {

@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn inactive_host_parent_is_walker_skipped_session_entity() {
         use crate::multiplexer::SessionEntityId;
-        use crate::ui::ActivityHostNode;
+        use crate::ui::registry::ActivityEntityRegistry;
         use ozmux_multiplexer::{Activity, ActivityId};
 
         let (mut app, _guard) = make_ui_test_app();
@@ -530,19 +530,14 @@ mod tests {
         }
         app.update();
 
-        // Find the bootstrap host Entity via a query over ActivityHostNode.
-        let bootstrap_host = {
-            let world = app.world_mut();
-            let mut q = world.query::<(Entity, &ActivityHostNode)>();
-            let mut found: Option<Entity> = None;
-            for (entity, host_node) in q.iter(world) {
-                if host_node.0 == bootstrap_id {
-                    found = Some(entity);
-                    break;
-                }
-            }
-            found.expect("bootstrap host present")
-        };
+        // Look up the bootstrap host Entity via the registry (which owns
+        // the `ActivityId → Entity` mapping); the `ActivityHostNode`
+        // marker no longer carries the id.
+        let bootstrap_host = app
+            .world()
+            .resource::<ActivityEntityRegistry>()
+            .get(&bootstrap_id)
+            .expect("bootstrap host present");
 
         // The bootstrap host's parent must be the owning Session entity
         // (carries `SessionEntityId`, no `Node`). The chip is the host's
