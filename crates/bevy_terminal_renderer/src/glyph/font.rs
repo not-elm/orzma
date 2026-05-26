@@ -168,9 +168,8 @@ impl TerminalFonts {
         let asc = i32::from(face.ascender());
         let desc = i32::from(face.descender());
         let upem = f32::from(face.units_per_em());
-        let em_scale = (asc - desc) as f32 / upem;
+        let px_scale_value = self.px_scale_value(phys_size_px);
         let phys_size_px_f = f32::from(phys_size_px);
-        let px_scale_value = phys_size_px_f * em_scale;
 
         let scaled = self
             .regular
@@ -216,6 +215,26 @@ impl TerminalFonts {
             underline_thickness_phys,
             max_overflow_phys,
         }
+    }
+
+    /// Returns the actual `PxScale` value fed to `ab_glyph` for the given
+    /// CSS-pixel font size. Multiplies by `em_scale = (ascender − descender)
+    /// / units_per_em` (derived from the Regular face's hhea/head tables)
+    /// so the input size is interpreted as the em-square in physical pixels
+    /// (CSS / Terminal.app convention), not as `ab_glyph::PxScale`'s
+    /// native "ascent + |descent|" interpretation.
+    ///
+    /// Used by both `cell_metrics_px` (for advance / ascent / descent
+    /// derivation) and `glyph/atlas.rs` (for glyph rasterization), so both
+    /// agree on the actual rendering scale.
+    pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
+        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
+            .expect("JetBrainsMono-Regular ttf-parser parse");
+        let asc = i32::from(face.ascender());
+        let desc = i32::from(face.descender());
+        let upem = f32::from(face.units_per_em());
+        let em_scale = (asc - desc) as f32 / upem;
+        f32::from(phys_size_px) * em_scale
     }
 }
 
@@ -354,6 +373,29 @@ mod tests {
         let m24 = fonts.cell_metrics_px(24);
         assert!((m24.advance_phys - m12.advance_phys * 2.0).abs() < 0.5);
         assert!((m24.line_height_phys - m12.line_height_phys * 2.0).abs() < 0.5);
+    }
+
+    /// `cell_metrics_px` and `glyph/atlas.rs` must rasterize at the SAME
+    /// PxScale, otherwise atlas glyphs are physically smaller (or larger)
+    /// than the cell pitch and either leave blank gutters on the right
+    /// (atlas < cell) or overflow without coverage (atlas > cell).
+    /// This test guards against accidental divergence.
+    #[test]
+    fn px_scale_value_matches_cell_metrics_internal_use() {
+        let fonts = TerminalFonts::default();
+        let phys = 12u16;
+        let helper_value = fonts.px_scale_value(phys);
+        let metrics = fonts.cell_metrics_px(phys);
+        let scaled = fonts
+            .regular
+            .as_scaled(ab_glyph::PxScale::from(helper_value));
+        let expected_advance = scaled.h_advance(scaled.glyph_id('0'));
+        assert!(
+            (metrics.advance_phys - expected_advance).abs() < 0.001,
+            "cell_metrics advance = {} disagrees with px_scale_value-derived advance = {}",
+            metrics.advance_phys,
+            expected_advance,
+        );
     }
 
     /// `init_cell_metrics_from_primary_window` reads the PrimaryWindow's
