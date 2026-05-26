@@ -33,9 +33,26 @@ pub struct MultiplexerService {
     pub sessions: HashMap<SessionId, Session>,
     pub pane_owner_session: HashMap<PaneId, SessionId>,
     next_session_id: u32,
+    session_epochs: HashMap<SessionId, u64>,
 }
 
 impl MultiplexerService {
+    /// Read the current per-session change epoch. Returns 0 for sessions
+    /// that have never been bumped (or no longer exist) — callers cache
+    /// the last-seen epoch and only act when the current epoch is strictly
+    /// greater.
+    pub fn epoch_of(&self, sid: &SessionId) -> u64 {
+        self.session_epochs.get(sid).copied().unwrap_or(0)
+    }
+
+    /// Increment the per-session epoch for `sid`. Mutators that change a
+    /// session's domain state MUST call this so the per-session rebuild
+    /// scope can detect the change.
+    pub fn bump_epoch(&mut self, sid: &SessionId) {
+        let entry = self.session_epochs.entry(*sid).or_insert(0);
+        *entry = entry.checked_add(1).expect("session epoch u64 overflow");
+    }
+
     /// Borrow the Session for `id` and run `f` against it.
     pub fn with_session<R>(
         &mut self,
@@ -314,5 +331,29 @@ mod tests {
             .resize_pane(&sid, &pid, PaneDirection::Right, 1)
             .unwrap();
         assert!(matches!(outcome, ResizePaneOutcome::NoOp));
+    }
+
+    #[test]
+    fn bump_epoch_increments_per_session_independently() {
+        let mut mux = MultiplexerService::default();
+        let (sid_a, _, _) = mux.create_session(Some("a".into()));
+        let (sid_b, _, _) = mux.create_session(Some("b".into()));
+
+        assert_eq!(mux.epoch_of(&sid_a), 0);
+        assert_eq!(mux.epoch_of(&sid_b), 0);
+
+        mux.bump_epoch(&sid_a);
+        mux.bump_epoch(&sid_a);
+        mux.bump_epoch(&sid_b);
+
+        assert_eq!(mux.epoch_of(&sid_a), 2, "A's epoch must reflect both bumps");
+        assert_eq!(mux.epoch_of(&sid_b), 1, "B's epoch must be independent of A");
+    }
+
+    #[test]
+    fn epoch_of_returns_zero_for_unknown_session() {
+        let mux = MultiplexerService::default();
+        let phantom = SessionId(9999);
+        assert_eq!(mux.epoch_of(&phantom), 0, "unknown sessions read as epoch 0 (sentinel)");
     }
 }
