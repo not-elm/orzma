@@ -52,6 +52,7 @@ pub(crate) fn setup_root_camera_and_ui_root(
         Node {
             flex_grow: 1.0,
             width: bevy::ui::Val::Percent(100.0),
+            height: bevy::ui::Val::Percent(100.0),
             ..default()
         },
         crate::ui::SessionUiRoot,

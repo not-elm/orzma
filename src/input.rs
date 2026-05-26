@@ -425,7 +425,13 @@ fn dispatch_new_session(
         .get(&sid)
         .map(|s| s.name.clone())
         .unwrap_or_else(|| format!("Session#{}", sid.0));
-    let subtree_root = commands.spawn(Node::default()).id();
+    let subtree_root = commands
+        .spawn(Node {
+            width: bevy::ui::Val::Percent(100.0),
+            height: bevy::ui::Val::Percent(100.0),
+            ..default()
+        })
+        .id();
     let new_session_entity = commands
         .spawn((
             SessionEntityId(sid),

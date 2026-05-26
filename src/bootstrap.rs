@@ -26,7 +26,13 @@ pub(crate) fn bootstrap(mut commands: Commands, mut mux: ResMut<Multiplexer>) {
     // The subtree root starts empty; rebuild_session_ui_on_data_change fills
     // it once the session's epoch advances. The bump_epoch() below ensures
     // that the first rebuild fires for the bootstrap session.
-    let subtree_root = commands.spawn(Node::default()).id();
+    let subtree_root = commands
+        .spawn(Node {
+            width: bevy::ui::Val::Percent(100.0),
+            height: bevy::ui::Val::Percent(100.0),
+            ..default()
+        })
+        .id();
     let session_entity = commands
         .spawn((
             SessionEntityId(sid),

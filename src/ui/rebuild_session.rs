@@ -37,8 +37,6 @@ pub(crate) fn rebuild_session_ui_on_data_change(
 
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
 
-    // Collect every Activity that exists in the multiplexer domain across
-    // ALL sessions — pruning live set.
     let live_activity_ids: HashSet<ActivityId> = mux
         .sessions
         .values()
@@ -370,6 +368,41 @@ mod tests {
         assert_eq!(
             children_before, children_after,
             "Session B's subtree children must not change when only Session A's epoch bumped",
+        );
+    }
+
+    #[test]
+    fn session_subtree_root_has_explicit_sizing() {
+        // Regression guard: the SessionUiSubtree root must carry explicit
+        // `width: Percent(100), height: Percent(100)`. Without this,
+        // `Node::default()` (`width: Auto, height: Auto, flex_grow: 0.0`)
+        // makes the subtree collapse to zero size when attached to
+        // SessionUiRoot, so taffy lays out every descendant (pane frames,
+        // activity slots, terminal hosts) as zero-sized and
+        // `resize_terminals_to_node` clamps the PTY grid to 1x1.
+        let (mut app, _guard) = make_test_app_v2();
+        app.update();
+        app.update();
+
+        let active_subtree = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<&SessionUiSubtree, With<AttachedSession>>();
+            q.single(world).expect("one attached subtree").0
+        };
+
+        let node = app
+            .world()
+            .get::<bevy::ui::Node>(active_subtree)
+            .expect("SessionUiSubtree root must have a Node component");
+        assert_eq!(
+            node.width,
+            bevy::ui::Val::Percent(100.0),
+            "subtree root must set width: Percent(100) so it fills SessionUiRoot",
+        );
+        assert_eq!(
+            node.height,
+            bevy::ui::Val::Percent(100.0),
+            "subtree root must set height: Percent(100) so it fills SessionUiRoot",
         );
     }
 }
