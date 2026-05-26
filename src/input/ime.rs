@@ -1,18 +1,24 @@
 //! IME composition state for the terminal overlay.
 //!
 //! Provides `Composition` (a validated preedit snapshot), `ImeState`
-//! (the active-composition resource), and `read_ime_events` (the Bevy
+//! (the active-composition resource), `read_ime_events` (the Bevy
 //! system that drains `Ime` events and forwards `Ime::Commit` text to
-//! the attached terminal). The `ime_policy_system` that toggles
-//! `Window::ime_enabled` is added in a later task.
+//! the attached terminal), and `ime_policy_system` (toggles
+//! `Window::ime_enabled` and `.ime_position`).
 
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
-use bevy::window::Ime;
+use bevy::math::Vec2;
+use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_terminal::{TerminalKey, TerminalModifiers};
+use bevy_terminal_renderer::TerminalCellMetricsResource;
+use bevy_terminal_renderer::prelude::TerminalGrid;
 use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::ui::TerminalActivityMarker;
+use crate::ui::copy_mode::CopyModeState;
 use crate::ui::registry::ActivityEntityRegistry;
 
 /// Validated snapshot of a preedit string and its UTF-8-safe caret
@@ -103,6 +109,72 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
             state.0 = None;
             Some(value.clone())
         }
+    }
+}
+
+/// Derives whether IME should be on this tick and writes
+/// `PrimaryWindow.ime_enabled` and `.ime_position`.
+///
+/// `ime_enabled` is `true` iff (a) the attached activity carries
+/// `TerminalActivityMarker`, and (b) it does NOT have `CopyModeState`.
+///
+/// `ime_position` is the logical-pixel anchor for the OS candidate
+/// window — computed from the attached terminal's `UiGlobalTransform`
+/// translation + `TerminalGrid.cursor` × cell pitch, then divided by
+/// the window scale factor.
+pub(crate) fn ime_policy_system(
+    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
+    mux: Res<Multiplexer>,
+    registry: Res<ActivityEntityRegistry>,
+    terminal_q: Query<(), With<TerminalActivityMarker>>,
+    copy_mode_q: Query<(), With<CopyModeState>>,
+    anchor_q: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    metrics: Res<TerminalCellMetricsResource>,
+    mut window_q: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    let Ok(mut window) = window_q.single_mut() else {
+        return;
+    };
+
+    let Some(entity) = super::resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
+        if window.ime_enabled {
+            window.ime_enabled = false;
+        }
+        return;
+    };
+
+    let is_terminal = terminal_q.get(entity).is_ok();
+    let in_copy_mode = copy_mode_q.get(entity).is_ok();
+    let desired = is_terminal && !in_copy_mode;
+
+    if window.ime_enabled != desired {
+        window.ime_enabled = desired;
+    }
+
+    if !desired {
+        return;
+    }
+
+    // NOTE: Anchor `ime_position` at the cursor cell origin (no
+    // row-below offset — that offset is only used for the inline
+    // overlay; the OS candidate window has its own placement logic
+    // relative to this point).
+    let Ok((_node, ui_xform, grid)) = anchor_q.get(entity) else {
+        return;
+    };
+    let scale = window.resolution.scale_factor();
+    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cursor_cell = grid.cursor.as_ref().cloned().unwrap_or_default();
+    let host_origin_phys = ui_xform.translation * scale;
+    let cell_origin_phys = host_origin_phys
+        + Vec2::new(
+            cursor_cell.x as f32 * cell_w_phys,
+            cursor_cell.y as f32 * cell_h_phys,
+        );
+    let pos_logical = cell_origin_phys / scale;
+    if window.ime_position != pos_logical {
+        window.ime_position = pos_logical;
     }
 }
 
