@@ -140,7 +140,7 @@ mod tests {
     use super::*;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
-    use crate::multiplexer::{OzmuxMultiplexerPlugin, SessionUiSubtree};
+    use crate::multiplexer::OzmuxMultiplexerPlugin;
     use crate::ui::OzmuxUiPlugin;
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
@@ -226,13 +226,14 @@ mod tests {
             let mut mux = world.resource_mut::<Multiplexer>();
             let sid = *mux.sessions.keys().next().expect("session");
             let active_pane = mux.sessions.get(&sid).expect("session").active_pane.clone();
-            mux.with_session(&sid, |s| {
-                s.pane_mut(&active_pane)
-                    .expect("pane_mut")
-                    .set_active_activity(&second_aid)
-            })
-            .expect("with_session")
-            .expect("set_active_activity");
+            let _outcome = mux
+                .with_session(&sid, |s| {
+                    s.pane_mut(&active_pane)
+                        .expect("pane_mut")
+                        .set_active_activity(&second_aid)
+                })
+                .expect("with_session")
+                .expect("set_active_activity");
             mux.bump_epoch(&sid);
         }
         app.update();
