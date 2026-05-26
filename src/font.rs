@@ -68,6 +68,23 @@ fn load_face_bytes(path: Option<&Path>, bundled: &'static [u8], face: FontFace) 
     }
 }
 
+/// Validates one face's bytes by attempting to parse them as a font.
+/// Returns the original bytes on success; on failure (parse error), warns
+/// and returns the bundled bytes for that face.
+fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -> Vec<u8> {
+    match ab_glyph::FontArc::try_from_vec(bytes.clone()) {
+        Ok(_) => bytes,
+        Err(err) => {
+            tracing::warn!(
+                ?face,
+                %err,
+                "font face failed to parse; substituting bundled bytes for THAT face only"
+            );
+            bundled.to_vec()
+        }
+    }
+}
+
 fn bridge_font_config(
     mut commands: Commands,
     configs: Res<OzmuxConfigsResource>,
@@ -96,31 +113,29 @@ fn bridge_font_config(
         FontFace::BoldItalic,
     );
 
+    // Per-face parse validation: if user-supplied bytes don't parse, fall
+    // back to bundled bytes for THAT face only. Partial override is a
+    // feature — a corrupt bold override must not also drop a working
+    // regular override.
+    let regular_bytes = validate_or_bundled(regular_bytes, BUNDLED_REGULAR, FontFace::Regular);
+    let bold_bytes = validate_or_bundled(bold_bytes, BUNDLED_BOLD, FontFace::Bold);
+    let italic_bytes = validate_or_bundled(italic_bytes, BUNDLED_ITALIC, FontFace::Italic);
+    let bold_italic_bytes = validate_or_bundled(
+        bold_italic_bytes,
+        BUNDLED_BOLD_ITALIC,
+        FontFace::BoldItalic,
+    );
+
     // Keep a copy of regular bytes for the UI font before moving into TerminalFonts.
     let ui_regular_bytes = regular_bytes.clone();
 
-    // Try to build TerminalFonts; on parse failure for any face, fall
-    // back to bundled-only and warn. (Simpler than reconstructing which
-    // specific face failed.)
-    let new_fonts = match TerminalFonts::from_bytes(
+    let new_fonts = TerminalFonts::from_bytes(
         regular_bytes,
         bold_bytes,
         italic_bytes,
         bold_italic_bytes,
-    ) {
-        Ok(f) => f,
-        Err(err) => {
-            tracing::warn!(%err, "TerminalFonts::from_bytes rejected an override face; \
-                              substituting bundled bytes for all faces");
-            TerminalFonts::from_bytes(
-                BUNDLED_REGULAR.to_vec(),
-                BUNDLED_BOLD.to_vec(),
-                BUNDLED_ITALIC.to_vec(),
-                BUNDLED_BOLD_ITALIC.to_vec(),
-            )
-            .expect("bundled TTFs must parse")
-        }
-    };
+    )
+    .expect("validated bytes must parse");
     *terminal_fonts = new_fonts;
 
     // Insert TerminalUiFont. Use the regular face bytes (already cloned above)
@@ -349,6 +364,74 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&normal_path);
+        let _ = std::fs::remove_file(&toml);
+        // SAFETY: serialized by env_guard().
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
+    }
+
+    #[test]
+    fn corrupt_bold_path_falls_back_per_face_without_dropping_normal_override() {
+        // Write a corrupt "bold" TTF (just random bytes that won't parse)
+        // and a valid "normal" TTF (bundled Iosevka regular). Verify
+        // bridge_font_config keeps the normal override AND replaces only
+        // the corrupt bold with bundled bold.
+        let tmp_dir = std::env::temp_dir().join("ozmux_font_bridge_test_corrupt_bold");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let normal_path = tmp_dir.join("regular.ttf");
+        std::fs::write(&normal_path, BUNDLED_REGULAR).expect("write regular");
+        let bold_path = tmp_dir.join("bold.ttf");
+        std::fs::write(&bold_path, b"this is not a valid TTF").expect("write corrupt bold");
+        let toml = tmp_dir.join("config.toml");
+        std::fs::write(
+            &toml,
+            format!(
+                "[font.normal]\npath = \"{}\"\n[font.bold]\npath = \"{}\"\n",
+                normal_path.to_string_lossy(),
+                bold_path.to_string_lossy(),
+            ),
+        )
+        .expect("write toml");
+
+        let _guard = crate::configs::env_guard();
+        // SAFETY: serialized by env_guard().
+        unsafe {
+            std::env::set_var("OZMUX_CONFIG", &toml);
+        }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .init_asset::<Font>();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.add_plugins(TerminalFontPlugin);
+        app.add_plugins(OzmuxConfigsPlugin);
+        app.add_plugins(FontBridgePlugin);
+        app.update();
+
+        let fonts = app.world().resource::<TerminalFonts>();
+        // Regular must remain the user-supplied (= bundled-regular bytes
+        // here, but reached via the override path).
+        assert_eq!(
+            fonts.regular.font_data(),
+            BUNDLED_REGULAR,
+            "normal override must survive a corrupt bold override"
+        );
+        // Bold must fall back to bundled because the user-supplied bold
+        // is corrupt.
+        assert_eq!(
+            fonts.bold.font_data(),
+            BUNDLED_BOLD,
+            "corrupt bold override must fall back to bundled bold"
+        );
+
+        let _ = std::fs::remove_file(&normal_path);
+        let _ = std::fs::remove_file(&bold_path);
         let _ = std::fs::remove_file(&toml);
         // SAFETY: serialized by env_guard().
         unsafe {
