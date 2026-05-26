@@ -3,11 +3,12 @@
 //! `palette::ACCENT` background.
 
 use crate::theme;
+use crate::theme::UI_FONT_SIZE;
 use crate::ui::StructuralNode;
 use crate::ui::palette;
 use bevy::color::Color;
 use bevy::prelude::*;
-use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
+use bevy::ui::{AlignItems, AlignSelf, FlexDirection, UiRect, Val};
 use ozmux_multiplexer::{Session, Window, WindowId};
 use std::collections::HashMap;
 
@@ -25,7 +26,7 @@ pub(crate) fn build_status_bar(
                 flex_direction: FlexDirection::Row,
                 width: Val::Percent(100.0),
                 align_items: AlignItems::Center,
-                padding: UiRect::axes(Val::Px(theme::ELEMENT_PADDING_PX), Val::Px(0.0)),
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(0.0)),
                 ..default()
             },
             BackgroundColor(palette::PANEL),
@@ -35,8 +36,32 @@ pub(crate) fn build_status_bar(
         .id();
 
     commands.spawn((
-        Text::new(session.name.clone()),
+        Text::new(&session.name),
         TextColor(palette::FOREGROUND),
+        TextFont {
+            font_size: UI_FONT_SIZE,
+            ..default()
+        },
+        StructuralNode,
+        ChildOf(bar),
+    ));
+
+    commands.spawn((
+        Node {
+            width: Val::Px(theme::ELEMENT_PADDING_PX),
+            ..default()
+        },
+        StructuralNode,
+        ChildOf(bar),
+    ));
+
+    commands.spawn((
+        Node {
+            width: Val::Px(theme::BORDER_PX),
+            align_self: AlignSelf::Stretch,
+            ..default()
+        },
+        BackgroundColor(palette::BORDER),
         StructuralNode,
         ChildOf(bar),
     ));
@@ -55,29 +80,21 @@ pub(crate) fn build_status_bar(
             .get(wid)
             .map(|w| w.name.clone())
             .unwrap_or_else(|| wid.to_string());
-        let bg = if wid == active_wid {
-            palette::ACCENT
+        let font_color = if wid == active_wid {
+            palette::COPY_MODE_INDICATOR_BG
         } else {
-            Color::NONE
+            palette::FOREGROUND
         };
-
-        let chip = commands
-            .spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(theme::ELEMENT_PADDING_PX), Val::Px(0.0)),
-                    ..default()
-                },
-                BackgroundColor(bg),
-                StructuralNode,
-                ChildOf(bar),
-            ))
-            .id();
 
         commands.spawn((
             Text::new(label),
-            TextColor(palette::FOREGROUND),
+            TextColor(font_color),
+            TextFont {
+                font_size: UI_FONT_SIZE,
+                ..default()
+            },
             StructuralNode,
-            ChildOf(chip),
+            ChildOf(bar),
         ));
     }
 }
