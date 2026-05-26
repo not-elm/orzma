@@ -3,18 +3,67 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ttf_parser::Face as TtfFace;
 
+/// Error returned by `TerminalFonts::from_bytes` when one of the supplied
+/// per-face byte buffers fails `ab_glyph::FontArc::try_from_vec`.
+#[derive(Debug)]
+pub enum FontLoadError {
+    /// `FontArc::try_from_vec` rejected the bytes for this face.
+    ParseFailed {
+        /// Which face's bytes were invalid.
+        face: FontFace,
+        /// Underlying ab_glyph error.
+        source: ab_glyph::InvalidFont,
+    },
+}
+
+impl std::fmt::Display for FontLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ParseFailed { face, source } => {
+                write!(f, "ab_glyph rejected {:?} face: {}", face, source)
+            }
+        }
+    }
+}
+
+impl std::error::Error for FontLoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ParseFailed { source, .. } => Some(source),
+        }
+    }
+}
+
 /// Font size in CSS pixels; multiplied by the PrimaryWindow's
 /// `scale_factor` to obtain the physical pixel size fed to
 /// `cell_metrics_px`.
 pub(crate) const FONT_SIZE_PX: f32 = 12.0;
+
+/// Public `SystemSet` label used to order systems against the renderer's
+/// cell-metrics initialization. App-level plugins that need to mutate
+/// `TerminalFonts` before metrics are computed should run their Startup
+/// systems `.before(TerminalFontInitSet::InitCellMetrics)`.
+#[derive(SystemSet, Debug, Clone, Eq, PartialEq, Hash)]
+pub enum TerminalFontInitSet {
+    /// `init_cell_metrics_from_primary_window` lives in this set. With
+    /// `bridge_font_config` (or any other override) running `.before` it,
+    /// the metrics are computed from the final `TerminalFonts`.
+    InitCellMetrics,
+}
 
 #[derive(Default)]
 pub struct TerminalFontPlugin;
 
 impl Plugin for TerminalFontPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(TerminalFonts::default());
-        app.add_systems(Startup, init_cell_metrics_from_primary_window);
+        if !app.world().contains_resource::<TerminalFonts>() {
+            app.insert_resource(TerminalFonts::default());
+        }
+        app.add_systems(
+            Startup,
+            init_cell_metrics_from_primary_window
+                .in_set(TerminalFontInitSet::InitCellMetrics),
+        );
     }
 }
 
@@ -140,6 +189,49 @@ fn max_ascii_overflow_for_face(face: &FontArc, px_scale: f32, cell_w_phys_floor:
 }
 
 impl TerminalFonts {
+    /// Constructs a `TerminalFonts` from four owned TTF byte buffers, one
+    /// per face. `Vec<u8>` is required by `ab_glyph::FontArc::try_from_vec`;
+    /// callers responsible for runtime font loading (e.g., the Bevy
+    /// font-bridge plugin) read bytes from disk, build `Vec<u8>`, and call
+    /// this. On per-face parse failure, returns `FontLoadError::ParseFailed`
+    /// naming the offending face — callers may then substitute bundled
+    /// bytes for that face and retry.
+    pub fn from_bytes(
+        regular: Vec<u8>,
+        bold: Vec<u8>,
+        italic: Vec<u8>,
+        bold_italic: Vec<u8>,
+    ) -> Result<Self, FontLoadError> {
+        let regular = FontArc::try_from_vec(regular).map_err(|source| {
+            FontLoadError::ParseFailed {
+                face: FontFace::Regular,
+                source,
+            }
+        })?;
+        let bold =
+            FontArc::try_from_vec(bold).map_err(|source| FontLoadError::ParseFailed {
+                face: FontFace::Bold,
+                source,
+            })?;
+        let italic =
+            FontArc::try_from_vec(italic).map_err(|source| FontLoadError::ParseFailed {
+                face: FontFace::Italic,
+                source,
+            })?;
+        let bold_italic = FontArc::try_from_vec(bold_italic).map_err(|source| {
+            FontLoadError::ParseFailed {
+                face: FontFace::BoldItalic,
+                source,
+            }
+        })?;
+        Ok(Self {
+            regular,
+            bold,
+            italic,
+            bold_italic,
+        })
+    }
+
     pub fn choice(&self, face: &FontFace) -> &FontArc {
         match face {
             FontFace::Regular => &self.regular,
@@ -406,6 +498,54 @@ mod tests {
             "cell_metrics advance = {} disagrees with px_scale_value-derived advance = {}",
             metrics.advance_phys,
             expected_advance,
+        );
+    }
+
+    /// `TerminalFontPlugin::build` must not overwrite an already-present
+    /// `TerminalFonts` resource. Apps pre-insert a custom `TerminalFonts`
+    /// (e.g., from a runtime config-driven font override) BEFORE adding
+    /// `TerminalFontPlugin`; if the plugin overwrote it, the override
+    /// would be lost.
+    #[test]
+    fn terminal_font_plugin_preserves_pre_inserted_terminal_fonts() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+
+        // Build a non-default TerminalFonts via from_bytes — same TTF for
+        // all four faces (legal for a smoke test; the labels are advisory).
+        let bytes: Vec<u8> = include_bytes!(
+            "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Regular.ttf"
+        )
+        .to_vec();
+        let custom = TerminalFonts::from_bytes(
+            bytes.clone(),
+            bytes.clone(),
+            bytes.clone(),
+            bytes,
+        )
+        .expect("from_bytes accepts Iosevka regular for all four slots");
+
+        // Use a sentinel: pre-insert THIS specific instance, then check
+        // that the bytes pointer hasn't changed after Plugin::build.
+        let pre_inserted_bytes_ptr = custom.regular.font_data().as_ptr();
+
+        let mut app = App::new();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+
+        app.insert_resource(custom);
+        app.add_plugins(TerminalFontPlugin);
+        app.update();
+
+        let fonts = app.world().resource::<TerminalFonts>();
+        assert_eq!(
+            fonts.regular.font_data().as_ptr(),
+            pre_inserted_bytes_ptr,
+            "TerminalFonts was overwritten by Plugin::build, but the resource was \
+             already present at add_plugins time — the pre-insert should have been preserved"
         );
     }
 
