@@ -78,6 +78,7 @@ impl Plugin for OzmuxUiPlugin {
             .add_systems(
                 Update,
                 rebuild_session::rebuild_session_ui_on_data_change
+                    .after(rebuild_structure_on_change)
                     .run_if(|| std::env::var("OZMUX_REBUILD_V2").is_ok()),
             )
             .add_systems(
@@ -267,6 +268,7 @@ mod tests {
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
         unsafe {
             std::env::remove_var("OZMUX_CONFIG");
+            std::env::remove_var("OZMUX_REBUILD_V2");
         }
 
         // NOTE: `finish_terminal_setup` takes `ResMut<Assets<TerminalUiMaterial>>`,
