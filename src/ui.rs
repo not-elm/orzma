@@ -21,6 +21,7 @@ pub(crate) mod palette;
 pub(crate) mod registry;
 pub(crate) mod root;
 pub(crate) mod status_bar;
+pub(crate) mod sync_session;
 pub(crate) mod tab_bar;
 pub(crate) mod terminal;
 
@@ -72,7 +73,11 @@ impl Plugin for OzmuxUiPlugin {
         app.init_resource::<ActivityEntityRegistry>()
             .add_plugins(OzmuxTerminalUiPlugin)
             .add_systems(Startup, root::setup_root_camera_and_ui_root)
-            .add_systems(Update, rebuild_structure_on_change);
+            .add_systems(Update, rebuild_structure_on_change)
+            .add_systems(
+                PostUpdate,
+                sync_session::sync_active_session.before(bevy::ui::UiSystems::Prepare),
+            );
     }
 }
 
