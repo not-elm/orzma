@@ -39,16 +39,7 @@ pub(crate) struct StructuralNode;
 /// ActivityId for registry reverse lookup. Survives structural
 /// rebuilds; re-parented via `ChildOf` each rebuild.
 #[derive(Component)]
-pub(crate) struct ActivityHostNode(
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "runtime reverse lookup planned for input dispatch; read by integration tests"
-        )
-    )]
-    pub(crate) ActivityId,
-);
+pub(crate) struct ActivityHostNode(pub(crate) ActivityId);
 
 /// Marks an Activity Host whose `kind` is `Terminal`. `finish_terminal_setup`
 /// queries for `With<TerminalActivityMarker>` to find hosts that need a
@@ -246,6 +237,23 @@ fn rebuild_structure_on_change(
                 window.root_cell,
                 err,
             );
+        }
+    }
+
+    // Activity hosts that belong to OTHER (inactive) windows in the session
+    // are not visited by `build_cell_recursive` (which only walks the active
+    // window's cells), so they remain orphans after the ChildOf-detach above.
+    // An orphan host renders its `MaterialNode`-required `Node` as a top-level
+    // UI root, covering the visible content and status bar. Park them in
+    // `hidden_stash` so their PTY/Term state stays alive but invisible.
+    let active_window_activity_ids: HashSet<ActivityId> = window
+        .pane_ids()
+        .filter_map(|pid| window.pane(pid).ok())
+        .flat_map(|p| p.activity_ids().cloned())
+        .collect();
+    for (host, host_node) in activity_hosts_q.iter() {
+        if !active_window_activity_ids.contains(&host_node.0) {
+            commands.entity(host).insert(ChildOf(hidden_stash));
         }
     }
 
@@ -545,6 +553,58 @@ mod tests {
         assert!(
             app.world().get_entity(entity_before).is_ok(),
             "host entity must still exist after rebuild — load-bearing for stable handles"
+        );
+    }
+
+    #[test]
+    fn focus_window_switch_does_not_orphan_inactive_window_hosts() {
+        use ozmux_multiplexer::CycleDirection;
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let (sid, bootstrap_aid) = {
+            let mux = app.world().resource::<Multiplexer>();
+            let (sid, session) = mux.sessions.iter().next().expect("session");
+            let wid = session.active_window.clone().expect("active window");
+            let window = mux.windows.get(&wid).expect("window");
+            let pane = window.pane(&window.active_pane).expect("pane");
+            (sid.clone(), pane.active_activity.clone())
+        };
+
+        let second_aid = {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let (_wid, _pid, aid) = mux
+                .create_window(Some(&sid), Some("second".into()))
+                .expect("create_window");
+            aid
+        };
+        app.update();
+
+        {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let outcome = mux
+                .cycle_active_window(&sid, CycleDirection::Next)
+                .expect("cycle_active_window");
+            assert!(
+                matches!(outcome, ozmux_multiplexer::SetActiveOutcome::Changed),
+                "active_window must advance for a 2-window session"
+            );
+        }
+        app.update();
+
+        let registry = app.world().resource::<ActivityEntityRegistry>();
+        let bootstrap_entity = registry
+            .get(&bootstrap_aid)
+            .expect("bootstrap activity host must remain in registry across window switch");
+        let _ = second_aid;
+
+        assert!(
+            app.world().get::<ChildOf>(bootstrap_entity).is_some(),
+            "inactive WINDOW's activity host must have a valid ChildOf — without it, MaterialNode's required Node becomes a top-level UI root that covers the screen (status bar disappears)"
         );
     }
 

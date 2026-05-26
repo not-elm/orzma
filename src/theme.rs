@@ -59,3 +59,5 @@ pub const COPY_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
 /// Horizontal padding inside the copy-mode indicator chip. Tighter than
 /// `ELEMENT_PADDING_PX` because the chip's text is also smaller.
 pub const COPY_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
+
+pub const UI_FONT_SIZE: f32 = 12.0;
