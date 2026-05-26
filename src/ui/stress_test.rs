@@ -19,9 +19,11 @@ use bevy::render::storage::ShaderStorageBuffer;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation};
+use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SessionId, SplitOrientation};
+use std::collections::HashSet;
+use std::sync::MutexGuard;
 
-fn make_app() -> (App, std::sync::MutexGuard<'static, ()>) {
+fn make_app() -> (App, MutexGuard<'static, ()>) {
     let guard = crate::configs::env_guard();
     // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
     unsafe {
@@ -65,9 +67,6 @@ fn taffy_handles_repeated_park_unpark_under_load() {
     app.update();
     app.update();
 
-    // Mint 4 additional sessions inside the multiplexer, each with one split
-    // pane and one extra activity, then spawn the corresponding Bevy
-    // entities (mirroring dispatch_new_session minus the AttachedSession move).
     {
         let world = app.world_mut();
         let mut mux = world.resource_mut::<Multiplexer>();
@@ -86,8 +85,6 @@ fn taffy_handles_repeated_park_unpark_under_load() {
             })
             .expect("with_session")
             .expect("split_pane");
-            // Add a second activity to the base pane so the session has both
-            // a split and an extra activity.
             let extra_aid = ActivityId::new();
             mux.with_session(&sid, |s| {
                 s.pane_mut(&base_pane)
@@ -100,12 +97,9 @@ fn taffy_handles_repeated_park_unpark_under_load() {
         }
     }
 
-    // Collect the SessionIds that need Bevy entities. The bootstrap session
-    // already has one, so skip it.
-    let sids_needing_entities: Vec<ozmux_multiplexer::SessionId> = {
+    let sids_needing_entities: Vec<SessionId> = {
         let world = app.world_mut();
-        let mut existing: std::collections::HashSet<ozmux_multiplexer::SessionId> =
-            std::collections::HashSet::new();
+        let mut existing: HashSet<SessionId> = HashSet::new();
         {
             let mut q = world.query::<&SessionEntityId>();
             for sid_comp in q.iter(world) {
@@ -170,9 +164,9 @@ fn taffy_handles_repeated_park_unpark_under_load() {
         current_attached = next;
     }
 
-    // If we reached this point without taffy panicking, the stress loop passes.
-    // Sanity check: every Session entity must still carry a SessionUiSubtree
-    // pointer to a live entity.
+    // NOTE: a despawned subtree under a still-live SessionUiSubtree pointer
+    // would crash the next rebuild with an invalid Entity insert; this loop
+    // catches that silent corruption mode.
     let world = app.world_mut();
     let mut q = world.query::<(&SessionEntityId, &SessionUiSubtree)>();
     for (_sid, sub) in q.iter(world) {
