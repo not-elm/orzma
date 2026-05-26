@@ -1,10 +1,10 @@
-//! Direction-resolution algorithm for `Window::pane_in_direction`. Owns the
+//! Direction-resolution algorithm for `Session::pane_in_direction`. Owns the
 //! `PaneDirection` enum and pure adjacency / overlap helpers. No I/O.
 
 use crate::error::{MultiplexerError, MultiplexerResult};
-use crate::window::cells::Rect;
-use crate::window::pane::PaneId;
-use crate::window::window::Window;
+use crate::session::cells::Rect;
+use crate::session::pane::PaneId;
+use crate::session::session::Session;
 use serde::{Deserialize, Serialize};
 
 /// Cardinal direction for pane-focus movement. Distinct from
@@ -13,13 +13,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PaneDirection {
-    /// Move focus toward the top of the window.
+    /// Move focus toward the top of the session.
     Up,
-    /// Move focus toward the bottom of the window.
+    /// Move focus toward the bottom of the session.
     Down,
-    /// Move focus toward the left of the window.
+    /// Move focus toward the left of the session.
     Left,
-    /// Move focus toward the right of the window.
+    /// Move focus toward the right of the session.
     Right,
 }
 
@@ -54,7 +54,7 @@ impl PaneDirection {
         }
     }
 
-    /// Window-side to fold the search edge to when the primary pass finds
+    /// Session-side to fold the search edge to when the primary pass finds
     /// nothing (wrap-around).
     fn wrap_edge(self) -> f32 {
         match self {
@@ -128,10 +128,10 @@ fn find_in_direction<F: Fn(&PaneId) -> u64>(
     pick_best(panes, from, me, direction, direction.wrap_edge(), &score)
 }
 
-impl Window {
+impl Session {
     /// Resolve the pane that should receive focus when moving `direction`
     /// from `from`. Returns `Ok(None)` when no candidate exists (single-pane
-    /// window or pathological layout); never picks `from` itself.
+    /// session or pathological layout); never picks `from` itself.
     pub fn pane_in_direction(
         &self,
         from: &PaneId,
@@ -151,11 +151,11 @@ impl Window {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::window::cells::{Side, SplitOrientation};
-    use crate::window::pane::PaneId;
-    use crate::window::pane::activity::{Activity, ActivityId};
-    use crate::window::window::Window;
-    use crate::window::window::WindowId;
+    use crate::session::cells::{Side, SplitOrientation};
+    use crate::session::pane::PaneId;
+    use crate::session::pane::activity::{Activity, ActivityId};
+    use crate::session::session::Session;
+    use crate::session::session::SessionId;
 
     #[test]
     fn pane_direction_serializes_kebab_case() {
@@ -165,18 +165,23 @@ mod tests {
         assert_eq!(back, PaneDirection::Up);
     }
 
-    fn fresh_window() -> Window {
-        Window::new_with_initial(
-            WindowId::new(),
+    fn fresh_session() -> Session {
+        Session::new_with_initial(
+            SessionId(0),
             "t".into(),
             PaneId::new(),
             Activity::terminal(ActivityId::new()),
         )
     }
 
-    fn split(window: &mut Window, target: &PaneId, orient: SplitOrientation, side: Side) -> PaneId {
+    fn split(
+        session: &mut Session,
+        target: &PaneId,
+        orient: SplitOrientation,
+        side: Side,
+    ) -> PaneId {
         let new = PaneId::new();
-        window
+        session
             .split_pane(
                 target,
                 new.clone(),
@@ -190,7 +195,7 @@ mod tests {
 
     #[test]
     fn pane_in_direction_horizontal_split_right_then_left_wraps() {
-        let mut w = fresh_window();
+        let mut w = fresh_session();
         let left = w.active_pane.clone();
         let right = split(&mut w, &left, SplitOrientation::Horizontal, Side::After);
 
@@ -212,7 +217,7 @@ mod tests {
 
     #[test]
     fn pane_in_direction_vertical_split_down_and_up() {
-        let mut w = fresh_window();
+        let mut w = fresh_session();
         let top = w.active_pane.clone();
         let bottom = split(&mut w, &top, SplitOrientation::Vertical, Side::After);
         assert_eq!(
@@ -228,7 +233,7 @@ mod tests {
 
     #[test]
     fn pane_in_direction_single_pane_returns_none() {
-        let w = fresh_window();
+        let w = fresh_session();
         for d in [
             PaneDirection::Up,
             PaneDirection::Down,
@@ -241,7 +246,7 @@ mod tests {
 
     #[test]
     fn pane_in_direction_two_by_two_grid_picks_geometric_neighbor() {
-        let mut w = fresh_window();
+        let mut w = fresh_session();
         // Build a 2x2 grid:
         //   tl | tr
         //   ---+---
@@ -275,7 +280,7 @@ mod tests {
         // levels the rightmost pane's width is below the old EPS = 1e-5,
         // which used to misfire. The new algorithm must still return its
         // immediate left neighbor (not a wrap target).
-        let mut w = fresh_window();
+        let mut w = fresh_session();
         let mut current = w.active_pane.clone();
         let mut second_last = current.clone();
         for _ in 0..20 {
@@ -298,7 +303,7 @@ mod tests {
         //   └────┴────┘
         // Then move Left from `r`: candidates are `tl` and `bl`. The one
         // most recently activated wins.
-        let mut w = fresh_window();
+        let mut w = fresh_session();
         let tl = w.active_pane.clone();
         let r = split(&mut w, &tl, SplitOrientation::Horizontal, Side::After);
         let bl = split(&mut w, &tl, SplitOrientation::Vertical, Side::After);

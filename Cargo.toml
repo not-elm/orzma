@@ -83,6 +83,7 @@ reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "json",
 ] }
+derive_more = { version = "2" }
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"

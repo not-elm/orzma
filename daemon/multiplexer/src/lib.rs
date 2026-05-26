@@ -1,27 +1,24 @@
-//! In-memory multiplexer domain model: sessions, windows, panes, activities,
-//! and the layout cell tree. No I/O.
+//! In-memory multiplexer domain model: sessions, panes, activities, and the
+//! layout cell tree. No I/O.
 
 use std::collections::HashMap;
 
 pub mod error;
 pub mod session;
-pub mod window;
 
 pub use error::{MultiplexerError, MultiplexerResult};
-pub use session::{Session, SessionId, SessionState};
-pub use window::resize::ResizePaneOutcome;
-pub use window::{
+pub use session::resize::ResizePaneOutcome;
+pub use session::{
     Activity, ActivityId, ActivityKind, BrowserProfile, Cell, CellId, CloseOutcome, CycleDirection,
-    LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, RootCell, SetActiveOutcome,
-    Side, SplitCell, SplitOrientation, SwapOffset, SwapOutcome, Window, WindowDimensions, WindowId,
-    WindowState,
+    LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, RootCell, Session,
+    SessionDimensions, SessionId, SessionState, SetActiveOutcome, Side, SplitCell,
+    SplitOrientation, SwapOffset, SwapOutcome,
 };
 
-/// Backwards-compatible alias for the active-pane outcome. Use
-/// `SetActiveOutcome` directly in new code.
+/// Backwards-compatible alias for the active-pane outcome.
 pub type SetActivePaneOutcome = SetActiveOutcome;
 
-/// Outcome of `set_window_dimensions`: whether the cached value changed.
+/// Outcome of `set_session_dimensions`: whether the cached value changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetDimensionsOutcome {
     /// New value differed from the previous one.
@@ -30,113 +27,80 @@ pub enum SetDimensionsOutcome {
     Unchanged,
 }
 
-/// In-memory domain model. Owns the multiplexer's three stores (sessions,
-/// windows, pane_owner_window index). Pure data — no PTY, no extension
-/// registry, no layout broadcast.
+/// In-memory domain model. Owns the multiplexer's session store and the
+/// pane-owner index. Pure data — no PTY, no extension registry, no broadcast.
 #[derive(Default, Clone)]
 pub struct MultiplexerService {
-    pub sessions: SessionState,
-    pub windows: HashMap<WindowId, Window>,
-    pub pane_owner_window: HashMap<PaneId, WindowId>,
+    pub sessions: HashMap<SessionId, Session>,
+    pub pane_owner_session: HashMap<PaneId, SessionId>,
+    next_session_id: u32,
 }
 
 impl MultiplexerService {
-    /// Borrow the Window for `id` and run `f` against it.
-    pub fn with_window<R>(&mut self, id: &WindowId, f: impl FnOnce(&mut Window) -> R) -> Option<R> {
-        self.windows.get_mut(id).map(f)
+    /// Borrow the Session for `id` and run `f` against it.
+    pub fn with_session<R>(
+        &mut self,
+        id: &SessionId,
+        f: impl FnOnce(&mut Session) -> R,
+    ) -> Option<R> {
+        self.sessions.get_mut(id).map(f)
     }
 
-    /// Same as `with_window` but propagates `WindowNotFound`.
-    pub fn with_window_or_404<R>(
+    /// Same as `with_session` but propagates `SessionNotFound`.
+    pub fn with_session_or_404<R>(
         &mut self,
-        id: &WindowId,
-        f: impl FnOnce(&mut Window) -> MultiplexerResult<R>,
+        id: &SessionId,
+        f: impl FnOnce(&mut Session) -> MultiplexerResult<R>,
     ) -> MultiplexerResult<R> {
-        match self.windows.get_mut(id) {
-            Some(w) => f(w),
-            None => Err(MultiplexerError::WindowNotFound(id.clone())),
+        match self.sessions.get_mut(id) {
+            Some(s) => f(s),
+            None => Err(MultiplexerError::SessionNotFound(*id)),
         }
     }
 
-    /// Create a Session and register it.
-    pub fn create_session(&mut self, name: Option<String>) -> SessionId {
-        let session_id = SessionId::new();
-        let session_name = name.unwrap_or_else(|| format!("Session{}", self.sessions.len() + 1));
-        self.sessions.register(
-            session_id.clone(),
-            Session::empty(session_id.clone(), session_name),
-        );
-        session_id
-    }
+    /// Create a Session containing one initial Pane with one initial Terminal Activity.
+    /// Returns `(SessionId, PaneId, ActivityId)`.
+    pub fn create_session(&mut self, name: Option<String>) -> (SessionId, PaneId, ActivityId) {
+        let session_id = SessionId(self.next_session_id);
+        self.next_session_id = self
+            .next_session_id
+            .checked_add(1)
+            .expect("SessionId u32 counter overflow");
 
-    /// Create a Window optionally attached to a Session.
-    pub fn create_window(
-        &mut self,
-        session_id: Option<&SessionId>,
-        name: Option<String>,
-    ) -> MultiplexerResult<(WindowId, PaneId, ActivityId)> {
-        if let Some(sid) = session_id {
-            self.sessions.get(sid)?;
-        }
-
-        let window_id = WindowId::new();
         let pane_id = PaneId::new();
         let activity = Activity::terminal(ActivityId::new());
         let activity_id = activity.id.clone();
-        let window_name = name.unwrap_or_else(|| format!("Window{}", self.windows.len() + 1));
-        let window =
-            Window::new_with_initial(window_id.clone(), window_name, pane_id.clone(), activity);
+        let session_name = name.unwrap_or_else(|| format!("Session{}", self.sessions.len() + 1));
+        let session =
+            Session::new_with_initial(session_id, session_name, pane_id.clone(), activity);
 
-        self.windows.insert(window_id.clone(), window);
-        self.pane_owner_window
-            .insert(pane_id.clone(), window_id.clone());
+        self.sessions.insert(session_id, session);
+        self.pane_owner_session.insert(pane_id.clone(), session_id);
 
-        if let Some(sid) = session_id {
-            let session = self.sessions.get_mut(sid)?;
-            session.attach_window(window_id.clone());
-        }
-
-        Ok((window_id, pane_id, activity_id))
+        (session_id, pane_id, activity_id)
     }
 
-    /// Resolve the currently focused pane of `sid`: returns the active
-    /// `WindowId` of the session and the active `PaneId` of that window.
-    /// Distinct errors are returned for "session missing" vs "session has
-    /// no active window" so callers can log accurately.
-    pub fn active_pane_of_session(&self, sid: &SessionId) -> MultiplexerResult<(WindowId, PaneId)> {
-        let session = self.sessions.get(sid)?;
-        let wid = session
-            .active_window
-            .clone()
-            .ok_or_else(|| MultiplexerError::SessionHasNoActiveWindow(sid.clone()))?;
-        let window = self
-            .windows
-            .get(&wid)
-            .ok_or_else(|| MultiplexerError::WindowNotFound(wid.clone()))?;
-        Ok((wid, window.active_pane.clone()))
-    }
-
-    /// Rename a Window in-place.
-    pub fn rename_window(&mut self, wid: &WindowId, name: String) -> MultiplexerResult<()> {
-        self.with_window_or_404(wid, |w| {
-            w.rename(name);
+    /// Rename a Session in-place.
+    pub fn rename_session(&mut self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
+        self.with_session_or_404(sid, |s| {
+            s.rename(name);
             Ok(())
         })
     }
 
-    /// Replace the cached cell-grid dimensions for `wid`.
-    pub fn set_window_dimensions(
+    /// Replace the cached cell-grid dimensions for `sid`.
+    pub fn set_session_dimensions(
         &mut self,
-        wid: &WindowId,
+        sid: &SessionId,
         cols: u16,
         rows: u16,
     ) -> MultiplexerResult<SetDimensionsOutcome> {
-        self.with_window_or_404(wid, |w| {
-            let next = WindowDimensions { cols, rows };
-            if w.dimensions.as_ref() == Some(&next) {
+        self.with_session_or_404(sid, |s| {
+            let next = SessionDimensions { cols, rows };
+            if s.dimensions.as_ref() == Some(&next) {
                 return Ok(SetDimensionsOutcome::Unchanged);
             }
-            w.set_dimensions(cols, rows);
+            s.set_dimensions(cols, rows);
             Ok(SetDimensionsOutcome::Applied)
         })
     }
@@ -144,19 +108,19 @@ impl MultiplexerService {
     /// Run the resize-pane algorithm.
     pub fn resize_pane(
         &mut self,
-        wid: &WindowId,
+        sid: &SessionId,
         pane: &PaneId,
         direction: PaneDirection,
         amount: u16,
     ) -> MultiplexerResult<ResizePaneOutcome> {
-        self.with_window_or_404(wid, |w| {
-            let dims = w
+        self.with_session_or_404(sid, |s| {
+            let dims = s
                 .dimensions
                 .clone()
-                .ok_or_else(|| MultiplexerError::WindowNotMeasured(wid.clone()))?;
-            Ok(crate::window::resize::resize_split_for_pane(
-                &mut w.cells,
-                &w.pane_to_cell,
+                .ok_or(MultiplexerError::SessionNotMeasured(*sid))?;
+            Ok(crate::session::resize::resize_split_for_pane(
+                &mut s.cells,
+                &s.pane_to_cell,
                 pane,
                 direction,
                 amount,
@@ -166,74 +130,33 @@ impl MultiplexerService {
         })
     }
 
-    /// Rename a Session.
-    pub fn rename_session(&mut self, sid: &SessionId, name: String) -> MultiplexerResult<()> {
-        let session = self.sessions.get_mut(sid)?;
-        session.rename(name);
-        Ok(())
-    }
-
-    /// Promote `wid` to the active window of whichever Session owns it.
-    pub fn select_active_window(&mut self, wid: &WindowId) -> MultiplexerResult<()> {
-        if !self.windows.contains_key(wid) {
-            return Err(MultiplexerError::WindowNotFound(wid.clone()));
-        }
-        for (_, session) in self.sessions.iter_mut() {
-            if session.linked_windows.contains(wid) {
-                session.active_window = Some(wid.clone());
-                return Ok(());
-            }
-        }
-        Err(MultiplexerError::WindowNotAttachedToSession(wid.clone()))
-    }
-
-    /// Cycle the active window of `sid` by `direction`. Thin delegate
-    /// to `Session::cycle_active_window` after resolving the session.
-    pub fn cycle_active_window(
-        &mut self,
-        sid: &SessionId,
-        direction: CycleDirection,
-    ) -> MultiplexerResult<SetActiveOutcome> {
-        self.sessions.get_mut(sid)?.cycle_active_window(direction)
-    }
-
-    /// Resolve which Window currently owns `pid`. Returns `PaneNotFound`
+    /// Resolve which Session currently owns `pid`. Returns `PaneNotFound`
     /// when the pane has no recorded owner.
-    pub fn lookup_pane_window(&self, pid: &PaneId) -> MultiplexerResult<WindowId> {
-        self.pane_owner_window
+    pub fn lookup_pane_session(&self, pid: &PaneId) -> MultiplexerResult<SessionId> {
+        self.pane_owner_session
             .get(pid)
-            .cloned()
+            .copied()
             .ok_or_else(|| MultiplexerError::PaneNotFound(pid.clone()))
     }
 
-    /// Remove a Window and detach it from any owning Session. Returns the
-    /// activities and pane ids the caller must clean up.
-    pub fn close_window_data(
+    /// Remove a Session and return the activities and pane ids the caller must
+    /// clean up.
+    pub fn close_session_data(
         &mut self,
-        wid: &WindowId,
+        sid: &SessionId,
     ) -> MultiplexerResult<(Vec<ActivityId>, Vec<PaneId>)> {
-        let win = self
-            .windows
-            .remove(wid)
-            .ok_or_else(|| MultiplexerError::WindowNotFound(wid.clone()))?;
+        let session = self
+            .sessions
+            .remove(sid)
+            .ok_or(MultiplexerError::SessionNotFound(*sid))?;
 
-        let activities = win.collect_activities_for_cleanup();
-        let pane_ids: Vec<PaneId> = win.pane_ids().cloned().collect();
-
-        for (_, session) in self.sessions.iter_mut() {
-            session.detach_window(wid);
-        }
+        let activities = session.collect_activities_for_cleanup();
+        let pane_ids: Vec<PaneId> = session.pane_ids().cloned().collect();
 
         for pid in &pane_ids {
-            self.pane_owner_window.remove(pid);
+            self.pane_owner_session.remove(pid);
         }
         Ok((activities, pane_ids))
-    }
-
-    /// Remove a Session and return the WindowIds that were attached to it.
-    pub fn take_session_windows(&mut self, sid: &SessionId) -> MultiplexerResult<Vec<WindowId>> {
-        let session = self.sessions.remove(sid)?;
-        Ok(session.linked_windows)
     }
 }
 
@@ -242,17 +165,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn set_window_dimensions_stores_values() {
+    fn create_session_returns_initial_ids() {
         let mut svc = MultiplexerService::default();
-        let (wid, _, _) = svc.create_window(None, None).unwrap();
-        let outcome = svc.set_window_dimensions(&wid, 120, 40).unwrap();
+        let (sid, pid, aid) = svc.create_session(None);
+        assert_eq!(sid, SessionId(0));
+        assert_eq!(svc.sessions.len(), 1);
+        assert_eq!(svc.pane_owner_session.get(&pid), Some(&sid));
+        let session = svc.sessions.get(&sid).expect("session present");
+        let pane = session.pane(&pid).expect("pane present");
+        assert!(pane.activity_ids().any(|a| a == &aid));
+    }
+
+    #[test]
+    fn create_session_mints_monotonic_ids() {
+        let mut svc = MultiplexerService::default();
+        let (a, _, _) = svc.create_session(None);
+        let (b, _, _) = svc.create_session(None);
+        let (c, _, _) = svc.create_session(None);
+        assert_eq!(a, SessionId(0));
+        assert_eq!(b, SessionId(1));
+        assert_eq!(c, SessionId(2));
+    }
+
+    #[test]
+    fn set_session_dimensions_stores_values() {
+        let mut svc = MultiplexerService::default();
+        let (sid, _, _) = svc.create_session(None);
+        let outcome = svc.set_session_dimensions(&sid, 120, 40).unwrap();
         assert_eq!(outcome, SetDimensionsOutcome::Applied);
         let dims = svc
-            .with_window_or_404(&wid, |w| Ok::<_, MultiplexerError>(w.dimensions.clone()))
+            .with_session_or_404(&sid, |s| Ok::<_, MultiplexerError>(s.dimensions.clone()))
             .unwrap();
         assert_eq!(
             dims,
-            Some(crate::WindowDimensions {
+            Some(SessionDimensions {
                 cols: 120,
                 rows: 40
             })
@@ -260,41 +206,41 @@ mod tests {
     }
 
     #[test]
-    fn set_window_dimensions_returns_unchanged_when_same_value() {
+    fn set_session_dimensions_returns_unchanged_when_same_value() {
         let mut svc = MultiplexerService::default();
-        let (wid, _, _) = svc.create_window(None, None).unwrap();
-        let first = svc.set_window_dimensions(&wid, 120, 40).unwrap();
+        let (sid, _, _) = svc.create_session(None);
+        let first = svc.set_session_dimensions(&sid, 120, 40).unwrap();
         assert_eq!(first, SetDimensionsOutcome::Applied);
-        let second = svc.set_window_dimensions(&wid, 120, 40).unwrap();
+        let second = svc.set_session_dimensions(&sid, 120, 40).unwrap();
         assert_eq!(second, SetDimensionsOutcome::Unchanged);
     }
 
     #[test]
-    fn set_window_dimensions_unknown_window_returns_window_not_found() {
+    fn set_session_dimensions_unknown_session_returns_session_not_found() {
         let mut svc = MultiplexerService::default();
         let err = svc
-            .set_window_dimensions(&WindowId::new(), 80, 24)
+            .set_session_dimensions(&SessionId(99), 80, 24)
             .unwrap_err();
-        assert!(matches!(err, MultiplexerError::WindowNotFound(_)));
+        assert!(matches!(err, MultiplexerError::SessionNotFound(_)));
     }
 
     #[test]
-    fn resize_pane_returns_window_not_measured_when_dimensions_unset() {
+    fn resize_pane_returns_session_not_measured_when_dimensions_unset() {
         let mut svc = MultiplexerService::default();
-        let (wid, pid, _aid) = svc.create_window(None, None).unwrap();
+        let (sid, pid, _aid) = svc.create_session(None);
         let err = svc
-            .resize_pane(&wid, &pid, PaneDirection::Right, 1)
+            .resize_pane(&sid, &pid, PaneDirection::Right, 1)
             .unwrap_err();
-        assert!(matches!(err, MultiplexerError::WindowNotMeasured(_)));
+        assert!(matches!(err, MultiplexerError::SessionNotMeasured(_)));
     }
 
     #[test]
-    fn resize_pane_returns_no_op_when_single_pane_window() {
+    fn resize_pane_returns_no_op_when_single_pane_session() {
         let mut svc = MultiplexerService::default();
-        let (wid, pid, _aid) = svc.create_window(None, None).unwrap();
-        svc.set_window_dimensions(&wid, 120, 40).unwrap();
+        let (sid, pid, _aid) = svc.create_session(None);
+        svc.set_session_dimensions(&sid, 120, 40).unwrap();
         let outcome = svc
-            .resize_pane(&wid, &pid, PaneDirection::Right, 1)
+            .resize_pane(&sid, &pid, PaneDirection::Right, 1)
             .unwrap();
         assert!(matches!(outcome, ResizePaneOutcome::NoOp));
     }

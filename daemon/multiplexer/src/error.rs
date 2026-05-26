@@ -1,10 +1,9 @@
 //! Domain errors for the session layer.
 
 use crate::session::SessionId;
-use crate::window::WindowId;
-use crate::window::cells::CellId;
-use crate::window::pane::PaneId;
-use crate::window::pane::activity::ActivityId;
+use crate::session::cells::CellId;
+use crate::session::pane::PaneId;
+use crate::session::pane::activity::ActivityId;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -12,24 +11,15 @@ pub enum MultiplexerError {
     #[error("session not found session-id={0}")]
     SessionNotFound(SessionId),
 
-    #[error("window not found window-id={0}")]
-    WindowNotFound(WindowId),
-
     #[error(
-        "window {0} has no cached dimensions; the client must PATCH /windows/{{wid}}/dimensions before resize-pane"
+        "session {0} has no cached dimensions; the renderer must set dimensions before resize-pane"
     )]
-    WindowNotMeasured(WindowId),
+    SessionNotMeasured(SessionId),
 
-    #[error("pane {pane} does not belong to window {window}")]
-    PaneNotInWindow { window: WindowId, pane: PaneId },
+    #[error("pane {pane} does not belong to session {session}")]
+    PaneNotInSession { session: SessionId, pane: PaneId },
 
-    #[error("window {window_id} does not belong to session {session_id}")]
-    WindowDoesNotBelongToSession {
-        session_id: SessionId,
-        window_id: WindowId,
-    },
-
-    #[error("missiong parent cell")]
+    #[error("missing parent cell")]
     MissingParentCell,
 
     #[error("pane not found pane-id={0}")]
@@ -50,23 +40,14 @@ pub enum MultiplexerError {
     #[error("split target equals new_cell: cell-id={0}")]
     SplitTargetEqualsNewCell(CellId),
 
-    #[error("cannot close the last window in a session: session-id={0}")]
-    CannotCloseLastWindow(SessionId),
+    #[error("cannot close the last pane in a session: session-id={0}")]
+    CannotCloseLastPaneInSession(SessionId),
 
-    #[error("cannot close the last pane in a window: window-id={0}")]
-    CannotCloseLastPaneInWindow(WindowId),
-
-    #[error("active pane {pane_id} must belong to window {window_id}")]
-    ActivePaneMustBelongToWindow {
-        window_id: WindowId,
+    #[error("active pane {pane_id} must belong to session {session_id}")]
+    ActivePaneMustBelongToSession {
+        session_id: SessionId,
         pane_id: PaneId,
     },
-
-    #[error("window {0} is not attached to any session")]
-    WindowNotAttachedToSession(WindowId),
-
-    #[error("session {0} has no active window")]
-    SessionHasNoActiveWindow(SessionId),
 
     #[error("activity not found: {0}")]
     ActivityNotFound(ActivityId),
@@ -74,8 +55,8 @@ pub enum MultiplexerError {
     #[error("pane already placed in cell tree: {0}")]
     PaneAlreadyPlaced(PaneId),
 
-    #[error("window not found for pane pane-id={0}")]
-    WindowNotFoundForPane(PaneId),
+    #[error("session not found for pane pane-id={0}")]
+    SessionNotFoundForPane(PaneId),
 
     #[error("pane id conflict: {0}")]
     PaneIdConflict(PaneId),
@@ -89,11 +70,11 @@ pub enum MultiplexerError {
     #[error("cannot remove the only activity in pane {0}")]
     CannotRemoveLastActivity(PaneId),
 
-    #[error("pane {pane} claimed to be in window {claimed} but is actually in {actual}")]
+    #[error("pane {pane} claimed to be in session {claimed} but is actually in {actual}")]
     PaneAttachmentMismatch {
         pane: PaneId,
-        claimed: WindowId,
-        actual: WindowId,
+        claimed: SessionId,
+        actual: SessionId,
     },
 }
 
@@ -105,37 +86,16 @@ mod tests {
 
     #[test]
     fn session_not_found_carries_id_in_message() {
-        let id = SessionId::new();
-        let err = MultiplexerError::SessionNotFound(id.clone());
-        assert!(err.to_string().contains(id.as_ref()));
+        let id = SessionId(7);
+        let err = MultiplexerError::SessionNotFound(id);
+        assert!(err.to_string().contains("7"));
     }
 
     #[test]
-    fn window_not_found_carries_id_in_message() {
-        let id = WindowId::new();
-        let err = MultiplexerError::WindowNotFound(id.clone());
-        assert!(err.to_string().contains(id.as_ref()));
-    }
-
-    #[test]
-    fn cannot_close_last_window_carries_session_id() {
-        let sid = SessionId::new();
-        let err = MultiplexerError::CannotCloseLastWindow(sid.clone());
-        assert!(err.to_string().contains(sid.as_ref()));
-    }
-
-    #[test]
-    fn cannot_close_last_pane_in_window_carries_window_id() {
-        let wid = WindowId::new();
-        let err = MultiplexerError::CannotCloseLastPaneInWindow(wid.clone());
-        assert!(err.to_string().contains(wid.as_ref()));
-    }
-
-    #[test]
-    fn window_not_attached_carries_window_id() {
-        let wid = WindowId::new();
-        let err = MultiplexerError::WindowNotAttachedToSession(wid.clone());
-        assert!(err.to_string().contains(wid.as_ref()));
+    fn cannot_close_last_pane_in_session_carries_session_id() {
+        let sid = SessionId(42);
+        let err = MultiplexerError::CannotCloseLastPaneInSession(sid);
+        assert!(err.to_string().contains("42"));
     }
 
     #[test]
