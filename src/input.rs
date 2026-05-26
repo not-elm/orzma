@@ -2,8 +2,8 @@
 //! table comes from the loaded `OzmuxConfigsResource`; this module owns
 //! no chord data.
 
-pub(crate) mod mouse_wheel;
 pub(crate) mod ime;
+pub(crate) mod mouse_wheel;
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};

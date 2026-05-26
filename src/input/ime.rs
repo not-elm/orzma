@@ -1,7 +1,8 @@
-//! IME (Input Method Editor) state + window plumbing for the primary
-//! window. Reacts to `bevy::window::Ime` events, toggles
-//! `Window::ime_enabled` and `Window::ime_position`, and forwards
-//! `Ime::Commit` into the existing terminal-key pipeline.
+//! IME composition state for the terminal overlay.
+//!
+//! Provides `Composition`, a validated snapshot of a preedit string and
+//! its UTF-8-safe caret offset. Bevy window event handling and
+//! `Ime::Commit` forwarding are added in later tasks.
 
 #[derive(Debug)]
 pub(crate) struct Composition {
