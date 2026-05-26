@@ -12,6 +12,7 @@ name = "ozmux-gui"
 path = "src/main.rs"
 
 [dependencies]
+ab_glyph = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
 bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
@@ -53,7 +54,13 @@ authors = ["notelm"]
 publish = false
 
 [workspace.dependencies]
-bevy = { version = "0.18" }
+# NOTE: default_font is load-bearing for src/font.rs::make_ui_font_handle —
+# the fallback when bevy_text rejects a font (e.g., parser divergence between
+# ab_glyph and cosmic-text/skrifa) uses Handle::<Font>::default() which only
+# resolves to FiraMono when default_font is enabled. The feature is currently
+# part of bevy's default set via 2d/3d/ui → default_platform → default_font,
+# but listing it explicitly here protects against future "default-features = false".
+bevy = { version = "0.18", features = ["default_font"] }
 tokio = { version = "1.52" }
 anyhow = { version = "1" }
 dashmap = "6"

@@ -1553,6 +1553,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "thiserror 2.0.18",
  "ttf-parser",
  "unicode-segmentation",
  "unicode-width",
@@ -4570,6 +4571,7 @@ dependencies = [
 name = "ozmux-gui"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "arboard",
  "bevy",
  "bevy_terminal",

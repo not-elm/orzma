@@ -51,6 +51,7 @@ pub(crate) fn build_pane_tab_bar(
     parent: Entity,
     pane: &Pane,
     is_active_pane: bool,
+    ui_font: &Handle<Font>,
 ) {
     let bar = commands
         .spawn((
@@ -69,7 +70,7 @@ pub(crate) fn build_pane_tab_bar(
 
     for activity in &pane.activities {
         let is_active = activity.id == pane.active_activity;
-        build_tab(commands, bar, activity, is_active, is_active_pane);
+        build_tab(commands, bar, activity, is_active, is_active_pane, ui_font);
     }
 }
 
@@ -79,6 +80,7 @@ fn build_tab(
     activity: &Activity,
     is_active: bool,
     is_active_pane: bool,
+    ui_font: &Handle<Font>,
 ) {
     let colors = tab_colors(is_active, is_active_pane);
 
@@ -119,6 +121,7 @@ fn build_tab(
         Text::new(activity.name.clone()),
         TextColor(colors.text),
         TextFont {
+            font: ui_font.clone(),
             font_size: 12.0,
             ..default()
         },

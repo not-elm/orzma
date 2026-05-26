@@ -4,6 +4,7 @@
 //! host carries `CopyModeState` and shows `[offset/total]` over the
 //! pane's top-right corner.
 
+use crate::font::TerminalUiFont;
 use crate::theme;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::palette;
@@ -45,6 +46,7 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 fn attach_indicator_to_activity_host(
     mut commands: Commands,
     hosts: Query<Entity, Added<bevy_terminal::TerminalHandle>>,
+    ui_font: Option<Res<TerminalUiFont>>,
 ) {
     for host in hosts.iter() {
         commands.entity(host).with_children(|parent| {
@@ -53,6 +55,10 @@ fn attach_indicator_to_activity_host(
                 IndicatorCache::default(),
                 Text::new(""),
                 TextFont {
+                    font: ui_font
+                        .as_deref()
+                        .map(|f| f.0.clone())
+                        .unwrap_or_default(),
                     font_size: theme::COPY_MODE_INDICATOR_FONT_SIZE_PX,
                     ..default()
                 },

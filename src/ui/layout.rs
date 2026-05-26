@@ -35,6 +35,7 @@ pub(crate) fn build_cell_recursive(
     cell_id: &CellId,
     registry: &mut ActivityEntityRegistry,
     hidden_stash: Entity,
+    ui_font: &Handle<Font>,
 ) {
     let cell = match session.cells.cell(cell_id) {
         Ok(c) => c,
@@ -58,7 +59,7 @@ pub(crate) fn build_cell_recursive(
                 cell_id,
             );
         }
-        Cell::Pane(p) => build_pane(commands, parent, session, p, registry, hidden_stash),
+        Cell::Pane(p) => build_pane(commands, parent, session, p, registry, hidden_stash, ui_font),
         Cell::Split(s) => {
             let (lhs_grow, rhs_grow) = split_ratio_to_flex_grows(s.lhs_weight, s.rhs_weight);
             let dir = match s.orientation {
@@ -90,7 +91,15 @@ pub(crate) fn build_cell_recursive(
                     ChildOf(container),
                 ))
                 .id();
-            build_cell_recursive(commands, lhs, session, &s.lhs_cell, registry, hidden_stash);
+            build_cell_recursive(
+                commands,
+                lhs,
+                session,
+                &s.lhs_cell,
+                registry,
+                hidden_stash,
+                ui_font,
+            );
 
             let rhs = commands
                 .spawn((
@@ -103,7 +112,15 @@ pub(crate) fn build_cell_recursive(
                     ChildOf(container),
                 ))
                 .id();
-            build_cell_recursive(commands, rhs, session, &s.rhs_cell, registry, hidden_stash);
+            build_cell_recursive(
+                commands,
+                rhs,
+                session,
+                &s.rhs_cell,
+                registry,
+                hidden_stash,
+                ui_font,
+            );
         }
     }
 }
@@ -115,6 +132,7 @@ fn build_pane(
     pane_cell: &ozmux_multiplexer::PaneCell,
     registry: &mut ActivityEntityRegistry,
     hidden_stash: Entity,
+    ui_font: &Handle<Font>,
 ) {
     let Some(pane) = session.panes.get(&pane_cell.pane) else {
         tracing::warn!(
@@ -143,7 +161,7 @@ fn build_pane(
         ))
         .id();
 
-    crate::ui::tab_bar::build_pane_tab_bar(commands, pane_frame, pane, is_active_pane);
+    crate::ui::tab_bar::build_pane_tab_bar(commands, pane_frame, pane, is_active_pane, ui_font);
 
     let activity_slot = commands
         .spawn((

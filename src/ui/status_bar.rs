@@ -20,6 +20,7 @@ pub(crate) fn build_status_bar(
     parent: Entity,
     sessions_by_id: &HashMap<SessionId, Session>,
     attached_sid: Option<SessionId>,
+    ui_font: &Handle<Font>,
 ) {
     let mut ordered: Vec<&SessionId> = sessions_by_id.keys().collect();
     ordered.sort();
@@ -66,7 +67,14 @@ pub(crate) fn build_status_bar(
         ChildOf(bar),
     ));
 
-    build_session_chips(commands, bar, &ordered, sessions_by_id, attached_sid);
+    build_session_chips(
+        commands,
+        bar,
+        &ordered,
+        sessions_by_id,
+        attached_sid,
+        ui_font,
+    );
 }
 
 fn build_session_chips(
@@ -75,6 +83,7 @@ fn build_session_chips(
     ordered: &[&SessionId],
     sessions_by_id: &HashMap<SessionId, Session>,
     attached_sid: Option<SessionId>,
+    ui_font: &Handle<Font>,
 ) {
     let container = commands
         .spawn((
@@ -107,6 +116,7 @@ fn build_session_chips(
             Text::new(session.name.clone()),
             TextColor(font_color),
             TextFont {
+                font: ui_font.clone(),
                 font_size: UI_FONT_SIZE,
                 ..default()
             },

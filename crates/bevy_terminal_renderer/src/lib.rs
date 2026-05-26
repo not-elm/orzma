@@ -5,12 +5,16 @@ use crate::{
 };
 
 mod bundle;
+pub mod bundled;
 pub mod glyph;
 mod grid;
 pub mod material;
 pub mod schema;
 
-pub use crate::glyph::font::{CellMetrics, TerminalCellMetricsResource};
+pub use crate::glyph::font::{
+    CellMetrics, FontFace, FontLoadError, TerminalCellMetricsResource, TerminalFontInitSet,
+    TerminalFontPlugin, TerminalFonts,
+};
 
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
