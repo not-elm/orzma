@@ -59,7 +59,7 @@ pub(crate) fn finish_terminal_setup(
 ///
 /// Always returns `(cols, rows)` ≥ `(1, 1)`; degenerate inputs collapse
 /// to a 1x1 grid rather than producing zero-sized buffers.
-pub(crate) fn compute_grid_dims(
+fn compute_grid_dims(
     node_phys_w: f32,
     node_phys_h: f32,
     cell_w_phys: f32,
