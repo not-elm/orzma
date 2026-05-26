@@ -22,7 +22,24 @@ pub(crate) fn bootstrap(mut commands: Commands, mut mux: ResMut<Multiplexer>) {
         .get(&sid)
         .map(|s| s.name.clone())
         .unwrap_or_else(|| "default".to_string());
-    commands.spawn((SessionEntityId(sid), AttachedSession, Name::new(bevy_name)));
+
+    // The subtree root starts empty; rebuild_session_ui_on_data_change fills
+    // it once the session's epoch advances. The bump_epoch() below ensures
+    // that the first rebuild fires for the bootstrap session.
+    let subtree_root = commands.spawn(Node::default()).id();
+    let session_entity = commands
+        .spawn((
+            SessionEntityId(sid),
+            AttachedSession,
+            crate::multiplexer::SessionUiSubtree(subtree_root),
+            Name::new(bevy_name),
+        ))
+        .id();
+    commands
+        .entity(subtree_root)
+        .insert(ChildOf(session_entity));
+
+    mux.bump_epoch(&sid);
 }
 
 #[cfg(test)]
@@ -57,5 +74,32 @@ mod tests {
             .pane(&session.active_pane)
             .expect("active pane resolves");
         assert_eq!(pane.activity_ids().count(), 1);
+    }
+
+    #[test]
+    fn bootstrap_spawns_session_entity_with_subtree_pointer() {
+        let _guard = crate::configs::env_guard();
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::multiplexer::OzmuxMultiplexerPlugin)
+            .add_plugins(crate::configs::OzmuxConfigsPlugin)
+            .add_plugins(OzmuxBootstrapPlugin);
+        app.update();
+
+        let world = app.world_mut();
+        let mut q = world.query::<(&SessionEntityId, &crate::multiplexer::SessionUiSubtree)>();
+        let row = q
+            .iter(world)
+            .next()
+            .expect("session entity has SessionUiSubtree pointer");
+        let subtree_entity = row.1.0;
+        assert!(
+            world.get_entity(subtree_entity).is_ok(),
+            "the subtree entity referenced by SessionUiSubtree must exist"
+        );
     }
 }

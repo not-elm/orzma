@@ -425,11 +425,19 @@ fn dispatch_new_session(
         .get(&sid)
         .map(|s| s.name.clone())
         .unwrap_or_else(|| format!("Session#{}", sid.0));
-    commands.spawn((
-        SessionEntityId(sid),
-        AttachedSession,
-        Name::new(bevy_name),
-    ));
+    let subtree_root = commands.spawn(Node::default()).id();
+    let new_session_entity = commands
+        .spawn((
+            SessionEntityId(sid),
+            AttachedSession,
+            crate::multiplexer::SessionUiSubtree(subtree_root),
+            Name::new(bevy_name),
+        ))
+        .id();
+    commands
+        .entity(subtree_root)
+        .insert(ChildOf(new_session_entity));
+
     mux.bump_epoch(&sid);
     mux.set_changed();
 }
@@ -1232,6 +1240,53 @@ mod tests {
         app.update();
 
         assert_eq!(attached_session_id(&mut app).0, second_sid);
+    }
+
+    #[test]
+    fn dispatch_new_session_spawns_subtree_pointer() {
+        use crate::multiplexer::{
+            AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId, SessionUiSubtree,
+        };
+        use bevy::ecs::system::RunSystemOnce;
+
+        let _guard = crate::configs::env_guard();
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(OzmuxMultiplexerPlugin)
+            .add_plugins(crate::configs::OzmuxConfigsPlugin)
+            .add_plugins(crate::bootstrap::OzmuxBootstrapPlugin);
+        app.update();
+
+        let session_count_before = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<Entity, With<SessionEntityId>>();
+            q.iter(world).count()
+        };
+
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands,
+                 mut mux: ResMut<Multiplexer>,
+                 attached_q: Query<Entity, With<AttachedSession>>| {
+                    super::dispatch_new_session(&mut commands, &mut mux, &attached_q);
+                },
+            )
+            .unwrap();
+        app.update();
+
+        let world = app.world_mut();
+        let mut q = world.query::<(&SessionEntityId, &SessionUiSubtree)>();
+        let count = q.iter(world).count();
+        assert_eq!(
+            count,
+            session_count_before + 1,
+            "new session entity must carry SessionUiSubtree"
+        );
     }
 
     #[test]

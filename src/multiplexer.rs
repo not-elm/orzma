@@ -9,7 +9,7 @@ pub mod commands;
 /// Layout-change logging system + `render_tree` formatter for the `Multiplexer` Resource.
 pub mod log;
 
-pub use crate::session_entity::{AttachedSession, SessionEntityId};
+pub use crate::session_entity::{AttachedSession, SessionEntityId, SessionUiSubtree};
 
 /// Bevy Resource wrapping the in-memory `MultiplexerService`. `Deref` /
 /// `DerefMut` let call sites invoke `MultiplexerService` methods directly.
