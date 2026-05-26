@@ -88,7 +88,7 @@ impl GlyphAtlas {
         //       outline if the font has one — which most do. Bail out before
         //       rasterizing so combining marks, CJK glyphs missing from the
         //       monospace face, etc. do not leave a literal tofu in every
-        //       cell. The bundled Iosevka Term Nerd Font Mono includes PUA
+        //       cell. The bundled JetBrains Mono Nerd Font Mono includes PUA
         //       icons (U+E000–U+F8FF used by neo-tree, nvim-web-devicons,
         //       lazygit), so those codepoints DO map to non-zero glyph IDs
         //       and DO rasterize through this path. A user-supplied non-

@@ -158,12 +158,12 @@ fn make_ui_font_handle(regular_bytes: Vec<u8>, fonts_assets: &mut Assets<Font>) 
         Err(err) => {
             // ERROR not warn: the user's terminal and UI overlay will now
             // render in different typefaces (terminal: user-supplied or
-            // bundled Iosevka; UI: Bevy's FiraMono), a visible
+            // bundled JetBrains Mono; UI: Bevy's FiraMono), a visible
             // inconsistency that operators should know about.
             tracing::error!(
                 %err,
                 "bevy_text::Font::try_from_bytes rejected the regular face; \
-                 the terminal grid will render in the resolved Iosevka or user override \
+                 the terminal grid will render in the resolved JetBrains Mono or user override \
                  while the UI overlay falls back to Bevy's bundled FiraMono — \
                  expect a visible typeface mismatch between the grid and chrome"
             );
@@ -250,14 +250,14 @@ mod tests {
     }
 
     #[test]
-    fn default_config_keeps_bundled_iosevka_in_terminal_fonts() {
+    fn default_config_keeps_bundled_jbm_in_terminal_fonts() {
         let (mut app, _guard, _env) = make_test_app();
         app.update();
         let fonts = app.world().resource::<TerminalFonts>();
         assert_eq!(
             fonts.regular.font_data(),
             bundled::REGULAR,
-            "regular face is bundled Iosevka when no override is configured"
+            "regular face is bundled JetBrains Mono when no override is configured"
         );
     }
 
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn configured_normal_path_overrides_regular_face() {
-        // Use the bundled Iosevka regular bytes as the "override" — the
+        // Use the bundled JetBrains Mono regular bytes as the "override" — the
         // test verifies the bytes flow through std::fs::read, not that
         // they differ from bundled. Write to a temp file and point
         // OZMUX_CONFIG at a TOML that uses it.
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn corrupt_bold_path_falls_back_per_face_without_dropping_normal_override() {
         // Write a corrupt "bold" TTF (just random bytes that won't parse)
-        // and a valid "normal" TTF (bundled Iosevka regular). Verify
+        // and a valid "normal" TTF (bundled JetBrains Mono regular). Verify
         // bridge_font_config keeps the normal override AND replaces only
         // the corrupt bold with bundled bold.
         let tmp_dir = std::env::temp_dir().join("ozmux_font_bridge_test_corrupt_bold");

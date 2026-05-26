@@ -340,13 +340,13 @@ impl Default for TerminalFonts {
         // truth the binary carries the font data twice).
         Self {
             regular: FontArc::try_from_slice(crate::bundled::REGULAR)
-                .expect("IosevkaTermNerdFontMono-Regular load"),
+                .expect("JetBrainsMonoNerdFontMono-Regular load"),
             bold: FontArc::try_from_slice(crate::bundled::BOLD)
-                .expect("IosevkaTermNerdFontMono-Bold load"),
+                .expect("JetBrainsMonoNerdFontMono-Bold load"),
             italic: FontArc::try_from_slice(crate::bundled::ITALIC)
-                .expect("IosevkaTermNerdFontMono-Italic load"),
+                .expect("JetBrainsMonoNerdFontMono-Italic load"),
             bold_italic: FontArc::try_from_slice(crate::bundled::BOLD_ITALIC)
-                .expect("IosevkaTermNerdFontMono-BoldItalic load"),
+                .expect("JetBrainsMonoNerdFontMono-BoldItalic load"),
         }
     }
 }
@@ -385,34 +385,34 @@ impl FontFace {
 mod tests {
     use super::*;
 
-    /// `cell_metrics_px(12)` returns sensible values for Iosevka Term Nerd
-    /// Font Mono Regular at 12px. Empirical ranges were measured against the
-    /// bundled TTF; structural invariants (positive ascent, negative
-    /// underline position) are the load-bearing assertions.
+    /// `cell_metrics_px(12)` returns sensible values for JetBrains Mono
+    /// Nerd Font Mono Regular at 12px. Empirical ranges were measured
+    /// against the bundled TTF; structural invariants (positive ascent,
+    /// negative underline position) are the load-bearing assertions.
     #[test]
-    fn iosevka_term_mono_12px_metrics_are_sensible() {
+    fn jetbrains_mono_12px_metrics_are_sensible() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
         // Empirical ranges below were measured against the bundled
-        // IosevkaTermNerdFontMono-Regular.ttf. Update if the font is
+        // JetBrainsMonoNerdFontMono-Regular.ttf. Update if the font is
         // re-vendored.
         assert!(
-            m.advance_phys > 5.7 && m.advance_phys < 6.3,
-            "advance_phys = {} (Iosevka Term Mono 12px range)",
+            m.advance_phys > 6.9 && m.advance_phys < 7.5,
+            "advance_phys = {} (JBM Mono 12px range)",
             m.advance_phys
         );
         assert!(
-            m.line_height_phys > 14.7 && m.line_height_phys < 15.3,
+            m.line_height_phys > 15.5 && m.line_height_phys < 16.2,
             "line_height_phys = {}",
             m.line_height_phys
         );
         assert!(
-            m.ascent_phys > 11.3 && m.ascent_phys < 11.9,
+            m.ascent_phys > 11.9 && m.ascent_phys < 12.5,
             "ascent_phys = {}",
             m.ascent_phys
         );
         assert!(
-            m.descent_phys > 3.1 && m.descent_phys < 3.7,
+            m.descent_phys > 3.3 && m.descent_phys < 3.9,
             "descent_phys = {}",
             m.descent_phys
         );
@@ -428,7 +428,7 @@ mod tests {
         );
     }
 
-    /// Iosevka Term Mono at 12 px must report a non-zero `max_overflow_phys`
+    /// JBM Mono at 12 px must report a non-zero `max_overflow_phys`
     /// because glyphs like `W` rasterize past the floored advance.
     #[test]
     fn cell_metrics_px_reports_nonzero_max_overflow() {
@@ -524,7 +524,7 @@ mod tests {
             bytes.clone(),
             bytes,
         )
-        .expect("from_bytes accepts Iosevka regular for all four slots");
+        .expect("from_bytes accepts JBM regular for all four slots");
 
         // Use a sentinel: pre-insert THIS specific instance, then check
         // that the bytes pointer hasn't changed after Plugin::build.
