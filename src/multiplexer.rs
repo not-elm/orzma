@@ -1,25 +1,20 @@
-//! Multiplexer Bevy Resource + AttachedSession Component, plus a Plugin that
-//! registers the Resource on app startup.
+//! Multiplexer Bevy Resource + per-session Component re-exports, plus a
+//! Plugin that registers the Resource on app startup.
 
 use bevy::prelude::*;
-use ozmux_multiplexer::{MultiplexerService, SessionId};
+use ozmux_multiplexer::MultiplexerService;
 
 /// `Action` → `MultiplexerService` mutation helpers consumed by the shortcut dispatcher.
 pub mod commands;
 /// Layout-change logging system + `render_tree` formatter for the `Multiplexer` Resource.
 pub mod log;
 
-/// Bevy Resource wrapping the in-memory `MultiplexerService` (the single
-/// source of truth for sessions / windows / panes / activities). `Deref` /
+pub use crate::session_entity::{AttachedSession, SessionEntityId};
+
+/// Bevy Resource wrapping the in-memory `MultiplexerService`. `Deref` /
 /// `DerefMut` let call sites invoke `MultiplexerService` methods directly.
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct Multiplexer(pub MultiplexerService);
-
-/// Per-GUI-window Component pointing at which ozmux `Session` is currently
-/// attached. Multiple GUI windows can attach to the same session (mirror) or
-/// to different sessions (independent clients).
-#[derive(Component, Debug, Clone)]
-pub struct AttachedSession(pub SessionId);
 
 /// Bevy Plugin that inserts the [`Multiplexer`] Resource at app build time.
 pub struct OzmuxMultiplexerPlugin;
@@ -45,7 +40,7 @@ mod tests {
     fn multiplexer_derefs_to_multiplexer_service() {
         let mut mux = Multiplexer::default();
         assert_eq!(mux.sessions.len(), 0);
-        let _sid = mux.create_session(Some("test".into()));
+        let (_sid, _pid, _aid) = mux.create_session(Some("test".into()));
         assert_eq!(mux.sessions.len(), 1);
     }
 }

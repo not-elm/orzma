@@ -5,6 +5,7 @@ mod clipboard;
 mod configs;
 mod input;
 mod multiplexer;
+mod session_entity;
 mod theme;
 mod ui;
 

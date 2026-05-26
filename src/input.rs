@@ -8,11 +8,11 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
-use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers};
+use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers, SessionOffset};
 use ozmux_multiplexer::SessionId;
 use std::collections::HashSet;
 
-use crate::multiplexer::{AttachedSession, Multiplexer};
+use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
 
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline.
@@ -34,7 +34,10 @@ pub(crate) fn dispatch_focused_key(
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
-    mut sessions: Query<(&AttachedSession, &Window)>,
+    windows_q: Query<&Window>,
+    sessions_q: Query<(Entity, &SessionEntityId)>,
+    attached_q: Query<Entity, With<AttachedSession>>,
+    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
@@ -51,17 +54,21 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        let Ok((attached, win)) = sessions.get_mut(ev.window) else {
+        let Ok(win) = windows_q.get(ev.window) else {
             continue;
         };
         if !win.focused {
             continue;
         }
 
+        let Ok(attached_sid) = attached_sid_q.single() else {
+            continue;
+        };
+        let session_id = attached_sid.0;
+
         if matches!(ev.logical_key, Key::Escape)
-            && let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
-            && let Some(window) = mux.windows.get(&wid)
-            && let Ok(pane) = window.pane(&pid)
+            && let Some(session) = mux.sessions.get(&session_id)
+            && let Ok(pane) = session.pane(&session.active_pane)
             && let Some(entity) = registry.get(&pane.active_activity)
             && copy_mode_q.get(entity).is_err()
             && let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(entity)
@@ -71,9 +78,8 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
-            && let Some(window) = mux.windows.get(&wid)
-            && let Ok(pane) = window.pane(&pid)
+        if let Some(session) = mux.sessions.get(&session_id)
+            && let Ok(pane) = session.pane(&session.active_pane)
             && let Some(entity) = registry.get(&pane.active_activity)
             && copy_mode_q.get(entity).is_ok()
             && !just_exited.contains(&entity)
@@ -93,9 +99,8 @@ pub(crate) fn dispatch_focused_key(
         }
 
         if is_paste_chord(&ev.logical_key, &mods) {
-            if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
-                && let Some(window) = mux.windows.get(&wid)
-                && let Ok(pane) = window.pane(&pid)
+            if let Some(session) = mux.sessions.get(&session_id)
+                && let Ok(pane) = session.pane(&session.active_pane)
                 && let Some(entity) = registry.get(&pane.active_activity)
                 && let Ok((mut handle, mut pty, _coalescer)) = handles.get_mut(entity)
                 && let Some(text) = clipboard.read()
@@ -128,7 +133,15 @@ pub(crate) fn dispatch_focused_key(
                 if ev.repeat {
                     continue;
                 }
-                execute_action(action, &mut commands, &mut mux, attached, &registry);
+                execute_action(
+                    action,
+                    &mut commands,
+                    &mut mux,
+                    session_id,
+                    &sessions_q,
+                    &attached_q,
+                    &registry,
+                );
                 continue;
             }
         }
@@ -138,7 +151,7 @@ pub(crate) fn dispatch_focused_key(
                 &mut commands,
                 &mux,
                 &registry,
-                &attached.0,
+                &session_id,
                 tk,
                 shortcut_mods_to_terminal_mods(&mods),
             );
@@ -243,29 +256,130 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 /// `set_changed()` discipline so that ECS change detection only fires
 /// when a real domain mutation happens. `Action::EnterCopyMode` is
 /// handled specially because it triggers an observer rather than
-/// mutating the multiplexer.
+/// mutating the multiplexer. `Action::NewSession`,
+/// `Action::FocusSession`, and `Action::FocusSessionNumber` are
+/// dispatched directly in Bevy-land because they require entity-level
+/// side effects beyond a pure `MultiplexerService` mutation.
 fn execute_action(
     action: Action,
     commands: &mut Commands,
     mux: &mut ResMut<Multiplexer>,
-    attached: &AttachedSession,
+    session_id: SessionId,
+    sessions_q: &Query<(Entity, &SessionEntityId)>,
+    attached_q: &Query<Entity, With<AttachedSession>>,
     registry: &ActivityEntityRegistry,
 ) {
-    if let Action::EnterCopyMode = action {
-        if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
-            && let Some(window) = mux.windows.get(&wid)
-            && let Ok(pane) = window.pane(&pid)
-            && let Some(entity) = registry.get(&pane.active_activity)
-        {
-            commands.trigger(crate::ui::copy_mode::EnterCopyModeRequest { entity });
+    match &action {
+        Action::EnterCopyMode => {
+            if let Some(session) = mux.sessions.get(&session_id)
+                && let Ok(pane) = session.pane(&session.active_pane)
+                && let Some(entity) = registry.get(&pane.active_activity)
+            {
+                commands.trigger(crate::ui::copy_mode::EnterCopyModeRequest { entity });
+            }
         }
+        Action::NewSession => {
+            dispatch_new_session(commands, mux, attached_q);
+        }
+        Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => {
+            dispatch_focus_session(commands, mux, sessions_q, attached_q, &action);
+        }
+        _ => {
+            let mux_ref = mux.bypass_change_detection();
+            let mutated = crate::multiplexer::commands::apply(action, mux_ref, session_id);
+            if mutated {
+                mux.set_changed();
+            }
+        }
+    }
+}
+
+/// Moves the `AttachedSession` marker between session entities for the
+/// `FocusSession{Next,Prev}` and `FocusSessionNumber{index}` actions.
+/// Sorts session entities numerically by `SessionEntityId` for deterministic
+/// cycle order. Bumps `Multiplexer::set_changed()` so the UI rebuild system
+/// (which polls on `mux.is_changed()`) fires.
+fn dispatch_focus_session(
+    commands: &mut Commands,
+    mux: &mut ResMut<Multiplexer>,
+    sessions_q: &Query<(Entity, &SessionEntityId)>,
+    attached_q: &Query<Entity, With<AttachedSession>>,
+    action: &Action,
+) {
+    let mut entries: Vec<(SessionEntityId, Entity)> =
+        sessions_q.iter().map(|(e, sid)| (*sid, e)).collect();
+    if entries.len() < 2 {
         return;
     }
-    let mux_ref = mux.bypass_change_detection();
-    let mutated = crate::multiplexer::commands::apply(action, mux_ref, attached.0.clone());
-    if mutated {
-        mux.set_changed();
+    entries.sort_by_key(|(sid, _)| *sid);
+
+    let Ok(current_entity) = attached_q.single() else {
+        return;
+    };
+    let current_idx = entries
+        .iter()
+        .position(|(_, e)| *e == current_entity)
+        .unwrap_or(0);
+
+    let target_idx = match action {
+        Action::FocusSession {
+            offset: SessionOffset::Next,
+        } => (current_idx + 1) % entries.len(),
+        Action::FocusSession {
+            offset: SessionOffset::Prev,
+        } => current_idx.checked_sub(1).unwrap_or(entries.len() - 1),
+        Action::FocusSession {
+            offset: SessionOffset::Last,
+        } => {
+            tracing::debug!(
+                target: "ozmux_gui::commands",
+                "FocusSession::Last not yet implemented"
+            );
+            return;
+        }
+        Action::FocusSessionNumber { index } => {
+            let i = *index as usize;
+            if i >= entries.len() {
+                return;
+            }
+            i
+        }
+        _ => return,
+    };
+
+    let target_entity = entries[target_idx].1;
+    if target_entity == current_entity {
+        return;
     }
+
+    commands.entity(current_entity).remove::<AttachedSession>();
+    commands.entity(target_entity).insert(AttachedSession);
+    mux.set_changed();
+}
+
+/// Mints a new domain session, spawns its Bevy entity with the
+/// `AttachedSession` marker, and removes the marker from the previously
+/// attached entity. Bumps Multiplexer change detection so the UI rebuild
+/// fires this frame.
+fn dispatch_new_session(
+    commands: &mut Commands,
+    mux: &mut ResMut<Multiplexer>,
+    attached_q: &Query<Entity, With<AttachedSession>>,
+) {
+    let (sid, _, _) = mux.create_session(None);
+
+    if let Ok(previous_attached) = attached_q.single() {
+        commands
+            .entity(previous_attached)
+            .remove::<AttachedSession>();
+    }
+
+    commands.spawn((
+        SessionEntityId(sid),
+        AttachedSession,
+        Name::new(format!("Session:{}", sid.0)),
+    ));
+    mux.set_changed();
 }
 
 /// Translates a Bevy logical key into the `TerminalKey` variant the
@@ -307,7 +421,7 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
 
 /// Resolves the active activity entity for `sid` and triggers a
 /// `TerminalKeyInput` on it. Silently no-ops when the session has no
-/// active window/pane/activity yet, or when the target entity has no
+/// active pane/activity yet, or when the target entity has no
 /// `TerminalHandle` (e.g. Browser Activity) — the `bevy_terminal`
 /// observer handles that case by also no-op'ing.
 fn forward_to_active_terminal(
@@ -318,13 +432,12 @@ fn forward_to_active_terminal(
     key: TerminalKey,
     mods: TerminalModifiers,
 ) {
-    let Ok((wid, pid)) = mux.active_pane_of_session(sid) else {
+    let Some(session) = mux.sessions.get(sid) else {
         return;
     };
-    let Some(window) = mux.windows.get(&wid) else {
+    let Ok(pane) = session.pane(&session.active_pane) else {
         return;
     };
-    let Ok(pane) = window.pane(&pid) else { return };
     let Some(entity) = registry.get(&pane.active_activity) else {
         return;
     };
@@ -339,7 +452,9 @@ fn forward_to_active_terminal(
 mod tests {
     use super::*;
     use crate::configs::OzmuxConfigsResource;
-    use crate::multiplexer::{AttachedSession, Multiplexer, OzmuxMultiplexerPlugin};
+    use crate::multiplexer::{
+        AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId,
+    };
     use bevy::input::ButtonState;
     use bevy::input::keyboard::{Key as Bk, KeyboardInput, NativeKeyCode};
     use bevy::window::{Window, WindowResolution};
@@ -359,22 +474,23 @@ mod tests {
 
         let sid = {
             let mut mux = app.world_mut().resource_mut::<Multiplexer>();
-            let sid = mux.create_session(Some("default".into()));
-            mux.create_window(Some(&sid), Some("main".into())).unwrap();
+            let (sid, _, _) = mux.create_session(Some("default".into()));
             sid
         };
-        let entity = app
+        // Spawn the session entity carrying the AttachedSession marker. This
+        // mirrors what `bootstrap` does in production. The window entity is
+        // spawned separately (without AttachedSession).
+        app.world_mut()
+            .spawn((SessionEntityId(sid), AttachedSession));
+        let window_entity = app
             .world_mut()
-            .spawn((
-                Window {
-                    focused: window_focused,
-                    resolution: WindowResolution::new(800, 600),
-                    ..default()
-                },
-                AttachedSession(sid),
-            ))
+            .spawn(Window {
+                focused: window_focused,
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            })
             .id();
-        (app, entity)
+        (app, window_entity)
     }
 
     fn press(app: &mut App, window: Entity, key: Bk) {
@@ -412,9 +528,9 @@ mod tests {
         let entity = app.world_mut().spawn_empty().id();
         let activity_id = {
             let mux = app.world().resource::<Multiplexer>();
-            let wid = mux.windows.keys().next().unwrap().clone();
-            let window = mux.windows.get(&wid).unwrap();
-            let pane = window.pane(&window.active_pane).unwrap();
+            let sid = *mux.sessions.keys().next().unwrap();
+            let session = mux.sessions.get(&sid).unwrap();
+            let pane = session.pane(&session.active_pane).unwrap();
             pane.active_activity.clone()
         };
         let mut registry = app
@@ -441,9 +557,9 @@ mod tests {
         let entity = app.world_mut().spawn(bundle).id();
         let activity_id = {
             let mux = app.world().resource::<Multiplexer>();
-            let wid = mux.windows.keys().next().unwrap().clone();
-            let window = mux.windows.get(&wid).unwrap();
-            let pane = window.pane(&window.active_pane).unwrap();
+            let sid = *mux.sessions.keys().next().unwrap();
+            let session = mux.sessions.get(&sid).unwrap();
+            let pane = session.pane(&session.active_pane).unwrap();
             pane.active_activity.clone()
         };
         let mut registry = app
@@ -887,7 +1003,7 @@ mod tests {
         press(&mut app, window_entity, Bk::Character("j".into()));
         app.update();
         let mux = app.world().resource::<crate::multiplexer::Multiplexer>();
-        assert!(!mux.windows.is_empty());
+        assert!(!mux.sessions.is_empty());
     }
 
     #[test]
@@ -913,7 +1029,7 @@ mod tests {
         drop(events);
         app.update();
         let mux = app.world().resource::<crate::multiplexer::Multiplexer>();
-        assert!(!mux.windows.is_empty());
+        assert!(!mux.sessions.is_empty());
     }
 
     #[test]
@@ -964,5 +1080,131 @@ mod tests {
             "repeat=true 'j' must still forward to the terminal; captured: {:?}",
             captured,
         );
+    }
+
+    fn attached_session_id(app: &mut App) -> SessionEntityId {
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<&SessionEntityId, With<AttachedSession>>();
+        *q.single(world)
+            .expect("exactly one attached session entity")
+    }
+
+    fn count_attached_session_entities(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<Entity, With<AttachedSession>>();
+        q.iter(world).count()
+    }
+
+    fn count_session_entities(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut q = world.query::<&SessionEntityId>();
+        q.iter(world).count()
+    }
+
+    #[test]
+    fn focus_session_next_moves_attached_marker() {
+        let (mut app, _window_entity) = make_app(true);
+
+        // Mint a second session via the domain API and spawn its entity
+        // (without AttachedSession, the bootstrap entity keeps the marker).
+        let second_sid = {
+            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
+            let (sid, _, _) = mux.create_session(Some("second".into()));
+            sid
+        };
+        let second_entity = app.world_mut().spawn(SessionEntityId(second_sid)).id();
+
+        // Sanity: bootstrap session (SessionId 0) is attached, second is not.
+        assert_eq!(count_attached_session_entities(&mut app), 1);
+        assert_eq!(
+            attached_session_id(&mut app).0,
+            ozmux_multiplexer::SessionId(0)
+        );
+
+        // Use a one-shot system that invokes the dispatcher.
+        let id = app.world_mut().register_system(
+            |mut commands: Commands,
+             mut mux: ResMut<Multiplexer>,
+             sessions_q: Query<(Entity, &SessionEntityId)>,
+             attached_q: Query<Entity, With<AttachedSession>>| {
+                super::dispatch_focus_session(
+                    &mut commands,
+                    &mut mux,
+                    &sessions_q,
+                    &attached_q,
+                    &ozmux_configs::shortcuts::Action::FocusSession {
+                        offset: ozmux_configs::shortcuts::SessionOffset::Next,
+                    },
+                );
+            },
+        );
+        let _ = app.world_mut().run_system(id);
+        app.update();
+
+        // Marker moved to the second entity.
+        assert_eq!(count_attached_session_entities(&mut app), 1);
+        let attached_now = attached_session_id(&mut app);
+        assert_eq!(attached_now.0, second_sid);
+        assert!(
+            app.world().get::<AttachedSession>(second_entity).is_some(),
+            "second entity must now carry the marker"
+        );
+    }
+
+    #[test]
+    fn focus_session_number_targets_index() {
+        let (mut app, _window_entity) = make_app(true);
+
+        let second_sid = {
+            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
+            let (sid, _, _) = mux.create_session(Some("second".into()));
+            sid
+        };
+        app.world_mut().spawn(SessionEntityId(second_sid));
+
+        let id = app.world_mut().register_system(
+            |mut commands: Commands,
+             mut mux: ResMut<Multiplexer>,
+             sessions_q: Query<(Entity, &SessionEntityId)>,
+             attached_q: Query<Entity, With<AttachedSession>>| {
+                super::dispatch_focus_session(
+                    &mut commands,
+                    &mut mux,
+                    &sessions_q,
+                    &attached_q,
+                    &ozmux_configs::shortcuts::Action::FocusSessionNumber { index: 1 },
+                );
+            },
+        );
+        let _ = app.world_mut().run_system(id);
+        app.update();
+
+        assert_eq!(attached_session_id(&mut app).0, second_sid);
+    }
+
+    #[test]
+    fn new_session_action_spawns_entity_and_moves_marker() {
+        let (mut app, _window_entity) = make_app(true);
+
+        assert_eq!(count_session_entities(&mut app), 1);
+        assert_eq!(count_attached_session_entities(&mut app), 1);
+        let bootstrap_sid = attached_session_id(&mut app).0;
+
+        let id = app.world_mut().register_system(
+            |mut commands: Commands,
+             mut mux: ResMut<Multiplexer>,
+             attached_q: Query<Entity, With<AttachedSession>>| {
+                super::dispatch_new_session(&mut commands, &mut mux, &attached_q);
+            },
+        );
+        let _ = app.world_mut().run_system(id);
+        app.update();
+
+        assert_eq!(count_session_entities(&mut app), 2);
+        assert_eq!(count_attached_session_entities(&mut app), 1);
+        let new_attached_sid = attached_session_id(&mut app).0;
+        assert_ne!(new_attached_sid, bootstrap_sid);
+        let mux = app.world().resource::<Multiplexer>();
+        assert_eq!(mux.sessions.len(), 2);
     }
 }

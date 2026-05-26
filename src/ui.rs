@@ -1,11 +1,11 @@
 //! Bevy UI Plugin and the rebuild system. The structural shell
 //! (status bar / tab bars / pane frames / split containers) is despawned
-//! and rebuilt whenever `Multiplexer` or the primary window's
-//! `AttachedSession` changes. Activity host entities (managed by
-//! `ActivityEntityRegistry`) are kept stable across rebuilds and
-//! re-parented via `ChildOf`.
+//! and rebuilt whenever `Multiplexer` changes or the `AttachedSession`
+//! marker moves to a different session entity. Activity host entities
+//! (managed by `ActivityEntityRegistry`) are kept stable across rebuilds
+//! and re-parented via `ChildOf`.
 
-use crate::multiplexer::{AttachedSession, Multiplexer};
+use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::ecs::change_detection::DetectChanges;
@@ -83,15 +83,15 @@ fn rebuild_structure_on_change(
     mut commands: Commands,
     mut registry: ResMut<ActivityEntityRegistry>,
     mux: Res<Multiplexer>,
-    attached_q: Query<(Entity, Ref<AttachedSession>), With<Window>>,
+    attached_q: Query<&SessionEntityId, With<AttachedSession>>,
     ui_root_q: Query<Entity, With<UiRoot>>,
     structural_q: Query<Entity, With<StructuralNode>>,
     activity_hosts_q: Query<(Entity, &ActivityHostNode)>,
 ) {
-    let Ok((_window_entity, attached_ref)) = attached_q.single() else {
+    let Ok(attached) = attached_q.single() else {
         return;
     };
-    if !mux.is_changed() && !attached_ref.is_changed() {
+    if !mux.is_changed() {
         return;
     }
 
@@ -103,23 +103,12 @@ fn rebuild_structure_on_change(
         return;
     };
 
-    let attached_sid = attached_ref.0.clone();
-    let Ok(session) = mux.sessions.get(&attached_sid) else {
+    let attached_sid = attached.0;
+    let Some(session) = mux.sessions.get(&attached_sid) else {
         tracing::warn!(
             target: "ozmux_gui::ui",
             "attached session {} missing from multiplexer",
             attached_sid,
-        );
-        return;
-    };
-    let Some(active_wid) = session.active_window.as_ref() else {
-        return;
-    };
-    let Some(window) = mux.windows.get(active_wid) else {
-        tracing::warn!(
-            target: "ozmux_gui::ui",
-            "active_window {} missing from multiplexer",
-            active_wid,
         );
         return;
     };
@@ -176,25 +165,25 @@ fn rebuild_structure_on_change(
         .id();
 
     // Collect every Activity that exists in the multiplexer domain — across
-    // ALL windows, not just the currently focused one. This is the set
+    // ALL sessions, not just the currently attached one. This is the set
     // `registry.prune` will preserve. Walking the domain (rather than
     // collecting from the just-built UI tree) keeps hosts of inactive
-    // tabs and unfocused windows alive across rebuilds; their
+    // tabs and unattached sessions alive across rebuilds; their
     // `TerminalHandle` / `PtyHandle` / alacritty `Term` would otherwise
     // be despawned on every focus switch and `finish_terminal_setup`
     // would re-spawn a fresh PTY, blowing away grid + scrollback.
     let live_activity_ids: HashSet<ActivityId> = mux
-        .windows
+        .sessions
         .values()
-        .flat_map(|w| w.pane_ids().filter_map(|pid| w.pane(pid).ok()))
+        .flat_map(|s| s.pane_ids().filter_map(|pid| s.pane(pid).ok()))
         .flat_map(|p| p.activity_ids().cloned())
         .collect();
-    match window.cells.cell(&window.root_cell) {
+    match session.cells.cell(&session.root_cell) {
         Ok(Cell::Root(root)) => {
             layout::build_cell_recursive(
                 &mut commands,
                 content,
-                window,
+                session,
                 &root.child,
                 &mut registry,
                 hidden_stash,
@@ -203,38 +192,39 @@ fn rebuild_structure_on_change(
         Ok(_) => {
             tracing::warn!(
                 target: "ozmux_gui::ui",
-                "window.root_cell {} is not Cell::Root",
-                window.root_cell,
+                "session.root_cell {} is not Cell::Root",
+                session.root_cell,
             );
         }
         Err(err) => {
             tracing::warn!(
                 target: "ozmux_gui::ui",
-                "window.root_cell {} missing ({:?})",
-                window.root_cell,
+                "session.root_cell {} missing ({:?})",
+                session.root_cell,
                 err,
             );
         }
     }
 
-    // Activity hosts that belong to OTHER (inactive) windows in the session
-    // are not visited by `build_cell_recursive` (which only walks the active
-    // window's cells), so they remain orphans after the ChildOf-detach above.
-    // An orphan host renders its `MaterialNode`-required `Node` as a top-level
-    // UI root, covering the visible content and status bar. Park them in
-    // `hidden_stash` so their PTY/Term state stays alive but invisible.
-    let active_window_activity_ids: HashSet<ActivityId> = window
+    // Activity hosts that belong to OTHER (unattached) sessions are not
+    // visited by `build_cell_recursive` (which only walks the attached
+    // session's cells), so they remain orphans after the ChildOf-detach
+    // above. An orphan host renders its `MaterialNode`-required `Node` as
+    // a top-level UI root, covering the visible content and status bar.
+    // Park them in `hidden_stash` so their PTY/Term state stays alive but
+    // invisible.
+    let attached_session_activity_ids: HashSet<ActivityId> = session
         .pane_ids()
-        .filter_map(|pid| window.pane(pid).ok())
+        .filter_map(|pid| session.pane(pid).ok())
         .flat_map(|p| p.activity_ids().cloned())
         .collect();
     for (host, host_node) in activity_hosts_q.iter() {
-        if !active_window_activity_ids.contains(&host_node.0) {
+        if !attached_session_activity_ids.contains(&host_node.0) {
             commands.entity(host).insert(ChildOf(hidden_stash));
         }
     }
 
-    status_bar::build_status_bar(&mut commands, ui_root, session, active_wid, &mux.windows);
+    status_bar::build_status_bar(&mut commands, ui_root, &mux.sessions, Some(attached_sid));
 
     registry.prune(&mut commands, &live_activity_ids);
 }
@@ -359,11 +349,8 @@ mod tests {
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let wid = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                session.active_window.clone().expect("active window")
-            };
-            mux.rename_window(&wid, "renamed".into()).expect("rename");
+            let sid = *mux.sessions.keys().next().expect("session");
+            mux.rename_session(&sid, "renamed".into()).expect("rename");
         }
         app.update();
 
@@ -401,16 +388,14 @@ mod tests {
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let (wid, active_pane) = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                let wid = session.active_window.clone().expect("active window");
-                let window = mux.windows.get(&wid).expect("window");
-                (wid, window.active_pane.clone())
+            let (sid, active_pane) = {
+                let (sid, session) = mux.sessions.iter().next().expect("session");
+                (*sid, session.active_pane.clone())
             };
             let new_pane_id = PaneId::new();
             let new_activity = Activity::terminal(ActivityId::new());
-            mux.with_window(&wid, |w| {
-                w.split_pane(
+            mux.with_session(&sid, |s| {
+                s.split_pane(
                     &active_pane,
                     new_pane_id,
                     new_activity,
@@ -418,7 +403,7 @@ mod tests {
                     SplitOrientation::Horizontal,
                 )
             })
-            .expect("with_window returned Some")
+            .expect("with_session returned Some")
             .expect("split_pane Ok");
         }
         app.update();
@@ -447,14 +432,12 @@ mod tests {
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let (wid, active_pane) = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                let wid = session.active_window.clone().expect("active window");
-                let window = mux.windows.get(&wid).expect("window");
-                (wid, window.active_pane.clone())
+            let (sid, active_pane) = {
+                let (sid, session) = mux.sessions.iter().next().expect("session");
+                (*sid, session.active_pane.clone())
             };
-            mux.with_window(&wid, |w| {
-                w.split_pane(
+            mux.with_session(&sid, |s| {
+                s.split_pane(
                     &active_pane,
                     new_pane_id.clone(),
                     Activity::terminal(new_activity_id.clone()),
@@ -462,7 +445,7 @@ mod tests {
                     SplitOrientation::Horizontal,
                 )
             })
-            .expect("with_window")
+            .expect("with_session")
             .expect("split_pane");
         }
         app.update();
@@ -478,17 +461,9 @@ mod tests {
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let wid = mux
-                .sessions
-                .iter()
-                .next()
-                .expect("session")
-                .1
-                .active_window
-                .clone()
-                .expect("active window");
-            mux.with_window(&wid, |w| w.close_pane(&new_pane_id))
-                .expect("with_window")
+            let sid = *mux.sessions.keys().next().expect("session");
+            mux.with_session(&sid, |s| s.close_pane(&new_pane_id))
+                .expect("with_session")
                 .expect("close_pane");
         }
         app.update();
@@ -518,11 +493,8 @@ mod tests {
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let wid = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                session.active_window.clone().expect("active window")
-            };
-            mux.rename_window(&wid, "second-rename".into())
+            let sid = *mux.sessions.keys().next().expect("session");
+            mux.rename_session(&sid, "second-rename".into())
                 .expect("rename");
         }
         app.update();
@@ -534,54 +506,58 @@ mod tests {
     }
 
     #[test]
-    fn focus_window_switch_does_not_orphan_inactive_window_hosts() {
-        use ozmux_multiplexer::CycleDirection;
-
+    fn focus_session_switch_does_not_orphan_inactive_session_hosts() {
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        let (sid, bootstrap_aid) = {
+        let bootstrap_aid = {
             let mux = app.world().resource::<Multiplexer>();
-            let (sid, session) = mux.sessions.iter().next().expect("session");
-            let wid = session.active_window.clone().expect("active window");
-            let window = mux.windows.get(&wid).expect("window");
-            let pane = window.pane(&window.active_pane).expect("pane");
-            (sid.clone(), pane.active_activity.clone())
+            let (_sid, session) = mux.sessions.iter().next().expect("session");
+            let pane = session.pane(&session.active_pane).expect("pane");
+            pane.active_activity.clone()
         };
 
-        let second_aid = {
+        // Mint a second session (entity included so the marker swap target exists).
+        let second_sid = {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let (_wid, _pid, aid) = mux
-                .create_window(Some(&sid), Some("second".into()))
-                .expect("create_window");
-            aid
+            let (sid, _, _) = mux.create_session(Some("second".into()));
+            sid
         };
+        let second_entity = app
+            .world_mut()
+            .spawn((SessionEntityId(second_sid), Name::new("Session:second")))
+            .id();
         app.update();
 
-        {
+        // Swap AttachedSession to the second session entity.
+        let bootstrap_entity = {
             let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let outcome = mux
-                .cycle_active_window(&sid, CycleDirection::Next)
-                .expect("cycle_active_window");
-            assert!(
-                matches!(outcome, ozmux_multiplexer::SetActiveOutcome::Changed),
-                "active_window must advance for a 2-window session"
-            );
+            let mut q = world.query_filtered::<Entity, With<AttachedSession>>();
+
+            q.single(world).expect("exactly one attached")
+        };
+        app.world_mut()
+            .entity_mut(bootstrap_entity)
+            .remove::<AttachedSession>();
+        app.world_mut()
+            .entity_mut(second_entity)
+            .insert(AttachedSession);
+        {
+            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
+            mux.set_changed();
         }
         app.update();
 
         let registry = app.world().resource::<ActivityEntityRegistry>();
-        let bootstrap_entity = registry
+        let bootstrap_host = registry
             .get(&bootstrap_aid)
-            .expect("bootstrap activity host must remain in registry across window switch");
-        let _ = second_aid;
+            .expect("bootstrap activity host must remain in registry across session switch");
 
         assert!(
-            app.world().get::<ChildOf>(bootstrap_entity).is_some(),
-            "inactive WINDOW's activity host must have a valid ChildOf — without it, MaterialNode's required Node becomes a top-level UI root that covers the screen (status bar disappears)"
+            app.world().get::<ChildOf>(bootstrap_host).is_some(),
+            "unattached session's activity host must have a valid ChildOf — without it, MaterialNode's required Node becomes a top-level UI root"
         );
     }
 
@@ -598,23 +574,20 @@ mod tests {
         let (bootstrap_id, second_id) = {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let wid = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                session.active_window.clone().expect("active window")
-            };
+            let sid = *mux.sessions.keys().next().expect("session");
             let (active_pane, bootstrap_aid) = {
-                let window = mux.windows.get(&wid).expect("window");
-                let active_pane = window.active_pane.clone();
-                let pane = window.pane(&active_pane).expect("pane");
+                let session = mux.sessions.get(&sid).expect("session");
+                let active_pane = session.active_pane.clone();
+                let pane = session.pane(&active_pane).expect("pane");
                 (active_pane, pane.active_activity.clone())
             };
             let second_aid = ActivityId::new();
-            mux.with_window(&wid, |w| {
-                w.pane_mut(&active_pane)
+            mux.with_session(&sid, |s| {
+                s.pane_mut(&active_pane)
                     .expect("pane_mut")
                     .add_activity(Activity::terminal(second_aid.clone()))
             })
-            .expect("with_window")
+            .expect("with_session")
             .expect("add_activity");
             (bootstrap_aid, second_aid)
         };
@@ -637,18 +610,15 @@ mod tests {
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let wid = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                session.active_window.clone().expect("active window")
-            };
-            let active_pane = mux.windows.get(&wid).expect("window").active_pane.clone();
+            let sid = *mux.sessions.keys().next().expect("session");
+            let active_pane = mux.sessions.get(&sid).expect("session").active_pane.clone();
             let _outcome = mux
-                .with_window(&wid, |w| {
-                    w.pane_mut(&active_pane)
+                .with_session(&sid, |s| {
+                    s.pane_mut(&active_pane)
                         .expect("pane_mut")
                         .set_active_activity(&second_id)
                 })
-                .expect("with_window")
+                .expect("with_session")
                 .expect("set_active_activity");
         }
         app.update();
@@ -705,18 +675,15 @@ mod tests {
             {
                 let world = app.world_mut();
                 let mut mux = world.resource_mut::<Multiplexer>();
-                let wid = {
-                    let (_sid, session) = mux.sessions.iter().next().expect("session");
-                    session.active_window.clone().expect("active window")
-                };
-                let active_pane = mux.windows.get(&wid).expect("window").active_pane.clone();
+                let sid = *mux.sessions.keys().next().expect("session");
+                let active_pane = mux.sessions.get(&sid).expect("session").active_pane.clone();
                 let _outcome = mux
-                    .with_window(&wid, |w| {
-                        w.pane_mut(&active_pane)
+                    .with_session(&sid, |s| {
+                        s.pane_mut(&active_pane)
                             .expect("pane_mut")
                             .set_active_activity(target_id)
                     })
-                    .expect("with_window")
+                    .expect("with_session")
                     .expect("set_active_activity");
             }
             app.update();
