@@ -16,12 +16,11 @@ use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
 
 /// Resolves the focused activity's entity via the attached session →
-/// multiplexer → registry chain. Shared by `dispatch_focused_key`, the
-/// mouse-wheel router, and the IME plugin.
+/// multiplexer → registry chain.
 pub(crate) fn resolve_focused_terminal(
     attached_sid_q: &Query<&SessionEntityId, With<AttachedSession>>,
     mux: &Multiplexer,
-    registry: &crate::ui::registry::ActivityEntityRegistry,
+    registry: &ActivityEntityRegistry,
 ) -> Option<Entity> {
     let attached = attached_sid_q.iter().next()?;
     let session = mux.sessions.get(&attached.0)?;
