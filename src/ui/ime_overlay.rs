@@ -27,22 +27,6 @@ use crate::input::resolve_focused_terminal;
 use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
 
-/// Marker for the singleton IME preedit overlay root entity.
-#[derive(Component)]
-pub(crate) struct ImeOverlayNode;
-
-/// Marker for the pre-caret `TextSpan` child of the overlay root.
-#[derive(Component)]
-pub(crate) struct ImePreCaretSpan;
-
-/// Marker for the post-caret `TextSpan` child of the overlay root.
-#[derive(Component)]
-pub(crate) struct ImePostCaretSpan;
-
-/// Marker for the 1-px sibling `Node` that draws the caret bar.
-#[derive(Component)]
-pub(crate) struct ImeCaretBar;
-
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
 pub struct ImeOverlayPlugin;
@@ -58,6 +42,22 @@ impl Plugin for ImeOverlayPlugin {
             );
     }
 }
+
+/// Marker for the singleton IME preedit overlay root entity.
+#[derive(Component)]
+pub(crate) struct ImeOverlayNode;
+
+/// Marker for the pre-caret `TextSpan` child of the overlay root.
+#[derive(Component)]
+pub(crate) struct ImePreCaretSpan;
+
+/// Marker for the post-caret `TextSpan` child of the overlay root.
+#[derive(Component)]
+pub(crate) struct ImePostCaretSpan;
+
+/// Marker for the 1-px sibling `Node` that draws the caret bar.
+#[derive(Component)]
+pub(crate) struct ImeCaretBar;
 
 /// Computes the overlay's top-left logical-pixel position relative to
 /// the window origin. Caller is responsible for writing this into
@@ -153,7 +153,7 @@ pub(crate) fn position_ime_overlay(
     };
 
     let scale = window.resolution.scale_factor();
-    let cursor_cell = grid.cursor.clone().map(|c| (c.x, c.y)).unwrap_or((0, 0));
+    let cursor_cell = grid.cursor.as_ref().map(|c| (c.x, c.y)).unwrap_or((0, 0));
 
     // NOTE: `measured_width_logical = 0.0` is a known MVP shortcut.
     // Reading `TextLayoutInfo.size.x` for accurate clamping requires
