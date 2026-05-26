@@ -12,7 +12,7 @@ use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers, SessionOffset};
 use ozmux_multiplexer::SessionId;
 use std::collections::HashSet;
-
+use crate::input::ime::{ImeState, read_ime_events};
 use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
 
@@ -34,7 +34,7 @@ pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, dispatch_focused_key);
+        app.add_systems(Update, dispatch_focused_key.after(read_ime_events));
     }
 }
 
@@ -56,6 +56,7 @@ pub(crate) fn dispatch_focused_key(
     configs: Res<crate::configs::OzmuxConfigsResource>,
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+    ime_state: Res<ImeState>,
 ) {
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
@@ -75,6 +76,10 @@ pub(crate) fn dispatch_focused_key(
 
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
+            continue;
+        }
+
+        if ime_state.is_composing() {
             continue;
         }
 
@@ -530,6 +535,7 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
 
@@ -803,6 +809,7 @@ mod tests {
             .add_plugins(OzmuxShortcutPlugin);
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
         app.update();
