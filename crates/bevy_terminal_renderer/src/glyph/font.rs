@@ -400,6 +400,10 @@ mod tests {
 
     /// `init_cell_metrics_from_primary_window` reads the PrimaryWindow's
     /// scale_factor and inserts a DPR-aware `TerminalCellMetricsResource`.
+    /// Verifies BOTH (a) `phys_font_size` reflects the scale_factor and
+    /// (b) the derived metrics (advance_phys) are also DPR-scaled —
+    /// catches a regression where phys_font_size is correct but a wrong
+    /// size (e.g. FONT_SIZE_PX as u16) is fed to cell_metrics_px.
     #[test]
     fn init_cell_metrics_from_primary_window_uses_window_scale_factor() {
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
@@ -425,9 +429,25 @@ mod tests {
             .world()
             .get_resource::<TerminalCellMetricsResource>()
             .expect("Startup system should have inserted TerminalCellMetricsResource");
+
+        // (a) phys_font_size reflects scale_factor.
         assert_eq!(
             res.phys_font_size, 24,
-            "phys_font_size should be FONT_SIZE_PX (12) * scale_factor (2.0) = 24"
+            "phys_font_size should be FONT_SIZE_PX * scale_factor (12 * 2.0 = 24)"
+        );
+
+        // (b) Derived metrics are ALSO scaled to DPR=2 — catches a bug
+        // where phys_font_size is right but the wrong size is fed to
+        // cell_metrics_px. Compares against DPR=1 baseline rather than
+        // hardcoding a JBM-specific advance value (~14.4 px) that would
+        // break on font updates.
+        let baseline = TerminalFonts::default();
+        let m12 = baseline.cell_metrics_px(12);
+        assert!(
+            (res.metrics.advance_phys - m12.advance_phys * 2.0).abs() < 0.5,
+            "advance_phys at DPR=2 ({:.3}) should be ~2x DPR=1's ({:.3})",
+            res.metrics.advance_phys,
+            m12.advance_phys * 2.0,
         );
     }
 }
