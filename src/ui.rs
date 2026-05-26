@@ -16,6 +16,7 @@ use std::collections::HashSet;
 pub(crate) mod activity;
 pub(crate) mod copy_mode;
 pub(crate) mod copy_mode_indicator;
+pub(crate) mod ime_overlay;
 pub(crate) mod layout;
 pub(crate) mod palette;
 pub(crate) mod registry;
