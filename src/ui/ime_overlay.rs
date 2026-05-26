@@ -6,6 +6,10 @@
 //! `position_ime_overlay`), and the marker components identifying the
 //! root, pre-caret span, post-caret span, and caret bar.
 
+use crate::input::ime::ImeState;
+use crate::input::resolve_focused_terminal;
+use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::ui::registry::ActivityEntityRegistry;
 use bevy::app::{App, Plugin, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -17,15 +21,14 @@ use bevy::math::Vec2;
 use bevy::prelude::default;
 use bevy::text::{TextColor, TextSpan, Underline, UnderlineColor};
 use bevy::ui::widget::Text;
-use bevy::ui::{BackgroundColor, ComputedNode, Display, GlobalZIndex, Node, PositionType, UiGlobalTransform, UiSystems, Val};
+use bevy::ui::{
+    BackgroundColor, ComputedNode, Display, GlobalZIndex, Node, PositionType, UiGlobalTransform,
+    UiSystems, Val,
+};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_terminal_renderer::CellMetrics;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::prelude::TerminalGrid;
-use crate::input::ime::ImeState;
-use crate::input::resolve_focused_terminal;
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
-use crate::ui::registry::ActivityEntityRegistry;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
@@ -125,10 +128,7 @@ pub(crate) fn position_ime_overlay(
     mut root_q: Query<&mut Node, With<ImeOverlayNode>>,
     mut pre_q: Query<&mut TextSpan, (With<ImePreCaretSpan>, Without<ImePostCaretSpan>)>,
     mut post_q: Query<&mut TextSpan, (With<ImePostCaretSpan>, Without<ImePreCaretSpan>)>,
-    mut bar_q: Query<
-        &mut Node,
-        (With<ImeCaretBar>, Without<ImeOverlayNode>),
-    >,
+    mut bar_q: Query<&mut Node, (With<ImeCaretBar>, Without<ImeOverlayNode>)>,
 ) {
     let Ok(mut root_node) = root_q.single_mut() else {
         return;

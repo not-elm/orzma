@@ -17,8 +17,10 @@ use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
+use input::ime::ImePlugin;
 use multiplexer::OzmuxMultiplexerPlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
+use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin};
 
 fn main() {
@@ -37,6 +39,8 @@ fn main() {
             CopyModePlugin,
             CopyModeIndicatorPlugin,
             crate::input::mouse_wheel::MouseWheelInputPlugin,
+            ImePlugin,
+            ImeOverlayPlugin,
         ))
         .run();
 }

@@ -6,6 +6,10 @@
 //! the attached terminal), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
+use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::ui::TerminalActivityMarker;
+use crate::ui::copy_mode::CopyModeState;
+use crate::ui::registry::ActivityEntityRegistry;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
@@ -18,10 +22,6 @@ use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_terminal::{TerminalKey, TerminalModifiers};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::prelude::TerminalGrid;
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
-use crate::ui::TerminalActivityMarker;
-use crate::ui::copy_mode::CopyModeState;
-use crate::ui::registry::ActivityEntityRegistry;
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before
@@ -32,10 +32,8 @@ pub struct ImePlugin;
 
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ImeState>().add_systems(
-            Update,
-            (ime_policy_system, read_ime_events).chain(),
-        );
+        app.init_resource::<ImeState>()
+            .add_systems(Update, (ime_policy_system, read_ime_events).chain());
     }
 }
 
@@ -236,6 +234,10 @@ pub(crate) fn read_ime_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::multiplexer::{
+        AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId,
+    };
+    use crate::ui::registry::ActivityEntityRegistry;
     use bevy::app::{App, Update};
     use bevy::ecs::entity::Entity;
     use bevy::ecs::observer::On;
@@ -244,8 +246,6 @@ mod tests {
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
     use std::sync::{Arc, Mutex};
-    use crate::multiplexer::{AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId};
-    use crate::ui::registry::ActivityEntityRegistry;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
@@ -301,7 +301,12 @@ mod tests {
     #[test]
     fn apply_enabled_is_noop() {
         let mut s = ImeState::default();
-        let out = apply_event(&mut s, &Ime::Enabled { window: dummy_window() });
+        let out = apply_event(
+            &mut s,
+            &Ime::Enabled {
+                window: dummy_window(),
+            },
+        );
         assert!(out.is_none());
         assert!(!s.is_composing());
     }
@@ -356,7 +361,12 @@ mod tests {
                 cursor: Some((1, 1)),
             },
         );
-        apply_event(&mut s, &Ime::Disabled { window: dummy_window() });
+        apply_event(
+            &mut s,
+            &Ime::Disabled {
+                window: dummy_window(),
+            },
+        );
         assert!(!s.is_composing());
     }
 
@@ -468,7 +478,13 @@ mod tests {
 
         app.update();
 
-        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap().clone();
+        let captured = app
+            .world()
+            .resource::<CapturedKeys>()
+            .0
+            .lock()
+            .unwrap()
+            .clone();
         assert_eq!(captured.len(), 1, "expected exactly one TerminalKeyInput");
         assert_eq!(captured[0].entity, term_entity);
         assert!(
@@ -504,7 +520,16 @@ mod tests {
 
         app.update();
 
-        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap().clone();
-        assert!(captured.is_empty(), "commit should be dropped when no AttachedSession");
+        let captured = app
+            .world()
+            .resource::<CapturedKeys>()
+            .0
+            .lock()
+            .unwrap()
+            .clone();
+        assert!(
+            captured.is_empty(),
+            "commit should be dropped when no AttachedSession"
+        );
     }
 }
