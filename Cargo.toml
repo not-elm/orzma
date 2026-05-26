@@ -12,6 +12,7 @@ name = "ozmux-gui"
 path = "src/main.rs"
 
 [dependencies]
+ab_glyph = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
 bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }

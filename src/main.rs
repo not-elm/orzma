@@ -3,6 +3,7 @@
 mod bootstrap;
 mod clipboard;
 mod configs;
+mod font;
 mod input;
 mod multiplexer;
 mod theme;
