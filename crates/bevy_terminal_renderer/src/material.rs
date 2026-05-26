@@ -322,10 +322,22 @@ fn update_terminal_material(
     // `sync_atlas_image` re-uploads pixels — the glyphs are present on GPU
     // but the shader's `textureSampleLevel` returns 0. The actual GPU upload
     // cost is bounded by `needs_rebuild` below.
-    for (handle, mut state, grid) in terminals.iter_mut() {
-        let dpr = windows.single().map(|w| w.scale_factor()).unwrap_or(1.0);
-        let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
+    // NOTE: Skip the entire system when PrimaryWindow is transiently
+    // absent (display hotplug, brief winit reconnect). Trade-off: the
+    // `mat.params = ...` write below would fire AssetEvent::Modified
+    // every frame (load-bearing for bind-group rebuild — see NOTE above);
+    // skipping for one frame means the previous frame's bind group
+    // continues to serve. This is bounded (sync_atlas_image is also
+    // ordered after this system, so atlas uploads defer in lock-step)
+    // and far less disruptive than the previous .unwrap_or(1.0) flash
+    // that would re-rasterize the entire atlas at half scale.
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let dpr = window.scale_factor();
+    let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
 
+    for (handle, mut state, grid) in terminals.iter_mut() {
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
