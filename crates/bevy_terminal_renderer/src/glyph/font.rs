@@ -108,13 +108,6 @@ pub struct TerminalFonts {
     pub italic: FontArc,
     /// Bold weight, italic style.
     pub bold_italic: FontArc,
-    /// Raw byte slice of `regular` for `ttf-parser` re-parse (underline metrics).
-    ///
-    /// `ab_glyph` does not expose `post`/`OS/2` table data, so we hold the
-    /// same `include_bytes!` slice to feed `ttf_parser::Face::parse` on
-    /// metrics requests. Zero extra memory cost — both crates borrow the
-    /// same static slice.
-    pub(crate) regular_ttf_bytes: &'static [u8],
 }
 
 /// Computes the worst-case rightward overflow (in physical px) over ASCII
@@ -159,7 +152,7 @@ impl TerminalFonts {
     /// Returns full pixel metrics for the regular face at the requested
     /// physical pixel size. See [`CellMetrics`] for individual field semantics.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
-        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
+        let face = TtfFace::parse(self.regular.font_data(), 0)
             .expect("IosevkaTermNerdFontMono-Regular ttf-parser parse");
         // NOTE: cast to i32 before subtraction. ascender() / descender() return
         // i16, and (asc − desc) can exceed i16::MAX for fonts where the
@@ -228,7 +221,7 @@ impl TerminalFonts {
     /// derivation) and `glyph/atlas.rs` (for glyph rasterization), so both
     /// agree on the actual rendering scale.
     pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
-        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
+        let face = TtfFace::parse(self.regular.font_data(), 0)
             .expect("IosevkaTermNerdFontMono-Regular ttf-parser parse");
         let asc = i32::from(face.ascender());
         let desc = i32::from(face.descender());
@@ -240,11 +233,11 @@ impl TerminalFonts {
 
 impl Default for TerminalFonts {
     fn default() -> Self {
-        const REGULAR_BYTES: &[u8] =
-            include_bytes!("../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Regular.ttf");
         Self {
-            regular: FontArc::try_from_slice(REGULAR_BYTES)
-                .expect("IosevkaTermNerdFontMono-Regular load"),
+            regular: FontArc::try_from_slice(include_bytes!(
+                "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Regular.ttf"
+            ))
+            .expect("IosevkaTermNerdFontMono-Regular load"),
             bold: FontArc::try_from_slice(include_bytes!(
                 "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Bold.ttf"
             ))
@@ -257,7 +250,6 @@ impl Default for TerminalFonts {
                 "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-BoldItalic.ttf"
             ))
             .expect("IosevkaTermNerdFontMono-BoldItalic load"),
-            regular_ttf_bytes: REGULAR_BYTES,
         }
     }
 }
@@ -361,7 +353,7 @@ mod tests {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
 
-        let face = TtfFace::parse(fonts.regular_ttf_bytes, 0).unwrap();
+        let face = TtfFace::parse(fonts.regular.font_data(), 0).unwrap();
         let upem = f32::from(face.units_per_em());
         let em_scale = (i32::from(face.ascender()) - i32::from(face.descender())) as f32 / upem;
         let px_scale = 12.0_f32 * em_scale;
