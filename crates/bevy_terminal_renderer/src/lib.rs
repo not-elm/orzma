@@ -5,6 +5,7 @@ use crate::{
 };
 
 mod bundle;
+pub mod bundled;
 pub mod glyph;
 mod grid;
 pub mod material;

@@ -333,23 +333,20 @@ impl TerminalFonts {
 
 impl Default for TerminalFonts {
     fn default() -> Self {
+        // Bytes come from crate::bundled so the Bevy app's FontBridgePlugin
+        // can reference the same static slices instead of re-embedding
+        // identical copies (the linker cannot dedup include_bytes! across
+        // crate boundaries without LTO; without this single source of
+        // truth the binary carries the font data twice).
         Self {
-            regular: FontArc::try_from_slice(include_bytes!(
-                "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Regular.ttf"
-            ))
-            .expect("IosevkaTermNerdFontMono-Regular load"),
-            bold: FontArc::try_from_slice(include_bytes!(
-                "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Bold.ttf"
-            ))
-            .expect("IosevkaTermNerdFontMono-Bold load"),
-            italic: FontArc::try_from_slice(include_bytes!(
-                "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Italic.ttf"
-            ))
-            .expect("IosevkaTermNerdFontMono-Italic load"),
-            bold_italic: FontArc::try_from_slice(include_bytes!(
-                "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-BoldItalic.ttf"
-            ))
-            .expect("IosevkaTermNerdFontMono-BoldItalic load"),
+            regular: FontArc::try_from_slice(crate::bundled::REGULAR)
+                .expect("IosevkaTermNerdFontMono-Regular load"),
+            bold: FontArc::try_from_slice(crate::bundled::BOLD)
+                .expect("IosevkaTermNerdFontMono-Bold load"),
+            italic: FontArc::try_from_slice(crate::bundled::ITALIC)
+                .expect("IosevkaTermNerdFontMono-Italic load"),
+            bold_italic: FontArc::try_from_slice(crate::bundled::BOLD_ITALIC)
+                .expect("IosevkaTermNerdFontMono-BoldItalic load"),
         }
     }
 }
@@ -520,10 +517,7 @@ mod tests {
 
         // Build a non-default TerminalFonts via from_bytes — same TTF for
         // all four faces (legal for a smoke test; the labels are advisory).
-        let bytes: Vec<u8> = include_bytes!(
-            "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Regular.ttf"
-        )
-        .to_vec();
+        let bytes: Vec<u8> = crate::bundled::REGULAR.to_vec();
         let custom = TerminalFonts::from_bytes(
             bytes.clone(),
             bytes.clone(),
