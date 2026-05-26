@@ -32,6 +32,10 @@ pub struct SessionDimensions {
     pub rows: u16,
 }
 
+/// Owns the cell tree, panes, and active-pane pointer for one Session.
+///
+/// Carries the per-Session active-point counter used by `pane_in_direction`
+/// to tiebreak adjacent panes by most-recent activation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
@@ -289,64 +293,278 @@ impl Session {
     }
 }
 
-/// Map of Session-by-id. Thin wrapper retained for the public re-export;
-/// callers typically reach for `MultiplexerService::sessions` directly.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct SessionState(HashMap<SessionId, Session>);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::cells::{Side, SplitOrientation};
+    use crate::session::pane::activity::{Activity, ActivityId};
 
-impl SessionState {
-    /// Insert a Session keyed by its own id.
-    #[inline]
-    pub fn insert(&mut self, session: Session) {
-        self.0.insert(session.id, session);
+    fn session_with_two_activities() -> (Session, PaneId, ActivityId, ActivityId) {
+        let pid = PaneId::new();
+        let a0 = Activity::terminal(ActivityId::new());
+        let a1 = Activity::terminal(ActivityId::new());
+        let a0_id = a0.id.clone();
+        let a1_id = a1.id.clone();
+        let mut s = Session::new_with_initial(SessionId(0), "s".into(), pid.clone(), a0);
+        s.pane_mut(&pid).unwrap().add_activity(a1).unwrap();
+        (s, pid, a0_id, a1_id)
     }
 
-    /// Look up a Session by id.
-    #[inline]
-    pub fn get(&self, id: &SessionId) -> Option<&Session> {
-        self.0.get(id)
+    #[test]
+    fn break_activity_moves_active_activity_into_new_pane() {
+        let (mut s, pid, a0_id, a1_id) = session_with_two_activities();
+        let _ = s
+            .pane_mut(&pid)
+            .unwrap()
+            .set_active_activity(&a1_id)
+            .unwrap();
+        let new_pid = PaneId::new();
+
+        s.break_activity_to_pane(
+            &pid,
+            &a1_id,
+            new_pid.clone(),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+
+        let src = s.pane(&pid).unwrap();
+        assert!(
+            !src.has_activity(&a1_id),
+            "moved activity left the source pane"
+        );
+        assert_eq!(
+            src.active_activity, a0_id,
+            "source active falls back to first remaining"
+        );
+
+        let new_pane = s.pane(&new_pid).unwrap();
+        assert_eq!(new_pane.activities.len(), 1);
+        assert!(new_pane.has_activity(&a1_id));
+        assert_eq!(new_pane.active_activity, a1_id);
+
+        assert_eq!(s.active_pane, new_pid, "new pane becomes active");
     }
 
-    /// Mutably look up a Session by id.
-    #[inline]
-    pub fn get_mut(&mut self, id: &SessionId) -> Option<&mut Session> {
-        self.0.get_mut(id)
+    #[test]
+    fn break_activity_preserves_remaining_order_when_moving_non_active() {
+        let (mut s, pid, a0_id, a1_id) = session_with_two_activities();
+        s.break_activity_to_pane(
+            &pid,
+            &a1_id,
+            PaneId::new(),
+            Side::After,
+            SplitOrientation::Vertical,
+        )
+        .unwrap();
+        let src = s.pane(&pid).unwrap();
+        assert_eq!(src.activities.len(), 1);
+        assert_eq!(src.activities[0].id, a0_id);
+        assert_eq!(
+            src.active_activity, a0_id,
+            "non-active move leaves source active unchanged"
+        );
     }
 
-    /// Remove a Session, returning it if it was present.
-    #[inline]
-    pub fn remove(&mut self, id: &SessionId) -> Option<Session> {
-        self.0.remove(id)
+    #[test]
+    fn break_activity_rejects_single_activity_pane() {
+        let pid = PaneId::new();
+        let only = Activity::terminal(ActivityId::new());
+        let only_id = only.id.clone();
+        let mut s = Session::new_with_initial(SessionId(0), "s".into(), pid.clone(), only);
+        let err = s
+            .break_activity_to_pane(
+                &pid,
+                &only_id,
+                PaneId::new(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::CannotRemoveLastActivity(_)));
     }
 
-    /// `true` iff a Session with `id` is registered.
-    #[inline]
-    pub fn contains_key(&self, id: &SessionId) -> bool {
-        self.0.contains_key(id)
+    #[test]
+    fn break_activity_rejects_unknown_activity() {
+        let (mut s, pid, _a0, _a1) = session_with_two_activities();
+        let err = s
+            .break_activity_to_pane(
+                &pid,
+                &ActivityId::new(),
+                PaneId::new(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::ActivityNotInPane { .. }));
     }
 
-    /// Number of registered Sessions.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.0.len()
+    #[test]
+    fn break_activity_rejects_duplicate_new_pane_id() {
+        let (mut s, pid, _a0, a1_id) = session_with_two_activities();
+        let err = s
+            .break_activity_to_pane(
+                &pid,
+                &a1_id,
+                pid.clone(),
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::PaneIdConflict(_)));
     }
 
-    /// `true` iff no Sessions are registered.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    fn fresh_session() -> (Session, PaneId, ActivityId) {
+        let sid = SessionId(0);
+        let pid = PaneId::new();
+        let aid = ActivityId::new();
+        let activity = Activity::terminal(aid.clone());
+        let s = Session::new_with_initial(sid, "s".into(), pid.clone(), activity);
+        (s, pid, aid)
     }
 
-    /// Iterate over `(id, session)` pairs in arbitrary order.
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (&SessionId, &Session)> {
-        self.0.iter()
+    #[test]
+    fn split_pane_inserts_new_pane_and_promotes_active() {
+        let (mut s, original_pid, _) = fresh_session();
+        let new_pid = PaneId::new();
+        let new_aid = ActivityId::new();
+        let activity = Activity::terminal(new_aid.clone());
+        s.split_pane(
+            &original_pid,
+            new_pid.clone(),
+            activity,
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        assert_eq!(s.panes.len(), 2);
+        assert_eq!(s.active_pane, new_pid);
+        let new_pane = s.panes.get(&new_pid).unwrap();
+        assert_eq!(new_pane.activities.len(), 1);
+        assert_eq!(new_pane.active_activity, new_aid);
     }
 
-    /// Mutably iterate over `(id, session)` pairs in arbitrary order.
-    #[inline]
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&SessionId, &mut Session)> {
-        self.0.iter_mut()
+    #[test]
+    fn split_pane_with_duplicate_id_returns_pane_id_conflict() {
+        let (mut s, original_pid, _) = fresh_session();
+        let activity = Activity::terminal(ActivityId::new());
+        let err = s
+            .split_pane(
+                &original_pid,
+                original_pid.clone(),
+                activity,
+                Side::After,
+                SplitOrientation::Horizontal,
+            )
+            .unwrap_err();
+        assert!(matches!(err, MultiplexerError::PaneIdConflict(_)));
+    }
+
+    #[test]
+    fn close_pane_returns_destroyed_activity_ids() {
+        let (mut s, original_pid, _) = fresh_session();
+        let new_pid = PaneId::new();
+        let new_aid = ActivityId::new();
+        s.split_pane(
+            &original_pid,
+            new_pid.clone(),
+            Activity::terminal(new_aid.clone()),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        let destroyed = s.close_pane(&new_pid).unwrap();
+        assert_eq!(destroyed, vec![new_aid]);
+        assert_eq!(s.panes.len(), 1);
+        assert_eq!(s.active_pane, original_pid);
+    }
+
+    #[test]
+    fn close_last_pane_returns_cannot_close_last_pane() {
+        let (mut s, pid, _) = fresh_session();
+        let err = s.close_pane(&pid).unwrap_err();
+        assert!(matches!(err, MultiplexerError::CannotCloseLastPane(_)));
+    }
+
+    #[test]
+    fn new_session_starts_with_empty_active_point_table() {
+        let (s, _, _) = fresh_session();
+        assert_eq!(s.next_active_point, 0);
+        assert!(s.pane_active_points.is_empty());
+    }
+
+    #[test]
+    fn set_active_pane_records_active_point() {
+        let (mut s, original, _) = fresh_session();
+        let other = PaneId::new();
+        s.split_pane(
+            &original,
+            other.clone(),
+            Activity::terminal(ActivityId::new()),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        let first_point = *s.pane_active_points.get(&other).unwrap();
+        assert!(first_point >= 1);
+
+        assert!(matches!(
+            s.set_active_pane(&original).unwrap(),
+            SetActiveOutcome::Changed,
+        ));
+        let original_point = *s.pane_active_points.get(&original).unwrap();
+        assert!(
+            original_point > first_point,
+            "switching back must increment past the previous max",
+        );
+    }
+
+    #[test]
+    fn set_active_pane_unchanged_does_not_bump_counter() {
+        let (mut s, active, _) = fresh_session();
+        let before = s.next_active_point;
+        assert!(matches!(
+            s.set_active_pane(&active).unwrap(),
+            SetActiveOutcome::Unchanged,
+        ));
+        assert_eq!(s.next_active_point, before);
+    }
+
+    #[test]
+    fn new_session_starts_with_unset_dimensions() {
+        let (s, _, _) = fresh_session();
+        assert!(s.dimensions.is_none());
+    }
+
+    #[test]
+    fn session_set_dimensions_stores_cols_and_rows() {
+        let (mut s, _, _) = fresh_session();
+        s.set_dimensions(120, 40);
+        assert_eq!(
+            s.dimensions,
+            Some(SessionDimensions {
+                cols: 120,
+                rows: 40,
+            })
+        );
+    }
+
+    #[test]
+    fn close_pane_removes_active_point_entry() {
+        let (mut s, original, _) = fresh_session();
+        let new_pane = PaneId::new();
+        s.split_pane(
+            &original,
+            new_pane.clone(),
+            Activity::terminal(ActivityId::new()),
+            Side::After,
+            SplitOrientation::Horizontal,
+        )
+        .unwrap();
+        assert!(s.pane_active_points.contains_key(&new_pane));
+        s.close_pane(&new_pane).unwrap();
+        assert!(!s.pane_active_points.contains_key(&new_pane));
     }
 }
 

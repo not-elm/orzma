@@ -7,12 +7,11 @@ pub mod error;
 pub mod session;
 
 pub use error::{MultiplexerError, MultiplexerResult};
-pub use session::resize::ResizePaneOutcome;
 pub use session::{
     Activity, ActivityId, ActivityKind, BrowserProfile, Cell, CellId, CloseOutcome, CycleDirection,
-    LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, RootCell, Session,
-    SessionDimensions, SessionId, SessionState, SetActiveOutcome, Side, SplitCell,
-    SplitOrientation, SwapOffset, SwapOutcome,
+    LayoutCellState, Pane, PaneCell, PaneDirection, PaneId, PaneState, ResizePaneOutcome, RootCell,
+    Session, SessionDimensions, SessionId, SetActiveOutcome, Side, SplitCell, SplitOrientation,
+    SwapOffset, SwapOutcome,
 };
 
 /// Backwards-compatible alias for the active-pane outcome.

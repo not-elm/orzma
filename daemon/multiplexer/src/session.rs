@@ -18,5 +18,6 @@ pub use cells::{
 pub use direction::PaneDirection;
 pub use pane::activity::{Activity, ActivityId, ActivityKind, BrowserProfile};
 pub use pane::{CycleDirection, Pane, PaneId, PaneState, SetActiveOutcome};
-pub use session::{Session, SessionDimensions, SessionId, SessionState};
+pub use resize::ResizePaneOutcome;
+pub use session::{Session, SessionDimensions, SessionId};
 pub use swap::{SwapOffset, SwapOutcome};
