@@ -24,6 +24,8 @@ pub(crate) mod registry;
 pub(crate) mod root;
 pub(crate) mod status_bar;
 pub(crate) mod status_bar_sync;
+#[cfg(test)]
+pub(crate) mod stress_test;
 pub(crate) mod sync_session;
 pub(crate) mod tab_bar;
 pub(crate) mod terminal;
