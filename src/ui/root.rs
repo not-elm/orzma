@@ -44,7 +44,7 @@ pub(crate) fn setup_root_camera_and_ui_root(
             UiRoot,
             // NOTE: UiRoot does NOT carry StructuralNode — it must persist
             // across rebuilds. Its children carry StructuralNode and are
-            // recycled by `rebuild_structure_on_change`.
+            // recycled by `rebuild_session_ui_on_data_change`.
         ))
         .id();
 

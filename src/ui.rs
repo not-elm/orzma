@@ -1,17 +1,19 @@
-//! Bevy UI Plugin and the rebuild system. The structural shell
-//! (status bar / tab bars / pane frames / split containers) is despawned
-//! and rebuilt whenever `Multiplexer` changes or the `AttachedSession`
-//! marker moves to a different session entity. Activity host entities
-//! (managed by `ActivityEntityRegistry`) are kept stable across rebuilds
-//! and re-parented via `ChildOf`.
+//! Bevy UI Plugin and rebuild systems. Per-session UI subtrees are owned
+//! by their Session entity and rebuilt via
+//! `rebuild_session::rebuild_session_ui_on_data_change` whenever the
+//! per-session epoch in `MultiplexerService` advances. The status bar
+//! rebuilds independently via
+//! `status_bar_sync::rebuild_status_bar_on_session_set_change` when the
+//! session list or `AttachedSession` marker changes. Activity host
+//! entities (managed by `ActivityEntityRegistry`) are kept stable across
+//! rebuilds and re-parented via `ChildOf` — active hosts under the
+//! active session's pane slot, inactive hosts under the owning Session
+//! entity (a non-Node walker-skipped park).
 
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
-use bevy::ecs::change_detection::DetectChanges;
 use bevy::prelude::*;
-use ozmux_multiplexer::{ActivityId, Cell};
-use std::collections::HashSet;
+use ozmux_multiplexer::ActivityId;
 
 pub(crate) mod activity;
 pub(crate) mod copy_mode;
@@ -28,7 +30,8 @@ pub(crate) mod tab_bar;
 pub(crate) mod terminal;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
-/// never despawned; rebuilds replace its descendants only.
+/// never despawned. Hosts `SessionUiRoot` (the attachment point for the
+/// active session) and `StatusBarRoot` as direct children.
 #[derive(Component)]
 pub(crate) struct UiRoot;
 
@@ -75,15 +78,12 @@ impl Plugin for OzmuxUiPlugin {
         app.init_resource::<ActivityEntityRegistry>()
             .add_plugins(OzmuxTerminalUiPlugin)
             .add_systems(Startup, root::setup_root_camera_and_ui_root)
-            .add_systems(Update, rebuild_structure_on_change)
             .add_systems(
                 Update,
                 (
-                    rebuild_session::rebuild_session_ui_on_data_change
-                        .after(rebuild_structure_on_change),
+                    rebuild_session::rebuild_session_ui_on_data_change,
                     status_bar_sync::rebuild_status_bar_on_session_set_change,
-                )
-                    .run_if(|| std::env::var("OZMUX_REBUILD_V2").is_ok()),
+                ),
             )
             .add_systems(
                 PostUpdate,
@@ -92,174 +92,14 @@ impl Plugin for OzmuxUiPlugin {
     }
 }
 
-fn rebuild_structure_on_change(
-    mut commands: Commands,
-    mut registry: ResMut<ActivityEntityRegistry>,
-    mux: Res<Multiplexer>,
-    attached_q: Query<&SessionEntityId, With<AttachedSession>>,
-    ui_root_q: Query<Entity, With<UiRoot>>,
-    structural_q: Query<Entity, With<StructuralNode>>,
-    activity_hosts_q: Query<(Entity, &ActivityHostNode)>,
-    ui_font: Option<Res<crate::font::TerminalUiFont>>,
-) {
-    let Ok(attached) = attached_q.single() else {
-        return;
-    };
-    if !mux.is_changed() {
-        return;
-    }
-
-    let Ok(ui_root) = ui_root_q.single() else {
-        tracing::warn!(
-            target: "ozmux_gui::ui",
-            "rebuild_structure_on_change: UiRoot missing",
-        );
-        return;
-    };
-
-    let attached_sid = attached.0;
-    let Some(session) = mux.sessions.get(&attached_sid) else {
-        tracing::warn!(
-            target: "ozmux_gui::ui",
-            "attached session {} missing from multiplexer",
-            attached_sid,
-        );
-        return;
-    };
-
-    // NOTE: removing `ChildOf` must run BEFORE the structural despawn below.
-    // Bevy 0.16+ `Children` cascade-despawns descendants of the despawned
-    // parent; without this detach the Activity hosts (children of the
-    // structural slot we're about to despawn) would be wiped out, breaking
-    // the stable-identity contract.
-    for (host, _) in activity_hosts_q.iter() {
-        commands.entity(host).remove::<ChildOf>();
-    }
-
-    for entity in structural_q.iter() {
-        // NOTE: try_despawn is required because the queue applies parent
-        // despawns first, cascading their descendants (also StructuralNodes);
-        // subsequent iterations of this loop then target already-cascaded
-        // entities. Plain despawn() warns on those; try_despawn() is the
-        // Bevy 0.18 idiom for "despawn if still alive".
-        commands.entity(entity).try_despawn();
-    }
-
-    let content = commands
-        .spawn((
-            Node {
-                flex_grow: 1.0,
-                width: bevy::ui::Val::Percent(100.0),
-                padding: UiRect::all(Val::Px(2.0)),
-                ..default()
-            },
-            StructuralNode,
-            ChildOf(ui_root),
-        ))
-        .id();
-
-    // Hidden parent for inactive Activity hosts. Setting Display::None on
-    // the *stash* (rather than on each host) gives taffy a consistent
-    // parent-child hierarchy: every host has a valid `ChildOf` every
-    // frame. An unparented host (with the auto-inserted `Node` from
-    // `MaterialNode`'s `#[require(Node)]`) would otherwise be a top-level
-    // UI root, and toggling its `Node.display` between rebuilds destabilises
-    // taffy's internal SlotMap (panic: "invalid SlotMap key used") —
-    // observed when switching focus between two terminal Activities
-    // hosting interactive programs like neovim.
-    let hidden_stash = commands
-        .spawn((
-            Node {
-                display: bevy::ui::Display::None,
-                ..default()
-            },
-            StructuralNode,
-            ChildOf(ui_root),
-        ))
-        .id();
-
-    // Collect every Activity that exists in the multiplexer domain — across
-    // ALL sessions, not just the currently attached one. This is the set
-    // `registry.prune` will preserve. Walking the domain (rather than
-    // collecting from the just-built UI tree) keeps hosts of inactive
-    // tabs and unattached sessions alive across rebuilds; their
-    // `TerminalHandle` / `PtyHandle` / alacritty `Term` would otherwise
-    // be despawned on every focus switch and `finish_terminal_setup`
-    // would re-spawn a fresh PTY, blowing away grid + scrollback.
-    let live_activity_ids: HashSet<ActivityId> = mux
-        .sessions
-        .values()
-        .flat_map(|s| s.pane_ids().filter_map(|pid| s.pane(pid).ok()))
-        .flat_map(|p| p.activity_ids().cloned())
-        .collect();
-    let ui_font_handle = ui_font
-        .as_deref()
-        .map(|f| f.0.clone())
-        .unwrap_or_default();
-    match session.cells.cell(&session.root_cell) {
-        Ok(Cell::Root(root)) => {
-            layout::build_cell_recursive(
-                &mut commands,
-                content,
-                session,
-                &root.child,
-                &mut registry,
-                hidden_stash,
-                &ui_font_handle,
-            );
-        }
-        Ok(_) => {
-            tracing::warn!(
-                target: "ozmux_gui::ui",
-                "session.root_cell {} is not Cell::Root",
-                session.root_cell,
-            );
-        }
-        Err(err) => {
-            tracing::warn!(
-                target: "ozmux_gui::ui",
-                "session.root_cell {} missing ({:?})",
-                session.root_cell,
-                err,
-            );
-        }
-    }
-
-    // Activity hosts that belong to OTHER (unattached) sessions are not
-    // visited by `build_cell_recursive` (which only walks the attached
-    // session's cells), so they remain orphans after the ChildOf-detach
-    // above. An orphan host renders its `MaterialNode`-required `Node` as
-    // a top-level UI root, covering the visible content and status bar.
-    // Park them in `hidden_stash` so their PTY/Term state stays alive but
-    // invisible.
-    let attached_session_activity_ids: HashSet<ActivityId> = session
-        .pane_ids()
-        .filter_map(|pid| session.pane(pid).ok())
-        .flat_map(|p| p.activity_ids().cloned())
-        .collect();
-    for (host, host_node) in activity_hosts_q.iter() {
-        if !attached_session_activity_ids.contains(&host_node.0) {
-            commands.entity(host).insert(ChildOf(hidden_stash));
-        }
-    }
-
-    status_bar::build_status_bar(
-        &mut commands,
-        ui_root,
-        &mux.sessions,
-        Some(attached_sid),
-        &ui_font_handle,
-    );
-
-    registry.prune(&mut commands, &live_activity_ids);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
-    use crate::multiplexer::OzmuxMultiplexerPlugin;
+    use crate::multiplexer::{
+        AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId,
+    };
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
@@ -272,7 +112,6 @@ mod tests {
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
         unsafe {
             std::env::remove_var("OZMUX_CONFIG");
-            std::env::remove_var("OZMUX_REBUILD_V2");
         }
 
         // NOTE: `finish_terminal_setup` takes `ResMut<Assets<TerminalUiMaterial>>`,
@@ -324,8 +163,8 @@ mod tests {
         // NOTE: two `app.update()` calls are required here (and in every test that
         // needs a visible rebuild): the first tick runs Startup systems (bootstrap +
         // setup_root_camera_and_ui_root); the second tick runs the first Update pass
-        // where `rebuild_structure_on_change` fires because `AttachedSession` was
-        // just inserted.
+        // where `rebuild_session_ui_on_data_change` fires because the bootstrap
+        // bumped the per-session epoch.
         app.update();
         app.update();
 
@@ -377,6 +216,7 @@ mod tests {
             let mut mux = world.resource_mut::<Multiplexer>();
             let sid = *mux.sessions.keys().next().expect("session");
             mux.rename_session(&sid, "renamed".into()).expect("rename");
+            mux.bump_epoch(&sid);
         }
         app.update();
 
@@ -431,6 +271,7 @@ mod tests {
             })
             .expect("with_session returned Some")
             .expect("split_pane Ok");
+            mux.bump_epoch(&sid);
         }
         app.update();
 
@@ -473,6 +314,7 @@ mod tests {
             })
             .expect("with_session")
             .expect("split_pane");
+            mux.bump_epoch(&sid);
         }
         app.update();
 
@@ -491,6 +333,7 @@ mod tests {
             mux.with_session(&sid, |s| s.close_pane(&new_pane_id))
                 .expect("with_session")
                 .expect("close_pane");
+            mux.bump_epoch(&sid);
         }
         app.update();
 
@@ -522,6 +365,7 @@ mod tests {
             let sid = *mux.sessions.keys().next().expect("session");
             mux.rename_session(&sid, "second-rename".into())
                 .expect("rename");
+            mux.bump_epoch(&sid);
         }
         app.update();
 
@@ -544,17 +388,27 @@ mod tests {
             pane.active_activity.clone()
         };
 
-        // Mint a second session (entity included so the marker swap target exists).
+        // Mint a second session (entity + SessionUiSubtree included so
+        // sync_active_session can park subtrees back to their owners).
         let second_sid = {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
             let (sid, _, _) = mux.create_session(Some("second".into()));
+            mux.bump_epoch(&sid);
             sid
         };
+        let second_subtree = app.world_mut().spawn(Node::default()).id();
         let second_entity = app
             .world_mut()
-            .spawn((SessionEntityId(second_sid), Name::new("Session:second")))
+            .spawn((
+                SessionEntityId(second_sid),
+                crate::multiplexer::SessionUiSubtree(second_subtree),
+                Name::new("Session:second"),
+            ))
             .id();
+        app.world_mut()
+            .entity_mut(second_subtree)
+            .insert(ChildOf(second_entity));
         app.update();
 
         // Swap AttachedSession to the second session entity.
@@ -581,9 +435,22 @@ mod tests {
             .get(&bootstrap_aid)
             .expect("bootstrap activity host must remain in registry across session switch");
 
+        // Walk up the ChildOf chain from the host. Must terminate at a
+        // Session entity (which carries SessionEntityId and has no Node).
+        let mut cursor = bootstrap_host;
+        let final_parent = loop {
+            match app.world().get::<ChildOf>(cursor) {
+                Some(c) => cursor = c.parent(),
+                None => break cursor,
+            }
+        };
         assert!(
-            app.world().get::<ChildOf>(bootstrap_host).is_some(),
-            "unattached session's activity host must have a valid ChildOf — without it, MaterialNode's required Node becomes a top-level UI root"
+            app.world().get::<SessionEntityId>(final_parent).is_some(),
+            "host's chain must terminate at a Session entity",
+        );
+        assert!(
+            app.world().get::<bevy::ui::Node>(final_parent).is_none(),
+            "Session entity must not carry Node (walker-skip)",
         );
     }
 
@@ -615,6 +482,7 @@ mod tests {
             })
             .expect("with_session")
             .expect("add_activity");
+            mux.bump_epoch(&sid);
             (bootstrap_aid, second_aid)
         };
         app.update();
@@ -646,6 +514,7 @@ mod tests {
                 })
                 .expect("with_session")
                 .expect("set_active_activity");
+            mux.bump_epoch(&sid);
         }
         app.update();
 
@@ -670,24 +539,27 @@ mod tests {
             "inactive host Entity must still exist in the world"
         );
 
-        // Inactive host MUST be parented to a hidden stash (a StructuralNode
-        // with Display::None). Without a valid `ChildOf`, the host's
-        // auto-inserted Node (from `MaterialNode`'s `#[require(Node)]`)
-        // would render as a full-screen UI root; with the parent being
-        // Display::None the entire subtree is laid out as hidden.
+        // Inactive host MUST be parented to the owning Session entity. The
+        // Session entity carries `SessionEntityId` but no `Node`, so it falls
+        // outside Bevy's UI walker (`UiChildren::iter_ui_children` filters
+        // `With<Node>`) — the inactive host's subtree is layout-skipped
+        // entirely, no `Display::None` workaround needed.
         let bootstrap_parent = app
             .world()
             .get::<ChildOf>(bootstrap_entity)
-            .expect("inactive host must have a parent (the hidden stash)")
+            .expect("inactive host must have a parent (the owning Session entity)")
             .parent();
-        let stash_node = app
-            .world()
-            .get::<bevy::ui::Node>(bootstrap_parent)
-            .expect("hidden stash parent must have a Node component");
-        assert_eq!(
-            stash_node.display,
-            bevy::ui::Display::None,
-            "inactive host's parent must be Display::None (the hidden stash)"
+        assert!(
+            app.world()
+                .get::<SessionEntityId>(bootstrap_parent)
+                .is_some(),
+            "inactive host's parent must be the owning Session entity",
+        );
+        assert!(
+            app.world()
+                .get::<bevy::ui::Node>(bootstrap_parent)
+                .is_none(),
+            "Session entity must not carry Node (the walker-skip invariant)",
         );
 
         // Toggle focus back and forth several times — this exercises
@@ -695,8 +567,8 @@ mod tests {
         // was reproduced under (alternating focus between two terminal
         // Activities). The hierarchy must stay valid each frame:
         // both hosts have valid parents, the previously-active host
-        // moves to the hidden stash, the newly-active host moves to
-        // the visible slot.
+        // is parked under the Session entity (non-Node, walker-skipped),
+        // the newly-active host moves to the visible activity slot.
         for target_id in [&bootstrap_id, &second_id, &bootstrap_id, &second_id] {
             {
                 let world = app.world_mut();
@@ -711,6 +583,7 @@ mod tests {
                     })
                     .expect("with_session")
                     .expect("set_active_activity");
+                mux.bump_epoch(&sid);
             }
             app.update();
 
@@ -728,7 +601,7 @@ mod tests {
                 );
                 assert!(
                     app.world().get::<ChildOf>(expected_entity).is_some(),
-                    "host {id} must have a ChildOf every frame (active = activity_slot, inactive = hidden stash)"
+                    "host {id} must have a ChildOf every frame (active = activity_slot, inactive = Session entity)"
                 );
             }
         }

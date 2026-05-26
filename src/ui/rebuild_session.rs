@@ -20,7 +20,12 @@ pub(crate) fn rebuild_session_ui_on_data_change(
     mut last_epochs: Local<HashMap<SessionId, u64>>,
     mut registry: ResMut<ActivityEntityRegistry>,
     mux: Res<Multiplexer>,
-    sessions_q: Query<(Entity, &SessionEntityId, &SessionUiSubtree, Has<AttachedSession>)>,
+    sessions_q: Query<(
+        Entity,
+        &SessionEntityId,
+        &SessionUiSubtree,
+        Has<AttachedSession>,
+    )>,
     structural_q: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     activity_hosts_q: Query<(Entity, &ActivityHostNode)>,
     children_q: Query<&Children>,
@@ -154,7 +159,6 @@ mod tests {
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
         unsafe {
             std::env::remove_var("OZMUX_CONFIG");
-            std::env::set_var("OZMUX_REBUILD_V2", "1");
         }
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -238,9 +242,15 @@ mod tests {
         }
         app.update();
 
-        let registry = app.world().resource::<crate::ui::registry::ActivityEntityRegistry>();
-        let bootstrap_host = registry.get(&bootstrap_aid).expect("bootstrap host in registry");
-        let parent = app.world().get::<ChildOf>(bootstrap_host)
+        let registry = app
+            .world()
+            .resource::<crate::ui::registry::ActivityEntityRegistry>();
+        let bootstrap_host = registry
+            .get(&bootstrap_aid)
+            .expect("bootstrap host in registry");
+        let parent = app
+            .world()
+            .get::<ChildOf>(bootstrap_host)
             .expect("inactive host must have parent");
         assert_eq!(
             parent.parent(),

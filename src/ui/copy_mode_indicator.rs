@@ -55,10 +55,7 @@ fn attach_indicator_to_activity_host(
                 IndicatorCache::default(),
                 Text::new(""),
                 TextFont {
-                    font: ui_font
-                        .as_deref()
-                        .map(|f| f.0.clone())
-                        .unwrap_or_default(),
+                    font: ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default(),
                     font_size: theme::COPY_MODE_INDICATOR_FONT_SIZE_PX,
                     ..default()
                 },
@@ -457,6 +454,7 @@ mod tests {
             let mut mux = world.resource_mut::<Multiplexer>();
             let sid = *mux.sessions.keys().next().expect("session");
             mux.rename_session(&sid, "renamed".into()).expect("rename");
+            mux.bump_epoch(&sid);
         }
         app.update();
 
@@ -477,7 +475,8 @@ mod tests {
     }
 
     #[test]
-    fn chip_inherits_display_none_from_hidden_stash() {
+    fn inactive_host_parent_is_walker_skipped_session_entity() {
+        use crate::multiplexer::SessionEntityId;
         use crate::ui::ActivityHostNode;
         use ozmux_multiplexer::{Activity, ActivityId};
 
@@ -506,13 +505,14 @@ mod tests {
             })
             .expect("with_session")
             .expect("add_activity");
+            mux.bump_epoch(&sid);
             (bootstrap_aid, second_aid)
         };
         app.update();
         app.update();
 
         // Switch focus to the second activity. The bootstrap host now
-        // lives under the hidden_stash (Display::None).
+        // lives under the owning Session entity (non-Node => walker-skipped).
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
@@ -526,6 +526,7 @@ mod tests {
                 })
                 .expect("with_session")
                 .expect("set_active_activity");
+            mux.bump_epoch(&sid);
         }
         app.update();
 
@@ -543,20 +544,22 @@ mod tests {
             found.expect("bootstrap host present")
         };
 
-        // The bootstrap host's parent (the hidden_stash) must be Display::None.
+        // The bootstrap host's parent must be the owning Session entity
+        // (carries `SessionEntityId`, no `Node`). The chip is the host's
+        // child, so the entire chip subtree is walker-skipped — `Display::None`
+        // workaround no longer needed.
         let host_parent = app
             .world()
             .get::<ChildOf>(bootstrap_host)
             .expect("host parent")
             .parent();
-        let stash_node = app.world().get::<Node>(host_parent).expect("stash Node");
-        assert_eq!(
-            stash_node.display,
-            Display::None,
-            "inactive host must be parented to a Display::None stash"
+        assert!(
+            app.world().get::<SessionEntityId>(host_parent).is_some(),
+            "inactive host's parent must be the owning Session entity",
         );
-
-        // (The chip's own Node.display may still be Flex — the rendered
-        // hidden-ness comes from the ancestor. This matches the spec.)
+        assert!(
+            app.world().get::<Node>(host_parent).is_none(),
+            "Session entity must not carry Node (walker-skip invariant)",
+        );
     }
 }

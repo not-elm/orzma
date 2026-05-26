@@ -26,7 +26,7 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 ///
 /// `Cell::Root` appearing mid-recursion is treated as an invariant
 /// violation (warn-and-skip); the entry point in
-/// `rebuild_structure_on_change` is expected to unwrap into
+/// `rebuild_session_ui_on_data_change` is expected to unwrap into
 /// `RootCell::child` first.
 ///
 /// `inactive_host_parent` — the Entity under which inactive Activity hosts

@@ -55,7 +55,7 @@ pub(crate) fn dispatch_focused_key(
     // double-taps Cmd+R), both would read the same pre-flush attached entity,
     // resulting in zero or multiple AttachedSession entities after flush —
     // breaking the `exactly one attached` invariant relied on by
-    // attached_sid_q.single() and rebuild_structure_on_change. Drop the
+    // attached_sid_q.single() and downstream rebuild systems. Drop the
     // second-and-onward marker mutations in this frame.
     let mut marker_dirty_this_frame = false;
 

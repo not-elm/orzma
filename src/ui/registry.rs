@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use ozmux_multiplexer::{ActivityId, ActivityKind};
 use std::collections::{HashMap, HashSet};
 
-/// `ActivityId → Entity` map. Updated by `rebuild_structure_on_change`
+/// `ActivityId → Entity` map. Updated by `rebuild_session_ui_on_data_change`
 /// each rebuild via `get_or_spawn` (insert) and `prune` (sweep).
 #[derive(Resource, Default)]
 pub(crate) struct ActivityEntityRegistry {
@@ -58,7 +58,7 @@ impl ActivityEntityRegistry {
 
     /// Looks up the host entity registered for `id`. Returns `None` when
     /// no host has been spawned yet (e.g. the activity was just created
-    /// and the next `rebuild_structure_on_change` has not run).
+    /// and the next `rebuild_session_ui_on_data_change` has not run).
     pub(crate) fn get(&self, id: &ActivityId) -> Option<Entity> {
         self.entities.get(id).copied()
     }

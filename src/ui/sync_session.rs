@@ -123,10 +123,7 @@ mod tests {
         let subtree_b = app.world_mut().spawn(Node::default()).id();
         let session_b = app
             .world_mut()
-            .spawn((
-                SessionEntityId(SessionId(1)),
-                SessionUiSubtree(subtree_b),
-            ))
+            .spawn((SessionEntityId(SessionId(1)), SessionUiSubtree(subtree_b)))
             .id();
         app.world_mut()
             .entity_mut(subtree_b)
