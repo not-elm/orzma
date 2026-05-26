@@ -6,7 +6,6 @@ use crate::theme;
 use crate::theme::UI_FONT_SIZE;
 use crate::ui::StructuralNode;
 use crate::ui::palette;
-use bevy::color::Color;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, AlignSelf, FlexDirection, UiRect, Val};
 use ozmux_multiplexer::{Session, Window, WindowId};
@@ -75,6 +74,31 @@ pub(crate) fn build_status_bar(
         ChildOf(bar),
     ));
 
+    build_window_are(commands, bar, session, active_wid, windows);
+}
+
+fn build_window_are(
+    commands: &mut Commands,
+    bar: Entity,
+    session: &Session,
+    active_wid: &WindowId,
+    windows: &HashMap<WindowId, Window>,
+) {
+    let container = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                width: Val::Percent(100.0),
+                align_items: AlignItems::Center,
+                padding: UiRect::ZERO,
+                column_gap: Val::Px(8.0),
+                ..default()
+            },
+            BackgroundColor(palette::PANEL),
+            StructuralNode,
+            ChildOf(bar),
+        ))
+        .id();
     for wid in &session.linked_windows {
         let label = windows
             .get(wid)
@@ -94,7 +118,7 @@ pub(crate) fn build_status_bar(
                 ..default()
             },
             StructuralNode,
-            ChildOf(bar),
+            ChildOf(container),
         ));
     }
 }
