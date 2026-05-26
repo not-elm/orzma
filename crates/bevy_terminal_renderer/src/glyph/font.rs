@@ -46,6 +46,13 @@ pub struct CellMetrics {
     pub underline_position_phys: f32,
     /// Underline stroke thickness in physical pixels.
     pub underline_thickness_phys: f32,
+    /// Worst-case rightward overflow in physical px across all four faces
+    /// (Regular/Italic/Bold/BoldItalic) over ASCII printable codepoints,
+    /// measured as `max(0, outline_glyph(...).px_bounds().max.x - cell_w_phys_floor)`.
+    /// Used by the shader to paint the rightmost column's overflow pixels
+    /// inside the bg_padding strip; used by `resize_terminals_to_node` to
+    /// reserve that strip from the available node width.
+    pub max_overflow_phys: f32,
 }
 
 /// Cross-crate public Resource exposing the current `CellMetrics` for
@@ -82,6 +89,35 @@ pub struct TerminalFonts {
     /// metrics requests. Zero extra memory cost — both crates borrow the
     /// same static slice.
     pub(crate) regular_ttf_bytes: &'static [u8],
+}
+
+/// Computes the worst-case rightward overflow (in physical px) over ASCII
+/// printable codepoints for a single scaled face. Uses the same
+/// `outline_glyph(...).px_bounds()` path as the atlas rasterizer, so the
+/// value matches what the shader actually samples.
+///
+/// `cell_w_phys_floor` is the floored advance the renderer uses as cell
+/// pitch. The overflow is how far past that floor the rasterized bitmap
+/// reaches.
+fn max_ascii_overflow_for_face(face: &FontArc, px_scale: f32, cell_w_phys_floor: f32) -> f32 {
+    let scaled = face.as_scaled(ab_glyph::PxScale::from(px_scale));
+    let mut worst = 0.0_f32;
+    for codepoint in 0x20u8..=0x7Eu8 {
+        let ch = codepoint as char;
+        let gid = scaled.glyph_id(ch);
+        if gid.0 == 0 {
+            continue;
+        }
+        let outlined = match scaled.outline_glyph(gid.with_scale(px_scale)) {
+            Some(o) => o,
+            None => continue,
+        };
+        let overflow = outlined.px_bounds().max.x - cell_w_phys_floor;
+        if overflow > worst {
+            worst = overflow;
+        }
+    }
+    worst.max(0.0)
 }
 
 impl TerminalFonts {
@@ -139,6 +175,12 @@ impl TerminalFonts {
                 (-ascent_phys * 0.07, (ascent_phys / 14.0).max(1.0))
             };
 
+        let cell_w_phys_floor = advance_phys.floor().max(1.0);
+        let max_overflow_phys = [&self.regular, &self.italic, &self.bold, &self.bold_italic]
+            .iter()
+            .map(|face| max_ascii_overflow_for_face(face, px_scale_value, cell_w_phys_floor))
+            .fold(0.0_f32, f32::max);
+
         CellMetrics {
             advance_phys,
             line_height_phys,
@@ -146,6 +188,7 @@ impl TerminalFonts {
             descent_phys,
             underline_position_phys,
             underline_thickness_phys,
+            max_overflow_phys,
         }
     }
 }
@@ -237,6 +280,43 @@ mod tests {
             m.underline_thickness_phys >= 1.0,
             "underline_thickness_phys = {}",
             m.underline_thickness_phys
+        );
+    }
+
+    /// JBM at 12 px must report a non-zero `max_overflow_phys` because
+    /// glyphs like `W` rasterize past the floored advance.
+    #[test]
+    fn cell_metrics_px_reports_nonzero_max_overflow_for_jbm() {
+        let fonts = TerminalFonts::default();
+        let m = fonts.cell_metrics_px(12);
+        assert!(
+            m.max_overflow_phys > 0.0,
+            "max_overflow_phys = {} (expected > 0 driven by wide ASCII glyphs)",
+            m.max_overflow_phys
+        );
+    }
+
+    /// `max_overflow_phys` must cover the worst face — independently
+    /// measuring BoldItalic '%' (a known wide italic glyph) must not
+    /// exceed what `cell_metrics_px` returned.
+    #[test]
+    fn cell_metrics_px_max_overflow_covers_all_faces() {
+        let fonts = TerminalFonts::default();
+        let m = fonts.cell_metrics_px(12);
+
+        let face = TtfFace::parse(fonts.regular_ttf_bytes, 0).unwrap();
+        let upem = f32::from(face.units_per_em());
+        let em_scale = (i32::from(face.ascender()) - i32::from(face.descender())) as f32 / upem;
+        let px_scale = 12.0_f32 * em_scale;
+        let cell_w_phys_floor = m.advance_phys.floor().max(1.0);
+
+        let bi_overflow =
+            max_ascii_overflow_for_face(&fonts.bold_italic, px_scale, cell_w_phys_floor);
+        assert!(
+            bi_overflow <= m.max_overflow_phys + 0.001,
+            "BoldItalic overflow = {} exceeded reported max_overflow_phys = {}",
+            bi_overflow,
+            m.max_overflow_phys,
         );
     }
 
