@@ -62,19 +62,9 @@ pub struct OzmuxUiPlugin;
 
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
-        // NOTE: `.after(bootstrap)` relies on Bevy 0.18's auto-sync-point
-        // insertion: bootstrap uses Commands to insert AttachedSession on
-        // the primary Window, and setup_root_camera_and_ui_root reads
-        // `With<AttachedSession>` — Bevy detects the conflict and inserts
-        // an `apply_deferred` between them so the commands are visible.
-        // If a future Bevy upgrade weakens that guarantee, move
-        // setup_root_camera_and_ui_root to `PostStartup` instead.
         app.init_resource::<ActivityEntityRegistry>()
             .add_plugins(OzmuxTerminalUiPlugin)
-            .add_systems(
-                Startup,
-                root::setup_root_camera_and_ui_root.after(crate::bootstrap::bootstrap),
-            )
+            .add_systems(Startup, root::setup_root_camera_and_ui_root)
             .add_systems(Update, rebuild_structure_on_change);
     }
 }
