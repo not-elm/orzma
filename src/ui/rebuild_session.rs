@@ -262,4 +262,113 @@ mod tests {
             "Session entity must not carry Node (load-bearing for walker-skip)",
         );
     }
+
+    #[test]
+    fn parked_subtree_has_no_computed_node_updates() {
+        let (mut app, _guard) = make_test_app_v2();
+        app.update();
+        app.update();
+
+        let inactive_sid = {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let (sid, _, _) = mux.create_session(Some("inactive".into()));
+            mux.bump_epoch(&sid);
+            sid
+        };
+        {
+            let world = app.world_mut();
+            let subtree = world.spawn(Node::default()).id();
+            let session_entity = world
+                .spawn((
+                    SessionEntityId(inactive_sid),
+                    SessionUiSubtree(subtree),
+                    Name::new("inactive"),
+                ))
+                .id();
+            world.entity_mut(subtree).insert(ChildOf(session_entity));
+        }
+        app.update();
+        app.update();
+
+        let inactive_subtree = {
+            let world = app.world_mut();
+            let mut q = world.query::<(&SessionEntityId, &SessionUiSubtree)>();
+            q.iter(world)
+                .find_map(|(sid, sub)| (sid.0 == inactive_sid).then_some(sub.0))
+        }
+        .expect("inactive subtree present");
+
+        for _ in 0..5 {
+            app.update();
+        }
+        let computed = app.world().get::<bevy::ui::ComputedNode>(inactive_subtree);
+        match computed {
+            None => {
+                // Walker skipped — ideal.
+            }
+            Some(c) => {
+                assert_eq!(
+                    c.size,
+                    bevy::math::Vec2::ZERO,
+                    "parked subtree's ComputedNode size must be zero (walker should not lay it out)",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn per_session_rebuild_only_touches_changed_session() {
+        let (mut app, _guard) = make_test_app_v2();
+        app.update();
+        app.update();
+
+        let (sid_b, subtree_b) = {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let (sid, _, _) = mux.create_session(Some("b".into()));
+            mux.bump_epoch(&sid);
+            let subtree = world.spawn(Node::default()).id();
+            let entity = world
+                .spawn((
+                    SessionEntityId(sid),
+                    SessionUiSubtree(subtree),
+                    Name::new("b"),
+                ))
+                .id();
+            world.entity_mut(subtree).insert(ChildOf(entity));
+            (sid, subtree)
+        };
+        app.update();
+        app.update();
+
+        let children_before: Vec<Entity> = app
+            .world()
+            .get::<Children>(subtree_b)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+
+        {
+            let world = app.world_mut();
+            let mut mux = world.resource_mut::<Multiplexer>();
+            let sid_a = *mux
+                .sessions
+                .keys()
+                .find(|s| **s != sid_b)
+                .expect("session A (distinct from B)");
+            mux.rename_session(&sid_a, "renamed".into()).expect("rename");
+            mux.bump_epoch(&sid_a);
+        }
+        app.update();
+
+        let children_after: Vec<Entity> = app
+            .world()
+            .get::<Children>(subtree_b)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(
+            children_before, children_after,
+            "Session B's subtree children must not change when only Session A's epoch bumped",
+        );
+    }
 }
