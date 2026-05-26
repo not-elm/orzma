@@ -214,6 +214,7 @@ impl MultiplexerService {
         for pid in &pane_ids {
             self.pane_owner_session.remove(pid);
         }
+        self.session_epochs.remove(sid);
         Ok((activities, pane_ids))
     }
 }
@@ -355,5 +356,22 @@ mod tests {
         let mux = MultiplexerService::default();
         let phantom = SessionId(9999);
         assert_eq!(mux.epoch_of(&phantom), 0, "unknown sessions read as epoch 0 (sentinel)");
+    }
+
+    #[test]
+    fn close_session_data_clears_session_epoch() {
+        let mut mux = MultiplexerService::default();
+        let (sid, _, _) = mux.create_session(Some("a".into()));
+        mux.bump_epoch(&sid);
+        mux.bump_epoch(&sid);
+        assert_eq!(mux.epoch_of(&sid), 2);
+
+        mux.close_session_data(&sid).unwrap();
+
+        assert_eq!(
+            mux.epoch_of(&sid),
+            0,
+            "closing a session must clear its epoch so a reused SessionId starts fresh",
+        );
     }
 }
