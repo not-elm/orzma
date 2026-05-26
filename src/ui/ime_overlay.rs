@@ -1,10 +1,11 @@
-//! IME preedit overlay — pure pixel-math layer.
+//! IME preedit overlay.
 //!
-//! Provides `compute_overlay_pos`, the single source of truth for the
-//! inline preedit overlay's logical-pixel position. The Bevy plugin
-//! (`ImeOverlayPlugin`) and its `position_ime_overlay` system are
-//! added in later tasks; this commit only ships the pure function and
-//! its unit tests.
+//! Provides `compute_overlay_pos` (the pure pixel-math function for
+//! anchoring the overlay), `ImeOverlayPlugin` (Bevy plugin that spawns
+//! the overlay entity tree at Startup), and the marker components
+//! identifying the root, pre-caret span, post-caret span, and caret
+//! bar. The `position_ime_overlay` PostUpdate system is added in a
+//! later task.
 
 use bevy::app::{App, Plugin, Startup};
 use bevy::color::Color;
@@ -34,10 +35,6 @@ pub(crate) struct ImePostCaretSpan;
 #[derive(Component)]
 pub(crate) struct ImeCaretBar;
 
-/// Z-index above copy-mode indicator's local z-ordering; floats the
-/// overlay above all other UI nodes.
-const IME_OVERLAY_Z: i32 = 200;
-
 /// Bevy plugin that spawns the IME overlay entity tree at Startup.
 /// The `position_ime_overlay` PostUpdate system is added in a later task.
 pub struct ImeOverlayPlugin;
@@ -47,6 +44,56 @@ impl Plugin for ImeOverlayPlugin {
         app.add_systems(Startup, spawn_ime_overlay_once);
     }
 }
+
+/// Computes the overlay's top-left logical-pixel position relative to
+/// the window origin. Caller is responsible for writing this into
+/// `Node.left` / `Node.top`.
+///
+/// All metric inputs are physical px; the function does the
+/// physical→logical conversion via `scale`.
+///
+/// Layout: the overlay sits **one row below** the cursor cell so the
+/// inline preedit doesn't overlap with the active-line glyph still
+/// rendered by the terminal material. Clamps:
+///   - right: if `cell_origin_x + measured_width > host_right`,
+///     shifts left so the right edge stays inside the host rect.
+///   - left: after the right-edge clamp, ensures `left >= host_left`
+///     so a very wide composition can't escape the left side of the
+///     pane.
+pub(crate) fn compute_overlay_pos(
+    ui_global_translation: Vec2,
+    host_size_logical: Vec2,
+    cursor_cell: (u16, u16),
+    metrics: &CellMetrics,
+    measured_width_logical: f32,
+    scale: f32,
+) -> Vec2 {
+    let cell_w_phys = metrics.advance_phys.floor().max(1.0);
+    let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
+    let host_origin_phys = ui_global_translation * scale;
+    let cell_origin_phys = host_origin_phys
+        + Vec2::new(
+            cursor_cell.0 as f32 * cell_w_phys,
+            (cursor_cell.1 as f32 + 1.0) * cell_h_phys,
+        );
+    let pos_logical = cell_origin_phys / scale;
+
+    let host_right = ui_global_translation.x + host_size_logical.x;
+    let mut left = pos_logical.x;
+    if left + measured_width_logical > host_right {
+        left = host_right - measured_width_logical;
+    }
+    let host_left = ui_global_translation.x;
+    if left < host_left {
+        left = host_left;
+    }
+
+    Vec2::new(left, pos_logical.y)
+}
+
+/// Global z-index for the IME overlay; placed high enough to float
+/// above all other UI nodes.
+const IME_OVERLAY_Z: i32 = 200;
 
 /// Spawns the single overlay entity tree.
 fn spawn_ime_overlay_once(mut commands: Commands) {
@@ -100,52 +147,6 @@ fn spawn_ime_overlay_once(mut commands: Commands) {
         ImePostCaretSpan,
         ChildOf(root),
     ));
-}
-
-/// Computes the overlay's top-left logical-pixel position relative to
-/// the window origin. Caller is responsible for writing this into
-/// `Node.left` / `Node.top`.
-///
-/// All metric inputs are physical px; the function does the
-/// physical→logical conversion via `scale`.
-///
-/// Layout: the overlay sits **one row below** the cursor cell so the
-/// inline preedit doesn't overlap with the active-line glyph still
-/// rendered by the terminal material. Clamps:
-///   - right: if `cell_origin_x + measured_width > host_right`,
-///     shifts left so the right edge stays inside the host rect.
-///   - left: after the right-edge clamp, ensures `left >= host_left`
-///     so a very wide composition can't escape the left side of the
-///     pane.
-pub(crate) fn compute_overlay_pos(
-    ui_global_translation: Vec2,
-    host_size_logical: Vec2,
-    cursor_cell: (u16, u16),
-    metrics: &CellMetrics,
-    measured_width_logical: f32,
-    scale: f32,
-) -> Vec2 {
-    let cell_w_phys = metrics.advance_phys.floor().max(1.0);
-    let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
-    let host_origin_phys = ui_global_translation * scale;
-    let cell_origin_phys = host_origin_phys
-        + Vec2::new(
-            cursor_cell.0 as f32 * cell_w_phys,
-            (cursor_cell.1 as f32 + 1.0) * cell_h_phys,
-        );
-    let pos_logical = cell_origin_phys / scale;
-
-    let host_right = ui_global_translation.x + host_size_logical.x;
-    let mut left = pos_logical.x;
-    if left + measured_width_logical > host_right {
-        left = host_right - measured_width_logical;
-    }
-    let host_left = ui_global_translation.x;
-    if left < host_left {
-        left = host_left;
-    }
-
-    Vec2::new(left, pos_logical.y)
 }
 
 #[cfg(test)]
