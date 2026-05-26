@@ -236,8 +236,16 @@ pub(crate) fn read_ime_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::app::{App, Update};
     use bevy::ecs::entity::Entity;
-    use bevy::window::Ime;
+    use bevy::ecs::observer::On;
+    use bevy::ecs::resource::Resource;
+    use bevy::prelude::{MinimalPlugins, default};
+    use bevy::window::{Ime, Window, WindowResolution};
+    use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+    use std::sync::{Arc, Mutex};
+    use crate::multiplexer::{AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId};
+    use crate::ui::registry::ActivityEntityRegistry;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
@@ -388,5 +396,115 @@ mod tests {
         let c = s.composition().unwrap();
         assert_eq!(c.text(), "ab");
         assert_eq!(c.caret(), None);
+    }
+
+    // Integration harness for read_ime_events app-driven tests.
+    // Mirrors the pattern from src/input.rs::tests::make_app / install_active_terminal_activity.
+    // We do NOT use ImePlugin because ime_policy_system requires TerminalCellMetricsResource
+    // and TerminalGrid, which are unavailable in the minimal test environment.
+
+    #[derive(Resource, Default, Clone)]
+    struct CapturedKeys(Arc<Mutex<Vec<TerminalKeyInput>>>);
+
+    fn capture_key_input(ev: On<TerminalKeyInput>, captured: Res<CapturedKeys>) {
+        captured.0.lock().unwrap().push((*ev).clone());
+    }
+
+    fn build_app_with_attached_entity() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(OzmuxMultiplexerPlugin)
+            .add_systems(Update, read_ime_events);
+        app.init_resource::<ImeState>();
+        app.init_resource::<ActivityEntityRegistry>();
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        // Ime is a Message; register its channel so MessageReader<Ime> is available.
+        app.add_message::<Ime>();
+
+        // Create a session in the multiplexer and spawn the attached session entity.
+        let sid = {
+            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
+            let (sid, _, _) = mux.create_session(Some("default".into()));
+            sid
+        };
+        app.world_mut()
+            .spawn((SessionEntityId(sid), AttachedSession));
+
+        // Spawn a terminal activity entity and register it in the registry so
+        // resolve_focused_terminal / forward_to_active_terminal resolve to it.
+        let term_entity = app.world_mut().spawn_empty().id();
+        let activity_id = {
+            let mux = app.world().resource::<Multiplexer>();
+            let session = mux.sessions.get(&sid).unwrap();
+            let pane = session.pane(&session.active_pane).unwrap();
+            pane.active_activity.clone()
+        };
+        {
+            let mut registry = app.world_mut().resource_mut::<ActivityEntityRegistry>();
+            registry.insert_for_test(activity_id, term_entity);
+        }
+
+        // Spawn a focused window so any dispatch path that queries Window works.
+        app.world_mut().spawn(Window {
+            focused: true,
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        });
+
+        (app, term_entity)
+    }
+
+    #[test]
+    fn commit_forwards_with_default_modifiers() {
+        let (mut app, term_entity) = build_app_with_attached_entity();
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .write(Ime::Commit {
+                window: Entity::PLACEHOLDER,
+                value: "こんにちは".into(),
+            });
+
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1, "expected exactly one TerminalKeyInput");
+        assert_eq!(captured[0].entity, term_entity);
+        assert!(
+            matches!(&captured[0].key, TerminalKey::Text(s) if s == "こんにちは"),
+            "key payload mismatch: {:?}",
+            captured[0].key,
+        );
+        assert_eq!(
+            captured[0].modifiers,
+            TerminalModifiers::default(),
+            "modifiers MUST be default — see input_codec.rs::encode_key ctrl path",
+        );
+    }
+
+    #[test]
+    fn commit_dropped_when_no_attached_terminal() {
+        let (mut app, _term_entity) = build_app_with_attached_entity();
+        let attached: Vec<Entity> = app
+            .world_mut()
+            .query_filtered::<Entity, With<AttachedSession>>()
+            .iter(app.world())
+            .collect();
+        for e in attached {
+            app.world_mut().despawn(e);
+        }
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .write(Ime::Commit {
+                window: Entity::PLACEHOLDER,
+                value: "x".into(),
+            });
+
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap().clone();
+        assert!(captured.is_empty(), "commit should be dropped when no AttachedSession");
     }
 }

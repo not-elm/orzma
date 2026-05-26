@@ -1344,4 +1344,35 @@ mod tests {
             "domain Multiplexer also reflects only one extra session"
         );
     }
+
+    #[test]
+    fn dispatch_focused_key_suppressed_during_composition() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+
+        // Drive ImeState into composing mode directly via apply_event.
+        {
+            let mut state = app.world_mut().resource_mut::<crate::input::ime::ImeState>();
+            crate::input::ime::apply_event(
+                &mut state,
+                &bevy::window::Ime::Preedit {
+                    window: Entity::PLACEHOLDER,
+                    value: "あ".into(),
+                    cursor: Some((3, 3)),
+                },
+            );
+        }
+
+        press(&mut app, window_entity, Bk::Character("a".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "dispatch_focused_key must suppress keys while ImeState is composing; captured: {:?}",
+            captured,
+        );
+    }
 }
