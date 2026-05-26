@@ -342,8 +342,9 @@ mod tests {
     }
 
     /// `max_overflow_phys` must cover the worst face — independently
-    /// measuring BoldItalic '%' (a known wide italic glyph) must not
-    /// exceed what `cell_metrics_px` returned.
+    /// measure each of the 4 faces and verify each is ≤ the reported
+    /// `max_overflow_phys`. Catches a regression where the fold drops
+    /// any face from the per-face max computation.
     #[test]
     fn cell_metrics_px_max_overflow_covers_all_faces() {
         let fonts = TerminalFonts::default();
@@ -355,14 +356,21 @@ mod tests {
         let px_scale = 12.0_f32 * em_scale;
         let cell_w_phys_floor = m.advance_phys.floor().max(1.0);
 
-        let bi_overflow =
-            max_ascii_overflow_for_face(&fonts.bold_italic, px_scale, cell_w_phys_floor);
-        assert!(
-            bi_overflow <= m.max_overflow_phys + 0.001,
-            "BoldItalic overflow = {} exceeded reported max_overflow_phys = {}",
-            bi_overflow,
-            m.max_overflow_phys,
-        );
+        for (name, face_arc) in [
+            ("Regular", &fonts.regular),
+            ("Italic", &fonts.italic),
+            ("Bold", &fonts.bold),
+            ("BoldItalic", &fonts.bold_italic),
+        ] {
+            let face_overflow = max_ascii_overflow_for_face(face_arc, px_scale, cell_w_phys_floor);
+            assert!(
+                face_overflow <= m.max_overflow_phys + 0.001,
+                "{} face overflow = {} exceeds reported max_overflow_phys = {}",
+                name,
+                face_overflow,
+                m.max_overflow_phys,
+            );
+        }
     }
 
     /// 24 px metrics are approximately double the 12 px ones.
