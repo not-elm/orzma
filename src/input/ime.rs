@@ -6,9 +6,11 @@
 //! the attached terminal), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
+use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
+use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
 use bevy::ui::UiGlobalTransform;
@@ -20,6 +22,22 @@ use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::TerminalActivityMarker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::registry::ActivityEntityRegistry;
+
+/// Bevy plugin that registers `ImeState` and the IME-event handling
+/// systems. Ordering: `ime_policy_system` runs before
+/// `read_ime_events`, both run before `dispatch_focused_key` (the
+/// `.after(read_ime_events)` constraint on `dispatch_focused_key` is
+/// added in `OzmuxShortcutPlugin`).
+pub struct ImePlugin;
+
+impl Plugin for ImePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ImeState>().add_systems(
+            Update,
+            (ime_policy_system, read_ime_events).chain(),
+        );
+    }
+}
 
 /// Validated snapshot of a preedit string and its UTF-8-safe caret
 /// position.
