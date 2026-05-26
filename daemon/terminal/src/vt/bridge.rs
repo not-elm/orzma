@@ -26,6 +26,7 @@ use crate::vt::frame_builder::{
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
+use crate::vt::title::sanitize_title;
 
 /// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
@@ -493,7 +494,7 @@ pub(crate) async fn run_bridge_task(
                     None => break,
                     Some(ControlFrame::Title(title)) => {
                         let mut state = vt_state.lock().expect("vt_state poisoned");
-                        state.title = Some(title);
+                        state.title = Some(sanitize_title(&title));
                     }
                     Some(ControlFrame::ResetTitle) => {
                         let mut state = vt_state.lock().expect("vt_state poisoned");

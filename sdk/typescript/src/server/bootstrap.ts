@@ -160,8 +160,6 @@ export async function handleConnection(
 
   // The PTY env carries the addressing tuple; bail early if anything required
   // is missing rather than letting the handler hit broken Pane methods.
-  // NOTE: OZMUX_WINDOW_ID was removed when Window was collapsed into Session;
-  // OZMUX_SESSION_ID is now the required addressing env var.
   const paneId = frame.env.OZMUX_PANE_ID ?? "";
   const sessionId = frame.env.OZMUX_SESSION_ID ?? null;
   const windowId = sessionId ?? "";
