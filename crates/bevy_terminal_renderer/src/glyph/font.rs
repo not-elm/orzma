@@ -97,30 +97,43 @@ impl TerminalFonts {
     /// Returns full pixel metrics for the regular face at the requested
     /// physical pixel size. See [`CellMetrics`] for individual field semantics.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
+        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
+            .expect("JetBrainsMono-Regular ttf-parser parse");
+        // NOTE: cast to i32 before subtraction. ascender() / descender() return
+        // i16, and (asc − desc) can exceed i16::MAX for fonts where the
+        // typographic envelope is unusually tall. JBM (1320) is safe; a
+        // user-provided font might not be.
+        let asc = i32::from(face.ascender());
+        let desc = i32::from(face.descender());
+        let upem = f32::from(face.units_per_em());
+        let em_scale = (asc - desc) as f32 / upem;
+        let phys_size_px_f = f32::from(phys_size_px);
+        let px_scale_value = phys_size_px_f * em_scale;
+
         let scaled = self
             .regular
-            .as_scaled(ab_glyph::PxScale::from(phys_size_px as f32));
+            .as_scaled(ab_glyph::PxScale::from(px_scale_value));
         let advance_phys = scaled.h_advance(scaled.glyph_id('0'));
         let ascent_phys = scaled.ascent();
         let descent_phys = scaled.descent().abs();
 
-        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
-            .expect("JetBrainsMono-Regular ttf-parser parse");
-        let upem = face.units_per_em() as f32;
-        let scale = phys_size_px as f32 / upem;
+        // NOTE: scale for ttf-parser font-unit values: phys_size_px is the
+        // em-square (1 em = upem font units = phys_size_px physical pixels).
+        // px_scale_value is already inflated for ab_glyph's PxScale convention
+        // and must not be used here — that would double-count the em_scale factor.
+        let scale = phys_size_px_f / upem;
 
         // NOTE: ab_glyph's PxScale maps em-square exactly to px so
         // ascent+descent==px_size and line_gap()==0. Use the hhea typographic
         // values from ttf-parser instead so the real typographic line gap is
         // preserved (drives correct line spacing).
-        let line_height_phys =
-            (face.ascender() - face.descender() + face.line_gap()) as f32 * scale;
+        let line_height_phys = (asc - desc + i32::from(face.line_gap())) as f32 * scale;
 
         let (underline_position_phys, underline_thickness_phys) =
             if let Some(u) = face.underline_metrics() {
                 (
-                    u.position as f32 * scale,
-                    (u.thickness as f32 * scale).max(1.0),
+                    f32::from(u.position) * scale,
+                    (f32::from(u.thickness) * scale).max(1.0),
                 )
             } else {
                 (-ascent_phys * 0.07, (ascent_phys / 14.0).max(1.0))
@@ -188,30 +201,30 @@ mod tests {
     use super::*;
 
     /// `cell_metrics_px(12)` returns sensible values for JetBrains Mono Regular 12px.
-    /// Empirical reference values (`docs/plans/2026-05-25-bevy-font-render-design.md` Background):
-    ///   advance(`0`) ≈ 5.45,  line_height ≈ 14.4,  ascent ≈ 10.0,  descent ≈ 2.6
+    /// Empirical reference values after em-square scaling (JBM 1.32 multiplier):
+    ///   advance(`0`) ≈ 7.2,  line_height ≈ 15.8,  ascent ≈ 12.x,  descent ≈ 3.x
     /// underline_position is negative (below baseline), underline_thickness is positive.
     #[test]
     fn jetbrains_mono_12px_metrics_are_sensible() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
         assert!(
-            m.advance_phys > 5.0 && m.advance_phys < 6.0,
-            "advance_phys = {}",
+            m.advance_phys > 7.0 && m.advance_phys < 7.5,
+            "advance_phys = {} (CSS/Terminal.app range)",
             m.advance_phys
         );
         assert!(
-            m.line_height_phys > 13.0 && m.line_height_phys < 16.0,
+            m.line_height_phys > 15.0 && m.line_height_phys < 17.0,
             "line_height_phys = {}",
             m.line_height_phys
         );
         assert!(
-            m.ascent_phys > 9.0 && m.ascent_phys < 11.0,
+            m.ascent_phys > 11.5 && m.ascent_phys < 13.0,
             "ascent_phys = {}",
             m.ascent_phys
         );
         assert!(
-            m.descent_phys > 1.0 && m.descent_phys < 4.0,
+            m.descent_phys > 2.5 && m.descent_phys < 4.5,
             "descent_phys = {}",
             m.descent_phys
         );
@@ -250,6 +263,6 @@ mod tests {
             .get_resource::<TerminalCellMetricsResource>()
             .expect("TerminalCellMetricsResource should be inserted by Startup");
         assert_eq!(res.phys_font_size, 12);
-        assert!(res.metrics.advance_phys > 5.0 && res.metrics.advance_phys < 6.0);
+        assert!(res.metrics.advance_phys > 7.0 && res.metrics.advance_phys < 7.5);
     }
 }
