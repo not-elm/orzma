@@ -4570,6 +4570,7 @@ dependencies = [
 name = "ozmux-gui"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "arboard",
  "bevy",
  "bevy_terminal",

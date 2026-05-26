@@ -18,6 +18,7 @@ pub(crate) fn build_status_bar(
     session: &Session,
     active_wid: &WindowId,
     windows: &HashMap<WindowId, Window>,
+    ui_font: &Handle<Font>,
 ) {
     let bar = commands
         .spawn((
@@ -38,6 +39,7 @@ pub(crate) fn build_status_bar(
         Text::new(&session.name),
         TextColor(palette::FOREGROUND),
         TextFont {
+            font: ui_font.clone(),
             font_size: UI_FONT_SIZE,
             ..default()
         },
@@ -74,7 +76,7 @@ pub(crate) fn build_status_bar(
         ChildOf(bar),
     ));
 
-    build_window_are(commands, bar, session, active_wid, windows);
+    build_window_are(commands, bar, session, active_wid, windows, ui_font);
 }
 
 fn build_window_are(
@@ -83,6 +85,7 @@ fn build_window_are(
     session: &Session,
     active_wid: &WindowId,
     windows: &HashMap<WindowId, Window>,
+    ui_font: &Handle<Font>,
 ) {
     let container = commands
         .spawn((
@@ -114,6 +117,7 @@ fn build_window_are(
             Text::new(label),
             TextColor(font_color),
             TextFont {
+                font: ui_font.clone(),
                 font_size: UI_FONT_SIZE,
                 ..default()
             },

@@ -87,6 +87,7 @@ fn rebuild_structure_on_change(
     ui_root_q: Query<Entity, With<UiRoot>>,
     structural_q: Query<Entity, With<StructuralNode>>,
     activity_hosts_q: Query<(Entity, &ActivityHostNode)>,
+    ui_font: Option<Res<crate::font::TerminalUiFont>>,
 ) {
     let Ok((_window_entity, attached_ref)) = attached_q.single() else {
         return;
@@ -189,6 +190,10 @@ fn rebuild_structure_on_change(
         .flat_map(|w| w.pane_ids().filter_map(|pid| w.pane(pid).ok()))
         .flat_map(|p| p.activity_ids().cloned())
         .collect();
+    let ui_font_handle = ui_font
+        .as_deref()
+        .map(|f| f.0.clone())
+        .unwrap_or_default();
     match window.cells.cell(&window.root_cell) {
         Ok(Cell::Root(root)) => {
             layout::build_cell_recursive(
@@ -198,6 +203,7 @@ fn rebuild_structure_on_change(
                 &root.child,
                 &mut registry,
                 hidden_stash,
+                &ui_font_handle,
             );
         }
         Ok(_) => {
@@ -234,7 +240,14 @@ fn rebuild_structure_on_change(
         }
     }
 
-    status_bar::build_status_bar(&mut commands, ui_root, session, active_wid, &mux.windows);
+    status_bar::build_status_bar(
+        &mut commands,
+        ui_root,
+        session,
+        active_wid,
+        &mux.windows,
+        &ui_font_handle,
+    );
 
     registry.prune(&mut commands, &live_activity_ids);
 }

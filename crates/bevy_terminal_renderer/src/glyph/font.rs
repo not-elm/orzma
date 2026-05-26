@@ -3,18 +3,51 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ttf_parser::Face as TtfFace;
 
+/// Error returned by `TerminalFonts::from_bytes` when one of the supplied
+/// per-face byte buffers fails `ab_glyph::FontArc::try_from_vec`.
+#[derive(Debug, thiserror::Error)]
+pub enum FontLoadError {
+    /// `FontArc::try_from_vec` rejected the bytes for this face.
+    #[error("ab_glyph rejected {face:?} face: {source}")]
+    ParseFailed {
+        /// Which face's bytes were invalid.
+        face: FontFace,
+        /// Underlying ab_glyph error.
+        #[source]
+        source: ab_glyph::InvalidFont,
+    },
+}
+
 /// Font size in CSS pixels; multiplied by the PrimaryWindow's
 /// `scale_factor` to obtain the physical pixel size fed to
 /// `cell_metrics_px`.
 pub(crate) const FONT_SIZE_PX: f32 = 12.0;
+
+/// Public `SystemSet` label used to order systems against the renderer's
+/// cell-metrics initialization. App-level plugins that need to mutate
+/// `TerminalFonts` before metrics are computed should run their Startup
+/// systems `.before(TerminalFontInitSet::InitCellMetrics)`.
+#[derive(SystemSet, Debug, Clone, Eq, PartialEq, Hash)]
+pub enum TerminalFontInitSet {
+    /// `init_cell_metrics_from_primary_window` lives in this set. With
+    /// `bridge_font_config` (or any other override) running `.before` it,
+    /// the metrics are computed from the final `TerminalFonts`.
+    InitCellMetrics,
+}
 
 #[derive(Default)]
 pub struct TerminalFontPlugin;
 
 impl Plugin for TerminalFontPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(TerminalFonts::default());
-        app.add_systems(Startup, init_cell_metrics_from_primary_window);
+        if !app.world().contains_resource::<TerminalFonts>() {
+            app.insert_resource(TerminalFonts::default());
+        }
+        app.add_systems(
+            Startup,
+            init_cell_metrics_from_primary_window
+                .in_set(TerminalFontInitSet::InitCellMetrics),
+        );
     }
 }
 
@@ -108,13 +141,6 @@ pub struct TerminalFonts {
     pub italic: FontArc,
     /// Bold weight, italic style.
     pub bold_italic: FontArc,
-    /// Raw byte slice of `regular` for `ttf-parser` re-parse (underline metrics).
-    ///
-    /// `ab_glyph` does not expose `post`/`OS/2` table data, so we hold the
-    /// same `include_bytes!` slice to feed `ttf_parser::Face::parse` on
-    /// metrics requests. Zero extra memory cost — both crates borrow the
-    /// same static slice.
-    pub(crate) regular_ttf_bytes: &'static [u8],
 }
 
 /// Computes the worst-case rightward overflow (in physical px) over ASCII
@@ -147,6 +173,49 @@ fn max_ascii_overflow_for_face(face: &FontArc, px_scale: f32, cell_w_phys_floor:
 }
 
 impl TerminalFonts {
+    /// Constructs a `TerminalFonts` from four owned TTF byte buffers, one
+    /// per face. `Vec<u8>` is required by `ab_glyph::FontArc::try_from_vec`;
+    /// callers responsible for runtime font loading (e.g., the Bevy
+    /// font-bridge plugin) read bytes from disk, build `Vec<u8>`, and call
+    /// this. On per-face parse failure, returns `FontLoadError::ParseFailed`
+    /// naming the offending face — callers may then substitute bundled
+    /// bytes for that face and retry.
+    pub fn from_bytes(
+        regular: Vec<u8>,
+        bold: Vec<u8>,
+        italic: Vec<u8>,
+        bold_italic: Vec<u8>,
+    ) -> Result<Self, FontLoadError> {
+        let regular = FontArc::try_from_vec(regular).map_err(|source| {
+            FontLoadError::ParseFailed {
+                face: FontFace::Regular,
+                source,
+            }
+        })?;
+        let bold =
+            FontArc::try_from_vec(bold).map_err(|source| FontLoadError::ParseFailed {
+                face: FontFace::Bold,
+                source,
+            })?;
+        let italic =
+            FontArc::try_from_vec(italic).map_err(|source| FontLoadError::ParseFailed {
+                face: FontFace::Italic,
+                source,
+            })?;
+        let bold_italic = FontArc::try_from_vec(bold_italic).map_err(|source| {
+            FontLoadError::ParseFailed {
+                face: FontFace::BoldItalic,
+                source,
+            }
+        })?;
+        Ok(Self {
+            regular,
+            bold,
+            italic,
+            bold_italic,
+        })
+    }
+
     pub fn choice(&self, face: &FontFace) -> &FontArc {
         match face {
             FontFace::Regular => &self.regular,
@@ -159,12 +228,16 @@ impl TerminalFonts {
     /// Returns full pixel metrics for the regular face at the requested
     /// physical pixel size. See [`CellMetrics`] for individual field semantics.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
-        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
-            .expect("JetBrainsMono-Regular ttf-parser parse");
+        let face = TtfFace::parse(self.regular.font_data(), 0)
+            .expect(
+                "regular face: ttf-parser parse failed (bundled or user-supplied via FontBridgePlugin); \
+                 if a user override is in effect this means the override file passed ab_glyph but \
+                 ttf-parser rejected it — check the most recent FontBridgePlugin warning",
+            );
         // NOTE: cast to i32 before subtraction. ascender() / descender() return
         // i16, and (asc − desc) can exceed i16::MAX for fonts where the
-        // typographic envelope is unusually tall. JBM (1320) is safe; a
-        // user-provided font might not be.
+        // typographic envelope is unusually tall. The bundled font is safe;
+        // a user-provided font might not be.
         let asc = i32::from(face.ascender());
         let desc = i32::from(face.descender());
         let upem = f32::from(face.units_per_em());
@@ -228,8 +301,12 @@ impl TerminalFonts {
     /// derivation) and `glyph/atlas.rs` (for glyph rasterization), so both
     /// agree on the actual rendering scale.
     pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
-        let face = TtfFace::parse(self.regular_ttf_bytes, 0)
-            .expect("JetBrainsMono-Regular ttf-parser parse");
+        let face = TtfFace::parse(self.regular.font_data(), 0)
+            .expect(
+                "regular face: ttf-parser parse failed (bundled or user-supplied via FontBridgePlugin); \
+                 if a user override is in effect this means the override file passed ab_glyph but \
+                 ttf-parser rejected it — check the most recent FontBridgePlugin warning",
+            );
         let asc = i32::from(face.ascender());
         let desc = i32::from(face.descender());
         let upem = f32::from(face.units_per_em());
@@ -240,16 +317,20 @@ impl TerminalFonts {
 
 impl Default for TerminalFonts {
     fn default() -> Self {
-        const REGULAR_BYTES: &[u8] = include_bytes!("./JetBrainsMono-Regular.ttf");
+        // Bytes come from crate::bundled so the Bevy app's FontBridgePlugin
+        // can reference the same static slices instead of re-embedding
+        // identical copies (the linker cannot dedup include_bytes! across
+        // crate boundaries without LTO; without this single source of
+        // truth the binary carries the font data twice).
         Self {
-            regular: FontArc::try_from_slice(REGULAR_BYTES).expect("JetBrainsMono-Regular load"),
-            bold: FontArc::try_from_slice(include_bytes!("./JetBrainsMono-Bold.ttf"))
-                .expect("JetBrainsMono-Bold load"),
-            italic: FontArc::try_from_slice(include_bytes!("./JetBrainsMono-Italic.ttf"))
-                .expect("JetBrainsMono-Italic load"),
-            bold_italic: FontArc::try_from_slice(include_bytes!("./JetBrainsMono-BoldItalic.ttf"))
-                .expect("JetBrainsMono-BoldItalic load"),
-            regular_ttf_bytes: REGULAR_BYTES,
+            regular: FontArc::try_from_slice(crate::bundled::REGULAR)
+                .expect("JetBrainsMonoNerdFontMono-Regular load"),
+            bold: FontArc::try_from_slice(crate::bundled::BOLD)
+                .expect("JetBrainsMonoNerdFontMono-Bold load"),
+            italic: FontArc::try_from_slice(crate::bundled::ITALIC)
+                .expect("JetBrainsMonoNerdFontMono-Italic load"),
+            bold_italic: FontArc::try_from_slice(crate::bundled::BOLD_ITALIC)
+                .expect("JetBrainsMonoNerdFontMono-BoldItalic load"),
         }
     }
 }
@@ -288,31 +369,34 @@ impl FontFace {
 mod tests {
     use super::*;
 
-    /// `cell_metrics_px(12)` returns sensible values for JetBrains Mono Regular 12px.
-    /// Empirical reference values after em-square scaling (JBM 1.32 multiplier):
-    ///   advance(`0`) ≈ 7.2,  line_height ≈ 15.8,  ascent ≈ 12.x,  descent ≈ 3.x
-    /// underline_position is negative (below baseline), underline_thickness is positive.
+    /// `cell_metrics_px(12)` returns sensible values for JetBrains Mono
+    /// Nerd Font Mono Regular at 12px. Empirical ranges were measured
+    /// against the bundled TTF; structural invariants (positive ascent,
+    /// negative underline position) are the load-bearing assertions.
     #[test]
     fn jetbrains_mono_12px_metrics_are_sensible() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
+        // Empirical ranges below were measured against the bundled
+        // JetBrainsMonoNerdFontMono-Regular.ttf. Update if the font is
+        // re-vendored.
         assert!(
-            m.advance_phys > 7.0 && m.advance_phys < 7.5,
-            "advance_phys = {} (CSS/Terminal.app range)",
+            m.advance_phys > 6.9 && m.advance_phys < 7.5,
+            "advance_phys = {} (JBM Mono 12px range)",
             m.advance_phys
         );
         assert!(
-            m.line_height_phys > 15.0 && m.line_height_phys < 17.0,
+            m.line_height_phys > 15.5 && m.line_height_phys < 16.2,
             "line_height_phys = {}",
             m.line_height_phys
         );
         assert!(
-            m.ascent_phys > 11.5 && m.ascent_phys < 13.0,
+            m.ascent_phys > 11.9 && m.ascent_phys < 12.5,
             "ascent_phys = {}",
             m.ascent_phys
         );
         assert!(
-            m.descent_phys > 2.5 && m.descent_phys < 4.5,
+            m.descent_phys > 3.3 && m.descent_phys < 3.9,
             "descent_phys = {}",
             m.descent_phys
         );
@@ -328,10 +412,10 @@ mod tests {
         );
     }
 
-    /// JBM at 12 px must report a non-zero `max_overflow_phys` because
-    /// glyphs like `W` rasterize past the floored advance.
+    /// JBM Mono at 12 px must report a non-zero `max_overflow_phys`
+    /// because glyphs like `W` rasterize past the floored advance.
     #[test]
-    fn cell_metrics_px_reports_nonzero_max_overflow_for_jbm() {
+    fn cell_metrics_px_reports_nonzero_max_overflow() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
         assert!(
@@ -350,7 +434,7 @@ mod tests {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
 
-        let face = TtfFace::parse(fonts.regular_ttf_bytes, 0).unwrap();
+        let face = TtfFace::parse(fonts.regular.font_data(), 0).unwrap();
         let upem = f32::from(face.units_per_em());
         let em_scale = (i32::from(face.ascender()) - i32::from(face.descender())) as f32 / upem;
         let px_scale = 12.0_f32 * em_scale;
@@ -406,6 +490,51 @@ mod tests {
         );
     }
 
+    /// `TerminalFontPlugin::build` must not overwrite an already-present
+    /// `TerminalFonts` resource. Apps pre-insert a custom `TerminalFonts`
+    /// (e.g., from a runtime config-driven font override) BEFORE adding
+    /// `TerminalFontPlugin`; if the plugin overwrote it, the override
+    /// would be lost.
+    #[test]
+    fn terminal_font_plugin_preserves_pre_inserted_terminal_fonts() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+
+        // Build a non-default TerminalFonts via from_bytes — same TTF for
+        // all four faces (legal for a smoke test; the labels are advisory).
+        let bytes: Vec<u8> = crate::bundled::REGULAR.to_vec();
+        let custom = TerminalFonts::from_bytes(
+            bytes.clone(),
+            bytes.clone(),
+            bytes.clone(),
+            bytes,
+        )
+        .expect("from_bytes accepts JBM regular for all four slots");
+
+        // Use a sentinel: pre-insert THIS specific instance, then check
+        // that the bytes pointer hasn't changed after Plugin::build.
+        let pre_inserted_bytes_ptr = custom.regular.font_data().as_ptr();
+
+        let mut app = App::new();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+
+        app.insert_resource(custom);
+        app.add_plugins(TerminalFontPlugin);
+        app.update();
+
+        let fonts = app.world().resource::<TerminalFonts>();
+        assert_eq!(
+            fonts.regular.font_data().as_ptr(),
+            pre_inserted_bytes_ptr,
+            "TerminalFonts was overwritten by Plugin::build, but the resource was \
+             already present at add_plugins time — the pre-insert should have been preserved"
+        );
+    }
+
     /// `init_cell_metrics_from_primary_window` reads the PrimaryWindow's
     /// scale_factor and inserts a DPR-aware `TerminalCellMetricsResource`.
     /// Verifies BOTH (a) `phys_font_size` reflects the scale_factor and
@@ -447,8 +576,8 @@ mod tests {
         // (b) Derived metrics are ALSO scaled to DPR=2 — catches a bug
         // where phys_font_size is right but the wrong size is fed to
         // cell_metrics_px. Compares against DPR=1 baseline rather than
-        // hardcoding a JBM-specific advance value (~14.4 px) that would
-        // break on font updates.
+        // hardcoding a font-specific advance value that would break on
+        // font updates.
         let baseline = TerminalFonts::default();
         let m12 = baseline.cell_metrics_px(12);
         assert!(
