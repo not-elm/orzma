@@ -5,20 +5,49 @@
 //! Failures mark the entity with `TerminalSpawnFailed` so the system does
 //! not retry on subsequent frames.
 
-use crate::ui::{TerminalActivityMarker, TerminalSpawnFailed};
+use crate::ui::{TerminalActivityMarker, TerminalSpawnFailed, rebuild_structure_on_change};
 use bevy::prelude::*;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 
+pub struct OzmuxTerminalUiPlugin;
+
+impl Plugin for OzmuxTerminalUiPlugin {
+    fn build(&self, app: &mut App) {
+        // NOTE: `resize_terminals_to_node` reads `ComputedNode.size`, which
+        // is written by `ui_layout_system` in `PostUpdate :: UiSystems::Layout`.
+        // Placing this system in `Update` would always read the *previous*
+        // frame's layout, producing a 1-tick lag where the pane border has
+        // jumped to its new size but the terminal grid hasn't caught up —
+        // visible as a strip of shader-fallback teal at the pane edge during
+        // a window drag. Running it in `PostUpdate .after(UiSystems::Layout)`
+        // makes WindowResized → layout → terminal resize converge in one
+        // frame. The `.before(TerminalMaterialSystems::UpdateMaterial)`
+        // anchors the same-frame chain into the renderer crate so the
+        // `grid_size` uniform is written this tick, not next.
+        app.add_systems(
+            Update,
+            finish_terminal_setup.after(rebuild_structure_on_change),
+        )
+        .add_systems(
+            PostUpdate,
+            resize_terminals_to_node
+                .after(bevy::ui::UiSystems::Layout)
+                .before(bevy::ui::UiSystems::PostLayout)
+                .before(bevy_terminal_renderer::material::TerminalMaterialSystems::UpdateMaterial),
+        );
+    }
+}
+
 /// Spawns a `TerminalBundle` and attaches `TerminalRenderBundle` for each
 /// freshly-spawned Terminal Activity host. Runs every Update tick but only
 /// targets entities that lack `TerminalHandle` and `TerminalSpawnFailed`,
 /// so the per-entity work happens exactly once.
-#[expect(clippy::type_complexity, reason = "Bevy query filter tuple")]
-pub(crate) fn finish_terminal_setup(
+fn finish_terminal_setup(
     mut commands: Commands,
+    mut materials: ResMut<Assets<TerminalUiMaterial>>,
     hosts: Query<
         Entity,
         (
@@ -27,7 +56,6 @@ pub(crate) fn finish_terminal_setup(
             Without<TerminalSpawnFailed>,
         ),
     >,
-    mut materials: ResMut<Assets<TerminalUiMaterial>>,
 ) {
     for host in hosts.iter() {
         let opts = SpawnOptions {
@@ -83,7 +111,7 @@ fn compute_grid_dims(
 /// this short-circuit the new dimensions would only reach the shader after
 /// the next `FrameSnapshot` round-trip through alacritty + observers,
 /// adding a visible 1-frame lag at the pane edge during drag.
-pub(crate) fn resize_terminals_to_node(
+fn resize_terminals_to_node(
     mut terminals: Query<(
         &ComputedNode,
         &mut TerminalHandle,

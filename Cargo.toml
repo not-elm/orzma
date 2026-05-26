@@ -86,3 +86,4 @@ reqwest = { version = "0.13", default-features = false, features = [
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"
+type_complexity = "allow"

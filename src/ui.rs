@@ -7,13 +7,13 @@
 
 use crate::multiplexer::{AttachedSession, Multiplexer};
 use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::ecs::change_detection::DetectChanges;
 use bevy::prelude::*;
 use ozmux_multiplexer::{ActivityId, Cell};
 use std::collections::HashSet;
 
 pub(crate) mod activity;
-pub(crate) mod clipboard;
 pub(crate) mod copy_mode;
 pub(crate) mod copy_mode_indicator;
 pub(crate) mod layout;
@@ -70,46 +70,23 @@ impl Plugin for OzmuxUiPlugin {
         // If a future Bevy upgrade weakens that guarantee, move
         // setup_root_camera_and_ui_root to `PostStartup` instead.
         app.init_resource::<ActivityEntityRegistry>()
+            .add_plugins(OzmuxTerminalUiPlugin)
             .add_systems(
                 Startup,
                 root::setup_root_camera_and_ui_root.after(crate::bootstrap::bootstrap),
             )
-            .add_systems(Update, rebuild_structure_on_change)
-            .add_systems(
-                Update,
-                terminal::finish_terminal_setup.after(rebuild_structure_on_change),
-            )
-            // NOTE: `resize_terminals_to_node` reads `ComputedNode.size`, which
-            // is written by `ui_layout_system` in `PostUpdate :: UiSystems::Layout`.
-            // Placing this system in `Update` would always read the *previous*
-            // frame's layout, producing a 1-tick lag where the pane border has
-            // jumped to its new size but the terminal grid hasn't caught up —
-            // visible as a strip of shader-fallback teal at the pane edge during
-            // a window drag. Running it in `PostUpdate .after(UiSystems::Layout)`
-            // makes WindowResized → layout → terminal resize converge in one
-            // frame. The `.before(TerminalMaterialSystems::UpdateMaterial)`
-            // anchors the same-frame chain into the renderer crate so the
-            // `grid_size` uniform is written this tick, not next.
-            .add_systems(
-                PostUpdate,
-                terminal::resize_terminals_to_node
-                    .after(bevy::ui::UiSystems::Layout)
-                    .before(bevy::ui::UiSystems::PostLayout)
-                    .before(
-                        bevy_terminal_renderer::material::TerminalMaterialSystems::UpdateMaterial,
-                    ),
-            );
+            .add_systems(Update, rebuild_structure_on_change);
     }
 }
 
 fn rebuild_structure_on_change(
     mut commands: Commands,
+    mut registry: ResMut<ActivityEntityRegistry>,
     mux: Res<Multiplexer>,
     attached_q: Query<(Entity, Ref<AttachedSession>), With<Window>>,
     ui_root_q: Query<Entity, With<UiRoot>>,
     structural_q: Query<Entity, With<StructuralNode>>,
     activity_hosts_q: Query<(Entity, &ActivityHostNode)>,
-    mut registry: ResMut<ActivityEntityRegistry>,
 ) {
     let Ok((_window_entity, attached_ref)) = attached_q.single() else {
         return;

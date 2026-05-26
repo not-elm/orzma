@@ -5,7 +5,7 @@
 //! toggle predicate reads `TerminalHandle::selection_type()` to
 //! decide between "start new selection of kind X" and "clear existing".
 
-use crate::ui::clipboard::Clipboard;
+use crate::clipboard::Clipboard;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
@@ -385,7 +385,7 @@ mod tests {
     fn dispatch_key_q_triggers_exit_copy_mode() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::ui::clipboard::Clipboard::new());
+        app.insert_resource(crate::clipboard::Clipboard::new());
         app.insert_resource(CapturedExits::default());
         app.add_observer(capture_exit);
 
@@ -395,7 +395,7 @@ mod tests {
         let mut sys = bevy::ecs::system::IntoSystem::into_system(
             move |mut commands: Commands,
                   mut q: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
-                  mut clip: ResMut<crate::ui::clipboard::Clipboard>| {
+                  mut clip: ResMut<crate::clipboard::Clipboard>| {
                 dispatch_key(
                     &mut commands,
                     &mut q,
@@ -419,7 +419,7 @@ mod tests {
     fn dispatch_key_y_with_selection_writes_clipboard_then_exits() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::ui::clipboard::Clipboard::new());
+        app.insert_resource(crate::clipboard::Clipboard::new());
         app.insert_resource(CapturedExits::default());
         app.add_observer(capture_exit);
 
@@ -439,7 +439,7 @@ mod tests {
         let mut sys = bevy::ecs::system::IntoSystem::into_system(
             move |mut commands: Commands,
                   mut q: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
-                  mut clip: ResMut<crate::ui::clipboard::Clipboard>| {
+                  mut clip: ResMut<crate::clipboard::Clipboard>| {
                 dispatch_key(
                     &mut commands,
                     &mut q,

@@ -12,6 +12,9 @@ use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers};
 use ozmux_multiplexer::SessionId;
 use std::collections::HashSet;
 
+use crate::multiplexer::{AttachedSession, Multiplexer};
+use crate::ui::registry::ActivityEntityRegistry;
+
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline.
 pub struct OzmuxShortcutPlugin;
 
@@ -24,18 +27,18 @@ impl Plugin for OzmuxShortcutPlugin {
 pub(crate) fn dispatch_focused_key(
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
-    keys: Res<ButtonInput<KeyCode>>,
-    configs: Res<crate::configs::OzmuxConfigsResource>,
-    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
-    mut mux: ResMut<crate::multiplexer::Multiplexer>,
-    copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
-    mut clipboard: ResMut<crate::ui::clipboard::Clipboard>,
+    mut mux: ResMut<Multiplexer>,
+    mut clipboard: ResMut<crate::clipboard::Clipboard>,
     mut handles: Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
-    mut q: Query<(&crate::multiplexer::AttachedSession, &Window)>,
+    mut sessions: Query<(&AttachedSession, &Window)>,
+    keys: Res<ButtonInput<KeyCode>>,
+    configs: Res<crate::configs::OzmuxConfigsResource>,
+    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
+    copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
@@ -48,7 +51,7 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        let Ok((attached, win)) = q.get_mut(ev.window) else {
+        let Ok((attached, win)) = sessions.get_mut(ev.window) else {
             continue;
         };
         if !win.focused {
@@ -99,7 +102,7 @@ pub(crate) fn dispatch_focused_key(
                 && !text.is_empty()
             {
                 let bracketed = handle.bracketed_paste_enabled();
-                let bytes = crate::ui::clipboard::build_paste_bytes(&text, bracketed);
+                let bytes = crate::clipboard::build_paste_bytes(&text, bracketed);
                 if let Err(err) = handle.write(&mut pty, &bytes) {
                     tracing::warn!(
                         target: "ozmux_gui::input",
@@ -244,9 +247,9 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 fn execute_action(
     action: Action,
     commands: &mut Commands,
-    mux: &mut ResMut<crate::multiplexer::Multiplexer>,
-    attached: &crate::multiplexer::AttachedSession,
-    registry: &crate::ui::registry::ActivityEntityRegistry,
+    mux: &mut ResMut<Multiplexer>,
+    attached: &AttachedSession,
+    registry: &ActivityEntityRegistry,
 ) {
     if let Action::EnterCopyMode = action {
         if let Ok((wid, pid)) = mux.active_pane_of_session(&attached.0)
@@ -351,7 +354,7 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
-        app.insert_resource(crate::ui::clipboard::Clipboard::new());
+        app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
 
         let sid = {
@@ -623,7 +626,7 @@ mod tests {
             .add_plugins(OzmuxShortcutPlugin);
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
-        app.insert_resource(crate::ui::clipboard::Clipboard::new());
+        app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
         app.update();
     }
@@ -737,7 +740,7 @@ mod tests {
         {
             let mut clipboard = app
                 .world_mut()
-                .resource_mut::<crate::ui::clipboard::Clipboard>();
+                .resource_mut::<crate::clipboard::Clipboard>();
             clipboard.write("hello\nworld".to_string());
         }
 
@@ -761,7 +764,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         let activity_entity = install_active_terminal_activity_with_handle(&mut app);
         let clipboard_available = {
-            let cb = app.world().resource::<crate::ui::clipboard::Clipboard>();
+            let cb = app.world().resource::<crate::clipboard::Clipboard>();
             cb.is_available_for_test()
         };
         if !clipboard_available {
@@ -771,7 +774,7 @@ mod tests {
         {
             let mut clipboard = app
                 .world_mut()
-                .resource_mut::<crate::ui::clipboard::Clipboard>();
+                .resource_mut::<crate::clipboard::Clipboard>();
             clipboard.write("hi".to_string());
         }
         {
