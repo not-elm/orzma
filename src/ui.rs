@@ -305,6 +305,7 @@ mod tests {
                     descent_phys: 4.0,
                     underline_position_phys: -2.0,
                     underline_thickness_phys: 1.0,
+                    max_overflow_phys: 0.0,
                 },
                 phys_font_size: 12,
             })

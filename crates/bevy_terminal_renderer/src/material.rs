@@ -1,7 +1,7 @@
 use crate::{
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
-        font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
+        font::{FONT_SIZE_PX, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
     material::state::TerminalMaterialState,
     schema::{Cell, SelectionKind, TerminalGrid},
@@ -14,6 +14,7 @@ use bevy::{
         storage::ShaderStorageBuffer,
     },
     shader::ShaderRef,
+    window::PrimaryWindow,
 };
 
 mod state;
@@ -112,8 +113,9 @@ impl UiMaterial for TerminalUiMaterial {
 ///
 /// # Layout (std140, encase derive)
 ///
-/// Field offsets in bytes (encase auto-inserts 4 bytes of padding before
-/// `bg_padding_color` so the Vec4 lands at offset 80; total 96 bytes,
+/// Field offsets in bytes. `max_overflow_phys` fills the 4-byte padding slot
+/// at offset 76 that encase would otherwise insert before `bg_padding_color`
+/// (Vec4 needs 16-byte alignment, lands at offset 80; total 96 bytes,
 /// 16-byte aligned):
 ///
 /// | Offset | Field                       |
@@ -133,6 +135,7 @@ impl UiMaterial for TerminalUiMaterial {
 /// | 64     | `sel_kind`                  |
 /// | 68     | `underline_position_phys`   |
 /// | 72     | `underline_thickness_phys`  |
+/// | 76     | `max_overflow_phys`         |
 /// | 80     | `bg_padding_color`          |
 #[derive(Clone, Copy, ShaderType, Default, Debug)]
 struct TerminalParams {
@@ -155,6 +158,11 @@ struct TerminalParams {
     sel_kind: u32,
     underline_position_phys: f32,
     underline_thickness_phys: f32,
+    /// Worst-case ASCII rightward bbox overflow (physical px) across all four
+    /// faces. The shader uses this to extend its "rightmost column glyph"
+    /// evaluation past `grid_size.x * cell_size_px.x` into the bg_padding
+    /// strip; the host reserves the same amount from the node width.
+    max_overflow_phys: f32,
     bg_padding_color: Vec4,
 }
 
@@ -178,6 +186,7 @@ impl TerminalParams {
         time_seconds: f32,
         underline_position_phys: f32,
         underline_thickness_phys: f32,
+        max_overflow_phys: f32,
         bg_padding_color: Vec4,
     ) -> Self {
         let cols = u32::from(grid.cols);
@@ -215,6 +224,7 @@ impl TerminalParams {
             sel_kind,
             underline_position_phys,
             underline_thickness_phys,
+            max_overflow_phys,
             bg_padding_color,
         }
     }
@@ -297,11 +307,10 @@ fn update_terminal_material(
     )>,
     fonts: Res<TerminalFonts>,
     palette_time: Res<Time>,
-    windows: Query<&Window>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
 ) {
     // TODO: load font size from config.
-    const FONT_SIZE_PX: f32 = 12.0;
 
     // NOTE: This system runs unconditionally — *not* gated by
     // `Changed<TerminalGrid>`. The `mat.params = ...` write at the end is
@@ -313,10 +322,22 @@ fn update_terminal_material(
     // `sync_atlas_image` re-uploads pixels — the glyphs are present on GPU
     // but the shader's `textureSampleLevel` returns 0. The actual GPU upload
     // cost is bounded by `needs_rebuild` below.
-    for (handle, mut state, grid) in terminals.iter_mut() {
-        let dpr = windows.single().map(|w| w.scale_factor()).unwrap_or(1.0);
-        let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
+    // NOTE: Skip the entire system when PrimaryWindow is transiently
+    // absent (display hotplug, brief winit reconnect). Trade-off: the
+    // `mat.params = ...` write below would fire AssetEvent::Modified
+    // every frame (load-bearing for bind-group rebuild — see NOTE above);
+    // skipping for one frame means the previous frame's bind group
+    // continues to serve. This is bounded (sync_atlas_image is also
+    // ordered after this system, so atlas uploads defer in lock-step)
+    // and far less disruptive than the previous .unwrap_or(1.0) flash
+    // that would re-rasterize the entire atlas at half scale.
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let dpr = window.scale_factor();
+    let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
 
+    for (handle, mut state, grid) in terminals.iter_mut() {
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
@@ -427,6 +448,7 @@ fn update_terminal_material(
                 palette_time.elapsed_secs(),
                 metrics.underline_position_phys,
                 metrics.underline_thickness_phys.max(1.0),
+                metrics.max_overflow_phys,
                 bg_padding_color,
             );
         }

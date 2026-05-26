@@ -52,6 +52,26 @@ pub(crate) fn finish_terminal_setup(
     }
 }
 
+/// Computes grid dimensions for a host node, reserving `max_overflow_phys`
+/// on the right so the WGSL right-strip handler has room to paint the
+/// rightmost cell's bbox overflow without clipping. Height is not
+/// reserved — line_height already accommodates descender headroom.
+///
+/// Always returns `(cols, rows)` ≥ `(1, 1)`; degenerate inputs collapse
+/// to a 1x1 grid rather than producing zero-sized buffers.
+fn compute_grid_dims(
+    node_phys_w: f32,
+    node_phys_h: f32,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    max_overflow_phys: f32,
+) -> (u16, u16) {
+    let usable_w = (node_phys_w - max_overflow_phys).max(0.0);
+    let cols = ((usable_w / cell_w_phys).floor() as u16).max(1);
+    let rows = ((node_phys_h / cell_h_phys).floor() as u16).max(1);
+    (cols, rows)
+}
+
 /// Resizes each Terminal Activity's PTY / VT grid to match its host UI
 /// node's pixel extents so the shader's `grid_size * cell_size_px` always
 /// fills the entire pane. Idempotent — no-op when cols/rows are unchanged.
@@ -82,10 +102,13 @@ pub(crate) fn resize_terminals_to_node(
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
 
     for (computed, mut handle, mut pty, mut coalescer, mut grid) in terminals.iter_mut() {
-        let node_phys_w = computed.size.x.max(0.0);
-        let node_phys_h = computed.size.y.max(0.0);
-        let cols = ((node_phys_w / cell_w_phys).floor() as u16).max(1);
-        let rows = ((node_phys_h / cell_h_phys).floor() as u16).max(1);
+        let (cols, rows) = compute_grid_dims(
+            computed.size.x.max(0.0),
+            computed.size.y.max(0.0),
+            cell_w_phys,
+            cell_h_phys,
+            metrics.metrics.max_overflow_phys,
+        );
 
         let (cur_cols, cur_rows, _) = handle.read_geometry();
         if cur_cols == cols && cur_rows == rows {
@@ -126,6 +149,23 @@ mod tests {
             .init_asset::<TerminalUiMaterial>()
             .init_asset::<ShaderStorageBuffer>();
         app
+    }
+
+    #[test]
+    fn compute_grid_dims_reserves_max_overflow_for_cols() {
+        // Cell pitch 10, node width 100, overflow 4 → cols = (100−4)/10 = 9.
+        // Without the reservation: cols = 100/10 = 10. Asserting cols == 9
+        // catches both a sign-flip and a use-wrong-field regression.
+        let (cols, rows) = compute_grid_dims(100.0, 50.0, 10.0, 10.0, 4.0);
+        assert_eq!(cols, 9, "cols should be (100 − 4) / 10 = 9");
+        assert_eq!(rows, 5, "rows should be 50 / 10 = 5 (height not affected)");
+    }
+
+    #[test]
+    fn compute_grid_dims_floor_to_minimum_one() {
+        // Degenerate input: overflow exceeds node width.
+        let (cols, _) = compute_grid_dims(3.0, 20.0, 10.0, 10.0, 5.0);
+        assert_eq!(cols, 1, "cols must stay >= 1 even when usable width is 0");
     }
 
     #[test]

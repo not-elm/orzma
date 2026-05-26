@@ -80,7 +80,7 @@ impl GlyphAtlas {
         }
         let font = fonts.choice(&key.face);
         let ch = char::from_u32(key.codepoint)?;
-        let scale = ab_glyph::PxScale::from(key.size_px as f32);
+        let scale = ab_glyph::PxScale::from(fonts.px_scale_value(key.size_px));
         let scaled = font.as_scaled(scale);
         let glyph_id = scaled.glyph_id(ch);
         // NOTE: ab_glyph maps unknown codepoints to glyph ID 0 (notdef), and
