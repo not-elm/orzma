@@ -163,8 +163,8 @@ impl TerminalFonts {
             .expect("IosevkaTermNerdFontMono-Regular ttf-parser parse");
         // NOTE: cast to i32 before subtraction. ascender() / descender() return
         // i16, and (asc − desc) can exceed i16::MAX for fonts where the
-        // typographic envelope is unusually tall. JBM (1320) is safe; a
-        // user-provided font might not be.
+        // typographic envelope is unusually tall. The bundled font is safe;
+        // a user-provided font might not be.
         let asc = i32::from(face.ascender());
         let desc = i32::from(face.descender());
         let upem = f32::from(face.units_per_em());
@@ -458,8 +458,8 @@ mod tests {
         // (b) Derived metrics are ALSO scaled to DPR=2 — catches a bug
         // where phys_font_size is right but the wrong size is fed to
         // cell_metrics_px. Compares against DPR=1 baseline rather than
-        // hardcoding a JBM-specific advance value (~14.4 px) that would
-        // break on font updates.
+        // hardcoding a font-specific advance value that would break on
+        // font updates.
         let baseline = TerminalFonts::default();
         let m12 = baseline.cell_metrics_px(12);
         assert!(
