@@ -167,9 +167,19 @@ pub(crate) fn position_ime_overlay(
     // uses the cursor anchor only, so the OS popup is unaffected.
     let measured_width_logical = 0.0;
 
+    // NOTE: ComputedNode.size is in physical px (precedent at
+    // src/ui/terminal.rs::resize_terminals_to_node), so divide by
+    // scale to match compute_overlay_pos's logical-px expectation.
+    // Today this is masked by `measured_width_logical = 0.0` (the
+    // right-edge clamp is virtually unreachable), but the unit
+    // mismatch would silently miscompute the clamp at DPR > 1.0 if
+    // that shortcut is later replaced with a real text-width
+    // measurement.
+    let host_size_logical = node.size / scale;
+
     let pos = compute_overlay_pos(
         ui_xform.translation,
-        node.size,
+        host_size_logical,
         cursor_cell,
         &metrics.metrics,
         measured_width_logical,
