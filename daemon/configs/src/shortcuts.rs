@@ -348,15 +348,15 @@ pub struct Bindings {
     /// Enter tmux-style copy mode on the active terminal activity.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub enter_copy_mode: Option<KeyChord>,
-    /// Create a new window in the active session.
+    /// Create a new session.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub new_window: Option<KeyChord>,
-    /// Cycle window focus to the previous one.
+    pub new_session: Option<KeyChord>,
+    /// Cycle session focus to the previous one.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_window_prev: Option<KeyChord>,
-    /// Cycle window focus to the next one.
+    pub focus_session_prev: Option<KeyChord>,
+    /// Cycle session focus to the next one.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_window_next: Option<KeyChord>,
+    pub focus_session_next: Option<KeyChord>,
 }
 
 fn parse_default_chord(s: &str) -> KeyChord {
@@ -380,9 +380,9 @@ impl Default for Bindings {
             focus_activity_prev: Some(parse_default_chord("Cmd+[")),
             focus_activity_next: Some(parse_default_chord("Cmd+]")),
             enter_copy_mode: Some(parse_default_chord("Cmd+U")),
-            new_window: Some(parse_default_chord("Cmd+R")),
-            focus_window_prev: Some(parse_default_chord("Cmd+Shift+[")),
-            focus_window_next: Some(parse_default_chord("Cmd+Shift+]")),
+            new_session: Some(parse_default_chord("Cmd+R")),
+            focus_session_prev: Some(parse_default_chord("Cmd+Shift+[")),
+            focus_session_next: Some(parse_default_chord("Cmd+Shift+]")),
         }
     }
 }
@@ -480,19 +480,19 @@ impl Bindings {
                 &self.enter_copy_mode,
                 Action::EnterCopyMode,
             ),
-            ("new-window", &self.new_window, Action::NewWindow),
+            ("new-session", &self.new_session, Action::NewSession),
             (
-                "focus-window-prev",
-                &self.focus_window_prev,
-                Action::FocusWindow {
-                    offset: WindowOffset::Prev,
+                "focus-session-prev",
+                &self.focus_session_prev,
+                Action::FocusSession {
+                    offset: SessionOffset::Prev,
                 },
             ),
             (
-                "focus-window-next",
-                &self.focus_window_next,
-                Action::FocusWindow {
-                    offset: WindowOffset::Next,
+                "focus-session-next",
+                &self.focus_session_next,
+                Action::FocusSession {
+                    offset: SessionOffset::Next,
                 },
             ),
         ]
@@ -536,8 +536,6 @@ impl Bindings {
 pub enum Action {
     /// Close the active pane.
     ClosePane,
-    /// Close the active window.
-    CloseWindow,
     /// Close the active session.
     CloseSession,
     /// Move pane focus in a direction.
@@ -545,14 +543,14 @@ pub enum Action {
         /// Direction to move focus.
         direction: Direction,
     },
-    /// Move window focus by offset.
-    FocusWindow {
-        /// Window offset to apply.
-        offset: WindowOffset,
+    /// Move session focus by offset.
+    FocusSession {
+        /// Session offset to apply.
+        offset: SessionOffset,
     },
-    /// Jump to a window by index.
-    FocusWindowNumber {
-        /// Target window index (0–9 in practice).
+    /// Jump to a session by index.
+    FocusSessionNumber {
+        /// Target session index (0–9 in practice).
         index: u8,
     },
     /// Move activity focus by offset.
@@ -570,8 +568,6 @@ pub enum Action {
         /// Split direction.
         direction: SplitDirection,
     },
-    /// Create a new window.
-    NewWindow,
     /// Create a new session.
     NewSession,
     /// Add a new terminal activity to the active pane.
@@ -580,14 +576,12 @@ pub enum Action {
     NewExtensionActivity,
     /// Rename the active session.
     RenameSession,
-    /// Rename the active window.
-    RenameWindow,
     /// Rename the active activity.
     RenameActivity,
     /// Close the active activity.
     CloseActivity,
-    /// Show the window list.
-    ListWindows,
+    /// Show the session list.
+    ListSessions,
     /// Show the activity list for the active pane.
     ListActivities,
     /// Resize the active pane in a direction.
@@ -602,10 +596,8 @@ pub enum Action {
         /// Swap offset.
         offset: SwapOffset,
     },
-    /// Break the active pane into a new window.
-    BreakPaneToWindow,
-    /// Show the cross-session window picker (tmux choose-tree).
-    ChooseTree,
+    /// Break the active pane into a new session.
+    BreakPaneToSession,
     /// Enter tmux-style copy mode on the active Terminal Activity.
     EnterCopyMode,
 }
@@ -634,15 +626,15 @@ pub enum SplitDirection {
     Vertical,
 }
 
-/// Window offset selectors for `FocusWindow`.
+/// Session offset selectors for `FocusSession`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum WindowOffset {
-    /// Next window.
+pub enum SessionOffset {
+    /// Next session.
     Next,
-    /// Previous window.
+    /// Previous session.
     Prev,
-    /// Last-active window.
+    /// Last-active session.
     Last,
 }
 
@@ -892,9 +884,9 @@ mod tests {
         assert!(b.focus_activity_prev.is_some());
         assert!(b.focus_activity_next.is_some());
         assert!(b.enter_copy_mode.is_some());
-        assert!(b.new_window.is_some());
-        assert!(b.focus_window_prev.is_some());
-        assert!(b.focus_window_next.is_some());
+        assert!(b.new_session.is_some());
+        assert!(b.focus_session_prev.is_some());
+        assert!(b.focus_session_next.is_some());
     }
 
     #[test]
@@ -970,7 +962,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Any change to defaults updates this string.
-        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-activity":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-activity":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-window":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-window-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-window-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}}}}"#;
+        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-activity":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-activity":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-session":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-session-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-session-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}}}}"#;
         assert_eq!(json, expected);
     }
 }
