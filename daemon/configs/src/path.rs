@@ -11,7 +11,15 @@ pub(crate) const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 const CONFIG_REL_PATH: &str = "ozmux/config.toml";
 const HOME_CONFIG_DIR: &str = ".config";
 
-/// Abstraction over the environment lookups `resolve_config_path` performs.
+/// Abstraction over environment lookups used to resolve user-specified
+/// paths. Lets callers (notably `expand_user_path`) substitute the
+/// process environment in tests with deterministic fakes.
+///
+/// External callers should construct or pass `SystemEnv` for production
+/// use; the trait's `var` / `home_dir` surface is intentionally narrow
+/// so test implementations stay simple. The crate-internal
+/// `resolve_config_path` is the other consumer but is `pub(crate)` and
+/// not part of the external API.
 pub trait Env {
     /// Returns the value of `key`, treating an empty string as unset.
     fn var(&self, key: &str) -> Option<String>;

@@ -88,12 +88,13 @@ impl GlyphAtlas {
         //       outline if the font has one — which most do. Bail out before
         //       rasterizing so combining marks, CJK glyphs missing from the
         //       monospace face, etc. do not leave a literal tofu in every
-        //       cell. The trade-off is that Nerd Font icons (PUA U+E000–
-        //       U+F8FF used by neo-tree, nvim-web-devicons, lazygit) render
-        //       as blank cells — the bundled JetBrains Mono carries no PUA
-        //       glyphs, so they all collapse to notdef here. Tier 2 will add
-        //       a fallback face (Symbols Only Nerd Font) so those codepoints
-        //       can be resolved without ballooning the wasm bundle by ~10 MB.
+        //       cell. The bundled Iosevka Term Nerd Font Mono includes PUA
+        //       icons (U+E000–U+F8FF used by neo-tree, nvim-web-devicons,
+        //       lazygit), so those codepoints DO map to non-zero glyph IDs
+        //       and DO rasterize through this path. A user-supplied non-
+        //       Nerd-Font override will fall back to notdef here (and
+        //       short-circuit) for any PUA codepoints, which is the
+        //       desired behavior for monospace fonts without icon coverage.
         if glyph_id.0 == 0 {
             return None;
         }

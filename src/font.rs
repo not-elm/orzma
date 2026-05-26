@@ -3,6 +3,11 @@
 //! text builders consume. Runs at Startup, ordered
 //! `.before(TerminalFontInitSet::InitCellMetrics)` so the renderer's
 //! cell-metrics computation sees any overridden font.
+//!
+//! Startup-only: font changes require a process restart. If a future
+//! feature adds config hot-reload, `bridge_font_config` must move to a
+//! change-detection system in Update (and additionally re-issue cell
+//! metrics + invalidate the glyph atlas — see the renderer crate).
 
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;

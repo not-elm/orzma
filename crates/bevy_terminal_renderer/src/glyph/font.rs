@@ -245,7 +245,11 @@ impl TerminalFonts {
     /// physical pixel size. See [`CellMetrics`] for individual field semantics.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
         let face = TtfFace::parse(self.regular.font_data(), 0)
-            .expect("IosevkaTermNerdFontMono-Regular ttf-parser parse");
+            .expect(
+                "regular face: ttf-parser parse failed (bundled or user-supplied via FontBridgePlugin); \
+                 if a user override is in effect this means the override file passed ab_glyph but \
+                 ttf-parser rejected it — check the most recent FontBridgePlugin warning",
+            );
         // NOTE: cast to i32 before subtraction. ascender() / descender() return
         // i16, and (asc − desc) can exceed i16::MAX for fonts where the
         // typographic envelope is unusually tall. The bundled font is safe;
@@ -314,7 +318,11 @@ impl TerminalFonts {
     /// agree on the actual rendering scale.
     pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
         let face = TtfFace::parse(self.regular.font_data(), 0)
-            .expect("IosevkaTermNerdFontMono-Regular ttf-parser parse");
+            .expect(
+                "regular face: ttf-parser parse failed (bundled or user-supplied via FontBridgePlugin); \
+                 if a user override is in effect this means the override file passed ab_glyph but \
+                 ttf-parser rejected it — check the most recent FontBridgePlugin warning",
+            );
         let asc = i32::from(face.ascender());
         let desc = i32::from(face.descender());
         let upem = f32::from(face.units_per_em());
