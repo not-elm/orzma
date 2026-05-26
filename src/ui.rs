@@ -29,6 +29,13 @@ pub(crate) mod terminal;
 #[derive(Component)]
 pub(crate) struct UiRoot;
 
+/// Marker for the single attachment-point `Node` child of `UiRoot` that
+/// receives whichever Session's `SessionUiSubtree` is currently attached.
+/// `sync_active_session` reparents subtrees between this and their owning
+/// Session entity. Spawned once in Startup; never despawned.
+#[derive(Component)]
+pub(crate) struct SessionUiRoot;
+
 /// Marker for every transient UI Node (status bar, tab bar, pane frame,
 /// split container, placeholder activity content). Rebuilds query this
 /// and despawn every match. Activity host entities must NOT carry this.
