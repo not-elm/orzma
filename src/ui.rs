@@ -18,6 +18,7 @@ pub(crate) mod copy_mode;
 pub(crate) mod copy_mode_indicator;
 pub(crate) mod layout;
 pub(crate) mod palette;
+pub(crate) mod rebuild_session;
 pub(crate) mod registry;
 pub(crate) mod root;
 pub(crate) mod status_bar;
@@ -74,6 +75,11 @@ impl Plugin for OzmuxUiPlugin {
             .add_plugins(OzmuxTerminalUiPlugin)
             .add_systems(Startup, root::setup_root_camera_and_ui_root)
             .add_systems(Update, rebuild_structure_on_change)
+            .add_systems(
+                Update,
+                rebuild_session::rebuild_session_ui_on_data_change
+                    .run_if(|| std::env::var("OZMUX_REBUILD_V2").is_ok()),
+            )
             .add_systems(
                 PostUpdate,
                 sync_session::sync_active_session.before(bevy::ui::UiSystems::Prepare),
