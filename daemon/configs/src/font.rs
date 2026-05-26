@@ -27,12 +27,20 @@ pub struct FontConfig {
     /// Absolute or `~`-prefixed path to the regular-face TTF.
     /// Consumed by the Bevy GUI only; the web frontend ignores this and
     /// uses `normal_family` for CSS lookup.
+    // NOTE: skip_serializing keeps the field out of `GET /configs/font`
+    // responses. The user's local filesystem path must not be exposed
+    // to the web frontend (an information leak in any
+    // network-accessible deployment).
+    #[serde(skip_serializing)]
     pub normal_path: Option<std::path::PathBuf>,
     /// Absolute or `~`-prefixed path to the bold-face TTF (Bevy GUI only).
+    #[serde(skip_serializing)]
     pub bold_path: Option<std::path::PathBuf>,
     /// Absolute or `~`-prefixed path to the italic-face TTF (Bevy GUI only).
+    #[serde(skip_serializing)]
     pub italic_path: Option<std::path::PathBuf>,
     /// Absolute or `~`-prefixed path to the bold-italic-face TTF (Bevy GUI only).
+    #[serde(skip_serializing)]
     pub bold_italic_path: Option<std::path::PathBuf>,
 }
 
