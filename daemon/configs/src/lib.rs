@@ -15,7 +15,7 @@ pub mod browser;
 pub mod error;
 pub mod font;
 pub mod mouse;
-mod path;
+pub mod path;
 mod raw;
 pub mod shortcuts;
 pub mod theme;

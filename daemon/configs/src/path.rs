@@ -12,7 +12,7 @@ const CONFIG_REL_PATH: &str = "ozmux/config.toml";
 const HOME_CONFIG_DIR: &str = ".config";
 
 /// Abstraction over the environment lookups `resolve_config_path` performs.
-pub(crate) trait Env {
+pub trait Env {
     /// Returns the value of `key`, treating an empty string as unset.
     fn var(&self, key: &str) -> Option<String>;
     /// Returns the user's home directory, if known.
@@ -20,7 +20,7 @@ pub(crate) trait Env {
 }
 
 /// Production `Env` implementation that delegates to `std::env` and `dirs`.
-pub(crate) struct SystemEnv;
+pub struct SystemEnv;
 
 impl Env for SystemEnv {
     fn var(&self, key: &str) -> Option<String> {
