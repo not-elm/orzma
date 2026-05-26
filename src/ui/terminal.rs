@@ -84,7 +84,13 @@ pub(crate) fn resize_terminals_to_node(
     for (computed, mut handle, mut pty, mut coalescer, mut grid) in terminals.iter_mut() {
         let node_phys_w = computed.size.x.max(0.0);
         let node_phys_h = computed.size.y.max(0.0);
-        let cols = ((node_phys_w / cell_w_phys).floor() as u16).max(1);
+        // NOTE: max_overflow_phys reserves space on the right for the WGSL
+        //       shader's right-strip handler to paint the rightmost cell's
+        //       bbox overflow without clipping. Height needs no analogous
+        //       reservation — line_height already accommodates descender
+        //       headroom for the bundled font.
+        let usable_w = (node_phys_w - metrics.metrics.max_overflow_phys).max(0.0);
+        let cols = ((usable_w / cell_w_phys).floor() as u16).max(1);
         let rows = ((node_phys_h / cell_h_phys).floor() as u16).max(1);
 
         let (cur_cols, cur_rows, _) = handle.read_geometry();
