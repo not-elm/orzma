@@ -22,6 +22,7 @@ pub(crate) mod rebuild_session;
 pub(crate) mod registry;
 pub(crate) mod root;
 pub(crate) mod status_bar;
+pub(crate) mod status_bar_sync;
 pub(crate) mod sync_session;
 pub(crate) mod tab_bar;
 pub(crate) mod terminal;
@@ -77,8 +78,11 @@ impl Plugin for OzmuxUiPlugin {
             .add_systems(Update, rebuild_structure_on_change)
             .add_systems(
                 Update,
-                rebuild_session::rebuild_session_ui_on_data_change
-                    .after(rebuild_structure_on_change)
+                (
+                    rebuild_session::rebuild_session_ui_on_data_change
+                        .after(rebuild_structure_on_change),
+                    status_bar_sync::rebuild_status_bar_on_session_set_change,
+                )
                     .run_if(|| std::env::var("OZMUX_REBUILD_V2").is_ok()),
             )
             .add_systems(
