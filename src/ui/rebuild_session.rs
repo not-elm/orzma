@@ -356,7 +356,8 @@ mod tests {
                 .keys()
                 .find(|s| **s != sid_b)
                 .expect("session A (distinct from B)");
-            mux.rename_session(&sid_a, "renamed".into()).expect("rename");
+            mux.rename_session(&sid_a, "renamed".into())
+                .expect("rename");
             mux.bump_epoch(&sid_a);
         }
         app.update();

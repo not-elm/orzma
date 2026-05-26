@@ -19,7 +19,7 @@ use bevy::render::storage::ShaderStorageBuffer;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SessionId, SplitOrientation};
+use ozmux_multiplexer::{Activity, ActivityId, PaneId, SessionId, Side, SplitOrientation};
 use std::collections::HashSet;
 use std::sync::MutexGuard;
 

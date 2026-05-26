@@ -185,13 +185,7 @@ impl MultiplexerService {
         orientation: SplitOrientation,
     ) -> MultiplexerResult<()> {
         self.with_session_or_404(sid, |s| {
-            s.break_activity_to_pane(
-                target_pane_id,
-                aid,
-                new_pane_id.clone(),
-                side,
-                orientation,
-            )
+            s.break_activity_to_pane(target_pane_id, aid, new_pane_id.clone(), side, orientation)
         })?;
         self.pane_owner_session.insert(new_pane_id, *sid);
         Ok(())
@@ -348,14 +342,22 @@ mod tests {
         mux.bump_epoch(&sid_b);
 
         assert_eq!(mux.epoch_of(&sid_a), 2, "A's epoch must reflect both bumps");
-        assert_eq!(mux.epoch_of(&sid_b), 1, "B's epoch must be independent of A");
+        assert_eq!(
+            mux.epoch_of(&sid_b),
+            1,
+            "B's epoch must be independent of A"
+        );
     }
 
     #[test]
     fn epoch_of_returns_zero_for_unknown_session() {
         let mux = MultiplexerService::default();
         let phantom = SessionId(9999);
-        assert_eq!(mux.epoch_of(&phantom), 0, "unknown sessions read as epoch 0 (sentinel)");
+        assert_eq!(
+            mux.epoch_of(&phantom),
+            0,
+            "unknown sessions read as epoch 0 (sentinel)"
+        );
     }
 
     #[test]
