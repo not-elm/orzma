@@ -3,6 +3,7 @@
 //! no chord data.
 
 pub(crate) mod mouse_wheel;
+pub(crate) mod ime;
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
