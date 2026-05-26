@@ -183,12 +183,52 @@ mod tests {
     use bevy_terminal_renderer::bundled;
     use std::io::Write;
 
-    fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
-        let guard = crate::configs::env_guard();
-        // SAFETY: env mutations serialized by env_guard().
-        unsafe {
-            std::env::remove_var("OZMUX_CONFIG");
+    /// RAII guard for a process-environment variable. Constructing it via
+    /// `EnvVarGuard::set(...)` sets the variable; dropping it removes
+    /// it. The Drop runs even on panic, so a test that panics inside
+    /// `app.update()` no longer leaks the stale env var into the next
+    /// test (which would then run against a misconfigured `OZMUX_CONFIG`
+    /// after recovering from the poisoned `env_guard` mutex).
+    ///
+    /// The caller MUST hold `crate::configs::env_guard()` for the full
+    /// lifetime of every `EnvVarGuard` to keep env mutations serialized
+    /// across tests.
+    struct EnvVarGuard {
+        key: &'static str,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            // SAFETY: caller holds env_guard for the duration of this guard.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key }
         }
+
+        fn unset(key: &'static str) -> Self {
+            // SAFETY: caller holds env_guard for the duration of this guard.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: caller still holds env_guard (drop runs before the
+            // env_guard MutexGuard because of LIFO drop order within
+            // each test scope).
+            unsafe {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
+        let guard = crate::configs::env_guard();
+        let env = EnvVarGuard::unset("OZMUX_CONFIG");
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -206,12 +246,12 @@ mod tests {
         app.add_plugins(TerminalFontPlugin);
         app.add_plugins(OzmuxConfigsPlugin);
         app.add_plugins(FontBridgePlugin);
-        (app, guard)
+        (app, guard, env)
     }
 
     #[test]
     fn default_config_keeps_bundled_iosevka_in_terminal_fonts() {
-        let (mut app, _guard) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app();
         app.update();
         let fonts = app.world().resource::<TerminalFonts>();
         assert_eq!(
@@ -223,7 +263,7 @@ mod tests {
 
     #[test]
     fn default_config_inserts_terminal_ui_font_with_strong_handle() {
-        let (mut app, _guard) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app();
         app.update();
         let ui_font = app
             .world()
@@ -260,10 +300,7 @@ mod tests {
         drop(f);
 
         let _guard = crate::configs::env_guard();
-        // SAFETY: serialized by env_guard().
-        unsafe {
-            std::env::set_var("OZMUX_CONFIG", &toml_path);
-        }
+        let _env = EnvVarGuard::set("OZMUX_CONFIG", &toml_path);
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -289,10 +326,6 @@ mod tests {
 
         let _ = std::fs::remove_file(&ttf_path);
         let _ = std::fs::remove_file(&toml_path);
-        // SAFETY: serialized by env_guard().
-        unsafe {
-            std::env::remove_var("OZMUX_CONFIG");
-        }
     }
 
     #[test]
@@ -309,10 +342,7 @@ mod tests {
         .expect("write toml");
 
         let _guard = crate::configs::env_guard();
-        // SAFETY: serialized by env_guard().
-        unsafe {
-            std::env::set_var("OZMUX_CONFIG", &toml);
-        }
+        let _env = EnvVarGuard::set("OZMUX_CONFIG", &toml);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -336,10 +366,6 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&toml);
-        // SAFETY: serialized by env_guard().
-        unsafe {
-            std::env::remove_var("OZMUX_CONFIG");
-        }
     }
 
     #[test]
@@ -359,10 +385,7 @@ mod tests {
         .expect("write toml");
 
         let _guard = crate::configs::env_guard();
-        // SAFETY: serialized by env_guard().
-        unsafe {
-            std::env::set_var("OZMUX_CONFIG", &toml);
-        }
+        let _env = EnvVarGuard::set("OZMUX_CONFIG", &toml);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -387,10 +410,6 @@ mod tests {
 
         let _ = std::fs::remove_file(&normal_path);
         let _ = std::fs::remove_file(&toml);
-        // SAFETY: serialized by env_guard().
-        unsafe {
-            std::env::remove_var("OZMUX_CONFIG");
-        }
     }
 
     #[test]
@@ -417,10 +436,7 @@ mod tests {
         .expect("write toml");
 
         let _guard = crate::configs::env_guard();
-        // SAFETY: serialized by env_guard().
-        unsafe {
-            std::env::set_var("OZMUX_CONFIG", &toml);
-        }
+        let _env = EnvVarGuard::set("OZMUX_CONFIG", &toml);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -455,9 +471,5 @@ mod tests {
         let _ = std::fs::remove_file(&normal_path);
         let _ = std::fs::remove_file(&bold_path);
         let _ = std::fs::remove_file(&toml);
-        // SAFETY: serialized by env_guard().
-        unsafe {
-            std::env::remove_var("OZMUX_CONFIG");
-        }
     }
 }
