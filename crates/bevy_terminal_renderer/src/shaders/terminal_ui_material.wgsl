@@ -114,19 +114,24 @@ fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
     var color = colors.bg;
     color = paint_primary_glyph(hit, colors.fg, color);
     color = paint_left_overdraw(hit, color);
-    color = paint_text_decorations(hit.cell.style_flags, hit.in_cell_px, colors.fg, color);
-    color = paint_cursor(hit.row, hit.col, hit.in_cell_px, color);
-    color = paint_selection(hit.row, hit.col, color);
-    return color;
+    return paint_cell_overlays(hit, colors.fg, color);
 }
 
 // Handles fragments past the grid's right edge: when they fall within the
 // `max_overflow_phys` band reserved by the host, paint the rightmost cell's
 // bbox overflow. Falls back to `fallback` outside the band or on a miss.
 fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
+    // Defensive guard (#10): cell_size_px is Vec2::ZERO during the
+    // ~1-frame window between MaterialNode insertion and the first
+    // update_terminal_material write. The grid_h_phys = 0 check below
+    // already prevents the strip-entry, but the explicit cell_size_px
+    // guard documents the invariant and protects against future
+    // refactors that might remove the height check.
     let grid_w_phys = params.cell_size_px.x * f32(params.grid_size.x);
     let grid_h_phys = params.cell_size_px.y * f32(params.grid_size.y);
-    let in_right_strip = p_px.x >= grid_w_phys
+    let in_right_strip = params.cell_size_px.x > 0.0
+        && params.cell_size_px.y > 0.0
+        && p_px.x >= grid_w_phys
         && p_px.x < grid_w_phys + params.max_overflow_phys
         && p_px.y < grid_h_phys;
     if !in_right_strip {
@@ -145,8 +150,17 @@ fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
         p_px.x - f32(col) * params.cell_size_px.x,
         p_px.y - f32(row) * params.cell_size_px.y,
     );
-    let strip_fg = resolve_cell_colors(strip_cell).fg;
-    return paint_cell_glyph(strip_cell, strip_local, strip_fg, fallback);
+    let colors = resolve_cell_colors(strip_cell);
+    var color = colors.bg;
+    // NOTE: paint_cell_glyph (NOT paint_primary_glyph). strip_local.x is
+    // in [cell_pitch.x, cell_pitch.x + max_overflow_phys) — already in
+    // the right-half coordinate space of any STYLE_WIDE_RIGHT_HALF wide
+    // glyph. paint_primary_glyph would add another +cell_pitch.x, pushing
+    // past the wide bitmap (size_px.x ≈ 2*cell_pitch.x) → zero coverage.
+    // The asymmetry vs paint_grid_cell is intentional and unavoidable.
+    color = paint_cell_glyph(strip_cell, strip_local, colors.fg, color);
+    let hit = CellHit(true, row, col, strip_cell, strip_local);
+    return paint_cell_overlays(hit, colors.fg, color);
 }
 
 // ============================================================================
@@ -195,6 +209,17 @@ fn paint_left_overdraw(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
 // ============================================================================
 // Overlay stages (decorations / cursor / selection)
 // ============================================================================
+
+// Runs the three overlay stages in canonical order:
+// text decorations → cursor → selection. Used by both paint_grid_cell
+// and paint_right_strip so the strip cannot drift from the grid path
+// on overlay sequence or argument order.
+fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
+    var color = paint_text_decorations(hit.cell.style_flags, hit.in_cell_px, fg, base);
+    color = paint_cursor(hit.row, hit.col, hit.in_cell_px, color);
+    color = paint_selection(hit.row, hit.col, color);
+    return color;
+}
 
 // Underline metrics come from font-derived uniforms; strike sits at half the
 // ascent and reuses the underline thickness.
