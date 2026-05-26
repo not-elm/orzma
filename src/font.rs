@@ -93,8 +93,6 @@ fn bridge_font_config(
 ) {
     let font: &FontConfig = &configs.font;
 
-    // Load per face — independently. Failure to load one face leaves the
-    // others untouched.
     let regular_bytes = load_face_bytes(
         font.normal_path.as_deref(),
         BUNDLED_REGULAR,
@@ -113,10 +111,9 @@ fn bridge_font_config(
         FontFace::BoldItalic,
     );
 
-    // Per-face parse validation: if user-supplied bytes don't parse, fall
-    // back to bundled bytes for THAT face only. Partial override is a
-    // feature — a corrupt bold override must not also drop a working
-    // regular override.
+    // NOTE: validate-per-face is load-bearing. Without it, a corrupt
+    // override on ANY face drops ALL overrides — the all-or-nothing
+    // regression that commit 09213e7 fixed.
     let regular_bytes = validate_or_bundled(regular_bytes, BUNDLED_REGULAR, FontFace::Regular);
     let bold_bytes = validate_or_bundled(bold_bytes, BUNDLED_BOLD, FontFace::Bold);
     let italic_bytes = validate_or_bundled(italic_bytes, BUNDLED_ITALIC, FontFace::Italic);
@@ -126,7 +123,6 @@ fn bridge_font_config(
         FontFace::BoldItalic,
     );
 
-    // Keep a copy of regular bytes for the UI font before moving into TerminalFonts.
     let ui_regular_bytes = regular_bytes.clone();
 
     let new_fonts = TerminalFonts::from_bytes(
@@ -138,8 +134,6 @@ fn bridge_font_config(
     .expect("validated bytes must parse");
     *terminal_fonts = new_fonts;
 
-    // Insert TerminalUiFont. Use the regular face bytes (already cloned above)
-    // so the UI font matches whatever the renderer just adopted.
     let handle = match Font::try_from_bytes(ui_regular_bytes) {
         Ok(font_asset) => fonts_assets.add(font_asset),
         Err(err) => {
