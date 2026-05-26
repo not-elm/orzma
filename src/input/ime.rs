@@ -1,8 +1,10 @@
 //! IME composition state for the terminal overlay.
 //!
-//! Provides `Composition`, a validated snapshot of a preedit string and
-//! its UTF-8-safe caret offset. Bevy window event handling and
-//! `Ime::Commit` forwarding are added in later tasks.
+//! Provides `Composition` (a validated preedit snapshot), `ImeState`
+//! (the active-composition resource), and `read_ime_events` (the Bevy
+//! system that drains `Ime` events and forwards `Ime::Commit` text to
+//! the attached terminal). The `ime_policy_system` that toggles
+//! `Window::ime_enabled` is added in a later task.
 
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
@@ -124,7 +126,7 @@ pub(crate) fn read_ime_events(
         if let Some(commit_text) = apply_event(&mut state, event) {
             let Some(sid) = attached_sid_q.iter().next().map(|s| s.0) else {
                 tracing::warn!(
-                    target: "ozmux_gui::ime",
+                    target: "ozmux_gui::input::ime",
                     "commit dropped: no attached terminal",
                 );
                 continue;
