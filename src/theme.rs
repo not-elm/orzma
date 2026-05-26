@@ -22,7 +22,7 @@ pub const BORDER: Color = Color::srgb(0.333, 0.333, 0.333);
 pub const FOREGROUND: Color = Color::srgb(0.870, 0.870, 0.890);
 /// Secondary / muted text color (inactive tab text).
 pub const MUTED: Color = Color::srgb(0.376, 0.408, 0.471);
-/// Active highlight (active window chip in status bar, active-pane top
+/// Active highlight (active session chip in status bar, active-pane top
 /// indicator on the active tab).
 pub const ACCENT: Color = Color::srgb(0.302, 0.561, 0.851);
 

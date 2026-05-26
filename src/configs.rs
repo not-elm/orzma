@@ -35,9 +35,15 @@ impl Plugin for OzmuxConfigsPlugin {
             // the problem in logs.
             _ => {
                 tracing::warn!(?err, "configs: load failed, falling back to defaults");
+                eprintln!("ozmux-gui: shortcut config could not be loaded; using defaults.");
+                eprintln!("  {err}");
+                let mut source = std::error::Error::source(&err);
+                while let Some(cause) = source {
+                    eprintln!("  caused by: {cause}");
+                    source = cause.source();
+                }
                 eprintln!(
-                    "ozmux-gui: shortcut config could not be loaded; using defaults.\n  {err}\n  \
-                     Edit ~/.config/ozmux/config.toml to fix or remove it to silence this warning."
+                    "  Edit ~/.config/ozmux/config.toml to fix or remove it to silence this warning."
                 );
                 OzmuxConfigs::default()
             }
@@ -123,6 +129,44 @@ mod tests {
             .expect("plugin must still insert a resource on broken-toml fallback");
         let defaults = OzmuxConfigs::default();
         assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
+
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Confirms `OzmuxConfigsError::ParseToml` chains down to the underlying
+    /// `toml::de::Error`, so the `eprintln!` "caused by:" walker in
+    /// `OzmuxConfigsPlugin::build` will surface the field-name detail to
+    /// users with a stale config file. Without that walker, the outer Display
+    /// only says "failed to parse TOML at ...".
+    #[test]
+    fn parse_error_chain_surfaces_inner_toml_cause() {
+        let _guard = env_guard();
+        let tmp = std::env::temp_dir().join("ozmux_configs_unknown_field.toml");
+        // Provide a key that won't match any expected struct field. The
+        // exact wording of the toml parser's error message is not pinned;
+        // we only assert that the chain has a non-empty source.
+        std::fs::write(
+            &tmp,
+            "this-is-not-a-valid-section = 42\n[unknown-section]\nfoo = 1\n",
+        )
+        .unwrap();
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
+        unsafe {
+            std::env::set_var("OZMUX_CONFIG", &tmp);
+        }
+
+        let err = OzmuxConfigs::load_blocking().expect_err("must error on unknown field");
+        // The outer error must wrap an inner cause via Error::source().
+        let source = std::error::Error::source(&err);
+        // ParseToml carries a toml::de::Error as #[source]; assert that path
+        // is taken.
+        assert!(
+            source.is_some(),
+            "ParseToml error must have an inner source (toml::de::Error) so the eprintln! chain walker has something to print"
+        );
 
         unsafe {
             std::env::remove_var("OZMUX_CONFIG");

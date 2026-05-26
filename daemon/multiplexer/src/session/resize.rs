@@ -2,9 +2,9 @@
 //! whose orientation matches the requested axis and re-weights it in
 //! integer cells per spec §7.
 
-use crate::window::cells::{Cell, CellId, LayoutCellState, SplitOrientation};
-use crate::window::direction::PaneDirection;
-use crate::window::pane::PaneId;
+use crate::session::cells::{Cell, CellId, LayoutCellState, SplitOrientation};
+use crate::session::direction::PaneDirection;
+use crate::session::pane::PaneId;
 use std::collections::HashMap;
 
 /// Hard floor on a leaf pane's cell count along the LEFTRIGHT axis.
@@ -71,7 +71,7 @@ fn compute_p_at(
     state: &LayoutCellState,
     target: &CellId,
     axis: SplitOrientation,
-    window_cells_on_axis: u16,
+    session_cells_on_axis: u16,
 ) -> u16 {
     let mut path: Vec<CellId> = Vec::new();
     let mut cursor = Some(target.clone());
@@ -81,7 +81,7 @@ fn compute_p_at(
     }
     path.reverse();
 
-    let mut p = window_cells_on_axis;
+    let mut p = session_cells_on_axis;
     for window in path.windows(2) {
         let parent_id = &window[0];
         let child_id = &window[1];
@@ -158,8 +158,8 @@ pub(crate) fn resize_split_for_pane(
     pane: &PaneId,
     direction: PaneDirection,
     amount: u16,
-    window_cols: u16,
-    window_rows: u16,
+    session_cols: u16,
+    session_rows: u16,
 ) -> ResizePaneOutcome {
     let Some(leaf_id) = pane_to_cell.get(pane) else {
         return ResizePaneOutcome::NoOp;
@@ -169,15 +169,15 @@ pub(crate) fn resize_split_for_pane(
         return ResizePaneOutcome::NoOp;
     };
 
-    let window_p = match axis {
-        SplitOrientation::Horizontal => window_cols,
-        SplitOrientation::Vertical => window_rows,
+    let session_p = match axis {
+        SplitOrientation::Horizontal => session_cols,
+        SplitOrientation::Vertical => session_rows,
     };
     let min_cells = match axis {
         SplitOrientation::Horizontal => MIN_PANE_COLS,
         SplitOrientation::Vertical => MIN_PANE_ROWS,
     };
-    let p_ancestor = compute_p_at(state, &ancestor_id, axis, window_p);
+    let p_ancestor = compute_p_at(state, &ancestor_id, axis, session_p);
 
     let (current_lhs, current_rhs, lhs_cell, rhs_cell) = match state.get(&ancestor_id) {
         Some(Cell::Split(s)) => {
@@ -216,16 +216,15 @@ pub(crate) fn resize_split_for_pane(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::window::cells::Side;
-    use crate::window::pane::activity::{Activity, ActivityId};
-    use crate::window::window::{Window, WindowId};
+    use crate::session::cells::Side;
+    use crate::session::pane::activity::{Activity, ActivityId};
+    use crate::session::session::{Session, SessionId};
 
-    fn fresh_window_with_split(orientation: SplitOrientation) -> (Window, PaneId, PaneId) {
+    fn fresh_session_with_split(orientation: SplitOrientation) -> (Session, PaneId, PaneId) {
         let pid_a = PaneId::new();
         let pid_b = PaneId::new();
         let activity = Activity::terminal(ActivityId::new());
-        let mut win =
-            Window::new_with_initial(WindowId::new(), "w".into(), pid_a.clone(), activity);
+        let mut win = Session::new_with_initial(SessionId(0), "w".into(), pid_a.clone(), activity);
         win.split_pane(
             &pid_a,
             pid_b.clone(),
@@ -259,7 +258,7 @@ mod tests {
 
     #[test]
     fn find_matching_ancestor_finds_split_when_orientation_matches() {
-        let (win, pid_left, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (win, pid_left, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let leaf = win.pane_to_cell.get(&pid_left).unwrap();
         let found = find_matching_ancestor(&win.cells, leaf, SplitOrientation::Horizontal);
         assert!(found.is_some());
@@ -267,15 +266,15 @@ mod tests {
 
     #[test]
     fn find_matching_ancestor_returns_none_when_no_ancestor_matches() {
-        let (win, pid_left, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (win, pid_left, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let leaf = win.pane_to_cell.get(&pid_left).unwrap();
         let found = find_matching_ancestor(&win.cells, leaf, SplitOrientation::Vertical);
         assert!(found.is_none());
     }
 
     #[test]
-    fn compute_p_at_root_returns_window_axis_length() {
-        let (win, _, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+    fn compute_p_at_root_returns_session_axis_length() {
+        let (win, _, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let root = &win.root_cell;
         let p = compute_p_at(&win.cells, root, SplitOrientation::Horizontal, 120);
         assert_eq!(p, 120);
@@ -284,7 +283,7 @@ mod tests {
     #[test]
     fn compute_p_at_lhs_child_of_same_axis_split_is_lhs_rounded() {
         // 50/50 horizontal split of width=120 → lhs gets round(60)=60.
-        let (win, pid_left, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (win, pid_left, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let leaf = win.pane_to_cell.get(&pid_left).unwrap();
         let p = compute_p_at(&win.cells, leaf, SplitOrientation::Horizontal, 120);
         assert_eq!(p, 60);
@@ -292,7 +291,7 @@ mod tests {
 
     #[test]
     fn compute_p_at_in_cross_axis_subtree_inherits_parent_p() {
-        let (win, pid_left, _) = fresh_window_with_split(SplitOrientation::Vertical);
+        let (win, pid_left, _) = fresh_session_with_split(SplitOrientation::Vertical);
         let leaf = win.pane_to_cell.get(&pid_left).unwrap();
         let p_horizontal = compute_p_at(&win.cells, leaf, SplitOrientation::Horizontal, 120);
         assert_eq!(p_horizontal, 120);
@@ -300,7 +299,7 @@ mod tests {
 
     #[test]
     fn satisfies_min_at_pane_passes_when_p_at_or_above_min() {
-        let (win, pid, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (win, pid, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let leaf = win.pane_to_cell.get(&pid).unwrap();
         assert!(satisfies_min_at(
             &win.cells,
@@ -320,7 +319,7 @@ mod tests {
 
     #[test]
     fn satisfies_min_at_same_axis_split_walks_both_children() {
-        let (win, pid, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (win, pid, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let leaf = win.pane_to_cell.get(&pid).unwrap();
         assert!(satisfies_min_at(
             &win.cells,
@@ -338,8 +337,8 @@ mod tests {
         let pid_a = PaneId::new();
         let pid_b = PaneId::new();
         let pid_c = PaneId::new();
-        let mut win = Window::new_with_initial(
-            WindowId::new(),
+        let mut win = Session::new_with_initial(
+            SessionId(0),
             "w".into(),
             pid_a.clone(),
             Activity::terminal(ActivityId::new()),
@@ -394,7 +393,7 @@ mod tests {
 
     #[test]
     fn available_to_shrink_returns_zero_when_p_sub_is_zero() {
-        let (win, pid, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (win, pid, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let leaf = win.pane_to_cell.get(&pid).unwrap();
         assert_eq!(
             available_to_shrink(&win.cells, leaf, SplitOrientation::Horizontal, 0, 10, 5),
@@ -404,7 +403,7 @@ mod tests {
 
     #[test]
     fn available_to_shrink_caps_at_p_sub() {
-        let (win, pid, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (win, pid, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let leaf = win.pane_to_cell.get(&pid).unwrap();
         assert_eq!(
             available_to_shrink(&win.cells, leaf, SplitOrientation::Horizontal, 15, 10, 100),
@@ -414,7 +413,7 @@ mod tests {
 
     #[test]
     fn available_to_shrink_handles_zero_total_weight_split() {
-        let (mut win, _pid_a, pid_b) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (mut win, _pid_a, pid_b) = fresh_session_with_split(SplitOrientation::Horizontal);
         let cell_b = win.pane_to_cell.get(&pid_b).unwrap().clone();
         let split_id = win.cells.get(&cell_b).unwrap().parent().unwrap().clone();
         if let Some(Cell::Split(s)) = win.cells.get_mut(&split_id) {
@@ -436,8 +435,8 @@ mod tests {
 
     #[test]
     fn resize_right_in_two_column_split_grows_lhs_shrinks_rhs() {
-        let (mut win, pid_left, _) = fresh_window_with_split(SplitOrientation::Horizontal);
-        win.dimensions = Some(crate::window::window::WindowDimensions {
+        let (mut win, pid_left, _) = fresh_session_with_split(SplitOrientation::Horizontal);
+        win.dimensions = Some(crate::session::session::SessionDimensions {
             cols: 120,
             rows: 40,
         });
@@ -458,8 +457,9 @@ mod tests {
 
     #[test]
     fn resize_right_in_two_column_split_with_active_in_rhs_still_shrinks_rhs() {
-        let (mut win, _pid_left, pid_right) = fresh_window_with_split(SplitOrientation::Horizontal);
-        win.dimensions = Some(crate::window::window::WindowDimensions {
+        let (mut win, _pid_left, pid_right) =
+            fresh_session_with_split(SplitOrientation::Horizontal);
+        win.dimensions = Some(crate::session::session::SessionDimensions {
             cols: 120,
             rows: 40,
         });
@@ -480,8 +480,8 @@ mod tests {
 
     #[test]
     fn resize_returns_no_op_when_no_matching_ancestor_orientation() {
-        let (mut win, pid_left, _) = fresh_window_with_split(SplitOrientation::Horizontal);
-        win.dimensions = Some(crate::window::window::WindowDimensions {
+        let (mut win, pid_left, _) = fresh_session_with_split(SplitOrientation::Horizontal);
+        win.dimensions = Some(crate::session::session::SessionDimensions {
             cols: 120,
             rows: 40,
         });
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn resize_clamps_at_min_cells_when_shrinking_subtree_is_at_floor() {
-        let (mut win, pid_left, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (mut win, pid_left, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let cell_left = win.pane_to_cell.get(&pid_left).unwrap().clone();
         let split_id = win.cells.get(&cell_left).unwrap().parent().unwrap().clone();
         if let Some(Cell::Split(s)) = win.cells.get_mut(&split_id) {
@@ -522,7 +522,7 @@ mod tests {
     fn resize_partially_applies_when_amount_exceeds_available_budget() {
         // 50/50 horizontal split, P=120 → 60/60 cells. min=10. Budget = 50.
         // Request 100 → should partially apply 50, leaving lhs at 110.
-        let (mut win, pid_left, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (mut win, pid_left, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let outcome = resize_split_for_pane(
             &mut win.cells,
             &win.pane_to_cell,
@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn resize_no_drift_across_repeated_one_cell_adjustments() {
-        let (mut win, pid_left, _) = fresh_window_with_split(SplitOrientation::Horizontal);
+        let (mut win, pid_left, _) = fresh_session_with_split(SplitOrientation::Horizontal);
         let leaf_id = win.pane_to_cell.get(&pid_left).unwrap().clone();
         let split_id = win.cells.get(&leaf_id).unwrap().parent().unwrap().clone();
         let before = if let Some(Cell::Split(s)) = win.cells.get(&split_id) {

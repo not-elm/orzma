@@ -1,10 +1,10 @@
 //! Pane swap types: traversal offset and mutation outcome.
 
-use crate::window::pane::PaneId;
+use crate::session::pane::PaneId;
 use serde::{Deserialize, Serialize};
 
 /// Selects the swap target relative to the active pane in the depth-first
-/// leaf traversal of the window's cell tree. Mirrors
+/// leaf traversal of the session's cell tree. Mirrors
 /// `ozmux_configs::SwapOffset` so the multiplexer crate stays free of the
 /// `configs` dependency (same pattern as `PaneDirection`).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,14 +16,14 @@ pub enum SwapOffset {
     Next,
 }
 
-/// Result of `Window::swap_pane`: whether a swap actually happened, and if
+/// Result of `Session::swap_pane`: whether a swap actually happened, and if
 /// so, the id of the pane that traded places.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SwapOutcome {
     /// A swap was applied. `other_pane` is the id whose cell now hosts the
     /// caller's `pane` argument's previous cell.
     Swapped { other_pane: PaneId },
-    /// Single-pane window — no swap target exists. Callers should treat as
+    /// Single-pane session — no swap target exists. Callers should treat as
     /// a soft no-op (HTTP 204, no broadcast).
     NoOp,
 }

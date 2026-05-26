@@ -13,43 +13,54 @@ use crate::{
 };
 use bytes::Bytes;
 use ozmux_extension::runtime::RuntimeRoot;
-use ozmux_multiplexer::{ActivityId, PaneId, WindowId};
+use ozmux_multiplexer::{ActivityId, PaneId};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
+use tokio::sync::{Mutex, broadcast};
 
 pub(crate) mod terminal_handle;
 pub mod types;
 
+/// Shared inner state of [`TerminalService`], protected by a `tokio::sync::Mutex`
+/// to allow async lock acquisition without blocking the executor.
+#[derive(Default)]
+struct Inner {
+    handles: HashMap<ActivityId, TerminalHandle>,
+    runtime_root: Option<Arc<RuntimeRoot>>,
+}
+
 /// Activity-keyed registry of running terminals.
 ///
 /// Each entry owns a `TerminalHandle` (PTY + scrollback + VT bridge) and is
-/// keyed by [`ActivityId`].
-#[derive(Default)]
+/// keyed by [`ActivityId`]. The service is cheaply cloneable — clones share
+/// the same underlying handle map via `Arc`.
+#[derive(Clone, Default)]
 #[cfg_attr(feature = "bevy", derive(bevy::prelude::Resource))]
 pub struct TerminalService {
-    handles: HashMap<ActivityId, TerminalHandle>,
-    runtime_root: Option<RuntimeRoot>,
+    inner: Arc<Mutex<Inner>>,
 }
 
 impl TerminalService {
     /// Constructs a service that exposes the runtime root's `bin/` directory
     /// to spawned shells via `PATH`.
-    pub fn with_runtime_root(root: RuntimeRoot) -> Self {
+    pub fn with_runtime_root(root: Arc<RuntimeRoot>) -> Self {
         Self {
-            runtime_root: Some(root),
-            ..Self::default()
+            inner: Arc::new(Mutex::new(Inner {
+                handles: HashMap::new(),
+                runtime_root: Some(root),
+            })),
         }
     }
 
     /// Spawns a shell for `activity_id` under `pane_id` with the given options.
-    pub fn spawn(
-        &mut self,
+    pub async fn spawn(
+        &self,
         pane_id: PaneId,
         activity_id: ActivityId,
         opts: SpawnOptions,
     ) -> TerminalResult {
-        if self.handles.contains_key(&activity_id) {
+        let mut inner = self.inner.lock().await;
+        if inner.handles.contains_key(&activity_id) {
             return Ok(());
         }
 
@@ -62,7 +73,7 @@ impl TerminalService {
             })
             .to_terminal_result()?;
 
-        let cmd = self.pty_command_builder(&pane_id, &activity_id, &opts);
+        let cmd = build_pty_command(&pane_id, &activity_id, &opts, inner.runtime_root.as_deref());
         let child = pty_pair.slave.spawn_command(cmd).to_terminal_result()?;
         let killer = child.clone_killer();
         drop(pty_pair.slave);
@@ -93,22 +104,47 @@ impl TerminalService {
             vt_chunk_tx,
             vt_chunk_rx,
         );
-        self.handles.insert(activity_id, handle);
+        inner.handles.insert(activity_id, handle);
         Ok(())
+    }
+
+    /// Returns a scrollback snapshot and a new broadcast receiver for
+    /// [`TerminalEvent`] emissions from the activity's PTY.
+    pub async fn snapshot_and_subscribe(
+        &self,
+        activity: &ActivityId,
+    ) -> TerminalResult<(Vec<u8>, broadcast::Receiver<TerminalEvent>)> {
+        let inner = self.inner.lock().await;
+        let handle = inner
+            .handles
+            .get(activity)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity.clone()))?;
+        let snap = handle.snapshot();
+        let rx = handle.subscribe_events();
+        Ok((snap, rx))
     }
 
     /// Writes raw bytes to the PTY master for `activity`, setting the
     /// pending-user-input flag before the syscall so the bridge cannot miss it.
-    pub fn write(&mut self, activity: &ActivityId, data: &[u8]) -> TerminalResult {
-        let handle = self.handle_mut(activity)?;
+    pub async fn write(&self, activity: &ActivityId, data: &[u8]) -> TerminalResult {
+        let mut inner = self.inner.lock().await;
+        let handle = inner
+            .handles
+            .get_mut(activity)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity.clone()))?;
         handle.write(data)?;
         Ok(())
     }
 
     /// Resizes the PTY and underlying VT grid, then wakes the bridge task so
     /// the resulting Full damage is emitted without waiting for the next chunk.
-    pub fn resize(&mut self, activity: &ActivityId, cols: u16, rows: u16) -> TerminalResult {
-        self.handle_mut(activity)?.resize(PtySize {
+    pub async fn resize(&self, activity: &ActivityId, cols: u16, rows: u16) -> TerminalResult {
+        let mut inner = self.inner.lock().await;
+        let handle = inner
+            .handles
+            .get_mut(activity)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity.clone()))?;
+        handle.resize(PtySize {
             rows,
             cols,
             pixel_width: 0,
@@ -119,8 +155,9 @@ impl TerminalService {
 
     /// Removes and drops the handle for `activity`, terminating its bridge
     /// task. Missing activities are logged but not treated as errors.
-    pub fn kill(&mut self, activity: &ActivityId) -> TerminalResult {
-        match self.handles.remove(activity) {
+    pub async fn kill(&self, activity: &ActivityId) -> TerminalResult {
+        let mut inner = self.inner.lock().await;
+        match inner.handles.remove(activity) {
             Some(h) => {
                 drop(h);
             }
@@ -134,11 +171,14 @@ impl TerminalService {
         Ok(())
     }
 
-    /// Returns the current scrollback snapshot and a fresh broadcast receiver
-    /// for raw [`TerminalEvent`] emissions, captured under one lock.
+    /// Returns the current scrollback snapshot.
     #[inline]
-    pub fn snapshot(&self, activity: &ActivityId) -> TerminalResult<Vec<u8>> {
-        let handle = self.handle(activity)?;
+    pub async fn snapshot(&self, activity: &ActivityId) -> TerminalResult<Vec<u8>> {
+        let inner = self.inner.lock().await;
+        let handle = inner
+            .handles
+            .get(activity)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity.clone()))?;
         Ok(handle.snapshot())
     }
 
@@ -158,14 +198,18 @@ impl TerminalService {
     ///   ring has evicted past that point.
     /// - `FreshSnapshot { reason: Reconnect }` when `last_seq` is `None`
     ///   (cold start or initial connect).
-    pub fn subscribe_frames(
+    pub async fn subscribe_frames(
         &self,
         activity: &ActivityId,
         last_seq: Option<u32>,
     ) -> TerminalResult<FrameSubscription> {
-        let handle = self.handle(activity).await?;
+        let inner = self.inner.lock().await;
+        let handle = inner
+            .handles
+            .get(activity)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity.clone()))?;
         let vt_state = handle.vt_state.clone();
-        drop(handle);
+        drop(inner);
 
         let mut state = vt_state.lock().expect("vt_state poisoned");
 
@@ -176,12 +220,6 @@ impl TerminalService {
             return Ok(FrameSubscription::ResumeReplay { deltas, rx });
         }
 
-        // Fresh snapshot path. The snapshot is not a sequenced emission, so we
-        // do not bump frame_seq. The snapshot carries the seq of the last emitted
-        // frame (frame_seq - 1) so that clients know the broadcast rx continues
-        // from frame_seq onward (i.e., next_broadcast_seq > snapshot_seq).
-        // When no frame has been emitted yet (frame_seq == 0), we use 0 as a
-        // sentinel — the client will accept the first broadcast regardless.
         let reason = if last_seq.is_some() {
             SnapshotReason::Lagged
         } else {
@@ -211,87 +249,109 @@ impl TerminalService {
     /// the instant the lock is acquired. Intended for emitting the hello frame
     /// on VT WebSocket connect.
     #[inline]
-    pub fn read_geometry(&self, activity: &ActivityId) -> TerminalResult<TerminalGeometry> {
-        let geometry = self.handle(activity)?.read_geometry();
-        Ok(geometry)
+    pub async fn read_geometry(&self, activity: &ActivityId) -> TerminalResult<TerminalGeometry> {
+        let inner = self.inner.lock().await;
+        let handle = inner
+            .handles
+            .get(activity)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity.clone()))?;
+        Ok(handle.read_geometry())
     }
 
     /// Scrolls the visible viewport by `delta` lines.
     ///
     /// Positive `delta` moves backward into scrollback history; negative
     /// moves forward toward the live tail. Alacritty clamps to `[0, history_size]`.
-    ///
-    /// Triggers Full damage in alacritty when `display_offset` changes, so the
-    /// bridge emits a snapshot through the existing path. The synthetic empty
-    /// chunk wakes the bridge task if no PTY output is pending.
     #[inline]
-    pub fn scroll(&mut self, activity: &ActivityId, delta: i32) -> TerminalResult {
-        self.handle_mut(activity)?.scroll(delta);
+    pub async fn scroll(&self, activity: &ActivityId, delta: i32) -> TerminalResult {
+        let mut inner = self.inner.lock().await;
+        let handle = inner
+            .handles
+            .get_mut(activity)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity.clone()))?;
+        handle.scroll(delta);
         Ok(())
     }
 
     /// Snaps the viewport back to the live tail and resumes auto-follow.
     #[inline]
-    pub async fn scroll_to_bottom(&mut self, activity: &ActivityId) -> TerminalResult {
-        self.handle_mut(activity)?.scroll_to_bottom();
+    pub async fn scroll_to_bottom(&self, activity: &ActivityId) -> TerminalResult {
+        let mut inner = self.inner.lock().await;
+        let handle = inner
+            .handles
+            .get_mut(activity)
+            .ok_or_else(|| TerminalError::ActivityNotFound(activity.clone()))?;
+        handle.scroll_to_bottom();
         Ok(())
     }
 
-    #[inline]
-    fn handle(&self, activity_id: &ActivityId) -> TerminalResult<&TerminalHandle> {
-        self.handles
-            .get(activity_id)
-            .ok_or_else(|| TerminalError::ActivityNotFound(activity_id.clone()))
+    /// Returns all current terminal titles, keyed by activity id.
+    pub async fn all_titles(&self) -> HashMap<ActivityId, String> {
+        // NOTE: Hold the outer tokio::Mutex only long enough to clone the
+        // per-handle Arc<Mutex<VtState>>. Releasing the outer lock before
+        // iterating prevents `all_titles` from serializing every other
+        // TerminalService op (write/resize/scroll/kill/etc.) behind a routine
+        // status-bar poll.
+        let snapshots: Vec<(ActivityId, Arc<std::sync::Mutex<crate::vt::bridge::VtState>>)> = {
+            let inner = self.inner.lock().await;
+            inner
+                .handles
+                .iter()
+                .map(|(aid, h)| (aid.clone(), h.vt_state.clone()))
+                .collect()
+        };
+        snapshots
+            .into_iter()
+            .filter_map(|(aid, vt_state)| {
+                let state = vt_state.lock().expect("vt_state poisoned");
+                state.title.clone().map(|t| (aid, t))
+            })
+            .collect()
     }
+}
 
-    #[inline]
-    fn handle_mut(&mut self, activity_id: &ActivityId) -> TerminalResult<&mut TerminalHandle> {
-        self.handles
-            .get_mut(activity_id)
-            .ok_or_else(|| TerminalError::ActivityNotFound(activity_id.clone()))
+/// Constructs a [`CommandBuilder`] for the PTY, setting environment variables
+/// including `OZMUX_PANE_ID`, `OZMUX_ACTIVITY_ID`, `OZMUX_SESSION_ID`, and
+/// an augmented `PATH` if the runtime root is present.
+fn build_pty_command(
+    pane_id: &PaneId,
+    activity_id: &ActivityId,
+    opts: &SpawnOptions,
+    runtime_root: Option<&RuntimeRoot>,
+) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(&opts.shell);
+    if let Some(cwd) = &opts.cwd {
+        cmd.cwd(cwd);
     }
+    cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
+    cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
+    if let Some(sid) = &opts.session_id {
+        cmd.env("OZMUX_SESSION_ID", sid.to_string());
+    }
+    if let Some(prefix) = extension_path_prefix(runtime_root) {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        let combined = if existing.is_empty() {
+            prefix
+        } else {
+            format!("{prefix}:{existing}")
+        };
+        cmd.env("PATH", combined);
+    }
+    cmd
+}
 
-    fn extension_path_prefix(&self) -> Option<String> {
-        let root = self.runtime_root.as_ref()?;
-        let bin_dir = root.bin_dir();
-        let entries: Vec<String> = std::fs::read_dir(bin_dir)
-            .ok()?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
-            .map(|e| e.path().to_string_lossy().into_owned())
-            .collect();
-        build_path_prefix(entries)
-    }
-
-    fn pty_command_builder(
-        &self,
-        pane_id: &PaneId,
-        activity_id: &ActivityId,
-        opts: &SpawnOptions,
-    ) -> CommandBuilder {
-        let mut cmd = CommandBuilder::new(&opts.shell);
-        if let Some(cwd) = &opts.cwd {
-            cmd.cwd(cwd);
-        }
-        cmd.env("OZMUX_PANE_ID", pane_id.as_ref());
-        cmd.env("OZMUX_ACTIVITY_ID", activity_id.as_ref());
-        if let Some(wid) = &opts.window_id {
-            cmd.env("OZMUX_WINDOW_ID", wid.as_ref());
-        }
-        if let Some(sid) = &opts.session_id {
-            cmd.env("OZMUX_SESSION_ID", sid.as_ref());
-        }
-        if let Some(prefix) = self.extension_path_prefix() {
-            let existing = std::env::var("PATH").unwrap_or_default();
-            let combined = if existing.is_empty() {
-                prefix
-            } else {
-                format!("{prefix}:{existing}")
-            };
-            cmd.env("PATH", combined);
-        }
-        cmd
-    }
+/// Reads the bin subdirectories under `runtime_root` and builds a colon-joined
+/// PATH prefix, pinning `__builtin` first so built-in shims always win.
+fn extension_path_prefix(runtime_root: Option<&RuntimeRoot>) -> Option<String> {
+    let root = runtime_root?;
+    let bin_dir = root.bin_dir();
+    let entries: Vec<String> = std::fs::read_dir(bin_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+    build_path_prefix(entries)
 }
 
 /// Builds the colon-joined PATH prefix from a list of bin dir paths,

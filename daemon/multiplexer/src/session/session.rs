@@ -1,29 +1,44 @@
 use crate::error::{MultiplexerError, MultiplexerResult};
-use crate::window::cells::{CellId, LayoutCellState, Side, SplitOrientation};
-use crate::window::pane::activity::{Activity, ActivityId};
-use crate::window::pane::{Pane, PaneId, PaneState, SetActiveOutcome};
-use crate::window::swap::{SwapOffset, SwapOutcome};
-use ozmux_macros::NewType;
+use crate::session::cells::{CellId, LayoutCellState, Side, SplitOrientation};
+use crate::session::pane::activity::{Activity, ActivityId};
+use crate::session::pane::{Pane, PaneId, PaneState, SetActiveOutcome};
+use crate::session::swap::{SwapOffset, SwapOutcome};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, NewType)]
-#[newtype(as_ref(str), display, new(uuid_v4_string), default)]
-pub struct WindowId(String);
+/// Stable identifier for a Session. Minted by `MultiplexerService::create_session`
+/// as a monotonically increasing counter. Bevy-free — the GUI side wraps this
+/// in `SessionEntityId` for use as a Component.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    derive_more::Display,
+)]
+pub struct SessionId(pub u32);
 
-/// Cell-grid dimensions of a Window's outer container, as reported by
-/// the client. Used as the root `P` for the resize-pane algorithm.
-/// Per-activity cell dimensions live in `TerminalService` and are
-/// **not** mirrored here.
+/// Cell-grid dimensions of a Session's outer container, as reported by
+/// the renderer. Used as the root `P` for the resize-pane algorithm.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WindowDimensions {
+pub struct SessionDimensions {
     pub cols: u16,
     pub rows: u16,
 }
 
+/// Owns the cell tree, panes, and active-pane pointer for one Session.
+///
+/// Carries the per-Session active-point counter used by `pane_in_direction`
+/// to tiebreak adjacent panes by most-recent activation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Window {
-    pub id: WindowId,
+pub struct Session {
+    pub id: SessionId,
     pub name: String,
     pub cells: LayoutCellState,
     pub panes: PaneState,
@@ -32,24 +47,23 @@ pub struct Window {
     pub active_pane: PaneId,
     pub(crate) pane_active_points: HashMap<PaneId, u64>,
     pub(crate) next_active_point: u64,
-    /// Cell-grid dimensions reported by the client (root `P` for
-    /// resize-pane). `None` until the client first measures and sends
-    /// `PATCH /windows/{wid}/dimensions`.
+    /// Cell-grid dimensions reported by the renderer. `None` until the
+    /// first measurement.
     #[serde(default)]
-    pub dimensions: Option<WindowDimensions>,
+    pub dimensions: Option<SessionDimensions>,
 }
 
-impl Window {
-    /// Construct a Window containing one initial Pane with one initial Activity.
-    /// The caller supplies the ids (typically generated client-side as UUIDv4).
+impl Session {
+    /// Construct a Session containing one initial Pane with one initial Activity.
+    /// The caller supplies the ids (typically generated upstream as UUIDv4).
     pub fn new_with_initial(
-        id: WindowId,
+        id: SessionId,
         name: String,
         initial_pane_id: PaneId,
         initial_activity: Activity,
     ) -> Self {
         let mut cells = LayoutCellState::default();
-        let (root_cell, pane_cell_id) = cells.new_window_layout(initial_pane_id.clone());
+        let (root_cell, pane_cell_id) = cells.new_session_layout(initial_pane_id.clone());
         let mut panes = PaneState::default();
         panes.insert(Pane::new(initial_pane_id.clone(), initial_activity));
         let mut pane_to_cell = HashMap::new();
@@ -69,14 +83,14 @@ impl Window {
         }
     }
 
-    /// Replace the cached dimensions. Set on first client measurement
-    /// and updated on subsequent container resizes.
+    /// Replace the cached dimensions. Set on first measurement and
+    /// updated on subsequent container resizes.
     pub fn set_dimensions(&mut self, cols: u16, rows: u16) {
-        self.dimensions = Some(WindowDimensions { cols, rows });
+        self.dimensions = Some(SessionDimensions { cols, rows });
     }
 
-    /// Bump the per-window counter and record it as the new active pane's
-    /// activation point. The tiebreak in `Window::pane_in_direction` reads
+    /// Bump the per-session counter and record it as the new active pane's
+    /// activation point. The tiebreak in `Session::pane_in_direction` reads
     /// from `pane_active_points`; a missing entry is treated as `0`, so we
     /// only need to insert when a pane actually becomes active.
     fn record_active_point(&mut self, pane_id: &PaneId) {
@@ -85,6 +99,7 @@ impl Window {
             .insert(pane_id.clone(), self.next_active_point);
     }
 
+    /// Replace the Session's display name in-place.
     pub fn rename(&mut self, name: impl Into<String>) {
         self.name = name.into();
     }
@@ -136,12 +151,12 @@ impl Window {
     /// fallible mutation (`split_pane`) runs before the irreversible one and
     /// no rollback path is needed. Between those two steps the same
     /// `ActivityId` is briefly present in both Panes; this is safe only
-    /// because the whole method runs under the per-Window lock.
+    /// because the whole method runs under the per-Session lock.
     ///
     /// # Errors
     ///
     /// - `PaneIdConflict` — `new_pane_id` is already in use.
-    /// - `PaneNotFound` — `target_pane_id` is not in this Window.
+    /// - `PaneNotFound` — `target_pane_id` is not in this Session.
     /// - `ActivityNotInPane` — `aid` is not an Activity of the target Pane.
     /// - `CannotRemoveLastActivity` — the target Pane holds only `aid`.
     pub fn break_activity_to_pane(
@@ -200,7 +215,7 @@ impl Window {
 
     /// Swap the named pane's contents with its previous or next neighbor in
     /// the depth-first leaf traversal of the cell tree. Returns
-    /// `SwapOutcome::NoOp` for a single-pane window. The active pane id is
+    /// `SwapOutcome::NoOp` for a single-pane session. The active pane id is
     /// not mutated — the same `PaneId` is now hosted by a different cell,
     /// so focus visually follows the swap.
     pub fn swap_pane(
@@ -234,7 +249,7 @@ impl Window {
         Ok(SwapOutcome::Swapped { other_pane })
     }
 
-    /// Set the active pane in this Window. Returns `Unchanged` so the caller
+    /// Set the active pane in this Session. Returns `Unchanged` so the caller
     /// can skip a redundant broadcast.
     pub fn set_active_pane(&mut self, pane_id: &PaneId) -> MultiplexerResult<SetActiveOutcome> {
         if !self.panes.contains_key(pane_id) {
@@ -248,7 +263,7 @@ impl Window {
         Ok(SetActiveOutcome::Changed)
     }
 
-    /// Collect every ActivityId across every Pane. Used at window-close time
+    /// Collect every ActivityId across every Pane. Used at session-close time
     /// to enumerate runtime resources that need cleanup.
     pub fn collect_activities_for_cleanup(&self) -> Vec<ActivityId> {
         self.panes
@@ -272,89 +287,40 @@ impl Window {
             .ok_or_else(|| MultiplexerError::PaneNotFound(pid.clone()))
     }
 
+    /// Iterate over all PaneIds in this Session in insertion order.
     pub fn pane_ids(&self) -> impl Iterator<Item = &PaneId> {
         self.panes.ids()
-    }
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct WindowState(HashMap<WindowId, Window>);
-
-impl WindowState {
-    #[inline]
-    pub fn insert(&mut self, window: Window) {
-        self.0.insert(window.id.clone(), window);
-    }
-
-    #[inline]
-    pub fn get(&self, id: &WindowId) -> Option<&Window> {
-        self.0.get(id)
-    }
-
-    #[inline]
-    pub fn get_mut(&mut self, id: &WindowId) -> Option<&mut Window> {
-        self.0.get_mut(id)
-    }
-
-    #[inline]
-    pub fn remove(&mut self, id: &WindowId) -> Option<Window> {
-        self.0.remove(id)
-    }
-
-    #[inline]
-    pub fn contains_key(&self, id: &WindowId) -> bool {
-        self.0.contains_key(id)
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (&WindowId, &Window)> {
-        self.0.iter()
-    }
-
-    #[inline]
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&WindowId, &mut Window)> {
-        self.0.iter_mut()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::window::cells::{Side, SplitOrientation};
-    use crate::window::pane::activity::{Activity, ActivityId};
+    use crate::session::cells::{Side, SplitOrientation};
+    use crate::session::pane::activity::{Activity, ActivityId};
 
-    fn window_with_two_activities() -> (Window, PaneId, ActivityId, ActivityId) {
+    fn session_with_two_activities() -> (Session, PaneId, ActivityId, ActivityId) {
         let pid = PaneId::new();
         let a0 = Activity::terminal(ActivityId::new());
         let a1 = Activity::terminal(ActivityId::new());
         let a0_id = a0.id.clone();
         let a1_id = a1.id.clone();
-        let mut win = Window::new_with_initial(WindowId::new(), "w".into(), pid.clone(), a0);
-        win.pane_mut(&pid).unwrap().add_activity(a1).unwrap();
-        (win, pid, a0_id, a1_id)
+        let mut s = Session::new_with_initial(SessionId(0), "s".into(), pid.clone(), a0);
+        s.pane_mut(&pid).unwrap().add_activity(a1).unwrap();
+        (s, pid, a0_id, a1_id)
     }
 
     #[test]
     fn break_activity_moves_active_activity_into_new_pane() {
-        let (mut win, pid, a0_id, a1_id) = window_with_two_activities();
-        let _ = win
+        let (mut s, pid, a0_id, a1_id) = session_with_two_activities();
+        let _ = s
             .pane_mut(&pid)
             .unwrap()
             .set_active_activity(&a1_id)
             .unwrap();
         let new_pid = PaneId::new();
 
-        win.break_activity_to_pane(
+        s.break_activity_to_pane(
             &pid,
             &a1_id,
             new_pid.clone(),
@@ -363,7 +329,7 @@ mod tests {
         )
         .unwrap();
 
-        let src = win.pane(&pid).unwrap();
+        let src = s.pane(&pid).unwrap();
         assert!(
             !src.has_activity(&a1_id),
             "moved activity left the source pane"
@@ -373,18 +339,18 @@ mod tests {
             "source active falls back to first remaining"
         );
 
-        let new_pane = win.pane(&new_pid).unwrap();
+        let new_pane = s.pane(&new_pid).unwrap();
         assert_eq!(new_pane.activities.len(), 1);
         assert!(new_pane.has_activity(&a1_id));
         assert_eq!(new_pane.active_activity, a1_id);
 
-        assert_eq!(win.active_pane, new_pid, "new pane becomes active");
+        assert_eq!(s.active_pane, new_pid, "new pane becomes active");
     }
 
     #[test]
     fn break_activity_preserves_remaining_order_when_moving_non_active() {
-        let (mut win, pid, a0_id, a1_id) = window_with_two_activities();
-        win.break_activity_to_pane(
+        let (mut s, pid, a0_id, a1_id) = session_with_two_activities();
+        s.break_activity_to_pane(
             &pid,
             &a1_id,
             PaneId::new(),
@@ -392,7 +358,7 @@ mod tests {
             SplitOrientation::Vertical,
         )
         .unwrap();
-        let src = win.pane(&pid).unwrap();
+        let src = s.pane(&pid).unwrap();
         assert_eq!(src.activities.len(), 1);
         assert_eq!(src.activities[0].id, a0_id);
         assert_eq!(
@@ -406,8 +372,8 @@ mod tests {
         let pid = PaneId::new();
         let only = Activity::terminal(ActivityId::new());
         let only_id = only.id.clone();
-        let mut win = Window::new_with_initial(WindowId::new(), "w".into(), pid.clone(), only);
-        let err = win
+        let mut s = Session::new_with_initial(SessionId(0), "s".into(), pid.clone(), only);
+        let err = s
             .break_activity_to_pane(
                 &pid,
                 &only_id,
@@ -421,8 +387,8 @@ mod tests {
 
     #[test]
     fn break_activity_rejects_unknown_activity() {
-        let (mut win, pid, _a0, _a1) = window_with_two_activities();
-        let err = win
+        let (mut s, pid, _a0, _a1) = session_with_two_activities();
+        let err = s
             .break_activity_to_pane(
                 &pid,
                 &ActivityId::new(),
@@ -436,8 +402,8 @@ mod tests {
 
     #[test]
     fn break_activity_rejects_duplicate_new_pane_id() {
-        let (mut win, pid, _a0, a1_id) = window_with_two_activities();
-        let err = win
+        let (mut s, pid, _a0, a1_id) = session_with_two_activities();
+        let err = s
             .break_activity_to_pane(
                 &pid,
                 &a1_id,
@@ -449,22 +415,22 @@ mod tests {
         assert!(matches!(err, MultiplexerError::PaneIdConflict(_)));
     }
 
-    fn fresh_window() -> (Window, PaneId, ActivityId) {
-        let wid = WindowId::new();
+    fn fresh_session() -> (Session, PaneId, ActivityId) {
+        let sid = SessionId(0);
         let pid = PaneId::new();
         let aid = ActivityId::new();
         let activity = Activity::terminal(aid.clone());
-        let win = Window::new_with_initial(wid, "w".into(), pid.clone(), activity);
-        (win, pid, aid)
+        let s = Session::new_with_initial(sid, "s".into(), pid.clone(), activity);
+        (s, pid, aid)
     }
 
     #[test]
     fn split_pane_inserts_new_pane_and_promotes_active() {
-        let (mut win, original_pid, _) = fresh_window();
+        let (mut s, original_pid, _) = fresh_session();
         let new_pid = PaneId::new();
         let new_aid = ActivityId::new();
         let activity = Activity::terminal(new_aid.clone());
-        win.split_pane(
+        s.split_pane(
             &original_pid,
             new_pid.clone(),
             activity,
@@ -472,18 +438,18 @@ mod tests {
             SplitOrientation::Horizontal,
         )
         .unwrap();
-        assert_eq!(win.panes.len(), 2);
-        assert_eq!(win.active_pane, new_pid);
-        let new_pane = win.panes.get(&new_pid).unwrap();
+        assert_eq!(s.panes.len(), 2);
+        assert_eq!(s.active_pane, new_pid);
+        let new_pane = s.panes.get(&new_pid).unwrap();
         assert_eq!(new_pane.activities.len(), 1);
         assert_eq!(new_pane.active_activity, new_aid);
     }
 
     #[test]
     fn split_pane_with_duplicate_id_returns_pane_id_conflict() {
-        let (mut win, original_pid, _) = fresh_window();
+        let (mut s, original_pid, _) = fresh_session();
         let activity = Activity::terminal(ActivityId::new());
-        let err = win
+        let err = s
             .split_pane(
                 &original_pid,
                 original_pid.clone(),
@@ -497,10 +463,10 @@ mod tests {
 
     #[test]
     fn close_pane_returns_destroyed_activity_ids() {
-        let (mut win, original_pid, _) = fresh_window();
+        let (mut s, original_pid, _) = fresh_session();
         let new_pid = PaneId::new();
         let new_aid = ActivityId::new();
-        win.split_pane(
+        s.split_pane(
             &original_pid,
             new_pid.clone(),
             Activity::terminal(new_aid.clone()),
@@ -508,31 +474,31 @@ mod tests {
             SplitOrientation::Horizontal,
         )
         .unwrap();
-        let destroyed = win.close_pane(&new_pid).unwrap();
+        let destroyed = s.close_pane(&new_pid).unwrap();
         assert_eq!(destroyed, vec![new_aid]);
-        assert_eq!(win.panes.len(), 1);
-        assert_eq!(win.active_pane, original_pid);
+        assert_eq!(s.panes.len(), 1);
+        assert_eq!(s.active_pane, original_pid);
     }
 
     #[test]
     fn close_last_pane_returns_cannot_close_last_pane() {
-        let (mut win, pid, _) = fresh_window();
-        let err = win.close_pane(&pid).unwrap_err();
+        let (mut s, pid, _) = fresh_session();
+        let err = s.close_pane(&pid).unwrap_err();
         assert!(matches!(err, MultiplexerError::CannotCloseLastPane(_)));
     }
 
     #[test]
-    fn new_window_starts_with_empty_active_point_table() {
-        let (win, _, _) = fresh_window();
-        assert_eq!(win.next_active_point, 0);
-        assert!(win.pane_active_points.is_empty());
+    fn new_session_starts_with_empty_active_point_table() {
+        let (s, _, _) = fresh_session();
+        assert_eq!(s.next_active_point, 0);
+        assert!(s.pane_active_points.is_empty());
     }
 
     #[test]
     fn set_active_pane_records_active_point() {
-        let (mut win, original, _) = fresh_window();
+        let (mut s, original, _) = fresh_session();
         let other = PaneId::new();
-        win.split_pane(
+        s.split_pane(
             &original,
             other.clone(),
             Activity::terminal(ActivityId::new()),
@@ -540,14 +506,14 @@ mod tests {
             SplitOrientation::Horizontal,
         )
         .unwrap();
-        let first_point = *win.pane_active_points.get(&other).unwrap();
+        let first_point = *s.pane_active_points.get(&other).unwrap();
         assert!(first_point >= 1);
 
         assert!(matches!(
-            win.set_active_pane(&original).unwrap(),
+            s.set_active_pane(&original).unwrap(),
             SetActiveOutcome::Changed,
         ));
-        let original_point = *win.pane_active_points.get(&original).unwrap();
+        let original_point = *s.pane_active_points.get(&original).unwrap();
         assert!(
             original_point > first_point,
             "switching back must increment past the previous max",
@@ -556,39 +522,39 @@ mod tests {
 
     #[test]
     fn set_active_pane_unchanged_does_not_bump_counter() {
-        let (mut win, active, _) = fresh_window();
-        let before = win.next_active_point;
+        let (mut s, active, _) = fresh_session();
+        let before = s.next_active_point;
         assert!(matches!(
-            win.set_active_pane(&active).unwrap(),
+            s.set_active_pane(&active).unwrap(),
             SetActiveOutcome::Unchanged,
         ));
-        assert_eq!(win.next_active_point, before);
+        assert_eq!(s.next_active_point, before);
     }
 
     #[test]
-    fn new_window_starts_with_unset_dimensions() {
-        let (win, _, _) = fresh_window();
-        assert!(win.dimensions.is_none());
+    fn new_session_starts_with_unset_dimensions() {
+        let (s, _, _) = fresh_session();
+        assert!(s.dimensions.is_none());
     }
 
     #[test]
-    fn window_set_dimensions_stores_cols_and_rows() {
-        let (mut win, _, _) = fresh_window();
-        win.set_dimensions(120, 40);
+    fn session_set_dimensions_stores_cols_and_rows() {
+        let (mut s, _, _) = fresh_session();
+        s.set_dimensions(120, 40);
         assert_eq!(
-            win.dimensions,
-            Some(WindowDimensions {
+            s.dimensions,
+            Some(SessionDimensions {
                 cols: 120,
-                rows: 40
+                rows: 40,
             })
         );
     }
 
     #[test]
     fn close_pane_removes_active_point_entry() {
-        let (mut win, original, _) = fresh_window();
+        let (mut s, original, _) = fresh_session();
         let new_pane = PaneId::new();
-        win.split_pane(
+        s.split_pane(
             &original,
             new_pane.clone(),
             Activity::terminal(ActivityId::new()),
@@ -596,28 +562,28 @@ mod tests {
             SplitOrientation::Horizontal,
         )
         .unwrap();
-        assert!(win.pane_active_points.contains_key(&new_pane));
-        win.close_pane(&new_pane).unwrap();
-        assert!(!win.pane_active_points.contains_key(&new_pane));
+        assert!(s.pane_active_points.contains_key(&new_pane));
+        s.close_pane(&new_pane).unwrap();
+        assert!(!s.pane_active_points.contains_key(&new_pane));
     }
 }
 
 #[cfg(test)]
 mod swap_tests {
     use super::*;
-    use crate::window::cells::{Side, SplitOrientation};
-    use crate::window::pane::activity::{Activity, ActivityId};
-    use crate::window::swap::{SwapOffset, SwapOutcome};
+    use crate::session::cells::{Side, SplitOrientation};
+    use crate::session::pane::activity::{Activity, ActivityId};
+    use crate::session::swap::{SwapOffset, SwapOutcome};
 
-    fn three_pane_window() -> (Window, PaneId, PaneId, PaneId) {
-        let wid = WindowId::new();
+    fn three_pane_session() -> (Session, PaneId, PaneId, PaneId) {
+        let sid = SessionId(0);
         let pa = PaneId::new();
         let aa = Activity::terminal(ActivityId::new());
-        let mut w = Window::new_with_initial(wid, "w".into(), pa.clone(), aa);
+        let mut s = Session::new_with_initial(sid, "s".into(), pa.clone(), aa);
 
         let pb = PaneId::new();
         let ab = Activity::terminal(ActivityId::new());
-        w.split_pane(
+        s.split_pane(
             &pa,
             pb.clone(),
             ab,
@@ -628,15 +594,15 @@ mod swap_tests {
 
         let pc = PaneId::new();
         let ac = Activity::terminal(ActivityId::new());
-        w.split_pane(&pb, pc.clone(), ac, Side::After, SplitOrientation::Vertical)
+        s.split_pane(&pb, pc.clone(), ac, Side::After, SplitOrientation::Vertical)
             .unwrap();
 
-        (w, pa, pb, pc)
+        (s, pa, pb, pc)
     }
 
-    fn pane_order(w: &Window) -> Vec<PaneId> {
-        w.cells
-            .ordered_pane_cells(&w.root_cell)
+    fn pane_order(s: &Session) -> Vec<PaneId> {
+        s.cells
+            .ordered_pane_cells(&s.root_cell)
             .unwrap()
             .into_iter()
             .map(|(_, p)| p)
@@ -644,98 +610,98 @@ mod swap_tests {
     }
 
     #[test]
-    fn swap_pane_in_single_pane_window_returns_noop() {
-        let wid = WindowId::new();
+    fn swap_pane_in_single_pane_session_returns_noop() {
+        let sid = SessionId(0);
         let pa = PaneId::new();
         let aa = Activity::terminal(ActivityId::new());
-        let mut w = Window::new_with_initial(wid, "w".into(), pa.clone(), aa);
+        let mut s = Session::new_with_initial(sid, "s".into(), pa.clone(), aa);
 
-        let out = w.swap_pane(&pa, SwapOffset::Next).unwrap();
+        let out = s.swap_pane(&pa, SwapOffset::Next).unwrap();
         assert_eq!(out, SwapOutcome::NoOp);
-        let out = w.swap_pane(&pa, SwapOffset::Prev).unwrap();
+        let out = s.swap_pane(&pa, SwapOffset::Prev).unwrap();
         assert_eq!(out, SwapOutcome::NoOp);
     }
 
     #[test]
     fn swap_pane_next_moves_active_pane_one_slot_forward() {
-        let (mut w, pa, pb, pc) = three_pane_window();
-        assert_eq!(pane_order(&w), vec![pa.clone(), pb.clone(), pc.clone()]);
+        let (mut s, pa, pb, pc) = three_pane_session();
+        assert_eq!(pane_order(&s), vec![pa.clone(), pb.clone(), pc.clone()]);
 
-        let out = w.swap_pane(&pa, SwapOffset::Next).unwrap();
+        let out = s.swap_pane(&pa, SwapOffset::Next).unwrap();
         assert_eq!(
             out,
             SwapOutcome::Swapped {
                 other_pane: pb.clone()
             }
         );
-        assert_eq!(pane_order(&w), vec![pb.clone(), pa.clone(), pc]);
+        assert_eq!(pane_order(&s), vec![pb.clone(), pa.clone(), pc]);
     }
 
     #[test]
     fn swap_pane_prev_wraps_around_from_first() {
-        let (mut w, pa, pb, pc) = three_pane_window();
-        let out = w.swap_pane(&pa, SwapOffset::Prev).unwrap();
+        let (mut s, pa, pb, pc) = three_pane_session();
+        let out = s.swap_pane(&pa, SwapOffset::Prev).unwrap();
         assert_eq!(
             out,
             SwapOutcome::Swapped {
                 other_pane: pc.clone()
             }
         );
-        assert_eq!(pane_order(&w), vec![pc, pb, pa]);
+        assert_eq!(pane_order(&s), vec![pc, pb, pa]);
     }
 
     #[test]
     fn swap_pane_next_wraps_around_from_last() {
-        let (mut w, pa, pb, pc) = three_pane_window();
-        let out = w.swap_pane(&pc, SwapOffset::Next).unwrap();
+        let (mut s, pa, pb, pc) = three_pane_session();
+        let out = s.swap_pane(&pc, SwapOffset::Next).unwrap();
         assert_eq!(
             out,
             SwapOutcome::Swapped {
                 other_pane: pa.clone()
             }
         );
-        assert_eq!(pane_order(&w), vec![pc, pb, pa]);
+        assert_eq!(pane_order(&s), vec![pc, pb, pa]);
     }
 
     #[test]
     fn swap_pane_prev_is_inverse_of_next() {
-        let (mut w, _pa, pb, _pc) = three_pane_window();
-        let before = pane_order(&w);
-        w.swap_pane(&pb, SwapOffset::Next).unwrap();
-        w.swap_pane(&pb, SwapOffset::Prev).unwrap();
-        assert_eq!(pane_order(&w), before);
+        let (mut s, _pa, pb, _pc) = three_pane_session();
+        let before = pane_order(&s);
+        s.swap_pane(&pb, SwapOffset::Next).unwrap();
+        s.swap_pane(&pb, SwapOffset::Prev).unwrap();
+        assert_eq!(pane_order(&s), before);
     }
 
     #[test]
     fn swap_pane_preserves_active_pane_id_and_pane_to_cell_bijection() {
-        let (mut w, pa, pb, _pc) = three_pane_window();
-        let active_before = w.active_pane.clone();
-        w.swap_pane(&pa, SwapOffset::Next).unwrap();
-        assert_eq!(w.active_pane, active_before);
+        let (mut s, pa, pb, _pc) = three_pane_session();
+        let active_before = s.active_pane.clone();
+        s.swap_pane(&pa, SwapOffset::Next).unwrap();
+        assert_eq!(s.active_pane, active_before);
 
-        for (cell_id, pane_id) in w.cells.ordered_pane_cells(&w.root_cell).unwrap() {
-            assert_eq!(w.pane_to_cell.get(&pane_id), Some(&cell_id));
+        for (cell_id, pane_id) in s.cells.ordered_pane_cells(&s.root_cell).unwrap() {
+            assert_eq!(s.pane_to_cell.get(&pane_id), Some(&cell_id));
         }
         let _ = pb;
     }
 
     #[test]
     fn swap_pane_unknown_pane_returns_pane_not_found() {
-        let (mut w, _pa, _pb, _pc) = three_pane_window();
+        let (mut s, _pa, _pb, _pc) = three_pane_session();
         let stranger = PaneId::new();
-        let err = w.swap_pane(&stranger, SwapOffset::Next).unwrap_err();
+        let err = s.swap_pane(&stranger, SwapOffset::Next).unwrap_err();
         assert!(matches!(err, MultiplexerError::PaneNotFound(_)));
     }
 
     #[test]
     fn swap_pane_with_two_panes_prev_and_next_produce_same_state() {
-        let wid = WindowId::new();
+        let sid = SessionId(0);
         let pa = PaneId::new();
         let aa = Activity::terminal(ActivityId::new());
-        let mut wn = Window::new_with_initial(wid.clone(), "w".into(), pa.clone(), aa);
+        let mut sn = Session::new_with_initial(sid, "s".into(), pa.clone(), aa);
         let pb = PaneId::new();
         let ab = Activity::terminal(ActivityId::new());
-        wn.split_pane(
+        sn.split_pane(
             &pa,
             pb.clone(),
             ab,
@@ -745,9 +711,9 @@ mod swap_tests {
         .unwrap();
 
         let aa2 = Activity::terminal(ActivityId::new());
-        let mut wp = Window::new_with_initial(wid, "w".into(), pa.clone(), aa2);
+        let mut sp = Session::new_with_initial(sid, "s".into(), pa.clone(), aa2);
         let ab2 = Activity::terminal(ActivityId::new());
-        wp.split_pane(
+        sp.split_pane(
             &pa,
             pb.clone(),
             ab2,
@@ -756,8 +722,8 @@ mod swap_tests {
         )
         .unwrap();
 
-        wn.swap_pane(&pa, SwapOffset::Next).unwrap();
-        wp.swap_pane(&pa, SwapOffset::Prev).unwrap();
-        assert_eq!(pane_order(&wn), pane_order(&wp));
+        sn.swap_pane(&pa, SwapOffset::Next).unwrap();
+        sp.swap_pane(&pa, SwapOffset::Prev).unwrap();
+        assert_eq!(pane_order(&sn), pane_order(&sp));
     }
 }

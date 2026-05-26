@@ -6,6 +6,7 @@ mod configs;
 mod font;
 mod input;
 mod multiplexer;
+mod session_entity;
 mod theme;
 mod ui;
 

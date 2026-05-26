@@ -451,15 +451,12 @@ mod tests {
             (child_of.parent(), chip)
         };
 
-        // Rebuild structure by renaming the active window.
+        // Rebuild structure by renaming the attached session.
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let wid = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                session.active_window.clone().expect("active window")
-            };
-            mux.rename_window(&wid, "renamed".into()).expect("rename");
+            let sid = *mux.sessions.keys().next().expect("session");
+            mux.rename_session(&sid, "renamed".into()).expect("rename");
         }
         app.update();
 
@@ -494,23 +491,20 @@ mod tests {
         let (bootstrap_id, second_id) = {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let wid = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                session.active_window.clone().expect("active window")
-            };
+            let sid = *mux.sessions.keys().next().expect("session");
             let (active_pane, bootstrap_aid) = {
-                let window = mux.windows.get(&wid).expect("window");
-                let active_pane = window.active_pane.clone();
-                let pane = window.pane(&active_pane).expect("pane");
+                let session = mux.sessions.get(&sid).expect("session");
+                let active_pane = session.active_pane.clone();
+                let pane = session.pane(&active_pane).expect("pane");
                 (active_pane, pane.active_activity.clone())
             };
             let second_aid = ActivityId::new();
-            mux.with_window(&wid, |w| {
-                w.pane_mut(&active_pane)
+            mux.with_session(&sid, |s| {
+                s.pane_mut(&active_pane)
                     .expect("pane_mut")
                     .add_activity(Activity::terminal(second_aid.clone()))
             })
-            .expect("with_window")
+            .expect("with_session")
             .expect("add_activity");
             (bootstrap_aid, second_aid)
         };
@@ -522,18 +516,15 @@ mod tests {
         {
             let world = app.world_mut();
             let mut mux = world.resource_mut::<Multiplexer>();
-            let wid = {
-                let (_sid, session) = mux.sessions.iter().next().expect("session");
-                session.active_window.clone().expect("active window")
-            };
-            let active_pane = mux.windows.get(&wid).expect("window").active_pane.clone();
+            let sid = *mux.sessions.keys().next().expect("session");
+            let active_pane = mux.sessions.get(&sid).expect("session").active_pane.clone();
             let _ = mux
-                .with_window(&wid, |w| {
-                    w.pane_mut(&active_pane)
+                .with_session(&sid, |s| {
+                    s.pane_mut(&active_pane)
                         .expect("pane_mut")
                         .set_active_activity(&second_id)
                 })
-                .expect("with_window")
+                .expect("with_session")
                 .expect("set_active_activity");
         }
         app.update();

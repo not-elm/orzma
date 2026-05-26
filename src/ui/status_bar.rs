@@ -1,6 +1,7 @@
-//! Status bar Bevy UI builder. Spawns one Row Node containing the session
-//! name + one chip per linked window. The active window's chip gets
-//! `palette::ACCENT` background.
+//! Status bar Bevy UI builder. Spawns one Row Node containing one chip
+//! per Session, sorted by `SessionId` (numeric, since `SessionEntityId`
+//! wraps the monotonic counter). The attached session's chip gets the
+//! accent color.
 
 use crate::theme;
 use crate::theme::UI_FONT_SIZE;
@@ -8,18 +9,22 @@ use crate::ui::StructuralNode;
 use crate::ui::palette;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, AlignSelf, FlexDirection, UiRect, Val};
-use ozmux_multiplexer::{Session, Window, WindowId};
+use ozmux_multiplexer::{Session, SessionId};
 use std::collections::HashMap;
 
-/// Spawn the status bar (session name + window chips) as a child of `parent`.
+/// Spawn the status bar as a child of `parent`. `sessions_by_id` is the
+/// domain HashMap from `MultiplexerService`. `attached_sid` colors the
+/// matching chip with the accent.
 pub(crate) fn build_status_bar(
     commands: &mut Commands,
     parent: Entity,
-    session: &Session,
-    active_wid: &WindowId,
-    windows: &HashMap<WindowId, Window>,
+    sessions_by_id: &HashMap<SessionId, Session>,
+    attached_sid: Option<SessionId>,
     ui_font: &Handle<Font>,
 ) {
+    let mut ordered: Vec<&SessionId> = sessions_by_id.keys().collect();
+    ordered.sort();
+
     let bar = commands
         .spawn((
             Node {
@@ -36,18 +41,6 @@ pub(crate) fn build_status_bar(
         .id();
 
     commands.spawn((
-        Text::new(&session.name),
-        TextColor(palette::FOREGROUND),
-        TextFont {
-            font: ui_font.clone(),
-            font_size: UI_FONT_SIZE,
-            ..default()
-        },
-        StructuralNode,
-        ChildOf(bar),
-    ));
-
-    commands.spawn((
         Node {
             width: Val::Px(theme::ELEMENT_PADDING_PX),
             ..default()
@@ -55,7 +48,6 @@ pub(crate) fn build_status_bar(
         StructuralNode,
         ChildOf(bar),
     ));
-
     commands.spawn((
         Node {
             width: Val::Px(theme::BORDER_PX),
@@ -66,7 +58,6 @@ pub(crate) fn build_status_bar(
         StructuralNode,
         ChildOf(bar),
     ));
-
     commands.spawn((
         Node {
             width: Val::Px(theme::ELEMENT_PADDING_PX),
@@ -76,15 +67,22 @@ pub(crate) fn build_status_bar(
         ChildOf(bar),
     ));
 
-    build_window_are(commands, bar, session, active_wid, windows, ui_font);
+    build_session_chips(
+        commands,
+        bar,
+        &ordered,
+        sessions_by_id,
+        attached_sid,
+        ui_font,
+    );
 }
 
-fn build_window_are(
+fn build_session_chips(
     commands: &mut Commands,
     bar: Entity,
-    session: &Session,
-    active_wid: &WindowId,
-    windows: &HashMap<WindowId, Window>,
+    ordered: &[&SessionId],
+    sessions_by_id: &HashMap<SessionId, Session>,
+    attached_sid: Option<SessionId>,
     ui_font: &Handle<Font>,
 ) {
     let container = commands
@@ -102,19 +100,20 @@ fn build_window_are(
             ChildOf(bar),
         ))
         .id();
-    for wid in &session.linked_windows {
-        let label = windows
-            .get(wid)
-            .map(|w| w.name.clone())
-            .unwrap_or_else(|| wid.to_string());
-        let font_color = if wid == active_wid {
+
+    for sid in ordered {
+        let session = match sessions_by_id.get(sid) {
+            Some(s) => s,
+            None => continue,
+        };
+        let font_color = if Some(**sid) == attached_sid {
             palette::COPY_MODE_INDICATOR_BG
         } else {
             palette::FOREGROUND
         };
 
         commands.spawn((
-            Text::new(label),
+            Text::new(session.name.clone()),
             TextColor(font_color),
             TextFont {
                 font: ui_font.clone(),

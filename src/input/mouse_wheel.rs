@@ -63,7 +63,10 @@ fn dispatch_mouse_wheel(
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
     mux: Res<crate::multiplexer::Multiplexer>,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
-    sessions: Query<&crate::multiplexer::AttachedSession>,
+    attached_sid_q: Query<
+        &crate::multiplexer::SessionEntityId,
+        With<crate::multiplexer::AttachedSession>,
+    >,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
 ) {
@@ -82,7 +85,7 @@ fn dispatch_mouse_wheel(
     let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
         return;
     };
-    let Some(entity) = resolve_focused_terminal(&sessions, &mux, &registry) else {
+    let Some(entity) = resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
         return;
     };
     if copy_mode_q.get(entity).is_ok() {
@@ -133,17 +136,19 @@ fn aggregate_wheel_delta(
     had_input.then_some(delta_y)
 }
 
-/// Resolves the focused activity's entity via the session →
+/// Resolves the focused activity's entity via the attached session →
 /// multiplexer → registry chain (mirrors `dispatch_focused_key`).
 fn resolve_focused_terminal(
-    sessions: &Query<&crate::multiplexer::AttachedSession>,
+    attached_sid_q: &Query<
+        &crate::multiplexer::SessionEntityId,
+        With<crate::multiplexer::AttachedSession>,
+    >,
     mux: &crate::multiplexer::Multiplexer,
     registry: &crate::ui::registry::ActivityEntityRegistry,
 ) -> Option<Entity> {
-    let attached = sessions.iter().next()?;
-    let (wid, pid) = mux.active_pane_of_session(&attached.0).ok()?;
-    let window = mux.windows.get(&wid)?;
-    let pane = window.pane(&pid).ok()?;
+    let attached = attached_sid_q.iter().next()?;
+    let session = mux.sessions.get(&attached.0)?;
+    let pane = session.pane(&session.active_pane).ok()?;
     registry.get(&pane.active_activity)
 }
 

@@ -23,43 +23,40 @@ fn log_layout_changes(mux: Res<Multiplexer>) {
 }
 
 fn render_tree(svc: &MultiplexerService) -> String {
-    let mut sids: Vec<_> = svc.sessions.iter().collect();
-    sids.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
+    let mut sids: Vec<_> = svc.sessions.keys().copied().collect();
+    sids.sort();
 
     let mut out = String::from("Sessions:\n");
-    for (sid, session) in sids {
-        out.push_str(&format!("  Session({sid}) \"{}\"\n", session.name));
-        let mut wids: Vec<_> = session.linked_windows.iter().collect();
-        wids.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
-        for wid in wids {
-            let Some(window) = svc.windows.get(wid) else {
+    for sid in sids {
+        let Some(session) = svc.sessions.get(&sid) else {
+            continue;
+        };
+        let dims = session
+            .dimensions
+            .as_ref()
+            .map(|d| format!("[{}x{}]", d.cols, d.rows))
+            .unwrap_or_else(|| "[?]".into());
+        let active = session.active_pane.to_string();
+        out.push_str(&format!(
+            "  Session({sid}) \"{}\" {dims} active_pane={active}\n",
+            session.name
+        ));
+        let mut pids: Vec<_> = session.pane_ids().collect();
+        pids.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
+        for pid in pids {
+            let Ok(pane) = session.pane(pid) else {
                 continue;
             };
-            let active = window.active_pane.to_string();
-            let dims = window
-                .dimensions
-                .as_ref()
-                .map(|d| format!("[{}x{}]", d.cols, d.rows))
-                .unwrap_or_else(|| "[?]".into());
-            out.push_str(&format!(
-                "    Window({wid}) \"{}\" {dims} active={active}\n",
-                window.name
-            ));
-            let mut pids: Vec<_> = window.pane_ids().collect();
-            pids.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
-            for pid in pids {
-                let Ok(pane) = window.pane(pid) else { continue };
-                let pa = pane.active_activity.to_string();
-                out.push_str(&format!("      Pane({pid}) active={pa}\n"));
-                let mut aids: Vec<_> = pane.activity_ids().collect();
-                aids.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
-                for aid in aids {
-                    let kind = match pane.activity(aid).map(|a| &a.kind) {
-                        Some(k) => format!("{k:?}"),
-                        None => "?".into(),
-                    };
-                    out.push_str(&format!("        Activity({aid}) {kind}\n"));
-                }
+            let pa = pane.active_activity.to_string();
+            out.push_str(&format!("    Pane({pid}) active={pa}\n"));
+            let mut aids: Vec<_> = pane.activity_ids().collect();
+            aids.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
+            for aid in aids {
+                let kind = match pane.activity(aid).map(|a| &a.kind) {
+                    Some(k) => format!("{k:?}"),
+                    None => "?".into(),
+                };
+                out.push_str(&format!("      Activity({aid}) {kind}\n"));
             }
         }
     }
@@ -77,17 +74,14 @@ mod tests {
     }
 
     #[test]
-    fn render_tree_includes_session_window_pane_activity() {
+    fn render_tree_includes_session_pane_activity() {
         let mut svc = MultiplexerService::default();
-        let sid = svc.create_session(Some("default".into()));
-        svc.create_window(Some(&sid), Some("main".into())).unwrap();
+        let (_sid, _, _) = svc.create_session(Some("default".into()));
 
         let output = render_tree(&svc);
         assert!(output.starts_with("Sessions:\n"));
         assert!(output.contains("Session("));
         assert!(output.contains("\"default\""));
-        assert!(output.contains("Window("));
-        assert!(output.contains("\"main\""));
         assert!(output.contains("Pane("));
         assert!(output.contains("Activity("));
     }
@@ -95,9 +89,8 @@ mod tests {
     #[test]
     fn render_tree_is_deterministic_across_runs() {
         let mut svc = MultiplexerService::default();
-        let sid = svc.create_session(Some("default".into()));
-        svc.create_window(Some(&sid), Some("a".into())).unwrap();
-        svc.create_window(Some(&sid), Some("b".into())).unwrap();
+        let _ = svc.create_session(Some("a".into()));
+        let _ = svc.create_session(Some("b".into()));
 
         let first = render_tree(&svc);
         let second = render_tree(&svc);
@@ -116,7 +109,7 @@ mod tests {
             let mut mux = app
                 .world_mut()
                 .resource_mut::<crate::multiplexer::Multiplexer>();
-            let _sid = mux.create_session(Some("plugin-test".into()));
+            let _ = mux.create_session(Some("plugin-test".into()));
         }
         app.update();
     }

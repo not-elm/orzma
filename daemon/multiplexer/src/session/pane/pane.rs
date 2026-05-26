@@ -1,5 +1,5 @@
 use crate::error::{MultiplexerError, MultiplexerResult};
-use crate::window::pane::activity::{Activity, ActivityId};
+use crate::session::pane::activity::{Activity, ActivityId};
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

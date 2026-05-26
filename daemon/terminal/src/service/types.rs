@@ -3,7 +3,7 @@
 use crate::vt::frame::Cursor;
 use crate::vt::frame_ring::WireMessage;
 use bytes::Bytes;
-use ozmux_multiplexer::{SessionId, WindowId};
+use ozmux_multiplexer::SessionId;
 use tokio::sync::broadcast;
 
 /// Configuration passed to [`crate::service::TerminalService::spawn`].
@@ -16,11 +16,8 @@ pub struct SpawnOptions {
     pub shell: String,
     /// Initial working directory for the spawned shell, if any.
     pub cwd: Option<String>,
-    /// Owning Window id, surfaced to the spawned shell as `OZMUX_WINDOW_ID`.
-    /// `None` only for callers that have no Window context (tests/legacy).
-    pub window_id: Option<WindowId>,
-    /// Owning Session id, surfaced to the spawned shell as `OZMUX_SESSION_ID`
-    /// when present. Orphan Windows resolve to `None`.
+    /// Owning Session id, surfaced to the spawned shell as `OZMUX_SESSION_ID`.
+    /// `None` only for callers that have no Session context (tests/legacy).
     pub session_id: Option<SessionId>,
 }
 

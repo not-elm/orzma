@@ -9,7 +9,7 @@ use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{PaneFrame, StructuralNode, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, UiRect, Val};
-use ozmux_multiplexer::{Cell, CellId, LayoutCellState, SplitOrientation, Window};
+use ozmux_multiplexer::{Cell, CellId, LayoutCellState, Session, SplitOrientation};
 
 /// Convert `(lhs_weight, rhs_weight)` into the `flex_grow` pair to set on
 /// the two split children. Routes through `LayoutCellState::split_ratio`
@@ -31,20 +31,20 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 pub(crate) fn build_cell_recursive(
     commands: &mut Commands,
     parent: Entity,
-    window: &Window,
+    session: &Session,
     cell_id: &CellId,
     registry: &mut ActivityEntityRegistry,
     hidden_stash: Entity,
     ui_font: &Handle<Font>,
 ) {
-    let cell = match window.cells.cell(cell_id) {
+    let cell = match session.cells.cell(cell_id) {
         Ok(c) => c,
         Err(err) => {
             tracing::warn!(
                 target: "ozmux_gui::layout",
-                "cell {} missing from window {} ({:?})",
+                "cell {} missing from session {} ({:?})",
                 cell_id,
-                window.id,
+                session.id,
                 err,
             );
             return;
@@ -59,7 +59,7 @@ pub(crate) fn build_cell_recursive(
                 cell_id,
             );
         }
-        Cell::Pane(p) => build_pane(commands, parent, window, p, registry, hidden_stash, ui_font),
+        Cell::Pane(p) => build_pane(commands, parent, session, p, registry, hidden_stash, ui_font),
         Cell::Split(s) => {
             let (lhs_grow, rhs_grow) = split_ratio_to_flex_grows(s.lhs_weight, s.rhs_weight);
             let dir = match s.orientation {
@@ -91,7 +91,15 @@ pub(crate) fn build_cell_recursive(
                     ChildOf(container),
                 ))
                 .id();
-            build_cell_recursive(commands, lhs, window, &s.lhs_cell, registry, hidden_stash, ui_font);
+            build_cell_recursive(
+                commands,
+                lhs,
+                session,
+                &s.lhs_cell,
+                registry,
+                hidden_stash,
+                ui_font,
+            );
 
             let rhs = commands
                 .spawn((
@@ -104,7 +112,15 @@ pub(crate) fn build_cell_recursive(
                     ChildOf(container),
                 ))
                 .id();
-            build_cell_recursive(commands, rhs, window, &s.rhs_cell, registry, hidden_stash, ui_font);
+            build_cell_recursive(
+                commands,
+                rhs,
+                session,
+                &s.rhs_cell,
+                registry,
+                hidden_stash,
+                ui_font,
+            );
         }
     }
 }
@@ -112,13 +128,13 @@ pub(crate) fn build_cell_recursive(
 fn build_pane(
     commands: &mut Commands,
     parent: Entity,
-    window: &Window,
+    session: &Session,
     pane_cell: &ozmux_multiplexer::PaneCell,
     registry: &mut ActivityEntityRegistry,
     hidden_stash: Entity,
     ui_font: &Handle<Font>,
 ) {
-    let Some(pane) = window.panes.get(&pane_cell.pane) else {
+    let Some(pane) = session.panes.get(&pane_cell.pane) else {
         tracing::warn!(
             target: "ozmux_gui::layout",
             "pane {} referenced by cell missing",
@@ -126,11 +142,11 @@ fn build_pane(
         );
         return;
     };
-    let is_active_pane = pane_cell.pane == window.active_pane;
+    let is_active_pane = pane_cell.pane == session.active_pane;
 
     let pane_frame = commands
         .spawn((
-            Name::new(format!("Pane({})", window.name)),
+            Name::new(format!("Pane({})", session.name)),
             Node {
                 flex_direction: FlexDirection::Column,
                 width: Val::Percent(100.0),

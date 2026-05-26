@@ -16,7 +16,6 @@ use alacritty_terminal::term::Config;
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor, Rgb};
 use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc};
-use tokio_util::sync::CancellationToken;
 
 use crate::vt::coalescer::{Coalescer, DamageVerdict};
 use crate::vt::frame::{Cursor, CursorShape, RenderFrame, SnapshotReason, encode};
@@ -28,7 +27,6 @@ use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
 use crate::vt::title::sanitize_title;
-use ozmux_multiplexer::WindowId;
 
 /// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
@@ -416,11 +414,17 @@ fn emit_now(
 /// Drives the VT bridge: drains PTY chunks into `Term` via `vte::Parser` and
 /// emits wire frames via the per-bridge [`Coalescer`].
 ///
-/// `state.advance(chunk)` runs on every received chunk — the bounded
-/// `pty_rx` channel uses `try_send` with silent drop, so any delay in
-/// parsing risks data loss that is unrecoverable from the wire log.
-/// The Coalescer only buffers the *decision to emit*; the Term itself
-/// stays continuously up to date.
+/// `state.advance(chunk)` runs on every received chunk. The bounded
+/// `pty_rx` channel is fed by the PTY reader OS thread via `blocking_send`,
+/// so bursty PTY output applies backpressure to the read thread rather than
+/// dropping bytes — the VT parser never misses a chunk. The Coalescer only
+/// buffers the *decision to emit*; the Term itself stays continuously up to
+/// date.
+///
+/// `vt_chunk_tx::try_send` is still used by `TerminalHandle::resize` and
+/// `scroll` to send synthetic empty-byte wakeups — those are best-effort
+/// signals where a drop only means a slightly delayed snapshot, not bytes
+/// missing from the Term.
 pub(crate) async fn run_bridge_task(
     vt_state: Arc<Mutex<VtState>>,
     mut pty_rx: mpsc::Receiver<Bytes>,
@@ -494,6 +498,14 @@ pub(crate) async fn run_bridge_task(
             ctrl = control_rx.recv() => {
                 match ctrl {
                     None => break,
+                    Some(ControlFrame::Title(title)) => {
+                        let mut state = vt_state.lock().expect("vt_state poisoned");
+                        state.title = Some(sanitize_title(&title));
+                    }
+                    Some(ControlFrame::ResetTitle) => {
+                        let mut state = vt_state.lock().expect("vt_state poisoned");
+                        state.title = None;
+                    }
                     // NOTE: Bell and Clipboard remain intentionally dropped.
                     Some(ControlFrame::Bell | ControlFrame::Clipboard { .. }) => {}
                 }
@@ -530,4 +542,10 @@ pub(crate) fn dim_for(cols: u16, rows: u16) -> LocalDim {
         cols: cols.into(),
         rows: rows.into(),
     }
+}
+
+/// Test helper alias for [`dim_for`].
+#[cfg(test)]
+pub(crate) fn test_dim(cols: u16, rows: u16) -> LocalDim {
+    dim_for(cols, rows)
 }

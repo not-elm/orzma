@@ -1,12 +1,12 @@
 use crate::{
     error::{MultiplexerError, MultiplexerResult},
-    window::pane::PaneId,
+    session::pane::PaneId,
 };
 use ozmux_macros::NewType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Axis-aligned rectangle in normalized window coordinates (`x, y, w, h` ∈ [0, 1]).
+/// Axis-aligned rectangle in normalized session coordinates (`x, y, w, h` ∈ [0, 1]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Rect {
     pub x: f32,
@@ -19,11 +19,11 @@ pub(crate) struct Rect {
 pub struct LayoutCellState(HashMap<CellId, Cell>);
 
 impl LayoutCellState {
-    /// Initialize a new window's layout: a `Cell::Root` and its single initial
+    /// Initialize a new session's layout: a `Cell::Root` and its single initial
     /// `Cell::Pane`, registered atomically so `RootCell::child` is always valid.
-    /// `Window.root_cell` is set to the returned root id and stays invariant
+    /// `Session.root_cell` is set to the returned root id and stays invariant
     /// across subsequent splits / closes.
-    pub fn new_window_layout(&mut self, pane_id: PaneId) -> (CellId, CellId) {
+    pub fn new_session_layout(&mut self, pane_id: PaneId) -> (CellId, CellId) {
         let root_id = CellId::new();
         let pane_cell_id = CellId::new();
         self.0.insert(
@@ -123,7 +123,7 @@ impl LayoutCellState {
         let parent_split = match self.cell(&parent_id)? {
             Cell::Split(s) => s,
             // Pane is the only child of Root — closing it would empty the
-            // window's layout, which the model forbids.
+            // session's layout, which the model forbids.
             Cell::Root(_) => return Err(MultiplexerError::CannotCloseLastPane(target_id.clone())),
             Cell::Pane(_) => return Err(MultiplexerError::InvalidCellType(parent_id)),
         };
@@ -290,7 +290,7 @@ impl LayoutCellState {
     ///   `Self::split_ratio` and recurses into lhs then rhs. The trailing
     ///   side's size is computed as `parent_size - lhs_size` (not as a
     ///   separate multiplication) so siblings always sum exactly to the
-    ///   parent rect — `Window::pane_in_direction`'s adjacency test relies
+    ///   parent rect — `Session::pane_in_direction`'s adjacency test relies
     ///   on this exactness.
     ///
     /// The lhs-before-rhs descent fixes the output as DFS left-to-right
@@ -373,7 +373,7 @@ impl LayoutCellState {
     }
 
     /// Drop every cell in `start`'s subtree (including `start` itself).
-    /// Used during window close to vacate the cell store atomically.
+    /// Used during session close to vacate the cell store atomically.
     pub fn remove_subtree(&mut self, start: &CellId) -> MultiplexerResult {
         let mut ids = Vec::new();
         self.collect_cell_ids(start, &mut ids)?;
@@ -576,8 +576,8 @@ pub enum CloseOutcome {
         survivor: CellId,
         new_parent: CellId,
     },
-    /// Target's grandparent was the window's `Cell::Root`; survivor was promoted
-    /// to be `RootCell::child`. `Window.root_cell` itself is unchanged.
+    /// Target's grandparent was the session's `Cell::Root`; survivor was promoted
+    /// to be `RootCell::child`. `Session.root_cell` itself is unchanged.
     PromotedToRootChild { survivor: CellId, root: CellId },
 }
 
@@ -602,10 +602,10 @@ mod tests {
     }
 
     #[test]
-    fn new_window_layout_creates_root_with_child() {
+    fn new_session_layout_creates_root_with_child() {
         let mut state = LayoutCellState::default();
         let pane_id = pid();
-        let (root_id, pane_cell_id) = state.new_window_layout(pane_id.clone());
+        let (root_id, pane_cell_id) = state.new_session_layout(pane_id.clone());
 
         let Cell::Root(root) = state.cell(&root_id).unwrap() else {
             panic!("expected Root");
@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn split_cell_under_root_updates_root_child() {
         let mut state = LayoutCellState::default();
-        let (root_id, pane_a) = state.new_window_layout(pid());
+        let (root_id, pane_a) = state.new_session_layout(pid());
         let pane_b = state.new_pane(pid(), None);
 
         let split_id = state
@@ -648,7 +648,7 @@ mod tests {
     #[test]
     fn split_cell_under_split_updates_parent_split_slot() {
         let mut state = LayoutCellState::default();
-        let (_, pane_a) = state.new_window_layout(pid());
+        let (_, pane_a) = state.new_session_layout(pid());
         let pane_b = state.new_pane(pid(), None);
         let outer = state
             .split_cell(
@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn close_cell_rejects_last_pane_under_root() {
         let mut state = LayoutCellState::default();
-        let (_, pane_cell) = state.new_window_layout(pid());
+        let (_, pane_cell) = state.new_session_layout(pid());
 
         let result = state.close_cell(&pane_cell);
         assert!(matches!(
@@ -697,7 +697,7 @@ mod tests {
     #[test]
     fn close_cell_under_root_split_promotes_sibling_to_root_child() {
         let mut state = LayoutCellState::default();
-        let (root_id, pane_a) = state.new_window_layout(pid());
+        let (root_id, pane_a) = state.new_session_layout(pid());
         let pane_b = state.new_pane(pid(), None);
         let split_id = state
             .split_cell(
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn close_cell_under_nested_split_promotes_sibling_in_grandparent_slot() {
         let mut state = LayoutCellState::default();
-        let (_, pane_a) = state.new_window_layout(pid());
+        let (_, pane_a) = state.new_session_layout(pid());
         let pane_b = state.new_pane(pid(), None);
         let outer = state
             .split_cell(
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn pane_ids_in_subtree_collects_all_leaves() {
         let mut state = LayoutCellState::default();
-        let (root_id, pane_a) = state.new_window_layout(pid());
+        let (root_id, pane_a) = state.new_session_layout(pid());
         let pane_b = state.new_pane(pid(), None);
         let outer = state
             .split_cell(
@@ -813,7 +813,7 @@ mod tests {
     fn pane_bounds_single_pane_fills_unit_rect() {
         let mut state = LayoutCellState::default();
         let p = pid();
-        let (root_id, _) = state.new_window_layout(p.clone());
+        let (root_id, _) = state.new_session_layout(p.clone());
 
         let bounds = state.pane_bounds(&root_id).unwrap();
         assert_eq!(bounds.len(), 1);
@@ -832,7 +832,7 @@ mod tests {
     #[test]
     fn pane_bounds_horizontal_split_returns_left_then_right_halves() {
         let mut state = LayoutCellState::default();
-        let (root_id, lhs) = state.new_window_layout(pid());
+        let (root_id, lhs) = state.new_session_layout(pid());
         let rhs = state.new_pane(pid(), None);
         state
             .split_cell(
@@ -882,7 +882,7 @@ mod tests {
     #[test]
     fn pane_bounds_vertical_split_stacks_top_then_bottom() {
         let mut state = LayoutCellState::default();
-        let (root_id, top) = state.new_window_layout(pid());
+        let (root_id, top) = state.new_session_layout(pid());
         let bottom = state.new_pane(pid(), None);
         state
             .split_cell(
@@ -940,7 +940,7 @@ mod tests {
         let pa = PaneId::new();
         let pb = PaneId::new();
         let pc = PaneId::new();
-        let (root, cell_a) = state.new_window_layout(pa.clone());
+        let (root, cell_a) = state.new_session_layout(pa.clone());
         let cell_b = state.new_pane(pb.clone(), None);
         let split_ab = state
             .split_cell(
@@ -967,7 +967,7 @@ mod tests {
     #[test]
     fn remove_subtree_drops_every_cell_below_root() {
         let mut state = LayoutCellState::default();
-        let (root_id, pane_a) = state.new_window_layout(pid());
+        let (root_id, pane_a) = state.new_session_layout(pid());
         let pane_b = state.new_pane(pid(), None);
         let split_id = state
             .split_cell(
@@ -990,7 +990,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = PaneId::new();
         let pb = PaneId::new();
-        let (_root, cell_a) = state.new_window_layout(pa.clone());
+        let (_root, cell_a) = state.new_session_layout(pa.clone());
         let cell_b = state.new_pane(pb.clone(), None);
         let _split = state
             .split_cell(
@@ -1018,7 +1018,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = PaneId::new();
         let pb = PaneId::new();
-        let (root, cell_a) = state.new_window_layout(pa.clone());
+        let (root, cell_a) = state.new_session_layout(pa.clone());
         let cell_b = state.new_pane(pb.clone(), None);
         let split = state
             .split_cell(
