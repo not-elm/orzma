@@ -113,8 +113,9 @@ impl UiMaterial for TerminalUiMaterial {
 ///
 /// # Layout (std140, encase derive)
 ///
-/// Field offsets in bytes (encase auto-inserts 4 bytes of padding before
-/// `bg_padding_color` so the Vec4 lands at offset 80; total 96 bytes,
+/// Field offsets in bytes. `max_overflow_phys` fills the 4-byte padding slot
+/// at offset 76 that encase would otherwise insert before `bg_padding_color`
+/// (Vec4 needs 16-byte alignment, lands at offset 80; total 96 bytes,
 /// 16-byte aligned):
 ///
 /// | Offset | Field                       |
@@ -134,6 +135,7 @@ impl UiMaterial for TerminalUiMaterial {
 /// | 64     | `sel_kind`                  |
 /// | 68     | `underline_position_phys`   |
 /// | 72     | `underline_thickness_phys`  |
+/// | 76     | `max_overflow_phys`         |
 /// | 80     | `bg_padding_color`          |
 #[derive(Clone, Copy, ShaderType, Default, Debug)]
 struct TerminalParams {
@@ -156,6 +158,11 @@ struct TerminalParams {
     sel_kind: u32,
     underline_position_phys: f32,
     underline_thickness_phys: f32,
+    /// Worst-case ASCII rightward bbox overflow (physical px) across all four
+    /// faces. The shader uses this to extend its "rightmost column glyph"
+    /// evaluation past `grid_size.x * cell_size_px.x` into the bg_padding
+    /// strip; the host reserves the same amount from the node width.
+    max_overflow_phys: f32,
     bg_padding_color: Vec4,
 }
 
@@ -179,6 +186,7 @@ impl TerminalParams {
         time_seconds: f32,
         underline_position_phys: f32,
         underline_thickness_phys: f32,
+        max_overflow_phys: f32,
         bg_padding_color: Vec4,
     ) -> Self {
         let cols = u32::from(grid.cols);
@@ -216,6 +224,7 @@ impl TerminalParams {
             sel_kind,
             underline_position_phys,
             underline_thickness_phys,
+            max_overflow_phys,
             bg_padding_color,
         }
     }
@@ -427,6 +436,7 @@ fn update_terminal_material(
                 palette_time.elapsed_secs(),
                 metrics.underline_position_phys,
                 metrics.underline_thickness_phys.max(1.0),
+                metrics.max_overflow_phys,
                 bg_padding_color,
             );
         }

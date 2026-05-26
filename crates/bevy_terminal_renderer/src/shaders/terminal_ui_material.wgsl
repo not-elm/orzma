@@ -17,6 +17,7 @@ struct TerminalParams {
     sel_kind: u32,
     underline_position_phys: f32,
     underline_thickness_phys: f32,
+    max_overflow_phys: f32,
     bg_padding_color: vec4<f32>,
 };
 
@@ -316,6 +317,29 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let p_px = in.uv * in.size;
     let hit = locate_cell(p_px);
     if !hit.valid {
+        // Right-strip handler: paint the rightmost cell's bbox overflow
+        // into the bg_padding band reserved by resize_terminals_to_node.
+        // paint_cell_glyph early-rejects when the strip's local_px is past
+        // the glyph bitmap, so a miss falls through to bg_padding_color.
+        let grid_w_phys = params.cell_size_px.x * f32(params.grid_size.x);
+        let grid_h_phys = params.cell_size_px.y * f32(params.grid_size.y);
+        let in_right_strip = p_px.x >= grid_w_phys
+            && p_px.x < grid_w_phys + params.max_overflow_phys
+            && p_px.y < grid_h_phys;
+        if in_right_strip {
+            let col = params.grid_size.x - 1u;
+            let row = u32(floor(p_px.y / params.cell_size_px.y));
+            let idx = row * params.grid_size.x + col;
+            if idx < arrayLength(&cells) {
+                let strip_cell = cells[idx];
+                let strip_local = vec2<f32>(
+                    p_px.x - f32(col) * params.cell_size_px.x,
+                    p_px.y - f32(row) * params.cell_size_px.y,
+                );
+                let strip_fg = resolve_cell_colors(strip_cell).fg;
+                return paint_cell_glyph(strip_cell, strip_local, strip_fg, fallback);
+            }
+        }
         return fallback;
     }
 
@@ -346,7 +370,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
         let left_is_wide_right = (left_cell.style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
         if !left_is_wide_right {
             let left_local = hit.in_cell_px + vec2<f32>(cell_pitch.x, 0.0);
-            let left_fg = unpack_rgba(left_cell.fg_packed);
+            let left_fg = resolve_cell_colors(left_cell).fg;
             color = paint_cell_glyph(left_cell, left_local, left_fg, color);
         }
     }
