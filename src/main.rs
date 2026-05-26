@@ -14,6 +14,7 @@ use bevy_terminal::TerminalHandlePlugin;
 use bevy_terminal_renderer::TerminalRendererPlugin;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
+use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use multiplexer::OzmuxMultiplexerPlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
@@ -27,6 +28,7 @@ fn main() {
             TerminalRendererPlugin,
             OzmuxMultiplexerPlugin,
             OzmuxConfigsPlugin,
+            FontBridgePlugin,
             OzmuxLayoutLogPlugin,
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
