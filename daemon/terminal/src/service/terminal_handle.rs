@@ -2,18 +2,16 @@
 
 use crate::event::TerminalEvent;
 use crate::pty::scrollback::ScrollbackBuffer;
-use crate::vt::FrameDelta;
 use crate::vt::bridge::{VtState, run_bridge_task};
 use crate::vt::frame_ring::WireMessage;
 use crate::vt::listener::{ControlFrame, DropCounter, ReplyFrame, TermListener};
 use crate::{PtyErrorBridge, TerminalError, TerminalGeometry, TerminalResult};
 use alacritty_terminal::grid::Dimensions;
 use bytes::Bytes;
-use ozmux_multiplexer::WindowId;
 use portable_pty::{ChildKiller, MasterPty, PtySize};
 use std::sync::Mutex;
-use std::sync::mpsc::Sender;
 use std::{io::Write, sync::Arc};
+use tokio::sync::{broadcast, mpsc};
 
 pub(crate) struct TerminalHandle {
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -21,8 +19,8 @@ pub(crate) struct TerminalHandle {
     /// Handle-side sender for the VT fan-out channel. Used by
     /// `TerminalService::resize` to send a synthetic empty chunk that wakes
     /// the bridge task after `term.resize` sets `Full` damage.
-    vt_chunk_tx: Sender<Bytes>,
-    event_sender: Sender<TerminalEvent>,
+    vt_chunk_tx: mpsc::Sender<Bytes>,
+    event_sender: broadcast::Sender<TerminalEvent>,
     scrollback: ScrollbackBuffer,
     _child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
 
@@ -30,7 +28,7 @@ pub(crate) struct TerminalHandle {
     /// wrapped in `std::sync::Mutex` for short-held locks per PTY chunk in
     /// the bridge task. Read by `TerminalService::write`, `resize`,
     /// `subscribe_frames`, and `read_geometry`.
-    vt_state: Arc<Mutex<VtState>>,
+    pub(crate) vt_state: Arc<Mutex<VtState>>,
 
     /// Reply-required events from `TermListener` (unbounded; must-not-drop
     /// to avoid capability-query backflow regression). Held only to keep
@@ -42,7 +40,7 @@ pub(crate) struct TerminalHandle {
     /// rate-limited via `DropCounter`. Held only to keep the channel
     /// open; `TermListener` owns the active clone and `control_rx` is
     /// consumed by `run_bridge_task`.
-    _control_tx: Sender<ControlFrame>,
+    _control_tx: mpsc::Sender<ControlFrame>,
 
     /// Broadcast of wire messages (Binary deltas + Text sidecars). Held
     /// only to keep the channel open; the active `Sender` lives on
@@ -63,7 +61,7 @@ impl TerminalHandle {
     pub fn new(
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
-        event_sender: Sender<TerminalEvent>,
+        event_sender: broadcast::Sender<TerminalEvent>,
         child_killer: Box<dyn ChildKiller + Send + Sync>,
         scrollback: ScrollbackBuffer,
         cols: u16,
@@ -89,8 +87,9 @@ impl TerminalHandle {
             frame_broadcast.clone(),
         )));
 
-        // NOTE: the JoinHandle is intentionally discarded; cancellation via
-        // vt_cancel on TerminalHandle::drop is sufficient to terminate the task.
+        // NOTE: the JoinHandle is intentionally discarded; the bridge task
+        // exits naturally when vt_chunk_rx is dropped (TerminalHandle::drop
+        // drops vt_chunk_tx, closing the channel).
         tokio::spawn(run_bridge_task(
             vt_state.clone(),
             vt_chunk_rx,
@@ -111,6 +110,11 @@ impl TerminalHandle {
             _drop_counter: drop_counter,
             vt_chunk_tx,
         }
+    }
+
+    /// Returns a new broadcast receiver for `TerminalEvent` emissions.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<TerminalEvent> {
+        self.event_sender.subscribe()
     }
 
     #[inline]
@@ -144,7 +148,7 @@ impl TerminalHandle {
             .unwrap()
             .resize(size)
             .to_terminal_result()?;
-        let _ = self.vt_chunk_tx.send(Bytes::new());
+        let _ = self.vt_chunk_tx.try_send(Bytes::new());
 
         Ok(())
     }
@@ -155,7 +159,7 @@ impl TerminalHandle {
         TerminalGeometry {
             cols: vt_state.term.columns() as u16,
             rows: vt_state.term.screen_lines() as u16,
-            cursor: crate::vt::frame_builder::extract_cursor(&state.term),
+            cursor: crate::vt::frame_builder::extract_cursor(&vt_state.term),
         }
     }
 
@@ -166,9 +170,9 @@ impl TerminalHandle {
                 .term
                 .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
         }
-        // NOTE: send().await (not try_send) — matches resize semantics so the
-        // wakeup survives a backpressured channel.
-        let _ = self.vt_chunk_tx.send(Bytes::new());
+        // NOTE: try_send rather than blocking send — matches resize semantics
+        // so the wakeup is best-effort and cannot deadlock on a full channel.
+        let _ = self.vt_chunk_tx.try_send(Bytes::new());
     }
 
     pub fn scroll_to_bottom(&mut self) {
@@ -178,9 +182,9 @@ impl TerminalHandle {
                 .term
                 .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
         }
-        // NOTE: send().await (not try_send) — matches resize semantics so the
-        // wakeup survives a backpressured channel.
-        let _ = self.vt_chunk_tx.send(Bytes::new());
+        // NOTE: try_send rather than blocking send — matches resize semantics
+        // so the wakeup is best-effort and cannot deadlock on a full channel.
+        let _ = self.vt_chunk_tx.try_send(Bytes::new());
     }
 
     /// Thin wrapper for the WS handler. The PTY bridge task does not go through
@@ -188,11 +192,5 @@ impl TerminalHandle {
     #[inline]
     pub fn snapshot(&self) -> Vec<u8> {
         self.scrollback.snapshot()
-    }
-}
-
-impl Drop for TerminalHandle {
-    fn drop(&mut self) {
-        self.vt_cancel.cancel();
     }
 }

@@ -1,7 +1,7 @@
 use ozmux_extension::{
     handle::ExtensionHandles, registry::ExtensionRegistry, runtime::RuntimeRoot,
 };
-use ozmux_multiplexer::{ActivityId, PaneId, SessionId, WindowId};
+use ozmux_multiplexer::{ActivityId, PaneId, SessionId};
 use ozmux_terminal::{SpawnOptions, TerminalService};
 use std::{
     path::PathBuf,
@@ -43,8 +43,7 @@ async fn pane_command_invokes_extension_handler() {
             rows: 24,
             shell: "/bin/sh".to_string(),
             cwd: None,
-            window_id: Some(WindowId::new()),
-            session_id: Some(SessionId::new()),
+            session_id: Some(SessionId(0)),
         },
     )
     .await
@@ -240,8 +239,7 @@ async fn builtin_browser_shim_is_on_path() {
             rows: 24,
             shell: "/bin/sh".to_string(),
             cwd: None,
-            window_id: Some(WindowId::new()),
-            session_id: Some(SessionId::new()),
+            session_id: Some(SessionId(0)),
         },
     )
     .await

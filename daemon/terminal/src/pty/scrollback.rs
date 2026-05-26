@@ -1,6 +1,5 @@
 //! Bounded scrollback ring shared between the PTY reader and WS subscribers.
 
-use crate::event::TerminalEvent;
 use crate::pty::ring_buffer::RingBuffer;
 use std::{
     num::NonZero,

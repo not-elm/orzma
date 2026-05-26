@@ -34,6 +34,8 @@ pub enum ControlFrame {
         content: String,
         correlation_seq: Option<u32>,
     },
+    Title(String),
+    ResetTitle,
 }
 
 /// `alacritty_terminal::event::EventListener` implementation that bridges

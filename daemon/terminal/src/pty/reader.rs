@@ -5,7 +5,7 @@ use crate::pty::scrollback::ScrollbackBuffer;
 use bytes::Bytes;
 use portable_pty::Child;
 use std::io::Read;
-use std::sync::mpsc::Sender;
+use tokio::sync::{broadcast, mpsc};
 
 /// Spawn a dedicated OS thread for blocking PTY reads, plus a tokio bridge
 /// task that pushes data to the scrollback and broadcasts under the same
@@ -17,8 +17,8 @@ pub(crate) fn spawn_pty_reader(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
     scrollback: ScrollbackBuffer,
-    event_sender: Sender<TerminalEvent>,
-    vt_chunk_tx: Sender<Bytes>,
+    event_sender: broadcast::Sender<TerminalEvent>,
+    vt_chunk_tx: mpsc::Sender<Bytes>,
 ) {
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -27,7 +27,7 @@ pub(crate) fn spawn_pty_reader(
                 Ok(0) => break,
                 Ok(n) => {
                     let chunk = buf[..n].to_vec();
-                    let _ = vt_chunk_tx.send(Bytes::copy_from_slice(&chunk));
+                    let _ = vt_chunk_tx.try_send(Bytes::copy_from_slice(&chunk));
                     scrollback.push(&chunk);
                     let _ = event_sender.send(TerminalEvent::Data { buffer: chunk });
                 }

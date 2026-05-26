@@ -16,7 +16,6 @@ use alacritty_terminal::term::Config;
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor, Rgb};
 use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc};
-use tokio_util::sync::CancellationToken;
 
 use crate::vt::coalescer::{Coalescer, DamageVerdict};
 use crate::vt::frame::{Cursor, CursorShape, RenderFrame, SnapshotReason, encode};
@@ -27,8 +26,6 @@ use crate::vt::frame_builder::{
 use crate::vt::frame_ring::{FrameRing, WireMessage};
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::listener::{ControlFrame, ReplyFrame, TermListener};
-use crate::vt::title::sanitize_title;
-use ozmux_multiplexer::WindowId;
 
 /// All state mutated by the VT bridge task, wrapped by `TerminalHandle` in
 /// `std::sync::Mutex` so the bridge can take a short non-await lock per
@@ -494,6 +491,14 @@ pub(crate) async fn run_bridge_task(
             ctrl = control_rx.recv() => {
                 match ctrl {
                     None => break,
+                    Some(ControlFrame::Title(title)) => {
+                        let mut state = vt_state.lock().expect("vt_state poisoned");
+                        state.title = Some(title);
+                    }
+                    Some(ControlFrame::ResetTitle) => {
+                        let mut state = vt_state.lock().expect("vt_state poisoned");
+                        state.title = None;
+                    }
                     // NOTE: Bell and Clipboard remain intentionally dropped.
                     Some(ControlFrame::Bell | ControlFrame::Clipboard { .. }) => {}
                 }
@@ -530,4 +535,10 @@ pub(crate) fn dim_for(cols: u16, rows: u16) -> LocalDim {
         cols: cols.into(),
         rows: rows.into(),
     }
+}
+
+/// Test helper alias for [`dim_for`].
+#[cfg(test)]
+pub(crate) fn test_dim(cols: u16, rows: u16) -> LocalDim {
+    dim_for(cols, rows)
 }

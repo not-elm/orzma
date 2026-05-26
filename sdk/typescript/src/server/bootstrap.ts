@@ -160,12 +160,14 @@ export async function handleConnection(
 
   // The PTY env carries the addressing tuple; bail early if anything required
   // is missing rather than letting the handler hit broken Pane methods.
+  // NOTE: OZMUX_WINDOW_ID was removed when Window was collapsed into Session;
+  // OZMUX_SESSION_ID is now the required addressing env var.
   const paneId = frame.env.OZMUX_PANE_ID ?? "";
-  const windowId = frame.env.OZMUX_WINDOW_ID ?? "";
   const sessionId = frame.env.OZMUX_SESSION_ID ?? null;
-  if (!paneId || !windowId) {
+  const windowId = sessionId ?? "";
+  if (!paneId || !sessionId) {
     stderr.write(
-      Buffer.from("ozmux: missing OZMUX_PANE_ID / OZMUX_WINDOW_ID\n"),
+      Buffer.from("ozmux: missing OZMUX_PANE_ID / OZMUX_SESSION_ID\n"),
     );
     socket.write(encodeFrame({ type: "exit", code: 2 }));
     return;
