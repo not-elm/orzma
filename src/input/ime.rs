@@ -11,7 +11,7 @@ use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
-use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::ui::UiGlobalTransform;
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_terminal::{TerminalKey, TerminalModifiers};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
@@ -128,7 +128,7 @@ pub(crate) fn ime_policy_system(
     registry: Res<ActivityEntityRegistry>,
     terminal_q: Query<(), With<TerminalActivityMarker>>,
     copy_mode_q: Query<(), With<CopyModeState>>,
-    anchor_q: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    anchor_q: Query<(&UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     mut window_q: Query<&mut Window, With<PrimaryWindow>>,
 ) {
@@ -159,13 +159,13 @@ pub(crate) fn ime_policy_system(
     // row-below offset — that offset is only used for the inline
     // overlay; the OS candidate window has its own placement logic
     // relative to this point).
-    let Ok((_node, ui_xform, grid)) = anchor_q.get(entity) else {
+    let Ok((ui_xform, grid)) = anchor_q.get(entity) else {
         return;
     };
     let scale = window.resolution.scale_factor();
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
-    let cursor_cell = grid.cursor.as_ref().cloned().unwrap_or_default();
+    let cursor_cell = grid.cursor.clone().unwrap_or_default();
     let host_origin_phys = ui_xform.translation * scale;
     let cell_origin_phys = host_origin_phys
         + Vec2::new(
