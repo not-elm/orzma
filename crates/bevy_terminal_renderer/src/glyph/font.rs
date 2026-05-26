@@ -5,33 +5,17 @@ use ttf_parser::Face as TtfFace;
 
 /// Error returned by `TerminalFonts::from_bytes` when one of the supplied
 /// per-face byte buffers fails `ab_glyph::FontArc::try_from_vec`.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum FontLoadError {
     /// `FontArc::try_from_vec` rejected the bytes for this face.
+    #[error("ab_glyph rejected {face:?} face: {source}")]
     ParseFailed {
         /// Which face's bytes were invalid.
         face: FontFace,
         /// Underlying ab_glyph error.
+        #[source]
         source: ab_glyph::InvalidFont,
     },
-}
-
-impl std::fmt::Display for FontLoadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ParseFailed { face, source } => {
-                write!(f, "ab_glyph rejected {:?} face: {}", face, source)
-            }
-        }
-    }
-}
-
-impl std::error::Error for FontLoadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ParseFailed { source, .. } => Some(source),
-        }
-    }
 }
 
 /// Font size in CSS pixels; multiplied by the PrimaryWindow's
