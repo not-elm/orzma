@@ -160,7 +160,7 @@ impl TerminalFonts {
     /// physical pixel size. See [`CellMetrics`] for individual field semantics.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
         let face = TtfFace::parse(self.regular_ttf_bytes, 0)
-            .expect("JetBrainsMono-Regular ttf-parser parse");
+            .expect("IosevkaTermNerdFontMono-Regular ttf-parser parse");
         // NOTE: cast to i32 before subtraction. ascender() / descender() return
         // i16, and (asc − desc) can exceed i16::MAX for fonts where the
         // typographic envelope is unusually tall. JBM (1320) is safe; a
@@ -229,7 +229,7 @@ impl TerminalFonts {
     /// agree on the actual rendering scale.
     pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
         let face = TtfFace::parse(self.regular_ttf_bytes, 0)
-            .expect("JetBrainsMono-Regular ttf-parser parse");
+            .expect("IosevkaTermNerdFontMono-Regular ttf-parser parse");
         let asc = i32::from(face.ascender());
         let desc = i32::from(face.descender());
         let upem = f32::from(face.units_per_em());
@@ -240,15 +240,23 @@ impl TerminalFonts {
 
 impl Default for TerminalFonts {
     fn default() -> Self {
-        const REGULAR_BYTES: &[u8] = include_bytes!("./JetBrainsMono-Regular.ttf");
+        const REGULAR_BYTES: &[u8] =
+            include_bytes!("../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Regular.ttf");
         Self {
-            regular: FontArc::try_from_slice(REGULAR_BYTES).expect("JetBrainsMono-Regular load"),
-            bold: FontArc::try_from_slice(include_bytes!("./JetBrainsMono-Bold.ttf"))
-                .expect("JetBrainsMono-Bold load"),
-            italic: FontArc::try_from_slice(include_bytes!("./JetBrainsMono-Italic.ttf"))
-                .expect("JetBrainsMono-Italic load"),
-            bold_italic: FontArc::try_from_slice(include_bytes!("./JetBrainsMono-BoldItalic.ttf"))
-                .expect("JetBrainsMono-BoldItalic load"),
+            regular: FontArc::try_from_slice(REGULAR_BYTES)
+                .expect("IosevkaTermNerdFontMono-Regular load"),
+            bold: FontArc::try_from_slice(include_bytes!(
+                "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Bold.ttf"
+            ))
+            .expect("IosevkaTermNerdFontMono-Bold load"),
+            italic: FontArc::try_from_slice(include_bytes!(
+                "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-Italic.ttf"
+            ))
+            .expect("IosevkaTermNerdFontMono-Italic load"),
+            bold_italic: FontArc::try_from_slice(include_bytes!(
+                "../../../../assets/fonts/iosevka/IosevkaTermNerdFontMono-BoldItalic.ttf"
+            ))
+            .expect("IosevkaTermNerdFontMono-BoldItalic load"),
             regular_ttf_bytes: REGULAR_BYTES,
         }
     }
@@ -288,31 +296,34 @@ impl FontFace {
 mod tests {
     use super::*;
 
-    /// `cell_metrics_px(12)` returns sensible values for JetBrains Mono Regular 12px.
-    /// Empirical reference values after em-square scaling (JBM 1.32 multiplier):
-    ///   advance(`0`) ≈ 7.2,  line_height ≈ 15.8,  ascent ≈ 12.x,  descent ≈ 3.x
-    /// underline_position is negative (below baseline), underline_thickness is positive.
+    /// `cell_metrics_px(12)` returns sensible values for Iosevka Term Nerd
+    /// Font Mono Regular at 12px. Empirical ranges were measured against the
+    /// bundled TTF; structural invariants (positive ascent, negative
+    /// underline position) are the load-bearing assertions.
     #[test]
-    fn jetbrains_mono_12px_metrics_are_sensible() {
+    fn iosevka_term_mono_12px_metrics_are_sensible() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
+        // Empirical ranges below were measured against the bundled
+        // IosevkaTermNerdFontMono-Regular.ttf. Update if the font is
+        // re-vendored.
         assert!(
-            m.advance_phys > 7.0 && m.advance_phys < 7.5,
-            "advance_phys = {} (CSS/Terminal.app range)",
+            m.advance_phys > 5.7 && m.advance_phys < 6.3,
+            "advance_phys = {} (Iosevka Term Mono 12px range)",
             m.advance_phys
         );
         assert!(
-            m.line_height_phys > 15.0 && m.line_height_phys < 17.0,
+            m.line_height_phys > 14.7 && m.line_height_phys < 15.3,
             "line_height_phys = {}",
             m.line_height_phys
         );
         assert!(
-            m.ascent_phys > 11.5 && m.ascent_phys < 13.0,
+            m.ascent_phys > 11.3 && m.ascent_phys < 11.9,
             "ascent_phys = {}",
             m.ascent_phys
         );
         assert!(
-            m.descent_phys > 2.5 && m.descent_phys < 4.5,
+            m.descent_phys > 3.1 && m.descent_phys < 3.7,
             "descent_phys = {}",
             m.descent_phys
         );
@@ -328,10 +339,10 @@ mod tests {
         );
     }
 
-    /// JBM at 12 px must report a non-zero `max_overflow_phys` because
-    /// glyphs like `W` rasterize past the floored advance.
+    /// Iosevka Term Mono at 12 px must report a non-zero `max_overflow_phys`
+    /// because glyphs like `W` rasterize past the floored advance.
     #[test]
-    fn cell_metrics_px_reports_nonzero_max_overflow_for_jbm() {
+    fn cell_metrics_px_reports_nonzero_max_overflow() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
         assert!(
