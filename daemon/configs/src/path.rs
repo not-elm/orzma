@@ -4,7 +4,7 @@
 
 use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) const ENV_OZMUX_CONFIG: &str = "OZMUX_CONFIG";
 pub(crate) const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
@@ -49,10 +49,32 @@ pub(crate) fn resolve_config_path(env: &dyn Env) -> OzmuxConfigsResult<PathBuf> 
     Err(OzmuxConfigsError::HomeDirNotFound)
 }
 
+/// Expands a leading `~` or `~/` in `path` to the home directory.
+///
+/// Returns:
+/// - `Some(path)` unchanged if `path` does not start with `~`.
+/// - `Some(home)` if `path` is exactly `~` and `env.home_dir()` is `Some`.
+/// - `Some(home.join(rest))` if `path` starts with `~/` and home is `Some`.
+/// - `None` if the path starts with `~` but home is `None`, or if the path
+///   starts with `~<name>` (other-user form — unsupported).
+pub fn expand_user_path(path: &Path, env: &dyn Env) -> Option<PathBuf> {
+    let s = path.to_string_lossy();
+    if !s.starts_with('~') {
+        return Some(path.to_path_buf());
+    }
+    let home = env.home_dir()?;
+    if s == "~" {
+        return Some(home);
+    }
+    let rest = s.strip_prefix("~/")?;
+    Some(home.join(rest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::path::Path;
 
     struct FakeEnv {
         vars: HashMap<String, String>,
@@ -127,5 +149,55 @@ mod tests {
         };
         let err = resolve_config_path(&env).unwrap_err();
         assert!(matches!(err, OzmuxConfigsError::HomeDirNotFound));
+    }
+
+    #[test]
+    fn expand_user_path_passes_through_absolute_path() {
+        let env = FakeEnv {
+            vars: HashMap::new(),
+            home: Some(PathBuf::from("/home/u")),
+        };
+        let expanded = expand_user_path(Path::new("/etc/fonts/Iosevka.ttf"), &env);
+        assert_eq!(expanded, Some(PathBuf::from("/etc/fonts/Iosevka.ttf")));
+    }
+
+    #[test]
+    fn expand_user_path_substitutes_tilde_with_home() {
+        let env = FakeEnv {
+            vars: HashMap::new(),
+            home: Some(PathBuf::from("/home/u")),
+        };
+        let expanded = expand_user_path(Path::new("~/.fonts/Iosevka.ttf"), &env);
+        assert_eq!(expanded, Some(PathBuf::from("/home/u/.fonts/Iosevka.ttf")));
+    }
+
+    #[test]
+    fn expand_user_path_bare_tilde_resolves_to_home() {
+        let env = FakeEnv {
+            vars: HashMap::new(),
+            home: Some(PathBuf::from("/home/u")),
+        };
+        let expanded = expand_user_path(Path::new("~"), &env);
+        assert_eq!(expanded, Some(PathBuf::from("/home/u")));
+    }
+
+    #[test]
+    fn expand_user_path_returns_none_when_tilde_with_no_home_dir() {
+        let env = FakeEnv {
+            vars: HashMap::new(),
+            home: None,
+        };
+        let expanded = expand_user_path(Path::new("~/.fonts/Iosevka.ttf"), &env);
+        assert_eq!(expanded, None);
+    }
+
+    #[test]
+    fn expand_user_path_returns_none_for_other_user_tilde() {
+        let env = FakeEnv {
+            vars: HashMap::new(),
+            home: Some(PathBuf::from("/home/u")),
+        };
+        let expanded = expand_user_path(Path::new("~bob/.fonts/Iosevka.ttf"), &env);
+        assert_eq!(expanded, None, "~user/... form is not supported");
     }
 }
