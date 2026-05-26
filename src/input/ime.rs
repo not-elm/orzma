@@ -4,6 +4,9 @@
 //! its UTF-8-safe caret offset. Bevy window event handling and
 //! `Ime::Commit` forwarding are added in later tasks.
 
+use bevy::ecs::resource::Resource;
+use bevy::window::Ime;
+
 #[derive(Debug)]
 pub(crate) struct Composition {
     text: String,
@@ -46,8 +49,57 @@ impl Composition {
     }
 }
 
+/// IME composition state for the primary window.
+///
+/// `None` = no active preedit (overlay hidden, key dispatch normal).
+/// `Some(_)` = a non-empty preedit is showing and key dispatch is
+/// suppressed.
+///
+/// The window's `ime_enabled` field is the single source of truth for
+/// whether IME is allowed; this resource intentionally does not mirror
+/// it.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct ImeState(Option<Composition>);
+
+impl ImeState {
+    pub(crate) fn is_composing(&self) -> bool {
+        self.0.is_some()
+    }
+
+    pub(crate) fn composition(&self) -> Option<&Composition> {
+        self.0.as_ref()
+    }
+}
+
+/// Pure-function state machine: applies one `Ime` event to `state` and
+/// returns the text that should be committed to the PTY (only set on
+/// `Ime::Commit`).
+///
+/// Keeping this pure makes the state transitions unit-testable without
+/// a Bevy `App` harness; the Bevy system in `read_ime_events` is a thin
+/// wrapper around this.
+pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
+    match event {
+        Ime::Enabled { .. } => None,
+        Ime::Disabled { .. } => {
+            state.0 = None;
+            None
+        }
+        Ime::Preedit { value, cursor, .. } => {
+            state.0 = Composition::try_new(value.clone(), *cursor);
+            None
+        }
+        Ime::Commit { value, .. } => {
+            state.0 = None;
+            Some(value.clone())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::entity::Entity;
+    use bevy::window::Ime;
     use super::*;
 
     #[test]
@@ -94,6 +146,110 @@ mod tests {
     #[test]
     fn try_new_with_none_caret_keeps_none() {
         let c = Composition::try_new("hi".into(), None).unwrap();
+        assert_eq!(c.caret(), None);
+    }
+
+    fn dummy_window() -> Entity {
+        Entity::from_bits(1)
+    }
+
+    #[test]
+    fn apply_enabled_is_noop() {
+        let mut s = ImeState::default();
+        let out = apply_event(&mut s, &Ime::Enabled { window: dummy_window() });
+        assert!(out.is_none());
+        assert!(!s.is_composing());
+    }
+
+    #[test]
+    fn apply_nonempty_preedit_sets_composition() {
+        let mut s = ImeState::default();
+        let event = Ime::Preedit {
+            window: dummy_window(),
+            value: "こんに".into(),
+            cursor: Some((3, 3)),
+        };
+        let out = apply_event(&mut s, &event);
+        assert!(out.is_none());
+        let c = s.composition().expect("composition set");
+        assert_eq!(c.text(), "こんに");
+        assert_eq!(c.caret(), Some(3));
+    }
+
+    #[test]
+    fn apply_empty_preedit_clears_composition() {
+        let mut s = ImeState::default();
+        apply_event(
+            &mut s,
+            &Ime::Preedit {
+                window: dummy_window(),
+                value: "ab".into(),
+                cursor: Some((1, 1)),
+            },
+        );
+        assert!(s.is_composing());
+
+        apply_event(
+            &mut s,
+            &Ime::Preedit {
+                window: dummy_window(),
+                value: String::new(),
+                cursor: None,
+            },
+        );
+        assert!(!s.is_composing());
+    }
+
+    #[test]
+    fn apply_disabled_clears_composition() {
+        let mut s = ImeState::default();
+        apply_event(
+            &mut s,
+            &Ime::Preedit {
+                window: dummy_window(),
+                value: "ab".into(),
+                cursor: Some((1, 1)),
+            },
+        );
+        apply_event(&mut s, &Ime::Disabled { window: dummy_window() });
+        assert!(!s.is_composing());
+    }
+
+    #[test]
+    fn apply_commit_returns_text_and_clears_composition() {
+        let mut s = ImeState::default();
+        apply_event(
+            &mut s,
+            &Ime::Preedit {
+                window: dummy_window(),
+                value: "ab".into(),
+                cursor: Some((1, 1)),
+            },
+        );
+        let out = apply_event(
+            &mut s,
+            &Ime::Commit {
+                window: dummy_window(),
+                value: "こんにちは".into(),
+            },
+        );
+        assert_eq!(out.as_deref(), Some("こんにちは"));
+        assert!(!s.is_composing());
+    }
+
+    #[test]
+    fn apply_cursor_none_preedit_clears_caret() {
+        let mut s = ImeState::default();
+        apply_event(
+            &mut s,
+            &Ime::Preedit {
+                window: dummy_window(),
+                value: "ab".into(),
+                cursor: None,
+            },
+        );
+        let c = s.composition().unwrap();
+        assert_eq!(c.text(), "ab");
         assert_eq!(c.caret(), None);
     }
 }
