@@ -6,8 +6,101 @@
 //! added in later tasks; this commit only ships the pure function and
 //! its unit tests.
 
+use bevy::app::{App, Plugin, Startup};
+use bevy::color::Color;
+use bevy::ecs::component::Component;
+use bevy::ecs::hierarchy::ChildOf;
+use bevy::ecs::system::Commands;
 use bevy::math::Vec2;
+use bevy::prelude::default;
+use bevy::text::{TextColor, TextSpan, Underline, UnderlineColor};
+use bevy::ui::widget::Text;
+use bevy::ui::{BackgroundColor, Display, GlobalZIndex, Node, PositionType, Val};
 use bevy_terminal_renderer::CellMetrics;
+
+/// Marker for the singleton IME preedit overlay root entity.
+#[derive(Component)]
+pub(crate) struct ImeOverlayNode;
+
+/// Marker for the pre-caret `TextSpan` child of the overlay root.
+#[derive(Component)]
+pub(crate) struct ImePreCaretSpan;
+
+/// Marker for the post-caret `TextSpan` child of the overlay root.
+#[derive(Component)]
+pub(crate) struct ImePostCaretSpan;
+
+/// Marker for the 1-px sibling `Node` that draws the caret bar.
+#[derive(Component)]
+pub(crate) struct ImeCaretBar;
+
+/// Z-index above copy-mode indicator's local z-ordering; floats the
+/// overlay above all other UI nodes.
+const IME_OVERLAY_Z: i32 = 200;
+
+/// Bevy plugin that spawns the IME overlay entity tree at Startup.
+/// The `position_ime_overlay` PostUpdate system is added in a later task.
+pub struct ImeOverlayPlugin;
+
+impl Plugin for ImeOverlayPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, spawn_ime_overlay_once);
+    }
+}
+
+/// Spawns the single overlay entity tree.
+fn spawn_ime_overlay_once(mut commands: Commands) {
+    let root = commands
+        .spawn((
+            Text::new(""),
+            Node {
+                position_type: PositionType::Absolute,
+                display: Display::None,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                ..default()
+            },
+            GlobalZIndex(IME_OVERLAY_Z),
+            ImeOverlayNode,
+        ))
+        .id();
+
+    // TODO: bind TextColor / UnderlineColor / BackgroundColor to theme
+    // tokens (`text-foreground` / `bg-background`) once the
+    // theme-token helper is integrated. Placeholder white for now.
+    let color = Color::WHITE;
+
+    commands.spawn((
+        TextSpan::new(""),
+        TextColor(color),
+        Underline,
+        UnderlineColor(color),
+        ImePreCaretSpan,
+        ChildOf(root),
+    ));
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            width: Val::Px(1.0),
+            height: Val::Px(16.0), // TODO: refined at runtime from CellMetrics
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            ..default()
+        },
+        BackgroundColor(color),
+        ImeCaretBar,
+        ChildOf(root),
+    ));
+    commands.spawn((
+        TextSpan::new(""),
+        TextColor(color),
+        Underline,
+        UnderlineColor(color),
+        ImePostCaretSpan,
+        ChildOf(root),
+    ));
+}
 
 /// Computes the overlay's top-left logical-pixel position relative to
 /// the window origin. Caller is responsible for writing this into
