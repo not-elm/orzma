@@ -7,6 +7,8 @@
 use bevy::ecs::resource::Resource;
 use bevy::window::Ime;
 
+/// Validated snapshot of a preedit string and its UTF-8-safe caret
+/// position.
 #[derive(Debug)]
 pub(crate) struct Composition {
     text: String,
@@ -98,9 +100,9 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use bevy::ecs::entity::Entity;
     use bevy::window::Ime;
-    use super::*;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
