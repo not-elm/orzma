@@ -287,13 +287,24 @@ impl TerminalService {
 
     /// Returns all current terminal titles, keyed by activity id.
     pub async fn all_titles(&self) -> HashMap<ActivityId, String> {
-        let inner = self.inner.lock().await;
-        inner
-            .handles
-            .iter()
-            .filter_map(|(aid, h)| {
-                let state = h.vt_state.lock().expect("vt_state poisoned");
-                state.title.clone().map(|t| (aid.clone(), t))
+        // NOTE: Hold the outer tokio::Mutex only long enough to clone the
+        // per-handle Arc<Mutex<VtState>>. Releasing the outer lock before
+        // iterating prevents `all_titles` from serializing every other
+        // TerminalService op (write/resize/scroll/kill/etc.) behind a routine
+        // status-bar poll.
+        let snapshots: Vec<(ActivityId, Arc<std::sync::Mutex<crate::vt::bridge::VtState>>)> = {
+            let inner = self.inner.lock().await;
+            inner
+                .handles
+                .iter()
+                .map(|(aid, h)| (aid.clone(), h.vt_state.clone()))
+                .collect()
+        };
+        snapshots
+            .into_iter()
+            .filter_map(|(aid, vt_state)| {
+                let state = vt_state.lock().expect("vt_state poisoned");
+                state.title.clone().map(|t| (aid, t))
             })
             .collect()
     }

@@ -17,11 +17,12 @@ impl Plugin for OzmuxBootstrapPlugin {
 
 pub(crate) fn bootstrap(mut commands: Commands, mut mux: ResMut<Multiplexer>) {
     let (sid, _pid, _aid) = mux.create_session(Some("default".into()));
-    commands.spawn((
-        SessionEntityId(sid),
-        AttachedSession,
-        Name::new("Session:default"),
-    ));
+    let bevy_name = mux
+        .sessions
+        .get(&sid)
+        .map(|s| s.name.clone())
+        .unwrap_or_else(|| "default".to_string());
+    commands.spawn((SessionEntityId(sid), AttachedSession, Name::new(bevy_name)));
 }
 
 #[cfg(test)]

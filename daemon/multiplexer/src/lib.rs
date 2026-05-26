@@ -60,6 +60,16 @@ impl MultiplexerService {
     /// Create a Session containing one initial Pane with one initial Terminal Activity.
     /// Returns `(SessionId, PaneId, ActivityId)`.
     pub fn create_session(&mut self, name: Option<String>) -> (SessionId, PaneId, ActivityId) {
+        // NOTE: skip over any externally-inserted SessionIds (callers can
+        // construct `SessionId(n)` via the public tuple field). This keeps
+        // create_session collision-free even if a test or recovery path
+        // inserted a session manually.
+        while self.sessions.contains_key(&SessionId(self.next_session_id)) {
+            self.next_session_id = self
+                .next_session_id
+                .checked_add(1)
+                .expect("SessionId u32 counter overflow");
+        }
         let session_id = SessionId(self.next_session_id);
         self.next_session_id = self
             .next_session_id
@@ -69,7 +79,11 @@ impl MultiplexerService {
         let pane_id = PaneId::new();
         let activity = Activity::terminal(ActivityId::new());
         let activity_id = activity.id.clone();
-        let session_name = name.unwrap_or_else(|| format!("Session{}", self.sessions.len() + 1));
+        // NOTE: default name uses the monotonic session id, not sessions.len()+1.
+        // The len-based scheme generated duplicate names after a close-then-create
+        // cycle (closing SessionId(0) makes len==1, the next create then mints
+        // "Session2" even though a "Session2" may already exist).
+        let session_name = name.unwrap_or_else(|| format!("Session{}", session_id.0 + 1));
         let session =
             Session::new_with_initial(session_id, session_name, pane_id.clone(), activity);
 
@@ -138,6 +152,34 @@ impl MultiplexerService {
             .ok_or_else(|| MultiplexerError::PaneNotFound(pid.clone()))
     }
 
+    /// Break an Activity out of its current Pane into a fresh Pane within the
+    /// same Session, maintaining the `pane_owner_session` invariant.
+    ///
+    /// This is the recommended entry point for `Action::BreakActivityToPane`
+    /// — calling `Session::break_activity_to_pane` directly leaves the new
+    /// pane absent from `pane_owner_session`.
+    pub fn break_activity_to_pane(
+        &mut self,
+        sid: &SessionId,
+        target_pane_id: &PaneId,
+        aid: &ActivityId,
+        new_pane_id: PaneId,
+        side: session::Side,
+        orientation: SplitOrientation,
+    ) -> MultiplexerResult<()> {
+        self.with_session_or_404(sid, |s| {
+            s.break_activity_to_pane(
+                target_pane_id,
+                aid,
+                new_pane_id.clone(),
+                side,
+                orientation,
+            )
+        })?;
+        self.pane_owner_session.insert(new_pane_id, *sid);
+        Ok(())
+    }
+
     /// Remove a Session and return the activities and pane ids the caller must
     /// clean up.
     pub fn close_session_data(
@@ -184,6 +226,36 @@ mod tests {
         assert_eq!(a, SessionId(0));
         assert_eq!(b, SessionId(1));
         assert_eq!(c, SessionId(2));
+    }
+
+    #[test]
+    fn create_session_skips_past_externally_inserted_ids() {
+        let mut svc = MultiplexerService::default();
+        // Mint Session 0 normally.
+        let (a, _, _) = svc.create_session(None);
+        assert_eq!(a, SessionId(0));
+        // Simulate external code constructing a session at id 1 directly (test,
+        // restore-from-snapshot, etc.) and inserting it into the store.
+        let externally_placed_id = SessionId(1);
+        let externally_placed_pane = PaneId::new();
+        let externally_placed = Session::new_with_initial(
+            externally_placed_id,
+            "external".into(),
+            externally_placed_pane.clone(),
+            Activity::terminal(ActivityId::new()),
+        );
+        svc.sessions.insert(externally_placed_id, externally_placed);
+        svc.pane_owner_session
+            .insert(externally_placed_pane, externally_placed_id);
+        // Now `create_session` must NOT mint id 1 (would overwrite the
+        // external one in HashMap::insert). It should skip to id 2.
+        let (next, _, _) = svc.create_session(None);
+        assert_eq!(
+            next,
+            SessionId(2),
+            "create_session must skip over externally-inserted ids"
+        );
+        assert_eq!(svc.sessions.len(), 3, "no session was overwritten");
     }
 
     #[test]

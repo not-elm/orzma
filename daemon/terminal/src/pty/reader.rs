@@ -27,7 +27,21 @@ pub(crate) fn spawn_pty_reader(
                 Ok(0) => break,
                 Ok(n) => {
                     let chunk = buf[..n].to_vec();
-                    let _ = vt_chunk_tx.try_send(Bytes::copy_from_slice(&chunk));
+                    // NOTE: blocking_send applies backpressure to the read thread
+                    // when the bounded vt_chunk channel is full. `try_send` would
+                    // silently drop bytes under sustained PTY output (cat large
+                    // file, busy TUI repaint), causing terminal display corruption
+                    // since the VT parser never sees the dropped chunks. The OS
+                    // reader thread is synchronous and is the right place to
+                    // exert backpressure all the way back to the PTY.
+                    // Err here means the channel is closed (bridge task exited);
+                    // break the loop in that case.
+                    if vt_chunk_tx
+                        .blocking_send(Bytes::copy_from_slice(&chunk))
+                        .is_err()
+                    {
+                        break;
+                    }
                     scrollback.push(&chunk);
                     let _ = event_sender.send(TerminalEvent::Data { buffer: chunk });
                 }

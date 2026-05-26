@@ -22,7 +22,13 @@ pub(crate) struct TerminalHandle {
     vt_chunk_tx: mpsc::Sender<Bytes>,
     event_sender: broadcast::Sender<TerminalEvent>,
     scrollback: ScrollbackBuffer,
-    _child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    /// Kills the child process on Drop. Required because the PTY reader OS
+    /// thread holds its own clone of `vt_chunk_tx` (so dropping this handle
+    /// alone does not close the channel) and reads from a cloned master fd
+    /// (so dropping `master` alone does not interrupt its blocking `read()`).
+    /// Children that ignore SIGHUP (e.g. `nohup`) would otherwise keep the
+    /// reader thread + bridge task + child tree alive indefinitely.
+    child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
 
     /// Bundled VT state (Term + Parser + FrameRing + pending_user_input),
     /// wrapped in `std::sync::Mutex` for short-held locks per PTY chunk in
@@ -102,7 +108,7 @@ impl TerminalHandle {
             event_sender,
             writer: Mutex::new(writer),
             master: Mutex::new(master),
-            _child_killer: child_killer,
+            child_killer,
             vt_state,
             _reply_tx: reply_tx,
             _control_tx: control_tx,
@@ -192,5 +198,22 @@ impl TerminalHandle {
     #[inline]
     pub fn snapshot(&self) -> Vec<u8> {
         self.scrollback.snapshot()
+    }
+}
+
+impl Drop for TerminalHandle {
+    fn drop(&mut self) {
+        // SAFETY: Forces PTY hangup → OS reader thread's blocking `read()` returns
+        // 0/Err → reader exits → its `vt_chunk_tx` clone drops → the bridge task's
+        // `vt_chunk_rx.recv()` returns None → the bridge task exits cleanly.
+        // Without this, children that ignore SIGHUP keep every link in that
+        // chain alive (reader thread, bridge task, master fd, child process tree).
+        if let Err(err) = self.child_killer.kill() {
+            tracing::warn!(
+                target: "ozmux_terminal::handle",
+                ?err,
+                "TerminalHandle::drop: child_killer.kill() failed (child may have already exited)"
+            );
+        }
     }
 }

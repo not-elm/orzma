@@ -48,6 +48,16 @@ pub(crate) fn dispatch_focused_key(
     // sees the same modifier snapshot. Read once outside the loop.
     let mods = current_modifiers(&keys);
     let mut just_exited: HashSet<Entity> = HashSet::new();
+    // NOTE: Bevy command-flush race guard. dispatch_new_session and
+    // dispatch_focus_session queue Commands that mutate the AttachedSession
+    // marker; the deferred flush only runs after this system returns. If two
+    // marker-mutating actions fire in the same Update tick (e.g., user
+    // double-taps Cmd+R), both would read the same pre-flush attached entity,
+    // resulting in zero or multiple AttachedSession entities after flush —
+    // breaking the `exactly one attached` invariant relied on by
+    // attached_sid_q.single() and rebuild_structure_on_change. Drop the
+    // second-and-onward marker mutations in this frame.
+    let mut marker_dirty_this_frame = false;
 
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
@@ -61,8 +71,21 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        let Ok(attached_sid) = attached_sid_q.single() else {
-            continue;
+        let attached_sid = match attached_sid_q.single() {
+            Ok(sid) => sid,
+            Err(err) => {
+                // NOTE: silently dropping keystrokes here would be invisible to
+                // the user. The invariant 'exactly one entity carries
+                // AttachedSession' is enforced by bootstrap + dispatch_new_session
+                // + dispatch_focus_session; if it's violated we want a loud
+                // signal in the log so the failure mode is observable.
+                tracing::warn!(
+                    target: "ozmux_gui::input",
+                    ?err,
+                    "attached_sid_q.single() failed; dropping keystroke (AttachedSession invariant violated)"
+                );
+                continue;
+            }
         };
         let session_id = attached_sid.0;
 
@@ -141,6 +164,7 @@ pub(crate) fn dispatch_focused_key(
                     &sessions_q,
                     &attached_q,
                     &registry,
+                    &mut marker_dirty_this_frame,
                 );
                 continue;
             }
@@ -268,6 +292,7 @@ fn execute_action(
     sessions_q: &Query<(Entity, &SessionEntityId)>,
     attached_q: &Query<Entity, With<AttachedSession>>,
     registry: &ActivityEntityRegistry,
+    marker_dirty_this_frame: &mut bool,
 ) {
     match &action {
         Action::EnterCopyMode => {
@@ -279,9 +304,26 @@ fn execute_action(
             }
         }
         Action::NewSession => {
+            if *marker_dirty_this_frame {
+                tracing::warn!(
+                    target: "ozmux_gui::input",
+                    "skipping NewSession: AttachedSession marker already mutated this frame (would race the deferred Bevy command flush)"
+                );
+                return;
+            }
+            *marker_dirty_this_frame = true;
             dispatch_new_session(commands, mux, attached_q);
         }
         Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => {
+            if *marker_dirty_this_frame {
+                tracing::warn!(
+                    target: "ozmux_gui::input",
+                    ?action,
+                    "skipping FocusSession*: AttachedSession marker already mutated this frame (would race the deferred Bevy command flush)"
+                );
+                return;
+            }
+            *marker_dirty_this_frame = true;
             dispatch_focus_session(commands, mux, sessions_q, attached_q, &action);
         }
         _ => {
@@ -374,10 +416,15 @@ fn dispatch_new_session(
             .remove::<AttachedSession>();
     }
 
+    let bevy_name = mux
+        .sessions
+        .get(&sid)
+        .map(|s| s.name.clone())
+        .unwrap_or_else(|| format!("Session#{}", sid.0));
     commands.spawn((
         SessionEntityId(sid),
         AttachedSession,
-        Name::new(format!("Session:{}", sid.0)),
+        Name::new(bevy_name),
     ));
     mux.set_changed();
 }
@@ -1206,5 +1253,74 @@ mod tests {
         assert_ne!(new_attached_sid, bootstrap_sid);
         let mux = app.world().resource::<Multiplexer>();
         assert_eq!(mux.sessions.len(), 2);
+    }
+
+    /// Two `NewSession` actions in a single Update tick must NOT both queue
+    /// `commands.spawn((..., AttachedSession))`. Without the
+    /// `marker_dirty_this_frame` guard, both invocations would observe the
+    /// same pre-flush attached entity, each queue a fresh spawn-with-marker,
+    /// and after the deferred command flush there would be two entities
+    /// carrying `AttachedSession` — breaking `single()` for every downstream
+    /// system and silently freezing keyboard input.
+    #[test]
+    fn two_new_session_actions_in_one_frame_keep_marker_invariant() {
+        let (mut app, _window_entity) = make_app(true);
+
+        assert_eq!(count_session_entities(&mut app), 1);
+        assert_eq!(count_attached_session_entities(&mut app), 1);
+
+        // Simulate the dispatch loop calling execute_action twice in one tick
+        // by registering a system that invokes it twice with the same shared
+        // `marker_dirty_this_frame` flag.
+        let id = app.world_mut().register_system(
+            |mut commands: Commands,
+             mut mux: ResMut<Multiplexer>,
+             sessions_q: Query<(Entity, &SessionEntityId)>,
+             attached_q: Query<Entity, With<AttachedSession>>,
+             registry: Res<crate::ui::registry::ActivityEntityRegistry>| {
+                let mut marker_dirty = false;
+                let dummy_session = ozmux_multiplexer::SessionId(0);
+                super::execute_action(
+                    ozmux_configs::shortcuts::Action::NewSession,
+                    &mut commands,
+                    &mut mux,
+                    dummy_session,
+                    &sessions_q,
+                    &attached_q,
+                    &registry,
+                    &mut marker_dirty,
+                );
+                super::execute_action(
+                    ozmux_configs::shortcuts::Action::NewSession,
+                    &mut commands,
+                    &mut mux,
+                    dummy_session,
+                    &sessions_q,
+                    &attached_q,
+                    &registry,
+                    &mut marker_dirty,
+                );
+            },
+        );
+        let _ = app.world_mut().run_system(id);
+        app.update();
+
+        // Exactly one new session entity spawned, exactly one attached marker.
+        assert_eq!(
+            count_attached_session_entities(&mut app),
+            1,
+            "AttachedSession marker invariant preserved across same-frame double NewSession"
+        );
+        assert_eq!(
+            count_session_entities(&mut app),
+            2,
+            "second NewSession in same frame must NOT spawn a third entity"
+        );
+        let mux = app.world().resource::<Multiplexer>();
+        assert_eq!(
+            mux.sessions.len(),
+            2,
+            "domain Multiplexer also reflects only one extra session"
+        );
     }
 }
