@@ -4,8 +4,14 @@
 //! its UTF-8-safe caret offset. Bevy window event handling and
 //! `Ime::Commit` forwarding are added in later tasks.
 
+use bevy::ecs::message::MessageReader;
+use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
+use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::window::Ime;
+use bevy_terminal::{TerminalKey, TerminalModifiers};
+use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::ui::registry::ActivityEntityRegistry;
 
 /// Validated snapshot of a preedit string and its UTF-8-safe caret
 /// position.
@@ -94,6 +100,43 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
         Ime::Commit { value, .. } => {
             state.0 = None;
             Some(value.clone())
+        }
+    }
+}
+
+/// Drains `Ime` events, mutates `ImeState`, and forwards `Ime::Commit`
+/// text to the attached terminal.
+///
+/// Modifiers are forced to `TerminalModifiers::default()` on commit:
+/// `crates/bevy_terminal/src/input_codec.rs::encode_key` converts
+/// `Text("a")` to control byte `0x01` when `ctrl` is held, which would
+/// silently corrupt a single-ASCII-letter IME commit (e.g., the
+/// macOS Character Viewer emoji path).
+pub(crate) fn read_ime_events(
+    mut events: MessageReader<Ime>,
+    mut state: ResMut<ImeState>,
+    mut commands: Commands,
+    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
+    mux: Res<Multiplexer>,
+    registry: Res<ActivityEntityRegistry>,
+) {
+    for event in events.read() {
+        if let Some(commit_text) = apply_event(&mut state, event) {
+            let Some(sid) = attached_sid_q.iter().next().map(|s| s.0) else {
+                tracing::warn!(
+                    target: "ozmux_gui::ime",
+                    "commit dropped: no attached terminal",
+                );
+                continue;
+            };
+            super::forward_to_active_terminal(
+                &mut commands,
+                &mux,
+                &registry,
+                &sid,
+                TerminalKey::Text(commit_text),
+                TerminalModifiers::default(),
+            );
         }
     }
 }
