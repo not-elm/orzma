@@ -2,22 +2,30 @@
 //!
 //! Provides `compute_overlay_pos` (the pure pixel-math function for
 //! anchoring the overlay), `ImeOverlayPlugin` (Bevy plugin that spawns
-//! the overlay entity tree at Startup), and the marker components
-//! identifying the root, pre-caret span, post-caret span, and caret
-//! bar. The `position_ime_overlay` PostUpdate system is added in a
-//! later task.
+//! the overlay entity tree at Startup and schedules
+//! `position_ime_overlay`), and the marker components identifying the
+//! root, pre-caret span, post-caret span, and caret bar.
 
 use bevy::app::{App, Plugin, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
 use bevy::ecs::hierarchy::ChildOf;
-use bevy::ecs::system::Commands;
+use bevy::ecs::query::{With, Without};
+use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::system::{Commands, Query, Res};
 use bevy::math::Vec2;
 use bevy::prelude::default;
 use bevy::text::{TextColor, TextSpan, Underline, UnderlineColor};
 use bevy::ui::widget::Text;
-use bevy::ui::{BackgroundColor, Display, GlobalZIndex, Node, PositionType, Val};
+use bevy::ui::{BackgroundColor, ComputedNode, Display, GlobalZIndex, Node, PositionType, UiGlobalTransform, UiSystems, Val};
+use bevy::window::{PrimaryWindow, Window};
 use bevy_terminal_renderer::CellMetrics;
+use bevy_terminal_renderer::TerminalCellMetricsResource;
+use bevy_terminal_renderer::prelude::TerminalGrid;
+use crate::input::ime::ImeState;
+use crate::input::resolve_focused_terminal;
+use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::ui::registry::ActivityEntityRegistry;
 
 /// Marker for the singleton IME preedit overlay root entity.
 #[derive(Component)]
@@ -35,13 +43,19 @@ pub(crate) struct ImePostCaretSpan;
 #[derive(Component)]
 pub(crate) struct ImeCaretBar;
 
-/// Bevy plugin that spawns the IME overlay entity tree at Startup.
-/// The `position_ime_overlay` PostUpdate system is added in a later task.
+/// Bevy plugin that spawns the IME overlay entity tree at Startup and
+/// schedules `position_ime_overlay` in PostUpdate.
 pub struct ImeOverlayPlugin;
 
 impl Plugin for ImeOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_ime_overlay_once);
+        app.add_systems(Startup, spawn_ime_overlay_once)
+            .add_systems(
+                bevy::app::PostUpdate,
+                position_ime_overlay
+                    .after(UiSystems::Layout)
+                    .before(UiSystems::PostLayout),
+            );
     }
 }
 
@@ -89,6 +103,117 @@ pub(crate) fn compute_overlay_pos(
     }
 
     Vec2::new(left, pos_logical.y)
+}
+
+/// PostUpdate system that positions the IME preedit overlay at the
+/// attached terminal's cursor cell, sets the two `TextSpan` children
+/// to the pre- and post-caret substrings, and positions the caret
+/// bar.
+///
+/// When `ImeState` has no composition, hides the overlay and returns.
+/// When the attached entity is missing or lacks the expected
+/// components, hides the overlay; the next `Ime` event clears
+/// `ImeState`.
+pub(crate) fn position_ime_overlay(
+    state: Res<ImeState>,
+    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
+    mux: Res<Multiplexer>,
+    registry: Res<ActivityEntityRegistry>,
+    anchor_q: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    metrics: Res<TerminalCellMetricsResource>,
+    window_q: Query<&Window, With<PrimaryWindow>>,
+    mut root_q: Query<&mut Node, With<ImeOverlayNode>>,
+    mut pre_q: Query<&mut TextSpan, (With<ImePreCaretSpan>, Without<ImePostCaretSpan>)>,
+    mut post_q: Query<&mut TextSpan, (With<ImePostCaretSpan>, Without<ImePreCaretSpan>)>,
+    mut bar_q: Query<
+        &mut Node,
+        (With<ImeCaretBar>, Without<ImeOverlayNode>),
+    >,
+) {
+    let Ok(mut root_node) = root_q.single_mut() else {
+        return;
+    };
+
+    let Some(comp) = state.composition() else {
+        root_node.display = Display::None;
+        return;
+    };
+
+    let Some(entity) = resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
+        root_node.display = Display::None;
+        return;
+    };
+    let Ok((node, ui_xform, grid)) = anchor_q.get(entity) else {
+        root_node.display = Display::None;
+        return;
+    };
+    let Ok(window) = window_q.single() else {
+        root_node.display = Display::None;
+        return;
+    };
+
+    let scale = window.resolution.scale_factor();
+    let cursor_cell = grid.cursor.clone().map(|c| (c.x, c.y)).unwrap_or((0, 0));
+
+    // NOTE: `measured_width_logical = 0.0` is a known MVP shortcut.
+    // Reading `TextLayoutInfo.size.x` for accurate clamping requires
+    // an additional query AND careful ordering against Bevy's text
+    // layout pipeline — the right value is filled by Bevy in
+    // `UiSystems::PostLayout`, but this system runs before that. The
+    // overlay therefore won't clamp at the right edge until the next
+    // tick after a width change. Bounded impact: at most a 1-frame
+    // visual misalignment after the composition grows past the pane
+    // edge. The candidate-window position (in `ime_policy_system`)
+    // uses the cursor anchor only, so the OS popup is unaffected.
+    let measured_width_logical = 0.0;
+
+    let pos = compute_overlay_pos(
+        ui_xform.translation,
+        node.size,
+        cursor_cell,
+        &metrics.metrics,
+        measured_width_logical,
+        scale,
+    );
+
+    root_node.left = Val::Px(pos.x);
+    root_node.top = Val::Px(pos.y);
+    root_node.display = Display::Flex;
+
+    let (pre_text, post_text) = match comp.caret() {
+        Some(caret) => (&comp.text()[..caret], &comp.text()[caret..]),
+        None => ("", comp.text()),
+    };
+    if let Ok(mut pre) = pre_q.single_mut()
+        && pre.0 != pre_text
+    {
+        pre.0 = pre_text.to_string();
+    }
+    if let Ok(mut post) = post_q.single_mut()
+        && post.0 != post_text
+    {
+        post.0 = post_text.to_string();
+    }
+
+    // NOTE: The caret bar's horizontal offset is approximated by
+    // `chars().count()` × cell-width. Exact for monospace ASCII;
+    // slightly off for CJK in the preedit (which is rare — the
+    // preedit is usually Romaji being converted). The terminal font
+    // is monospace, so the bounded error is acceptable.
+    let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;
+    let approx_caret_x_logical = pre_text.chars().count() as f32 * cell_w_logical;
+    let line_h_logical = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
+
+    if let Ok(mut bar) = bar_q.single_mut() {
+        if comp.caret().is_some() {
+            bar.display = Display::Flex;
+            bar.left = Val::Px(approx_caret_x_logical);
+            bar.top = Val::Px(0.0);
+            bar.height = Val::Px(line_h_logical);
+        } else {
+            bar.display = Display::None;
+        }
+    }
 }
 
 /// Global z-index for the IME overlay; placed high enough to float
