@@ -1,20 +1,47 @@
 use ab_glyph::{Font, FontArc, ScaleFont};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use ttf_parser::Face as TtfFace;
+
+/// Font size in CSS pixels; multiplied by the PrimaryWindow's
+/// `scale_factor` to obtain the physical pixel size fed to
+/// `cell_metrics_px`.
+pub(crate) const FONT_SIZE_PX: f32 = 12.0;
 
 #[derive(Default)]
 pub struct TerminalFontPlugin;
 
 impl Plugin for TerminalFontPlugin {
     fn build(&self, app: &mut App) {
-        let fonts = TerminalFonts::default();
-        let default_metrics = fonts.cell_metrics_px(12);
-        app.insert_resource(fonts);
-        app.insert_resource(TerminalCellMetricsResource {
-            metrics: default_metrics,
-            phys_font_size: 12,
-        });
+        app.insert_resource(TerminalFonts::default());
+        app.add_systems(Startup, init_cell_metrics_from_primary_window);
     }
+}
+
+/// Inserts `TerminalCellMetricsResource` at Startup based on the
+/// PrimaryWindow's current scale_factor. Bevy 0.18's winit runner writes
+/// the OS-reported scale_factor into the Window during `create_windows()`
+/// (in `resumed()`), which runs before the first `App::update()` — so this
+/// Startup system sees the correct DPR on its very first invocation,
+/// eliminating the 1-frame Retina jitter where the resource would
+/// otherwise hold DPR=1.0 values.
+///
+/// `Single<&Window, With<PrimaryWindow>>` refuses to run the system unless
+/// exactly one matching entity exists; under `MinimalPlugins` (no Window)
+/// the system is silently skipped, and consumers' test helpers continue
+/// to insert `TerminalCellMetricsResource` manually.
+fn init_cell_metrics_from_primary_window(
+    mut commands: Commands,
+    fonts: Res<TerminalFonts>,
+    window: Single<&Window, With<PrimaryWindow>>,
+) {
+    let dpr = window.scale_factor();
+    let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
+    let metrics = fonts.cell_metrics_px(phys_font_size);
+    commands.insert_resource(TerminalCellMetricsResource {
+        metrics,
+        phys_font_size,
+    });
 }
 
 /// Pixel metrics for the regular face at the given physical pixel size.
@@ -59,11 +86,10 @@ pub struct CellMetrics {
 /// `ozmux-gui::resize_terminals_to_node` and any other consumer that needs
 /// the canonical cell pitch / advance values.
 ///
-/// Initialized at `Startup` with DPR=1.0 defaults; updated every time
-/// `update_terminal_material` recomputes metrics (DPR or font-size change).
-/// Consumers reading this Resource on a frame between Startup and the first
-/// `update_terminal_material` invocation will see DPR=1.0 values; the spec
-/// documents this 1-frame jitter as an accepted Tier 1 trade-off.
+/// Inserted at `Startup` by `init_cell_metrics_from_primary_window` based
+/// on the OS-reported scale_factor of the PrimaryWindow; subsequently
+/// rewritten by `update_terminal_material` whenever DPR or font size
+/// changes (e.g. window moved to a different-DPR display).
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct TerminalCellMetricsResource {
     /// Current cell pitch and typographic measurements in physical pixels.
@@ -330,19 +356,36 @@ mod tests {
         assert!((m24.line_height_phys - m12.line_height_phys * 2.0).abs() < 0.5);
     }
 
-    /// `TerminalFontPlugin` inserts `TerminalCellMetricsResource` at Startup
-    /// with the DPR=1.0 / FONT_SIZE_PX=12 default values, so gui-side
-    /// consumers can read non-None metrics on the first frame.
+    /// `init_cell_metrics_from_primary_window` reads the PrimaryWindow's
+    /// scale_factor and inserts a DPR-aware `TerminalCellMetricsResource`.
     #[test]
-    fn font_plugin_inserts_default_cell_metrics_resource() {
+    fn init_cell_metrics_from_primary_window_uses_window_scale_factor() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+
         let mut app = App::new();
+        // NOTE: PrimaryWindow must be spawned BEFORE `app.update()` — the
+        // Startup system uses `Single<&Window, With<PrimaryWindow>>` which
+        // skips the system when zero entities match. If we spawned after
+        // update, the resource would never be inserted and the assertion
+        // below would panic with "should have inserted" — a vacuous pass
+        // disguised as a failure-mode test.
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(2.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+
         app.add_plugins(TerminalFontPlugin);
         app.update();
+
         let res = app
             .world()
             .get_resource::<TerminalCellMetricsResource>()
-            .expect("TerminalCellMetricsResource should be inserted by Startup");
-        assert_eq!(res.phys_font_size, 12);
-        assert!(res.metrics.advance_phys > 7.0 && res.metrics.advance_phys < 7.5);
+            .expect("Startup system should have inserted TerminalCellMetricsResource");
+        assert_eq!(
+            res.phys_font_size, 24,
+            "phys_font_size should be FONT_SIZE_PX (12) * scale_factor (2.0) = 24"
+        );
     }
 }

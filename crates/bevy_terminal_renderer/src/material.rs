@@ -1,7 +1,7 @@
 use crate::{
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
-        font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
+        font::{FONT_SIZE_PX, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
     material::state::TerminalMaterialState,
     schema::{Cell, SelectionKind, TerminalGrid},
@@ -14,6 +14,7 @@ use bevy::{
         storage::ShaderStorageBuffer,
     },
     shader::ShaderRef,
+    window::PrimaryWindow,
 };
 
 mod state;
@@ -297,11 +298,10 @@ fn update_terminal_material(
     )>,
     fonts: Res<TerminalFonts>,
     palette_time: Res<Time>,
-    windows: Query<&Window>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
 ) {
     // TODO: load font size from config.
-    const FONT_SIZE_PX: f32 = 12.0;
 
     // NOTE: This system runs unconditionally — *not* gated by
     // `Changed<TerminalGrid>`. The `mat.params = ...` write at the end is
