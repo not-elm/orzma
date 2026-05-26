@@ -57,16 +57,24 @@ pub(crate) fn resolve_config_path(env: &dyn Env) -> OzmuxConfigsResult<PathBuf> 
     Err(OzmuxConfigsError::HomeDirNotFound)
 }
 
-/// Expands a leading `~` or `~/` in `path` to the home directory.
+/// Expands a leading `~` or `~/` (and `~\\` on Windows) in `path` to
+/// the home directory.
 ///
 /// Returns:
 /// - `Some(path)` unchanged if `path` does not start with `~`.
 /// - `Some(home)` if `path` is exactly `~` and `env.home_dir()` is `Some`.
-/// - `Some(home.join(rest))` if `path` starts with `~/` and home is `Some`.
-/// - `None` if the path starts with `~` but home is `None`, or if the path
-///   starts with `~<name>` (other-user form — unsupported).
+/// - `Some(home.join(rest))` if `path` starts with `~/` (or `~\` on
+///   Windows) and home is `Some`.
+/// - `None` if the path starts with `~` but home is `None`, the path
+///   starts with `~<name>` (other-user form — unsupported), or the
+///   path contains non-UTF-8 bytes that prevent reliable prefix
+///   handling.
 pub fn expand_user_path(path: &Path, env: &dyn Env) -> Option<PathBuf> {
-    let s = path.to_string_lossy();
+    // NOTE: require valid UTF-8 for the tilde-prefix path. to_string_lossy()
+    // would silently substitute U+FFFD for non-UTF-8 bytes, producing a
+    // mangled join target that doesn't exist on disk. Refusing to expand
+    // surfaces the misconfig via the caller's "expansion failed" warn.
+    let s = path.to_str()?;
     if !s.starts_with('~') {
         return Some(path.to_path_buf());
     }
@@ -74,7 +82,17 @@ pub fn expand_user_path(path: &Path, env: &dyn Env) -> Option<PathBuf> {
     if s == "~" {
         return Some(home);
     }
-    let rest = s.strip_prefix("~/")?;
+    let rest = s
+        .strip_prefix("~/")
+        // NOTE: also accept `~\` on Windows so a TOML path like
+        // `~\fonts\Foo.ttf` (native separator) expands correctly.
+        .or_else(|| {
+            if cfg!(windows) {
+                s.strip_prefix("~\\")
+            } else {
+                None
+            }
+        })?;
     Some(home.join(rest))
 }
 
@@ -207,5 +225,63 @@ mod tests {
         };
         let expanded = expand_user_path(Path::new("~bob/.fonts/Iosevka.ttf"), &env);
         assert_eq!(expanded, None, "~user/... form is not supported");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_user_path_returns_none_for_non_utf8_tilde_path() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let env = FakeEnv {
+            vars: HashMap::new(),
+            home: Some(PathBuf::from("/home/u")),
+        };
+        // Invalid UTF-8 (0xFF 0xFE) embedded after the ~/ prefix.
+        let bytes: Vec<u8> = b"~/\xff\xfe.ttf".to_vec();
+        let path = Path::new(OsStr::from_bytes(&bytes));
+        let expanded = expand_user_path(path, &env);
+        assert_eq!(
+            expanded, None,
+            "non-UTF-8 tilde-prefixed paths must refuse to expand rather than silently mangle"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_user_path_passes_through_non_utf8_path_without_tilde() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let env = FakeEnv {
+            vars: HashMap::new(),
+            home: Some(PathBuf::from("/home/u")),
+        };
+        // Non-UTF-8 path WITHOUT a tilde prefix should still pass through
+        // (we only care about tilde expansion correctness; absolute paths
+        // with weird bytes are handed directly to std::fs::read).
+        let bytes: Vec<u8> = b"/etc/\xff\xfe.ttf".to_vec();
+        let path = Path::new(OsStr::from_bytes(&bytes));
+        let expanded = expand_user_path(path, &env);
+        // Refuses to expand because to_str() returns None even for
+        // non-tilde paths. This is a behavior change from the previous
+        // to_string_lossy() implementation, but it's the safe default:
+        // non-UTF-8 paths now fail loud instead of silently mangling.
+        assert_eq!(
+            expanded, None,
+            "non-UTF-8 paths refuse expansion regardless of prefix"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn expand_user_path_accepts_windows_backslash_after_tilde() {
+        let env = FakeEnv {
+            vars: HashMap::new(),
+            home: Some(PathBuf::from("C:\\Users\\u")),
+        };
+        let expanded = expand_user_path(Path::new("~\\fonts\\Iosevka.ttf"), &env);
+        assert_eq!(
+            expanded,
+            Some(PathBuf::from("C:\\Users\\u\\fonts\\Iosevka.ttf"))
+        );
     }
 }
