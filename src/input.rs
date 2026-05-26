@@ -15,6 +15,20 @@ use std::collections::HashSet;
 use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
 
+/// Resolves the focused activity's entity via the attached session →
+/// multiplexer → registry chain. Shared by `dispatch_focused_key`, the
+/// mouse-wheel router, and the IME plugin.
+pub(crate) fn resolve_focused_terminal(
+    attached_sid_q: &Query<&SessionEntityId, With<AttachedSession>>,
+    mux: &Multiplexer,
+    registry: &crate::ui::registry::ActivityEntityRegistry,
+) -> Option<Entity> {
+    let attached = attached_sid_q.iter().next()?;
+    let session = mux.sessions.get(&attached.0)?;
+    let pane = session.pane(&session.active_pane).ok()?;
+    registry.get(&pane.active_activity)
+}
+
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline.
 pub struct OzmuxShortcutPlugin;
 
