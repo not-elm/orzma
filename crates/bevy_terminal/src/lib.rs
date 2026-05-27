@@ -24,8 +24,8 @@ pub use events::{
     TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
 pub use handle::{TerminalHandle, ViIndicatorSnapshot};
-pub use mouse_encode::{CellCoord as CellCoordShared, ProtocolModifiers};
+pub use mouse_encode::ProtocolModifiers;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::TerminalTitle;
-pub use wheel::{CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers, route_wheel};
+pub use wheel::{CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers};
