@@ -214,6 +214,7 @@ mod tests {
     use crate::configs::OzmuxConfigsPlugin;
     use ab_glyph::Font as AbFont;
     use bevy::asset::AssetPlugin;
+    use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
     use bevy_terminal_renderer::TerminalFontPlugin;
     use bevy_terminal_renderer::bundled;
@@ -263,8 +264,6 @@ mod tests {
     }
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
-        use bevy::text::TextPlugin;
-
         let guard = crate::configs::env_guard();
         let env = EnvVarGuard::unset("OZMUX_CONFIG");
         let mut app = App::new();
@@ -344,7 +343,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(bevy::text::TextPlugin::default())
+            .add_plugins(TextPlugin::default())
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -387,7 +386,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(bevy::text::TextPlugin::default())
+            .add_plugins(TextPlugin::default())
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -431,7 +430,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(bevy::text::TextPlugin::default())
+            .add_plugins(TextPlugin::default())
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -499,7 +498,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(bevy::text::TextPlugin::default())
+            .add_plugins(TextPlugin::default())
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
