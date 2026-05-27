@@ -251,6 +251,14 @@ mod tests {
     use super::*;
     use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
 
+    fn make_key(face: FontFace, codepoint: u32, size_px: u16) -> GlyphKey {
+        GlyphKey {
+            face,
+            codepoint,
+            size_px,
+        }
+    }
+
     #[test]
     fn returned_rect_matches_written_pixels() {
         let mut atlas = GlyphAtlas::new(256, 256);
@@ -279,5 +287,57 @@ mod tests {
             .get_or_insert(key, &fonts)
             .expect("cached glyph lookup should succeed");
         assert_eq!(rect, rect2);
+    }
+
+    #[test]
+    fn latin_renders_through_primary() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let key = make_key(FontFace::Regular, u32::from('a'), 24);
+        let rect = atlas
+            .get_or_insert(key, &fonts)
+            .expect("'a' must rasterize");
+        assert!(rect.w > 0 && rect.h > 0, "'a' rect must be non-empty");
+    }
+
+    #[test]
+    fn cjk_renders_through_fallback() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        // 'あ' (HIRAGANA LETTER A, U+3042) — present in UDEVGothic35,
+        // absent from JetBrains Mono. Before this change, returned None.
+        let key = make_key(FontFace::Regular, 0x3042, 24);
+        let rect = atlas
+            .get_or_insert(key, &fonts)
+            .expect("'あ' must rasterize via UDEVGothic35 fallback");
+        assert!(rect.w > 0 && rect.h > 0, "'あ' rect must be non-empty");
+    }
+
+    #[test]
+    fn nerd_font_pua_stays_on_primary() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        // U+E0B0 (Powerline right-pointing arrow) — present in JBM Nerd
+        // Font Mono's PUA. The primary path must resolve it; UDEVGothic35
+        // doesn't carry Nerd Font glyphs, so a fallback-only resolution
+        // would either fail or return a different glyph.
+        let key = make_key(FontFace::Regular, 0xE0B0, 24);
+        let rect = atlas
+            .get_or_insert(key, &fonts)
+            .expect("Powerline glyph U+E0B0 must rasterize via primary");
+        assert!(rect.w > 0 && rect.h > 0, "U+E0B0 rect must be non-empty");
+    }
+
+    #[test]
+    fn unknown_codepoint_returns_none() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        // U+1FFFFE — Plane 1 unassigned, not in either font.
+        let key = make_key(FontFace::Regular, 0x1FFFFE, 24);
+        let result = atlas.get_or_insert(key, &fonts);
+        assert!(
+            result.is_none(),
+            "unknown codepoint must return None (tofu suppression)"
+        );
     }
 }
