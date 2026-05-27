@@ -3,6 +3,7 @@
 //! `bevy_terminal_renderer` schema.
 
 mod bundle;
+mod buttons;
 mod coalescer;
 mod events;
 mod handle;
@@ -18,6 +19,7 @@ mod wheel;
 pub use alacritty_terminal::selection::SelectionType;
 pub use alacritty_terminal::vi_mode::ViMotion;
 pub use bundle::{SpawnOptions, TerminalBundle};
+pub use buttons::{ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind};
 pub use coalescer::Coalescer;
 pub use events::{
     TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalKey, TerminalKeyInput,
