@@ -20,7 +20,7 @@ impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            rebuild_session_ui_on_data_change
+            rebuild_session_ui
                 .run_if(resource_exists_and_changed::<Multiplexer>)
                 .in_set(OzmuxSystems::SessionUi),
         )
@@ -75,7 +75,7 @@ fn sync_active_session(
 /// `session.cells` and replaces every `StructuralNode` descendant of the
 /// session's `SessionUiSubtree` root — Activity hosts are preserved via
 /// `ActivityEntityRegistry` and re-parented.
-fn rebuild_session_ui_on_data_change(
+fn rebuild_session_ui(
     mut commands: Commands,
     mut last_epochs: Local<HashMap<SessionId, u64>>,
     mut registry: ResMut<ActivityEntityRegistry>,
