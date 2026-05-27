@@ -20,7 +20,7 @@ use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, Query, Res};
 use bevy::math::Vec2;
 use bevy::prelude::default;
-use bevy::text::{TextColor, TextFont, TextSpan, Underline, UnderlineColor};
+use bevy::text::{TextColor, TextFont, Underline, UnderlineColor};
 use bevy::ui::widget::Text;
 use bevy::ui::{
     BackgroundColor, ComputedNode, Display, GlobalZIndex, Node, PositionType, UiGlobalTransform,
@@ -71,14 +71,6 @@ impl Plugin for ImeOverlayPlugin {
 /// Marker for the singleton IME preedit overlay root entity.
 #[derive(Component)]
 pub(crate) struct ImeOverlayNode;
-
-/// Marker for the pre-caret `TextSpan` child of the overlay root.
-#[derive(Component)]
-pub(crate) struct ImePreCaretSpan;
-
-/// Marker for the post-caret `TextSpan` child of the overlay root.
-#[derive(Component)]
-pub(crate) struct ImePostCaretSpan;
 
 /// Marker for the 1-px sibling `Node` that draws the caret bar.
 #[derive(Component)]
@@ -141,9 +133,8 @@ pub(crate) fn compute_overlay_pos(
 }
 
 /// PostUpdate system that positions the IME preedit overlay at the
-/// attached terminal's cursor cell, sets the two `TextSpan` children
-/// to the pre- and post-caret substrings, and positions the caret
-/// bar.
+/// attached terminal's cursor cell, writes the composition text into
+/// the overlay's root `Text`, and positions the caret bar.
 ///
 /// When `ImeState` has no composition, hides the overlay and returns.
 /// When the attached entity is missing or lacks the expected
@@ -157,12 +148,10 @@ pub(crate) fn position_ime_overlay(
     anchor_q: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     window_q: Query<&Window, With<PrimaryWindow>>,
-    mut root_q: Query<&mut Node, With<ImeOverlayNode>>,
-    mut pre_q: Query<&mut TextSpan, (With<ImePreCaretSpan>, Without<ImePostCaretSpan>)>,
-    mut post_q: Query<&mut TextSpan, (With<ImePostCaretSpan>, Without<ImePreCaretSpan>)>,
+    mut root_q: Query<(&mut Node, &mut Text), With<ImeOverlayNode>>,
     mut bar_q: Query<&mut Node, (With<ImeCaretBar>, Without<ImeOverlayNode>)>,
 ) {
-    let Ok(mut root_node) = root_q.single_mut() else {
+    let Ok((mut root_node, mut root_text)) = root_q.single_mut() else {
         return;
     };
 
@@ -215,19 +204,12 @@ pub(crate) fn position_ime_overlay(
     root_node.top = Val::Px(pos.y);
     root_node.display = Display::Flex;
 
-    let (pre_text, post_text) = match comp.caret() {
-        Some(caret) => (&comp.text()[..caret], &comp.text()[caret..]),
-        None => ("", comp.text()),
-    };
-    if let Ok(mut pre) = pre_q.single_mut()
-        && pre.0 != pre_text
-    {
-        pre.0 = pre_text.to_string();
-    }
-    if let Ok(mut post) = post_q.single_mut()
-        && post.0 != post_text
-    {
-        post.0 = post_text.to_string();
+    // Write the full composition text to the root. With a single
+    // `Text` entity (no `TextSpan` children), Bevy's text pipeline
+    // shapes through cosmic-text directly and the registered
+    // UDEVGothic35 fallback covers CJK script.
+    if root_text.0 != comp.text() {
+        root_text.0 = comp.text().to_string();
     }
 
     // NOTE: The caret bar's horizontal offset is approximated by
@@ -235,6 +217,10 @@ pub(crate) fn position_ime_overlay(
     // slightly off for CJK in the preedit (which is rare — the
     // preedit is usually Romaji being converted). The terminal font
     // is monospace, so the bounded error is acceptable.
+    let pre_text = match comp.caret() {
+        Some(caret) => &comp.text()[..caret],
+        None => "",
+    };
     let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;
     let approx_caret_x_logical = pre_text.chars().count() as f32 * cell_w_logical;
     let line_h_logical = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
@@ -255,17 +241,38 @@ pub(crate) fn position_ime_overlay(
 /// above all other UI nodes.
 const IME_OVERLAY_Z: i32 = 200;
 
-/// Spawns the single overlay entity tree.
+/// Spawns the overlay entity tree.
+///
+/// NOTE: The architecture was originally a root `Text` + two
+/// `TextSpan` children (pre-caret + post-caret) + a sibling caret-bar
+/// `Node`. That collapsed to a single `Text` root because the
+/// parent-child text-collection path in Bevy 0.18 wasn't reliably
+/// rendering the spans (the previous draft's invisible-preedit bug
+/// reproduced even after the system-ordering fix in `81a6c45`). A
+/// single root `Text` is the simplest Bevy-supported pattern: the
+/// `Text(String)` content shapes through cosmic-text directly,
+/// `Underline` + `UnderlineColor` on the same entity underline the
+/// whole text, and the caret bar still lives as a sibling `Node`
+/// positioned by counting characters in the prefix.
+///
+/// TODO: bind TextColor / UnderlineColor / BackgroundColor to theme
+/// tokens (`text-foreground` / `bg-background`) once the theme-token
+/// helper is integrated. Placeholder white for now.
 fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) {
     let text_font = TextFont {
         font: ui_font.0.clone(),
         font_size: bevy_terminal_renderer::FONT_SIZE_PX,
         ..default()
     };
+    let color = Color::WHITE;
+
     let root = commands
         .spawn((
             Text::new(""),
             text_font.clone(),
+            TextColor(color),
+            Underline,
+            UnderlineColor(color),
             Node {
                 position_type: PositionType::Absolute,
                 display: Display::None,
@@ -278,20 +285,6 @@ fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) 
         ))
         .id();
 
-    // TODO: bind TextColor / UnderlineColor / BackgroundColor to theme
-    // tokens (`text-foreground` / `bg-background`) once the
-    // theme-token helper is integrated. Placeholder white for now.
-    let color = Color::WHITE;
-
-    commands.spawn((
-        TextSpan::new(""),
-        text_font.clone(),
-        TextColor(color),
-        Underline,
-        UnderlineColor(color),
-        ImePreCaretSpan,
-        ChildOf(root),
-    ));
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -304,15 +297,6 @@ fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) 
         },
         BackgroundColor(color),
         ImeCaretBar,
-        ChildOf(root),
-    ));
-    commands.spawn((
-        TextSpan::new(""),
-        text_font.clone(),
-        TextColor(color),
-        Underline,
-        UnderlineColor(color),
-        ImePostCaretSpan,
         ChildOf(root),
     ));
 }
