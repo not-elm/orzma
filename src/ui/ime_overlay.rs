@@ -163,7 +163,9 @@ fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
 
 /// PostUpdate system that positions the IME preedit overlay at the
 /// attached terminal's cursor cell, writes the composition text into
-/// the overlay's root `Text`, and positions the caret bar.
+/// the overlay's root `Text`, and positions the caret bar (beam when
+/// `begin == end`) or clause highlight (hollow block when
+/// `begin != end`).
 ///
 /// When `ImeState` has no composition, hides the overlay and returns.
 /// When the attached entity is missing or lacks the expected
