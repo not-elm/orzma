@@ -2,6 +2,7 @@
 //! table comes from the loaded `OzmuxConfigsResource`; this module owns
 //! no chord data.
 
+pub(crate) mod ime;
 pub(crate) mod mouse_wheel;
 
 use bevy::input::ButtonState;
@@ -11,16 +12,29 @@ use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers, SessionOffset};
 use ozmux_multiplexer::SessionId;
 use std::collections::HashSet;
-
+use crate::input::ime::{ImeState, read_ime_events};
 use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
+
+/// Resolves the focused activity's entity via the attached session →
+/// multiplexer → registry chain.
+pub(crate) fn resolve_focused_terminal(
+    attached_sid_q: &Query<&SessionEntityId, With<AttachedSession>>,
+    mux: &Multiplexer,
+    registry: &ActivityEntityRegistry,
+) -> Option<Entity> {
+    let attached = attached_sid_q.iter().next()?;
+    let session = mux.sessions.get(&attached.0)?;
+    let pane = session.pane(&session.active_pane).ok()?;
+    registry.get(&pane.active_activity)
+}
 
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline.
 pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, dispatch_focused_key);
+        app.add_systems(Update, dispatch_focused_key.after(read_ime_events));
     }
 }
 
@@ -42,6 +56,7 @@ pub(crate) fn dispatch_focused_key(
     configs: Res<crate::configs::OzmuxConfigsResource>,
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+    ime_state: Res<ImeState>,
 ) {
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
@@ -61,6 +76,10 @@ pub(crate) fn dispatch_focused_key(
 
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
+            continue;
+        }
+
+        if ime_state.is_composing() {
             continue;
         }
 
@@ -535,6 +554,7 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
 
@@ -808,6 +828,7 @@ mod tests {
             .add_plugins(OzmuxShortcutPlugin);
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
         app.update();
@@ -1387,6 +1408,37 @@ mod tests {
             mux.sessions.len(),
             2,
             "domain Multiplexer also reflects only one extra session"
+        );
+    }
+
+    #[test]
+    fn dispatch_focused_key_suppressed_during_composition() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        install_active_terminal_activity(&mut app);
+
+        // Drive ImeState into composing mode directly via apply_event.
+        {
+            let mut state = app.world_mut().resource_mut::<crate::input::ime::ImeState>();
+            crate::input::ime::apply_event(
+                &mut state,
+                &bevy::window::Ime::Preedit {
+                    window: Entity::PLACEHOLDER,
+                    value: "あ".into(),
+                    cursor: Some((3, 3)),
+                },
+            );
+        }
+
+        press(&mut app, window_entity, Bk::Character("a".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "dispatch_focused_key must suppress keys while ImeState is composing; captured: {:?}",
+            captured,
         );
     }
 }

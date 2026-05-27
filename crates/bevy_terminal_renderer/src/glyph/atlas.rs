@@ -1,7 +1,7 @@
-use ab_glyph::{Font, OutlinedGlyph, ScaleFont};
+use ab_glyph::{Font, FontArc, OutlinedGlyph, ScaleFont};
 use bevy::{platform::collections::HashMap, prelude::*};
 
-use crate::glyph::font::{GlyphKey, TerminalFonts};
+use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
 
 pub struct TerminalGlyphAtlasPlugin;
 
@@ -47,6 +47,47 @@ pub struct GlyphAtlas {
     shelves: Shelves,
 }
 
+/// Resolves a glyph for the requested codepoint, preferring the
+/// primary face and falling back to `fallback_choice` when the
+/// primary's `glyph_id` is 0 (notdef).
+///
+/// Returns `(font, glyph_id)` for the resolved face, or `None` when
+/// neither primary nor fallback contains the glyph.
+///
+/// Both faces are scaled at `scale` — the primary's `PxScale`. This
+/// is the Alacritty / WezTerm pattern: rasterize fallback at the
+/// primary's size so the grid pitch stays bound to the primary
+/// font's metrics. UDEVGothic35 is JBM-metric-compatible by design.
+///
+/// NOTE: this helper retries on `glyph_id == 0` only — NOT on
+/// degenerate outline (`w == 0 || h == 0`) which is still
+/// short-circuited in `get_or_insert`. A non-zero `glyph_id` with
+/// zero-extent raster indicates a malformed font, not missing
+/// coverage; not worth retrying.
+///
+/// NOTE: we keep PUA Nerd Font icons rendering through the primary
+/// face — UDEVGothic35 doesn't include Nerd Font glyphs, so for
+/// U+E000–U+F8FF the primary's glyph_id is non-zero and we never
+/// reach the fallback path.
+fn resolve_glyph<'a>(
+    fonts: &'a TerminalFonts,
+    face: &FontFace,
+    ch: char,
+    scale: ab_glyph::PxScale,
+) -> Option<(&'a FontArc, ab_glyph::GlyphId)> {
+    let primary = fonts.choice(face);
+    let id = primary.as_scaled(scale).glyph_id(ch);
+    if id.0 != 0 {
+        return Some((primary, id));
+    }
+    let fallback = fonts.fallback_choice(face);
+    let id = fallback.as_scaled(scale).glyph_id(ch);
+    if id.0 != 0 {
+        return Some((fallback, id));
+    }
+    None
+}
+
 impl GlyphAtlas {
     /// Creates an empty atlas with the given pixel dimensions.
     pub fn new(width: u32, height: u32) -> Self {
@@ -78,26 +119,9 @@ impl GlyphAtlas {
         if let Some(r) = self.glyphs.get(&key) {
             return Some(*r);
         }
-        let font = fonts.choice(&key.face);
         let ch = char::from_u32(key.codepoint)?;
         let scale = ab_glyph::PxScale::from(fonts.px_scale_value(key.size_px));
-        let scaled = font.as_scaled(scale);
-        let glyph_id = scaled.glyph_id(ch);
-        // NOTE: ab_glyph maps unknown codepoints to glyph ID 0 (notdef), and
-        //       outline_glyph happily returns the notdef rectangle ("tofu")
-        //       outline if the font has one — which most do. Bail out before
-        //       rasterizing so combining marks, CJK glyphs missing from the
-        //       monospace face, etc. do not leave a literal tofu in every
-        //       cell. The bundled JetBrains Mono Nerd Font Mono includes PUA
-        //       icons (U+E000–U+F8FF used by neo-tree, nvim-web-devicons,
-        //       lazygit), so those codepoints DO map to non-zero glyph IDs
-        //       and DO rasterize through this path. A user-supplied non-
-        //       Nerd-Font override will fall back to notdef here (and
-        //       short-circuit) for any PUA codepoints, which is the
-        //       desired behavior for monospace fonts without icon coverage.
-        if glyph_id.0 == 0 {
-            return None;
-        }
+        let (font, glyph_id) = resolve_glyph(fonts, &key.face, ch, scale)?;
 
         let outlined = font.outline_glyph(glyph_id.with_scale(scale))?;
         let bounds = outlined.px_bounds();
@@ -226,6 +250,14 @@ mod tests {
     use super::*;
     use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
 
+    fn make_key(face: FontFace, codepoint: u32, size_px: u16) -> GlyphKey {
+        GlyphKey {
+            face,
+            codepoint,
+            size_px,
+        }
+    }
+
     #[test]
     fn returned_rect_matches_written_pixels() {
         let mut atlas = GlyphAtlas::new(256, 256);
@@ -254,5 +286,57 @@ mod tests {
             .get_or_insert(key, &fonts)
             .expect("cached glyph lookup should succeed");
         assert_eq!(rect, rect2);
+    }
+
+    #[test]
+    fn latin_renders_through_primary() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let key = make_key(FontFace::Regular, u32::from('a'), 24);
+        let rect = atlas
+            .get_or_insert(key, &fonts)
+            .expect("'a' must rasterize");
+        assert!(rect.w > 0 && rect.h > 0, "'a' rect must be non-empty");
+    }
+
+    #[test]
+    fn cjk_renders_through_fallback() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        // 'あ' (HIRAGANA LETTER A, U+3042) — present in UDEVGothic35,
+        // absent from JetBrains Mono. Before this change, returned None.
+        let key = make_key(FontFace::Regular, 0x3042, 24);
+        let rect = atlas
+            .get_or_insert(key, &fonts)
+            .expect("'あ' must rasterize via UDEVGothic35 fallback");
+        assert!(rect.w > 0 && rect.h > 0, "'あ' rect must be non-empty");
+    }
+
+    #[test]
+    fn nerd_font_pua_stays_on_primary() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        // U+E0B0 (Powerline right-pointing arrow) — present in JBM Nerd
+        // Font Mono's PUA. The primary path must resolve it; UDEVGothic35
+        // doesn't carry Nerd Font glyphs, so a fallback-only resolution
+        // would either fail or return a different glyph.
+        let key = make_key(FontFace::Regular, 0xE0B0, 24);
+        let rect = atlas
+            .get_or_insert(key, &fonts)
+            .expect("Powerline glyph U+E0B0 must rasterize via primary");
+        assert!(rect.w > 0 && rect.h > 0, "U+E0B0 rect must be non-empty");
+    }
+
+    #[test]
+    fn unknown_codepoint_returns_none() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        // U+1FFFFE — Plane 1 unassigned, not in either font.
+        let key = make_key(FontFace::Regular, 0x1FFFFE, 24);
+        let result = atlas.get_or_insert(key, &fonts);
+        assert!(
+            result.is_none(),
+            "unknown codepoint must return None (tofu suppression)"
+        );
     }
 }

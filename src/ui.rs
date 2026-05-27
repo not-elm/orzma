@@ -18,6 +18,7 @@ use bevy::prelude::*;
 pub(crate) mod activity;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
+pub(crate) mod ime_overlay;
 pub mod layout;
 pub mod palette;
 pub mod registry;
