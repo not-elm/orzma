@@ -29,6 +29,7 @@ use bevy::ui::{
 use bevy::window::{PrimaryWindow, Window};
 use bevy_terminal_renderer::CellMetrics;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
+use bevy_terminal_renderer::TerminalFontInitSet;
 use bevy_terminal_renderer::prelude::TerminalGrid;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -37,13 +38,16 @@ pub struct ImeOverlayPlugin;
 
 impl Plugin for ImeOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_ime_overlay_once)
-            .add_systems(
-                bevy::app::PostUpdate,
-                position_ime_overlay
-                    .after(UiSystems::Layout)
-                    .before(UiSystems::PostLayout),
-            );
+        app.add_systems(
+            Startup,
+            spawn_ime_overlay_once.after(TerminalFontInitSet::InitCellMetrics),
+        )
+        .add_systems(
+            bevy::app::PostUpdate,
+            position_ime_overlay
+                .after(UiSystems::Layout)
+                .before(UiSystems::PostLayout),
+        );
     }
 }
 
