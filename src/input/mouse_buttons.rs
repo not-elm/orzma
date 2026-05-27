@@ -247,10 +247,13 @@ pub(crate) fn autoscroll_period_ms(
 
 /// True when an in-flight drag should be dropped because alacritty
 /// wiped `Term::selection` out from under us (alt-screen swap, screen
-/// reset). See spec §6 "End-of-frame guards" and
-/// `term/mod.rs:682, 733, 1803, 1847`.
-pub(crate) fn should_drop_stale_drag(handle: &bevy_terminal::TerminalHandle) -> bool {
-    handle.selection_type().is_none()
+/// reset). See spec §7 and `term/mod.rs:682, 733, 1803, 1847`.
+///
+/// Only fires for `DragPhase::Active` drags — an `Armed` drag legitimately
+/// has no `Term::selection` because the selection has not been
+/// materialized yet, and the absence is not a wipe signal.
+fn should_drop_stale_drag(drag: &ActiveDrag, handle: &bevy_terminal::TerminalHandle) -> bool {
+    drag.is_active() && handle.selection_type().is_none()
 }
 
 /// Runs a single autoscroll tick if conditions are met. Called once per
@@ -476,7 +479,7 @@ fn dispatch_mouse_buttons(
     // Drag-scroll loop. Runs every frame while a left-drag is active
     // and the cursor is past the pane's vertical rect.
     let now = time.last_update().unwrap_or_else(Instant::now);
-    let Some(drag) = state.drag.clone() else {
+    let Some(drag) = state.drag.as_ref().filter(|d| d.is_active()).cloned() else {
         state.next_autoscroll_at = None;
         return;
     };
@@ -508,10 +511,12 @@ fn dispatch_mouse_buttons(
 
     // 1. Drop stale drag when alacritty wiped Term::selection (e.g.
     //    alt-screen swap, screen reset). Without this, the next drag
-    //    tick would re-arm a phantom anchor.
+    //    tick would re-arm a phantom anchor. Gated by drag.is_active()
+    //    inside should_drop_stale_drag so an armed-but-unstarted drag
+    //    is not falsely flagged stale.
     if let Some(drag) = state.drag.as_ref() {
         match handles.get(drag.entity) {
-            Ok((handle, _, _)) if should_drop_stale_drag(handle) => {
+            Ok((handle, _, _)) if should_drop_stale_drag(drag, &handle) => {
                 state.drag = None;
                 state.next_autoscroll_at = None;
             }
@@ -870,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn should_drop_stale_drag_returns_true_when_no_selection() {
+    fn should_drop_stale_drag_returns_false_for_armed_drag() {
         let opts = bevy_terminal::SpawnOptions {
             cols: 80,
             rows: 24,
@@ -879,7 +884,39 @@ mod tests {
             env: Vec::new(),
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
-        // Fresh bundle has no selection.
-        assert!(super::should_drop_stale_drag(&bundle.handle));
+        // Fresh bundle has no selection. An Armed drag should NOT be
+        // considered stale (the absence of selection is expected
+        // pre-materialization).
+        let armed = ActiveDrag {
+            entity: Entity::from_bits(1),
+            anchor_cell: CellCoord { col: 1, row: 1 },
+            last_drag_cell: None,
+            phase: DragPhase::Armed {
+                ty: bevy_terminal::SelectionType::Simple,
+                anchor_side: bevy_terminal::Side::Left,
+            },
+        };
+        assert!(!super::should_drop_stale_drag(&armed, &bundle.handle));
+    }
+
+    #[test]
+    fn should_drop_stale_drag_returns_true_for_active_drag_with_no_selection() {
+        let opts = bevy_terminal::SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        // Active drag + no Term::selection = alacritty wiped it out
+        // from under us (alt-screen swap, screen reset).
+        let active = ActiveDrag {
+            entity: Entity::from_bits(1),
+            anchor_cell: CellCoord { col: 1, row: 1 },
+            last_drag_cell: None,
+            phase: DragPhase::Active,
+        };
+        assert!(super::should_drop_stale_drag(&active, &bundle.handle));
     }
 }
