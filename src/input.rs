@@ -2,6 +2,7 @@
 //! table comes from the loaded `OzmuxConfigsResource`; this module owns
 //! no chord data.
 
+pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
 use bevy::input::ButtonState;
@@ -20,7 +21,10 @@ pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, dispatch_focused_key);
+        app.add_systems(
+            Update,
+            dispatch_focused_key.in_set(crate::system_set::OzmuxSystems::Input),
+        );
     }
 }
 

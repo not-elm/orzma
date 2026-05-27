@@ -38,6 +38,7 @@ fn main() {
             CopyModePlugin,
             CopyModeIndicatorPlugin,
             crate::input::mouse_wheel::MouseWheelInputPlugin,
+            crate::input::mouse_buttons::MouseButtonsInputPlugin,
         ))
         .run();
 }

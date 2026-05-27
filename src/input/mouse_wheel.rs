@@ -48,8 +48,10 @@ pub(crate) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WheelAccumulator>()
-            .add_systems(Update, dispatch_mouse_wheel);
+        app.init_resource::<WheelAccumulator>().add_systems(
+            Update,
+            dispatch_mouse_wheel.in_set(crate::system_set::OzmuxSystems::Input),
+        );
     }
 }
 
