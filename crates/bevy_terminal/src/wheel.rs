@@ -45,12 +45,7 @@ impl Default for WheelConfig {
     }
 }
 
-/// 1-indexed cell coordinate suitable for SGR / X10 mouse reports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CellCoord {
-    pub col: u32,
-    pub row: u32,
-}
+pub use crate::mouse_encode::CellCoord;
 
 /// Wheel direction. Horizontal wheels are out of scope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,66 +79,45 @@ pub enum WheelAction {
     Noop,
 }
 
-/// Encodes a single SGR (1006) wheel report.
-///
-/// Wire format: `CSI < <b> ; <col> ; <row> M` (press only; wheel never
-/// reports release). `<b>` is `64` for up, `65` for down, plus `+4`
-/// for Shift, `+8` for Alt, `+16` for Ctrl.
-pub(crate) fn encode_sgr_wheel(
-    direction: WheelDir,
-    mods: WheelModifiers,
-    cell: CellCoord,
-) -> Vec<u8> {
-    let mut b: u32 = 64;
-    if matches!(direction, WheelDir::Down) {
-        b += 1;
+fn protocol_mods_from(mods: WheelModifiers) -> crate::mouse_encode::ProtocolModifiers {
+    crate::mouse_encode::ProtocolModifiers {
+        shift: mods.shift,
+        ctrl: mods.ctrl,
+        // NOTE: WheelModifiers.alt → ProtocolModifiers.meta. The xterm
+        // "meta" bit (+8) is the Alt/Option key on macOS and Linux; the
+        // legacy `encode_sgr_wheel` mapped `mods.alt` to that bit
+        // directly. Mapping alt → ProtocolModifiers.alt has no
+        // SGR-byte assignment and would drop the bit entirely.
+        alt: false,
+        meta: mods.alt,
     }
-    if mods.shift {
-        b += 4;
-    }
-    if mods.alt {
-        b += 8;
-    }
-    if mods.ctrl {
-        b += 16;
-    }
-    format!("\x1b[<{};{};{}M", b, cell.col.max(1), cell.row.max(1)).into_bytes()
 }
 
-/// Encodes a single legacy X10 wheel report.
+/// Encodes a single wheel report (SGR or X10, picked by `modes`).
 ///
-/// Wire format: `CSI M <b+32> <col+32> <row+32>`. Each coordinate
-/// byte caps at 223 (`255 - 32`) — the X10 protocol cannot represent
-/// larger cells; wheel reports for huge terminals must use SGR
-/// (`SGR_MOUSE`).
-pub(crate) fn encode_x10_wheel(
+/// Wire format follows the shared protocol encoder. `<cb>` is `64` for
+/// up, `65` for down, plus `+4` for Shift, `+8` for Alt (Alt/Option →
+/// xterm meta bit), and `+16` for Ctrl. Alacritty's wheel-report
+/// convention does NOT set the motion bit (+32) on wheel events, so
+/// `motion = false` is passed through.
+fn encode_wheel_report(
+    modes: TermMode,
     direction: WheelDir,
     mods: WheelModifiers,
     cell: CellCoord,
 ) -> Vec<u8> {
-    let mut b: u32 = 64;
-    if matches!(direction, WheelDir::Down) {
-        b += 1;
-    }
-    if mods.shift {
-        b += 4;
-    }
-    if mods.alt {
-        b += 8;
-    }
-    if mods.ctrl {
-        b += 16;
-    }
-    let col_clamped = cell.col.clamp(1, 223) as u8;
-    let row_clamped = cell.row.clamp(1, 223) as u8;
-    vec![
-        0x1b,
-        b'[',
-        b'M',
-        (b + 32) as u8,
-        col_clamped + 32,
-        row_clamped + 32,
-    ]
+    let cb_base: u8 = match direction {
+        WheelDir::Up => 64,
+        WheelDir::Down => 65,
+    };
+    crate::mouse_encode::encode_protocol_event(
+        modes,
+        cb_base,
+        cell,
+        protocol_mods_from(mods),
+        false,
+        false,
+    )
 }
 
 /// Decides what to do with a discrete wheel input.
@@ -185,14 +159,9 @@ pub fn route_wheel(
         if count == 0 {
             return WheelAction::Noop;
         }
-        let sgr = modes.contains(TermMode::SGR_MOUSE);
         let mut buf = Vec::new();
         for _ in 0..count {
-            let one = if sgr {
-                encode_sgr_wheel(direction, mods, mouse_cell)
-            } else {
-                encode_x10_wheel(direction, mods, mouse_cell)
-            };
+            let one = encode_wheel_report(modes, direction, mods, mouse_cell);
             buf.extend_from_slice(&one);
         }
         return WheelAction::WriteToPty(buf);
@@ -249,9 +218,13 @@ pub(crate) fn alt_screen_arrow_bytes(direction: WheelDir, n: u32) -> Vec<u8> {
 mod sgr_tests {
     use super::*;
 
+    fn sgr(direction: WheelDir, mods: WheelModifiers, cell: CellCoord) -> Vec<u8> {
+        encode_wheel_report(TermMode::SGR_MOUSE, direction, mods, cell)
+    }
+
     #[test]
     fn sgr_up_no_mods_origin() {
-        let bytes = encode_sgr_wheel(
+        let bytes = sgr(
             WheelDir::Up,
             WheelModifiers::default(),
             CellCoord { col: 1, row: 1 },
@@ -261,7 +234,7 @@ mod sgr_tests {
 
     #[test]
     fn sgr_down_no_mods_at_cell() {
-        let bytes = encode_sgr_wheel(
+        let bytes = sgr(
             WheelDir::Down,
             WheelModifiers::default(),
             CellCoord { col: 43, row: 11 },
@@ -275,7 +248,7 @@ mod sgr_tests {
             shift: true,
             ..Default::default()
         };
-        let bytes = encode_sgr_wheel(WheelDir::Up, mods, CellCoord { col: 1, row: 1 });
+        let bytes = sgr(WheelDir::Up, mods, CellCoord { col: 1, row: 1 });
         assert_eq!(bytes, b"\x1b[<68;1;1M");
     }
 
@@ -286,14 +259,14 @@ mod sgr_tests {
             alt: true,
             ..Default::default()
         };
-        let bytes = encode_sgr_wheel(WheelDir::Up, mods, CellCoord { col: 1, row: 1 });
+        let bytes = sgr(WheelDir::Up, mods, CellCoord { col: 1, row: 1 });
         // 64 + 8 (alt) + 16 (ctrl) = 88
         assert_eq!(bytes, b"\x1b[<88;1;1M");
     }
 
     #[test]
     fn sgr_zero_col_row_clamps_to_one() {
-        let bytes = encode_sgr_wheel(
+        let bytes = sgr(
             WheelDir::Up,
             WheelModifiers::default(),
             CellCoord { col: 0, row: 0 },
@@ -306,9 +279,14 @@ mod sgr_tests {
 mod x10_tests {
     use super::*;
 
+    fn x10(direction: WheelDir, mods: WheelModifiers, cell: CellCoord) -> Vec<u8> {
+        // Any non-SGR mouse mode bit drops into the X10 branch.
+        encode_wheel_report(TermMode::MOUSE_REPORT_CLICK, direction, mods, cell)
+    }
+
     #[test]
     fn x10_up_origin() {
-        let bytes = encode_x10_wheel(
+        let bytes = x10(
             WheelDir::Up,
             WheelModifiers::default(),
             CellCoord { col: 1, row: 1 },
@@ -319,7 +297,7 @@ mod x10_tests {
 
     #[test]
     fn x10_down_cell() {
-        let bytes = encode_x10_wheel(
+        let bytes = x10(
             WheelDir::Down,
             WheelModifiers::default(),
             CellCoord { col: 10, row: 5 },
@@ -330,7 +308,7 @@ mod x10_tests {
 
     #[test]
     fn x10_clamps_beyond_223() {
-        let bytes = encode_x10_wheel(
+        let bytes = x10(
             WheelDir::Up,
             WheelModifiers::default(),
             CellCoord { col: 300, row: 300 },
@@ -346,7 +324,7 @@ mod x10_tests {
             ctrl: true,
             ..Default::default()
         };
-        let bytes = encode_x10_wheel(WheelDir::Down, mods, CellCoord { col: 1, row: 1 });
+        let bytes = x10(WheelDir::Down, mods, CellCoord { col: 1, row: 1 });
         // 65 + 4 + 16 = 85, + 32 = 117
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 117, 33, 33]);
     }
