@@ -30,6 +30,7 @@ use bevy_terminal_renderer::CellMetrics;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::TerminalFontInitSet;
 use bevy_terminal_renderer::prelude::TerminalGrid;
+use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
@@ -135,6 +136,20 @@ pub(crate) fn compute_overlay_pos(
     Vec2::new(left, pos_logical.y)
 }
 
+/// Returns `(begin_cells, end_cells)` — the per-side cell offsets of
+/// the IME caret/clause range relative to the start of `text`. Uses
+/// `unicode_width::UnicodeWidthStr::width` so fullwidth CJK
+/// preedit counts as 2 cells per glyph, matching the renderer's own
+/// width logic in `bevy_terminal_renderer::grid`.
+///
+/// Caller is responsible for byte-offset validity (UTF-8 boundary,
+/// `begin <= end <= text.len()`); `Composition::try_new` enforces these.
+pub(crate) fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
+    let begin_cells = UnicodeWidthStr::width(&text[..begin]) as f32;
+    let end_cells = UnicodeWidthStr::width(&text[..end]) as f32;
+    (begin_cells, end_cells)
+}
+
 /// PostUpdate system that positions the IME preedit overlay at the
 /// attached terminal's cursor cell, writes the composition text into
 /// the overlay's root `Text`, and positions the caret bar.
@@ -215,18 +230,13 @@ pub(crate) fn position_ime_overlay(
         root_text.0 = comp.text().to_string();
     }
 
-    // NOTE: The caret bar's horizontal offset is approximated by
-    // `chars().count()` × cell-width. Exact for monospace ASCII;
-    // slightly off for CJK in the preedit (which is rare — the
-    // preedit is usually Romaji being converted). The terminal font
-    // is monospace, so the bounded error is acceptable.
-    let pre_text = match comp.caret() {
-        Some((_begin, end)) => &comp.text()[..end],
-        None => "",
-    };
     let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;
-    let approx_caret_x_logical = pre_text.chars().count() as f32 * cell_w_logical;
     let line_h_logical = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
+    let (_begin_cells, end_cells) = match comp.caret() {
+        Some(range) => caret_cell_offsets(comp.text(), range),
+        None => (0.0, 0.0),
+    };
+    let caret_x_logical = pos.x + end_cells * cell_w_logical;
 
     if let Ok(mut bar) = bar_q.single_mut() {
         if comp.caret().is_some() {
@@ -234,7 +244,7 @@ pub(crate) fn position_ime_overlay(
             // Text root), so its position is in window-absolute coords:
             // overlay origin + per-character horizontal offset.
             bar.display = Display::Flex;
-            bar.left = Val::Px(pos.x + approx_caret_x_logical);
+            bar.left = Val::Px(caret_x_logical);
             bar.top = Val::Px(pos.y);
             bar.height = Val::Px(line_h_logical);
         } else {
@@ -447,6 +457,38 @@ mod tests {
             1.0,
         );
         assert_eq!(pos.x, 0.0);
+    }
+
+    #[test]
+    fn caret_cell_offsets_ascii_caret_at_start() {
+        assert_eq!(caret_cell_offsets("hello", (0, 0)), (0.0, 0.0));
+    }
+
+    #[test]
+    fn caret_cell_offsets_ascii_caret_at_end() {
+        assert_eq!(caret_cell_offsets("hello", (5, 5)), (5.0, 5.0));
+    }
+
+    #[test]
+    fn caret_cell_offsets_ascii_clause_range() {
+        // begin=2 ("he|llo"), end=4 ("hel|lo"). Width 2 cells.
+        assert_eq!(caret_cell_offsets("hello", (2, 4)), (2.0, 4.0));
+    }
+
+    #[test]
+    fn caret_cell_offsets_cjk_fullwidth() {
+        // "にほん" is 3 hiragana × 3 bytes each = 9 bytes total;
+        // each hiragana takes 2 monospace cells. begin=0, end=9 →
+        // begin_cells=0, end_cells=6.
+        assert_eq!(caret_cell_offsets("にほん", (0, 9)), (0.0, 6.0));
+    }
+
+    #[test]
+    fn caret_cell_offsets_mixed_ascii_and_cjk() {
+        // "a" (1 byte, 1 cell) + "あ" (3 bytes, 2 cells) = 4 bytes, 3 cells.
+        // begin=0, end=4 → (0.0, 3.0). begin=1 (after "a"), end=4 → (1.0, 3.0).
+        assert_eq!(caret_cell_offsets("aあ", (0, 4)), (0.0, 3.0));
+        assert_eq!(caret_cell_offsets("aあ", (1, 4)), (1.0, 3.0));
     }
 
     #[test]

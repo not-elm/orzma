@@ -4580,6 +4580,7 @@ dependencies = [
  "ozmux_configs",
  "ozmux_multiplexer",
  "tracing",
+ "unicode-width",
 ]
 
 [[package]]
