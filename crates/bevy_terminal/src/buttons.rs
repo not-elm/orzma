@@ -9,7 +9,7 @@
 //! See `docs/superpowers/specs/2026-05-27-mouse-selection-design.md`
 //! for the full decision table.
 
-use crate::mouse_encode::{CellCoord, ProtocolModifiers};
+use crate::mouse_encode::{CellCoord, ProtocolModifiers, encode_protocol_event};
 use alacritty_terminal::index::Side;
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
@@ -93,9 +93,25 @@ impl ButtonAction {
             return route_locally_branch(evt, mods);
         }
 
-        // Phase 2 — PTY-forward path (Task 12 implements).
-        let _ = cfg;
-        ButtonAction::Noop
+        // PTY-forward path (app has mouse capture and Shift is not held).
+        let cb_base: u8 = match evt.button {
+            MouseButtonKind::Left => 0,
+            MouseButtonKind::Middle => 1,
+            MouseButtonKind::Right => 2,
+        };
+        let motion = matches!(evt.kind, ButtonEventKind::Drag);
+        let release = matches!(evt.kind, ButtonEventKind::Release);
+        let bytes = encode_protocol_event(modes, cb_base, evt.cell, mods, motion, release);
+
+        if cfg.max_protocol_events_per_frame == 0 {
+            // Caller asked for a hard cap of zero — drop the event.
+            return ButtonAction::Noop;
+        }
+
+        match evt.kind {
+            ButtonEventKind::Press => ButtonAction::ClearAndWriteToPty(bytes),
+            ButtonEventKind::Drag | ButtonEventKind::Release => ButtonAction::WriteToPty(bytes),
+        }
     }
 }
 
@@ -275,5 +291,88 @@ mod tests {
                 ButtonAction::route(TermMode::empty(), evt, ProtocolModifiers::default(), &cfg());
             assert_eq!(action, ButtonAction::Noop, "button = {:?}", button);
         }
+    }
+
+    #[test]
+    fn captured_press_emits_clear_and_write() {
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let action =
+            ButtonAction::route(modes, press_left(1), ProtocolModifiers::default(), &cfg());
+        match action {
+            ButtonAction::ClearAndWriteToPty(bytes) => {
+                // SGR left-press at (5, 5), no modifiers, no motion, not release.
+                assert_eq!(bytes, b"\x1b[<0;5;5M");
+            }
+            other => panic!("expected ClearAndWriteToPty, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn captured_drag_emits_write_with_motion_bit() {
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let evt = ButtonEvent {
+            kind: ButtonEventKind::Drag,
+            button: MouseButtonKind::Left,
+            cell: cell(5, 5),
+            side: Side::Left,
+            click_count: 1,
+        };
+        let action = ButtonAction::route(modes, evt, ProtocolModifiers::default(), &cfg());
+        // Motion bit (32) is set; left-button base is 0; cb = 32.
+        assert_eq!(action, ButtonAction::WriteToPty(b"\x1b[<32;5;5M".to_vec()));
+    }
+
+    #[test]
+    fn captured_release_uses_lowercase_m_in_sgr() {
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let evt = ButtonEvent {
+            kind: ButtonEventKind::Release,
+            button: MouseButtonKind::Left,
+            cell: cell(5, 5),
+            side: Side::Left,
+            click_count: 1,
+        };
+        let action = ButtonAction::route(modes, evt, ProtocolModifiers::default(), &cfg());
+        assert_eq!(action, ButtonAction::WriteToPty(b"\x1b[<0;5;5m".to_vec()));
+    }
+
+    #[test]
+    fn captured_middle_button_press_forwards_with_cb_1() {
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let evt = ButtonEvent {
+            kind: ButtonEventKind::Press,
+            button: MouseButtonKind::Middle,
+            cell: cell(5, 5),
+            side: Side::Left,
+            click_count: 1,
+        };
+        let action = ButtonAction::route(modes, evt, ProtocolModifiers::default(), &cfg());
+        match action {
+            ButtonAction::ClearAndWriteToPty(bytes) => {
+                assert_eq!(bytes, b"\x1b[<1;5;5M");
+            }
+            other => panic!(
+                "expected ClearAndWriteToPty for middle press, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn shift_bypass_routes_locally_even_when_captured() {
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let mods = ProtocolModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let action = ButtonAction::route(modes, press_left(1), mods, &cfg());
+        assert_eq!(
+            action,
+            ButtonAction::StartLocalSelection {
+                ty: SelectionType::Simple,
+                cell: cell(5, 5),
+                side: Side::Left,
+            }
+        );
     }
 }
