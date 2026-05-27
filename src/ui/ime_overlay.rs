@@ -144,7 +144,7 @@ pub(crate) fn compute_overlay_pos(
 ///
 /// Caller is responsible for byte-offset validity (UTF-8 boundary,
 /// `begin <= end <= text.len()`); `Composition::try_new` enforces these.
-pub(crate) fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
+fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
     let begin_cells = UnicodeWidthStr::width(&text[..begin]) as f32;
     let end_cells = UnicodeWidthStr::width(&text[..end]) as f32;
     (begin_cells, end_cells)
