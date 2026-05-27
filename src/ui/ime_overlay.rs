@@ -14,6 +14,7 @@ use crate::ui::registry::ActivityEntityRegistry;
 use bevy::app::{App, Plugin, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
+use bevy::ecs::entity::Entity;
 use bevy::ecs::query::{With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, Query, Res};
@@ -29,6 +30,7 @@ use bevy::window::{PrimaryWindow, Window};
 use bevy_terminal_renderer::CellMetrics;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::TerminalFontInitSet;
+use bevy_terminal_renderer::material::TerminalMaterialSystems;
 use bevy_terminal_renderer::prelude::TerminalGrid;
 use unicode_width::UnicodeWidthStr;
 
@@ -63,7 +65,11 @@ impl Plugin for ImeOverlayPlugin {
         // had.
         .add_systems(
             bevy::app::PostUpdate,
-            position_ime_overlay.before(UiSystems::Content),
+            (
+                position_ime_overlay.before(UiSystems::Content),
+                suppress_terminal_cursor_during_ime
+                    .before(TerminalMaterialSystems::UpdateMaterial),
+            ),
         );
     }
 }
@@ -296,6 +302,36 @@ pub(crate) fn position_ime_overlay(
             clause.height = Val::Px(line_h_logical);
         } else {
             clause.display = Display::None;
+        }
+    }
+}
+
+/// Sets `TerminalGrid.suppress_cursor = true` on the currently-focused
+/// terminal entity while IME composition is active; clears it on all
+/// other grids. Runs in `PostUpdate.before(TerminalMaterialSystems::UpdateMaterial)`
+/// so the override takes effect in the same frame the IME caret
+/// appears (and clears the same frame composition ends).
+///
+/// If `resolve_focused_terminal` returns `None` while composition is
+/// active (e.g., race window between focus loss and `Ime::Disabled`),
+/// every grid gets `suppress_cursor = false`. The safe default is
+/// "show cursors" rather than blanket-hide.
+fn suppress_terminal_cursor_during_ime(
+    state: Res<ImeState>,
+    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
+    mux: Res<Multiplexer>,
+    registry: Res<ActivityEntityRegistry>,
+    mut grids: Query<(Entity, &mut TerminalGrid)>,
+) {
+    let focused = if state.is_composing() {
+        resolve_focused_terminal(&attached_sid_q, &mux, &registry)
+    } else {
+        None
+    };
+    for (entity, mut grid) in &mut grids {
+        let want = Some(entity) == focused;
+        if grid.suppress_cursor != want {
+            grid.suppress_cursor = want;
         }
     }
 }
