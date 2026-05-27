@@ -600,7 +600,7 @@ fn dispatch_mouse_buttons(
     //    is not falsely flagged stale.
     if let Some(drag) = state.drag.as_ref() {
         match handles.get(drag.entity) {
-            Ok((handle, _, _)) if should_drop_stale_drag(drag, &handle) => {
+            Ok((handle, _, _)) if should_drop_stale_drag(drag, handle) => {
                 state.drag = None;
                 state.next_autoscroll_at = None;
             }
