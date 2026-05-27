@@ -5,6 +5,6 @@ use bevy::prelude::*;
 pub enum OzmuxSystems {
     /// The phase for building the session UI.
     SessionUi,
-    ///
+    /// The phase that setup activities.
     SetupActivity,
 }
