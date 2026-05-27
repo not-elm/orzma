@@ -221,7 +221,7 @@ pub(crate) fn position_ime_overlay(
     // preedit is usually Romaji being converted). The terminal font
     // is monospace, so the bounded error is acceptable.
     let pre_text = match comp.caret() {
-        Some(caret) => &comp.text()[..caret],
+        Some((_begin, end)) => &comp.text()[..end],
         None => "",
     };
     let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;

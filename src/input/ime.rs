@@ -38,35 +38,40 @@ impl Plugin for ImePlugin {
 }
 
 /// Validated snapshot of a preedit string and its UTF-8-safe caret
-/// position.
+/// range.
 #[derive(Debug)]
 pub(crate) struct Composition {
     text: String,
-    caret: Option<usize>,
+    caret: Option<(usize, usize)>,
 }
 
 impl Composition {
     /// Validates and constructs a `Composition`. Returns `None` when:
     ///   - `text` is empty (treat any empty-value Preedit as
-    ///     "no composition");
-    ///   - `raw_caret.0` is out of bounds or lands on a non-UTF-8
-    ///     boundary byte (defensive: winit returns byte offsets that
-    ///     we later slice into).
+    ///     "no composition").
     ///
-    /// Only honors `raw_caret.0` (the begin offset); the selection
-    /// range is out of scope per the design spec, Decision 3.
+    /// Sets `caret = None` when:
+    ///   - either endpoint is out of bounds (`> text.len()`);
+    ///   - either endpoint lands on a non-UTF-8 boundary byte
+    ///     (defensive: winit returns byte offsets that we later slice into);
+    ///   - `begin > end` (invariant violation; winit's spec is `(begin, end)`).
+    ///
+    /// `begin == end` is the normal caret-only case. `begin != end`
+    /// represents a clause-selection range (macOS IME during clause
+    /// conversion, etc.) and is rendered as a hollow block over the
+    /// span by `position_ime_overlay`.
     pub(crate) fn try_new(text: String, raw_caret: Option<(usize, usize)>) -> Option<Self> {
         if text.is_empty() {
             return None;
         }
         let caret = match raw_caret {
             None => None,
-            Some((begin, _end)) => {
-                if begin <= text.len() && text.is_char_boundary(begin) {
-                    Some(begin)
-                } else {
-                    None
-                }
+            Some((begin, end)) => {
+                let valid = begin <= end
+                    && end <= text.len()
+                    && text.is_char_boundary(begin)
+                    && text.is_char_boundary(end);
+                if valid { Some((begin, end)) } else { None }
             }
         };
         Some(Composition { text, caret })
@@ -76,7 +81,7 @@ impl Composition {
         &self.text
     }
 
-    pub(crate) fn caret(&self) -> Option<usize> {
+    pub(crate) fn caret(&self) -> Option<(usize, usize)> {
         self.caret
     }
 }
@@ -274,13 +279,13 @@ mod tests {
     fn try_new_accepts_valid_caret() {
         let c = Composition::try_new("hello".into(), Some((3, 3))).unwrap();
         assert_eq!(c.text(), "hello");
-        assert_eq!(c.caret(), Some(3));
+        assert_eq!(c.caret(), Some((3, 3)));
     }
 
     #[test]
     fn try_new_accepts_caret_at_text_len() {
         let c = Composition::try_new("ab".into(), Some((2, 2))).unwrap();
-        assert_eq!(c.caret(), Some(2));
+        assert_eq!(c.caret(), Some((2, 2)));
     }
 
     #[test]
@@ -299,10 +304,30 @@ mod tests {
     }
 
     #[test]
-    fn try_new_honors_only_begin_offset() {
-        // The end offset is ignored per Decision 3 (no selection range).
+    fn try_new_preserves_clause_selection_range() {
+        // begin != end represents a clause-selection range (e.g., macOS IME
+        // clause highlight). Both endpoints must be honored.
         let c = Composition::try_new("hello".into(), Some((2, 5))).unwrap();
-        assert_eq!(c.caret(), Some(2));
+        assert_eq!(c.caret(), Some((2, 5)));
+    }
+
+    #[test]
+    fn try_new_rejects_end_out_of_bounds() {
+        let c = Composition::try_new("hello".into(), Some((1, 99))).unwrap();
+        assert_eq!(c.caret(), None);
+    }
+
+    #[test]
+    fn try_new_rejects_end_on_non_char_boundary() {
+        // "あい" is 6 bytes; byte 4 is mid-char (`い` starts at byte 3, ends at 6).
+        let c = Composition::try_new("あい".into(), Some((0, 4))).unwrap();
+        assert_eq!(c.caret(), None);
+    }
+
+    #[test]
+    fn try_new_rejects_begin_greater_than_end() {
+        let c = Composition::try_new("hello".into(), Some((3, 1))).unwrap();
+        assert_eq!(c.caret(), None);
     }
 
     #[test]
@@ -340,7 +365,7 @@ mod tests {
         assert!(out.is_none());
         let c = s.composition().expect("composition set");
         assert_eq!(c.text(), "こんに");
-        assert_eq!(c.caret(), Some(3));
+        assert_eq!(c.caret(), Some((3, 3)));
     }
 
     #[test]
