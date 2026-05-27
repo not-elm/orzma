@@ -113,13 +113,16 @@ fn compute_grid_dims(
 /// the next `FrameSnapshot` round-trip through alacritty + observers,
 /// adding a visible 1-frame lag at the pane edge during drag.
 fn resize_terminals_to_node(
-    mut terminals: Query<(
-        &ComputedNode,
-        &mut TerminalHandle,
-        &mut PtyHandle,
-        &mut Coalescer,
-        &mut TerminalGrid,
-    )>,
+    mut terminals: Query<
+        (
+            &ComputedNode,
+            &mut TerminalHandle,
+            &mut PtyHandle,
+            &mut Coalescer,
+            &mut TerminalGrid,
+        ),
+        Changed<TerminalHandle>,
+    >,
     metrics: Res<TerminalCellMetricsResource>,
 ) {
     // NOTE: Cell pitch is font-derived physical px; DPR is already baked into

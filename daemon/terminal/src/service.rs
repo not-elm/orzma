@@ -292,7 +292,10 @@ impl TerminalService {
         // iterating prevents `all_titles` from serializing every other
         // TerminalService op (write/resize/scroll/kill/etc.) behind a routine
         // status-bar poll.
-        let snapshots: Vec<(ActivityId, Arc<std::sync::Mutex<crate::vt::bridge::VtState>>)> = {
+        let snapshots: Vec<(
+            ActivityId,
+            Arc<std::sync::Mutex<crate::vt::bridge::VtState>>,
+        )> = {
             let inner = self.inner.lock().await;
             inner
                 .handles
