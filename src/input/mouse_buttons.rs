@@ -462,31 +462,15 @@ fn dispatch_mouse_buttons(
         };
         let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
 
-        // Drag-state lifecycle: set on local left-press, clear on
-        // left-release. Drag is only meaningful when the press routed
-        // locally (the action carries the SelectionType).
-        if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
-            match (&action, kind) {
-                (
-                    bevy_terminal::ButtonAction::StartLocalSelection { .. },
-                    bevy_terminal::ButtonEventKind::Press,
-                ) => {
-                    state.drag = Some(ActiveDrag {
-                        entity,
-                        anchor_cell: cell,
-                        last_drag_cell: None,
-                        phase: DragPhase::Active,
-                    });
-                }
-                (_, bevy_terminal::ButtonEventKind::Release) => {
-                    state.drag = None;
-                    state.next_autoscroll_at = None;
-                }
-                _ => {}
-            }
-        }
-
-        apply_action(action, entity, &mut handles, &copy_mode_q);
+        apply_action(
+            &mut state,
+            kind,
+            bevy_button,
+            action,
+            entity,
+            &mut handles,
+            &copy_mode_q,
+        );
     }
 
     // Drag-scroll loop. Runs every frame while a left-drag is active
@@ -566,6 +550,9 @@ fn to_viewport_point(cell: CellCoord) -> Point {
 /// selection mutation so the vi cursor tracks the moving end of the
 /// selection (see `bevy_terminal::TerminalHandle::vi_goto` docs).
 fn apply_action(
+    state: &mut MouseSelectionState,
+    event_kind: bevy_terminal::ButtonEventKind,
+    event_button: bevy_terminal::MouseButtonKind,
     action: bevy_terminal::ButtonAction,
     entity: Entity,
     handles: &mut Query<(
@@ -582,7 +569,19 @@ fn apply_action(
     let in_copy_mode = copy_mode_q.get(entity).is_ok();
 
     match action {
-        A::Noop => {}
+        A::Noop => {
+            // Left-release: clear drag state.
+            if matches!(
+                (event_kind, event_button),
+                (
+                    bevy_terminal::ButtonEventKind::Release,
+                    bevy_terminal::MouseButtonKind::Left,
+                ),
+            ) {
+                state.drag = None;
+                state.next_autoscroll_at = None;
+            }
+        }
         A::WriteToPty(bytes) => {
             if let Err(e) = handle.write(&mut pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse-button PTY write failed");
@@ -600,6 +599,15 @@ fn apply_action(
                 handle.vi_goto(&mut coalescer, pt);
             }
             handle.selection_start_at(&mut coalescer, pt, side, ty);
+            // Immediate-selection types (Semantic, Lines, Block) are born
+            // already-started — the press itself materialized the
+            // selection.
+            state.drag = Some(ActiveDrag {
+                entity,
+                anchor_cell: cell,
+                last_drag_cell: None,
+                phase: DragPhase::Active,
+            });
         }
         A::UpdateLocalSelection { cell, side } => {
             let pt = to_viewport_point(cell);
