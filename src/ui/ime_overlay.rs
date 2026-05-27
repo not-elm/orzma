@@ -67,8 +67,7 @@ impl Plugin for ImeOverlayPlugin {
             bevy::app::PostUpdate,
             (
                 position_ime_overlay.before(UiSystems::Content),
-                suppress_terminal_cursor_during_ime
-                    .before(TerminalMaterialSystems::UpdateMaterial),
+                suppress_terminal_cursor_during_ime.before(TerminalMaterialSystems::UpdateMaterial),
             ),
         );
     }
@@ -466,8 +465,7 @@ mod tests {
 
     #[test]
     fn places_overlay_at_cursor_row() {
-        let (translation_phys, size_phys) =
-            host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
+        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
             translation_phys,
             size_phys,
@@ -507,8 +505,7 @@ mod tests {
     fn floors_subpixel_cell_pitch() {
         // advance 10.4 → floor 10; col 10 → x = 100
         // line_height 16.4 → floor 16; cursor row 1 → y = 1 × 16 = 16
-        let (translation_phys, size_phys) =
-            host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
+        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
             translation_phys,
             size_phys,
@@ -526,8 +523,7 @@ mod tests {
         // Cursor at col 78, cell width 10 → cell_origin x = 780.
         // Measured width 100 → would extend to 880, host right = 800.
         // Shift left by 80 → left = 700.
-        let (translation_phys, size_phys) =
-            host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
+        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
             translation_phys,
             size_phys,
@@ -545,8 +541,7 @@ mod tests {
         // cell_origin x = 70, would overflow right → shift to
         // host_right - measured = 80 - 200 = -120, then left clamp →
         // 0 (host_left).
-        let (translation_phys, size_phys) =
-            host_inputs(Vec2::ZERO, Vec2::new(80.0, 600.0), 1.0);
+        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(80.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
             translation_phys,
             size_phys,
