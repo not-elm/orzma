@@ -178,7 +178,22 @@ pub(crate) fn position_ime_overlay(
     metrics: Res<TerminalCellMetricsResource>,
     window_q: Query<&Window, With<PrimaryWindow>>,
     mut root_q: Query<(&mut Node, &mut Text), With<ImeOverlayNode>>,
-    mut bar_q: Query<&mut Node, (With<ImeCaretBar>, Without<ImeOverlayNode>)>,
+    mut bar_q: Query<
+        &mut Node,
+        (
+            With<ImeCaretBar>,
+            Without<ImeOverlayNode>,
+            Without<ImeClauseHighlight>,
+        ),
+    >,
+    mut clause_q: Query<
+        &mut Node,
+        (
+            With<ImeClauseHighlight>,
+            Without<ImeOverlayNode>,
+            Without<ImeCaretBar>,
+        ),
+    >,
 ) {
     let Ok((mut root_node, mut root_text)) = root_q.single_mut() else {
         return;
@@ -243,23 +258,42 @@ pub(crate) fn position_ime_overlay(
 
     let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;
     let line_h_logical = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
-    let (_begin_cells, end_cells) = match comp.caret() {
+    let (begin_cells, end_cells) = match comp.caret() {
         Some(range) => caret_cell_offsets(comp.text(), range),
         None => (0.0, 0.0),
     };
-    let caret_x_logical = pos.x + end_cells * cell_w_logical;
+    let has_clause = comp.caret().is_some_and(|(b, e)| b != e);
+    let has_beam = comp.caret().is_some() && !has_clause;
+    let beam_x_logical = pos.x + end_cells * cell_w_logical;
+    let clause_x_logical = pos.x + begin_cells * cell_w_logical;
+    let clause_w_logical = (end_cells - begin_cells) * cell_w_logical;
 
     if let Ok(mut bar) = bar_q.single_mut() {
-        if comp.caret().is_some() {
+        if has_beam {
             // Caret bar is a top-level UI entity (not a child of the
             // Text root), so its position is in window-absolute coords:
             // overlay origin + per-character horizontal offset.
             bar.display = Display::Flex;
-            bar.left = Val::Px(caret_x_logical);
+            bar.left = Val::Px(beam_x_logical);
             bar.top = Val::Px(pos.y);
             bar.height = Val::Px(line_h_logical);
         } else {
             bar.display = Display::None;
+        }
+    }
+
+    if let Ok(mut clause) = clause_q.single_mut() {
+        if has_clause {
+            // Hollow block over the macOS-IME clause-selection range.
+            // Positioned in window-absolute coords for the same
+            // leaf-Text-no-children reason as ImeCaretBar.
+            clause.display = Display::Flex;
+            clause.left = Val::Px(clause_x_logical);
+            clause.top = Val::Px(pos.y);
+            clause.width = Val::Px(clause_w_logical);
+            clause.height = Val::Px(line_h_logical);
+        } else {
+            clause.display = Display::None;
         }
     }
 }
