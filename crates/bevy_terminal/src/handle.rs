@@ -277,6 +277,40 @@ impl TerminalHandle {
         self.stage_full_damage_and_arm(coalescer);
     }
 
+    /// Start a selection of `ty` anchored at `viewport_point` with
+    /// `side`. `viewport_point` carries a viewport-relative row in
+    /// `line.0` (0 = top of viewport); this method translates it to an
+    /// alacritty terminal `Line` using the existing `viewport_row_to_line`
+    /// helper (`vt/frame_builder.rs:244`) so the selection survives
+    /// mid-drag viewport scrolling.
+    ///
+    /// Calls `update(anchor, opposite_side)` immediately after
+    /// `Selection::new` so `selection_to_string()` does not return
+    /// `None` for a freshly-anchored `Simple` / `Block` selection
+    /// (alacritty's `to_range` short-circuits on `is_empty()`; see
+    /// `selection.rs:271` and the early-return at `:332`).
+    pub fn selection_start_at(
+        &mut self,
+        coalescer: &mut Coalescer,
+        viewport_point: alacritty_terminal::index::Point,
+        side: alacritty_terminal::index::Side,
+        ty: alacritty_terminal::selection::SelectionType,
+    ) {
+        use alacritty_terminal::index::Side as ASide;
+        let line =
+            crate::vt::frame_builder::viewport_row_to_line(&self.term, viewport_point.line.0);
+        let anchor = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        let mut sel = alacritty_terminal::selection::Selection::new(ty, anchor, side);
+        let opposite = match side {
+            ASide::Left => ASide::Right,
+            ASide::Right => ASide::Left,
+        };
+        sel.update(anchor, opposite);
+        self.term.selection = Some(sel);
+        self.selection_anchor = Some(anchor);
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
     /// Starts a selection of the given type at the current vi cursor.
     ///
     /// Internally seeds `Selection::new(ty, vi_cursor, Side::Left)` and
@@ -1246,6 +1280,64 @@ mod tests {
         assert!(
             handle.pending_user_input(),
             "after write the flag must be true (used by tests to verify a PTY write happened)",
+        );
+    }
+
+    #[test]
+    fn selection_start_at_creates_simple_selection_at_arbitrary_point() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::SelectionType;
+
+        let opts = SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = TerminalBundle::spawn(opts).expect("spawn");
+        let TerminalBundle {
+            mut handle,
+            mut coalescer,
+            ..
+        } = bundle;
+
+        let point = Point::new(Line(5), Column(10));
+        handle.selection_start_at(&mut coalescer, point, Side::Left, SelectionType::Simple);
+
+        assert_eq!(handle.selection_type(), Some(SelectionType::Simple));
+        assert!(handle.selection_to_string().is_some());
+    }
+
+    #[test]
+    fn selection_start_at_immediate_update_avoids_none_string() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::SelectionType;
+
+        let opts = SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let TerminalBundle {
+            mut handle,
+            mut coalescer,
+            ..
+        } = TerminalBundle::spawn(opts).expect("spawn");
+
+        handle.selection_start_at(
+            &mut coalescer,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+            SelectionType::Block,
+        );
+        assert!(
+            handle.selection_to_string().is_some(),
+            "Block selection_start_at must produce a non-None selection_to_string via the immediate update"
         );
     }
 
