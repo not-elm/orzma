@@ -11,24 +11,25 @@
 //! entity (a non-Node walker-skipped park).
 
 use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::prelude::*;
 
 pub(crate) mod activity;
-pub(crate) mod copy_mode;
-pub(crate) mod copy_mode_indicator;
-pub(crate) mod layout;
-pub(crate) mod palette;
-pub(crate) mod rebuild_session;
-pub(crate) mod registry;
-pub(crate) mod root;
-pub(crate) mod status_bar;
-pub(crate) mod status_bar_sync;
+pub mod copy_mode;
+pub mod copy_mode_indicator;
+pub mod layout;
+pub mod palette;
+pub mod rebuild_session;
+pub mod registry;
+pub mod root;
+pub mod session;
+pub mod status_bar;
+pub mod status_bar_sync;
 #[cfg(test)]
 pub(crate) mod stress_test;
-pub(crate) mod sync_session;
-pub(crate) mod tab_bar;
-pub(crate) mod terminal;
+pub mod tab_bar;
+pub mod terminal;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
 /// never despawned. Hosts `SessionUiRoot` (the attachment point for the
@@ -78,7 +79,7 @@ pub struct OzmuxUiPlugin;
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActivityEntityRegistry>()
-            .add_plugins(OzmuxTerminalUiPlugin)
+            .add_plugins((OzmuxTerminalUiPlugin, OzmuxSessionUiPlugin))
             .add_systems(Startup, root::setup_root_camera_and_ui_root)
             .add_systems(
                 Update,
@@ -86,10 +87,6 @@ impl Plugin for OzmuxUiPlugin {
                     rebuild_session::rebuild_session_ui_on_data_change,
                     status_bar_sync::rebuild_status_bar_on_session_set_change,
                 ),
-            )
-            .add_systems(
-                PostUpdate,
-                sync_session::sync_active_session.before(bevy::ui::UiSystems::Prepare),
             );
     }
 }

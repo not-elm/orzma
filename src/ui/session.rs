@@ -7,22 +7,33 @@ use crate::multiplexer::{AttachedSession, SessionEntityId, SessionUiSubtree};
 use crate::ui::SessionUiRoot;
 use bevy::prelude::*;
 
+pub struct OzmuxSessionUiPlugin;
+
+impl Plugin for OzmuxSessionUiPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            PostUpdate,
+            sync_active_session.before(bevy::ui::UiSystems::Prepare),
+        );
+    }
+}
+
 /// Runs every Update; only does work when the set of `AttachedSession`
 /// markers changes. Tracks the previously-attached session's Entity in a
 /// `Local<Option<Entity>>` so we can look up its `SessionUiSubtree` and
 /// park it back under the Session entity.
-pub(crate) fn sync_active_session(
+fn sync_active_session(
     mut commands: Commands,
     mut last_attached: Local<Option<Entity>>,
-    attached_q: Query<(Entity, &SessionEntityId, &SessionUiSubtree), With<AttachedSession>>,
-    sessions_q: Query<(Entity, &SessionUiSubtree)>,
-    session_ui_root_q: Query<Entity, With<SessionUiRoot>>,
+    attached_session: Query<(Entity, &SessionEntityId, &SessionUiSubtree), With<AttachedSession>>,
+    sessions: Query<(Entity, &SessionUiSubtree)>,
+    session_ui_root: Query<Entity, With<SessionUiRoot>>,
 ) {
-    let Ok(session_ui_root) = session_ui_root_q.single() else {
+    let Ok(session_ui_root) = session_ui_root.single() else {
         return;
     };
     let Ok((newly_attached_entity, _newly_attached_sid, newly_attached_subtree)) =
-        attached_q.single()
+        attached_session.single()
     else {
         return;
     };
@@ -32,7 +43,7 @@ pub(crate) fn sync_active_session(
     }
 
     if let Some(prev_session_entity) = *last_attached
-        && let Ok((_, prev_subtree)) = sessions_q.get(prev_session_entity)
+        && let Ok((_, prev_subtree)) = sessions.get(prev_session_entity)
     {
         commands
             .entity(prev_subtree.0)
