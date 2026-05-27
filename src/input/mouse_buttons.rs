@@ -338,6 +338,49 @@ fn run_autoscroll_tick(
     state.next_autoscroll_at = Some(now + period);
 }
 
+/// Decides whether to synthesize a `Drag` event this frame. Returns
+/// `Some((cell, side))` when the cursor has moved to a different cell
+/// since the last synthesized Drag event for the active drag; `None`
+/// otherwise. Also mutates `state.drag.last_drag_cell` to the new cell
+/// on `Some`. Returns `None` if no drag is in flight or the drag pane's
+/// geometry is unresolvable.
+///
+/// The drag stays anchored to the original pane — out-of-pane cursor
+/// positions clamp to the pane edge so a cursor that wanders into
+/// another pane still extends the original selection.
+fn synthesize_drag_cell(
+    state: &mut MouseSelectionState,
+    cursor_phys: Vec2,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    pane_geometry: Option<(
+        bevy::ui::ComputedNode,
+        bevy::ui::UiGlobalTransform,
+        u16,
+        u16,
+    )>,
+) -> Option<(CellCoord, Side)> {
+    let drag = state.drag.as_ref()?;
+    let (node, transform, cols, rows) = pane_geometry?;
+    // NOTE: UiGlobalTransform.translation is the node CENTER, not the
+    // top-left corner — every hit-test in this file relies on the
+    // `translation ± half * size` form.
+    let pane_top_left = transform.translation - node.size * 0.5;
+    let local = (cursor_phys - pane_top_left).clamp(Vec2::ZERO, node.size);
+    let (col, row, side) = cell_at_local(local, cell_w_phys, cell_h_phys, cols, rows);
+    let cell = CellCoord { col, row };
+    let last = drag.last_drag_cell.unwrap_or(drag.anchor_cell);
+    if last == cell {
+        return None;
+    }
+    // Record the new last_drag_cell BEFORE the caller routes the event,
+    // so re-entrancy can't loop.
+    if let Some(drag) = state.drag.as_mut() {
+        drag.last_drag_cell = Some(cell);
+    }
+    Some((cell, side))
+}
+
 /// Per-frame system entrypoint. Drains `MouseButtonInput`, hit-tests
 /// against activity hosts, tracks click count, dispatches every
 /// press/release through `ButtonAction::route`, and pre-routes
@@ -399,10 +442,9 @@ fn dispatch_mouse_buttons(
         max_protocol_events_per_frame: configs.mouse.max_protocol_events_per_frame,
     };
 
-    // Drain CursorMoved events — Drag events are NOT synthesized in
-    // this task; Task 19's drag-scroll loop reads cursor position
-    // separately, and the dispatch_mouse_buttons system only fires on
-    // explicit button transitions.
+    // We don't need per-event CursorMoved details — the drag-event
+    // synthesizer below reads `cursor_phys` directly. Drain so the
+    // reader's queue doesn't grow unbounded.
     cursor_msg.clear();
 
     for ev in buttons_msg.read() {
@@ -474,6 +516,48 @@ fn dispatch_mouse_buttons(
             &mut handles,
             &copy_mode_q,
         );
+    }
+
+    // Drag-event synthesis (spec §4). While `state.drag.is_some()`, turn
+    // cursor motion into `ButtonEventKind::Drag` events anchored to the
+    // drag pane. De-duplicated by cell (spec §4.3): only one Drag event
+    // per cell crossing per frame.
+    if let Some(drag_entity) = state.drag.as_ref().map(|d| d.entity) {
+        let pane_geometry = hosts_q.get(drag_entity).ok().and_then(|(_, node, xf)| {
+            handles.get(drag_entity).ok().map(|(h, _, _)| {
+                let (cols, rows, _) = h.read_geometry();
+                (*node, *xf, cols, rows)
+            })
+        });
+        if let Some((cell, side)) = synthesize_drag_cell(
+            &mut state,
+            cursor_phys,
+            cell_w_phys,
+            cell_h_phys,
+            pane_geometry,
+        ) {
+            let modes = match handles.get(drag_entity) {
+                Ok((h, _, _)) => h.current_modes(),
+                Err(_) => return,
+            };
+            let evt = bevy_terminal::ButtonEvent {
+                kind: bevy_terminal::ButtonEventKind::Drag,
+                button: bevy_terminal::MouseButtonKind::Left,
+                cell,
+                side,
+                click_count: 1,
+            };
+            let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
+            apply_action(
+                &mut state,
+                evt.kind,
+                evt.button,
+                action,
+                drag_entity,
+                &mut handles,
+                &copy_mode_q,
+            );
+        }
     }
 
     // Drag-scroll loop. Runs every frame while a left-drag is active
@@ -1114,5 +1198,98 @@ mod tests {
             drag.is_active(),
             "phase must be Active after first inter-cell update"
         );
+    }
+
+    #[test]
+    fn synthesize_drag_cell_emits_once_per_cell_crossing() {
+        // Fixture: an Active drag anchored at (1, 1) in a pane sized
+        // 800×480 physical px, centered at (400, 240) — so its
+        // top-left corner is (0, 0) and bottom-right is (800, 480).
+        // Cell pitch is 10×20 physical px → 80 cols, 24 rows.
+        let mut state = MouseSelectionState::default();
+        state.drag = Some(ActiveDrag {
+            entity: Entity::from_bits(1),
+            anchor_cell: CellCoord { col: 1, row: 1 },
+            last_drag_cell: None,
+            phase: DragPhase::Active,
+        });
+
+        let mut node = bevy::ui::ComputedNode::default();
+        node.size = Vec2::new(800.0, 480.0);
+        let transform = bevy::ui::UiGlobalTransform::from_xy(400.0, 240.0);
+
+        // Cursor at (155, 25) → pane-local (155, 25). With 10×20-px
+        // cells, that's col floor(155/10)+1 = 16, row floor(25/20)+1
+        // = 2. frac_x = 0.5 → Side::Right.
+        let result = super::synthesize_drag_cell(
+            &mut state,
+            Vec2::new(155.0, 25.0),
+            10.0,
+            20.0,
+            Some((node, transform, 80, 24)),
+        );
+        assert_eq!(
+            result,
+            Some((CellCoord { col: 16, row: 2 }, Side::Right)),
+            "first call must emit a Drag event at the new cell",
+        );
+        assert_eq!(
+            state.drag.as_ref().unwrap().last_drag_cell,
+            Some(CellCoord { col: 16, row: 2 }),
+            "last_drag_cell must track the most recent emission",
+        );
+
+        // Second call with the same cursor → de-duplicated.
+        let dup = super::synthesize_drag_cell(
+            &mut state,
+            Vec2::new(155.0, 25.0),
+            10.0,
+            20.0,
+            Some((node, transform, 80, 24)),
+        );
+        assert!(dup.is_none(), "second call with same cell must return None");
+    }
+
+    #[test]
+    fn synthesize_drag_cell_returns_none_without_drag() {
+        let mut state = MouseSelectionState::default();
+        let mut node = bevy::ui::ComputedNode::default();
+        node.size = Vec2::new(800.0, 480.0);
+        let transform = bevy::ui::UiGlobalTransform::from_xy(400.0, 240.0);
+        let result = super::synthesize_drag_cell(
+            &mut state,
+            Vec2::new(155.0, 25.0),
+            10.0,
+            20.0,
+            Some((node, transform, 80, 24)),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn synthesize_drag_cell_clamps_out_of_pane_cursor_to_edge() {
+        // Drag anchored at (1, 1); pane top-left at (0, 0), size
+        // 800×480. Cursor at (-50, 500) is outside the pane on both
+        // axes → clamps to (0, 480). With 10×20 cells, that's col 1,
+        // row 24.
+        let mut state = MouseSelectionState::default();
+        state.drag = Some(ActiveDrag {
+            entity: Entity::from_bits(1),
+            anchor_cell: CellCoord { col: 1, row: 1 },
+            last_drag_cell: None,
+            phase: DragPhase::Active,
+        });
+        let mut node = bevy::ui::ComputedNode::default();
+        node.size = Vec2::new(800.0, 480.0);
+        let transform = bevy::ui::UiGlobalTransform::from_xy(400.0, 240.0);
+        let result = super::synthesize_drag_cell(
+            &mut state,
+            Vec2::new(-50.0, 500.0),
+            10.0,
+            20.0,
+            Some((node, transform, 80, 24)),
+        );
+        let (cell, _side) = result.expect("clamped cursor must still emit");
+        assert_eq!(cell, CellCoord { col: 1, row: 24 });
     }
 }
