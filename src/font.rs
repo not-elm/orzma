@@ -34,7 +34,10 @@ impl Plugin for FontBridgePlugin {
         // font override.
         app.add_systems(
             Startup,
-            bridge_font_config.before(TerminalFontInitSet::InitCellMetrics),
+            (
+                bridge_font_config.before(TerminalFontInitSet::InitCellMetrics),
+                register_cjk_fallback_with_cosmic,
+            ),
         );
     }
 }
@@ -80,6 +83,36 @@ fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -
     }
 }
 
+/// Registers the bundled CJK fallback font directly into cosmic-text's
+/// fontdb, making it discoverable as a script-fallback for spans whose
+/// primary `TextFont` lacks CJK coverage.
+///
+/// NOTE: Bevy's `Assets<Font>::add(...)` is NOT sufficient here —
+/// `bevy_text::load_font_to_fontdb` only runs when a `TextFont`
+/// handle pointing at the asset reaches the text pipeline
+/// (`bevy_text-0.18.1/src/pipeline.rs:597-620`). For a fallback that
+/// is never referenced as a primary `TextFont`, call
+/// `db_mut().load_font_source(...)` explicitly so cosmic-text's
+/// `FontFallbackIter::other_i` last-resort loop sees it.
+///
+/// NOTE: zero-copy `Source::Binary` form. `fontdb::Source::Binary`
+/// accepts `Arc<dyn AsRef<[u8]> + Sync + Send>`. The static slice
+/// already lives in `.rodata`, so wrapping it directly (without
+/// `.to_vec()`) avoids a ~3.9 MB allocation + copy at Startup.
+fn register_cjk_fallback_with_cosmic(
+    mut font_system: ResMut<bevy::text::CosmicFontSystem>,
+) {
+    let source = cosmic_text::fontdb::Source::Binary(
+        std::sync::Arc::new(bevy_terminal_renderer::bundled::FALLBACK_REGULAR)
+            as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>,
+    );
+    font_system.db_mut().load_font_source(source);
+    tracing::info!(
+        target: "ozmux_gui::font",
+        "registered UDEVGothic35-Regular into cosmic-text fontdb",
+    );
+}
+
 fn bridge_font_config(
     mut commands: Commands,
     configs: Res<OzmuxConfigsResource>,
@@ -107,8 +140,7 @@ fn bridge_font_config(
         bundled::REGULAR,
         FontFace::Regular,
     );
-    let bold_bytes =
-        load_face_bytes(font.bold_path.as_deref(), bundled::BOLD, FontFace::Bold);
+    let bold_bytes = load_face_bytes(font.bold_path.as_deref(), bundled::BOLD, FontFace::Bold);
     let italic_bytes = load_face_bytes(
         font.italic_path.as_deref(),
         bundled::ITALIC,
@@ -179,8 +211,8 @@ fn make_ui_font_handle(regular_bytes: Vec<u8>, fonts_assets: &mut Assets<Font>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ab_glyph::Font as AbFont;
     use crate::configs::OzmuxConfigsPlugin;
+    use ab_glyph::Font as AbFont;
     use bevy::asset::AssetPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
     use bevy_terminal_renderer::TerminalFontPlugin;
@@ -231,11 +263,14 @@ mod tests {
     }
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
+        use bevy::text::TextPlugin;
+
         let guard = crate::configs::env_guard();
         let env = EnvVarGuard::unset("OZMUX_CONFIG");
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
+            .add_plugins(TextPlugin::default())
             .init_asset::<Font>();
         // Spawn a PrimaryWindow so init_cell_metrics_from_primary_window
         // (which is registered as a Startup system by TerminalFontPlugin)
@@ -309,6 +344,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
+            .add_plugins(bevy::text::TextPlugin::default())
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -334,14 +370,15 @@ mod tests {
 
     #[test]
     fn missing_normal_path_falls_back_to_bundled() {
-        let nonexistent = std::env::temp_dir()
-            .join("ozmux_font_bridge_test_missing.ttf");
+        let nonexistent = std::env::temp_dir().join("ozmux_font_bridge_test_missing.ttf");
         let _ = std::fs::remove_file(&nonexistent);
-        let toml = std::env::temp_dir()
-            .join("ozmux_font_bridge_test_missing.toml");
+        let toml = std::env::temp_dir().join("ozmux_font_bridge_test_missing.toml");
         std::fs::write(
             &toml,
-            format!("[font.normal]\npath = \"{}\"\n", nonexistent.to_string_lossy()),
+            format!(
+                "[font.normal]\npath = \"{}\"\n",
+                nonexistent.to_string_lossy()
+            ),
         )
         .expect("write toml");
 
@@ -350,6 +387,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
+            .add_plugins(bevy::text::TextPlugin::default())
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -393,6 +431,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
+            .add_plugins(bevy::text::TextPlugin::default())
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -414,6 +453,22 @@ mod tests {
 
         let _ = std::fs::remove_file(&normal_path);
         let _ = std::fs::remove_file(&toml);
+    }
+
+    #[test]
+    fn cjk_fallback_registered_in_cosmic_fontdb() {
+        let (mut app, _guard, _env) = make_test_app();
+        app.update();
+
+        let font_system = app.world().resource::<bevy::text::CosmicFontSystem>();
+        let has_udev_face = font_system
+            .db()
+            .faces()
+            .any(|face| face.families.iter().any(|(name, _)| name.contains("UDEV")));
+        assert!(
+            has_udev_face,
+            "UDEVGothic35 must be registered in cosmic-text fontdb after Startup",
+        );
     }
 
     #[test]
@@ -444,6 +499,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
+            .add_plugins(bevy::text::TextPlugin::default())
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),

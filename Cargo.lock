@@ -4576,6 +4576,7 @@ dependencies = [
  "bevy",
  "bevy_terminal",
  "bevy_terminal_renderer",
+ "cosmic-text",
  "ozmux_configs",
  "ozmux_multiplexer",
  "tracing",
