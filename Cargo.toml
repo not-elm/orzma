@@ -21,6 +21,7 @@ cosmic-text = "0.16"
 ozmux_configs = { path = "daemon/configs" }
 ozmux_multiplexer = { path = "daemon/multiplexer" }
 tracing = { workspace = true }
+unicode-width = { workspace = true }
 
 [lints]
 workspace = true
