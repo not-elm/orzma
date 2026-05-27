@@ -85,9 +85,10 @@ pub(crate) struct ImeCaretBar;
 /// All metric inputs are physical px; the function does the
 /// physical→logical conversion via `scale`.
 ///
-/// Layout: the overlay sits **one row below** the cursor cell so the
-/// inline preedit doesn't overlap with the active-line glyph still
-/// rendered by the terminal material. Clamps:
+/// Layout: the overlay sits **at the cursor row**, matching Alacritty.
+/// The composed glyph overlays the terminal-rendered cursor cell for
+/// the duration of composition; this is the conventional placement
+/// users expect from a terminal IME. Clamps:
 ///   - right: if `cell_origin_x + measured_width > host_right`,
 ///     shifts left so the right edge stays inside the host rect.
 ///   - left: after the right-edge clamp, ensures `left >= host_left`
@@ -115,7 +116,7 @@ pub(crate) fn compute_overlay_pos(
     let cell_origin_phys = host_top_left_phys
         + Vec2::new(
             cursor_cell.0 as f32 * cell_w_phys,
-            (cursor_cell.1 as f32 + 1.0) * cell_h_phys,
+            cursor_cell.1 as f32 * cell_h_phys,
         );
     let pos_logical = cell_origin_phys / scale;
 
@@ -355,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn places_overlay_one_row_below_cursor() {
+    fn places_overlay_at_cursor_row() {
         let (translation_phys, size_phys) =
             host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
@@ -366,8 +367,8 @@ mod tests {
             0.0,
             1.0,
         );
-        // y = (row 5 + 1) × 16 = 96
-        assert_eq!(pos.y, 96.0);
+        // y = row 5 × 16 = 80
+        assert_eq!(pos.y, 80.0);
         // x = col 3 × 10 = 30, no clamp
         assert_eq!(pos.x, 30.0);
     }
@@ -377,8 +378,8 @@ mod tests {
         // Logical top-left (100, 0), logical size 800×600, scale 2.0.
         // At scale 2.0: physical size = (1600, 1200), physical
         // top-left = (200, 0), physical center = (1000, 600).
-        // Cursor (0, 0) row-below → cell_origin_phys = (200, 16) →
-        // pos_logical = (100, 8).
+        // Cursor (0, 0) at cursor row → cell_origin_phys = (200, 0) →
+        // pos_logical = (100, 0).
         let (translation_phys, size_phys) =
             host_inputs(Vec2::new(100.0, 0.0), Vec2::new(800.0, 600.0), 2.0);
         let pos = compute_overlay_pos(
@@ -390,13 +391,13 @@ mod tests {
             2.0,
         );
         assert_eq!(pos.x, 100.0);
-        assert_eq!(pos.y, 8.0);
+        assert_eq!(pos.y, 0.0);
     }
 
     #[test]
     fn floors_subpixel_cell_pitch() {
         // advance 10.4 → floor 10; col 10 → x = 100
-        // line_height 16.4 → floor 16; row 1 row-below → y = (1+1) × 16 = 32
+        // line_height 16.4 → floor 16; cursor row 1 → y = 1 × 16 = 16
         let (translation_phys, size_phys) =
             host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
@@ -408,7 +409,7 @@ mod tests {
             1.0,
         );
         assert_eq!(pos.x, 100.0);
-        assert_eq!(pos.y, 32.0);
+        assert_eq!(pos.y, 16.0);
     }
 
     #[test]
@@ -459,7 +460,7 @@ mod tests {
         //
         // Host top-left at logical (10, 20), size 1200×640, cursor (5, 3),
         // metrics 10×16, scale 1.0.
-        // Expected: pos = (10 + 5*10, 20 + (3+1)*16) = (60, 84).
+        // Expected: pos = (10 + 5*10, 20 + 3*16) = (60, 68).
         let (translation_phys, size_phys) =
             host_inputs(Vec2::new(10.0, 20.0), Vec2::new(1200.0, 640.0), 1.0);
         let pos = compute_overlay_pos(
@@ -471,6 +472,6 @@ mod tests {
             1.0,
         );
         assert_eq!(pos.x, 60.0);
-        assert_eq!(pos.y, 84.0);
+        assert_eq!(pos.y, 68.0);
     }
 }
