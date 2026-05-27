@@ -17,7 +17,7 @@ use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
-use bevy::ui::UiGlobalTransform;
+use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_terminal::{TerminalKey, TerminalModifiers};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
@@ -144,7 +144,7 @@ pub(crate) fn ime_policy_system(
     registry: Res<ActivityEntityRegistry>,
     terminal_q: Query<(), With<TerminalActivityMarker>>,
     copy_mode_q: Query<(), With<CopyModeState>>,
-    anchor_q: Query<(&UiGlobalTransform, &TerminalGrid)>,
+    anchor_q: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     mut window_q: Query<&mut Window, With<PrimaryWindow>>,
 ) {
@@ -183,14 +183,22 @@ pub(crate) fn ime_policy_system(
     // top-of-row-below-cursor means macOS's hard-coded ~10 px
     // offset lands the candidate window just under the preedit
     // row, which is what users expect.
-    let Ok((ui_xform, grid)) = anchor_q.get(entity) else {
+    //
+    // NOTE: `UiGlobalTransform.translation` is the CENTER of the
+    // node in PHYSICAL pixels (verified via Bevy 0.18 source:
+    // `bevy_ui-0.18.1/src/layout/mod.rs:239-275` writes
+    // `local_center` into the global transform; `ComputedNode.size`
+    // is also physical px). To get the node's top-left in physical
+    // px, subtract `0.5 * node.size()`. Do NOT multiply translation
+    // by `scale` — it's already physical.
+    let Ok((node, ui_xform, grid)) = anchor_q.get(entity) else {
         return;
     };
     let scale = window.resolution.scale_factor();
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
     let cursor_cell = grid.cursor.clone().unwrap_or_default();
-    let host_origin_phys = ui_xform.translation * scale;
+    let host_origin_phys = ui_xform.translation - 0.5 * node.size();
     let cell_origin_phys = host_origin_phys
         + Vec2::new(
             cursor_cell.x as f32 * cell_w_phys,

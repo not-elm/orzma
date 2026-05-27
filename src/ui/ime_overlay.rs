@@ -83,29 +83,39 @@ pub(crate) struct ImeCaretBar;
 ///     so a very wide composition can't escape the left side of the
 ///     pane.
 pub(crate) fn compute_overlay_pos(
-    ui_global_translation: Vec2,
-    host_size_logical: Vec2,
+    ui_global_translation_phys: Vec2,
+    host_size_phys: Vec2,
     cursor_cell: (u16, u16),
     metrics: &CellMetrics,
     measured_width_logical: f32,
     scale: f32,
 ) -> Vec2 {
+    // NOTE: `UiGlobalTransform.translation` is the CENTER of the
+    // node in PHYSICAL pixels (verified via Bevy 0.18 source:
+    // `bevy_ui-0.18.1/src/layout/mod.rs:239-275`). To get the
+    // top-left we subtract `0.5 * host_size_phys`. We do NOT
+    // multiply by `scale` — translation is already physical. The
+    // earlier draft treated `translation` as logical-px top-left,
+    // producing an offset of ~(host_w/2, host_h/2) at scale=1
+    // (visible in bug1.png) and a compounding unit error at DPR>1.
     let cell_w_phys = metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
-    let host_origin_phys = ui_global_translation * scale;
-    let cell_origin_phys = host_origin_phys
+    let host_top_left_phys = ui_global_translation_phys - 0.5 * host_size_phys;
+    let cell_origin_phys = host_top_left_phys
         + Vec2::new(
             cursor_cell.0 as f32 * cell_w_phys,
             (cursor_cell.1 as f32 + 1.0) * cell_h_phys,
         );
     let pos_logical = cell_origin_phys / scale;
 
-    let host_right = ui_global_translation.x + host_size_logical.x;
+    let host_top_left_logical = host_top_left_phys / scale;
+    let host_size_logical = host_size_phys / scale;
+    let host_left = host_top_left_logical.x;
+    let host_right = host_left + host_size_logical.x;
     let mut left = pos_logical.x;
     if left + measured_width_logical > host_right {
         left = host_right - measured_width_logical;
     }
-    let host_left = ui_global_translation.x;
     if left < host_left {
         left = host_left;
     }
@@ -172,19 +182,12 @@ pub(crate) fn position_ime_overlay(
     // uses the cursor anchor only, so the OS popup is unaffected.
     let measured_width_logical = 0.0;
 
-    // NOTE: ComputedNode.size is in physical px (precedent at
-    // src/ui/terminal.rs::resize_terminals_to_node), so divide by
-    // scale to match compute_overlay_pos's logical-px expectation.
-    // Today this is masked by `measured_width_logical = 0.0` (the
-    // right-edge clamp is virtually unreachable), but the unit
-    // mismatch would silently miscompute the clamp at DPR > 1.0 if
-    // that shortcut is later replaced with a real text-width
-    // measurement.
-    let host_size_logical = node.size / scale;
-
+    // NOTE: pass `ui_xform.translation` (center, physical px) and
+    // `node.size` (physical px) — `compute_overlay_pos` derives
+    // both the top-left and the logical-px clamp bounds internally.
     let pos = compute_overlay_pos(
         ui_xform.translation,
-        host_size_logical,
+        node.size,
         cursor_cell,
         &metrics.metrics,
         measured_width_logical,
@@ -319,11 +322,27 @@ mod tests {
         }
     }
 
+    /// Builds the inputs `compute_overlay_pos` expects from a more
+    /// intuitive `(top_left_logical, size_logical, scale)` spec.
+    /// `UiGlobalTransform.translation` is in physical px and points
+    /// at the node's CENTER; `ComputedNode.size` is in physical px.
+    /// Tests express their setup in logical-px top-left because
+    /// that's how a reader thinks about pane geometry; this helper
+    /// does the conversion.
+    fn host_inputs(top_left_logical: Vec2, size_logical: Vec2, scale: f32) -> (Vec2, Vec2) {
+        let size_phys = size_logical * scale;
+        let top_left_phys = top_left_logical * scale;
+        let center_phys = top_left_phys + 0.5 * size_phys;
+        (center_phys, size_phys)
+    }
+
     #[test]
     fn places_overlay_one_row_below_cursor() {
+        let (translation_phys, size_phys) =
+            host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
-            Vec2::ZERO,
-            Vec2::new(800.0, 600.0),
+            translation_phys,
+            size_phys,
             (3, 5),
             &metrics(10.0, 16.0),
             0.0,
@@ -337,11 +356,16 @@ mod tests {
 
     #[test]
     fn divides_by_scale_factor_for_logical_px() {
-        // translation (100, 0) logical at scale 2.0 → host_origin_phys (200, 0)
-        // cell (0, 0) row-below → cell_origin_phys (200, 16) → logical (100, 8)
+        // Logical top-left (100, 0), logical size 800×600, scale 2.0.
+        // At scale 2.0: physical size = (1600, 1200), physical
+        // top-left = (200, 0), physical center = (1000, 600).
+        // Cursor (0, 0) row-below → cell_origin_phys = (200, 16) →
+        // pos_logical = (100, 8).
+        let (translation_phys, size_phys) =
+            host_inputs(Vec2::new(100.0, 0.0), Vec2::new(800.0, 600.0), 2.0);
         let pos = compute_overlay_pos(
-            Vec2::new(100.0, 0.0),
-            Vec2::new(800.0, 600.0),
+            translation_phys,
+            size_phys,
             (0, 0),
             &metrics(10.0, 16.0),
             0.0,
@@ -355,9 +379,11 @@ mod tests {
     fn floors_subpixel_cell_pitch() {
         // advance 10.4 → floor 10; col 10 → x = 100
         // line_height 16.4 → floor 16; row 1 row-below → y = (1+1) × 16 = 32
+        let (translation_phys, size_phys) =
+            host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
-            Vec2::ZERO,
-            Vec2::new(800.0, 600.0),
+            translation_phys,
+            size_phys,
             (10, 1),
             &metrics(10.4, 16.4),
             0.0,
@@ -372,9 +398,11 @@ mod tests {
         // Cursor at col 78, cell width 10 → cell_origin x = 780.
         // Measured width 100 → would extend to 880, host right = 800.
         // Shift left by 80 → left = 700.
+        let (translation_phys, size_phys) =
+            host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
-            Vec2::ZERO,
-            Vec2::new(800.0, 600.0),
+            translation_phys,
+            size_phys,
             (78, 0),
             &metrics(10.0, 16.0),
             100.0,
@@ -389,14 +417,42 @@ mod tests {
         // cell_origin x = 70, would overflow right → shift to
         // host_right - measured = 80 - 200 = -120, then left clamp →
         // 0 (host_left).
+        let (translation_phys, size_phys) =
+            host_inputs(Vec2::ZERO, Vec2::new(80.0, 600.0), 1.0);
         let pos = compute_overlay_pos(
-            Vec2::ZERO,
-            Vec2::new(80.0, 600.0),
+            translation_phys,
+            size_phys,
             (7, 0),
             &metrics(10.0, 16.0),
             200.0,
             1.0,
         );
         assert_eq!(pos.x, 0.0);
+    }
+
+    #[test]
+    fn host_translated_to_window_offset_does_not_leak_into_cell_origin() {
+        // Regression guard for the bug visible in bug1.png: prior
+        // implementation treated `translation` as top-left, so a
+        // host centered in a 1265×720 window would push the cell
+        // origin by (host_w/2, host_h/2). With the fix, the cell
+        // origin must be the host's top-left + cursor offset, no
+        // matter where the host sits in the window.
+        //
+        // Host top-left at logical (10, 20), size 1200×640, cursor (5, 3),
+        // metrics 10×16, scale 1.0.
+        // Expected: pos = (10 + 5*10, 20 + (3+1)*16) = (60, 84).
+        let (translation_phys, size_phys) =
+            host_inputs(Vec2::new(10.0, 20.0), Vec2::new(1200.0, 640.0), 1.0);
+        let pos = compute_overlay_pos(
+            translation_phys,
+            size_phys,
+            (5, 3),
+            &metrics(10.0, 16.0),
+            0.0,
+            1.0,
+        );
+        assert_eq!(pos.x, 60.0);
+        assert_eq!(pos.y, 84.0);
     }
 }
