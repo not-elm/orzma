@@ -6,6 +6,7 @@
 //! `position_ime_overlay`), and the marker components identifying the
 //! root, pre-caret span, post-caret span, and caret bar.
 
+use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
 use crate::input::resolve_focused_terminal;
 use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
@@ -19,7 +20,7 @@ use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, Query, Res};
 use bevy::math::Vec2;
 use bevy::prelude::default;
-use bevy::text::{TextColor, TextSpan, Underline, UnderlineColor};
+use bevy::text::{TextColor, TextFont, TextSpan, Underline, UnderlineColor};
 use bevy::ui::widget::Text;
 use bevy::ui::{
     BackgroundColor, ComputedNode, Display, GlobalZIndex, Node, PositionType, UiGlobalTransform,
@@ -231,10 +232,16 @@ pub(crate) fn position_ime_overlay(
 const IME_OVERLAY_Z: i32 = 200;
 
 /// Spawns the single overlay entity tree.
-fn spawn_ime_overlay_once(mut commands: Commands) {
+fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) {
+    let text_font = TextFont {
+        font: ui_font.0.clone(),
+        font_size: bevy_terminal_renderer::FONT_SIZE_PX,
+        ..default()
+    };
     let root = commands
         .spawn((
             Text::new(""),
+            text_font.clone(),
             Node {
                 position_type: PositionType::Absolute,
                 display: Display::None,
@@ -254,6 +261,7 @@ fn spawn_ime_overlay_once(mut commands: Commands) {
 
     commands.spawn((
         TextSpan::new(""),
+        text_font.clone(),
         TextColor(color),
         Underline,
         UnderlineColor(color),
@@ -276,6 +284,7 @@ fn spawn_ime_overlay_once(mut commands: Commands) {
     ));
     commands.spawn((
         TextSpan::new(""),
+        text_font.clone(),
         TextColor(color),
         Underline,
         UnderlineColor(color),
