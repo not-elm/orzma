@@ -14,13 +14,12 @@ use crate::ui::registry::ActivityEntityRegistry;
 use bevy::app::{App, Plugin, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
-use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::query::{With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, Query, Res};
 use bevy::math::Vec2;
 use bevy::prelude::default;
-use bevy::text::{TextColor, TextFont, Underline, UnderlineColor};
+use bevy::text::{LineBreak, TextColor, TextFont, TextLayout, Underline, UnderlineColor};
 use bevy::ui::widget::Text;
 use bevy::ui::{
     BackgroundColor, ComputedNode, Display, GlobalZIndex, Node, PositionType, UiGlobalTransform,
@@ -72,7 +71,10 @@ impl Plugin for ImeOverlayPlugin {
 #[derive(Component)]
 pub(crate) struct ImeOverlayNode;
 
-/// Marker for the 1-px sibling `Node` that draws the caret bar.
+/// Marker for the 1-px `Node` that draws the caret bar. Spawned as a
+/// top-level UI entity (NOT a child of [`ImeOverlayNode`]) so the
+/// `Text` root stays a taffy leaf — required for `NodeMeasure::Text`
+/// to drive its `ComputedNode.size`.
 #[derive(Component)]
 pub(crate) struct ImeCaretBar;
 
@@ -227,9 +229,12 @@ pub(crate) fn position_ime_overlay(
 
     if let Ok(mut bar) = bar_q.single_mut() {
         if comp.caret().is_some() {
+            // Caret bar is a top-level UI entity (not a child of the
+            // Text root), so its position is in window-absolute coords:
+            // overlay origin + per-character horizontal offset.
             bar.display = Display::Flex;
-            bar.left = Val::Px(approx_caret_x_logical);
-            bar.top = Val::Px(0.0);
+            bar.left = Val::Px(pos.x + approx_caret_x_logical);
+            bar.top = Val::Px(pos.y);
             bar.height = Val::Px(line_h_logical);
         } else {
             bar.display = Display::None;
@@ -243,17 +248,27 @@ const IME_OVERLAY_Z: i32 = 200;
 
 /// Spawns the overlay entity tree.
 ///
-/// NOTE: The architecture was originally a root `Text` + two
-/// `TextSpan` children (pre-caret + post-caret) + a sibling caret-bar
-/// `Node`. That collapsed to a single `Text` root because the
-/// parent-child text-collection path in Bevy 0.18 wasn't reliably
-/// rendering the spans (the previous draft's invisible-preedit bug
-/// reproduced even after the system-ordering fix in `81a6c45`). A
-/// single root `Text` is the simplest Bevy-supported pattern: the
-/// `Text(String)` content shapes through cosmic-text directly,
-/// `Underline` + `UnderlineColor` on the same entity underline the
-/// whole text, and the caret bar still lives as a sibling `Node`
-/// positioned by counting characters in the prefix.
+/// NOTE: `Text` root and caret bar are spawned as INDEPENDENT
+/// top-level UI entities (no `ChildOf` between them). Required by
+/// Bevy 0.18 + Taffy 0.9.2: `NodeMeasure::Text` is only consulted by
+/// `compute_leaf_layout`, dispatched at `(_, has_children == false)`
+/// in `taffy-0.9.2/src/tree/taffy_tree.rs:364-394`. Adding any UI
+/// child (even an absolute-positioned one that contributes 0 to flex
+/// container size) puts the Text node on the `compute_flexbox_layout`
+/// branch, which ignores the measure function — `ComputedNode.size`
+/// becomes (0, 0), `bevy_ui_render` then skips text + underline at
+/// `uinode.is_empty()` (`bevy_ui_render-0.18.1/src/lib.rs:939, 1197`),
+/// while the child caret bar still renders because its own
+/// `ComputedNode` is non-empty (explicit width/height). Both
+/// entities are positioned in window-absolute coords each frame in
+/// `position_ime_overlay`.
+///
+/// `LineBreak::NoWrap` is set as defense-in-depth: with it,
+/// `measure_text_system` uses `FixedMeasure { size: measure.max }`
+/// (`bevy_ui-0.18.1/src/widget/text.rs:292-295`) and `text_system`
+/// uses `TextBounds::UNBOUNDED` (`:351-353`) — bypassing any residual
+/// zero-bound shaping. Single-line preedit text never needs wrapping
+/// anyway.
 ///
 /// TODO: bind TextColor / UnderlineColor / BackgroundColor to theme
 /// tokens (`text-foreground` / `bg-background`) once the theme-token
@@ -266,24 +281,26 @@ fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) 
     };
     let color = Color::WHITE;
 
-    let root = commands
-        .spawn((
-            Text::new(""),
-            text_font.clone(),
-            TextColor(color),
-            Underline,
-            UnderlineColor(color),
-            Node {
-                position_type: PositionType::Absolute,
-                display: Display::None,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                ..default()
-            },
-            GlobalZIndex(IME_OVERLAY_Z),
-            ImeOverlayNode,
-        ))
-        .id();
+    commands.spawn((
+        Text::new(""),
+        text_font.clone(),
+        TextColor(color),
+        TextLayout {
+            linebreak: LineBreak::NoWrap,
+            ..default()
+        },
+        Underline,
+        UnderlineColor(color),
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            ..default()
+        },
+        GlobalZIndex(IME_OVERLAY_Z),
+        ImeOverlayNode,
+    ));
 
     commands.spawn((
         Node {
@@ -296,8 +313,8 @@ fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) 
             ..default()
         },
         BackgroundColor(color),
+        GlobalZIndex(IME_OVERLAY_Z),
         ImeCaretBar,
-        ChildOf(root),
     ));
 }
 
