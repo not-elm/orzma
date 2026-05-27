@@ -7,4 +7,9 @@ pub enum OzmuxSystems {
     SessionUi,
     /// The phase that setup activities.
     SetupActivity,
+    /// Per-frame input handling — keyboard and mouse. Members are
+    /// ordered: `dispatch_mouse_buttons` runs `.before(dispatch_focused_key)`
+    /// so click-to-focus mutates `Session::active_pane` before the
+    /// keyboard chord dispatcher reads it in the same frame.
+    Input,
 }

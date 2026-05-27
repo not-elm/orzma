@@ -1,6 +1,6 @@
 //! Bevy system that translates mouse-wheel input into either host
 //! scrollback adjustments or PTY-bound mouse / arrow-key bytes via the
-//! pure router in `bevy_terminal::wheel`.
+//! pure router in `bevy_terminal::wheel::WheelAction::route`.
 //!
 //! Per-frame flow:
 //!
@@ -19,7 +19,7 @@
 //!    to `(1, 1)`).
 //! 6. Build `WheelModifiers` from `ButtonInput<KeyCode>` using the
 //!    config's `fine_modifier` to set `mods.fine`.
-//! 7. Call `bevy_terminal::route_wheel` once; dispatch the returned
+//! 7. Call `WheelAction::route` once; dispatch the returned
 //!    `WheelAction` to the focused entity's `TerminalHandle`.
 
 use bevy::input::ButtonInput;
@@ -29,7 +29,6 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_terminal::{
     CellCoord, Coalescer, PtyHandle, TerminalHandle, WheelAction, WheelConfig, WheelModifiers,
-    route_wheel,
 };
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use ozmux_configs::mouse::FineModifier;
@@ -49,8 +48,10 @@ pub(crate) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WheelAccumulator>()
-            .add_systems(Update, dispatch_mouse_wheel);
+        app.init_resource::<WheelAccumulator>().add_systems(
+            Update,
+            dispatch_mouse_wheel.in_set(crate::system_set::OzmuxSystems::Input),
+        );
     }
 }
 
@@ -79,8 +80,8 @@ fn dispatch_mouse_wheel(
         .next()
         .map(|w| w.scale_factor())
         .unwrap_or(1.0);
-    let cell_w_logical = (metrics.metrics.advance_phys / dpr).max(1.0);
-    let cell_h_logical = (metrics.metrics.line_height_phys / dpr).max(1.0);
+    let cell_w_logical = (metrics.metrics.advance_phys.floor() / dpr).max(1.0);
+    let cell_h_logical = (metrics.metrics.line_height_phys.floor() / dpr).max(1.0);
 
     let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
         return;
@@ -102,7 +103,7 @@ fn dispatch_mouse_wheel(
     let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
         return;
     };
-    let action = route_wheel(
+    let action = WheelAction::route(
         handle.current_modes(),
         notches,
         cursor,
