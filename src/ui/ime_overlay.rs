@@ -27,11 +27,11 @@ use bevy::ui::{
     UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
+use bevy_terminal_renderer::material::TerminalMaterialSystems;
+use bevy_terminal_renderer::prelude::TerminalGrid;
 use bevy_terminal_renderer::CellMetrics;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::TerminalFontInitSet;
-use bevy_terminal_renderer::material::TerminalMaterialSystems;
-use bevy_terminal_renderer::prelude::TerminalGrid;
 use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -205,22 +205,31 @@ pub(crate) fn position_ime_overlay(
     let Ok((mut root_node, mut root_text)) = root_q.single_mut() else {
         return;
     };
+    let mut bar = bar_q.single_mut().ok();
+    let mut clause = clause_q.single_mut().ok();
+
+    // Default: hide every overlay part. The success path below re-shows
+    // root + (bar OR clause) as needed. Every early-return arm leaves
+    // these set to Display::None so the bar/clause don't leak past a
+    // commit / cancel / focus-loss.
+    root_node.display = Display::None;
+    if let Some(b) = bar.as_mut() {
+        b.display = Display::None;
+    }
+    if let Some(c) = clause.as_mut() {
+        c.display = Display::None;
+    }
 
     let Some(comp) = state.composition() else {
-        root_node.display = Display::None;
         return;
     };
-
     let Some(entity) = resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
-        root_node.display = Display::None;
         return;
     };
     let Ok((node, ui_xform, grid)) = anchor_q.get(entity) else {
-        root_node.display = Display::None;
         return;
     };
     let Ok(window) = window_q.single() else {
-        root_node.display = Display::None;
         return;
     };
 
@@ -275,32 +284,28 @@ pub(crate) fn position_ime_overlay(
     let clause_x_logical = pos.x + begin_cells * cell_w_logical;
     let clause_w_logical = (end_cells - begin_cells) * cell_w_logical;
 
-    if let Ok(mut bar) = bar_q.single_mut() {
-        if has_beam {
+    if has_beam {
+        if let Some(b) = bar.as_mut() {
             // Caret bar is a top-level UI entity (not a child of the
             // Text root), so its position is in window-absolute coords:
             // overlay origin + per-character horizontal offset.
-            bar.display = Display::Flex;
-            bar.left = Val::Px(beam_x_logical);
-            bar.top = Val::Px(pos.y);
-            bar.height = Val::Px(line_h_logical);
-        } else {
-            bar.display = Display::None;
+            b.display = Display::Flex;
+            b.left = Val::Px(beam_x_logical);
+            b.top = Val::Px(pos.y);
+            b.height = Val::Px(line_h_logical);
         }
     }
 
-    if let Ok(mut clause) = clause_q.single_mut() {
-        if has_clause {
+    if has_clause {
+        if let Some(c) = clause.as_mut() {
             // Hollow block over the macOS-IME clause-selection range.
             // Positioned in window-absolute coords for the same
             // leaf-Text-no-children reason as ImeCaretBar.
-            clause.display = Display::Flex;
-            clause.left = Val::Px(clause_x_logical);
-            clause.top = Val::Px(pos.y);
-            clause.width = Val::Px(clause_w_logical);
-            clause.height = Val::Px(line_h_logical);
-        } else {
-            clause.display = Display::None;
+            c.display = Display::Flex;
+            c.left = Val::Px(clause_x_logical);
+            c.top = Val::Px(pos.y);
+            c.width = Val::Px(clause_w_logical);
+            c.height = Val::Px(line_h_logical);
         }
     }
 }
