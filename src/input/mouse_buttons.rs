@@ -28,7 +28,6 @@ struct ActiveDrag {
     in_copy_mode: bool,
 }
 
-#[allow(dead_code)] // fields populated in subsequent tasks
 struct LastClick {
     entity: Entity,
     cell: CellCoord,
@@ -61,7 +60,6 @@ impl Plugin for MouseButtonsInputPlugin {
 /// `cursor_phys_px` is in physical (DPR-scaled) pixels — the caller
 /// must convert from `Window::cursor_position()` (logical) by
 /// multiplying by `Window::scale_factor()` first.
-#[allow(dead_code)] // wired into dispatch_mouse_buttons in subsequent tasks
 pub(crate) fn resolve_pane_at_phys(
     hosts: &Query<
         (
@@ -121,7 +119,6 @@ pub(crate) fn cell_at_local(
 ///   - 1 if `now - last_click.at >= double_click_timeout`
 ///   - 1 if cursor drift exceeds `click_drift_px`
 ///   - else `(last_click.count % 3) + 1` (triple wraps to 1)
-#[allow(dead_code)] // wired into dispatch_mouse_buttons in subsequent tasks
 pub(crate) fn next_click_count(
     state: &mut MouseSelectionState,
     cfg: &ozmux_configs::mouse::MouseConfig,
@@ -361,8 +358,8 @@ fn dispatch_mouse_buttons(
         return;
     };
     let cursor_phys = cursor_logical * scale;
-    let cell_w_phys = metrics.metrics.advance_phys.max(1.0);
-    let cell_h_phys = metrics.metrics.line_height_phys.max(1.0);
+    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
 
     let mods = crate::input::current_modifiers(&keys);
     let proto_mods = bevy_terminal::ProtocolModifiers {

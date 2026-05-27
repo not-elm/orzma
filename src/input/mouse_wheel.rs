@@ -80,8 +80,8 @@ fn dispatch_mouse_wheel(
         .next()
         .map(|w| w.scale_factor())
         .unwrap_or(1.0);
-    let cell_w_logical = (metrics.metrics.advance_phys / dpr).max(1.0);
-    let cell_h_logical = (metrics.metrics.line_height_phys / dpr).max(1.0);
+    let cell_w_logical = (metrics.metrics.advance_phys.floor() / dpr).max(1.0);
+    let cell_h_logical = (metrics.metrics.line_height_phys.floor() / dpr).max(1.0);
 
     let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
         return;

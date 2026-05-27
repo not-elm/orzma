@@ -73,7 +73,12 @@ fn encode_sgr(
     if mods.shift {
         cb += 4;
     }
-    if mods.meta {
+    // OS-level Alt (Option on macOS) is xterm's "meta" bit. Treat either
+    // ProtocolModifiers.alt OR ProtocolModifiers.meta as setting bit 3.
+    // This means callers can pass alt and meta independently and the
+    // encoder picks the correct wire encoding — wheel and button paths
+    // both benefit.
+    if mods.alt || mods.meta {
         cb += 8;
     }
     if mods.ctrl {
@@ -107,7 +112,12 @@ fn encode_x10(
     if mods.shift {
         cb += 4;
     }
-    if mods.meta {
+    // OS-level Alt (Option on macOS) is xterm's "meta" bit. Treat either
+    // ProtocolModifiers.alt OR ProtocolModifiers.meta as setting bit 3.
+    // This means callers can pass alt and meta independently and the
+    // encoder picks the correct wire encoding — wheel and button paths
+    // both benefit.
+    if mods.alt || mods.meta {
         cb += 8;
     }
     if mods.ctrl {
@@ -221,6 +231,41 @@ mod tests {
             false,
         );
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 32, 255, 255]);
+    }
+
+    #[test]
+    fn alt_modifier_sets_meta_bit_in_sgr() {
+        // OS-level Alt → +8 (xterm meta), independent of meta field.
+        let bytes = encode_protocol_event(
+            TermMode::SGR_MOUSE,
+            0,
+            cell(5, 5),
+            ProtocolModifiers {
+                alt: true,
+                ..Default::default()
+            },
+            false,
+            false,
+        );
+        assert_eq!(bytes, b"\x1b[<8;5;5M");
+    }
+
+    #[test]
+    fn alt_and_meta_dont_double_count() {
+        // Both set → still +8, not +16.
+        let bytes = encode_protocol_event(
+            TermMode::SGR_MOUSE,
+            0,
+            cell(5, 5),
+            ProtocolModifiers {
+                alt: true,
+                meta: true,
+                ..Default::default()
+            },
+            false,
+            false,
+        );
+        assert_eq!(bytes, b"\x1b[<8;5;5M");
     }
 
     #[test]
