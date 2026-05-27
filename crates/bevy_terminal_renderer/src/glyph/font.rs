@@ -45,8 +45,7 @@ impl Plugin for TerminalFontPlugin {
         }
         app.add_systems(
             Startup,
-            init_cell_metrics_from_primary_window
-                .in_set(TerminalFontInitSet::InitCellMetrics),
+            init_cell_metrics_from_primary_window.in_set(TerminalFontInitSet::InitCellMetrics),
         );
     }
 }
@@ -198,28 +197,25 @@ impl TerminalFonts {
         fallback_italic: Vec<u8>,
         fallback_bold_italic: Vec<u8>,
     ) -> Result<Self, FontLoadError> {
-        let regular = FontArc::try_from_vec(regular).map_err(|source| {
-            FontLoadError::ParseFailed {
+        let regular =
+            FontArc::try_from_vec(regular).map_err(|source| FontLoadError::ParseFailed {
                 face: FontFace::Regular,
                 source,
-            }
-        })?;
-        let bold =
-            FontArc::try_from_vec(bold).map_err(|source| FontLoadError::ParseFailed {
-                face: FontFace::Bold,
-                source,
             })?;
+        let bold = FontArc::try_from_vec(bold).map_err(|source| FontLoadError::ParseFailed {
+            face: FontFace::Bold,
+            source,
+        })?;
         let italic =
             FontArc::try_from_vec(italic).map_err(|source| FontLoadError::ParseFailed {
                 face: FontFace::Italic,
                 source,
             })?;
-        let bold_italic = FontArc::try_from_vec(bold_italic).map_err(|source| {
-            FontLoadError::ParseFailed {
+        let bold_italic =
+            FontArc::try_from_vec(bold_italic).map_err(|source| FontLoadError::ParseFailed {
                 face: FontFace::BoldItalic,
                 source,
-            }
-        })?;
+            })?;
         let fallback_regular = FontArc::try_from_vec(fallback_regular).map_err(|source| {
             FontLoadError::ParseFailed {
                 face: FontFace::Regular,

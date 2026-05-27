@@ -26,15 +26,22 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 ///
 /// `Cell::Root` appearing mid-recursion is treated as an invariant
 /// violation (warn-and-skip); the entry point in
-/// `rebuild_structure_on_change` is expected to unwrap into
+/// `rebuild_session_ui_on_data_change` is expected to unwrap into
 /// `RootCell::child` first.
+///
+/// `inactive_host_parent` — the Entity under which inactive Activity hosts
+/// (within this session) are parked. In production this is the owning
+/// Session entity itself, which lacks `Node`, so the host falls out of
+/// Bevy's UI walker (`UiChildren::iter_ui_children` filters `With<Node>`).
+/// This is the mechanism that replaces the previous `hidden_stash`
+/// `Display::None` workaround.
 pub(crate) fn build_cell_recursive(
     commands: &mut Commands,
     parent: Entity,
     session: &Session,
     cell_id: &CellId,
     registry: &mut ActivityEntityRegistry,
-    hidden_stash: Entity,
+    inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
 ) {
     let cell = match session.cells.cell(cell_id) {
@@ -59,7 +66,15 @@ pub(crate) fn build_cell_recursive(
                 cell_id,
             );
         }
-        Cell::Pane(p) => build_pane(commands, parent, session, p, registry, hidden_stash, ui_font),
+        Cell::Pane(p) => build_pane(
+            commands,
+            parent,
+            session,
+            p,
+            registry,
+            inactive_host_parent,
+            ui_font,
+        ),
         Cell::Split(s) => {
             let (lhs_grow, rhs_grow) = split_ratio_to_flex_grows(s.lhs_weight, s.rhs_weight);
             let dir = match s.orientation {
@@ -97,7 +112,7 @@ pub(crate) fn build_cell_recursive(
                 session,
                 &s.lhs_cell,
                 registry,
-                hidden_stash,
+                inactive_host_parent,
                 ui_font,
             );
 
@@ -118,7 +133,7 @@ pub(crate) fn build_cell_recursive(
                 session,
                 &s.rhs_cell,
                 registry,
-                hidden_stash,
+                inactive_host_parent,
                 ui_font,
             );
         }
@@ -131,7 +146,7 @@ fn build_pane(
     session: &Session,
     pane_cell: &ozmux_multiplexer::PaneCell,
     registry: &mut ActivityEntityRegistry,
-    hidden_stash: Entity,
+    inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
 ) {
     let Some(pane) = session.panes.get(&pane_cell.pane) else {
@@ -177,26 +192,19 @@ fn build_pane(
         ))
         .id();
 
-    // NOTE: every Activity in this pane gets `get_or_spawn` so its host
-    // Entity (and the `TerminalBundle` / `PtyHandle` / alacritty `Term`
-    // attached by `finish_terminal_setup`) survives focus changes.
-    //
-    // The active activity is parented onto `activity_slot` and gets its
-    // visible Node bundle via `build_activity_host_children`. Inactive
-    // hosts are parented onto `hidden_stash` — a Display::None container
-    // owned by `rebuild_structure_on_change`. The stash approach keeps
-    // every host with a valid `ChildOf` every frame, which taffy's UI
-    // layout requires: toggling `Node.display` on an unparented host
-    // panics taffy with "invalid SlotMap key used" when the same host
-    // alternates between active and inactive across rebuilds (seen when
-    // switching focus between two terminal Activities running neovim).
+    // NOTE: Inactive activity hosts are parked under `inactive_host_parent`,
+    // which the caller guarantees is a non-`Node` entity (the owning
+    // Session). The UI walker filters `With<Node>` on parents in
+    // `UiChildren::iter_ui_children`, so inactive hosts never appear in
+    // `ui_layout_system`'s traversal — no layout, no `ComputedNode`
+    // updates, no resize-pass work.
     for activity in &pane.activities {
         let host = registry.get_or_spawn(commands, &activity.id, &activity.kind);
         if activity.id == pane.active_activity {
             commands.entity(host).insert(ChildOf(activity_slot));
             crate::ui::activity::build_activity_host_children(commands, host, activity);
         } else {
-            commands.entity(host).insert(ChildOf(hidden_stash));
+            commands.entity(host).insert(ChildOf(inactive_host_parent));
         }
     }
 }
