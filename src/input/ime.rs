@@ -171,10 +171,18 @@ pub(crate) fn ime_policy_system(
         return;
     }
 
-    // NOTE: Anchor `ime_position` at the cursor cell origin (no
-    // row-below offset — that offset is only used for the inline
-    // overlay; the OS candidate window has its own placement logic
-    // relative to this point).
+    // NOTE: Anchor `ime_position` at the TOP of the row BELOW the
+    // cursor (the same anchor the inline overlay uses in
+    // `compute_overlay_pos`). Reasoning: macOS treats the rect
+    // `set_ime_cursor_area(origin, size)` as the marked-text
+    // bounding box and places the candidate window just below
+    // `origin.y + size.height`. Bevy 0.18 hard-codes that size to
+    // `PhysicalSize::new(10, 10)`
+    // (`bevy_winit-0.18.1/src/system.rs:510`) with no way for us
+    // to pass the actual cell height. Anchoring at the
+    // top-of-row-below-cursor means macOS's hard-coded ~10 px
+    // offset lands the candidate window just under the preedit
+    // row, which is what users expect.
     let Ok((ui_xform, grid)) = anchor_q.get(entity) else {
         return;
     };
@@ -186,7 +194,7 @@ pub(crate) fn ime_policy_system(
     let cell_origin_phys = host_origin_phys
         + Vec2::new(
             cursor_cell.x as f32 * cell_w_phys,
-            cursor_cell.y as f32 * cell_h_phys,
+            (cursor_cell.y as f32 + 1.0) * cell_h_phys,
         );
     let pos_logical = cell_origin_phys / scale;
     if window.ime_position != pos_logical {
