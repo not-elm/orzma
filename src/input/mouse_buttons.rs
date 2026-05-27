@@ -269,7 +269,7 @@ fn run_autoscroll_tick(
     } else {
         ((cursor_phys.y - pane_bot) / cell_h_phys).floor().max(0.0) as u32
     };
-    let period_ms = autoscroll_period_ms(&configs, distance_cells);
+    let period_ms = autoscroll_period_ms(configs, distance_cells);
     let period = std::time::Duration::from_millis(period_ms as u64);
 
     let next_at = state.next_autoscroll_at.unwrap_or(now + period);
@@ -506,7 +506,7 @@ fn dispatch_mouse_buttons(
     //    tick would re-arm a phantom anchor.
     if let Some(drag) = state.drag.as_ref() {
         match handles.get(drag.entity) {
-            Ok((handle, _, _)) if should_drop_stale_drag(&handle) => {
+            Ok((handle, _, _)) if should_drop_stale_drag(handle) => {
                 state.drag = None;
                 state.next_autoscroll_at = None;
             }
