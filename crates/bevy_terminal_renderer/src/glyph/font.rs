@@ -21,7 +21,7 @@ pub enum FontLoadError {
 /// Font size in CSS pixels; multiplied by the PrimaryWindow's
 /// `scale_factor` to obtain the physical pixel size fed to
 /// `cell_metrics_px`.
-pub(crate) const FONT_SIZE_PX: f32 = 12.0;
+pub const FONT_SIZE_PX: f32 = 12.0;
 
 /// Public `SystemSet` label used to order systems against the renderer's
 /// cell-metrics initialization. App-level plugins that need to mutate
