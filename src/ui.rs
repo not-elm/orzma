@@ -11,6 +11,7 @@
 //! entity (a non-Node walker-skipped park).
 
 use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::prelude::*;
@@ -79,8 +80,11 @@ pub struct OzmuxUiPlugin;
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActivityEntityRegistry>()
-            .add_plugins((OzmuxTerminalUiPlugin, OzmuxSessionUiPlugin))
-            .add_systems(Startup, root::setup_root_camera_and_ui_root)
+            .add_plugins((
+                OzmuxTerminalUiPlugin,
+                OzmuxSessionUiPlugin,
+                OzmuxUiRootPlugin,
+            ))
             .add_systems(
                 Update,
                 status_bar_sync::rebuild_status_bar_on_session_set_change,

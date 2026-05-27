@@ -2,24 +2,27 @@
 //! Runs after bootstrap, but no longer depends on AttachedSession (which
 //! now lives on session entities, not on the OS window).
 
-use crate::ui::UiRoot;
+use crate::ui::{SessionUiRoot, UiRoot};
+use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::ui::IsDefaultUiCamera;
-use bevy::window::PrimaryWindow;
+use bevy::window::{PrimaryWindow, WindowRef};
 
 /// Marker for the `Camera2d` entity that renders the primary GUI window.
 #[derive(Component)]
-pub(crate) struct WindowCamera;
+pub struct WindowCamera;
 
-/// Spawn the per-window `Camera2d` (tagged `IsDefaultUiCamera` so root
-/// `Node`s without explicit `UiTargetCamera` resolve to it) and the
-/// `UiRoot` Node entity.
-pub(crate) fn setup_root_camera_and_ui_root(
-    mut commands: Commands,
-    primary: Query<Entity, With<PrimaryWindow>>,
-) {
-    let Ok(_window_entity) = primary.single() else {
-        tracing::warn!(
+pub struct OzmuxUiRootPlugin;
+
+impl Plugin for OzmuxUiRootPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, (spawn_camera, spawn_root_ui));
+    }
+}
+
+fn spawn_camera(mut commands: Commands, primary: Query<Entity, With<PrimaryWindow>>) {
+    let Ok(window_entity) = primary.single() else {
+        tracing::error!(
             target: "ozmux_gui::ui",
             "setup_root_camera_and_ui_root: primary window missing",
         );
@@ -28,13 +31,16 @@ pub(crate) fn setup_root_camera_and_ui_root(
 
     commands.spawn((
         Camera2d,
-        // RenderTarget::Window(WindowRef::Entity(window_entity)),
+        RenderTarget::Window(WindowRef::Entity(window_entity)),
         WindowCamera,
         IsDefaultUiCamera,
     ));
+}
 
+fn spawn_root_ui(mut commands: Commands) {
     let ui_root_entity = commands
         .spawn((
+            Name::new("UI Root"),
             Node {
                 flex_direction: bevy::ui::FlexDirection::Column,
                 width: bevy::ui::Val::Percent(100.0),
@@ -42,20 +48,18 @@ pub(crate) fn setup_root_camera_and_ui_root(
                 ..default()
             },
             UiRoot,
-            // NOTE: UiRoot does NOT carry StructuralNode — it must persist
-            // across rebuilds. Its children carry StructuralNode and are
-            // recycled by `rebuild_session_ui_on_data_change`.
         ))
         .id();
 
     commands.spawn((
+        Name::new("Session UI Root"),
         Node {
             flex_grow: 1.0,
             width: bevy::ui::Val::Percent(100.0),
             height: bevy::ui::Val::Percent(100.0),
             ..default()
         },
-        crate::ui::SessionUiRoot,
+        SessionUiRoot,
         ChildOf(ui_root_entity),
     ));
 }
@@ -76,7 +80,7 @@ mod tests {
             },
             PrimaryWindow,
         ));
-        app.add_systems(Startup, setup_root_camera_and_ui_root);
+        app.add_systems(Startup, spawn_root_ui);
         app.update();
         app
     }
