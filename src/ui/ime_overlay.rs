@@ -22,8 +22,8 @@ use bevy::prelude::default;
 use bevy::text::{LineBreak, TextColor, TextFont, TextLayout, Underline, UnderlineColor};
 use bevy::ui::widget::Text;
 use bevy::ui::{
-    BackgroundColor, ComputedNode, Display, GlobalZIndex, Node, PositionType, UiGlobalTransform,
-    UiSystems, Val,
+    BackgroundColor, BorderColor, ComputedNode, Display, GlobalZIndex, Node, PositionType,
+    UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
 use bevy_terminal_renderer::CellMetrics;
@@ -78,6 +78,17 @@ pub(crate) struct ImeOverlayNode;
 /// to drive its `ComputedNode.size`.
 #[derive(Component)]
 pub(crate) struct ImeCaretBar;
+
+/// Marker for the hollow-block `Node` that highlights the macOS-IME
+/// clause-selection range. Spawned as a top-level UI entity (NOT a
+/// child of [`ImeOverlayNode`] — same constraint as [`ImeCaretBar`]
+/// per the parent's leaf-only measure requirement).
+///
+/// Visible only when the composition's caret range has `begin != end`;
+/// in that state, [`ImeCaretBar`] is hidden. The two markers are
+/// mutually exclusive visually.
+#[derive(Component)]
+pub(crate) struct ImeClauseHighlight;
 
 /// Computes the overlay's top-left logical-pixel position relative to
 /// the window origin. Caller is responsible for writing this into
@@ -326,6 +337,22 @@ fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) 
         BackgroundColor(color),
         GlobalZIndex(IME_OVERLAY_Z),
         ImeCaretBar,
+    ));
+
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            border: UiRect::all(Val::Px(1.0)),
+            width: Val::Px(0.0),
+            height: Val::Px(16.0), // TODO: refined at runtime from CellMetrics
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            ..default()
+        },
+        BorderColor::all(color),
+        GlobalZIndex(IME_OVERLAY_Z),
+        ImeClauseHighlight,
     ));
 }
 
