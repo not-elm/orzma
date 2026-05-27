@@ -1,7 +1,7 @@
-use ab_glyph::{Font, OutlinedGlyph, ScaleFont};
+use ab_glyph::{Font, FontArc, OutlinedGlyph, ScaleFont};
 use bevy::{platform::collections::HashMap, prelude::*};
 
-use crate::glyph::font::{GlyphKey, TerminalFonts};
+use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
 
 pub struct TerminalGlyphAtlasPlugin;
 
@@ -47,6 +47,48 @@ pub struct GlyphAtlas {
     shelves: Shelves,
 }
 
+/// Resolves a glyph for the requested codepoint, preferring the
+/// primary face and falling back to `fallback_choice` when the
+/// primary's `glyph_id` is 0 (notdef).
+///
+/// Returns `(font, glyph_id)` for the resolved face, or `None` when
+/// neither primary nor fallback contains the glyph.
+///
+/// Both faces are scaled at `scale` — the primary's `PxScale`. This
+/// is the Alacritty / WezTerm pattern: rasterize fallback at the
+/// primary's size so the grid pitch stays bound to the primary
+/// font's metrics. UDEVGothic35 is JBM-metric-compatible by design.
+///
+/// NOTE: this helper retries on `glyph_id == 0` only — NOT on
+/// degenerate outline (`w == 0 || h == 0`) which is still
+/// short-circuited in `get_or_insert`. A non-zero `glyph_id` with
+/// zero-extent raster indicates a malformed font, not missing
+/// coverage; not worth retrying.
+///
+/// NOTE: we keep PUA Nerd Font icons rendering through the primary
+/// face — UDEVGothic35 doesn't include Nerd Font glyphs, so for
+/// U+E000–U+F8FF the primary's glyph_id is non-zero and we never
+/// reach the fallback path.
+fn resolve_glyph<'a>(
+    fonts: &'a TerminalFonts,
+    face: &FontFace,
+    ch: char,
+    scale: ab_glyph::PxScale,
+) -> Option<(&'a FontArc, ab_glyph::GlyphId)> {
+    use ab_glyph::Font as _;
+    let primary = fonts.choice(face);
+    let id = primary.as_scaled(scale).glyph_id(ch);
+    if id.0 != 0 {
+        return Some((primary, id));
+    }
+    let fallback = fonts.fallback_choice(face);
+    let id = fallback.as_scaled(scale).glyph_id(ch);
+    if id.0 != 0 {
+        return Some((fallback, id));
+    }
+    None
+}
+
 impl GlyphAtlas {
     /// Creates an empty atlas with the given pixel dimensions.
     pub fn new(width: u32, height: u32) -> Self {
@@ -78,26 +120,9 @@ impl GlyphAtlas {
         if let Some(r) = self.glyphs.get(&key) {
             return Some(*r);
         }
-        let font = fonts.choice(&key.face);
         let ch = char::from_u32(key.codepoint)?;
         let scale = ab_glyph::PxScale::from(fonts.px_scale_value(key.size_px));
-        let scaled = font.as_scaled(scale);
-        let glyph_id = scaled.glyph_id(ch);
-        // NOTE: ab_glyph maps unknown codepoints to glyph ID 0 (notdef), and
-        //       outline_glyph happily returns the notdef rectangle ("tofu")
-        //       outline if the font has one — which most do. Bail out before
-        //       rasterizing so combining marks, CJK glyphs missing from the
-        //       monospace face, etc. do not leave a literal tofu in every
-        //       cell. The bundled JetBrains Mono Nerd Font Mono includes PUA
-        //       icons (U+E000–U+F8FF used by neo-tree, nvim-web-devicons,
-        //       lazygit), so those codepoints DO map to non-zero glyph IDs
-        //       and DO rasterize through this path. A user-supplied non-
-        //       Nerd-Font override will fall back to notdef here (and
-        //       short-circuit) for any PUA codepoints, which is the
-        //       desired behavior for monospace fonts without icon coverage.
-        if glyph_id.0 == 0 {
-            return None;
-        }
+        let (font, glyph_id) = resolve_glyph(fonts, &key.face, ch, scale)?;
 
         let outlined = font.outline_glyph(glyph_id.with_scale(scale))?;
         let bounds = outlined.px_bounds();
