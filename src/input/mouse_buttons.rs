@@ -7,7 +7,7 @@
 //! §6.
 
 use bevy::prelude::*;
-use bevy_terminal::{CellCoord, SelectionType, Side};
+use bevy_terminal::{CellCoord, Column, Line, Point, SelectionType, Side};
 use std::time::Instant;
 
 /// Per-frame state for the mouse-selection system.
@@ -152,9 +152,179 @@ pub(crate) fn next_click_count(
     count
 }
 
-/// Per-frame system entrypoint. Skeleton — Tasks 15-20 fill it in.
-fn dispatch_mouse_buttons(_state: ResMut<MouseSelectionState>) {
-    // Filled in by subsequent tasks.
+/// Per-frame system entrypoint. Drains `MouseButtonInput`, hit-tests
+/// against activity hosts, tracks click count, and dispatches every
+/// press/release through `ButtonAction::route`. Click-to-focus
+/// (Task 18) and drag-state tracking + autoscroll (Tasks 19-20) are
+/// layered on later.
+fn dispatch_mouse_buttons(
+    mut state: ResMut<MouseSelectionState>,
+    mut buttons_msg: MessageReader<bevy::input::mouse::MouseButtonInput>,
+    mut cursor_msg: MessageReader<bevy::window::CursorMoved>,
+    keys: Res<ButtonInput<KeyCode>>,
+    configs: Res<crate::configs::OzmuxConfigsResource>,
+    hosts_q: Query<
+        (
+            Entity,
+            &bevy::ui::ComputedNode,
+            &bevy::ui::UiGlobalTransform,
+        ),
+        With<crate::ui::ActivityHostNode>,
+    >,
+    mut handles: Query<(
+        &mut bevy_terminal::TerminalHandle,
+        &mut bevy_terminal::PtyHandle,
+        &mut bevy_terminal::Coalescer,
+    )>,
+    copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+    windows_q: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
+    time: Res<Time<Real>>,
+) {
+    let Ok(window) = windows_q.single() else {
+        buttons_msg.clear();
+        cursor_msg.clear();
+        return;
+    };
+    let scale = window.scale_factor();
+    let Some(cursor_logical) = window.cursor_position() else {
+        buttons_msg.clear();
+        cursor_msg.clear();
+        return;
+    };
+    let cursor_phys = cursor_logical * scale;
+    let cell_w_phys = metrics.metrics.advance_phys.max(1.0);
+    let cell_h_phys = metrics.metrics.line_height_phys.max(1.0);
+
+    let mods = crate::input::current_modifiers(&keys);
+    let proto_mods = bevy_terminal::ProtocolModifiers {
+        shift: mods.shift,
+        ctrl: mods.ctrl,
+        alt: mods.alt,
+        meta: mods.meta,
+    };
+    let cfg = bevy_terminal::ButtonConfig {
+        max_protocol_events_per_frame: configs.mouse.max_protocol_events_per_frame,
+    };
+
+    // Drain CursorMoved events — Drag events are NOT synthesized in
+    // this task; Task 19's drag-scroll loop reads cursor position
+    // separately, and the dispatch_mouse_buttons system only fires on
+    // explicit button transitions.
+    cursor_msg.clear();
+
+    for ev in buttons_msg.read() {
+        let bevy_button = match ev.button {
+            bevy::input::mouse::MouseButton::Left => bevy_terminal::MouseButtonKind::Left,
+            bevy::input::mouse::MouseButton::Middle => bevy_terminal::MouseButtonKind::Middle,
+            bevy::input::mouse::MouseButton::Right => bevy_terminal::MouseButtonKind::Right,
+            _ => continue,
+        };
+        let Some((entity, local)) = resolve_pane_at_phys(&hosts_q, cursor_phys) else {
+            continue;
+        };
+        let (cols, rows) = match handles.get(entity) {
+            Ok((h, _, _)) => {
+                let (c, r, _) = h.read_geometry();
+                (c, r)
+            }
+            Err(_) => continue,
+        };
+        let (col, row, side) = cell_at_local(local, cell_w_phys, cell_h_phys, cols, rows);
+        let cell = bevy_terminal::CellCoord { col, row };
+
+        let kind = match ev.state {
+            bevy::input::ButtonState::Pressed => bevy_terminal::ButtonEventKind::Press,
+            bevy::input::ButtonState::Released => bevy_terminal::ButtonEventKind::Release,
+        };
+
+        let click_count = if matches!(kind, bevy_terminal::ButtonEventKind::Press)
+            && matches!(bevy_button, bevy_terminal::MouseButtonKind::Left)
+        {
+            next_click_count(
+                &mut state,
+                &configs.mouse,
+                entity,
+                cell,
+                cursor_logical,
+                time.last_update().unwrap_or_else(Instant::now),
+            )
+        } else {
+            1
+        };
+
+        // Click-to-focus (Task 18) and drag-state tracking (Task 19)
+        // go here.
+
+        let evt = bevy_terminal::ButtonEvent {
+            kind,
+            button: bevy_button,
+            cell,
+            side,
+            click_count,
+        };
+        let modes = match handles.get(entity) {
+            Ok((h, _, _)) => h.current_modes(),
+            Err(_) => continue,
+        };
+        let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
+        apply_action(action, entity, &mut handles, &copy_mode_q);
+    }
+}
+
+/// Dispatches the router's `ButtonAction` against the focused entity's
+/// `TerminalHandle`. In copy mode, `vi_goto` is issued before any
+/// selection mutation so the vi cursor tracks the moving end of the
+/// selection (see `bevy_terminal::TerminalHandle::vi_goto` docs).
+fn apply_action(
+    action: bevy_terminal::ButtonAction,
+    entity: Entity,
+    handles: &mut Query<(
+        &mut bevy_terminal::TerminalHandle,
+        &mut bevy_terminal::PtyHandle,
+        &mut bevy_terminal::Coalescer,
+    )>,
+    copy_mode_q: &Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+) {
+    use bevy_terminal::ButtonAction as A;
+    let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
+        return;
+    };
+    let in_copy_mode = copy_mode_q.get(entity).is_ok();
+    let to_viewport_point =
+        |c: CellCoord| Point::new(Line((c.row as i32) - 1), Column((c.col as usize) - 1));
+
+    match action {
+        A::Noop => {}
+        A::WriteToPty(bytes) => {
+            if let Err(e) = handle.write(&mut pty, &bytes) {
+                tracing::warn!(?e, ?entity, "mouse-button PTY write failed");
+            }
+        }
+        A::ClearAndWriteToPty(bytes) => {
+            handle.selection_clear(&mut coalescer);
+            if let Err(e) = handle.write(&mut pty, &bytes) {
+                tracing::warn!(?e, ?entity, "mouse-button forwarded press PTY write failed");
+            }
+        }
+        A::StartLocalSelection { ty, cell, side } => {
+            let pt = to_viewport_point(cell);
+            if in_copy_mode {
+                handle.vi_goto(&mut coalescer, pt);
+            }
+            handle.selection_start_at(&mut coalescer, pt, side, ty);
+        }
+        A::UpdateLocalSelection { cell, side } => {
+            let pt = to_viewport_point(cell);
+            if in_copy_mode {
+                handle.vi_goto(&mut coalescer, pt);
+            }
+            handle.selection_update_to(&mut coalescer, pt, side);
+        }
+        A::ClearLocalSelection => {
+            handle.selection_clear(&mut coalescer);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -270,5 +440,30 @@ mod tests {
 
     fn mock_cfg() -> ozmux_configs::mouse::MouseConfig {
         ozmux_configs::mouse::MouseConfig::default()
+    }
+
+    #[test]
+    fn dispatch_translates_left_press_to_simple_selection() {
+        use bevy_terminal::{
+            ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind,
+            ProtocolModifiers, Side, TermMode,
+        };
+
+        let evt = ButtonEvent {
+            kind: ButtonEventKind::Press,
+            button: MouseButtonKind::Left,
+            cell: bevy_terminal::CellCoord { col: 5, row: 5 },
+            side: Side::Left,
+            click_count: 1,
+        };
+        let action = ButtonAction::route(
+            TermMode::empty(),
+            evt,
+            ProtocolModifiers::default(),
+            &ButtonConfig {
+                max_protocol_events_per_frame: 8,
+            },
+        );
+        assert!(matches!(action, ButtonAction::StartLocalSelection { .. }));
     }
 }

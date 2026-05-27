@@ -199,7 +199,7 @@ pub(crate) fn dispatch_focused_key(
     }
 }
 
-fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
+pub(crate) fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
     Modifiers {
         ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
         shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
