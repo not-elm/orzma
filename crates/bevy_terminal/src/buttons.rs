@@ -62,6 +62,17 @@ pub enum ButtonAction {
     /// PTY. Used on forwarded press events so a previous highlight does
     /// not visually persist past a click that goes to the app.
     ClearAndWriteToPty(Vec<u8>),
+    /// A single-click left-press has occurred. The Bevy glue should
+    /// arm a pending drag at `(cell, side)` of type `ty` (always
+    /// `Simple` in current usage) and clear any pre-existing local
+    /// selection, but NOT call `selection_start_at` yet. The selection
+    /// is materialized lazily on the first `UpdateLocalSelection`
+    /// whose cell differs from the armed `cell`.
+    ArmDrag {
+        ty: SelectionType,
+        cell: CellCoord,
+        side: Side,
+    },
     /// Begin a new local selection of `ty` at `(cell, side)`.
     StartLocalSelection {
         ty: SelectionType,

@@ -598,6 +598,21 @@ fn apply_action(
                 tracing::warn!(?e, ?entity, "mouse-button forwarded press PTY write failed");
             }
         }
+        A::ArmDrag { ty, cell, side } => {
+            // Clear any prior selection on the focused pane so the
+            // click does not leave a stale highlight visible (spec §2,
+            // brainstorm Q5).
+            handle.selection_clear(&mut coalescer);
+            state.drag = Some(ActiveDrag {
+                entity,
+                anchor_cell: cell,
+                last_drag_cell: None,
+                phase: DragPhase::Armed {
+                    ty,
+                    anchor_side: side,
+                },
+            });
+        }
         A::StartLocalSelection { ty, cell, side } => {
             let pt = to_viewport_point(cell);
             if in_copy_mode {
@@ -616,10 +631,34 @@ fn apply_action(
         }
         A::UpdateLocalSelection { cell, side } => {
             let pt = to_viewport_point(cell);
-            if in_copy_mode {
-                handle.vi_goto(&mut coalescer, pt);
+            if let Some(drag) = state.drag.as_mut().filter(|d| d.entity == entity) {
+                // Materialize the selection now if the drag is still
+                // Armed (first inter-cell move). Anchor at the press
+                // cell, then extend to the current cell.
+                if let DragPhase::Armed { ty, anchor_side } = drag.phase {
+                    if drag.anchor_cell == cell {
+                        // Still in the press cell — wait for the next
+                        // Drag event. Drag-event synthesis dedupes
+                        // same-cell motion, so this branch is
+                        // defensive — should not normally be hit.
+                        return;
+                    }
+                    let anchor_pt = to_viewport_point(drag.anchor_cell);
+                    if in_copy_mode {
+                        handle.vi_goto(&mut coalescer, anchor_pt);
+                    }
+                    handle.selection_start_at(&mut coalescer, anchor_pt, anchor_side, ty);
+                    drag.phase = DragPhase::Active;
+                }
+                if in_copy_mode {
+                    handle.vi_goto(&mut coalescer, pt);
+                }
+                handle.selection_update_to(&mut coalescer, pt, side);
             }
-            handle.selection_update_to(&mut coalescer, pt, side);
+            // No active or armed drag → silently ignore. Drag events
+            // should only be synthesized when state.drag.is_some();
+            // reaching this arm without a drag would be a logic bug
+            // elsewhere.
         }
         A::ClearLocalSelection => {
             handle.selection_clear(&mut coalescer);
@@ -918,5 +957,162 @@ mod tests {
             phase: DragPhase::Active,
         };
         assert!(super::should_drop_stale_drag(&active, &bundle.handle));
+    }
+
+    #[test]
+    fn apply_action_arm_drag_clears_prior_selection_and_arms_state() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<MouseSelectionState>();
+
+        let opts = bevy_terminal::SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let entity = app.world_mut().spawn(bundle).id();
+
+        // Seed a prior selection so ArmDrag's selection_clear is observable.
+        app.world_mut()
+            .run_system_once(
+                move |mut handles: Query<(
+                    &mut bevy_terminal::TerminalHandle,
+                    &mut bevy_terminal::Coalescer,
+                )>| {
+                    let (mut handle, mut coalescer) = handles.get_mut(entity).unwrap();
+                    let anchor =
+                        bevy_terminal::Point::new(bevy_terminal::Line(2), bevy_terminal::Column(3));
+                    handle.selection_start_at(
+                        &mut coalescer,
+                        anchor,
+                        bevy_terminal::Side::Left,
+                        bevy_terminal::SelectionType::Simple,
+                    );
+                    assert!(
+                        handle.selection_type().is_some(),
+                        "fixture pre-condition: seed selection must exist before ArmDrag"
+                    );
+                },
+            )
+            .unwrap();
+
+        app.world_mut()
+            .run_system_once(
+                move |mut state: ResMut<MouseSelectionState>,
+                      mut handles: Query<(
+                    &mut bevy_terminal::TerminalHandle,
+                    &mut bevy_terminal::PtyHandle,
+                    &mut bevy_terminal::Coalescer,
+                )>,
+                      copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
+                    super::apply_action(
+                        &mut state,
+                        bevy_terminal::ButtonEventKind::Press,
+                        bevy_terminal::MouseButtonKind::Left,
+                        bevy_terminal::ButtonAction::ArmDrag {
+                            ty: bevy_terminal::SelectionType::Simple,
+                            cell: CellCoord { col: 5, row: 7 },
+                            side: bevy_terminal::Side::Right,
+                        },
+                        entity,
+                        &mut handles,
+                        &copy_mode_q,
+                    );
+                },
+            )
+            .unwrap();
+
+        let state = app.world().resource::<MouseSelectionState>();
+        let drag = state.drag.as_ref().expect("ArmDrag must arm state.drag");
+        assert_eq!(drag.entity, entity);
+        assert_eq!(drag.anchor_cell, CellCoord { col: 5, row: 7 });
+        match &drag.phase {
+            DragPhase::Armed { ty, anchor_side } => {
+                assert!(matches!(ty, bevy_terminal::SelectionType::Simple));
+                assert!(matches!(anchor_side, bevy_terminal::Side::Right));
+            }
+            DragPhase::Active => panic!("expected Armed phase, got Active"),
+        }
+
+        // ArmDrag also clears the prior selection on the focused pane.
+        let handle = app
+            .world()
+            .get::<bevy_terminal::TerminalHandle>(entity)
+            .unwrap();
+        assert!(
+            handle.selection_type().is_none(),
+            "ArmDrag must drop any prior selection on the focused pane"
+        );
+    }
+
+    #[test]
+    fn apply_action_update_local_selection_materializes_armed_drag() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<MouseSelectionState>();
+
+        let opts = bevy_terminal::SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let entity = app.world_mut().spawn(bundle).id();
+
+        // Pre-arm a drag at (5, 7) of type Simple.
+        {
+            let mut state = app.world_mut().resource_mut::<MouseSelectionState>();
+            state.drag = Some(ActiveDrag {
+                entity,
+                anchor_cell: CellCoord { col: 5, row: 7 },
+                last_drag_cell: None,
+                phase: DragPhase::Armed {
+                    ty: bevy_terminal::SelectionType::Simple,
+                    anchor_side: bevy_terminal::Side::Left,
+                },
+            });
+        }
+
+        // UpdateLocalSelection at a different cell triggers the transition.
+        app.world_mut()
+            .run_system_once(
+                move |mut state: ResMut<MouseSelectionState>,
+                      mut handles: Query<(
+                    &mut bevy_terminal::TerminalHandle,
+                    &mut bevy_terminal::PtyHandle,
+                    &mut bevy_terminal::Coalescer,
+                )>,
+                      copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
+                    super::apply_action(
+                        &mut state,
+                        bevy_terminal::ButtonEventKind::Drag,
+                        bevy_terminal::MouseButtonKind::Left,
+                        bevy_terminal::ButtonAction::UpdateLocalSelection {
+                            cell: CellCoord { col: 8, row: 7 },
+                            side: bevy_terminal::Side::Right,
+                        },
+                        entity,
+                        &mut handles,
+                        &copy_mode_q,
+                    );
+                },
+            )
+            .unwrap();
+
+        let state = app.world().resource::<MouseSelectionState>();
+        let drag = state.drag.as_ref().expect("drag must remain set");
+        assert!(
+            drag.is_active(),
+            "phase must be Active after first inter-cell update"
+        );
     }
 }
