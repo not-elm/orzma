@@ -207,6 +207,18 @@ pub(crate) fn try_click_to_focus(
     mutated
 }
 
+/// Drag-scroll tick period in ms, given distance past the pane edge in
+/// cells. Linear-step decay from `autoscroll_base_period_ms` floored at
+/// `autoscroll_min_period_ms`.
+pub(crate) fn autoscroll_period_ms(
+    cfg: &ozmux_configs::mouse::MouseConfig,
+    distance_cells: u32,
+) -> u32 {
+    cfg.autoscroll_base_period_ms
+        .saturating_sub(distance_cells * cfg.autoscroll_step_ms)
+        .max(cfg.autoscroll_min_period_ms)
+}
+
 /// Per-frame system entrypoint. Drains `MouseButtonInput`, hit-tests
 /// against activity hosts, tracks click count, dispatches every
 /// press/release through `ButtonAction::route`, and pre-routes
@@ -333,8 +345,112 @@ fn dispatch_mouse_buttons(
             Err(_) => continue,
         };
         let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
+
+        // Drag-state lifecycle: set on local left-press, clear on
+        // left-release. Drag is only meaningful when the press routed
+        // locally (the action carries the SelectionType).
+        if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
+            match (&action, kind) {
+                (
+                    bevy_terminal::ButtonAction::StartLocalSelection { ty, .. },
+                    bevy_terminal::ButtonEventKind::Press,
+                ) => {
+                    state.drag = Some(ActiveDrag {
+                        entity,
+                        ty: *ty,
+                        anchor_cell: cell,
+                        in_copy_mode: copy_mode_q.get(entity).is_ok(),
+                    });
+                }
+                (_, bevy_terminal::ButtonEventKind::Release) => {
+                    state.drag = None;
+                    state.next_autoscroll_at = None;
+                }
+                _ => {}
+            }
+        }
+
         apply_action(action, entity, &mut handles, &copy_mode_q);
     }
+
+    // Drag-scroll loop. Runs every frame while a left-drag is active
+    // and the cursor is past the pane's vertical rect.
+    let now = time.last_update().unwrap_or_else(Instant::now);
+    let Some(drag) = state.drag.as_ref() else {
+        state.next_autoscroll_at = None;
+        return;
+    };
+
+    // Capture pane geometry by value (ComputedNode is Copy + Clone).
+    let Ok((_, node_ref, transform_ref)) = hosts_q.get(drag.entity) else {
+        return;
+    };
+    let node = *node_ref;
+    let transform = *transform_ref;
+
+    // Compute pane vertical rect in physical px. UiGlobalTransform's
+    // translation is the node CENTER, not top-left. The inner field is
+    // private but `UiGlobalTransform: Deref<Target = Affine2>`.
+    let translation = transform.translation;
+    let half = node.size * 0.5;
+    let pane_top = translation.y - half.y;
+    let pane_bot = translation.y + half.y;
+
+    let above = cursor_phys.y < pane_top;
+    let below = cursor_phys.y > pane_bot;
+    if !above && !below {
+        state.next_autoscroll_at = None;
+        return;
+    }
+
+    let distance_cells = if above {
+        ((pane_top - cursor_phys.y) / cell_h_phys).floor().max(0.0) as u32
+    } else {
+        ((cursor_phys.y - pane_bot) / cell_h_phys).floor().max(0.0) as u32
+    };
+    let period_ms = autoscroll_period_ms(&configs.mouse, distance_cells);
+    let period = std::time::Duration::from_millis(period_ms as u64);
+
+    let next_at = state.next_autoscroll_at.unwrap_or(now + period);
+    if now < next_at {
+        state.next_autoscroll_at = Some(next_at);
+        return;
+    }
+
+    // Time to tick. Compute the edge cell (clamped to pane bounds).
+    let edge_local_y = if above { 0.0 } else { node.size.y };
+    let edge_local_x = (cursor_phys.x - (translation.x - half.x)).clamp(0.0, node.size.x);
+    let edge_local = bevy::math::Vec2::new(edge_local_x, edge_local_y);
+
+    let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(drag.entity) else {
+        return;
+    };
+    let (cols, rows, _) = handle.read_geometry();
+    let (col, row, side) = cell_at_local(edge_local, cell_w_phys, cell_h_phys, cols, rows);
+    // 1-indexed cell → 0-indexed viewport point.
+    let pt = bevy_terminal::Point::new(
+        bevy_terminal::Line((row as i32) - 1),
+        bevy_terminal::Column((col as usize) - 1),
+    );
+
+    let in_copy_mode = copy_mode_q.get(drag.entity).is_ok();
+    let scroll_delta: i32 = if above { 1 } else { -1 };
+
+    if in_copy_mode {
+        // NOTE: vi_goto must run BEFORE scroll_display in copy mode.
+        // scroll_display calls vi_mode_recompute_selection, which sets
+        // selection.end = vi_cursor.point. Without the pre-scroll
+        // vi_goto, the selection end snaps back to the stale vi cursor
+        // before we overwrite it via selection_update_to.
+        handle.vi_goto(&mut coalescer, pt);
+        handle.scroll(&mut coalescer, scroll_delta);
+        handle.selection_update_to(&mut coalescer, pt, side);
+    } else {
+        handle.scroll(&mut coalescer, scroll_delta);
+        handle.selection_update_to(&mut coalescer, pt, side);
+    }
+
+    state.next_autoscroll_at = Some(now + period);
 }
 
 /// Dispatches the router's `ButtonAction` against the focused entity's
@@ -505,6 +621,17 @@ mod tests {
 
     fn mock_cfg() -> ozmux_configs::mouse::MouseConfig {
         ozmux_configs::mouse::MouseConfig::default()
+    }
+
+    #[test]
+    fn autoscroll_period_decreases_with_distance_past_edge() {
+        let cfg = mock_cfg();
+        // distance = 0 cells past edge → period = base (50ms).
+        assert_eq!(super::autoscroll_period_ms(&cfg, 0), 50);
+        // distance = 4 → 50 - 4*4 = 34ms (above min=16).
+        assert_eq!(super::autoscroll_period_ms(&cfg, 4), 34);
+        // distance = 100 → saturating_sub clamped to 0, then max → 16.
+        assert_eq!(super::autoscroll_period_ms(&cfg, 100), 16);
     }
 
     #[test]
