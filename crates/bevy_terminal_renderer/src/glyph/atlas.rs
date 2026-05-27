@@ -75,7 +75,6 @@ fn resolve_glyph<'a>(
     ch: char,
     scale: ab_glyph::PxScale,
 ) -> Option<(&'a FontArc, ab_glyph::GlyphId)> {
-    use ab_glyph::Font as _;
     let primary = fonts.choice(face);
     let id = primary.as_scaled(scale).glyph_id(ch);
     if id.0 != 0 {
