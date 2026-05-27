@@ -152,13 +152,69 @@ pub(crate) fn next_click_count(
     count
 }
 
+/// Pre-route helper. If `target_entity` belongs to a pane that is not
+/// the currently active pane in `attached_sid`'s session, mutates
+/// `Session::active_pane` to that pane and bumps the change-detection
+/// signals (`bump_epoch` + `set_changed`). No-op when:
+///   - The entity isn't registered as the active activity of any pane
+///     in `attached_sid`.
+///   - The pane is already active.
+///   - The session isn't found.
+///
+/// Returns `true` when a focus change actually happened.
+///
+/// Cross-session clicks (where `target_entity` belongs to a pane in a
+/// different session) are NOT handled here — they're rejected per the
+/// spec §10 edge cases. The reverse-lookup only scans the attached
+/// session's panes; an unknown target falls through as a no-op.
+pub(crate) fn try_click_to_focus(
+    mux: &mut ResMut<crate::multiplexer::Multiplexer>,
+    registry: &crate::ui::registry::ActivityEntityRegistry,
+    attached_sid: ozmux_multiplexer::SessionId,
+    target_entity: Entity,
+) -> bool {
+    let mux_ref = mux.bypass_change_detection();
+    let target_pane: Option<ozmux_multiplexer::PaneId> = {
+        let Some(session) = mux_ref.sessions.get(&attached_sid) else {
+            return false;
+        };
+        let mut found: Option<ozmux_multiplexer::PaneId> = None;
+        for pane_id in session.pane_ids() {
+            if let Ok(pane) = session.pane(pane_id) {
+                for activity in &pane.activities {
+                    if registry.get(&activity.id) == Some(target_entity) {
+                        found = Some(pane_id.clone());
+                        break;
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+            }
+        }
+        found
+    };
+    let Some(target_pane) = target_pane else {
+        return false;
+    };
+
+    let mutated =
+        crate::multiplexer::commands::focus_pane_by_id(mux_ref, &attached_sid, &target_pane);
+    if mutated {
+        mux.bump_epoch(&attached_sid);
+        mux.set_changed();
+    }
+    mutated
+}
+
 /// Per-frame system entrypoint. Drains `MouseButtonInput`, hit-tests
-/// against activity hosts, tracks click count, and dispatches every
-/// press/release through `ButtonAction::route`. Click-to-focus
-/// (Task 18) and drag-state tracking + autoscroll (Tasks 19-20) are
-/// layered on later.
+/// against activity hosts, tracks click count, dispatches every
+/// press/release through `ButtonAction::route`, and pre-routes
+/// click-to-focus per spec §6 step 4. Drag-state tracking + autoscroll
+/// (Tasks 19-20) are layered on later.
 fn dispatch_mouse_buttons(
     mut state: ResMut<MouseSelectionState>,
+    mut mux: ResMut<crate::multiplexer::Multiplexer>,
     mut buttons_msg: MessageReader<bevy::input::mouse::MouseButtonInput>,
     mut cursor_msg: MessageReader<bevy::window::CursorMoved>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -180,6 +236,11 @@ fn dispatch_mouse_buttons(
     windows_q: Query<&Window, With<bevy::window::PrimaryWindow>>,
     metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
     time: Res<Time<Real>>,
+    attached_sid_q: Query<
+        &crate::multiplexer::SessionEntityId,
+        With<crate::multiplexer::AttachedSession>,
+    >,
+    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
 ) {
     let Ok(window) = windows_q.single() else {
         buttons_msg.clear();
@@ -253,8 +314,12 @@ fn dispatch_mouse_buttons(
             1
         };
 
-        // Click-to-focus (Task 18) and drag-state tracking (Task 19)
-        // go here.
+        if matches!(kind, bevy_terminal::ButtonEventKind::Press) {
+            let Ok(attached_sid) = attached_sid_q.single() else {
+                continue;
+            };
+            try_click_to_focus(&mut mux, &registry, attached_sid.0, entity);
+        }
 
         let evt = bevy_terminal::ButtonEvent {
             kind,
@@ -440,6 +505,102 @@ mod tests {
 
     fn mock_cfg() -> ozmux_configs::mouse::MouseConfig {
         ozmux_configs::mouse::MouseConfig::default()
+    }
+
+    #[test]
+    fn try_click_to_focus_mutates_active_pane_and_returns_true() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_configs::shortcuts::{Action, SplitDirection};
+
+        let mut app = App::new();
+        app.insert_resource(crate::multiplexer::Multiplexer::default());
+        app.insert_resource(crate::ui::registry::ActivityEntityRegistry::default());
+
+        let (sid, original_pane, original_activity, new_activity) = {
+            let mux = &mut app
+                .world_mut()
+                .resource_mut::<crate::multiplexer::Multiplexer>();
+            let (sid, original_pane, original_activity) = mux.create_session(Some("test".into()));
+            let split_mutated = crate::multiplexer::commands::apply(
+                Action::SplitPane {
+                    direction: SplitDirection::Horizontal,
+                },
+                &mut mux.0,
+                sid,
+            );
+            assert!(split_mutated, "split must succeed");
+            let session = mux.sessions.get(&sid).unwrap();
+            let new_pane = session.active_pane.clone();
+            assert_ne!(
+                new_pane, original_pane,
+                "split must promote a fresh pane to active"
+            );
+            let new_activity = session.pane(&new_pane).unwrap().active_activity.clone();
+            (sid, original_pane, original_activity, new_activity)
+        };
+
+        let original_entity = app.world_mut().spawn_empty().id();
+        let new_entity = app.world_mut().spawn_empty().id();
+        {
+            let mut registry = app
+                .world_mut()
+                .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
+            registry.insert_for_test(original_activity, original_entity);
+            registry.insert_for_test(new_activity, new_entity);
+        }
+
+        let mutated = app
+            .world_mut()
+            .run_system_once(
+                move |mut mux: ResMut<crate::multiplexer::Multiplexer>,
+                      registry: Res<crate::ui::registry::ActivityEntityRegistry>|
+                      -> bool {
+                    try_click_to_focus(&mut mux, &registry, sid, original_entity)
+                },
+            )
+            .unwrap();
+        assert!(
+            mutated,
+            "click-to-focus must mutate when targeting a non-active pane"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::multiplexer::Multiplexer>()
+                .sessions
+                .get(&sid)
+                .unwrap()
+                .active_pane,
+            original_pane,
+            "active pane must now be the click target"
+        );
+
+        let mutated_again = app
+            .world_mut()
+            .run_system_once(
+                move |mut mux: ResMut<crate::multiplexer::Multiplexer>,
+                      registry: Res<crate::ui::registry::ActivityEntityRegistry>|
+                      -> bool {
+                    try_click_to_focus(&mut mux, &registry, sid, original_entity)
+                },
+            )
+            .unwrap();
+        assert!(
+            !mutated_again,
+            "second click on already-active pane returns false"
+        );
+
+        let stranger = app.world_mut().spawn_empty().id();
+        let mutated_unknown = app
+            .world_mut()
+            .run_system_once(
+                move |mut mux: ResMut<crate::multiplexer::Multiplexer>,
+                      registry: Res<crate::ui::registry::ActivityEntityRegistry>|
+                      -> bool {
+                    try_click_to_focus(&mut mux, &registry, sid, stranger)
+                },
+            )
+            .unwrap();
+        assert!(!mutated_unknown, "unknown entity must not mutate focus");
     }
 
     #[test]
