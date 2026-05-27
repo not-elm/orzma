@@ -79,12 +79,201 @@ impl ButtonAction {
     /// table. The router is stateless: click counting and drag-state
     /// tracking live in the Bevy glue.
     pub fn route(
-        _modes: TermMode,
-        _evt: ButtonEvent,
-        _mods: ProtocolModifiers,
-        _cfg: &ButtonConfig,
+        modes: TermMode,
+        evt: ButtonEvent,
+        mods: ProtocolModifiers,
+        cfg: &ButtonConfig,
     ) -> Self {
-        // Skeleton — Task 11/12 fill in the decision table.
+        let app_captured = modes.intersects(TermMode::MOUSE_MODE);
+        // Shift bypasses app capture — the user is asking for local
+        // selection even while an app has mouse mode on.
+        let route_locally = !app_captured || mods.shift;
+
+        if route_locally {
+            return route_locally_branch(evt, mods);
+        }
+
+        // Phase 2 — PTY-forward path (Task 12 implements).
+        let _ = cfg;
         ButtonAction::Noop
+    }
+}
+
+fn route_locally_branch(evt: ButtonEvent, mods: ProtocolModifiers) -> ButtonAction {
+    match (evt.kind, evt.button) {
+        (ButtonEventKind::Press, MouseButtonKind::Left) => {
+            let ty = if mods.alt {
+                SelectionType::Block
+            } else {
+                match evt.click_count {
+                    1 => SelectionType::Simple,
+                    2 => SelectionType::Semantic,
+                    _ => SelectionType::Lines,
+                }
+            };
+            ButtonAction::StartLocalSelection {
+                ty,
+                cell: evt.cell,
+                side: evt.side,
+            }
+        }
+        (ButtonEventKind::Drag, MouseButtonKind::Left) => ButtonAction::UpdateLocalSelection {
+            cell: evt.cell,
+            side: evt.side,
+        },
+        // Release on local path: selection persists; nothing to do.
+        (ButtonEventKind::Release, MouseButtonKind::Left) => ButtonAction::Noop,
+        // Middle/Right buttons do nothing locally (no primary-selection paste).
+        _ => ButtonAction::Noop,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alacritty_terminal::index::Side;
+
+    fn cell(col: u32, row: u32) -> CellCoord {
+        CellCoord { col, row }
+    }
+
+    fn press_left(count: u8) -> ButtonEvent {
+        ButtonEvent {
+            kind: ButtonEventKind::Press,
+            button: MouseButtonKind::Left,
+            cell: cell(5, 5),
+            side: Side::Left,
+            click_count: count,
+        }
+    }
+
+    fn cfg() -> ButtonConfig {
+        ButtonConfig {
+            max_protocol_events_per_frame: 8,
+        }
+    }
+
+    #[test]
+    fn left_press_single_click_starts_simple_selection() {
+        let action = ButtonAction::route(
+            TermMode::empty(),
+            press_left(1),
+            ProtocolModifiers::default(),
+            &cfg(),
+        );
+        assert_eq!(
+            action,
+            ButtonAction::StartLocalSelection {
+                ty: SelectionType::Simple,
+                cell: cell(5, 5),
+                side: Side::Left,
+            }
+        );
+    }
+
+    #[test]
+    fn left_press_double_click_starts_semantic_selection() {
+        let action = ButtonAction::route(
+            TermMode::empty(),
+            press_left(2),
+            ProtocolModifiers::default(),
+            &cfg(),
+        );
+        assert!(matches!(
+            action,
+            ButtonAction::StartLocalSelection {
+                ty: SelectionType::Semantic,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn left_press_triple_click_starts_lines_selection() {
+        let action = ButtonAction::route(
+            TermMode::empty(),
+            press_left(3),
+            ProtocolModifiers::default(),
+            &cfg(),
+        );
+        assert!(matches!(
+            action,
+            ButtonAction::StartLocalSelection {
+                ty: SelectionType::Lines,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn left_press_with_alt_starts_block_selection_regardless_of_count() {
+        let mods = ProtocolModifiers {
+            alt: true,
+            ..Default::default()
+        };
+        for count in [1, 2, 3] {
+            let action = ButtonAction::route(TermMode::empty(), press_left(count), mods, &cfg());
+            assert!(
+                matches!(
+                    action,
+                    ButtonAction::StartLocalSelection {
+                        ty: SelectionType::Block,
+                        ..
+                    }
+                ),
+                "click_count={} should still produce Block when Alt held",
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn left_drag_updates_local_selection() {
+        let evt = ButtonEvent {
+            kind: ButtonEventKind::Drag,
+            button: MouseButtonKind::Left,
+            cell: cell(10, 10),
+            side: Side::Right,
+            click_count: 1,
+        };
+        let action =
+            ButtonAction::route(TermMode::empty(), evt, ProtocolModifiers::default(), &cfg());
+        assert_eq!(
+            action,
+            ButtonAction::UpdateLocalSelection {
+                cell: cell(10, 10),
+                side: Side::Right,
+            }
+        );
+    }
+
+    #[test]
+    fn left_release_outside_capture_is_noop() {
+        let evt = ButtonEvent {
+            kind: ButtonEventKind::Release,
+            button: MouseButtonKind::Left,
+            cell: cell(5, 5),
+            side: Side::Left,
+            click_count: 1,
+        };
+        let action =
+            ButtonAction::route(TermMode::empty(), evt, ProtocolModifiers::default(), &cfg());
+        assert_eq!(action, ButtonAction::Noop);
+    }
+
+    #[test]
+    fn middle_or_right_outside_capture_is_noop() {
+        for button in [MouseButtonKind::Middle, MouseButtonKind::Right] {
+            let evt = ButtonEvent {
+                kind: ButtonEventKind::Press,
+                button,
+                cell: cell(1, 1),
+                side: Side::Left,
+                click_count: 1,
+            };
+            let action =
+                ButtonAction::route(TermMode::empty(), evt, ProtocolModifiers::default(), &cfg());
+            assert_eq!(action, ButtonAction::Noop, "button = {:?}", button);
+        }
     }
 }
