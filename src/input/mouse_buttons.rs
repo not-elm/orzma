@@ -19,13 +19,41 @@ pub(crate) struct MouseSelectionState {
     next_autoscroll_at: Option<Instant>,
 }
 
-#[allow(dead_code)] // fields populated in subsequent tasks
 #[derive(Clone)]
 struct ActiveDrag {
     entity: Entity,
-    ty: SelectionType,
     anchor_cell: CellCoord,
-    in_copy_mode: bool,
+    /// Last cell where a `Drag` event was synthesized. `None` until the
+    /// first inter-cell move; used by `dispatch_mouse_buttons`'s
+    /// drag-event synthesizer to deduplicate within-cell motion.
+    last_drag_cell: Option<CellCoord>,
+    phase: DragPhase,
+}
+
+impl ActiveDrag {
+    /// Returns `true` once the selection has been materialized
+    /// (`selection_start_at` has run). The Armed phase represents a
+    /// click-press where the user has not yet moved past the anchor
+    /// cell — no `Term::selection` exists yet.
+    fn is_active(&self) -> bool {
+        matches!(self.phase, DragPhase::Active)
+    }
+}
+
+#[derive(Clone)]
+enum DragPhase {
+    /// Press has armed a drag; no inter-cell motion has occurred yet.
+    /// `selection_start_at` has NOT been called. The renderer shows
+    /// no highlight for this drag.
+    Armed {
+        ty: SelectionType,
+        anchor_side: Side,
+    },
+    /// Drag has been materialized — `selection_start_at` has run and
+    /// the selection lives in `Term::selection`. The original `ty` and
+    /// `anchor_side` are now baked into the alacritty selection and
+    /// no longer need to be stored on `ActiveDrag`.
+    Active,
 }
 
 struct LastClick {
@@ -444,14 +472,14 @@ fn dispatch_mouse_buttons(
         if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
             match (&action, kind) {
                 (
-                    bevy_terminal::ButtonAction::StartLocalSelection { ty, .. },
+                    bevy_terminal::ButtonAction::StartLocalSelection { .. },
                     bevy_terminal::ButtonEventKind::Press,
                 ) => {
                     state.drag = Some(ActiveDrag {
                         entity,
-                        ty: *ty,
                         anchor_cell: cell,
-                        in_copy_mode: copy_mode_q.get(entity).is_ok(),
+                        last_drag_cell: None,
+                        phase: DragPhase::Active,
                     });
                 }
                 (_, bevy_terminal::ButtonEventKind::Release) => {
