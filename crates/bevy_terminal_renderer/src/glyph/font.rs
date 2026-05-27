@@ -257,12 +257,29 @@ impl TerminalFonts {
         })
     }
 
+    /// Returns the primary face matching `face`.
     pub fn choice(&self, face: &FontFace) -> &FontArc {
         match face {
             FontFace::Regular => &self.regular,
             FontFace::Bold => &self.bold,
             FontFace::Italic => &self.italic,
             FontFace::BoldItalic => &self.bold_italic,
+        }
+    }
+
+    /// Returns the fallback face matching `face`. Used by
+    /// `atlas::get_or_insert` when the primary face does not contain a
+    /// glyph for the requested codepoint.
+    ///
+    /// NOTE: this is the GLYPH-lookup path. `cell_metrics_px` and
+    /// `max_overflow_phys` still read only the 4 primary faces — fallback
+    /// metrics never participate in cell layout.
+    pub fn fallback_choice(&self, face: &FontFace) -> &FontArc {
+        match face {
+            FontFace::Regular => &self.fallback_regular,
+            FontFace::Bold => &self.fallback_bold,
+            FontFace::Italic => &self.fallback_italic,
+            FontFace::BoldItalic => &self.fallback_bold_italic,
         }
     }
 
@@ -586,6 +603,26 @@ mod tests {
             "TerminalFonts was overwritten by Plugin::build, but the resource was \
              already present at add_plugins time — the pre-insert should have been preserved"
         );
+    }
+
+    #[test]
+    fn fallback_choice_returns_face_aware() {
+        use ab_glyph::Font as _;
+        let fonts = TerminalFonts::default();
+        // Different FontFace variants must yield different FontArc pointers
+        // (we have 4 distinct bundled UDEVGothic35 faces, not the same one
+        // wired four times).
+        let r_ptr = fonts.fallback_choice(&FontFace::Regular).font_data().as_ptr();
+        let b_ptr = fonts.fallback_choice(&FontFace::Bold).font_data().as_ptr();
+        let i_ptr = fonts.fallback_choice(&FontFace::Italic).font_data().as_ptr();
+        let bi_ptr = fonts
+            .fallback_choice(&FontFace::BoldItalic)
+            .font_data()
+            .as_ptr();
+        assert_ne!(r_ptr, b_ptr, "Regular and Bold fallback share bytes");
+        assert_ne!(r_ptr, i_ptr, "Regular and Italic fallback share bytes");
+        assert_ne!(r_ptr, bi_ptr, "Regular and BoldItalic fallback share bytes");
+        assert_ne!(b_ptr, i_ptr, "Bold and Italic fallback share bytes");
     }
 
     /// `init_cell_metrics_from_primary_window` reads the PrimaryWindow's
