@@ -313,11 +313,7 @@ fn run_autoscroll_tick(
     };
     let (cols, rows, _) = handle.read_geometry();
     let (col, row, side) = cell_at_local(edge_local, cell_w_phys, cell_h_phys, cols, rows);
-    // 1-indexed cell → 0-indexed viewport point.
-    let pt = bevy_terminal::Point::new(
-        bevy_terminal::Line((row as i32) - 1),
-        bevy_terminal::Column((col as usize) - 1),
-    );
+    let pt = to_viewport_point(CellCoord { col, row });
 
     let in_copy_mode = copy_mode_q.get(drag.entity).is_ok();
     let scroll_delta: i32 = if above { 1 } else { -1 };
@@ -556,6 +552,15 @@ fn dispatch_mouse_buttons(
     }
 }
 
+/// Converts a 1-indexed `CellCoord` (the wire format from
+/// `ButtonEvent.cell` / `cell_at_local`) to a 0-indexed alacritty
+/// `Point` suitable for `selection_start_at` / `selection_update_to` /
+/// `vi_goto`. Both callers (apply_action's local-selection branches
+/// and run_autoscroll_tick) must use the same conversion.
+fn to_viewport_point(cell: CellCoord) -> Point {
+    Point::new(Line((cell.row as i32) - 1), Column((cell.col as usize) - 1))
+}
+
 /// Dispatches the router's `ButtonAction` against the focused entity's
 /// `TerminalHandle`. In copy mode, `vi_goto` is issued before any
 /// selection mutation so the vi cursor tracks the moving end of the
@@ -575,8 +580,6 @@ fn apply_action(
         return;
     };
     let in_copy_mode = copy_mode_q.get(entity).is_ok();
-    let to_viewport_point =
-        |c: CellCoord| Point::new(Line((c.row as i32) - 1), Column((c.col as usize) - 1));
 
     match action {
         A::Noop => {}
