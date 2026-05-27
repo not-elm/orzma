@@ -86,7 +86,7 @@ fn dispatch_mouse_wheel(
     let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
         return;
     };
-    let Some(entity) = resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
+    let Some(entity) = super::resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
         return;
     };
     if copy_mode_q.get(entity).is_ok() {
@@ -135,22 +135,6 @@ fn aggregate_wheel_delta(
         delta_y += cells;
     }
     had_input.then_some(delta_y)
-}
-
-/// Resolves the focused activity's entity via the attached session →
-/// multiplexer → registry chain (mirrors `dispatch_focused_key`).
-fn resolve_focused_terminal(
-    attached_sid_q: &Query<
-        &crate::multiplexer::SessionEntityId,
-        With<crate::multiplexer::AttachedSession>,
-    >,
-    mux: &crate::multiplexer::Multiplexer,
-    registry: &crate::ui::registry::ActivityEntityRegistry,
-) -> Option<Entity> {
-    let attached = attached_sid_q.iter().next()?;
-    let session = mux.sessions.get(&attached.0)?;
-    let pane = session.pane(&session.active_pane).ok()?;
-    registry.get(&pane.active_activity)
 }
 
 /// Updates the per-frame accumulator and returns the integer notch

@@ -1,4 +1,4 @@
-use crate::schema::{Cursor, CursorShape, HyperlinkId, ViCursor};
+use crate::schema::{CURSOR_VISIBLE_BIT, Cursor, CursorShape, HyperlinkId, ViCursor};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,13 @@ pub struct TerminalGrid {
     /// Active selection range emitted alongside `vi_cursor`. Independent of
     /// `vi_cursor` — survives motion without selection.
     pub selection: Option<SelectionRange>,
+    /// App-level cursor visibility override. When `true`,
+    /// `current_cursor_pos_and_style()` clears [`CURSOR_VISIBLE_BIT`]
+    /// before returning. Independent of `Cursor.visible` (which mirrors
+    /// DECTCEM from the wire) — this field is for the UI layer (e.g.,
+    /// IME composition) to non-destructively hide the cursor without
+    /// clobbering terminal-controlled state.
+    pub suppress_cursor: bool,
 }
 
 impl TerminalGrid {
@@ -49,6 +56,9 @@ impl TerminalGrid {
         } else if let Some(c) = self.cursor.as_ref() {
             cursor_pos = UVec2::new(u32::from(c.x), u32::from(c.y));
             cursor_style = c.pack_cursor_style();
+        }
+        if self.suppress_cursor {
+            cursor_style &= !CURSOR_VISIBLE_BIT;
         }
         (cursor_pos, cursor_style)
     }
@@ -139,4 +149,59 @@ pub enum SelectionKind {
     Char,
     /// Line-wise selection.
     Line,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::{Cursor, CursorShape};
+
+    fn visible_block_cursor() -> Cursor {
+        Cursor {
+            x: 3,
+            y: 5,
+            shape: CursorShape::Block,
+            blinking: false,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn current_cursor_pos_and_style_returns_packed_style_when_not_suppressed() {
+        let grid = TerminalGrid {
+            cursor: Some(visible_block_cursor()),
+            suppress_cursor: false,
+            ..Default::default()
+        };
+        let (pos, style) = grid.current_cursor_pos_and_style();
+        assert_eq!(pos, UVec2::new(3, 5));
+        assert_eq!(style & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
+    }
+
+    #[test]
+    fn current_cursor_pos_and_style_clears_visible_bit_when_suppressed() {
+        let grid = TerminalGrid {
+            cursor: Some(visible_block_cursor()),
+            suppress_cursor: true,
+            ..Default::default()
+        };
+        let (_pos, style) = grid.current_cursor_pos_and_style();
+        assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
+    }
+
+    #[test]
+    fn suppress_cursor_does_not_affect_vi_cursor_position() {
+        let grid = TerminalGrid {
+            vi_cursor: Some(ViCursor {
+                row: 2,
+                column: 7,
+                in_scrollback: false,
+            }),
+            suppress_cursor: true,
+            ..Default::default()
+        };
+        let (pos, style) = grid.current_cursor_pos_and_style();
+        assert_eq!(pos, UVec2::new(7, 2));
+        assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
+    }
 }

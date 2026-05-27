@@ -23,3 +23,19 @@ pub const ITALIC: &[u8] =
 /// Bold-italic JetBrains Mono Nerd Font Mono bytes.
 pub const BOLD_ITALIC: &[u8] =
     include_bytes!("../../../assets/fonts/jetbrainsmono/JetBrainsMonoNerdFontMono-BoldItalic.ttf");
+
+/// Regular-weight UDEVGothic35 bytes (CJK fallback).
+pub const FALLBACK_REGULAR: &[u8] =
+    include_bytes!("../assets/fonts/udevgothic/UDEVGothic35-Regular.ttf");
+
+/// Bold-weight UDEVGothic35 bytes (CJK fallback).
+pub const FALLBACK_BOLD: &[u8] =
+    include_bytes!("../assets/fonts/udevgothic/UDEVGothic35-Bold.ttf");
+
+/// Italic-style UDEVGothic35 bytes (CJK fallback).
+pub const FALLBACK_ITALIC: &[u8] =
+    include_bytes!("../assets/fonts/udevgothic/UDEVGothic35-Italic.ttf");
+
+/// Bold-italic UDEVGothic35 bytes (CJK fallback).
+pub const FALLBACK_BOLD_ITALIC: &[u8] =
+    include_bytes!("../assets/fonts/udevgothic/UDEVGothic35-BoldItalic.ttf");

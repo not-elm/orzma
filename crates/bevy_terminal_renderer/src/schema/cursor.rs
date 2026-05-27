@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// Bit 0 of the packed `cursor_style` u32 — set when the cursor
+/// should be drawn. The WGSL shader short-circuits when this bit is
+/// clear (see `terminal_ui_material.wgsl:74`). Exposed so app-level
+/// overrides (e.g., `TerminalGrid.suppress_cursor`) can mask it out
+/// without re-deriving the literal `1`.
+pub const CURSOR_VISIBLE_BIT: u32 = 1;
+
 /// Vi-mode cursor position in viewport coordinates.
 ///
 /// When the user is in alacritty vi mode (= tmux copy mode), the server
@@ -36,7 +43,7 @@ pub struct Cursor {
 
 impl Cursor {
     pub fn pack_cursor_style(&self) -> u32 {
-        let visible = if self.visible { 1u32 } else { 0 };
+        let visible = if self.visible { CURSOR_VISIBLE_BIT } else { 0 };
         let shape = match self.shape {
             CursorShape::Block => 0u32,
             CursorShape::Underline => 1,

@@ -17,9 +17,11 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
 bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
+cosmic-text = "0.16"
 ozmux_configs = { path = "daemon/configs" }
 ozmux_multiplexer = { path = "daemon/multiplexer" }
 tracing = { workspace = true }
+unicode-width = { workspace = true }
 
 [lints]
 workspace = true
