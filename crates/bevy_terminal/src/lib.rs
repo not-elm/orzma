@@ -7,6 +7,7 @@ mod coalescer;
 mod events;
 mod handle;
 mod input_codec;
+mod mouse_encode;
 mod palette;
 mod plugin;
 mod pty;
@@ -23,6 +24,7 @@ pub use events::{
     TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
 pub use handle::{TerminalHandle, ViIndicatorSnapshot};
+pub use mouse_encode::{CellCoord as CellCoordShared, ProtocolModifiers};
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::TerminalTitle;
