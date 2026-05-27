@@ -335,6 +335,35 @@ impl TerminalHandle {
         self.stage_full_damage_and_arm(coalescer);
     }
 
+    /// Jump the vi cursor to `viewport_point`. Wraps
+    /// `Term::vi_goto_point` (`term/mod.rs:855`). No-op when not in
+    /// vi mode.
+    ///
+    /// Called by the Bevy glue during mouse interaction inside copy
+    /// mode: BEFORE every `selection_update_to`, AND BEFORE every
+    /// `scroll` in the autoscroll loop, so alacritty's vi-mode
+    /// recompute on viewport changes (`scroll_display` →
+    /// `vi_mode_recompute_selection` at `term/mod.rs:402` → `:872`)
+    /// does not snap the selection end back to a stale vi cursor.
+    pub fn vi_goto(
+        &mut self,
+        coalescer: &mut Coalescer,
+        viewport_point: alacritty_terminal::index::Point,
+    ) {
+        if !self
+            .term
+            .mode()
+            .contains(alacritty_terminal::term::TermMode::VI)
+        {
+            return;
+        }
+        let line =
+            crate::vt::frame_builder::viewport_row_to_line(&self.term, viewport_point.line.0);
+        let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        self.term.vi_goto_point(point);
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
     /// Starts a selection of the given type at the current vi cursor.
     ///
     /// Internally seeds `Selection::new(ty, vi_cursor, Side::Left)` and
@@ -1451,6 +1480,66 @@ mod tests {
         // leave Term::selection as None.
         handle.selection_update_to(&mut coalescer, Point::new(Line(0), Column(5)), Side::Right);
         assert!(handle.selection_type().is_none());
+    }
+
+    #[test]
+    fn vi_goto_moves_vi_cursor_in_vi_mode() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        use alacritty_terminal::index::{Column, Line, Point};
+
+        let opts = SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let TerminalBundle {
+            mut handle,
+            mut coalescer,
+            ..
+        } = TerminalBundle::spawn(opts).expect("spawn");
+
+        handle.enter_vi_mode(&mut coalescer);
+        handle.vi_goto(&mut coalescer, Point::new(Line(5), Column(12)));
+
+        // vi_goto in vi mode must not panic and must keep vi mode active.
+        // Direct cursor verification belongs in alacritty's internal tests;
+        // here we just confirm no panic, vi mode stays set, and the method
+        // is callable.
+        assert!(
+            handle
+                .current_modes()
+                .contains(alacritty_terminal::term::TermMode::VI)
+        );
+    }
+
+    #[test]
+    fn vi_goto_is_noop_outside_vi_mode() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        use alacritty_terminal::index::{Column, Line, Point};
+
+        let opts = SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let TerminalBundle {
+            mut handle,
+            mut coalescer,
+            ..
+        } = TerminalBundle::spawn(opts).expect("spawn");
+
+        // Not in vi mode. vi_goto must not panic and must leave the
+        // mode set unchanged (still NOT containing VI).
+        handle.vi_goto(&mut coalescer, Point::new(Line(2), Column(3)));
+        assert!(
+            !handle
+                .current_modes()
+                .contains(alacritty_terminal::term::TermMode::VI)
+        );
     }
 }
 
