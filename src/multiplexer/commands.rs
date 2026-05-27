@@ -192,6 +192,54 @@ fn apply_focus_pane(
     }
 }
 
+/// Focus the pane with the given id within the given session.
+/// Returns `true` when `Session::active_pane` actually changed.
+///
+/// Caller is responsible for the change-detection discipline used by
+/// other Multiplexer mutators (see `src/input.rs:330-336`):
+///
+/// ```ignore
+/// let mux_ref = mux.bypass_change_detection();
+/// let mutated = focus_pane_by_id(mux_ref, &session_id, &pane_id);
+/// if mutated {
+///     mux.bump_epoch(&session_id);
+///     mux.set_changed();
+/// }
+/// ```
+///
+/// This helper is separate from `apply_focus_pane` (direction-based);
+/// it serves the click-to-focus path in `src/input/mouse_buttons.rs`
+/// where the target pane id is known directly.
+pub(crate) fn focus_pane_by_id(
+    mux: &mut MultiplexerService,
+    session: &SessionId,
+    target: &PaneId,
+) -> bool {
+    let session_id = *session;
+    let outcome = mux.with_session(&session_id, |s| -> MultiplexerResult<bool> {
+        // NOTE: Treat "already active" / unknown pane as a no-op so
+        // change detection is only tripped on real focus moves.
+        if &s.active_pane == target {
+            return Ok(false);
+        }
+        Ok(matches!(
+            s.set_active_pane(target)?,
+            SetActiveOutcome::Changed
+        ))
+    });
+    match outcome {
+        Some(Ok(mutated)) => mutated,
+        Some(Err(err)) => {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "focus_pane_by_id failed");
+            false
+        }
+        None => {
+            tracing::warn!(target: "ozmux_gui::commands", ?session_id, "focus_pane_by_id: session vanished");
+            false
+        }
+    }
+}
+
 fn apply_focus_activity(
     mux: &mut MultiplexerService,
     session: &SessionId,
@@ -626,5 +674,57 @@ mod tests {
             sid,
         );
         assert!(!mutated);
+    }
+
+    #[test]
+    fn focus_pane_by_id_switches_active_pane() {
+        let (mut svc, sid) = fresh();
+        let original_active = svc.sessions.get(&sid).unwrap().active_pane.clone();
+        apply(
+            Action::SplitPane {
+                direction: SplitDirection::Horizontal,
+            },
+            &mut svc,
+            sid,
+        );
+        let new_active = svc.sessions.get(&sid).unwrap().active_pane.clone();
+        assert_ne!(new_active, original_active, "split should promote new pane");
+
+        let mutated = focus_pane_by_id(&mut svc, &sid, &original_active);
+        assert!(mutated, "focusing a different pane must return true");
+        assert_eq!(
+            svc.sessions.get(&sid).unwrap().active_pane,
+            original_active,
+            "active pane should be the target"
+        );
+    }
+
+    #[test]
+    fn focus_pane_by_id_returns_false_when_already_active() {
+        let (mut svc, sid) = fresh();
+        let already_active = svc.sessions.get(&sid).unwrap().active_pane.clone();
+
+        let mutated = focus_pane_by_id(&mut svc, &sid, &already_active);
+        assert!(
+            !mutated,
+            "no-op focus on already-active pane must return false"
+        );
+        assert_eq!(
+            svc.sessions.get(&sid).unwrap().active_pane,
+            already_active,
+            "active pane should be unchanged"
+        );
+    }
+
+    #[test]
+    fn focus_pane_by_id_returns_false_for_unknown_pane() {
+        let (mut svc, sid) = fresh();
+        let bogus = PaneId::new();
+
+        let mutated = focus_pane_by_id(&mut svc, &sid, &bogus);
+        assert!(
+            !mutated,
+            "unknown pane must not change focus and return false"
+        );
     }
 }
