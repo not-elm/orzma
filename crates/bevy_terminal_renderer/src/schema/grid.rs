@@ -175,7 +175,6 @@ mod tests {
         };
         let (pos, style) = grid.current_cursor_pos_and_style();
         assert_eq!(pos, UVec2::new(3, 5));
-        // Visible bit (bit 0) must be set.
         assert_eq!(style & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
     }
 
@@ -187,7 +186,6 @@ mod tests {
             ..Default::default()
         };
         let (_pos, style) = grid.current_cursor_pos_and_style();
-        // Visible bit must be cleared even though Cursor.visible is true.
         assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
     }
 
@@ -204,8 +202,6 @@ mod tests {
         };
         let (pos, style) = grid.current_cursor_pos_and_style();
         assert_eq!(pos, UVec2::new(7, 2));
-        // Vi cursor's visible bit is also cleared because suppress_cursor
-        // is a blanket override.
         assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
     }
 }
