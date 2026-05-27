@@ -55,7 +55,7 @@ pub(crate) fn dispatch_focused_key(
     // double-taps Cmd+R), both would read the same pre-flush attached entity,
     // resulting in zero or multiple AttachedSession entities after flush —
     // breaking the `exactly one attached` invariant relied on by
-    // attached_sid_q.single() and rebuild_structure_on_change. Drop the
+    // attached_sid_q.single() and downstream rebuild systems. Drop the
     // second-and-onward marker mutations in this frame.
     let mut marker_dirty_this_frame = false;
 
@@ -330,6 +330,7 @@ fn execute_action(
             let mux_ref = mux.bypass_change_detection();
             let mutated = crate::multiplexer::commands::apply(action, mux_ref, session_id);
             if mutated {
+                mux.bump_epoch(&session_id);
                 mux.set_changed();
             }
         }
@@ -396,6 +397,9 @@ fn dispatch_focus_session(
 
     commands.entity(current_entity).remove::<AttachedSession>();
     commands.entity(target_entity).insert(AttachedSession);
+    // NOTE: focus-session moves the AttachedSession marker only; no per-session
+    // domain state changes, so we do not bump any session epoch. The rebuild
+    // system intentionally ignores this signal; sync_active_session picks it up.
     mux.set_changed();
 }
 
@@ -421,11 +425,26 @@ fn dispatch_new_session(
         .get(&sid)
         .map(|s| s.name.clone())
         .unwrap_or_else(|| format!("Session#{}", sid.0));
-    commands.spawn((
-        SessionEntityId(sid),
-        AttachedSession,
-        Name::new(bevy_name),
-    ));
+    let subtree_root = commands
+        .spawn(Node {
+            width: bevy::ui::Val::Percent(100.0),
+            height: bevy::ui::Val::Percent(100.0),
+            ..default()
+        })
+        .id();
+    let new_session_entity = commands
+        .spawn((
+            SessionEntityId(sid),
+            AttachedSession,
+            crate::multiplexer::SessionUiSubtree(subtree_root),
+            Name::new(bevy_name),
+        ))
+        .id();
+    commands
+        .entity(subtree_root)
+        .insert(ChildOf(new_session_entity));
+
+    mux.bump_epoch(&sid);
     mux.set_changed();
 }
 
@@ -1227,6 +1246,53 @@ mod tests {
         app.update();
 
         assert_eq!(attached_session_id(&mut app).0, second_sid);
+    }
+
+    #[test]
+    fn dispatch_new_session_spawns_subtree_pointer() {
+        use crate::multiplexer::{
+            AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId, SessionUiSubtree,
+        };
+        use bevy::ecs::system::RunSystemOnce;
+
+        let _guard = crate::configs::env_guard();
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(OzmuxMultiplexerPlugin)
+            .add_plugins(crate::configs::OzmuxConfigsPlugin)
+            .add_plugins(crate::bootstrap::OzmuxBootstrapPlugin);
+        app.update();
+
+        let session_count_before = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<Entity, With<SessionEntityId>>();
+            q.iter(world).count()
+        };
+
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands,
+                 mut mux: ResMut<Multiplexer>,
+                 attached_q: Query<Entity, With<AttachedSession>>| {
+                    super::dispatch_new_session(&mut commands, &mut mux, &attached_q);
+                },
+            )
+            .unwrap();
+        app.update();
+
+        let world = app.world_mut();
+        let mut q = world.query::<(&SessionEntityId, &SessionUiSubtree)>();
+        let count = q.iter(world).count();
+        assert_eq!(
+            count,
+            session_count_before + 1,
+            "new session entity must carry SessionUiSubtree"
+        );
     }
 
     #[test]

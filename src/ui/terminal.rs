@@ -5,7 +5,8 @@
 //! Failures mark the entity with `TerminalSpawnFailed` so the system does
 //! not retry on subsequent frames.
 
-use crate::ui::{TerminalActivityMarker, TerminalSpawnFailed, rebuild_structure_on_change};
+use crate::system_set::OzmuxSystems;
+use crate::ui::{TerminalActivityMarker, TerminalSpawnFailed};
 use bevy::prelude::*;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
@@ -29,7 +30,7 @@ impl Plugin for OzmuxTerminalUiPlugin {
         // `grid_size` uniform is written this tick, not next.
         app.add_systems(
             Update,
-            finish_terminal_setup.after(rebuild_structure_on_change),
+            finish_terminal_setup.in_set(OzmuxSystems::SetupActivity),
         )
         .add_systems(
             PostUpdate,
@@ -112,13 +113,16 @@ fn compute_grid_dims(
 /// the next `FrameSnapshot` round-trip through alacritty + observers,
 /// adding a visible 1-frame lag at the pane edge during drag.
 fn resize_terminals_to_node(
-    mut terminals: Query<(
-        &ComputedNode,
-        &mut TerminalHandle,
-        &mut PtyHandle,
-        &mut Coalescer,
-        &mut TerminalGrid,
-    )>,
+    mut terminals: Query<
+        (
+            &ComputedNode,
+            &mut TerminalHandle,
+            &mut PtyHandle,
+            &mut Coalescer,
+            &mut TerminalGrid,
+        ),
+        Changed<TerminalHandle>,
+    >,
     metrics: Res<TerminalCellMetricsResource>,
 ) {
     // NOTE: Cell pitch is font-derived physical px; DPR is already baked into

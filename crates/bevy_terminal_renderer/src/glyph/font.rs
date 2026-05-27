@@ -45,8 +45,7 @@ impl Plugin for TerminalFontPlugin {
         }
         app.add_systems(
             Startup,
-            init_cell_metrics_from_primary_window
-                .in_set(TerminalFontInitSet::InitCellMetrics),
+            init_cell_metrics_from_primary_window.in_set(TerminalFontInitSet::InitCellMetrics),
         );
     }
 }
@@ -186,28 +185,25 @@ impl TerminalFonts {
         italic: Vec<u8>,
         bold_italic: Vec<u8>,
     ) -> Result<Self, FontLoadError> {
-        let regular = FontArc::try_from_vec(regular).map_err(|source| {
-            FontLoadError::ParseFailed {
+        let regular =
+            FontArc::try_from_vec(regular).map_err(|source| FontLoadError::ParseFailed {
                 face: FontFace::Regular,
                 source,
-            }
-        })?;
-        let bold =
-            FontArc::try_from_vec(bold).map_err(|source| FontLoadError::ParseFailed {
-                face: FontFace::Bold,
-                source,
             })?;
+        let bold = FontArc::try_from_vec(bold).map_err(|source| FontLoadError::ParseFailed {
+            face: FontFace::Bold,
+            source,
+        })?;
         let italic =
             FontArc::try_from_vec(italic).map_err(|source| FontLoadError::ParseFailed {
                 face: FontFace::Italic,
                 source,
             })?;
-        let bold_italic = FontArc::try_from_vec(bold_italic).map_err(|source| {
-            FontLoadError::ParseFailed {
+        let bold_italic =
+            FontArc::try_from_vec(bold_italic).map_err(|source| FontLoadError::ParseFailed {
                 face: FontFace::BoldItalic,
                 source,
-            }
-        })?;
+            })?;
         Ok(Self {
             regular,
             bold,
@@ -502,13 +498,8 @@ mod tests {
         // Build a non-default TerminalFonts via from_bytes — same TTF for
         // all four faces (legal for a smoke test; the labels are advisory).
         let bytes: Vec<u8> = crate::bundled::REGULAR.to_vec();
-        let custom = TerminalFonts::from_bytes(
-            bytes.clone(),
-            bytes.clone(),
-            bytes.clone(),
-            bytes,
-        )
-        .expect("from_bytes accepts JBM regular for all four slots");
+        let custom = TerminalFonts::from_bytes(bytes.clone(), bytes.clone(), bytes.clone(), bytes)
+            .expect("from_bytes accepts JBM regular for all four slots");
 
         // Use a sentinel: pre-insert THIS specific instance, then check
         // that the bytes pointer hasn't changed after Plugin::build.

@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use ozmux_multiplexer::{ActivityId, ActivityKind};
 use std::collections::{HashMap, HashSet};
 
-/// `ActivityId → Entity` map. Updated by `rebuild_structure_on_change`
+/// `ActivityId → Entity` map. Updated by `rebuild_session_ui_on_data_change`
 /// each rebuild via `get_or_spawn` (insert) and `prune` (sweep).
 #[derive(Resource, Default)]
 pub(crate) struct ActivityEntityRegistry {
@@ -30,7 +30,7 @@ impl ActivityEntityRegistry {
         if let Some(&existing) = self.entities.get(id) {
             return existing;
         }
-        let mut spawn = commands.spawn(crate::ui::ActivityHostNode(id.clone()));
+        let mut spawn = commands.spawn(crate::ui::ActivityHostNode);
         if matches!(kind, ActivityKind::Terminal) {
             spawn.insert(crate::ui::TerminalActivityMarker);
         }
@@ -58,7 +58,7 @@ impl ActivityEntityRegistry {
 
     /// Looks up the host entity registered for `id`. Returns `None` when
     /// no host has been spawned yet (e.g. the activity was just created
-    /// and the next `rebuild_structure_on_change` has not run).
+    /// and the next `rebuild_session_ui_on_data_change` has not run).
     pub(crate) fn get(&self, id: &ActivityId) -> Option<Entity> {
         self.entities.get(id).copied()
     }
@@ -66,6 +66,15 @@ impl ActivityEntityRegistry {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entities.len()
+    }
+
+    /// Iterates `(&ActivityId, Entity)` over every registered host.
+    /// Test-only: lets tests snapshot the live host set without querying
+    /// the world (which would require a now-fieldless `ActivityHostNode`
+    /// to carry the id).
+    #[cfg(test)]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&ActivityId, Entity)> {
+        self.entities.iter().map(|(id, &entity)| (id, entity))
     }
 
     /// Inserts a pre-existing Entity for `id` without going through

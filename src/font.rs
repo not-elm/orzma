@@ -107,8 +107,7 @@ fn bridge_font_config(
         bundled::REGULAR,
         FontFace::Regular,
     );
-    let bold_bytes =
-        load_face_bytes(font.bold_path.as_deref(), bundled::BOLD, FontFace::Bold);
+    let bold_bytes = load_face_bytes(font.bold_path.as_deref(), bundled::BOLD, FontFace::Bold);
     let italic_bytes = load_face_bytes(
         font.italic_path.as_deref(),
         bundled::ITALIC,
@@ -134,13 +133,9 @@ fn bridge_font_config(
 
     let ui_regular_bytes = regular_bytes.clone();
 
-    let new_fonts = TerminalFonts::from_bytes(
-        regular_bytes,
-        bold_bytes,
-        italic_bytes,
-        bold_italic_bytes,
-    )
-    .expect("validated bytes must parse");
+    let new_fonts =
+        TerminalFonts::from_bytes(regular_bytes, bold_bytes, italic_bytes, bold_italic_bytes)
+            .expect("validated bytes must parse");
     *terminal_fonts = new_fonts;
 
     let handle = make_ui_font_handle(ui_regular_bytes, &mut fonts_assets);
@@ -175,8 +170,8 @@ fn make_ui_font_handle(regular_bytes: Vec<u8>, fonts_assets: &mut Assets<Font>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ab_glyph::Font as AbFont;
     use crate::configs::OzmuxConfigsPlugin;
+    use ab_glyph::Font as AbFont;
     use bevy::asset::AssetPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
     use bevy_terminal_renderer::TerminalFontPlugin;
@@ -330,14 +325,15 @@ mod tests {
 
     #[test]
     fn missing_normal_path_falls_back_to_bundled() {
-        let nonexistent = std::env::temp_dir()
-            .join("ozmux_font_bridge_test_missing.ttf");
+        let nonexistent = std::env::temp_dir().join("ozmux_font_bridge_test_missing.ttf");
         let _ = std::fs::remove_file(&nonexistent);
-        let toml = std::env::temp_dir()
-            .join("ozmux_font_bridge_test_missing.toml");
+        let toml = std::env::temp_dir().join("ozmux_font_bridge_test_missing.toml");
         std::fs::write(
             &toml,
-            format!("[font.normal]\npath = \"{}\"\n", nonexistent.to_string_lossy()),
+            format!(
+                "[font.normal]\npath = \"{}\"\n",
+                nonexistent.to_string_lossy()
+            ),
         )
         .expect("write toml");
 

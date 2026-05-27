@@ -36,6 +36,7 @@ pub(crate) fn build_status_bar(
             },
             BackgroundColor(palette::PANEL),
             StructuralNode,
+            crate::ui::status_bar_sync::StatusBarRoot,
             ChildOf(parent),
         ))
         .id();
