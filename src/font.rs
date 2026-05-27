@@ -139,6 +139,10 @@ fn bridge_font_config(
         bold_bytes,
         italic_bytes,
         bold_italic_bytes,
+        bevy_terminal_renderer::bundled::FALLBACK_REGULAR.to_vec(),
+        bevy_terminal_renderer::bundled::FALLBACK_BOLD.to_vec(),
+        bevy_terminal_renderer::bundled::FALLBACK_ITALIC.to_vec(),
+        bevy_terminal_renderer::bundled::FALLBACK_BOLD_ITALIC.to_vec(),
     )
     .expect("validated bytes must parse");
     *terminal_fonts = new_fonts;

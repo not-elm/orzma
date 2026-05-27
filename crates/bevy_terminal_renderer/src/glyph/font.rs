@@ -141,6 +141,14 @@ pub struct TerminalFonts {
     pub italic: FontArc,
     /// Bold weight, italic style.
     pub bold_italic: FontArc,
+    /// Fallback regular weight, upright style (CJK / wide-character coverage).
+    pub fallback_regular: FontArc,
+    /// Fallback bold weight, upright style.
+    pub fallback_bold: FontArc,
+    /// Fallback regular weight, italic style.
+    pub fallback_italic: FontArc,
+    /// Fallback bold weight, italic style.
+    pub fallback_bold_italic: FontArc,
 }
 
 /// Computes the worst-case rightward overflow (in physical px) over ASCII
@@ -173,18 +181,22 @@ fn max_ascii_overflow_for_face(face: &FontArc, px_scale: f32, cell_w_phys_floor:
 }
 
 impl TerminalFonts {
-    /// Constructs a `TerminalFonts` from four owned TTF byte buffers, one
-    /// per face. `Vec<u8>` is required by `ab_glyph::FontArc::try_from_vec`;
-    /// callers responsible for runtime font loading (e.g., the Bevy
-    /// font-bridge plugin) read bytes from disk, build `Vec<u8>`, and call
-    /// this. On per-face parse failure, returns `FontLoadError::ParseFailed`
-    /// naming the offending face — callers may then substitute bundled
-    /// bytes for that face and retry.
+    /// Constructs a `TerminalFonts` from eight owned TTF byte buffers, one
+    /// per face (four primary + four fallback). `Vec<u8>` is required by
+    /// `ab_glyph::FontArc::try_from_vec`; callers responsible for runtime
+    /// font loading (e.g., the Bevy font-bridge plugin) read bytes from disk,
+    /// build `Vec<u8>`, and call this. On per-face parse failure, returns
+    /// `FontLoadError::ParseFailed` naming the offending face — callers may
+    /// then substitute bundled bytes for that face and retry.
     pub fn from_bytes(
         regular: Vec<u8>,
         bold: Vec<u8>,
         italic: Vec<u8>,
         bold_italic: Vec<u8>,
+        fallback_regular: Vec<u8>,
+        fallback_bold: Vec<u8>,
+        fallback_italic: Vec<u8>,
+        fallback_bold_italic: Vec<u8>,
     ) -> Result<Self, FontLoadError> {
         let regular = FontArc::try_from_vec(regular).map_err(|source| {
             FontLoadError::ParseFailed {
@@ -208,11 +220,40 @@ impl TerminalFonts {
                 source,
             }
         })?;
+        let fallback_regular = FontArc::try_from_vec(fallback_regular).map_err(|source| {
+            FontLoadError::ParseFailed {
+                face: FontFace::Regular,
+                source,
+            }
+        })?;
+        let fallback_bold = FontArc::try_from_vec(fallback_bold).map_err(|source| {
+            FontLoadError::ParseFailed {
+                face: FontFace::Bold,
+                source,
+            }
+        })?;
+        let fallback_italic = FontArc::try_from_vec(fallback_italic).map_err(|source| {
+            FontLoadError::ParseFailed {
+                face: FontFace::Italic,
+                source,
+            }
+        })?;
+        let fallback_bold_italic =
+            FontArc::try_from_vec(fallback_bold_italic).map_err(|source| {
+                FontLoadError::ParseFailed {
+                    face: FontFace::BoldItalic,
+                    source,
+                }
+            })?;
         Ok(Self {
             regular,
             bold,
             italic,
             bold_italic,
+            fallback_regular,
+            fallback_bold,
+            fallback_italic,
+            fallback_bold_italic,
         })
     }
 
@@ -331,6 +372,14 @@ impl Default for TerminalFonts {
                 .expect("JetBrainsMonoNerdFontMono-Italic load"),
             bold_italic: FontArc::try_from_slice(crate::bundled::BOLD_ITALIC)
                 .expect("JetBrainsMonoNerdFontMono-BoldItalic load"),
+            fallback_regular: FontArc::try_from_slice(crate::bundled::FALLBACK_REGULAR)
+                .expect("UDEVGothic35-Regular load"),
+            fallback_bold: FontArc::try_from_slice(crate::bundled::FALLBACK_BOLD)
+                .expect("UDEVGothic35-Bold load"),
+            fallback_italic: FontArc::try_from_slice(crate::bundled::FALLBACK_ITALIC)
+                .expect("UDEVGothic35-Italic load"),
+            fallback_bold_italic: FontArc::try_from_slice(crate::bundled::FALLBACK_BOLD_ITALIC)
+                .expect("UDEVGothic35-BoldItalic load"),
         }
     }
 }
@@ -506,9 +555,13 @@ mod tests {
             bytes.clone(),
             bytes.clone(),
             bytes.clone(),
+            bytes.clone(),
+            bytes.clone(),
+            bytes.clone(),
+            bytes.clone(),
             bytes,
         )
-        .expect("from_bytes accepts JBM regular for all four slots");
+        .expect("from_bytes accepts JBM regular for all eight slots");
 
         // Use a sentinel: pre-insert THIS specific instance, then check
         // that the bytes pointer hasn't changed after Plugin::build.
