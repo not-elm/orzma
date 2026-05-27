@@ -20,6 +20,7 @@ pub(crate) struct MouseSelectionState {
 }
 
 #[allow(dead_code)] // fields populated in subsequent tasks
+#[derive(Clone)]
 struct ActiveDrag {
     entity: Entity,
     ty: SelectionType,
@@ -219,6 +220,100 @@ pub(crate) fn autoscroll_period_ms(
         .max(cfg.autoscroll_min_period_ms)
 }
 
+/// True when an in-flight drag should be dropped because alacritty
+/// wiped `Term::selection` out from under us (alt-screen swap, screen
+/// reset). See spec §6 "End-of-frame guards" and
+/// `term/mod.rs:682, 733, 1803, 1847`.
+pub(crate) fn should_drop_stale_drag(handle: &bevy_terminal::TerminalHandle) -> bool {
+    handle.selection_type().is_none()
+}
+
+/// Runs a single autoscroll tick if conditions are met. Called once per
+/// frame from the end-of-frame guard section. Updates `next_autoscroll_at`
+/// and performs the scroll+selection-update.
+fn run_autoscroll_tick(
+    state: &mut MouseSelectionState,
+    drag: &ActiveDrag,
+    cursor_phys: Vec2,
+    now: Instant,
+    node: bevy::ui::ComputedNode,
+    transform: bevy::ui::UiGlobalTransform,
+    cell_h_phys: f32,
+    cell_w_phys: f32,
+    configs: &ozmux_configs::mouse::MouseConfig,
+    handles: &mut Query<(
+        &mut bevy_terminal::TerminalHandle,
+        &mut bevy_terminal::PtyHandle,
+        &mut bevy_terminal::Coalescer,
+    )>,
+    copy_mode_q: &Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+) {
+    // NOTE: UiGlobalTransform.translation is the node CENTER, not the
+    // top-left corner — every hit-test in this file relies on the
+    // `translation ± half * size` form. The inner Affine2 field is
+    // private; we access `translation` via the type's Deref impl.
+    let translation = transform.translation;
+    let half = node.size * 0.5;
+    let pane_top = translation.y - half.y;
+    let pane_bot = translation.y + half.y;
+
+    let above = cursor_phys.y < pane_top;
+    let below = cursor_phys.y > pane_bot;
+    if !above && !below {
+        state.next_autoscroll_at = None;
+        return;
+    }
+
+    let distance_cells = if above {
+        ((pane_top - cursor_phys.y) / cell_h_phys).floor().max(0.0) as u32
+    } else {
+        ((cursor_phys.y - pane_bot) / cell_h_phys).floor().max(0.0) as u32
+    };
+    let period_ms = autoscroll_period_ms(&configs, distance_cells);
+    let period = std::time::Duration::from_millis(period_ms as u64);
+
+    let next_at = state.next_autoscroll_at.unwrap_or(now + period);
+    if now < next_at {
+        state.next_autoscroll_at = Some(next_at);
+        return;
+    }
+
+    // Time to tick. Compute the edge cell (clamped to pane bounds).
+    let edge_local_y = if above { 0.0 } else { node.size.y };
+    let edge_local_x = (cursor_phys.x - (translation.x - half.x)).clamp(0.0, node.size.x);
+    let edge_local = bevy::math::Vec2::new(edge_local_x, edge_local_y);
+
+    let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(drag.entity) else {
+        return;
+    };
+    let (cols, rows, _) = handle.read_geometry();
+    let (col, row, side) = cell_at_local(edge_local, cell_w_phys, cell_h_phys, cols, rows);
+    // 1-indexed cell → 0-indexed viewport point.
+    let pt = bevy_terminal::Point::new(
+        bevy_terminal::Line((row as i32) - 1),
+        bevy_terminal::Column((col as usize) - 1),
+    );
+
+    let in_copy_mode = copy_mode_q.get(drag.entity).is_ok();
+    let scroll_delta: i32 = if above { 1 } else { -1 };
+
+    if in_copy_mode {
+        // NOTE: vi_goto must run BEFORE scroll_display in copy mode.
+        // scroll_display calls vi_mode_recompute_selection, which sets
+        // selection.end = vi_cursor.point. Without the pre-scroll
+        // vi_goto, the selection end snaps back to the stale vi cursor
+        // before we overwrite it via selection_update_to.
+        handle.vi_goto(&mut coalescer, pt);
+        handle.scroll(&mut coalescer, scroll_delta);
+        handle.selection_update_to(&mut coalescer, pt, side);
+    } else {
+        handle.scroll(&mut coalescer, scroll_delta);
+        handle.selection_update_to(&mut coalescer, pt, side);
+    }
+
+    state.next_autoscroll_at = Some(now + period);
+}
+
 /// Per-frame system entrypoint. Drains `MouseButtonInput`, hit-tests
 /// against activity hosts, tracks click count, dispatches every
 /// press/release through `ButtonAction::route`, and pre-routes
@@ -376,81 +471,64 @@ fn dispatch_mouse_buttons(
     // Drag-scroll loop. Runs every frame while a left-drag is active
     // and the cursor is past the pane's vertical rect.
     let now = time.last_update().unwrap_or_else(Instant::now);
-    let Some(drag) = state.drag.as_ref() else {
+    let Some(drag) = state.drag.clone() else {
         state.next_autoscroll_at = None;
         return;
     };
 
     // Capture pane geometry by value (ComputedNode is Copy + Clone).
     let Ok((_, node_ref, transform_ref)) = hosts_q.get(drag.entity) else {
+        // Entity is gone or not found; fall through to end-of-frame guards.
         return;
     };
     let node = *node_ref;
     let transform = *transform_ref;
 
-    // Compute pane vertical rect in physical px. UiGlobalTransform's
-    // translation is the node CENTER, not top-left. The inner field is
-    // private but `UiGlobalTransform: Deref<Target = Affine2>`.
-    let translation = transform.translation;
-    let half = node.size * 0.5;
-    let pane_top = translation.y - half.y;
-    let pane_bot = translation.y + half.y;
-
-    let above = cursor_phys.y < pane_top;
-    let below = cursor_phys.y > pane_bot;
-    if !above && !below {
-        state.next_autoscroll_at = None;
-        return;
-    }
-
-    let distance_cells = if above {
-        ((pane_top - cursor_phys.y) / cell_h_phys).floor().max(0.0) as u32
-    } else {
-        ((cursor_phys.y - pane_bot) / cell_h_phys).floor().max(0.0) as u32
-    };
-    let period_ms = autoscroll_period_ms(&configs.mouse, distance_cells);
-    let period = std::time::Duration::from_millis(period_ms as u64);
-
-    let next_at = state.next_autoscroll_at.unwrap_or(now + period);
-    if now < next_at {
-        state.next_autoscroll_at = Some(next_at);
-        return;
-    }
-
-    // Time to tick. Compute the edge cell (clamped to pane bounds).
-    let edge_local_y = if above { 0.0 } else { node.size.y };
-    let edge_local_x = (cursor_phys.x - (translation.x - half.x)).clamp(0.0, node.size.x);
-    let edge_local = bevy::math::Vec2::new(edge_local_x, edge_local_y);
-
-    let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(drag.entity) else {
-        return;
-    };
-    let (cols, rows, _) = handle.read_geometry();
-    let (col, row, side) = cell_at_local(edge_local, cell_w_phys, cell_h_phys, cols, rows);
-    // 1-indexed cell → 0-indexed viewport point.
-    let pt = bevy_terminal::Point::new(
-        bevy_terminal::Line((row as i32) - 1),
-        bevy_terminal::Column((col as usize) - 1),
+    // Run autoscroll tick if time permits.
+    run_autoscroll_tick(
+        &mut state,
+        &drag,
+        cursor_phys,
+        now,
+        node,
+        transform,
+        cell_h_phys,
+        cell_w_phys,
+        &configs.mouse,
+        &mut handles,
+        &copy_mode_q,
     );
 
-    let in_copy_mode = copy_mode_q.get(drag.entity).is_ok();
-    let scroll_delta: i32 = if above { 1 } else { -1 };
+    // End-of-frame guards.
 
-    if in_copy_mode {
-        // NOTE: vi_goto must run BEFORE scroll_display in copy mode.
-        // scroll_display calls vi_mode_recompute_selection, which sets
-        // selection.end = vi_cursor.point. Without the pre-scroll
-        // vi_goto, the selection end snaps back to the stale vi cursor
-        // before we overwrite it via selection_update_to.
-        handle.vi_goto(&mut coalescer, pt);
-        handle.scroll(&mut coalescer, scroll_delta);
-        handle.selection_update_to(&mut coalescer, pt, side);
-    } else {
-        handle.scroll(&mut coalescer, scroll_delta);
-        handle.selection_update_to(&mut coalescer, pt, side);
+    // 1. Drop stale drag when alacritty wiped Term::selection (e.g.
+    //    alt-screen swap, screen reset). Without this, the next drag
+    //    tick would re-arm a phantom anchor.
+    if let Some(drag) = state.drag.as_ref() {
+        match handles.get(drag.entity) {
+            Ok((handle, _, _)) if should_drop_stale_drag(&handle) => {
+                state.drag = None;
+                state.next_autoscroll_at = None;
+            }
+            Err(_) => {
+                // Entity is gone (e.g. pane closed mid-drag).
+                state.drag = None;
+                state.next_autoscroll_at = None;
+            }
+            _ => {}
+        }
     }
 
-    state.next_autoscroll_at = Some(now + period);
+    // 2. Resize clamp: clamp anchor_cell to current geometry so a
+    //    mid-drag pane resize doesn't leave us pointing past the new
+    //    bottom-right.
+    if let Some(drag) = state.drag.as_mut()
+        && let Ok((handle, _, _)) = handles.get(drag.entity)
+    {
+        let (cols, rows, _) = handle.read_geometry();
+        drag.anchor_cell.col = drag.anchor_cell.col.min(cols as u32).max(1);
+        drag.anchor_cell.row = drag.anchor_cell.row.min(rows as u32).max(1);
+    }
 }
 
 /// Dispatches the router's `ButtonAction` against the focused entity's
@@ -753,5 +831,19 @@ mod tests {
             },
         );
         assert!(matches!(action, ButtonAction::StartLocalSelection { .. }));
+    }
+
+    #[test]
+    fn should_drop_stale_drag_returns_true_when_no_selection() {
+        let opts = bevy_terminal::SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        // Fresh bundle has no selection.
+        assert!(super::should_drop_stale_drag(&bundle.handle));
     }
 }
