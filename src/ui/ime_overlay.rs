@@ -42,11 +42,28 @@ impl Plugin for ImeOverlayPlugin {
             Startup,
             spawn_ime_overlay_once.after(TerminalFontInitSet::InitCellMetrics),
         )
+        // NOTE: must run BEFORE `UiSystems::Content`. Bevy's
+        // `detect_text_needs_rerender::<Text>` and `measure_text_system`
+        // run in `UiSystems::Content` (`bevy_ui-0.18.1/src/lib.rs:226-243`)
+        // and that's where `ComputedTextBlock` is refreshed from
+        // ECS `TextSpan`s (`bevy_text-0.18.1/src/pipeline.rs:245-272`).
+        // If we mutate `TextSpan.0` after `Content`, detection sees no
+        // change this frame, `text_system` in `PostLayout` is gated off
+        // (`bevy_ui-0.18.1/src/widget/text.rs:343-393`), the root's
+        // `ComputedNode` stays at 0×0, and `bevy_ui_render` skips empty
+        // nodes (`bevy_ui_render-0.18.1/src/lib.rs:1044-1046`) —
+        // explaining why the inline preedit was invisible.
+        //
+        // Side effect of running before `Layout`: the anchor's
+        // `UiGlobalTransform` and `ComputedNode.size` we read here are
+        // from the PRIOR frame's `PostLayout`. For a stable terminal
+        // pane (no per-frame resize) this is invisible; under window
+        // drag it lags overlay placement by one frame, which is also
+        // the same cosmetic latency the caret-bar `left` calc already
+        // had.
         .add_systems(
             bevy::app::PostUpdate,
-            position_ime_overlay
-                .after(UiSystems::Layout)
-                .before(UiSystems::PostLayout),
+            position_ime_overlay.before(UiSystems::Content),
         );
     }
 }
