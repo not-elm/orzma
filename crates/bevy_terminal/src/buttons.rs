@@ -129,19 +129,34 @@ impl ButtonAction {
 fn route_locally_branch(evt: ButtonEvent, mods: ProtocolModifiers) -> ButtonAction {
     match (evt.kind, evt.button) {
         (ButtonEventKind::Press, MouseButtonKind::Left) => {
-            let ty = if mods.alt {
-                SelectionType::Block
-            } else {
-                match evt.click_count {
-                    1 => SelectionType::Simple,
-                    2 => SelectionType::Semantic,
-                    _ => SelectionType::Lines,
-                }
-            };
-            ButtonAction::StartLocalSelection {
-                ty,
-                cell: evt.cell,
-                side: evt.side,
+            // Alt+click → immediate Block selection (no defer).
+            if mods.alt {
+                return ButtonAction::StartLocalSelection {
+                    ty: SelectionType::Block,
+                    cell: evt.cell,
+                    side: evt.side,
+                };
+            }
+            // click=1 defers selection start until the first inter-cell
+            // drag (spec §3). click=2 / click=3 still start immediately
+            // because users expect word / line selection to appear on
+            // the click itself.
+            match evt.click_count {
+                1 => ButtonAction::ArmDrag {
+                    ty: SelectionType::Simple,
+                    cell: evt.cell,
+                    side: evt.side,
+                },
+                2 => ButtonAction::StartLocalSelection {
+                    ty: SelectionType::Semantic,
+                    cell: evt.cell,
+                    side: evt.side,
+                },
+                _ => ButtonAction::StartLocalSelection {
+                    ty: SelectionType::Lines,
+                    cell: evt.cell,
+                    side: evt.side,
+                },
             }
         }
         (ButtonEventKind::Drag, MouseButtonKind::Left) => ButtonAction::UpdateLocalSelection {
@@ -181,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn left_press_single_click_starts_simple_selection() {
+    fn left_press_single_click_arms_drag() {
         let action = ButtonAction::route(
             TermMode::empty(),
             press_left(1),
@@ -190,7 +205,7 @@ mod tests {
         );
         assert_eq!(
             action,
-            ButtonAction::StartLocalSelection {
+            ButtonAction::ArmDrag {
                 ty: SelectionType::Simple,
                 cell: cell(5, 5),
                 side: Side::Left,
@@ -227,6 +242,23 @@ mod tests {
             action,
             ButtonAction::StartLocalSelection {
                 ty: SelectionType::Lines,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn left_press_click1_with_alt_still_returns_start_block_selection() {
+        let mods = ProtocolModifiers {
+            alt: true,
+            ..Default::default()
+        };
+        let action = ButtonAction::route(TermMode::empty(), press_left(1), mods, &cfg());
+        // Alt+click=1 is the Block selection — must NOT fold into ArmDrag.
+        assert!(matches!(
+            action,
+            ButtonAction::StartLocalSelection {
+                ty: SelectionType::Block,
                 ..
             }
         ));
@@ -379,7 +411,7 @@ mod tests {
         let action = ButtonAction::route(modes, press_left(1), mods, &cfg());
         assert_eq!(
             action,
-            ButtonAction::StartLocalSelection {
+            ButtonAction::ArmDrag {
                 ty: SelectionType::Simple,
                 cell: cell(5, 5),
                 side: Side::Left,

@@ -973,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_translates_left_press_to_simple_selection() {
+    fn dispatch_translates_left_press_to_arm_drag() {
         use bevy_terminal::{
             ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind,
             ProtocolModifiers, Side, TermMode,
@@ -994,7 +994,7 @@ mod tests {
                 max_protocol_events_per_frame: 8,
             },
         );
-        assert!(matches!(action, ButtonAction::StartLocalSelection { .. }));
+        assert!(matches!(action, ButtonAction::ArmDrag { .. }));
     }
 
     #[test]
