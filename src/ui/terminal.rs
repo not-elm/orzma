@@ -5,6 +5,7 @@
 //! Failures mark the entity with `TerminalSpawnFailed` so the system does
 //! not retry on subsequent frames.
 
+use crate::system_set::OzmuxSystems;
 use crate::ui::{TerminalActivityMarker, TerminalSpawnFailed};
 use bevy::prelude::*;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
@@ -29,8 +30,7 @@ impl Plugin for OzmuxTerminalUiPlugin {
         // `grid_size` uniform is written this tick, not next.
         app.add_systems(
             Update,
-            finish_terminal_setup
-                .after(crate::ui::rebuild_session::rebuild_session_ui_on_data_change),
+            finish_terminal_setup.in_set(OzmuxSystems::SetupActivity),
         )
         .add_systems(
             PostUpdate,

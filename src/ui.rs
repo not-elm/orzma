@@ -20,7 +20,6 @@ pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub mod layout;
 pub mod palette;
-pub mod rebuild_session;
 pub mod registry;
 pub mod root;
 pub mod session;
@@ -35,43 +34,43 @@ pub mod terminal;
 /// never despawned. Hosts `SessionUiRoot` (the attachment point for the
 /// active session) and `StatusBarRoot` as direct children.
 #[derive(Component)]
-pub(crate) struct UiRoot;
+pub struct UiRoot;
 
 /// Marker for the single attachment-point `Node` child of `UiRoot` that
 /// receives whichever Session's `SessionUiSubtree` is currently attached.
 /// `sync_active_session` reparents subtrees between this and their owning
 /// Session entity. Spawned once in Startup; never despawned.
 #[derive(Component)]
-pub(crate) struct SessionUiRoot;
+pub struct SessionUiRoot;
 
 /// Marker for every transient UI Node (status bar, tab bar, pane frame,
 /// split container, placeholder activity content). Rebuilds query this
 /// and despawn every match. Activity host entities must NOT carry this.
 #[derive(Component)]
-pub(crate) struct StructuralNode;
+pub struct StructuralNode;
 
 /// Marker for the stable per-activity host entity. Survives structural
 /// rebuilds; re-parented via `ChildOf` each rebuild. The `ActivityId →
 /// Entity` mapping is owned by `ActivityEntityRegistry`; this marker
 /// exists only so queries can filter for activity hosts.
 #[derive(Component)]
-pub(crate) struct ActivityHostNode;
+pub struct ActivityHostNode;
 
 /// Marks an Activity Host whose `kind` is `Terminal`. `finish_terminal_setup`
 /// queries for `With<TerminalActivityMarker>` to find hosts that need a
 /// `TerminalBundle` + `TerminalRenderBundle` attached.
 #[derive(Component)]
-pub(crate) struct TerminalActivityMarker;
+pub struct TerminalActivityMarker;
 
 /// Records that `TerminalBundle::spawn` failed for this host, so
 /// `finish_terminal_setup` will not retry on subsequent frames.
 #[derive(Component)]
-pub(crate) struct TerminalSpawnFailed;
+pub struct TerminalSpawnFailed;
 
 /// Marker for the pane frame Node (the outermost Node of one
 /// `Cell::Pane` subtree). Used by tests; not load-bearing for runtime.
 #[derive(Component)]
-pub(crate) struct PaneFrame;
+pub struct PaneFrame;
 
 /// Bevy Plugin wiring the native Bevy UI rebuild pipeline.
 pub struct OzmuxUiPlugin;
@@ -83,10 +82,7 @@ impl Plugin for OzmuxUiPlugin {
             .add_systems(Startup, root::setup_root_camera_and_ui_root)
             .add_systems(
                 Update,
-                (
-                    rebuild_session::rebuild_session_ui_on_data_change,
-                    status_bar_sync::rebuild_status_bar_on_session_set_change,
-                ),
+                status_bar_sync::rebuild_status_bar_on_session_set_change,
             );
     }
 }
