@@ -101,6 +101,18 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
+        if is_copy_chord(&ev.logical_key, &mods)
+            && let Some(session) = mux.sessions.get(&session_id)
+            && let Ok(pane) = session.pane(&session.active_pane)
+            && let Some(entity) = registry.get(&pane.active_activity)
+            && let Ok((handle, _pty, _coalescer)) = handles.get_mut(entity)
+            && let Some(text) = handle.selection_to_string()
+            && !text.is_empty()
+        {
+            clipboard.write(text);
+            continue;
+        }
+
         if let Some(session) = mux.sessions.get(&session_id)
             && let Ok(pane) = session.pane(&session.active_pane)
             && let Some(entity) = registry.get(&pane.active_activity)
@@ -215,6 +227,24 @@ fn is_modifier_only_key(key: &Key) -> bool {
 fn is_paste_chord(key: &Key, mods: &Modifiers) -> bool {
     let Key::Character(s) = key else { return false };
     if s.as_str() != "v" {
+        return false;
+    }
+    mods.meta && !mods.ctrl && !mods.shift && !mods.alt
+}
+
+/// Returns `true` when the (key, mods) pair is the "copy active
+/// selection to clipboard" shortcut `Cmd+C`. The match is strict —
+/// exactly `meta` is held; `ctrl` / `shift` / `alt` are absent. The
+/// `c` character match is case-sensitive (uppercase `C` does not bind,
+/// since `Cmd+Shift+C` is not the copy shortcut on macOS).
+///
+/// Lives as a fast-path predicate rather than a `Bindings` action for
+/// the same reason `is_paste_chord` does — sit symmetric with paste,
+/// and avoid touching the binding-table schema for a non-rebindable
+/// chord. See spec §8.
+fn is_copy_chord(key: &Key, mods: &Modifiers) -> bool {
+    let Key::Character(s) = key else { return false };
+    if s.as_str() != "c" {
         return false;
     }
     mods.meta && !mods.ctrl && !mods.shift && !mods.alt
@@ -794,6 +824,48 @@ mod tests {
             &Bk::Escape,
             &Modifiers {
                 meta: true,
+                ..Default::default()
+            },
+        ));
+    }
+
+    #[test]
+    fn is_copy_chord_matches_meta_c_only() {
+        assert!(super::is_copy_chord(
+            &Bk::Character("c".into()),
+            &Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+        ));
+    }
+
+    #[test]
+    fn is_copy_chord_rejects_meta_shift_c() {
+        assert!(!super::is_copy_chord(
+            &Bk::Character("c".into()),
+            &Modifiers {
+                meta: true,
+                shift: true,
+                ..Default::default()
+            },
+        ));
+    }
+
+    #[test]
+    fn is_copy_chord_rejects_plain_c() {
+        assert!(!super::is_copy_chord(
+            &Bk::Character("c".into()),
+            &Modifiers::default(),
+        ));
+    }
+
+    #[test]
+    fn is_copy_chord_rejects_ctrl_c() {
+        assert!(!super::is_copy_chord(
+            &Bk::Character("c".into()),
+            &Modifiers {
+                ctrl: true,
                 ..Default::default()
             },
         ));
