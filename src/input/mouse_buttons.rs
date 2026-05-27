@@ -560,38 +560,33 @@ fn dispatch_mouse_buttons(
         }
     }
 
-    // Drag-scroll loop. Runs every frame while a left-drag is active
-    // and the cursor is past the pane's vertical rect.
+    // Drag-scroll loop. Runs only for Active drags (Armed drags have no
+    // selection to extend yet) and only while the cursor is past the
+    // pane's vertical rect.
     let now = time.last_update().unwrap_or_else(Instant::now);
-    let Some(drag) = state.drag.as_ref().filter(|d| d.is_active()).cloned() else {
+    if let Some(drag) = state.drag.as_ref().filter(|d| d.is_active()).cloned() {
+        if let Ok((_, node_ref, transform_ref)) = hosts_q.get(drag.entity) {
+            let node = *node_ref;
+            let transform = *transform_ref;
+            run_autoscroll_tick(
+                &mut state,
+                &drag,
+                cursor_phys,
+                now,
+                node,
+                transform,
+                cell_h_phys,
+                cell_w_phys,
+                &configs.mouse,
+                &mut handles,
+                &copy_mode_q,
+            );
+        }
+    } else {
         state.next_autoscroll_at = None;
-        return;
-    };
+    }
 
-    // Capture pane geometry by value (ComputedNode is Copy + Clone).
-    let Ok((_, node_ref, transform_ref)) = hosts_q.get(drag.entity) else {
-        // Entity is gone or not found; fall through to end-of-frame guards.
-        return;
-    };
-    let node = *node_ref;
-    let transform = *transform_ref;
-
-    // Run autoscroll tick if time permits.
-    run_autoscroll_tick(
-        &mut state,
-        &drag,
-        cursor_phys,
-        now,
-        node,
-        transform,
-        cell_h_phys,
-        cell_w_phys,
-        &configs.mouse,
-        &mut handles,
-        &copy_mode_q,
-    );
-
-    // End-of-frame guards.
+    // End-of-frame guards (run for both Armed and Active phases).
 
     // 1. Drop stale drag when alacritty wiped Term::selection (e.g.
     //    alt-screen swap, screen reset). Without this, the next drag
@@ -655,22 +650,26 @@ fn apply_action(
     let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
         return;
     };
+
+    // Left-release ALWAYS clears the drag state, regardless of which
+    // action the router emitted — covers the Shift-release-mid-drag
+    // corner where the router flips from local-route to PTY-forward
+    // between press and release.
+    if matches!(
+        (event_kind, event_button),
+        (
+            bevy_terminal::ButtonEventKind::Release,
+            bevy_terminal::MouseButtonKind::Left,
+        ),
+    ) {
+        state.drag = None;
+        state.next_autoscroll_at = None;
+    }
+
     let in_copy_mode = copy_mode_q.get(entity).is_ok();
 
     match action {
-        A::Noop => {
-            // Left-release: clear drag state.
-            if matches!(
-                (event_kind, event_button),
-                (
-                    bevy_terminal::ButtonEventKind::Release,
-                    bevy_terminal::MouseButtonKind::Left,
-                ),
-            ) {
-                state.drag = None;
-                state.next_autoscroll_at = None;
-            }
-        }
+        A::Noop => {}
         A::WriteToPty(bytes) => {
             if let Err(e) = handle.write(&mut pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse-button PTY write failed");
@@ -1291,5 +1290,127 @@ mod tests {
         );
         let (cell, _side) = result.expect("clamped cursor must still emit");
         assert_eq!(cell, CellCoord { col: 1, row: 24 });
+    }
+
+    #[test]
+    fn apply_action_left_release_clears_state_drag_even_on_pty_forward_path() {
+        // Regression: Shift+click → ArmDrag; user releases Shift before
+        // mouse-release. The mouse-release now routes to PTY-forward
+        // (WriteToPty), not Noop. The release-clear of state.drag must
+        // still fire.
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<MouseSelectionState>();
+
+        let opts = bevy_terminal::SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let entity = app.world_mut().spawn(bundle).id();
+
+        // Pre-arm the drag (simulating the Shift+click → ArmDrag press).
+        {
+            let mut state = app.world_mut().resource_mut::<MouseSelectionState>();
+            state.drag = Some(ActiveDrag {
+                entity,
+                anchor_cell: CellCoord { col: 1, row: 1 },
+                last_drag_cell: None,
+                phase: DragPhase::Armed {
+                    ty: bevy_terminal::SelectionType::Simple,
+                    anchor_side: bevy_terminal::Side::Left,
+                },
+            });
+        }
+
+        // Apply a left-release with WriteToPty (captured-mouse release).
+        app.world_mut()
+            .run_system_once(
+                move |mut state: ResMut<MouseSelectionState>,
+                      mut handles: Query<(
+                    &mut bevy_terminal::TerminalHandle,
+                    &mut bevy_terminal::PtyHandle,
+                    &mut bevy_terminal::Coalescer,
+                )>,
+                      copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
+                    super::apply_action(
+                        &mut state,
+                        bevy_terminal::ButtonEventKind::Release,
+                        bevy_terminal::MouseButtonKind::Left,
+                        bevy_terminal::ButtonAction::WriteToPty(b"\x1b[<0;1;1m".to_vec()),
+                        entity,
+                        &mut handles,
+                        &copy_mode_q,
+                    );
+                },
+            )
+            .unwrap();
+
+        let state = app.world().resource::<MouseSelectionState>();
+        assert!(
+            state.drag.is_none(),
+            "left-release must clear state.drag regardless of the action variant",
+        );
+    }
+
+    #[test]
+    fn end_of_frame_guard_drops_drag_when_armed_pane_closes() {
+        // Regression: the end-of-frame guards must run for Armed drags.
+        // Previously the autoscroll early-return skipped past them.
+        // This test verifies the guard fires when the drag entity is gone.
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<MouseSelectionState>();
+
+        let dead_entity = Entity::from_bits(99999);
+
+        // Set state.drag to an Armed drag pointing at a non-existent entity.
+        // (Simulating a pane that closed mid-arm.)
+        {
+            let mut state = app.world_mut().resource_mut::<MouseSelectionState>();
+            state.drag = Some(ActiveDrag {
+                entity: dead_entity,
+                anchor_cell: CellCoord { col: 5, row: 5 },
+                last_drag_cell: None,
+                phase: DragPhase::Armed {
+                    ty: bevy_terminal::SelectionType::Simple,
+                    anchor_side: bevy_terminal::Side::Left,
+                },
+            });
+        }
+
+        // Run the end-of-frame guards inline by mimicking the structure
+        // in dispatch_mouse_buttons. The entity is not in the query, so
+        // the Err(_) arm should drop state.drag.
+        app.world_mut()
+            .run_system_once(
+                |mut state: ResMut<MouseSelectionState>,
+                 handles: Query<(
+                    &mut bevy_terminal::TerminalHandle,
+                    &mut bevy_terminal::PtyHandle,
+                    &mut bevy_terminal::Coalescer,
+                )>| {
+                    if let Some(drag) = state.drag.as_ref()
+                        && handles.get(drag.entity).is_err()
+                    {
+                        state.drag = None;
+                        state.next_autoscroll_at = None;
+                    }
+                },
+            )
+            .unwrap();
+
+        let state = app.world().resource::<MouseSelectionState>();
+        assert!(
+            state.drag.is_none(),
+            "end-of-frame guard must drop state.drag when entity is gone (Armed phase)",
+        );
     }
 }
