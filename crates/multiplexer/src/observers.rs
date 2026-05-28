@@ -75,11 +75,10 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     #[test]
-    #[ignore = "requires MultiplexerPlugin (added in Task 10) to register the observers"]
     fn removing_pane_repoints_active_pane_to_survivor() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        // Task 10: app.add_plugins(crate::plugin::MultiplexerPlugin);
+        app.add_plugins(crate::plugin::MultiplexerPlugin);
 
         let outcome = app
             .world_mut()
