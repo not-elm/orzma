@@ -27,11 +27,11 @@ use bevy::ui::{
     UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
-use bevy_terminal_renderer::material::TerminalMaterialSystems;
-use bevy_terminal_renderer::prelude::TerminalGrid;
 use bevy_terminal_renderer::CellMetrics;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::TerminalFontInitSet;
+use bevy_terminal_renderer::material::TerminalMaterialSystems;
+use bevy_terminal_renderer::prelude::TerminalGrid;
 use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -75,14 +75,14 @@ impl Plugin for ImeOverlayPlugin {
 
 /// Marker for the singleton IME preedit overlay root entity.
 #[derive(Component)]
-pub(crate) struct ImeOverlayNode;
+pub struct ImeOverlayNode;
 
 /// Marker for the 1-px `Node` that draws the caret bar. Spawned as a
 /// top-level UI entity (NOT a child of [`ImeOverlayNode`]) so the
 /// `Text` root stays a taffy leaf — required for `NodeMeasure::Text`
 /// to drive its `ComputedNode.size`.
 #[derive(Component)]
-pub(crate) struct ImeCaretBar;
+pub struct ImeCaretBar;
 
 /// Marker for the hollow-block `Node` that highlights the macOS-IME
 /// clause-selection range. Spawned as a top-level UI entity (NOT a
@@ -93,7 +93,7 @@ pub(crate) struct ImeCaretBar;
 /// in that state, [`ImeCaretBar`] is hidden. The two markers are
 /// mutually exclusive visually.
 #[derive(Component)]
-pub(crate) struct ImeClauseHighlight;
+pub struct ImeClauseHighlight;
 
 /// Computes the overlay's top-left logical-pixel position relative to
 /// the window origin. Caller is responsible for writing this into

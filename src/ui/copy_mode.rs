@@ -16,15 +16,28 @@ use bevy::input::keyboard::Key;
 use bevy_terminal::{Coalescer, PtyHandle, SelectionType, TerminalHandle, ViMotion};
 use ozmux_configs::shortcuts::Modifiers;
 
+/// Bevy Plugin: registers the two observers and inserts the global
+/// `Clipboard` resource. `CopyModeState` is inserted/removed per-entity
+/// by the observers themselves; no global system needed.
+pub struct CopyModePlugin;
+
+impl Plugin for CopyModePlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(Clipboard::new())
+            .add_observer(handle_enter_copy_mode_request)
+            .add_observer(handle_exit_copy_mode);
+    }
+}
+
 /// Marker: presence on an Activity entity means "copy mode is active".
 #[derive(Component, Debug, Default)]
-pub(crate) struct CopyModeState;
+pub struct CopyModeState;
 
 /// Request to enter copy mode on a specific Activity entity. Fired by
 /// `handle_chord` when it sees `Action::EnterCopyMode`. The observer
 /// inserts `CopyModeState` and calls `TerminalHandle::enter_vi_mode`.
 #[derive(EntityEvent, Debug)]
-pub(crate) struct EnterCopyModeRequest {
+pub struct EnterCopyModeRequest {
     pub entity: Entity,
 }
 
@@ -33,13 +46,13 @@ pub(crate) struct EnterCopyModeRequest {
 /// calls `TerminalHandle::exit_vi_mode`, clears any selection, and
 /// removes `CopyModeState`.
 #[derive(EntityEvent, Debug)]
-pub(crate) struct ExitCopyMode {
+pub struct ExitCopyMode {
     pub entity: Entity,
 }
 
 /// Outcome of `map_key_to_copy_op` — what the dispatcher should do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CopyOp {
+pub enum CopyOp {
     /// `q` / `Esc` — leave copy mode, drop any selection.
     ExitCancel,
     /// `y` — copy the active selection to the OS clipboard, then leave.
@@ -103,19 +116,6 @@ pub(crate) fn map_key_to_copy_op(key: &Key, mods: Modifiers) -> Option<CopyOp> {
         'q' => CopyOp::ExitCancel,
         _ => return None,
     })
-}
-
-/// Bevy Plugin: registers the two observers and inserts the global
-/// `Clipboard` resource. `CopyModeState` is inserted/removed per-entity
-/// by the observers themselves; no global system needed.
-pub struct CopyModePlugin;
-
-impl Plugin for CopyModePlugin {
-    fn build(&self, app: &mut App) {
-        app.insert_resource(Clipboard::new())
-            .add_observer(handle_enter_copy_mode_request)
-            .add_observer(handle_exit_copy_mode);
-    }
 }
 
 /// Side-effecting helper called inline from

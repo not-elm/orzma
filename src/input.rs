@@ -6,6 +6,9 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
+use crate::input::ime::{ImeState, read_ime_events};
+use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::ui::registry::ActivityEntityRegistry;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -13,9 +16,6 @@ use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers, SessionOffset};
 use ozmux_multiplexer::SessionId;
 use std::collections::HashSet;
-use crate::input::ime::{ImeState, read_ime_events};
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
-use crate::ui::registry::ActivityEntityRegistry;
 
 /// Resolves the focused activity's entity via the attached session →
 /// multiplexer → registry chain.
@@ -1498,7 +1498,9 @@ mod tests {
 
         // Drive ImeState into composing mode directly via apply_event.
         {
-            let mut state = app.world_mut().resource_mut::<crate::input::ime::ImeState>();
+            let mut state = app
+                .world_mut()
+                .resource_mut::<crate::input::ime::ImeState>();
             crate::input::ime::apply_event(
                 &mut state,
                 &bevy::window::Ime::Preedit {

@@ -99,13 +99,11 @@ fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -
 /// accepts `Arc<dyn AsRef<[u8]> + Sync + Send>`. The static slice
 /// already lives in `.rodata`, so wrapping it directly (without
 /// `.to_vec()`) avoids a ~3.9 MB allocation + copy at Startup.
-fn register_cjk_fallback_with_cosmic(
-    mut font_system: ResMut<bevy::text::CosmicFontSystem>,
-) {
-    let source = cosmic_text::fontdb::Source::Binary(
-        std::sync::Arc::new(bevy_terminal_renderer::bundled::FALLBACK_REGULAR)
-            as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>,
-    );
+fn register_cjk_fallback_with_cosmic(mut font_system: ResMut<bevy::text::CosmicFontSystem>) {
+    let source = cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+        bevy_terminal_renderer::bundled::FALLBACK_REGULAR,
+    )
+        as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>);
     font_system.db_mut().load_font_source(source);
     tracing::info!(
         target: "ozmux_gui::font",

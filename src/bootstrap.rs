@@ -2,7 +2,7 @@
 //! seeds the initial Session and spawns the corresponding Bevy entity
 //! with `AttachedSession`.
 
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId, SessionUiSubtree};
 use bevy::prelude::*;
 
 /// Bevy Plugin that registers the `bootstrap` system in the `Startup`
@@ -37,7 +37,7 @@ pub(crate) fn bootstrap(mut commands: Commands, mut mux: ResMut<Multiplexer>) {
         .spawn((
             SessionEntityId(sid),
             AttachedSession,
-            crate::multiplexer::SessionUiSubtree(subtree_root),
+            SessionUiSubtree(subtree_root),
             Name::new(bevy_name),
         ))
         .id();

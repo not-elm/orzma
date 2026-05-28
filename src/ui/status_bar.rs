@@ -7,6 +7,7 @@ use crate::theme;
 use crate::theme::UI_FONT_SIZE;
 use crate::ui::StructuralNode;
 use crate::ui::palette;
+use crate::ui::status_bar_sync::StatusBarRoot;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, AlignSelf, FlexDirection, UiRect, Val};
 use ozmux_multiplexer::{Session, SessionId};
@@ -36,7 +37,7 @@ pub(crate) fn build_status_bar(
             },
             BackgroundColor(palette::PANEL),
             StructuralNode,
-            crate::ui::status_bar_sync::StatusBarRoot,
+            StatusBarRoot,
             ChildOf(parent),
         ))
         .id();

@@ -46,7 +46,7 @@ fn tab_colors(is_active: bool, is_active_pane: bool) -> TabColors {
 
 /// Spawn the per-pane tab bar (one tab per Activity) as a child of `parent`.
 /// Every spawned Entity carries `StructuralNode`.
-pub(crate) fn build_pane_tab_bar(
+pub fn build_pane_tab_bar(
     commands: &mut Commands,
     parent: Entity,
     pane: &Pane,

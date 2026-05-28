@@ -17,17 +17,6 @@ pub struct OzmuxTerminalUiPlugin;
 
 impl Plugin for OzmuxTerminalUiPlugin {
     fn build(&self, app: &mut App) {
-        // NOTE: `resize_terminals_to_node` reads `ComputedNode.size`, which
-        // is written by `ui_layout_system` in `PostUpdate :: UiSystems::Layout`.
-        // Placing this system in `Update` would always read the *previous*
-        // frame's layout, producing a 1-tick lag where the pane border has
-        // jumped to its new size but the terminal grid hasn't caught up —
-        // visible as a strip of shader-fallback teal at the pane edge during
-        // a window drag. Running it in `PostUpdate .after(UiSystems::Layout)`
-        // makes WindowResized → layout → terminal resize converge in one
-        // frame. The `.before(TerminalMaterialSystems::UpdateMaterial)`
-        // anchors the same-frame chain into the renderer crate so the
-        // `grid_size` uniform is written this tick, not next.
         app.add_systems(
             Update,
             finish_terminal_setup.in_set(OzmuxSystems::SetupActivity),

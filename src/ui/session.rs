@@ -77,7 +77,6 @@ fn rebuild_session_ui(
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
-
     let live_activity_ids: HashSet<ActivityId> = mux
         .sessions
         .values()
@@ -139,16 +138,16 @@ fn rebuild_session_ui(
 fn descend_and_detach_hosts(
     commands: &mut Commands,
     root: Entity,
-    children_q: &Query<&Children>,
-    activity_hosts_q: &Query<(Entity, &ActivityHostNode)>,
+    children: &Query<&Children>,
+    activity_hosts: &Query<(Entity, &ActivityHostNode)>,
 ) {
     let mut stack = vec![root];
     while let Some(e) = stack.pop() {
-        if activity_hosts_q.get(e).is_ok() {
+        if activity_hosts.get(e).is_ok() {
             commands.entity(e).remove::<ChildOf>();
             continue;
         }
-        if let Ok(children) = children_q.get(e) {
+        if let Ok(children) = children.get(e) {
             for c in children.iter() {
                 stack.push(c);
             }
@@ -159,18 +158,18 @@ fn descend_and_detach_hosts(
 fn descend_and_despawn_structural(
     commands: &mut Commands,
     root: Entity,
-    children_q: &Query<&Children>,
-    structural_q: &Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
+    children: &Query<&Children>,
+    structurals: &Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
 ) {
     let mut to_despawn = vec![];
     let mut stack = vec![root];
     while let Some(e) = stack.pop() {
-        if let Ok(children) = children_q.get(e) {
+        if let Ok(children) = children.get(e) {
             for c in children.iter() {
                 stack.push(c);
             }
         }
-        if structural_q.get(e).is_ok() && e != root {
+        if structurals.get(e).is_ok() && e != root {
             to_despawn.push(e);
         }
     }

@@ -4,6 +4,7 @@
 //! bumps — content changes (split / activity-add) do not redraw the
 //! status bar.
 
+use crate::font::TerminalUiFont;
 use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
@@ -13,23 +14,23 @@ use bevy::prelude::*;
 /// system queries this to find and despawn the previous bar before
 /// spawning a replacement.
 #[derive(Component)]
-pub(crate) struct StatusBarRoot;
+pub struct StatusBarRoot;
 
 /// Despawns the existing `StatusBarRoot` and rebuilds via
 /// `crate::ui::status_bar::build_status_bar` when:
 /// - any `SessionEntityId` was added or removed this frame, OR
 /// - any `AttachedSession` marker was added or removed this frame.
-pub(crate) fn rebuild_status_bar_on_session_set_change(
+pub fn rebuild_status_bar_on_session_set_change(
     mut commands: Commands,
+    mut attached_removed: RemovedComponents<AttachedSession>,
+    mut sessions_removed: RemovedComponents<SessionEntityId>,
     mux: Res<Multiplexer>,
     attached_q: Query<&SessionEntityId, With<AttachedSession>>,
     ui_root_q: Query<Entity, With<UiRoot>>,
     status_bar_q: Query<Entity, With<StatusBarRoot>>,
     sessions_added: Query<(), Added<SessionEntityId>>,
-    mut sessions_removed: RemovedComponents<SessionEntityId>,
     attached_added: Query<(), Added<AttachedSession>>,
-    mut attached_removed: RemovedComponents<AttachedSession>,
-    ui_font: Option<Res<crate::font::TerminalUiFont>>,
+    ui_font: Option<Res<TerminalUiFont>>,
 ) {
     let any_session_added = sessions_added.iter().count() > 0;
     let any_session_removed = sessions_removed.read().count() > 0;

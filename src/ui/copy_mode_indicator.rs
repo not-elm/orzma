@@ -15,16 +15,35 @@ use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 
+/// Bevy Plugin: wires the copy-mode indicator's attach + refresh systems
+/// and the exit observer.
+pub struct CopyModeIndicatorPlugin;
+
+impl Plugin for CopyModeIndicatorPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            (
+                attach_indicator_to_activity_host,
+                refresh_indicator
+                    .after(attach_indicator_to_activity_host)
+                    .run_if(any_with_component::<CopyModeState>),
+            ),
+        )
+        .add_observer(hide_indicator_on_copy_mode_exit);
+    }
+}
+
 /// Marker for the chip Node child of an Activity host. Exactly one
 /// per host; created on `Added<TerminalHandle>` and never despawned
 /// (visibility toggled via `Node.display`).
 #[derive(Component)]
-pub(crate) struct CopyModeIndicator;
+pub struct CopyModeIndicator;
 
 /// Last `(offset, total)` pair this chip rendered. Compared numerically
 /// each frame so `format!` only runs when the pair changed.
 #[derive(Component, Default, Debug, PartialEq, Eq)]
-pub(crate) struct IndicatorCache {
+pub struct IndicatorCache {
     pub offset: u32,
     pub total: u32,
 }
@@ -132,25 +151,6 @@ fn hide_indicator_on_copy_mode_exit(
             }
             return;
         }
-    }
-}
-
-/// Bevy Plugin: wires the copy-mode indicator's attach + refresh systems
-/// and the exit observer.
-pub struct CopyModeIndicatorPlugin;
-
-impl Plugin for CopyModeIndicatorPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                attach_indicator_to_activity_host,
-                refresh_indicator
-                    .after(attach_indicator_to_activity_host)
-                    .run_if(any_with_component::<CopyModeState>),
-            ),
-        )
-        .add_observer(hide_indicator_on_copy_mode_exit);
     }
 }
 

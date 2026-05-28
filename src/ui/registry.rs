@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 /// `ActivityId → Entity` map. Updated by `rebuild_session_ui_on_data_change`
 /// each rebuild via `get_or_spawn` (insert) and `prune` (sweep).
 #[derive(Resource, Default)]
-pub(crate) struct ActivityEntityRegistry {
+pub struct ActivityEntityRegistry {
     entities: HashMap<ActivityId, Entity>,
 }
 
@@ -21,7 +21,7 @@ impl ActivityEntityRegistry {
     /// The newly-spawned Entity carries `ActivityHostNode` so the layout
     /// layer only needs to manage the `ChildOf` parent link, not re-insert
     /// the marker every rebuild.
-    pub(crate) fn get_or_spawn(
+    pub fn get_or_spawn(
         &mut self,
         commands: &mut Commands,
         id: &ActivityId,
@@ -42,7 +42,7 @@ impl ActivityEntityRegistry {
     /// Despawn any Activity Entity whose `ActivityId` is not in `live`,
     /// and remove its map entry. Called at the end of each rebuild so
     /// closed Activities release their GPU/CPU resources.
-    pub(crate) fn prune(&mut self, commands: &mut Commands, live: &HashSet<ActivityId>) {
+    pub fn prune(&mut self, commands: &mut Commands, live: &HashSet<ActivityId>) {
         let dead: Vec<ActivityId> = self
             .entities
             .keys()
@@ -59,7 +59,7 @@ impl ActivityEntityRegistry {
     /// Looks up the host entity registered for `id`. Returns `None` when
     /// no host has been spawned yet (e.g. the activity was just created
     /// and the next `rebuild_session_ui_on_data_change` has not run).
-    pub(crate) fn get(&self, id: &ActivityId) -> Option<Entity> {
+    pub fn get(&self, id: &ActivityId) -> Option<Entity> {
         self.entities.get(id).copied()
     }
 

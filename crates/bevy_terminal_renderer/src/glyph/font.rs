@@ -222,12 +222,11 @@ impl TerminalFonts {
                 source,
             }
         })?;
-        let fallback_bold = FontArc::try_from_vec(fallback_bold).map_err(|source| {
-            FontLoadError::ParseFailed {
+        let fallback_bold =
+            FontArc::try_from_vec(fallback_bold).map_err(|source| FontLoadError::ParseFailed {
                 face: FontFace::Bold,
                 source,
-            }
-        })?;
+            })?;
         let fallback_italic = FontArc::try_from_vec(fallback_italic).map_err(|source| {
             FontLoadError::ParseFailed {
                 face: FontFace::Italic,
@@ -608,9 +607,15 @@ mod tests {
         // Different FontFace variants must yield different FontArc pointers
         // (we have 4 distinct bundled UDEVGothic35 faces, not the same one
         // wired four times).
-        let r_ptr = fonts.fallback_choice(&FontFace::Regular).font_data().as_ptr();
+        let r_ptr = fonts
+            .fallback_choice(&FontFace::Regular)
+            .font_data()
+            .as_ptr();
         let b_ptr = fonts.fallback_choice(&FontFace::Bold).font_data().as_ptr();
-        let i_ptr = fonts.fallback_choice(&FontFace::Italic).font_data().as_ptr();
+        let i_ptr = fonts
+            .fallback_choice(&FontFace::Italic)
+            .font_data()
+            .as_ptr();
         let bi_ptr = fonts
             .fallback_choice(&FontFace::BoldItalic)
             .font_data()
