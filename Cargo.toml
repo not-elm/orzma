@@ -18,6 +18,7 @@ bevy = { workspace = true }
 bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
+open = { workspace = true }
 ozmux_configs = { path = "daemon/configs" }
 ozmux_multiplexer = { path = "daemon/multiplexer" }
 tracing = { workspace = true }
@@ -93,6 +94,7 @@ reqwest = { version = "0.13", default-features = false, features = [
   "json",
 ] }
 derive_more = { version = "2" }
+open = "5"
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"
