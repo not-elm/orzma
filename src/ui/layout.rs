@@ -9,7 +9,7 @@ use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{PaneFrame, StructuralNode, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, UiRect, Val};
-use ozmux_multiplexer::{Cell, CellId, LayoutCellState, Session, SplitOrientation};
+use ozmux_multiplexer::{Cell, CellId, LayoutCellState, SplitOrientation};
 
 /// Convert `(lhs_weight, rhs_weight)` into the `flex_grow` pair to set on
 /// the two split children. Routes through `LayoutCellState::split_ratio`
@@ -25,9 +25,8 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 /// pane frame + tab bar + activity host slot.
 ///
 /// `Cell::Root` appearing mid-recursion is treated as an invariant
-/// violation (warn-and-skip); the entry point in
-/// `rebuild_session_ui_on_data_change` is expected to unwrap into
-/// `RootCell::child` first.
+/// violation (warn-and-skip); the entry point in `rebuild_session_ui`
+/// is expected to unwrap into `RootCell::child` first.
 ///
 /// `inactive_host_parent` — the Entity under which inactive Activity hosts
 /// (within this session) are parked. In production this is the owning
@@ -38,20 +37,19 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 pub(crate) fn build_cell_recursive(
     commands: &mut Commands,
     parent: Entity,
-    session: &Session,
+    cells: &LayoutCellState,
     cell_id: &CellId,
     registry: &mut ActivityEntityRegistry,
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
 ) {
-    let cell = match session.cells.cell(cell_id) {
+    let cell = match cells.cell(cell_id) {
         Ok(c) => c,
         Err(err) => {
             tracing::warn!(
                 target: "ozmux_gui::layout",
-                "cell {} missing from session {} ({:?})",
+                "cell {} missing ({:?})",
                 cell_id,
-                session.id,
                 err,
             );
             return;
@@ -69,8 +67,7 @@ pub(crate) fn build_cell_recursive(
         Cell::Pane(p) => build_pane(
             commands,
             parent,
-            session,
-            p,
+            p.pane,
             registry,
             inactive_host_parent,
             ui_font,
@@ -109,7 +106,7 @@ pub(crate) fn build_cell_recursive(
             build_cell_recursive(
                 commands,
                 lhs,
-                session,
+                cells,
                 &s.lhs_cell,
                 registry,
                 inactive_host_parent,
@@ -130,7 +127,7 @@ pub(crate) fn build_cell_recursive(
             build_cell_recursive(
                 commands,
                 rhs,
-                session,
+                cells,
                 &s.rhs_cell,
                 registry,
                 inactive_host_parent,
@@ -143,25 +140,14 @@ pub(crate) fn build_cell_recursive(
 fn build_pane(
     commands: &mut Commands,
     parent: Entity,
-    session: &Session,
-    pane_cell: &ozmux_multiplexer::PaneCell,
+    pane_entity: Entity,
     registry: &mut ActivityEntityRegistry,
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
 ) {
-    let Some(pane) = session.panes.get(&pane_cell.pane) else {
-        tracing::warn!(
-            target: "ozmux_gui::layout",
-            "pane {} referenced by cell missing",
-            pane_cell.pane,
-        );
-        return;
-    };
-    let is_active_pane = pane_cell.pane == session.active_pane;
-
     let pane_frame = commands
         .spawn((
-            Name::new(format!("Pane({})", session.name)),
+            Name::new(format!("Pane({pane_entity:?})")),
             Node {
                 flex_direction: FlexDirection::Column,
                 width: Val::Percent(100.0),
@@ -176,7 +162,21 @@ fn build_pane(
         ))
         .id();
 
-    crate::ui::tab_bar::build_pane_tab_bar(commands, pane_frame, pane, is_active_pane, ui_font);
+    // TODO Task 16: port build_pane_tab_bar to accept ECS queries instead of &Pane.
+    // The tab bar currently uses ozmux_multiplexer::{Activity, Pane} which do not
+    // exist in the ECS-native multiplexer. For now we spawn an empty tab bar row
+    // as a structural placeholder.
+    commands.spawn((
+        Node {
+            flex_direction: FlexDirection::Row,
+            width: Val::Percent(100.0),
+            height: Val::Auto,
+            ..default()
+        },
+        BackgroundColor(palette::TAB_BAR_BG),
+        StructuralNode,
+        ChildOf(pane_frame),
+    ));
 
     let activity_slot = commands
         .spawn((
@@ -192,21 +192,12 @@ fn build_pane(
         ))
         .id();
 
-    // NOTE: Inactive activity hosts are parked under `inactive_host_parent`,
-    // which the caller guarantees is a non-`Node` entity (the owning
-    // Session). The UI walker filters `With<Node>` on parents in
-    // `UiChildren::iter_ui_children`, so inactive hosts never appear in
-    // `ui_layout_system`'s traversal — no layout, no `ComputedNode`
-    // updates, no resize-pass work.
-    for activity in &pane.activities {
-        let host = registry.get_or_spawn(commands, &activity.id, &activity.kind);
-        if activity.id == pane.active_activity {
-            commands.entity(host).insert(ChildOf(activity_slot));
-            crate::ui::activity::build_activity_host_children(commands, host, activity);
-        } else {
-            commands.entity(host).insert(ChildOf(inactive_host_parent));
-        }
-    }
+    // TODO Task 16: port activity host placement to use ECS-native activity
+    // entities. The registry still maps ActivityId -> Entity but the new
+    // ECS model uses Entity references throughout. Once Task 16 ports the
+    // activity module, restore the loop that calls registry.get_or_spawn
+    // per activity and sets ChildOf(activity_slot) / ChildOf(inactive_host_parent).
+    let _ = (registry, inactive_host_parent, activity_slot, ui_font);
 }
 
 #[cfg(test)]
