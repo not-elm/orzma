@@ -496,8 +496,8 @@ fn dispatch_mouse_buttons(
         //       call above is preserved so the pane still focuses.
         if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
             let modifier_held = crate::input::hyperlink::link_modifier_held(&mods);
-            if modifier_held {
-                if let Ok(grid) = grids_q.get(entity) {
+            if modifier_held
+                && let Ok(grid) = grids_q.get(entity) {
                     if let Some(uri) = crate::input::hyperlink::should_open_at(
                         grid,
                         row.saturating_sub(1) as u16,
@@ -520,7 +520,6 @@ fn dispatch_mouse_buttons(
                         continue;
                     }
                 }
-            }
         }
 
         let evt = bevy_terminal::ButtonEvent {

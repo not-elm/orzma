@@ -251,10 +251,7 @@ mod tests {
         let grid = TerminalGrid {
             cols: 4,
             rows: 2,
-            cells: vec![
-                vec![],
-                vec![],
-            ],
+            cells: vec![vec![], vec![]],
             ..Default::default()
         };
         assert!(grid.hyperlink_at(99, 0).is_none());

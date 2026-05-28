@@ -107,10 +107,7 @@ mod tests {
         app.add_observer(apply_snapshot);
         let entity = app
             .world_mut()
-            .spawn(grid_with(vec![(
-                HyperlinkId(99),
-                HyperlinkUri::new("old"),
-            )]))
+            .spawn(grid_with(vec![(HyperlinkId(99), HyperlinkUri::new("old"))]))
             .id();
         app.world_mut().trigger(FrameSnapshot {
             entity,

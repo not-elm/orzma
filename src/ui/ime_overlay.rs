@@ -284,8 +284,8 @@ pub(crate) fn position_ime_overlay(
     let clause_x_logical = pos.x + begin_cells * cell_w_logical;
     let clause_w_logical = (end_cells - begin_cells) * cell_w_logical;
 
-    if has_beam {
-        if let Some(b) = bar.as_mut() {
+    if has_beam
+        && let Some(b) = bar.as_mut() {
             // Caret bar is a top-level UI entity (not a child of the
             // Text root), so its position is in window-absolute coords:
             // overlay origin + per-character horizontal offset.
@@ -294,10 +294,9 @@ pub(crate) fn position_ime_overlay(
             b.top = Val::Px(pos.y);
             b.height = Val::Px(line_h_logical);
         }
-    }
 
-    if has_clause {
-        if let Some(c) = clause.as_mut() {
+    if has_clause
+        && let Some(c) = clause.as_mut() {
             // Hollow block over the macOS-IME clause-selection range.
             // Positioned in window-absolute coords for the same
             // leaf-Text-no-children reason as ImeCaretBar.
@@ -307,7 +306,6 @@ pub(crate) fn position_ime_overlay(
             c.width = Val::Px(clause_w_logical);
             c.height = Val::Px(line_h_logical);
         }
-    }
 }
 
 /// Sets `TerminalGrid.suppress_cursor = true` on the currently-focused
