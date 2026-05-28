@@ -7,7 +7,7 @@
 //! §6.
 
 use bevy::prelude::*;
-use bevy_terminal::{CellCoord, Column, Line, Point, SelectionType, Side};
+use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType, Side};
 use std::time::Instant;
 
 /// Per-frame state for the mouse-selection system.
@@ -72,9 +72,7 @@ impl Plugin for MouseButtonsInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseSelectionState>().add_systems(
             Update,
-            dispatch_mouse_buttons
-                .in_set(crate::system_set::OzmuxSystems::Input)
-                .before(crate::input::dispatch_focused_key),
+            dispatch_mouse_buttons.in_set(crate::input::InputPhase::Dispatch),
         );
     }
 }
@@ -103,10 +101,6 @@ pub(crate) fn resolve_pane_at_phys(
         if !node.contains_point(*transform, cursor_phys_px) {
             continue;
         }
-        // NOTE: normalize_point returns None if the affine transform is
-        // degenerate (zero-size node or non-invertible). contains_point
-        // returning true normally implies Some here, but skip defensively
-        // to avoid an unwrap on the degenerate case.
         let Some(normalized) = node.normalize_point(*transform, cursor_phys_px) else {
             continue;
         };
@@ -390,6 +384,11 @@ fn dispatch_mouse_buttons(
     mut mux: ozmux_multiplexer::MultiplexerCommands,
     mut buttons_msg: MessageReader<bevy::input::mouse::MouseButtonInput>,
     mut cursor_msg: MessageReader<bevy::window::CursorMoved>,
+    mut handles: Query<(
+        &mut bevy_terminal::TerminalHandle,
+        &mut bevy_terminal::PtyHandle,
+        &mut bevy_terminal::Coalescer,
+    )>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
     hosts_q: Query<
@@ -400,11 +399,7 @@ fn dispatch_mouse_buttons(
         ),
         With<crate::ui::ActivityHostNode>,
     >,
-    mut handles: Query<(
-        &mut bevy_terminal::TerminalHandle,
-        &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
-    )>,
+    grids_q: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
     windows_q: Query<&Window, With<bevy::window::PrimaryWindow>>,
     metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
@@ -494,6 +489,39 @@ fn dispatch_mouse_buttons(
                 continue;
             };
             try_click_to_focus(&mut mux, &registry, attached_session, entity);
+        }
+
+        // NOTE: OSC 8 hyperlink interception — Cmd+Left (or Ctrl+Left) on
+        //       a linked cell. Press opens the URI and skips PTY routing;
+        //       Release also skips so the PTY does not see a release
+        //       without a matching press. The existing try_click_to_focus
+        //       call above is preserved so the pane still focuses.
+        if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
+            let modifier_held = crate::input::hyperlink::link_modifier_held(&mods);
+            if modifier_held
+                && let Ok(grid) = grids_q.get(entity) {
+                    if let Some(uri) = crate::input::hyperlink::should_open_at(
+                        grid,
+                        row.saturating_sub(1) as u16,
+                        col.saturating_sub(1) as u16,
+                        bevy_button,
+                        kind,
+                        modifier_held,
+                    ) {
+                        crate::input::hyperlink::try_open_uri(uri.as_str());
+                        continue;
+                    }
+                    if matches!(kind, bevy_terminal::ButtonEventKind::Release)
+                        && grid
+                            .hyperlink_at(
+                                row.saturating_sub(1) as u16,
+                                col.saturating_sub(1) as u16,
+                            )
+                            .is_some()
+                    {
+                        continue;
+                    }
+                }
         }
 
         let evt = bevy_terminal::ButtonEvent {
@@ -648,7 +676,6 @@ fn apply_action(
     )>,
     copy_mode_q: &Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
-    use bevy_terminal::ButtonAction as A;
     let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
         return;
     };
@@ -671,19 +698,19 @@ fn apply_action(
     let in_copy_mode = copy_mode_q.get(entity).is_ok();
 
     match action {
-        A::Noop => {}
-        A::WriteToPty(bytes) => {
+        ButtonAction::Noop => {}
+        ButtonAction::WriteToPty(bytes) => {
             if let Err(e) = handle.write(&mut pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse-button PTY write failed");
             }
         }
-        A::ClearAndWriteToPty(bytes) => {
+        ButtonAction::ClearAndWriteToPty(bytes) => {
             handle.selection_clear(&mut coalescer);
             if let Err(e) = handle.write(&mut pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse-button forwarded press PTY write failed");
             }
         }
-        A::ArmDrag { ty, cell, side } => {
+        ButtonAction::ArmDrag { ty, cell, side } => {
             // Clear any prior selection on the focused pane so the
             // click does not leave a stale highlight visible (spec §2,
             // brainstorm Q5).
@@ -698,7 +725,7 @@ fn apply_action(
                 },
             });
         }
-        A::StartLocalSelection { ty, cell, side } => {
+        ButtonAction::StartLocalSelection { ty, cell, side } => {
             let pt = to_viewport_point(cell);
             if in_copy_mode {
                 handle.vi_goto(&mut coalescer, pt);
@@ -714,7 +741,7 @@ fn apply_action(
                 phase: DragPhase::Active,
             });
         }
-        A::UpdateLocalSelection { cell, side } => {
+        ButtonAction::UpdateLocalSelection { cell, side } => {
             let pt = to_viewport_point(cell);
             if let Some(drag) = state.drag.as_mut().filter(|d| d.entity == entity) {
                 // Materialize the selection now if the drag is still
@@ -745,7 +772,7 @@ fn apply_action(
             // reaching this arm without a drag would be a logic bug
             // elsewhere.
         }
-        A::ClearLocalSelection => {
+        ButtonAction::ClearLocalSelection => {
             handle.selection_clear(&mut coalescer);
         }
     }

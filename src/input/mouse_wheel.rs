@@ -33,6 +33,10 @@ use bevy_terminal::{
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use ozmux_configs::mouse::FineModifier;
 
+use crate::configs::OzmuxConfigsResource;
+use crate::input::InputPhase;
+use crate::ui::registry::ActivityEntityRegistry;
+
 /// Per-frame accumulator that carries fractional Pixel deltas across
 /// frames and tracks the entity the residual was earned on (so a focus
 /// change clears stale momentum).
@@ -48,10 +52,8 @@ pub(crate) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WheelAccumulator>().add_systems(
-            Update,
-            dispatch_mouse_wheel.in_set(crate::system_set::OzmuxSystems::Input),
-        );
+        app.init_resource::<WheelAccumulator>()
+            .add_systems(Update, dispatch_mouse_wheel.in_set(InputPhase::Dispatch));
     }
 }
 
@@ -60,8 +62,8 @@ fn dispatch_mouse_wheel(
     mut accumulator: ResMut<WheelAccumulator>,
     mut handles: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
     keys: Res<ButtonInput<KeyCode>>,
-    configs: Res<crate::configs::OzmuxConfigsResource>,
-    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
+    configs: Res<OzmuxConfigsResource>,
+    registry: Res<ActivityEntityRegistry>,
     mux: ozmux_multiplexer::MultiplexerCommands,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
     attached_q: Query<

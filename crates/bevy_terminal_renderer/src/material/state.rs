@@ -40,11 +40,6 @@ pub(crate) struct TerminalMaterialState {
     /// the entity sees `phys_size_changed == true` and triggers
     /// `invalidate_all()`.
     pub last_phys_font_size: u16,
-    /// Schema version of the cells/glyphs SSBO data. `SCHEMA_VERSION_TIER1`
-    /// is bumped whenever the renderer changes the meaning of `GpuGlyph`
-    /// fields (e.g. logical-px → physical-px in this Tier 1 fix), forcing
-    /// a one-time rebuild on first frame after upgrade.
-    pub last_schema_version: u32,
     /// Cached output of `TerminalFonts::cell_metrics_px(last_phys_font_size)`
     /// to avoid re-parsing the `post` table on every frame.
     pub cached_metrics: Option<CellMetrics>,
@@ -54,13 +49,11 @@ pub(crate) struct TerminalMaterialState {
 impl TerminalMaterialState {
     /// Resets all glyph-cache state so the next `update_terminal_material`
     /// invocation fully reuploads the atlas LUT, glyph rects, and atlas
-    /// generation marker. Called on DPR change (`phys_font_size` changed)
-    /// or schema upgrade (`last_schema_version != SCHEMA_VERSION_TIER1`).
+    /// generation marker. Called on DPR change (`phys_font_size` changed).
     ///
     /// Deliberately does NOT touch:
-    /// - `last_phys_font_size` / `last_schema_version` — the caller writes
-    ///   those after invalidation so the next frame's diff detection still
-    ///   works.
+    /// - `last_phys_font_size` — the caller writes it after invalidation
+    ///   so the next frame's diff detection still works.
     /// - `cpu_cells` — re-populated wholesale by `rebuild_cells` on the
     ///   next rebuild (forced here by `last_grid_seq = 0`).
     /// - `initialized` — stays `true`; the rebuild path is re-entered via
@@ -118,7 +111,6 @@ fn on_add_material_node(mut world: DeferredWorld, ctx: HookContext) {
             last_grid_seq: 0,
             last_grid_dims: (0, 0),
             last_phys_font_size: 0,
-            last_schema_version: 0,
             cached_metrics: None,
             initialized: false,
         });
@@ -138,7 +130,6 @@ mod tests {
             last_grid_seq: 99,
             last_grid_dims: (80, 24),
             last_phys_font_size: 24,
-            last_schema_version: 1,
             cached_metrics: Some(CellMetrics {
                 advance_phys: 5.5,
                 line_height_phys: 14.4,
@@ -173,11 +164,10 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_all_preserves_phys_font_size_and_schema_version() {
+    fn invalidate_all_preserves_phys_font_size() {
         let mut state = populated_state();
         state.invalidate_all();
         assert_eq!(state.last_phys_font_size, 24);
-        assert_eq!(state.last_schema_version, 1);
         assert!(state.initialized);
     }
 }
