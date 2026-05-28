@@ -386,6 +386,11 @@ fn execute_action(
                 return;
             }
             *marker_dirty_this_frame = true;
+            tracing::debug!(
+                target: "ozmux_gui::input",
+                ?session,
+                "NewSession action dispatched"
+            );
             dispatch_new_session(commands, mux, attached_q);
         }
         Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => {
@@ -470,18 +475,37 @@ fn dispatch_focus_session(
 /// subtree node, attaches `AttachedSession` + `SessionUiSubtree` to the
 /// new session entity, and removes `AttachedSession` from the previously
 /// attached entity.
-fn dispatch_new_session(
+pub(crate) fn dispatch_new_session(
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
     attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
 ) {
-    if let Ok(previous_attached) = attached_q.single() {
-        commands
-            .entity(previous_attached)
-            .remove::<AttachedSession>();
+    match attached_q.single() {
+        Ok(previous_attached) => {
+            tracing::debug!(
+                target: "ozmux_gui::input",
+                ?previous_attached,
+                "dispatch_new_session: queued AttachedSession remove from previous"
+            );
+            commands
+                .entity(previous_attached)
+                .remove::<AttachedSession>();
+        }
+        Err(err) => {
+            tracing::debug!(
+                target: "ozmux_gui::input",
+                ?err,
+                "dispatch_new_session: no single previously-attached session (skipping remove)"
+            );
+        }
     }
 
-    spawn_attached_session(commands, mux, None);
+    let new_session = spawn_attached_session(commands, mux, None);
+    tracing::debug!(
+        target: "ozmux_gui::input",
+        ?new_session,
+        "dispatch_new_session: queued spawn of new attached session"
+    );
 }
 
 /// Spawns a Session via `MultiplexerCommands` plus its UI subtree node,

@@ -36,6 +36,17 @@ fn sync_active_session(
     sessions: Query<(Entity, &SessionUiSubtree), Without<AttachedSession>>,
     session_ui_root: Query<Entity, With<SessionUiRoot>>,
 ) {
+    let added_count = attached_session.iter().count();
+    if added_count != 1 {
+        if added_count > 1 {
+            tracing::debug!(
+                target: "ozmux_gui::ui",
+                added_count,
+                "sync_active_session: Added<AttachedSession> matched multiple entities — skipping reparent (would break .single())"
+            );
+        }
+        return;
+    }
     let Ok(newly_attached_subtree) = attached_session.single() else {
         return;
     };
@@ -43,11 +54,23 @@ fn sync_active_session(
         return;
     };
 
+    tracing::debug!(
+        target: "ozmux_gui::ui",
+        new_subtree = ?newly_attached_subtree.0,
+        ?session_ui_root,
+        "sync_active_session: reparenting newly-attached subtree under SessionUiRoot"
+    );
     commands
         .entity(newly_attached_subtree.0)
         .insert(ChildOf(session_ui_root));
 
     for (session_entity, tree) in sessions.iter() {
+        tracing::debug!(
+            target: "ozmux_gui::ui",
+            ?session_entity,
+            parked_subtree = ?tree.0,
+            "sync_active_session: parking inactive session's subtree under its session entity"
+        );
         commands.entity(tree.0).insert(ChildOf(session_entity));
     }
 }
@@ -494,6 +517,94 @@ mod tests {
             node.height,
             bevy::ui::Val::Percent(100.0),
             "subtree root must set height: Percent(100) so it fills SessionUiRoot",
+        );
+    }
+
+    #[test]
+    fn new_session_action_reparents_new_subtree_to_session_ui_root() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::MultiplexerCommands;
+
+        let (mut app, _guard) = make_test_app_v2();
+        // Two ticks for Startup + first Update so bootstrap settles and
+        // sync_active_session runs at least once in PostUpdate.
+        app.update();
+        app.update();
+
+        let session_ui_root = app
+            .world_mut()
+            .query_filtered::<Entity, With<SessionUiRoot>>()
+            .single(app.world())
+            .expect("SessionUiRoot");
+        let bootstrap_session = app
+            .world_mut()
+            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .single(app.world())
+            .expect("exactly one bootstrap session");
+        let bootstrap_subtree = app
+            .world()
+            .get::<SessionUiSubtree>(bootstrap_session)
+            .expect("bootstrap session has SessionUiSubtree pointer")
+            .0;
+        assert_eq!(
+            app.world()
+                .get::<ChildOf>(bootstrap_subtree)
+                .expect("bootstrap subtree has ChildOf")
+                .parent(),
+            session_ui_root,
+            "bootstrap subtree must start under SessionUiRoot",
+        );
+
+        app.world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 mut commands: Commands,
+                 attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    crate::input::dispatch_new_session(&mut commands, &mut mux, &attached_q);
+                },
+            )
+            .unwrap();
+        // One tick for commands to flush + rebuild_session_ui to run, one for
+        // PostUpdate sync_active_session to react.
+        app.update();
+        app.update();
+
+        let new_session = app
+            .world_mut()
+            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .single(app.world())
+            .expect("exactly one attached session after CMD+R");
+        assert_ne!(
+            new_session, bootstrap_session,
+            "new session entity must differ from bootstrap",
+        );
+
+        let new_subtree = app
+            .world()
+            .get::<SessionUiSubtree>(new_session)
+            .expect("new session has SessionUiSubtree pointer")
+            .0;
+        assert_eq!(
+            app.world()
+                .get::<ChildOf>(new_subtree)
+                .expect("new subtree has ChildOf")
+                .parent(),
+            session_ui_root,
+            "new session's subtree must be reparented to SessionUiRoot",
+        );
+
+        let old_subtree = app
+            .world()
+            .get::<SessionUiSubtree>(bootstrap_session)
+            .expect("old session retains SessionUiSubtree pointer")
+            .0;
+        assert_eq!(
+            app.world()
+                .get::<ChildOf>(old_subtree)
+                .expect("old subtree has ChildOf")
+                .parent(),
+            bootstrap_session,
+            "old session's subtree must be parked under its session entity",
         );
     }
 }
