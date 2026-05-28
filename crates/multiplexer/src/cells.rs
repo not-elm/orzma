@@ -314,7 +314,7 @@ impl LayoutCellState {
     pub fn cell(&self, id: &CellId) -> MultiplexerResult<&Cell> {
         self.cells
             .get(id)
-            .ok_or_else(|| MultiplexerError::CellNotFound(*id))
+            .ok_or(MultiplexerError::CellNotFound(*id))
     }
 
     /// Return the `CellId` for a given Pane entity.
@@ -430,10 +430,10 @@ impl LayoutCellState {
         id
     }
 
-    fn cell_mut(&mut self, id: &CellId) -> MultiplexerResult<&mut Cell> {
+    pub(crate) fn cell_mut(&mut self, id: &CellId) -> MultiplexerResult<&mut Cell> {
         self.cells
             .get_mut(id)
-            .ok_or_else(|| MultiplexerError::CellNotFound(*id))
+            .ok_or(MultiplexerError::CellNotFound(*id))
     }
 
     fn target_pane_parent(&self, id: &CellId) -> MultiplexerResult<CellId> {

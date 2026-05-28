@@ -8,10 +8,16 @@
 //! `bevy::prelude::Name`) for tracing readability.
 
 pub mod cells;
+pub mod direction;
 pub mod error;
+pub mod resize;
+pub mod swap;
 
 pub use cells::{
     Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
     SplitOrientation,
 };
+pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};
+pub use resize::ResizePaneOutcome;
+pub use swap::{SwapOffset, SwapOutcome};

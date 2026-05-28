@@ -4642,6 +4642,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_multiplexer_ecs"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "ozmux_terminal"
 version = "0.1.0"
 dependencies = [
