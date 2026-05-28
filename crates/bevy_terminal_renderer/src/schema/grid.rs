@@ -304,4 +304,24 @@ mod tests {
         assert_eq!(id, HyperlinkId(7));
         assert_eq!(uri.as_str(), "https://example");
     }
+
+    #[test]
+    fn hyperlink_at_returns_none_for_unlinked_cell() {
+        let cell = Cell {
+            text: "x".to_string(),
+            width: 1,
+            fg: Color::WHITE,
+            bg: Color::BLACK,
+            style: 0,
+            hyperlink_id: None,
+        };
+        let grid = TerminalGrid {
+            cols: 4,
+            rows: 1,
+            cells: vec![vec![cell]],
+            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))],
+            ..Default::default()
+        };
+        assert!(grid.hyperlink_at(0, 0).is_none());
+    }
 }
