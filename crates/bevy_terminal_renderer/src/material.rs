@@ -4,7 +4,7 @@ use crate::{
         font::{FONT_SIZE_PX, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
     material::state::TerminalMaterialState,
-    schema::{Cell, SelectionKind, TerminalGrid},
+    schema::{Cell, HyperlinkHoverState, SelectionKind, TerminalGrid},
 };
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
@@ -319,6 +319,7 @@ fn update_terminal_material(
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     mut terminals: Query<(
+        Entity,
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
         &TerminalGrid,
@@ -327,6 +328,7 @@ fn update_terminal_material(
     palette_time: Res<Time>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
+    hover: Res<HyperlinkHoverState>,
 ) {
     // TODO: load font size from config.
 
@@ -355,7 +357,7 @@ fn update_terminal_material(
     let dpr = window.scale_factor();
     let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
 
-    for (handle, mut state, grid) in terminals.iter_mut() {
+    for (entity, handle, mut state, grid) in terminals.iter_mut() {
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
@@ -456,6 +458,11 @@ fn update_terminal_material(
         // TODO: source from a theme / TerminalGrid::default_bg instead of opaque black.
         let bg_padding_color = Vec4::new(0.0, 0.0, 0.0, 1.0);
 
+        let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
+            (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
+            _ => (0, 0),
+        };
+
         if let Some(mat) = materials.get_mut(&handle.0) {
             mat.params = TerminalParams::new(
                 grid,
@@ -468,8 +475,8 @@ fn update_terminal_material(
                 metrics.underline_thickness_phys.max(1.0),
                 metrics.max_overflow_phys,
                 bg_padding_color,
-                0,
-                0,
+                hover_hyperlink_id,
+                hover_active,
             );
         }
     }
