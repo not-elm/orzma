@@ -4604,7 +4604,7 @@ dependencies = [
  "interprocess",
  "libc",
  "ozmux_macros",
- "ozmux_multiplexer",
+ "ozmux_multiplexer_legacy",
  "ozmux_terminal",
  "serde",
  "serde_json",
@@ -4639,6 +4639,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_multiplexer_legacy"
+version = "0.1.0"
+dependencies = [
+ "derive_more",
+ "ozmux_macros",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "ozmux_terminal"
 version = "0.1.0"
 dependencies = [
@@ -4647,7 +4659,7 @@ dependencies = [
  "bevy",
  "bytes",
  "ozmux_extension",
- "ozmux_multiplexer",
+ "ozmux_multiplexer_legacy",
  "portable-pty",
  "rmp-serde",
  "serde",
