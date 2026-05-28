@@ -23,6 +23,8 @@ struct TerminalParams {
     underline_thickness_phys: f32,
     max_overflow_phys: f32,
     bg_padding_color: vec4<f32>,
+    hover_hyperlink_id: u32,
+    hover_active: u32,
 };
 
 struct Cell {
@@ -30,6 +32,7 @@ struct Cell {
     fg_packed: u32,
     bg_packed: u32,
     style_flags: u32,
+    hyperlink_id: u32,
 };
 
 struct Glyph {
@@ -62,6 +65,10 @@ struct CellColors {
 // NOTE: Must stay in sync with `ozmux_terminal_protocol::style::*`. The
 //       Rust-side test `style_bits_match_protocol_constants` asserts the
 //       literal values here against the canonical Rust constants.
+// Hyperlink accent color when the activation modifier is held and the
+// cell shares the hovered link's id. Hardcoded for v1.
+const ACCENT_LINK_COLOR: vec4<f32> = vec4<f32>(0.4, 0.7, 1.0, 1.0);
+
 const STYLE_UNDERLINE: u32 = 4u;
 const STYLE_STRIKE: u32 = 8u;
 const STYLE_REVERSE: u32 = 16u;
@@ -215,7 +222,13 @@ fn paint_left_overdraw(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
 // and paint_right_strip so the strip cannot drift from the grid path
 // on overlay sequence or argument order.
 fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
-    var color = paint_text_decorations(hit.cell.style_flags, hit.in_cell_px, fg, base);
+    var color = paint_text_decorations(
+        hit.cell.style_flags,
+        hit.in_cell_px,
+        fg,
+        base,
+        hit.cell.hyperlink_id,
+    );
     color = paint_cursor(hit.row, hit.col, hit.in_cell_px, color);
     color = paint_selection(hit.row, hit.col, color);
     return color;
@@ -228,9 +241,23 @@ fn paint_text_decorations(
     in_cell_px: vec2<f32>,
     fg: vec4<f32>,
     base: vec4<f32>,
+    cell_hyperlink_id: u32,
 ) -> vec4<f32> {
     var color = base;
-    if (style & STYLE_UNDERLINE) != 0u {
+    var underline_painted = false;
+    if cell_hyperlink_id != 0u {
+        let is_hovered =
+            params.hover_active != 0u &&
+            cell_hyperlink_id == params.hover_hyperlink_id;
+        let underline_color = select(fg, ACCENT_LINK_COLOR, is_hovered);
+        let y_top = params.ascent_px - params.underline_position_phys;
+        let y_bot = y_top + params.underline_thickness_phys;
+        if in_cell_px.y >= y_top && in_cell_px.y < y_bot {
+            color = vec4<f32>(underline_color.rgb, max(color.a, underline_color.a));
+        }
+        underline_painted = true;
+    }
+    if (style & STYLE_UNDERLINE) != 0u && !underline_painted {
         // underline_position_phys is negative (below baseline). The actual
         // y in the cell is baseline + |underline_position|.
         let y_top = params.ascent_px - params.underline_position_phys;
@@ -326,7 +353,7 @@ fn is_in_selection_uniform(
 // between `grid_size * cell_size_px` and the host UI node edge, or when the
 // cell index would overflow the `cells` storage buffer.
 fn locate_cell(p_px: vec2<f32>) -> CellHit {
-    let invalid = CellHit(false, 0u, 0u, Cell(0u, 0u, 0u, 0u), vec2<f32>(0.0, 0.0));
+    let invalid = CellHit(false, 0u, 0u, Cell(0u, 0u, 0u, 0u, 0u), vec2<f32>(0.0, 0.0));
     let cell_pitch = params.cell_size_px;
     let grid_w_px = cell_pitch.x * f32(params.grid_size.x);
     let grid_h_px = cell_pitch.y * f32(params.grid_size.y);
