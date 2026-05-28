@@ -26,11 +26,14 @@ pub(crate) struct HyperlinkInterner {
 }
 
 impl HyperlinkInterner {
-    /// Constructs an empty interner.
+    /// Constructs an empty interner. The first id assigned is
+    /// `HyperlinkId(1)`; `HyperlinkId(0)` is reserved as the
+    /// universal "no hyperlink" sentinel across the wire, the CPU
+    /// grid, and GPU storage.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            next_id: HyperlinkId(0),
+            next_id: HyperlinkId(1),
         }
     }
 
@@ -79,9 +82,18 @@ mod tests {
         let a = interner.intern("42", "https://a.example");
         let b = interner.intern("42", "https://b.example");
         let c = interner.intern("99", "https://a.example");
-        assert_eq!(a, HyperlinkId(0));
-        assert_eq!(b, HyperlinkId(1));
-        assert_eq!(c, HyperlinkId(2));
+        assert_eq!(a, HyperlinkId(1));
+        assert_eq!(b, HyperlinkId(2));
+        assert_eq!(c, HyperlinkId(3));
+    }
+
+    #[test]
+    fn never_assigns_hyperlink_id_zero() {
+        let mut interner = HyperlinkInterner::new();
+        for i in 0..16 {
+            let id = interner.intern(&format!("{i}"), &format!("https://{i}.example"));
+            assert_ne!(id, HyperlinkId(0), "id 0 is reserved as the no-link sentinel");
+        }
     }
 
     #[test]
