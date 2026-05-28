@@ -8,6 +8,7 @@
 //! `bevy::prelude::Name`) for tracing readability.
 
 pub mod cells;
+pub mod commands;
 pub mod components;
 pub mod direction;
 pub mod error;
@@ -26,4 +27,5 @@ pub use components::{
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};
 pub use resize::ResizePaneOutcome;
+pub use commands::{MultiplexerCommands, SessionCreated};
 pub use swap::{SwapOffset, SwapOutcome};
