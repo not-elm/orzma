@@ -26,10 +26,11 @@ pub struct TerminalRendererPlugin;
 
 impl Plugin for TerminalRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            TerminalGridPlugin,
-            TerminalMaterialPlugin,
-            TerminalGlyphPlugin,
-        ));
+        app.init_resource::<crate::schema::HyperlinkHoverState>()
+            .add_plugins((
+                TerminalGridPlugin,
+                TerminalMaterialPlugin,
+                TerminalGlyphPlugin,
+            ));
     }
 }
