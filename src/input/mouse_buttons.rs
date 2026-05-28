@@ -404,6 +404,7 @@ fn dispatch_mouse_buttons(
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
+    grids_q: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
     windows_q: Query<&Window, With<bevy::window::PrimaryWindow>>,
     metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
@@ -490,6 +491,46 @@ fn dispatch_mouse_buttons(
                 continue;
             };
             try_click_to_focus(&mut mux, &registry, attached_sid.0, entity);
+        }
+
+        // NOTE: OSC 8 hyperlink interception — Cmd+Left (or Ctrl+Left) on
+        //       a linked cell. Press opens the URI and skips PTY routing;
+        //       Release also skips so the PTY does not see a release
+        //       without a matching press. The existing try_click_to_focus
+        //       call above is preserved so the pane still focuses.
+        if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
+            let modifier_held = crate::input::hyperlink::link_modifier_held(&mods);
+            if modifier_held {
+                if let Ok(grid) = grids_q.get(entity) {
+                    if let Some(uri) = crate::input::hyperlink::should_open_at(
+                        grid,
+                        row.saturating_sub(1) as u16,
+                        col.saturating_sub(1) as u16,
+                        bevy_button,
+                        kind,
+                        modifier_held,
+                    ) {
+                        crate::input::hyperlink::try_open_uri(uri.as_str());
+                        continue;
+                    }
+                    // NOTE: While the modifier is still held at Release time,
+                    //       skip routing so the PTY does not get a stray release
+                    //       it cannot pair with a press. If the user lifts the
+                    //       modifier between Press and Release, this guard fails
+                    //       and the PTY may see an orphan release — accepted per
+                    //       spec §4 (matches Safari Cmd+click semantics).
+                    if matches!(kind, bevy_terminal::ButtonEventKind::Release)
+                        && grid
+                            .hyperlink_at(
+                                row.saturating_sub(1) as u16,
+                                col.saturating_sub(1) as u16,
+                            )
+                            .is_some()
+                    {
+                        continue;
+                    }
+                }
+            }
         }
 
         let evt = bevy_terminal::ButtonEvent {
