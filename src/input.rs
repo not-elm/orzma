@@ -76,6 +76,7 @@ pub(crate) fn dispatch_focused_key(
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<crate::clipboard::Clipboard>,
+    mut session_name_counter: ResMut<crate::multiplexer::SessionNameCounter>,
     mut handles: Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
@@ -218,6 +219,7 @@ pub(crate) fn dispatch_focused_key(
                     action,
                     &mut commands,
                     &mut mux,
+                    &mut session_name_counter,
                     session,
                     &sessions_q,
                     &attached_q,
@@ -362,6 +364,7 @@ fn execute_action(
     action: Action,
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
+    session_name_counter: &mut crate::multiplexer::SessionNameCounter,
     session: Entity,
     sessions_q: &Query<Entity, With<SessionMarker>>,
     attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
@@ -391,7 +394,7 @@ fn execute_action(
                 ?session,
                 "NewSession action dispatched"
             );
-            dispatch_new_session(commands, mux, attached_q);
+            dispatch_new_session(commands, mux, session_name_counter, attached_q);
         }
         Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => {
             if *marker_dirty_this_frame {
@@ -478,6 +481,7 @@ fn dispatch_focus_session(
 pub(crate) fn dispatch_new_session(
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
+    counter: &mut crate::multiplexer::SessionNameCounter,
     attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
 ) {
     match attached_q.single() {
@@ -500,7 +504,7 @@ pub(crate) fn dispatch_new_session(
         }
     }
 
-    let new_session = spawn_attached_session(commands, mux, None);
+    let new_session = spawn_attached_session(commands, mux, counter);
     tracing::debug!(
         target: "ozmux_gui::input",
         ?new_session,
@@ -510,14 +514,15 @@ pub(crate) fn dispatch_new_session(
 
 /// Spawns a Session via `MultiplexerCommands` plus its UI subtree node,
 /// inserts `AttachedSession` + `SessionUiSubtree` on the session entity,
-/// and parents the subtree under the session. Returns the new session
-/// entity.
+/// and parents the subtree under the session. The session name is
+/// minted from `counter` (monotonic `"session{n}"`). Returns the new
+/// session entity.
 pub(crate) fn spawn_attached_session(
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
-    name: Option<String>,
+    counter: &mut crate::multiplexer::SessionNameCounter,
 ) -> Entity {
-    let outcome = mux.create_session(name);
+    let outcome = mux.create_session(Some(counter.next()));
     let subtree = commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -619,6 +624,7 @@ mod tests {
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
         app.init_resource::<crate::input::ime::ImeState>();
+        app.init_resource::<crate::multiplexer::SessionNameCounter>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
 
@@ -942,6 +948,7 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
         app.init_resource::<crate::input::ime::ImeState>();
+        app.init_resource::<crate::multiplexer::SessionNameCounter>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
         app.update();
@@ -1411,11 +1418,19 @@ mod tests {
             .count();
 
         app.world_mut()
+            .init_resource::<crate::multiplexer::SessionNameCounter>();
+        app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
                  mut commands: Commands,
+                 mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
                  attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    super::dispatch_new_session(&mut commands, &mut mux, &attached_q);
+                    super::dispatch_new_session(
+                        &mut commands,
+                        &mut mux,
+                        &mut counter,
+                        &attached_q,
+                    );
                 },
             )
             .unwrap();
@@ -1434,8 +1449,43 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_new_session_uses_monotonic_session_name() {
+        let (mut app, _window_entity) = make_app(true);
+        // make_app already called create_session once (bootstrap-equivalent),
+        // but with the counter freshly init'd here, the bootstrap session got
+        // no auto-name from the counter — its name was set by create_session
+        // pre-counter wiring. To exercise the monotonic counter end-to-end,
+        // we drive the counter through two dispatch_new_session invocations
+        // and verify the names progress as "session1", "session2".
+
+        let id = app.world_mut().register_system(
+            |mut mux: MultiplexerCommands,
+             mut commands: Commands,
+             mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
+             attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_q);
+            },
+        );
+        let _ = app.world_mut().run_system(id);
+        app.update();
+        let _ = app.world_mut().run_system(id);
+        app.update();
+
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<&Name, With<SessionMarker>>();
+        let mut names: Vec<&str> = q.iter(world).map(|n| n.as_str()).collect();
+        names.sort();
+        // make_app's bootstrap-equivalent session is "default" (pre-counter wiring
+        // in this fixture); the two dispatch_new_session calls mint "session1" and
+        // "session2" off the freshly-init'd counter.
+        assert_eq!(names, vec!["default", "session1", "session2"],);
+    }
+
+    #[test]
     fn new_session_action_spawns_entity_and_moves_marker() {
         let (mut app, _window_entity) = make_app(true);
+        app.world_mut()
+            .init_resource::<crate::multiplexer::SessionNameCounter>();
 
         assert_eq!(count_session_entities(&mut app), 1);
         assert_eq!(count_attached_session_entities(&mut app), 1);
@@ -1449,8 +1499,9 @@ mod tests {
         let id = app.world_mut().register_system(
             |mut mux: MultiplexerCommands,
              mut commands: Commands,
+             mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
              attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_new_session(&mut commands, &mut mux, &attached_q);
+                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_q);
             },
         );
         let _ = app.world_mut().run_system(id);
@@ -1477,6 +1528,8 @@ mod tests {
     #[test]
     fn two_new_session_actions_in_one_frame_keep_marker_invariant() {
         let (mut app, _window_entity) = make_app(true);
+        app.world_mut()
+            .init_resource::<crate::multiplexer::SessionNameCounter>();
 
         assert_eq!(count_session_entities(&mut app), 1);
         assert_eq!(count_attached_session_entities(&mut app), 1);
@@ -1484,6 +1537,7 @@ mod tests {
         let id = app.world_mut().register_system(
             |mut mux: MultiplexerCommands,
              mut commands: Commands,
+             mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
              sessions_q: Query<Entity, With<SessionMarker>>,
              attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
              registry: Res<crate::ui::registry::ActivityEntityRegistry>| {
@@ -1493,6 +1547,7 @@ mod tests {
                     ozmux_configs::shortcuts::Action::NewSession,
                     &mut commands,
                     &mut mux,
+                    &mut counter,
                     bootstrap_session,
                     &sessions_q,
                     &attached_q,
@@ -1503,6 +1558,7 @@ mod tests {
                     ozmux_configs::shortcuts::Action::NewSession,
                     &mut commands,
                     &mut mux,
+                    &mut counter,
                     bootstrap_session,
                     &sessions_q,
                     &attached_q,

@@ -556,11 +556,19 @@ mod tests {
         );
 
         app.world_mut()
+            .init_resource::<crate::multiplexer::SessionNameCounter>();
+        app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
                  mut commands: Commands,
+                 mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
                  attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    crate::input::dispatch_new_session(&mut commands, &mut mux, &attached_q);
+                    crate::input::dispatch_new_session(
+                        &mut commands,
+                        &mut mux,
+                        &mut counter,
+                        &attached_q,
+                    );
                 },
             )
             .unwrap();

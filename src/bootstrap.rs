@@ -5,15 +5,19 @@
 
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionUiSubtree};
+use ozmux_multiplexer::MultiplexerCommands;
+
+use crate::multiplexer::SessionNameCounter;
 
 /// Bevy Plugin that registers the `bootstrap` system in the `Startup`
-/// schedule.
+/// schedule and initializes the `SessionNameCounter` resource that
+/// drives auto-generated session names.
 pub struct OzmuxBootstrapPlugin;
 
 impl Plugin for OzmuxBootstrapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (bootstrap, insert_initial_cursor_icon));
+        app.init_resource::<SessionNameCounter>()
+            .add_systems(Startup, (bootstrap, insert_initial_cursor_icon));
     }
 }
 
@@ -21,20 +25,16 @@ impl Plugin for OzmuxBootstrapPlugin {
 // Both params have separate deferred queues; apply order follows parameter order.
 // If `commands` went first, `entity(outcome.session).insert(…)` would panic
 // because `outcome.session` is only spawned when `mux`'s queue is applied.
-pub(crate) fn bootstrap(mut mux: MultiplexerCommands, mut commands: Commands) {
-    let outcome = mux.create_session(Some("default".into()));
-
-    let subtree_root = commands
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            ..default()
-        })
-        .id();
-    commands
-        .entity(outcome.session)
-        .insert((AttachedSession, SessionUiSubtree(subtree_root)));
-    commands.entity(subtree_root).insert(ChildOf(outcome.session));
+pub(crate) fn bootstrap(
+    mut mux: MultiplexerCommands,
+    mut commands: Commands,
+    mut counter: ResMut<SessionNameCounter>,
+) {
+    // Mint the bootstrap session as "session1" via the shared counter
+    // (CMD+R-created sessions take "session2", "session3", …). The
+    // helper in src/input.rs does the spawn + UI subtree + AttachedSession
+    // dance identically — call it instead of duplicating.
+    let _ = crate::input::spawn_attached_session(&mut commands, &mut mux, &mut counter);
 }
 
 /// Inserts an initial `CursorIcon::System(SystemCursorIcon::Text)` on
@@ -54,7 +54,9 @@ fn insert_initial_cursor_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_multiplexer::{MultiplexerPlugin, SessionMarker};
+    use ozmux_multiplexer::{
+        AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree,
+    };
 
     #[test]
     fn bootstrap_spawns_session_entity_with_attached_marker() {
@@ -71,6 +73,28 @@ mod tests {
         let world = app.world_mut();
         let mut q = world.query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>();
         assert_eq!(q.iter(world).count(), 1, "exactly one attached session entity");
+    }
+
+    #[test]
+    fn bootstrap_names_the_initial_session_session1() {
+        let _guard = crate::configs::env_guard();
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
+        unsafe { std::env::remove_var("OZMUX_CONFIG"); }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin)
+            .add_plugins(crate::configs::OzmuxConfigsPlugin)
+            .add_plugins(OzmuxBootstrapPlugin);
+        app.update();
+
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<&Name, With<SessionMarker>>();
+        let names: Vec<&str> = q.iter(world).map(|n| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["session1"],
+            "bootstrap session must be auto-named 'session1' (the first counter value)",
+        );
     }
 
     #[test]
