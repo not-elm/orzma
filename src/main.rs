@@ -39,8 +39,11 @@ fn main() {
             OzmuxUiPlugin,
             CopyModePlugin,
             CopyModeIndicatorPlugin,
+        ))
+        .add_plugins((
             crate::input::mouse_wheel::MouseWheelInputPlugin,
             crate::input::mouse_buttons::MouseButtonsInputPlugin,
+            crate::input::hyperlink::HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
         ))
