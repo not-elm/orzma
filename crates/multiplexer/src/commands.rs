@@ -319,6 +319,16 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         self.activities.get(activity).ok().map(|(_, child_of)| child_of.parent())
     }
 
+    /// Read the Session's `ActivePane` pointer.
+    pub fn sessions_active_pane(&self, session: Entity) -> Option<Entity> {
+        self.sessions.get(session).ok().map(|(_, active, _, _)| active.0)
+    }
+
+    /// Read the Pane's `ActiveActivity` pointer.
+    pub fn panes_active_activity(&self, pane: Entity) -> Option<Entity> {
+        self.panes.get(pane).ok().map(|(active, _, _)| active.0)
+    }
+
     /// Iterate the Pane entities owned by the given Session.
     pub fn panes_of_session(&self, session: Entity) -> impl Iterator<Item = Entity> + '_ {
         self.children
@@ -696,6 +706,30 @@ mod tests {
             matches!(result, Err(MultiplexerError::CannotRemoveLastActivity(_))),
             "expected CannotRemoveLastActivity, got {result:?}",
         );
+    }
+
+    #[test]
+    fn sessions_active_pane_returns_bootstrap_pane() {
+        let mut world = World::new();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let active = world
+            .run_system_once(move |mux: MultiplexerCommands| mux.sessions_active_pane(outcome.session))
+            .unwrap();
+        assert_eq!(active, Some(outcome.pane));
+    }
+
+    #[test]
+    fn panes_active_activity_returns_bootstrap_activity() {
+        let mut world = World::new();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let active = world
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_activity(outcome.pane))
+            .unwrap();
+        assert_eq!(active, Some(outcome.activity));
     }
 
     #[test]
