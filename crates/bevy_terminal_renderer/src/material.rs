@@ -19,17 +19,6 @@ use bevy::{
 
 mod state;
 
-/// Schema version of the `GpuGlyph` / `TerminalParams` layout. Bumped when
-/// the meaning of fields changes incompatibly so `TerminalMaterialState`
-/// can force a full LUT rebuild on the first frame after upgrade.
-///
-/// History: 0 = pre-Tier1 (logical-px `GpuGlyph`, hardcoded 8x16 cell,
-/// shader stretches `cell_pitch`); 1 = Tier 1 (physical-px schema,
-/// font-derived cell metrics, shader uses `params.cell_size_px` directly,
-/// `bg_padding_color` fallback, `STYLE_WIDE_RIGHT_HALF` cells); 2 = OSC 8
-/// hyperlink support (`GpuCell.hyperlink_id`, `TerminalParams.hover_*`).
-const SCHEMA_VERSION_TIER1: u32 = 2;
-
 /// Render-side public SystemSet anchor for `update_terminal_material`.
 ///
 /// `sync_atlas_image` in `glyph.rs` is ordered with
@@ -364,19 +353,16 @@ fn update_terminal_material(
         let dims_changed = (grid.cols, grid.rows) != state.last_grid_dims;
         let grid_changed = grid.last_seq != state.last_grid_seq;
         let phys_size_changed = phys_font_size != state.last_phys_font_size;
-        let schema_changed = state.last_schema_version != SCHEMA_VERSION_TIER1;
 
         let needs_rebuild = !state.initialized
             || grid_changed
             || atlas_invalidated
             || dims_changed
-            || phys_size_changed
-            || schema_changed;
+            || phys_size_changed;
 
-        if phys_size_changed || schema_changed {
+        if phys_size_changed {
             state.invalidate_all();
             state.last_phys_font_size = phys_font_size;
-            state.last_schema_version = SCHEMA_VERSION_TIER1;
         }
 
         // NOTE: atlas.generation can advance during this very system (via
@@ -633,11 +619,6 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_bumped_to_two() {
-        assert_eq!(SCHEMA_VERSION_TIER1, 2);
-    }
-
-    #[test]
     fn rebuild_cells_writes_hyperlink_id_when_present() {
         use crate::schema::HyperlinkId;
         use bevy::platform::collections::HashMap;
@@ -672,7 +653,6 @@ mod tests {
             last_grid_seq: 0,
             last_grid_dims: (0, 0),
             last_phys_font_size: 0,
-            last_schema_version: 0,
             cached_metrics: None,
             initialized: false,
         };
