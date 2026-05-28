@@ -138,6 +138,8 @@ impl UiMaterial for TerminalUiMaterial {
 /// | 72     | `underline_thickness_phys`  |
 /// | 76     | `max_overflow_phys`         |
 /// | 80     | `bg_padding_color`          |
+/// | 96     | `hover_hyperlink_id`        |
+/// | 100    | `hover_active`              |
 #[derive(Clone, Copy, ShaderType, Default, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -165,6 +167,13 @@ struct TerminalParams {
     /// strip; the host reserves the same amount from the node width.
     max_overflow_phys: f32,
     bg_padding_color: Vec4,
+    /// Wire id of the hovered link (across all panes); `0` = nothing
+    /// hovered, or hovered cell is unlinked.
+    hover_hyperlink_id: u32,
+    /// `1` when the activation modifier is held AND the hovered link
+    /// is in this entity's pane; else `0`. Drives the accent-underline
+    /// path in the shader.
+    hover_active: u32,
 }
 
 impl TerminalParams {
@@ -189,6 +198,8 @@ impl TerminalParams {
         underline_thickness_phys: f32,
         max_overflow_phys: f32,
         bg_padding_color: Vec4,
+        hover_hyperlink_id: u32,
+        hover_active: u32,
     ) -> Self {
         let cols = u32::from(grid.cols);
         let rows = u32::from(grid.rows);
@@ -227,6 +238,8 @@ impl TerminalParams {
             underline_thickness_phys,
             max_overflow_phys,
             bg_padding_color,
+            hover_hyperlink_id,
+            hover_active,
         }
     }
 }
@@ -455,6 +468,8 @@ fn update_terminal_material(
                 metrics.underline_thickness_phys.max(1.0),
                 metrics.max_overflow_phys,
                 bg_padding_color,
+                0,
+                0,
             );
         }
     }
@@ -661,5 +676,12 @@ mod tests {
 
         assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
         assert_eq!(state.cpu_cells[1].hyperlink_id, 0);
+    }
+
+    #[test]
+    fn terminal_params_default_hyperlink_uniforms_are_zero() {
+        let params = TerminalParams::default();
+        assert_eq!(params.hover_hyperlink_id, 0);
+        assert_eq!(params.hover_active, 0);
     }
 }
