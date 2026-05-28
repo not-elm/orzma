@@ -110,12 +110,11 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// first call; subsequent calls update in place via `set_if_neq`.
     pub fn set_session_dimensions(&mut self, session: Entity, cols: u16, rows: u16) {
         let new = SessionDimensions { cols, rows };
-        if let Ok((_, _, _, dims)) = self.sessions.get_mut(session) {
-            if let Some(mut dims) = dims {
+        if let Ok((_, _, _, dims)) = self.sessions.get_mut(session)
+            && let Some(mut dims) = dims {
                 dims.set_if_neq(new);
                 return;
             }
-        }
         self.commands.entity(session).insert(new);
     }
 
