@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 use bevy::prelude::*;
-use crate::cells::LayoutCellState;
+use crate::cells::{CellId, LayoutCellState};
 
 /// Zero-sized marker on every Session entity. Used as the `With<>` filter
 /// in queries that want to scope to Sessions, and as the trigger target
@@ -26,10 +26,28 @@ pub struct PaneMarker;
 #[derive(Component, Default, Debug)]
 pub struct ActivityMarker;
 
-/// Newtype wrapper over `LayoutCellState`. Lives on the Session entity;
-/// `Changed<LayoutCells>` is the rebuild signal for `rebuild_session_ui`.
+/// Layout cell state plus the session's `root` cell id, owned together
+/// because every consumer needs both. `Default` returns a freshly-empty
+/// `LayoutCellState` and a `CellId(0)` placeholder root that must be
+/// overwritten by the spawn site (`MultiplexerCommands::create_session`).
 #[derive(Component, Debug, Default, Clone)]
-pub struct LayoutCells(pub LayoutCellState);
+pub struct LayoutCells {
+    /// The BSP cell tree for this session.
+    pub cells: LayoutCellState,
+    /// The root `CellId` of the cell tree.
+    pub root: CellId,
+}
+
+impl LayoutCells {
+    /// Construct a `LayoutCells` from a freshly-spawned bootstrap pane:
+    /// builds a `LayoutCellState`, mints the root, and stashes the root
+    /// id together so callers do not need to track it separately.
+    pub fn new_session_layout(pane: bevy::ecs::entity::Entity) -> Self {
+        let mut cells = LayoutCellState::default();
+        let (root, _pane_cell) = cells.new_session_layout(pane);
+        Self { cells, root }
+    }
+}
 
 /// The currently focused Pane entity within a Session. `Changed<ActivePane>`
 /// is the signal for the terminal-focus and IME-target-switch systems.

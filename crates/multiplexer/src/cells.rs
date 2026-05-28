@@ -13,6 +13,12 @@ use crate::error::{MultiplexerError, MultiplexerResult};
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct CellId(u64);
 
+impl Default for CellId {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
 impl std::fmt::Display for CellId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "cell#{}", self.0)
