@@ -62,11 +62,14 @@ fn dispatch_mouse_wheel(
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
-    mux: Res<crate::multiplexer::Multiplexer>,
+    mux: crate::multiplexer::MultiplexerCommands,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
-    attached_sid_q: Query<
-        &crate::multiplexer::SessionEntityId,
-        With<crate::multiplexer::AttachedSession>,
+    attached_q: Query<
+        bevy::prelude::Entity,
+        (
+            With<crate::multiplexer::SessionMarker>,
+            With<crate::multiplexer::AttachedSession>,
+        ),
     >,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -86,7 +89,7 @@ fn dispatch_mouse_wheel(
     let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
         return;
     };
-    let Some(entity) = super::resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
+    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_q, &registry) else {
         return;
     };
     if copy_mode_q.get(entity).is_ok() {

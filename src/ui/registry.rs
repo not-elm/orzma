@@ -11,9 +11,18 @@ use std::collections::{HashMap, HashSet};
 
 /// `ActivityId → Entity` map. Updated by `rebuild_session_ui_on_data_change`
 /// each rebuild via `get_or_spawn` (insert) and `prune` (sweep).
+///
+/// Also maintains a secondary `Entity → Entity` map for ECS-native callers
+/// that resolve activity entities via `MultiplexerCommands` rather than
+/// domain `ActivityId`s. Both maps may be active simultaneously during the
+/// ECS migration.
 #[derive(Resource, Default)]
 pub struct ActivityEntityRegistry {
     entities: HashMap<ActivityId, Entity>,
+    // NOTE: ECS-native parallel map: activity Bevy Entity → host UI Entity.
+    // Populated by insert_for_entity_test during tests and (in production)
+    // by the rebuilt UI layer once Task 15+ ports the rebuild pipeline.
+    entity_to_host: HashMap<Entity, Entity>,
 }
 
 impl ActivityEntityRegistry {
@@ -63,6 +72,13 @@ impl ActivityEntityRegistry {
         self.entities.get(id).copied()
     }
 
+    /// Looks up the host entity registered for an ECS-native activity
+    /// entity. Returns `None` when no host has been registered for the
+    /// given activity entity (e.g. the UI rebuild has not yet run).
+    pub fn get_by_entity(&self, activity: Entity) -> Option<Entity> {
+        self.entity_to_host.get(&activity).copied()
+    }
+
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entities.len()
@@ -84,6 +100,14 @@ impl ActivityEntityRegistry {
     #[cfg(test)]
     pub(crate) fn insert_for_test(&mut self, id: ActivityId, entity: Entity) {
         self.entities.insert(id, entity);
+    }
+
+    /// Inserts a mapping from ECS-native activity entity to host UI entity.
+    /// Test-only: lets tests using `MultiplexerCommands` register activity
+    /// hosts without running the full UI rebuild pipeline.
+    #[cfg(test)]
+    pub(crate) fn insert_for_entity_test(&mut self, activity: Entity, host: Entity) {
+        self.entity_to_host.insert(activity, host);
     }
 }
 

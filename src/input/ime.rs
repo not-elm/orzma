@@ -6,7 +6,7 @@
 //! the attached terminal), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
 use crate::ui::TerminalActivityMarker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::registry::ActivityEntityRegistry;
@@ -17,6 +17,7 @@ use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
+use bevy::prelude::Entity;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_terminal::{TerminalKey, TerminalModifiers};
@@ -144,8 +145,8 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// translation + `TerminalGrid.cursor` × cell pitch, then divided by
 /// the window scale factor.
 pub(crate) fn ime_policy_system(
-    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
-    mux: Res<Multiplexer>,
+    mux: MultiplexerCommands,
+    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
     terminal_q: Query<(), With<TerminalActivityMarker>>,
     copy_mode_q: Query<(), With<CopyModeState>>,
@@ -157,7 +158,7 @@ pub(crate) fn ime_policy_system(
         return;
     };
 
-    let Some(entity) = super::resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
+    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_q, &registry) else {
         if window.ime_enabled {
             window.ime_enabled = false;
         }
@@ -228,13 +229,13 @@ pub(crate) fn read_ime_events(
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
     mut commands: Commands,
-    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
-    mux: Res<Multiplexer>,
+    mux: MultiplexerCommands,
+    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
 ) {
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
-            let Some(sid) = attached_sid_q.iter().next().map(|s| s.0) else {
+            let Some(session) = attached_q.iter().next() else {
                 tracing::warn!(
                     target: "ozmux_gui::input::ime",
                     "commit dropped: no attached terminal",
@@ -245,7 +246,7 @@ pub(crate) fn read_ime_events(
                 &mut commands,
                 &mux,
                 &registry,
-                &sid,
+                session,
                 TerminalKey::Text(commit_text),
                 TerminalModifiers::default(),
             );
@@ -256,9 +257,7 @@ pub(crate) fn read_ime_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multiplexer::{
-        AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId,
-    };
+    use crate::multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker};
     use crate::ui::registry::ActivityEntityRegistry;
     use bevy::app::{App, Update};
     use bevy::ecs::entity::Entity;
@@ -267,6 +266,7 @@ mod tests {
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+    use ozmux_multiplexer::MultiplexerCommands;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -297,7 +297,6 @@ mod tests {
 
     #[test]
     fn try_new_rejects_non_char_boundary_caret() {
-        // "あ" is 3 bytes in UTF-8; byte 1 is mid-char.
         let c = Composition::try_new("あ".into(), Some((1, 1))).unwrap();
         assert_eq!(c.text(), "あ");
         assert_eq!(c.caret(), None);
@@ -305,8 +304,6 @@ mod tests {
 
     #[test]
     fn try_new_preserves_clause_selection_range() {
-        // begin != end represents a clause-selection range (e.g., macOS IME
-        // clause highlight). Both endpoints must be honored.
         let c = Composition::try_new("hello".into(), Some((2, 5))).unwrap();
         assert_eq!(c.caret(), Some((2, 5)));
     }
@@ -319,7 +316,6 @@ mod tests {
 
     #[test]
     fn try_new_rejects_end_on_non_char_boundary() {
-        // "あい" is 6 bytes; byte 4 is mid-char (`い` starts at byte 3, ends at 6).
         let c = Composition::try_new("あい".into(), Some((0, 4))).unwrap();
         assert_eq!(c.caret(), None);
     }
@@ -450,11 +446,6 @@ mod tests {
         assert_eq!(c.caret(), None);
     }
 
-    // Integration harness for read_ime_events app-driven tests.
-    // Mirrors the pattern from src/input.rs::tests::make_app / install_active_terminal_activity.
-    // We do NOT use ImePlugin because ime_policy_system requires TerminalCellMetricsResource
-    // and TerminalGrid, which are unavailable in the minimal test environment.
-
     #[derive(Resource, Default, Clone)]
     struct CapturedKeys(Arc<Mutex<Vec<TerminalKeyInput>>>);
 
@@ -465,39 +456,33 @@ mod tests {
     fn build_app_with_attached_entity() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(OzmuxMultiplexerPlugin)
+            .add_plugins(MultiplexerPlugin)
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
         app.init_resource::<ActivityEntityRegistry>();
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        // Ime is a Message; register its channel so MessageReader<Ime> is available.
         app.add_message::<Ime>();
 
-        // Create a session in the multiplexer and spawn the attached session entity.
-        let sid = {
-            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
-            let (sid, _, _) = mux.create_session(Some("default".into()));
-            sid
-        };
+        let outcome = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_session(Some("default".into()))
+            })
+            .unwrap();
+        app.world_mut().flush();
         app.world_mut()
-            .spawn((SessionEntityId(sid), AttachedSession));
+            .entity_mut(outcome.session)
+            .insert(AttachedSession);
 
-        // Spawn a terminal activity entity and register it in the registry so
+        // Spawn a host UI entity and register it in the entity-keyed map so
         // resolve_focused_terminal / forward_to_active_terminal resolve to it.
         let term_entity = app.world_mut().spawn_empty().id();
-        let activity_id = {
-            let mux = app.world().resource::<Multiplexer>();
-            let session = mux.sessions.get(&sid).unwrap();
-            let pane = session.pane(&session.active_pane).unwrap();
-            pane.active_activity.clone()
-        };
         {
             let mut registry = app.world_mut().resource_mut::<ActivityEntityRegistry>();
-            registry.insert_for_test(activity_id, term_entity);
+            registry.insert_for_entity_test(outcome.activity, term_entity);
         }
 
-        // Spawn a focused window so any dispatch path that queries Window works.
         app.world_mut().spawn(Window {
             focused: true,
             resolution: WindowResolution::new(800, 600),
@@ -546,7 +531,7 @@ mod tests {
         let (mut app, _term_entity) = build_app_with_attached_entity();
         let attached: Vec<Entity> = app
             .world_mut()
-            .query_filtered::<Entity, With<AttachedSession>>()
+            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
             .iter(app.world())
             .collect();
         for e in attached {
