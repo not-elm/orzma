@@ -81,9 +81,9 @@ impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActivityEntityRegistry>()
             .add_plugins((
-                OzmuxTerminalUiPlugin,
-                OzmuxSessionUiPlugin,
                 OzmuxUiRootPlugin,
+                OzmuxSessionUiPlugin,
+                OzmuxTerminalUiPlugin,
             ))
             .add_systems(
                 Update,

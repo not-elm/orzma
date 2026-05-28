@@ -12,6 +12,7 @@ use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ActivityHostNode, SessionUiRoot, StructuralNode};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 use ozmux_multiplexer::{ActivityId, Cell, SessionId};
 
 pub struct OzmuxSessionUiPlugin;
@@ -24,10 +25,7 @@ impl Plugin for OzmuxSessionUiPlugin {
                 .run_if(resource_exists_and_changed::<Multiplexer>)
                 .in_set(OzmuxSystems::SessionUi),
         )
-        .add_systems(
-            PostUpdate,
-            sync_active_session.before(bevy::ui::UiSystems::Prepare),
-        );
+        .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
 }
 
@@ -37,37 +35,24 @@ impl Plugin for OzmuxSessionUiPlugin {
 /// park it back under the Session entity.
 fn sync_active_session(
     mut commands: Commands,
-    mut last_attached: Local<Option<Entity>>,
-    attached_session: Query<(Entity, &SessionEntityId, &SessionUiSubtree), With<AttachedSession>>,
-    sessions: Query<(Entity, &SessionUiSubtree)>,
+    attached_session: Query<&SessionUiSubtree, Added<AttachedSession>>,
+    sessions: Query<(Entity, &SessionUiSubtree), Without<AttachedSession>>,
     session_ui_root: Query<Entity, With<SessionUiRoot>>,
 ) {
+    let Ok(newly_attached_subtree) = attached_session.single() else {
+        return;
+    };
     let Ok(session_ui_root) = session_ui_root.single() else {
         return;
     };
-    let Ok((newly_attached_entity, _newly_attached_sid, newly_attached_subtree)) =
-        attached_session.single()
-    else {
-        return;
-    };
-
-    if *last_attached == Some(newly_attached_entity) {
-        return;
-    }
-
-    if let Some(prev_session_entity) = *last_attached
-        && let Ok((_, prev_subtree)) = sessions.get(prev_session_entity)
-    {
-        commands
-            .entity(prev_subtree.0)
-            .insert(ChildOf(prev_session_entity));
-    }
 
     commands
         .entity(newly_attached_subtree.0)
         .insert(ChildOf(session_ui_root));
 
-    *last_attached = Some(newly_attached_entity);
+    for (session_entity, tree) in sessions.iter() {
+        commands.entity(tree.0).insert(ChildOf(session_entity));
+    }
 }
 
 /// Rebuilds the UI subtree of every Session whose epoch advanced since the
