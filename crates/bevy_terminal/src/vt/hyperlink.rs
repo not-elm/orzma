@@ -46,12 +46,6 @@ impl HyperlinkInterner {
             }
         }
         let id = self.next_id;
-        // NOTE: `checked_add` (not `wrapping_add`) preserves the
-        //       `HyperlinkId(0)` reservation — wrapping past
-        //       `u32::MAX` would silently emit the sentinel and break
-        //       the GPU "no link" branch. The panic is reachable only
-        //       after ~4 billion distinct hyperlinks in one session,
-        //       far beyond any realistic budget.
         self.next_id = HyperlinkId(
             self.next_id
                 .0
@@ -103,7 +97,11 @@ mod tests {
         let mut interner = HyperlinkInterner::new();
         for i in 0..16 {
             let id = interner.intern(&format!("{i}"), &format!("https://{i}.example"));
-            assert_ne!(id, HyperlinkId(0), "id 0 is reserved as the no-link sentinel");
+            assert_ne!(
+                id,
+                HyperlinkId(0),
+                "id 0 is reserved as the no-link sentinel"
+            );
         }
     }
 
