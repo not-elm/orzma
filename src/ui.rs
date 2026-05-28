@@ -493,4 +493,73 @@ mod tests {
             .count();
         assert_eq!(count, 1, "exactly one AttachedSession after bootstrap");
     }
+
+    #[test]
+    fn status_bar_chips_appear_in_session_creation_order_after_cmd_r() {
+        use crate::ui::status_bar_sync::StatusBarRoot;
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::MultiplexerCommands;
+
+        let (mut app, _guard) = make_test_app();
+        // Two ticks for Startup + first Update so bootstrap settles and
+        // the initial status bar is built.
+        app.update();
+        app.update();
+
+        // Drive a CMD+R-equivalent dispatch_new_session.
+        app.world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 mut commands: Commands,
+                 mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
+                 attached_q: Query<
+                    Entity,
+                    (With<ozmux_multiplexer::SessionMarker>, With<AttachedSession>),
+                >| {
+                    crate::input::dispatch_new_session(
+                        &mut commands,
+                        &mut mux,
+                        &mut counter,
+                        &attached_q,
+                    );
+                },
+            )
+            .unwrap();
+        // One tick for commands to flush + status bar rebuild to enqueue,
+        // one for rebuild's commands to flush.
+        app.update();
+        app.update();
+
+        // Walk the StatusBarRoot's descendants and collect every chip's
+        // Name as a Text node. The chip order in DFS = insertion order =
+        // left-to-right visual order in FlexDirection::Row.
+        let world = app.world_mut();
+        let bar = world
+            .query_filtered::<Entity, With<StatusBarRoot>>()
+            .single(world)
+            .expect("StatusBarRoot present");
+        let mut chip_names: Vec<String> = Vec::new();
+        let mut stack: Vec<Entity> = vec![bar];
+        while let Some(e) = stack.pop() {
+            if let Some(text) = world.get::<bevy::ui::widget::Text>(e) {
+                chip_names.push(text.0.clone());
+            }
+            if let Some(children) = world.get::<Children>(e) {
+                // Push children in reverse so DFS visits them left-to-right.
+                let mut kids: Vec<Entity> = children.iter().collect();
+                kids.reverse();
+                stack.extend(kids);
+            }
+        }
+        // Filter to just session chips ("session1", "session2", ...).
+        let session_chips: Vec<String> = chip_names
+            .into_iter()
+            .filter(|n| n.starts_with("session"))
+            .collect();
+        assert_eq!(
+            session_chips,
+            vec!["session1".to_string(), "session2".to_string()],
+            "status bar must show session1 leftmost, session2 to its right",
+        );
+    }
 }

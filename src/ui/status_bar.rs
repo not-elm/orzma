@@ -1,6 +1,8 @@
 //! Status bar Bevy UI builder. Spawns one Row Node containing one chip
-//! per Session, sorted by Entity id (bit-stable across frames within a
-//! run). The attached session's chip gets the accent color.
+//! per Session, in the order provided by the caller (status_bar_sync
+//! sorts by `SessionCreatedAt` so chips appear in creation order with
+//! the oldest leftmost). The attached session's chip gets the accent
+//! color.
 
 use crate::theme;
 use crate::theme::UI_FONT_SIZE;

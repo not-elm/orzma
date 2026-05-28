@@ -83,7 +83,10 @@ pub(crate) fn dispatch_focused_key(
         &mut bevy_terminal::Coalescer,
     )>,
     windows_q: Query<&Window>,
-    sessions_q: Query<Entity, With<SessionMarker>>,
+    sessions_q: Query<
+        (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
+        With<SessionMarker>,
+    >,
     attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
@@ -366,7 +369,10 @@ fn execute_action(
     mux: &mut MultiplexerCommands,
     session_name_counter: &mut crate::multiplexer::SessionNameCounter,
     session: Entity,
-    sessions_q: &Query<Entity, With<SessionMarker>>,
+    sessions_q: &Query<
+        (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
+        With<SessionMarker>,
+    >,
     attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: &ActivityEntityRegistry,
     marker_dirty_this_frame: &mut bool,
@@ -417,19 +423,27 @@ fn execute_action(
 
 /// Moves the `AttachedSession` marker between session entities for the
 /// `FocusSession{Next,Prev}` and `FocusSessionNumber{index}` actions.
-/// Sorts session entities by their stable `Entity` bit representation for
-/// deterministic cycle order.
+/// Sorts by `SessionCreatedAt` so cycle order matches the visual order
+/// in the status bar; `Entity` bit ordering is not creation order
+/// because deferred command queues do not guarantee monotonic indices.
 fn dispatch_focus_session(
     commands: &mut Commands,
-    sessions_q: &Query<Entity, With<SessionMarker>>,
+    sessions_q: &Query<
+        (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
+        With<SessionMarker>,
+    >,
     attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     action: &Action,
 ) {
-    let mut entries: Vec<Entity> = sessions_q.iter().collect();
-    if entries.len() < 2 {
+    let mut pairs: Vec<(Entity, u32)> = sessions_q
+        .iter()
+        .map(|(e, created)| (e, created.map(|c| c.0).unwrap_or(u32::MAX)))
+        .collect();
+    if pairs.len() < 2 {
         return;
     }
-    entries.sort_by_key(|e| e.to_bits());
+    pairs.sort_by_key(|(_, c)| *c);
+    let entries: Vec<Entity> = pairs.into_iter().map(|(e, _)| e).collect();
 
     let Ok(current_entity) = attached_q.single() else {
         return;
@@ -513,16 +527,19 @@ pub(crate) fn dispatch_new_session(
 }
 
 /// Spawns a Session via `MultiplexerCommands` plus its UI subtree node,
-/// inserts `AttachedSession` + `SessionUiSubtree` on the session entity,
-/// and parents the subtree under the session. The session name is
-/// minted from `counter` (monotonic `"session{n}"`). Returns the new
-/// session entity.
+/// inserts `AttachedSession` + `SessionUiSubtree` + `SessionCreatedAt`
+/// on the session entity, and parents the subtree under the session.
+/// The session name is `"session{n}"` and the matching creation-order
+/// index is stored on `SessionCreatedAt(n)` so UIs (status bar, focus
+/// cycling) can sort sessions in stable creation order without relying
+/// on `Entity` index ordering. Returns the new session entity.
 pub(crate) fn spawn_attached_session(
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
     counter: &mut crate::multiplexer::SessionNameCounter,
 ) -> Entity {
-    let outcome = mux.create_session(Some(counter.next()));
+    let n = counter.next();
+    let outcome = mux.create_session(Some(format!("session{n}")));
     let subtree = commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -530,9 +547,11 @@ pub(crate) fn spawn_attached_session(
             ..default()
         })
         .id();
-    commands
-        .entity(outcome.session)
-        .insert((AttachedSession, SessionUiSubtree(subtree)));
+    commands.entity(outcome.session).insert((
+        AttachedSession,
+        SessionUiSubtree(subtree),
+        crate::multiplexer::SessionCreatedAt(n),
+    ));
     commands.entity(subtree).insert(ChildOf(outcome.session));
     outcome.session
 }
@@ -1325,7 +1344,10 @@ mod tests {
 
         let id = app.world_mut().register_system(
             |mut commands: Commands,
-             sessions_q: Query<Entity, With<SessionMarker>>,
+             sessions_q: Query<
+                (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
+                With<SessionMarker>,
+            >,
              attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                 super::dispatch_focus_session(
                     &mut commands,
@@ -1362,7 +1384,10 @@ mod tests {
 
         let id = app.world_mut().register_system(
             |mut commands: Commands,
-             sessions_q: Query<Entity, With<SessionMarker>>,
+             sessions_q: Query<
+                (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
+                With<SessionMarker>,
+            >,
              attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                 super::dispatch_focus_session(
                     &mut commands,
@@ -1445,6 +1470,39 @@ mod tests {
             count,
             session_count_before + 1,
             "new session entity must carry SessionUiSubtree"
+        );
+    }
+
+    #[test]
+    fn spawn_attached_session_inserts_session_created_at_monotonically() {
+        let (mut app, _window_entity) = make_app(true);
+
+        // make_app's bootstrap-equivalent session predates the counter wiring
+        // in this fixture, so it has no SessionCreatedAt. Drive two CMD+R
+        // dispatches and verify each new session carries a strictly-increasing
+        // SessionCreatedAt(n) starting at 1.
+        let id = app.world_mut().register_system(
+            |mut mux: MultiplexerCommands,
+             mut commands: Commands,
+             mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
+             attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_q);
+            },
+        );
+        let _ = app.world_mut().run_system(id);
+        app.update();
+        let _ = app.world_mut().run_system(id);
+        app.update();
+
+        let world = app.world_mut();
+        let mut q = world
+            .query_filtered::<&crate::multiplexer::SessionCreatedAt, With<SessionMarker>>();
+        let mut values: Vec<u32> = q.iter(world).map(|c| c.0).collect();
+        values.sort();
+        assert_eq!(
+            values,
+            vec![1u32, 2u32],
+            "two dispatch_new_session calls must produce SessionCreatedAt(1) and SessionCreatedAt(2)",
         );
     }
 
@@ -1538,7 +1596,10 @@ mod tests {
             |mut mux: MultiplexerCommands,
              mut commands: Commands,
              mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             sessions_q: Query<Entity, With<SessionMarker>>,
+             sessions_q: Query<
+                (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
+                With<SessionMarker>,
+            >,
              attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
              registry: Res<crate::ui::registry::ActivityEntityRegistry>| {
                 let mut marker_dirty = false;
