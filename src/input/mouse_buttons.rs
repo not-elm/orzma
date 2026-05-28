@@ -7,7 +7,7 @@
 //! §6.
 
 use bevy::prelude::*;
-use bevy_terminal::{CellCoord, Column, Line, Point, SelectionType, Side};
+use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType, Side};
 use std::time::Instant;
 
 /// Per-frame state for the mouse-selection system.
@@ -385,6 +385,11 @@ fn dispatch_mouse_buttons(
     mut mux: ResMut<crate::multiplexer::Multiplexer>,
     mut buttons_msg: MessageReader<bevy::input::mouse::MouseButtonInput>,
     mut cursor_msg: MessageReader<bevy::window::CursorMoved>,
+    mut handles: Query<(
+        &mut bevy_terminal::TerminalHandle,
+        &mut bevy_terminal::PtyHandle,
+        &mut bevy_terminal::Coalescer,
+    )>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
     hosts_q: Query<
@@ -395,11 +400,6 @@ fn dispatch_mouse_buttons(
         ),
         With<crate::ui::ActivityHostNode>,
     >,
-    mut handles: Query<(
-        &mut bevy_terminal::TerminalHandle,
-        &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
-    )>,
     grids_q: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
     windows_q: Query<&Window, With<bevy::window::PrimaryWindow>>,
@@ -675,7 +675,6 @@ fn apply_action(
     )>,
     copy_mode_q: &Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
-    use bevy_terminal::ButtonAction as A;
     let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
         return;
     };
@@ -698,19 +697,19 @@ fn apply_action(
     let in_copy_mode = copy_mode_q.get(entity).is_ok();
 
     match action {
-        A::Noop => {}
-        A::WriteToPty(bytes) => {
+        ButtonAction::Noop => {}
+        ButtonAction::WriteToPty(bytes) => {
             if let Err(e) = handle.write(&mut pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse-button PTY write failed");
             }
         }
-        A::ClearAndWriteToPty(bytes) => {
+        ButtonAction::ClearAndWriteToPty(bytes) => {
             handle.selection_clear(&mut coalescer);
             if let Err(e) = handle.write(&mut pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse-button forwarded press PTY write failed");
             }
         }
-        A::ArmDrag { ty, cell, side } => {
+        ButtonAction::ArmDrag { ty, cell, side } => {
             // Clear any prior selection on the focused pane so the
             // click does not leave a stale highlight visible (spec §2,
             // brainstorm Q5).
@@ -725,7 +724,7 @@ fn apply_action(
                 },
             });
         }
-        A::StartLocalSelection { ty, cell, side } => {
+        ButtonAction::StartLocalSelection { ty, cell, side } => {
             let pt = to_viewport_point(cell);
             if in_copy_mode {
                 handle.vi_goto(&mut coalescer, pt);
@@ -741,7 +740,7 @@ fn apply_action(
                 phase: DragPhase::Active,
             });
         }
-        A::UpdateLocalSelection { cell, side } => {
+        ButtonAction::UpdateLocalSelection { cell, side } => {
             let pt = to_viewport_point(cell);
             if let Some(drag) = state.drag.as_mut().filter(|d| d.entity == entity) {
                 // Materialize the selection now if the drag is still
@@ -772,7 +771,7 @@ fn apply_action(
             // reaching this arm without a drag would be a logic bug
             // elsewhere.
         }
-        A::ClearLocalSelection => {
+        ButtonAction::ClearLocalSelection => {
             handle.selection_clear(&mut coalescer);
         }
     }
