@@ -263,6 +263,7 @@ mod tests {
     use bevy::ecs::entity::Entity;
     use bevy::ecs::observer::On;
     use bevy::ecs::resource::Resource;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
@@ -480,7 +481,7 @@ mod tests {
         let term_entity = app.world_mut().spawn_empty().id();
         {
             let mut registry = app.world_mut().resource_mut::<ActivityEntityRegistry>();
-            registry.insert_for_entity_test(outcome.activity, term_entity);
+            registry.insert_for_test(outcome.activity, term_entity);
         }
 
         app.world_mut().spawn(Window {

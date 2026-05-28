@@ -205,7 +205,7 @@ pub(crate) fn try_click_to_focus(
         let mut found = None;
         for pane in mux.panes_of_session(attached_session) {
             for activity in mux.activities_of_pane(pane) {
-                if registry.get_by_entity(activity) == Some(target_entity) {
+                if registry.get(activity) == Some(target_entity) {
                     found = Some(pane);
                     break;
                 }
@@ -924,8 +924,8 @@ mod tests {
             let mut registry = app
                 .world_mut()
                 .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
-            registry.insert_for_entity_test(original_activity, original_entity);
-            registry.insert_for_entity_test(new_activity, new_entity);
+            registry.insert_for_test(original_activity, original_entity);
+            registry.insert_for_test(new_activity, new_entity);
         }
 
         let mutated = app

@@ -10,7 +10,9 @@ use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ActivityHostNode, SessionUiRoot, StructuralNode};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use ozmux_multiplexer::{Cell, LayoutCells, SessionMarker};
+use ozmux_multiplexer::{
+    ActiveActivity, ActivityKind, ActivityMarker, Cell, LayoutCells, PaneMarker, SessionMarker,
+};
 
 pub struct OzmuxSessionUiPlugin;
 
@@ -55,7 +57,9 @@ fn sync_active_session(
 /// old epoch-comparison gate. The rebuild walks `layout.cells` and
 /// replaces every `StructuralNode` descendant of the session's
 /// `SessionUiSubtree` root — Activity hosts are preserved via
-/// `ActivityEntityRegistry` and re-parented.
+/// `ActivityEntityRegistry` and re-parented. Pruning of stale registry
+/// entries is handled by `prune_registry_on_activity_removal` driven by
+/// `RemovedComponents<ActivityMarker>`.
 fn rebuild_session_ui(
     mut commands: Commands,
     mut registry: ResMut<ActivityEntityRegistry>,
@@ -66,6 +70,8 @@ fn rebuild_session_ui(
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     activity_hosts: Query<(Entity, &ActivityHostNode)>,
     children: Query<&Children>,
+    activity_q: Query<(&ActivityKind, &Name), With<ActivityMarker>>,
+    active_activity_q: Query<&ActiveActivity, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
@@ -85,6 +91,9 @@ fn rebuild_session_ui(
                     &mut registry,
                     session_entity,
                     &ui_font_handle,
+                    &children,
+                    &activity_q,
+                    &active_activity_q,
                 );
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
@@ -301,17 +310,65 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO Task 17: needs MultiplexerCommands::add_activity and set_active_activity wired to LayoutCells Changed; ports the old Multiplexer mux.with_session + mux.bump_epoch pattern"]
     fn inactive_activity_within_active_session_parks_under_session_entity() {
+        use crate::multiplexer::MultiplexerCommands;
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{ActivityKind, AttachedSession};
+
         let (mut app, _guard) = make_test_app_v2();
         app.update();
         app.update();
 
-        // TODO Task 17: port using MultiplexerCommands::add_activity + set_active_activity
-        // The old test added a second Activity to the bootstrap pane via mux.with_session,
-        // then switched active_activity to the new one. With the ECS model, this would
-        // use mux.add_activity(pane) + mux.set_active_activity(pane, activity), then
-        // assert that the inactive Activity host is parked under the Session entity.
+        let (session, pane, first_activity) = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next()?;
+                    let pane = mux.sessions_active_pane(session)?;
+                    let activity = mux.panes_active_activity(pane)?;
+                    Some((session, pane, activity))
+                },
+            )
+            .unwrap()
+            .expect("bootstrap session + pane + first_activity");
+
+        let first_host = app
+            .world()
+            .resource::<crate::ui::registry::ActivityEntityRegistry>()
+            .get(first_activity)
+            .expect("first activity must have a host after initial rebuild");
+
+        let second_activity = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(pane, ActivityKind::Terminal)
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_activity(pane, second_activity).unwrap();
+            })
+            .unwrap();
+
+        app.world_mut()
+            .entity_mut(session)
+            .get_mut::<LayoutCells>()
+            .expect("LayoutCells")
+            .set_changed();
+        app.update();
+
+        let first_host_parent = app
+            .world()
+            .get::<ChildOf>(first_host)
+            .map(|c| c.parent());
+        assert_eq!(
+            first_host_parent,
+            Some(session),
+            "inactive activity host must be parked under the Session entity (non-Node, walker-skipped)"
+        );
     }
 
     #[test]

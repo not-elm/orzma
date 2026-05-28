@@ -26,7 +26,7 @@ pub(crate) fn resolve_focused_terminal(
     let session = attached_q.iter().next()?;
     let pane = mux.sessions_active_pane(session)?;
     let activity = mux.panes_active_activity(pane)?;
-    registry.get_by_entity(activity)
+    registry.get(activity)
 }
 
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline.
@@ -43,10 +43,16 @@ impl Plugin for OzmuxShortcutPlugin {
     }
 }
 
+// NOTE: `mux` must precede `commands` in the parameter list. Both params
+// own separate deferred command queues; Bevy applies them in parameter
+// order. `spawn_attached_session` and `dispatch_new_session` queue
+// session-entity spawns into `mux.commands`, then insert components on
+// those entities via `commands`. If `commands` applied first, those
+// inserts would reference entities that don't exist yet and panic.
 pub(crate) fn dispatch_focused_key(
+    mut mux: MultiplexerCommands,
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
-    mut mux: MultiplexerCommands,
     mut clipboard: ResMut<crate::clipboard::Clipboard>,
     mut handles: Query<(
         &mut bevy_terminal::TerminalHandle,
@@ -113,7 +119,7 @@ pub(crate) fn dispatch_focused_key(
 
         let active_pane = mux.sessions_active_pane(session);
         let active_activity = active_pane.and_then(|p| mux.panes_active_activity(p));
-        let focused_entity = active_activity.and_then(|a| registry.get_by_entity(a));
+        let focused_entity = active_activity.and_then(|a| registry.get(a));
 
         if matches!(ev.logical_key, Key::Escape)
             && let Some(entity) = focused_entity
@@ -344,7 +350,7 @@ fn execute_action(
         Action::EnterCopyMode => {
             if let Some(pane) = mux.sessions_active_pane(session)
                 && let Some(activity) = mux.panes_active_activity(pane)
-                && let Some(entity) = registry.get_by_entity(activity)
+                && let Some(entity) = registry.get(activity)
             {
                 commands.trigger(crate::ui::copy_mode::EnterCopyModeRequest { entity });
             }
@@ -536,7 +542,7 @@ fn forward_to_active_terminal(
     let Some(activity) = mux.panes_active_activity(pane) else {
         return;
     };
-    let Some(entity) = registry.get_by_entity(activity) else {
+    let Some(entity) = registry.get(activity) else {
         return;
     };
     commands.trigger(TerminalKeyInput {
@@ -551,6 +557,7 @@ mod tests {
     use super::*;
     use crate::configs::OzmuxConfigsResource;
     use crate::multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::input::ButtonState;
     use bevy::input::keyboard::{Key as Bk, KeyboardInput, NativeKeyCode};
     use bevy::window::{Window, WindowResolution};
@@ -639,7 +646,7 @@ mod tests {
         let mut registry = app
             .world_mut()
             .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
-        registry.insert_for_entity_test(activity_id, activity_entity);
+        registry.insert_for_test(activity_id, activity_entity);
         activity_entity
     }
 
@@ -670,7 +677,7 @@ mod tests {
         let mut registry = app
             .world_mut()
             .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
-        registry.insert_for_entity_test(activity_id, entity);
+        registry.insert_for_test(activity_id, entity);
         entity
     }
 
@@ -1360,8 +1367,8 @@ mod tests {
 
         app.world_mut()
             .run_system_once(
-                |mut commands: Commands,
-                 mut mux: MultiplexerCommands,
+                |mut mux: MultiplexerCommands,
+                 mut commands: Commands,
                  attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                     super::dispatch_new_session(&mut commands, &mut mux, &attached_q);
                 },
@@ -1395,8 +1402,8 @@ mod tests {
             .unwrap();
 
         let id = app.world_mut().register_system(
-            |mut commands: Commands,
-             mut mux: MultiplexerCommands,
+            |mut mux: MultiplexerCommands,
+             mut commands: Commands,
              attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                 super::dispatch_new_session(&mut commands, &mut mux, &attached_q);
             },
@@ -1430,8 +1437,8 @@ mod tests {
         assert_eq!(count_attached_session_entities(&mut app), 1);
 
         let id = app.world_mut().register_system(
-            |mut commands: Commands,
-             mut mux: MultiplexerCommands,
+            |mut mux: MultiplexerCommands,
+             mut commands: Commands,
              sessions_q: Query<Entity, With<SessionMarker>>,
              attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
              registry: Res<crate::ui::registry::ActivityEntityRegistry>| {
