@@ -72,9 +72,7 @@ impl Plugin for MouseButtonsInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseSelectionState>().add_systems(
             Update,
-            dispatch_mouse_buttons
-                .in_set(crate::system_set::OzmuxSystems::Input)
-                .before(crate::input::dispatch_focused_key),
+            dispatch_mouse_buttons.in_set(crate::input::InputPhase::Dispatch),
         );
     }
 }

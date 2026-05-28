@@ -30,15 +30,36 @@ pub(crate) fn resolve_focused_terminal(
     registry.get(&pane.active_activity)
 }
 
+/// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
+/// `Hover` (cursor / hyperlink hover detection) → `Dispatch`
+/// (mouse / wheel button routing) → `FocusedKey` (keyboard
+/// shortcut + key forwarding).
+#[derive(SystemSet, Hash, PartialEq, Eq, Debug, Clone)]
+pub(crate) enum InputPhase {
+    Hover,
+    Dispatch,
+    FocusedKey,
+}
+
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline.
 pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.configure_sets(
+            Update,
+            (
+                InputPhase::Hover,
+                InputPhase::Dispatch,
+                InputPhase::FocusedKey,
+            )
+                .chain()
+                .in_set(crate::system_set::OzmuxSystems::Input),
+        )
+        .add_systems(
             Update,
             dispatch_focused_key
-                .in_set(crate::system_set::OzmuxSystems::Input)
+                .in_set(InputPhase::FocusedKey)
                 .after(read_ime_events),
         );
     }
