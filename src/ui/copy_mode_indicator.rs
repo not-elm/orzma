@@ -379,8 +379,8 @@ mod tests {
 
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
-    use crate::multiplexer::MultiplexerPlugin;
     use crate::ui::OzmuxUiPlugin;
+    use ozmux_multiplexer::MultiplexerPlugin;
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
@@ -432,9 +432,8 @@ mod tests {
 
     #[test]
     fn chip_survives_structural_rebuild() {
-        use crate::multiplexer::MultiplexerCommands;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::SessionMarker;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_ui_test_app();
         app.update();
@@ -479,9 +478,8 @@ mod tests {
 
     #[test]
     fn inactive_host_parent_is_walker_skipped_session_entity() {
-        use crate::multiplexer::MultiplexerCommands;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, AttachedSession, LayoutCells, SessionMarker};
+        use ozmux_multiplexer::{ActivityKind, AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_ui_test_app();
         app.update();

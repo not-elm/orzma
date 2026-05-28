@@ -16,7 +16,11 @@ impl Plugin for OzmuxBootstrapPlugin {
     }
 }
 
-pub(crate) fn bootstrap(mut commands: Commands, mut mux: MultiplexerCommands) {
+// NOTE: `mux` must precede `commands` so its command buffer is applied first.
+// Both params have separate deferred queues; apply order follows parameter order.
+// If `commands` went first, `entity(outcome.session).insert(…)` would panic
+// because `outcome.session` is only spawned when `mux`'s queue is applied.
+pub(crate) fn bootstrap(mut mux: MultiplexerCommands, mut commands: Commands) {
     let outcome = mux.create_session(Some("default".into()));
 
     let subtree_root = commands

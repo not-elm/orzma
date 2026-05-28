@@ -62,13 +62,13 @@ fn dispatch_mouse_wheel(
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<crate::configs::OzmuxConfigsResource>,
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
-    mux: crate::multiplexer::MultiplexerCommands,
+    mux: ozmux_multiplexer::MultiplexerCommands,
     copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
     attached_q: Query<
         bevy::prelude::Entity,
         (
-            With<crate::multiplexer::SessionMarker>,
-            With<crate::multiplexer::AttachedSession>,
+            With<ozmux_multiplexer::SessionMarker>,
+            With<ozmux_multiplexer::AttachedSession>,
         ),
     >,
     windows: Query<&Window, With<PrimaryWindow>>,

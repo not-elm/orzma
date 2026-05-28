@@ -6,7 +6,6 @@ mod configs;
 mod font;
 mod input;
 mod multiplexer;
-mod session_entity;
 mod system_set;
 mod theme;
 mod ui;
@@ -19,8 +18,8 @@ use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
-use multiplexer::OzmuxMultiplexerPlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
+use ozmux_multiplexer::MultiplexerPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin};
 
@@ -30,7 +29,7 @@ fn main() {
         .add_plugins((
             TerminalHandlePlugin,
             TerminalRendererPlugin,
-            OzmuxMultiplexerPlugin,
+            MultiplexerPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxLayoutLogPlugin,

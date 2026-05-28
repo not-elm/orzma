@@ -6,8 +6,8 @@
 //! the attached terminal), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
-use crate::multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
 use crate::ui::TerminalActivityMarker;
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::registry::ActivityEntityRegistry;
 use bevy::app::{App, Plugin, Update};
@@ -257,8 +257,8 @@ pub(crate) fn read_ime_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker};
     use crate::ui::registry::ActivityEntityRegistry;
+    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker};
     use bevy::app::{App, Update};
     use bevy::ecs::entity::Entity;
     use bevy::ecs::observer::On;

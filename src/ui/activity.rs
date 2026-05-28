@@ -1,7 +1,7 @@
 //! Activity host Bevy UI builder. The host entity itself is owned by
 //! `ActivityEntityRegistry` and lives across structural rebuilds; this
 //! module's `build_activity_host_children` populates its children (the
-//! placeholder Row + name + short-id Texts) on each rebuild.
+//! placeholder Row + name Text) on each rebuild.
 //!
 //! Phase 3+ replaces these placeholder children with a `MaterialNode<
 //! TerminalMaterial>` for the GPU terminal grid.
@@ -11,7 +11,7 @@ use crate::ui::palette;
 use bevy::color::Color;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
-use ozmux_multiplexer::{Activity, ActivityId, ActivityKind};
+use ozmux_multiplexer::ActivityKind;
 
 /// Background color for the Activity placeholder host, chosen by kind.
 fn kind_color(kind: &ActivityKind) -> Color {
@@ -22,21 +22,21 @@ fn kind_color(kind: &ActivityKind) -> Color {
     }
 }
 
-/// Insert / refresh the Node bundle on the stable Activity host entity,
-/// then spawn its (structural, replaced each rebuild) children showing
-/// the activity name + short id. The host's `Node` is set with
+/// Insert / refresh the `Node` bundle on the stable Activity host entity,
+/// then spawn its (structural, replaced each rebuild) placeholder children
+/// showing the activity name. The host's `Node` is set with
 /// `commands.entity(host).insert(...)` so the existing entity remains;
 /// children are spawned fresh.
 ///
 /// For `ActivityKind::Terminal` the placeholder children are skipped
 /// because the renderer-side `MaterialNode<TerminalUiMaterial>` covers
 /// the host node entirely. The terminal-colored `BackgroundColor` still
-/// shows briefly between activity creation and material readiness, which
-/// is useful when spawning fails.
+/// shows briefly between activity creation and material readiness.
 pub(crate) fn build_activity_host_children(
     commands: &mut Commands,
     host: Entity,
-    activity: &Activity,
+    kind: &ActivityKind,
+    name: &Name,
 ) {
     commands.entity(host).insert((
         Node {
@@ -47,10 +47,10 @@ pub(crate) fn build_activity_host_children(
             align_items: AlignItems::Center,
             ..default()
         },
-        BackgroundColor(kind_color(&activity.kind)),
+        BackgroundColor(kind_color(kind)),
     ));
 
-    if matches!(activity.kind, ActivityKind::Terminal) {
+    if matches!(kind, ActivityKind::Terminal) {
         return;
     }
 
@@ -66,23 +66,11 @@ pub(crate) fn build_activity_host_children(
         .id();
 
     commands.spawn((
-        Text::new(activity.name.clone()),
+        Text::new(name.as_str().to_string()),
         TextColor(palette::FOREGROUND),
         StructuralNode,
         ChildOf(row),
     ));
-
-    commands.spawn((
-        Text::new(short_id(&activity.id).to_string()),
-        TextColor(palette::FOREGROUND),
-        StructuralNode,
-        ChildOf(row),
-    ));
-}
-
-/// First 8 bytes of an `ActivityId`'s UUID string (UUID v4 is always 36 ASCII chars).
-fn short_id(id: &ActivityId) -> &str {
-    &AsRef::<str>::as_ref(id)[..8]
 }
 
 #[cfg(test)]

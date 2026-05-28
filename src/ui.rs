@@ -100,7 +100,7 @@ mod tests {
     use super::*;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
-    use crate::multiplexer::{AttachedSession, MultiplexerPlugin};
+    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin};
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
@@ -231,9 +231,8 @@ mod tests {
 
     #[test]
     fn split_pane_produces_two_pane_frames() {
-        use crate::multiplexer::MultiplexerCommands;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{SessionMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -265,10 +264,9 @@ mod tests {
 
     #[test]
     fn activity_registry_prunes_removed_activity() {
-        use crate::multiplexer::MultiplexerCommands;
         use crate::ui::registry::ActivityEntityRegistry;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{SessionMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -323,9 +321,8 @@ mod tests {
 
     #[test]
     fn activity_host_not_caught_in_despawn_cascade() {
-        use crate::multiplexer::MultiplexerCommands;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::SessionMarker;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -355,9 +352,8 @@ mod tests {
 
     #[test]
     fn focus_session_switch_does_not_orphan_inactive_session_hosts() {
-        use crate::multiplexer::MultiplexerCommands;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::SessionMarker;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -399,9 +395,8 @@ mod tests {
 
     #[test]
     fn inactive_activity_host_persists_across_focus_switch() {
-        use crate::multiplexer::MultiplexerCommands;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, SessionMarker};
+        use ozmux_multiplexer::{ActivityKind, MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();

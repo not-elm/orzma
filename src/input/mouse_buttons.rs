@@ -193,7 +193,7 @@ pub(crate) fn next_click_count(
 /// spec §10 edge cases. The reverse-lookup only scans the attached
 /// session's panes; an unknown target falls through as a no-op.
 pub(crate) fn try_click_to_focus(
-    mux: &mut crate::multiplexer::MultiplexerCommands,
+    mux: &mut ozmux_multiplexer::MultiplexerCommands,
     registry: &crate::ui::registry::ActivityEntityRegistry,
     attached_session: Entity,
     target_entity: Entity,
@@ -387,7 +387,7 @@ fn synthesize_drag_cell(
 /// (Tasks 19-20) are layered on later.
 fn dispatch_mouse_buttons(
     mut state: ResMut<MouseSelectionState>,
-    mut mux: crate::multiplexer::MultiplexerCommands,
+    mut mux: ozmux_multiplexer::MultiplexerCommands,
     mut buttons_msg: MessageReader<bevy::input::mouse::MouseButtonInput>,
     mut cursor_msg: MessageReader<bevy::window::CursorMoved>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -412,8 +412,8 @@ fn dispatch_mouse_buttons(
     attached_q: Query<
         bevy::prelude::Entity,
         (
-            With<crate::multiplexer::SessionMarker>,
-            With<crate::multiplexer::AttachedSession>,
+            With<ozmux_multiplexer::SessionMarker>,
+            With<ozmux_multiplexer::AttachedSession>,
         ),
     >,
     registry: Res<crate::ui::registry::ActivityEntityRegistry>,
@@ -881,7 +881,7 @@ mod tests {
     fn try_click_to_focus_mutates_active_pane_and_returns_true() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_configs::shortcuts::{Action, SplitDirection};
-        use ozmux_multiplexer::{ActivePane, MultiplexerCommands, MultiplexerPlugin, SessionMarker};
+        use ozmux_multiplexer::{ActivePane, MultiplexerCommands, MultiplexerPlugin};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)

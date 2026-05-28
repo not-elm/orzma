@@ -4,14 +4,14 @@
 //! UI walker — no layout, no `ComputedNode` updates, no resize-pass work.
 
 use crate::font::TerminalUiFont;
-use crate::multiplexer::{AttachedSession, SessionUiSubtree};
 use crate::system_set::OzmuxSystems;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ActivityHostNode, SessionUiRoot, StructuralNode};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use ozmux_multiplexer::{
-    ActiveActivity, ActivityKind, ActivityMarker, Cell, LayoutCells, PaneMarker, SessionMarker,
+    ActiveActivity, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells, PaneMarker,
+    SessionMarker, SessionUiSubtree,
 };
 
 pub struct OzmuxSessionUiPlugin;
@@ -311,9 +311,8 @@ mod tests {
 
     #[test]
     fn inactive_activity_within_active_session_parks_under_session_entity() {
-        use crate::multiplexer::MultiplexerCommands;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, AttachedSession};
+        use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();

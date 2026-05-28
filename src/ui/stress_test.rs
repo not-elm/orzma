@@ -8,7 +8,6 @@
 
 use crate::bootstrap::OzmuxBootstrapPlugin;
 use crate::configs::OzmuxConfigsPlugin;
-use crate::multiplexer::{AttachedSession, MultiplexerPlugin, SessionUiSubtree};
 use crate::ui::OzmuxUiPlugin;
 use bevy::asset::AssetPlugin;
 use bevy::image::ImagePlugin;
@@ -17,7 +16,7 @@ use bevy::render::storage::ShaderStorageBuffer;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-use ozmux_multiplexer::SessionMarker;
+use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
 use std::sync::MutexGuard;
 
 fn make_app() -> (App, MutexGuard<'static, ()>) {

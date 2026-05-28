@@ -7,7 +7,7 @@ pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
 use crate::input::ime::{ImeState, read_ime_events};
-use crate::multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
 use crate::ui::registry::ActivityEntityRegistry;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -556,14 +556,13 @@ fn forward_to_active_terminal(
 mod tests {
     use super::*;
     use crate::configs::OzmuxConfigsResource;
-    use crate::multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::ButtonState;
     use bevy::input::keyboard::{Key as Bk, KeyboardInput, NativeKeyCode};
     use bevy::window::{Window, WindowResolution};
     use ozmux_configs::OzmuxConfigs;
     use ozmux_configs::shortcuts::{Key as CKey, Modifiers};
-    use ozmux_multiplexer::ActivePane;
+    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
 
     fn make_app(window_focused: bool) -> (App, Entity) {
         let mut app = App::new();
