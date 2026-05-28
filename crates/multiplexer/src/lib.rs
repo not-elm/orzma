@@ -12,6 +12,7 @@ pub mod commands;
 pub mod components;
 pub mod direction;
 pub mod error;
+pub mod observers;
 pub mod resize;
 pub mod swap;
 
