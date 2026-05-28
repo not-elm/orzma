@@ -6,9 +6,7 @@
 use bevy::ecs::entity::Entity;
 use thiserror::Error;
 
-// TODO: re-enable cells.rs import once it lands in Task 4.
-// use crate::cells::CellId;
-type CellId = String;
+use crate::cells::CellId;
 
 /// Domain errors returned by multiplexer operations.
 #[derive(Error, Debug, Clone)]

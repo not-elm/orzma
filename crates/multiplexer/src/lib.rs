@@ -7,6 +7,11 @@
 //! is a Bevy `Entity`. Each entity also carries `Name` (from
 //! `bevy::prelude::Name`) for tracing readability.
 
+pub mod cells;
 pub mod error;
 
+pub use cells::{
+    Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
+    SplitOrientation,
+};
 pub use error::{MultiplexerError, MultiplexerResult};
