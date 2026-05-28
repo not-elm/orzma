@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 serde_json = "1"
-ozmux_multiplexer = { path = "../multiplexer" }
+ozmux_multiplexer = { path = "../../crates/multiplexer" }
 ozmux_extension = { path = "../extension" }
 tokio = { workspace = true, features = [
   "sync",
