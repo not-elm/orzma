@@ -3,18 +3,19 @@
 //! also re-exports the pure predicates the mouse-buttons system calls
 //! during interception.
 
+use crate::input::mouse_buttons::{cell_at_local, resolve_pane_at_phys};
+use crate::input::{InputPhase, current_modifiers};
+use crate::ui::ActivityHostNode;
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
-use bevy::input::keyboard::KeyCode;
+use bevy::input::keyboard::{KeyCode, KeyboardInput};
+use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;
-
-use crate::input::mouse_buttons::{cell_at_local, resolve_pane_at_phys};
-use crate::ui::ActivityHostNode;
 
 /// Plugin: registers `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
 pub(crate) struct HyperlinkInputPlugin;
@@ -23,7 +24,9 @@ impl Plugin for HyperlinkInputPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            hyperlink_hover_and_cursor.in_set(crate::input::InputPhase::Hover),
+            hyperlink_hover_and_cursor
+                .run_if(on_message::<MouseMotion>.or(on_message::<KeyboardInput>))
+                .in_set(InputPhase::Hover),
         );
     }
 }
@@ -119,7 +122,7 @@ fn hyperlink_hover_and_cursor(
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    let mods = crate::input::current_modifiers(&keys);
+    let mods = current_modifiers(&keys);
     hover.modifier_held = link_modifier_held(&mods);
 
     let Some((entity, local)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
