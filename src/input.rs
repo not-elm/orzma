@@ -2,6 +2,7 @@
 //! table comes from the loaded `OzmuxConfigsResource`; this module owns
 //! no chord data.
 
+pub(crate) mod hyperlink;
 pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
