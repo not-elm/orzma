@@ -495,7 +495,7 @@ fn rebuild_cells(
                     fg_packed: fg,
                     bg_packed: bg,
                     style_flags,
-                    hyperlink_id: 0,
+                    hyperlink_id: cell.hyperlink_id.map_or(0, |h| h.0),
                 };
             }
 
@@ -516,7 +516,7 @@ fn rebuild_cells(
                         fg_packed: fg,
                         bg_packed: bg,
                         style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
-                        hyperlink_id: 0,
+                        hyperlink_id: cell.hyperlink_id.map_or(0, |h| h.0),
                     };
                 }
             }
@@ -613,5 +613,53 @@ mod tests {
     #[test]
     fn schema_version_bumped_to_two() {
         assert_eq!(SCHEMA_VERSION_TIER1, 2);
+    }
+
+    #[test]
+    fn rebuild_cells_writes_hyperlink_id_when_present() {
+        use crate::schema::HyperlinkId;
+        use bevy::platform::collections::HashMap;
+
+        let linked = Cell {
+            text: "x".to_string(),
+            width: 1,
+            fg: Color::WHITE,
+            bg: Color::BLACK,
+            style: 0,
+            hyperlink_id: Some(HyperlinkId(7)),
+        };
+        let unlinked = Cell {
+            text: "y".to_string(),
+            width: 1,
+            fg: Color::WHITE,
+            bg: Color::BLACK,
+            style: 0,
+            hyperlink_id: None,
+        };
+        let grid = TerminalGrid {
+            cols: 2,
+            rows: 1,
+            cells: vec![vec![linked, unlinked]],
+            ..Default::default()
+        };
+        let mut state = TerminalMaterialState {
+            glyph_index_map: HashMap::new(),
+            cpu_cells: vec![GpuCell::default(); 2],
+            cpu_glyphs: Vec::new(),
+            last_atlas_generation: 0,
+            last_grid_seq: 0,
+            last_grid_dims: (0, 0),
+            last_phys_font_size: 0,
+            last_schema_version: 0,
+            cached_metrics: None,
+            initialized: false,
+        };
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+
+        rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 16, 2);
+
+        assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
+        assert_eq!(state.cpu_cells[1].hyperlink_id, 0);
     }
 }
