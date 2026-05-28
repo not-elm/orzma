@@ -1,4 +1,4 @@
-use crate::schema::{CURSOR_VISIBLE_BIT, Cursor, CursorShape, HyperlinkId, ViCursor};
+use crate::schema::{CURSOR_VISIBLE_BIT, Cursor, CursorShape, HyperlinkId, HyperlinkUri, ViCursor};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -35,9 +35,32 @@ pub struct TerminalGrid {
     /// IME composition) to non-destructively hide the cursor without
     /// clobbering terminal-controlled state.
     pub suppress_cursor: bool,
+    /// OSC 8 hyperlinks indexed by wire id. Populated cumulatively from
+    /// `FrameSnapshot.hyperlinks` / `FrameDelta.hyperlinks`. Replaced on
+    /// snapshot, merged on delta. Linear scan — realistic sessions
+    /// carry ≤100 distinct hyperlinks (mirroring the server-side
+    /// interner rationale).
+    pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
 }
 
 impl TerminalGrid {
+    /// Resolves `(row, col)` to the hyperlink at that grapheme cell,
+    /// if any. Returns `None` for out-of-bounds, width-0 trailers,
+    /// unlinked cells, or when the id is present on the cell but
+    /// absent from the map.
+    pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<(HyperlinkId, &HyperlinkUri)> {
+        let row_cells = self.cells.get(row as usize)?;
+        let cell = row_cells.get(col as usize)?;
+        if cell.width == 0 {
+            return None;
+        }
+        let id = cell.hyperlink_id?;
+        self.hyperlinks
+            .iter()
+            .find(|(stored_id, _)| *stored_id == id)
+            .map(|(stored_id, uri)| (*stored_id, uri))
+    }
+
     pub fn current_cursor_pos_and_style(&self) -> (UVec2, u32) {
         let mut cursor_pos = UVec2::ZERO;
         let mut cursor_style = 0;
@@ -203,5 +226,82 @@ mod tests {
         let (pos, style) = grid.current_cursor_pos_and_style();
         assert_eq!(pos, UVec2::new(7, 2));
         assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
+    }
+
+    #[test]
+    fn hyperlink_at_returns_none_when_out_of_bounds() {
+        let grid = TerminalGrid {
+            cols: 4,
+            rows: 2,
+            cells: vec![
+                vec![],
+                vec![],
+            ],
+            ..Default::default()
+        };
+        assert!(grid.hyperlink_at(99, 0).is_none());
+        assert!(grid.hyperlink_at(0, 99).is_none());
+    }
+
+    #[test]
+    fn hyperlink_at_returns_none_for_width_zero_trailer() {
+        let cell = Cell {
+            text: "\u{0301}".to_string(),
+            width: 0,
+            fg: Color::WHITE,
+            bg: Color::BLACK,
+            style: 0,
+            hyperlink_id: Some(HyperlinkId(5)),
+        };
+        let grid = TerminalGrid {
+            cols: 4,
+            rows: 1,
+            cells: vec![vec![cell]],
+            hyperlinks: vec![(HyperlinkId(5), HyperlinkUri::new("https://example"))],
+            ..Default::default()
+        };
+        assert!(grid.hyperlink_at(0, 0).is_none());
+    }
+
+    #[test]
+    fn hyperlink_at_returns_none_when_map_missing_id() {
+        let cell = Cell {
+            text: "x".to_string(),
+            width: 1,
+            fg: Color::WHITE,
+            bg: Color::BLACK,
+            style: 0,
+            hyperlink_id: Some(HyperlinkId(7)),
+        };
+        let grid = TerminalGrid {
+            cols: 4,
+            rows: 1,
+            cells: vec![vec![cell]],
+            hyperlinks: vec![],
+            ..Default::default()
+        };
+        assert!(grid.hyperlink_at(0, 0).is_none());
+    }
+
+    #[test]
+    fn hyperlink_at_returns_id_and_uri_for_linked_cell() {
+        let cell = Cell {
+            text: "x".to_string(),
+            width: 1,
+            fg: Color::WHITE,
+            bg: Color::BLACK,
+            style: 0,
+            hyperlink_id: Some(HyperlinkId(7)),
+        };
+        let grid = TerminalGrid {
+            cols: 4,
+            rows: 1,
+            cells: vec![vec![cell]],
+            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))],
+            ..Default::default()
+        };
+        let (id, uri) = grid.hyperlink_at(0, 0).expect("hyperlink present");
+        assert_eq!(id, HyperlinkId(7));
+        assert_eq!(uri.as_str(), "https://example");
     }
 }
