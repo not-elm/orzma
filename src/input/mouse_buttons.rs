@@ -101,10 +101,6 @@ pub(crate) fn resolve_pane_at_phys(
         if !node.contains_point(*transform, cursor_phys_px) {
             continue;
         }
-        // NOTE: normalize_point returns None if the affine transform is
-        // degenerate (zero-size node or non-invertible). contains_point
-        // returning true normally implies Some here, but skip defensively
-        // to avoid an unwrap on the degenerate case.
         let Some(normalized) = node.normalize_point(*transform, cursor_phys_px) else {
             continue;
         };
@@ -513,12 +509,6 @@ fn dispatch_mouse_buttons(
                         crate::input::hyperlink::try_open_uri(uri.as_str());
                         continue;
                     }
-                    // NOTE: While the modifier is still held at Release time,
-                    //       skip routing so the PTY does not get a stray release
-                    //       it cannot pair with a press. If the user lifts the
-                    //       modifier between Press and Release, this guard fails
-                    //       and the PTY may see an orphan release — accepted per
-                    //       spec §4 (matches Safari Cmd+click semantics).
                     if matches!(kind, bevy_terminal::ButtonEventKind::Release)
                         && grid
                             .hyperlink_at(
