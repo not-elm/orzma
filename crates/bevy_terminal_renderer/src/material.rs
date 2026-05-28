@@ -26,8 +26,9 @@ mod state;
 /// History: 0 = pre-Tier1 (logical-px `GpuGlyph`, hardcoded 8x16 cell,
 /// shader stretches `cell_pitch`); 1 = Tier 1 (physical-px schema,
 /// font-derived cell metrics, shader uses `params.cell_size_px` directly,
-/// `bg_padding_color` fallback, `STYLE_WIDE_RIGHT_HALF` cells).
-const SCHEMA_VERSION_TIER1: u32 = 1;
+/// `bg_padding_color` fallback, `STYLE_WIDE_RIGHT_HALF` cells); 2 = OSC 8
+/// hyperlink support (`GpuCell.hyperlink_id`, `TerminalParams.hover_*`).
+const SCHEMA_VERSION_TIER1: u32 = 2;
 
 /// Render-side public SystemSet anchor for `update_terminal_material`.
 ///
@@ -230,7 +231,7 @@ impl TerminalParams {
     }
 }
 
-/// One GPU-side cell — 16 bytes, indexed `row * cols + col` in the storage buffer.
+/// One GPU-side cell — 20 bytes, indexed `row * cols + col` in the storage buffer.
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct GpuCell {
     /// Index into the glyph LUT, or `u32::MAX` for an empty cell (space / blank).
@@ -241,6 +242,9 @@ struct GpuCell {
     bg_packed: u32,
     /// Mirror of `ozmux_terminal_protocol::style::*` bit flags.
     style_flags: u32,
+    /// OSC 8 wire id of this cell, or `0` for "no link". Safe because
+    /// `HyperlinkInterner` reserves `HyperlinkId(0)`.
+    hyperlink_id: u32,
 }
 
 /// Set on the right-half cell of a width=2 (CJK / wide) grapheme so the
@@ -266,6 +270,7 @@ impl Default for GpuCell {
             fg_packed: 0,
             bg_packed: 0,
             style_flags: 0,
+            hyperlink_id: 0,
         }
     }
 }
@@ -490,6 +495,7 @@ fn rebuild_cells(
                     fg_packed: fg,
                     bg_packed: bg,
                     style_flags,
+                    hyperlink_id: 0,
                 };
             }
 
@@ -510,6 +516,7 @@ fn rebuild_cells(
                         fg_packed: fg,
                         bg_packed: bg,
                         style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
+                        hyperlink_id: 0,
                     };
                 }
             }
@@ -585,4 +592,26 @@ fn resolve_glyph_index(
     state.cpu_glyphs.push(GpuGlyph::new(rect));
     state.glyph_index_map.insert(key, idx);
     idx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn gpu_cell_is_twenty_bytes() {
+        assert_eq!(size_of::<GpuCell>(), 20);
+    }
+
+    #[test]
+    fn gpu_cell_default_has_zero_hyperlink_id() {
+        let cell = GpuCell::default();
+        assert_eq!(cell.hyperlink_id, 0);
+    }
+
+    #[test]
+    fn schema_version_bumped_to_two() {
+        assert_eq!(SCHEMA_VERSION_TIER1, 2);
+    }
 }
