@@ -379,8 +379,8 @@ mod tests {
 
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
-    use crate::multiplexer::{Multiplexer, OzmuxMultiplexerPlugin};
     use crate::ui::OzmuxUiPlugin;
+    use ozmux_multiplexer::MultiplexerPlugin;
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
@@ -413,7 +413,7 @@ mod tests {
                 },
                 phys_font_size: 12,
             })
-            .add_plugins(OzmuxMultiplexerPlugin)
+            .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
             .add_plugins(OzmuxUiPlugin)
@@ -432,6 +432,9 @@ mod tests {
 
     #[test]
     fn chip_survives_structural_rebuild() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
+
         let (mut app, _guard) = make_ui_test_app();
         app.update();
         app.update();
@@ -448,14 +451,13 @@ mod tests {
             (child_of.parent(), chip)
         };
 
-        // Rebuild structure by renaming the attached session.
-        {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            mux.rename_session(&sid, "renamed".into()).expect("rename");
-            mux.bump_epoch(&sid);
-        }
+        // Rebuild structure by renaming the attached session via ECS-native API.
+        app.world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands, sessions: Query<Entity, With<SessionMarker>>| {
+                let session = sessions.iter().next().expect("session");
+                mux.rename_session(session, "renamed".into()).unwrap();
+            })
+            .unwrap();
         app.update();
 
         // Chip Entity must still exist and still be a child of the same host.
@@ -476,85 +478,68 @@ mod tests {
 
     #[test]
     fn inactive_host_parent_is_walker_skipped_session_entity() {
-        use crate::multiplexer::SessionEntityId;
-        use crate::ui::registry::ActivityEntityRegistry;
-        use ozmux_multiplexer::{Activity, ActivityId};
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{ActivityKind, AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_ui_test_app();
         app.update();
         app.update();
         app.update();
 
-        // Add a second Activity to the bootstrap pane so we have two
-        // hosts to toggle focus between.
-        let (bootstrap_id, second_id) = {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            let (active_pane, bootstrap_aid) = {
-                let session = mux.sessions.get(&sid).expect("session");
-                let active_pane = session.active_pane.clone();
-                let pane = session.pane(&active_pane).expect("pane");
-                (active_pane, pane.active_activity.clone())
-            };
-            let second_aid = ActivityId::new();
-            mux.with_session(&sid, |s| {
-                s.pane_mut(&active_pane)
-                    .expect("pane_mut")
-                    .add_activity(Activity::terminal(second_aid.clone()))
+        let (session, pane, first_activity) = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next()?;
+                    let pane = mux.sessions_active_pane(session)?;
+                    let activity = mux.panes_active_activity(pane)?;
+                    Some((session, pane, activity))
+                },
+            )
+            .unwrap()
+            .expect("bootstrap session + pane + activity");
+
+        let first_host = app
+            .world()
+            .resource::<crate::ui::registry::ActivityEntityRegistry>()
+            .get(first_activity)
+            .expect("first activity host registered");
+
+        let second_activity = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(pane, ActivityKind::Terminal)
             })
-            .expect("with_session")
-            .expect("add_activity");
-            mux.bump_epoch(&sid);
-            (bootstrap_aid, second_aid)
-        };
-        app.update();
+            .unwrap();
+        app.world_mut().flush();
+
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_activity(pane, second_activity).unwrap();
+            })
+            .unwrap();
+
+        app.world_mut()
+            .entity_mut(session)
+            .get_mut::<LayoutCells>()
+            .expect("LayoutCells")
+            .set_changed();
         app.update();
 
-        // Switch focus to the second activity. The bootstrap host now
-        // lives under the owning Session entity (non-Node => walker-skipped).
-        {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            let active_pane = mux.sessions.get(&sid).expect("session").active_pane.clone();
-            let _ = mux
-                .with_session(&sid, |s| {
-                    s.pane_mut(&active_pane)
-                        .expect("pane_mut")
-                        .set_active_activity(&second_id)
-                })
-                .expect("with_session")
-                .expect("set_active_activity");
-            mux.bump_epoch(&sid);
-        }
-        app.update();
-
-        // Look up the bootstrap host Entity via the registry (which owns
-        // the `ActivityId → Entity` mapping); the `ActivityHostNode`
-        // marker no longer carries the id.
-        let bootstrap_host = app
+        let first_host_parent = app
             .world()
-            .resource::<ActivityEntityRegistry>()
-            .get(&bootstrap_id)
-            .expect("bootstrap host present");
-
-        // The bootstrap host's parent must be the owning Session entity
-        // (carries `SessionEntityId`, no `Node`). The chip is the host's
-        // child, so the entire chip subtree is walker-skipped — `Display::None`
-        // workaround no longer needed.
-        let host_parent = app
-            .world()
-            .get::<ChildOf>(bootstrap_host)
-            .expect("host parent")
-            .parent();
-        assert!(
-            app.world().get::<SessionEntityId>(host_parent).is_some(),
-            "inactive host's parent must be the owning Session entity",
+            .get::<ChildOf>(first_host)
+            .map(|c| c.parent());
+        assert_eq!(
+            first_host_parent,
+            Some(session),
+            "inactive activity host must be parked under the session entity (no Node, walker-skipped)"
         );
+
         assert!(
-            app.world().get::<Node>(host_parent).is_none(),
-            "Session entity must not carry Node (walker-skip invariant)",
+            app.world().get::<Node>(session).is_none(),
+            "session entity must not carry a Node component (UI walker skip requires it)"
         );
     }
 }

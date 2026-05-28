@@ -1,46 +1,35 @@
-//! Multiplexer Bevy Resource + per-session Component re-exports, plus a
-//! Plugin that registers the Resource on app startup.
+//! GUI-side multiplexer helpers: action dispatcher and layout-change
+//! logging. The core ECS-native domain model lives in the
+//! `ozmux_multiplexer` crate and is imported directly by consumers.
 
 use bevy::prelude::*;
-use ozmux_multiplexer::MultiplexerService;
 
-/// `Action` → `MultiplexerService` mutation helpers consumed by the shortcut dispatcher.
 pub mod commands;
-/// Layout-change logging system + `render_tree` formatter for the `Multiplexer` Resource.
 pub mod log;
 
-pub use crate::session_entity::{AttachedSession, SessionEntityId, SessionUiSubtree};
+/// Monotonic counter for sessions created by the GUI (bootstrap +
+/// `Action::NewSession` via CMD+R). Each call to `next` returns the
+/// next index (1-based, never reused even after a session is closed).
+/// The value also seeds the `"session{n}"` auto-name and the
+/// `SessionCreatedAt` Component used for stable display order.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct SessionNameCounter(u32);
 
-/// Bevy Resource wrapping the in-memory `MultiplexerService`. `Deref` /
-/// `DerefMut` let call sites invoke `MultiplexerService` methods directly.
-#[derive(Resource, Default, Deref, DerefMut)]
-pub struct Multiplexer(pub MultiplexerService);
-
-/// Bevy Plugin that inserts the [`Multiplexer`] Resource at app build time.
-pub struct OzmuxMultiplexerPlugin;
-
-impl Plugin for OzmuxMultiplexerPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<Multiplexer>();
+impl SessionNameCounter {
+    /// Mint the next creation-order index. Saturating addition prevents
+    /// an extremely unlikely u32 overflow from panicking; the resulting
+    /// collision would be cosmetic and only after ~4 billion sessions.
+    pub(crate) fn next(&mut self) -> u32 {
+        self.0 = self.0.saturating_add(1);
+        self.0
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plugin_inserts_multiplexer_resource() {
-        let mut app = App::new();
-        app.add_plugins(OzmuxMultiplexerPlugin);
-        assert!(app.world().get_resource::<Multiplexer>().is_some());
-    }
-
-    #[test]
-    fn multiplexer_derefs_to_multiplexer_service() {
-        let mut mux = Multiplexer::default();
-        assert_eq!(mux.sessions.len(), 0);
-        let (_sid, _pid, _aid) = mux.create_session(Some("test".into()));
-        assert_eq!(mux.sessions.len(), 1);
-    }
-}
+/// Per-Session monotonic creation-order index, set at spawn time from
+/// `SessionNameCounter`. Used as the stable sort key for any UI that
+/// lists sessions in creation order (status bar, focus cycling, ...).
+/// `Entity` ordering is unreliable for this purpose because Bevy's
+/// deferred command queues do not guarantee strictly monotonic indices
+/// across multiple `Commands` instances.
+#[derive(Component, Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) struct SessionCreatedAt(pub(crate) u32);

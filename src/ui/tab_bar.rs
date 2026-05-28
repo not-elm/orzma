@@ -8,7 +8,6 @@ use crate::ui::palette;
 use bevy::color::Color;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, UiRect, Val};
-use ozmux_multiplexer::{Activity, Pane};
 
 /// Color triple for one tab.
 struct TabColors {
@@ -44,12 +43,25 @@ fn tab_colors(is_active: bool, is_active_pane: bool) -> TabColors {
     }
 }
 
+/// A single tab's display data, derived from ECS components by the caller.
+pub(crate) struct TabEntry {
+    /// Activity entity. Not read by the tab bar builder today, but load-bearing
+    /// for future tab interactivity (click-to-switch) and equality checks.
+    #[expect(dead_code, reason = "reserved for future tab interactivity; do not remove")]
+    pub entity: Entity,
+    /// Display name of the activity.
+    pub name: String,
+    /// Whether this activity is the pane's `ActiveActivity`.
+    pub is_active: bool,
+}
+
 /// Spawn the per-pane tab bar (one tab per Activity) as a child of `parent`.
-/// Every spawned Entity carries `StructuralNode`.
+/// Every spawned Entity carries `StructuralNode`. `is_active_pane` drives
+/// the indicator accent (accent vs border).
 pub fn build_pane_tab_bar(
     commands: &mut Commands,
     parent: Entity,
-    pane: &Pane,
+    tabs: &[TabEntry],
     is_active_pane: bool,
     ui_font: &Handle<Font>,
 ) {
@@ -68,23 +80,21 @@ pub fn build_pane_tab_bar(
         ))
         .id();
 
-    for activity in &pane.activities {
-        let is_active = activity.id == pane.active_activity;
-        build_tab(commands, bar, activity, is_active, is_active_pane, ui_font);
+    for tab in tabs {
+        build_tab(commands, bar, tab, is_active_pane, ui_font);
     }
 }
 
 fn build_tab(
     commands: &mut Commands,
     parent: Entity,
-    activity: &Activity,
-    is_active: bool,
+    tab: &TabEntry,
     is_active_pane: bool,
     ui_font: &Handle<Font>,
 ) {
-    let colors = tab_colors(is_active, is_active_pane);
+    let colors = tab_colors(tab.is_active, is_active_pane);
 
-    let tab = commands
+    let tab_entity = commands
         .spawn((
             Name::new("Tab"),
             Node {
@@ -118,7 +128,7 @@ fn build_tab(
         .id();
 
     commands.spawn((
-        Text::new(activity.name.clone()),
+        Text::new(tab.name.clone()),
         TextColor(colors.text),
         TextFont {
             font: ui_font.clone(),
@@ -126,7 +136,7 @@ fn build_tab(
             ..default()
         },
         StructuralNode,
-        ChildOf(tab),
+        ChildOf(tab_entity),
     ));
 }
 

@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 ozmux_macros = { path = "../macros" }
-ozmux_multiplexer = { path = "../multiplexer" }
+ozmux_multiplexer = { package = "ozmux_multiplexer_legacy", path = "../multiplexer" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [

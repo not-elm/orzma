@@ -8,7 +8,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-ozmux_multiplexer = { path = "../multiplexer" }
+ozmux_multiplexer = { package = "ozmux_multiplexer_legacy", path = "../multiplexer" }
 ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
 ozmux_cef_host = { path = "../cef_host" }
 url = "2"

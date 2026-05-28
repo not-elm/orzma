@@ -11,7 +11,7 @@ publish.workspace = true
 ozmux_browser = { path = "../browser" }
 ozmux_browser_cef_protocol = { path = "../browser_cef_protocol" }
 bytes = { workspace = true }
-ozmux_multiplexer = { path = "../multiplexer" }
+ozmux_multiplexer = { package = "ozmux_multiplexer_legacy", path = "../multiplexer" }
 ozmux_terminal = { path = "../terminal" }
 ozmux_extension = { path = "../extension" }
 ozmux_configs = { path = "../configs" }

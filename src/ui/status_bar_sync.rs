@@ -1,13 +1,14 @@
-//! Standalone status-bar rebuild system. Rebuilds when the LIST of session
-//! entities changes (Added/RemovedComponents on SessionEntityId) or the
+//! Standalone status-bar rebuild system. Rebuilds when the set of Session
+//! entities changes (Added/RemovedComponents on SessionMarker) or the
 //! AttachedSession marker moves. Does NOT depend on per-session epoch
 //! bumps — content changes (split / activity-add) do not redraw the
 //! status bar.
 
 use crate::font::TerminalUiFont;
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
+use crate::multiplexer::SessionCreatedAt;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
+use ozmux_multiplexer::{AttachedSession, SessionMarker};
 
 /// Marker on the currently-active status bar root Node. `build_status_bar`
 /// inserts this on the bar entity it spawns; the standalone rebuild
@@ -18,17 +19,19 @@ pub struct StatusBarRoot;
 
 /// Despawns the existing `StatusBarRoot` and rebuilds via
 /// `crate::ui::status_bar::build_status_bar` when:
-/// - any `SessionEntityId` was added or removed this frame, OR
+/// - any `SessionMarker` was added or removed this frame, OR
 /// - any `AttachedSession` marker was added or removed this frame.
 pub fn rebuild_status_bar_on_session_set_change(
     mut commands: Commands,
     mut attached_removed: RemovedComponents<AttachedSession>,
-    mut sessions_removed: RemovedComponents<SessionEntityId>,
-    mux: Res<Multiplexer>,
-    attached_q: Query<&SessionEntityId, With<AttachedSession>>,
+    mut sessions_removed: RemovedComponents<SessionMarker>,
+    sessions_q: Query<
+        (Entity, &Name, Has<AttachedSession>, Option<&SessionCreatedAt>),
+        With<SessionMarker>,
+    >,
     ui_root_q: Query<Entity, With<UiRoot>>,
     status_bar_q: Query<Entity, With<StatusBarRoot>>,
-    sessions_added: Query<(), Added<SessionEntityId>>,
+    sessions_added: Query<(), Added<SessionMarker>>,
     attached_added: Query<(), Added<AttachedSession>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
@@ -44,18 +47,34 @@ pub fn rebuild_status_bar_on_session_set_change(
     let Ok(ui_root) = ui_root_q.single() else {
         return;
     };
-    let attached_sid = attached_q.single().ok().copied().map(|s| s.0);
 
     for e in status_bar_q.iter() {
         commands.entity(e).try_despawn();
     }
 
+    // Sort by `SessionCreatedAt` (monotonic from `SessionNameCounter`)
+    // rather than by `Entity`: Bevy's entity allocator does not guarantee
+    // strictly monotonic indices across multiple deferred command queues,
+    // so an Entity-based sort would not match session creation order.
+    // Externally-spawned sessions without `SessionCreatedAt` sort last via
+    // the `u32::MAX` fallback.
+    let mut sessions: Vec<(Entity, String, bool, u32)> = sessions_q
+        .iter()
+        .map(|(e, name, attached, created)| {
+            (
+                e,
+                name.as_str().to_string(),
+                attached,
+                created.map(|c| c.0).unwrap_or(u32::MAX),
+            )
+        })
+        .collect();
+    sessions.sort_by_key(|(_, _, _, created_at)| *created_at);
+    let sessions: Vec<(Entity, String, bool)> = sessions
+        .into_iter()
+        .map(|(e, name, attached, _)| (e, name, attached))
+        .collect();
+
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
-    crate::ui::status_bar::build_status_bar(
-        &mut commands,
-        ui_root,
-        &mux.sessions,
-        attached_sid,
-        &ui_font_handle,
-    );
+    crate::ui::status_bar::build_status_bar(&mut commands, ui_root, &sessions, &ui_font_handle);
 }

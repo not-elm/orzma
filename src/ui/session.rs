@@ -3,17 +3,16 @@
 //! Session entity is non-`Node`, so a parked subtree is skipped by Bevy's
 //! UI walker — no layout, no `ComputedNode` updates, no resize-pass work.
 
-use std::collections::HashSet;
-
 use crate::font::TerminalUiFont;
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId, SessionUiSubtree};
 use crate::system_set::OzmuxSystems;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ActivityHostNode, SessionUiRoot, StructuralNode};
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use ozmux_multiplexer::{ActivityId, Cell, SessionId};
+use ozmux_multiplexer::{
+    ActiveActivity, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells, PaneMarker,
+    SessionMarker, SessionUiSubtree,
+};
 
 pub struct OzmuxSessionUiPlugin;
 
@@ -21,9 +20,7 @@ impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            rebuild_session_ui
-                .run_if(resource_exists_and_changed::<Multiplexer>)
-                .in_set(OzmuxSystems::SessionUi),
+            rebuild_session_ui.in_set(OzmuxSystems::SessionUi),
         )
         .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
@@ -39,6 +36,17 @@ fn sync_active_session(
     sessions: Query<(Entity, &SessionUiSubtree), Without<AttachedSession>>,
     session_ui_root: Query<Entity, With<SessionUiRoot>>,
 ) {
+    let added_count = attached_session.iter().count();
+    if added_count != 1 {
+        if added_count > 1 {
+            tracing::debug!(
+                target: "ozmux_gui::ui",
+                added_count,
+                "sync_active_session: Added<AttachedSession> matched multiple entities — skipping reparent (would break .single())"
+            );
+        }
+        return;
+    }
     let Ok(newly_attached_subtree) = attached_session.single() else {
         return;
     };
@@ -46,93 +54,75 @@ fn sync_active_session(
         return;
     };
 
+    tracing::debug!(
+        target: "ozmux_gui::ui",
+        new_subtree = ?newly_attached_subtree.0,
+        ?session_ui_root,
+        "sync_active_session: reparenting newly-attached subtree under SessionUiRoot"
+    );
     commands
         .entity(newly_attached_subtree.0)
         .insert(ChildOf(session_ui_root));
 
     for (session_entity, tree) in sessions.iter() {
+        tracing::debug!(
+            target: "ozmux_gui::ui",
+            ?session_entity,
+            parked_subtree = ?tree.0,
+            "sync_active_session: parking inactive session's subtree under its session entity"
+        );
         commands.entity(tree.0).insert(ChildOf(session_entity));
     }
 }
 
-/// Rebuilds the UI subtree of every Session whose epoch advanced since the
-/// last run. Skips sessions whose epoch is unchanged. The rebuild walks
-/// `session.cells` and replaces every `StructuralNode` descendant of the
-/// session's `SessionUiSubtree` root — Activity hosts are preserved via
-/// `ActivityEntityRegistry` and re-parented.
+/// Rebuilds the UI subtree of every Session whose `LayoutCells` changed
+/// since the last run. Native Bevy `Changed<LayoutCells>` replaces the
+/// old epoch-comparison gate. The rebuild walks `layout.cells` and
+/// replaces every `StructuralNode` descendant of the session's
+/// `SessionUiSubtree` root — Activity hosts are preserved via
+/// `ActivityEntityRegistry` and re-parented. Pruning of stale registry
+/// entries is handled by `prune_registry_on_activity_removal` driven by
+/// `RemovedComponents<ActivityMarker>`.
 fn rebuild_session_ui(
     mut commands: Commands,
-    mut last_epochs: Local<HashMap<SessionId, u64>>,
     mut registry: ResMut<ActivityEntityRegistry>,
-    mux: Res<Multiplexer>,
-    sessions: Query<(
-        Entity,
-        &SessionEntityId,
-        &SessionUiSubtree,
-        Has<AttachedSession>,
-    )>,
+    sessions: Query<
+        (Entity, &LayoutCells, &SessionUiSubtree, Has<AttachedSession>),
+        (With<SessionMarker>, Changed<LayoutCells>),
+    >,
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     activity_hosts: Query<(Entity, &ActivityHostNode)>,
     children: Query<&Children>,
+    activity_q: Query<(&ActivityKind, &Name), With<ActivityMarker>>,
+    active_activity_q: Query<&ActiveActivity, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
-    let live_activity_ids: HashSet<ActivityId> = mux
-        .sessions
-        .values()
-        .flat_map(|s| s.pane_ids().filter_map(|pid| s.pane(pid).ok()))
-        .flat_map(|p| p.activity_ids().cloned())
-        .collect();
 
-    for (session_entity, session_eid, subtree, _is_attached) in sessions.iter() {
-        let sid = session_eid.0;
-        let cur_epoch = mux.epoch_of(&sid);
-        let prev = last_epochs.get(&sid).copied().unwrap_or(0);
-        if cur_epoch <= prev {
-            continue;
-        }
-
-        let Some(session) = mux.sessions.get(&sid) else {
-            continue;
-        };
-
+    for (session_entity, layout, subtree, _is_attached) in sessions.iter() {
         descend_and_detach_hosts(&mut commands, subtree.0, &children, &activity_hosts);
-
         descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
 
-        match session.cells.cell(&session.root_cell) {
+        let root_cell_id = layout.root;
+        match layout.cells.cell(&root_cell_id) {
             Ok(Cell::Root(root)) => {
                 crate::ui::layout::build_cell_recursive(
                     &mut commands,
                     subtree.0,
-                    session,
+                    &layout.cells,
                     &root.child,
                     &mut registry,
                     session_entity,
                     &ui_font_handle,
+                    &children,
+                    &activity_q,
+                    &active_activity_q,
                 );
             }
-            Ok(_) => {
-                tracing::warn!(
-                    target: "ozmux_gui::ui",
-                    session = ?sid,
-                    "session.root_cell is not Cell::Root",
-                );
-            }
-            Err(err) => {
-                tracing::warn!(
-                    target: "ozmux_gui::ui",
-                    session = ?sid,
-                    ?err,
-                    "session.root_cell missing",
-                );
-            }
+            Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
+            Err(err) => tracing::warn!(target: "ozmux_gui::ui", ?err, "root_cell missing"),
         }
-
-        last_epochs.insert(sid, cur_epoch);
     }
-
-    registry.prune(&mut commands, &live_activity_ids);
 }
 
 fn descend_and_detach_hosts(
@@ -183,7 +173,6 @@ mod tests {
     use super::*;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
-    use crate::multiplexer::OzmuxMultiplexerPlugin;
     use crate::ui::OzmuxUiPlugin;
     use crate::ui::SessionUiRoot;
     use bevy::asset::AssetPlugin;
@@ -192,7 +181,7 @@ mod tests {
     use bevy::window::{PrimaryWindow, WindowResolution};
     use bevy_terminal_renderer::material::TerminalUiMaterial;
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-    use ozmux_multiplexer::SessionId;
+    use ozmux_multiplexer::{MultiplexerPlugin, SessionMarker};
 
     fn build_app() -> App {
         let mut app = App::new();
@@ -219,7 +208,7 @@ mod tests {
         let session = app
             .world_mut()
             .spawn((
-                SessionEntityId(SessionId(0)),
+                SessionMarker,
                 AttachedSession,
                 SessionUiSubtree(subtree),
             ))
@@ -252,7 +241,7 @@ mod tests {
         let session_a = app
             .world_mut()
             .spawn((
-                SessionEntityId(SessionId(0)),
+                SessionMarker,
                 AttachedSession,
                 SessionUiSubtree(subtree_a),
             ))
@@ -264,7 +253,7 @@ mod tests {
         let subtree_b = app.world_mut().spawn(Node::default()).id();
         let session_b = app
             .world_mut()
-            .spawn((SessionEntityId(SessionId(1)), SessionUiSubtree(subtree_b)))
+            .spawn((SessionMarker, SessionUiSubtree(subtree_b)))
             .id();
         app.world_mut()
             .entity_mut(subtree_b)
@@ -329,7 +318,7 @@ mod tests {
                 },
                 phys_font_size: 12,
             })
-            .add_plugins(OzmuxMultiplexerPlugin)
+            .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
             .add_plugins(OzmuxUiPlugin);
@@ -345,72 +334,62 @@ mod tests {
 
     #[test]
     fn inactive_activity_within_active_session_parks_under_session_entity() {
-        use ozmux_multiplexer::Activity;
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
         app.update();
 
-        let (bootstrap_aid, second_aid, session_entity, _sid) = {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            let (active_pane, bootstrap_aid) = {
-                let session = mux.sessions.get(&sid).expect("session");
-                let pane = session.pane(&session.active_pane).expect("pane");
-                (session.active_pane.clone(), pane.active_activity.clone())
-            };
-            let second = ActivityId::new();
-            mux.with_session(&sid, |s| {
-                s.pane_mut(&active_pane)
-                    .expect("pane_mut")
-                    .add_activity(Activity::terminal(second.clone()))
+        let (session, pane, first_activity) = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next()?;
+                    let pane = mux.sessions_active_pane(session)?;
+                    let activity = mux.panes_active_activity(pane)?;
+                    Some((session, pane, activity))
+                },
+            )
+            .unwrap()
+            .expect("bootstrap session + pane + first_activity");
+
+        let first_host = app
+            .world()
+            .resource::<crate::ui::registry::ActivityEntityRegistry>()
+            .get(first_activity)
+            .expect("first activity must have a host after initial rebuild");
+
+        let second_activity = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(pane, ActivityKind::Terminal)
             })
-            .expect("with_session")
-            .expect("add_activity");
-            mux.bump_epoch(&sid);
+            .unwrap();
+        app.world_mut().flush();
 
-            let mut q = world.query::<(Entity, &SessionEntityId)>();
-            let (entity, _) = q.iter(world).next().expect("session entity");
-            (bootstrap_aid, second, entity, sid)
-        };
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_activity(pane, second_activity).unwrap();
+            })
+            .unwrap();
+
+        app.world_mut()
+            .entity_mut(session)
+            .get_mut::<LayoutCells>()
+            .expect("LayoutCells")
+            .set_changed();
         app.update();
 
-        {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            let active_pane = mux.sessions.get(&sid).expect("session").active_pane.clone();
-            let _outcome = mux
-                .with_session(&sid, |s| {
-                    s.pane_mut(&active_pane)
-                        .expect("pane_mut")
-                        .set_active_activity(&second_aid)
-                })
-                .expect("with_session")
-                .expect("set_active_activity");
-            mux.bump_epoch(&sid);
-        }
-        app.update();
-
-        let registry = app
+        let first_host_parent = app
             .world()
-            .resource::<crate::ui::registry::ActivityEntityRegistry>();
-        let bootstrap_host = registry
-            .get(&bootstrap_aid)
-            .expect("bootstrap host in registry");
-        let parent = app
-            .world()
-            .get::<ChildOf>(bootstrap_host)
-            .expect("inactive host must have parent");
+            .get::<ChildOf>(first_host)
+            .map(|c| c.parent());
         assert_eq!(
-            parent.parent(),
-            session_entity,
-            "inactive Activity host within active session must be ChildOf the Session entity (non-Node parent => walker-skipped)",
-        );
-        assert!(
-            app.world().get::<bevy::ui::Node>(session_entity).is_none(),
-            "Session entity must not carry Node (load-bearing for walker-skip)",
+            first_host_parent,
+            Some(session),
+            "inactive activity host must be parked under the Session entity (non-Node, walker-skipped)"
         );
     }
 
@@ -420,40 +399,27 @@ mod tests {
         app.update();
         app.update();
 
-        let inactive_sid = {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let (sid, _, _) = mux.create_session(Some("inactive".into()));
-            mux.bump_epoch(&sid);
-            sid
-        };
-        {
+        // Create a second session entity with a SessionUiSubtree but no AttachedSession.
+        let inactive_session = {
             let world = app.world_mut();
             let subtree = world.spawn(Node::default()).id();
             let session_entity = world
                 .spawn((
-                    SessionEntityId(inactive_sid),
+                    SessionMarker,
                     SessionUiSubtree(subtree),
                     Name::new("inactive"),
                 ))
                 .id();
             world.entity_mut(subtree).insert(ChildOf(session_entity));
-        }
+            subtree
+        };
         app.update();
         app.update();
-
-        let inactive_subtree = {
-            let world = app.world_mut();
-            let mut q = world.query::<(&SessionEntityId, &SessionUiSubtree)>();
-            q.iter(world)
-                .find_map(|(sid, sub)| (sid.0 == inactive_sid).then_some(sub.0))
-        }
-        .expect("inactive subtree present");
 
         for _ in 0..5 {
             app.update();
         }
-        let computed = app.world().get::<bevy::ui::ComputedNode>(inactive_subtree);
+        let computed = app.world().get::<bevy::ui::ComputedNode>(inactive_session);
         match computed {
             None => {
                 // Walker skipped — ideal.
@@ -474,21 +440,20 @@ mod tests {
         app.update();
         app.update();
 
-        let (sid_b, subtree_b) = {
+        // Spawn a second session (session B) with a subtree, not attached.
+        // Session B has no LayoutCells, so Changed<LayoutCells> never fires for it.
+        let (_session_b, subtree_b) = {
             let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let (sid, _, _) = mux.create_session(Some("b".into()));
-            mux.bump_epoch(&sid);
             let subtree = world.spawn(Node::default()).id();
             let entity = world
                 .spawn((
-                    SessionEntityId(sid),
+                    SessionMarker,
                     SessionUiSubtree(subtree),
                     Name::new("b"),
                 ))
                 .id();
             world.entity_mut(subtree).insert(ChildOf(entity));
-            (sid, subtree)
+            (entity, subtree)
         };
         app.update();
         app.update();
@@ -499,17 +464,20 @@ mod tests {
             .map(|c| c.iter().collect())
             .unwrap_or_default();
 
+        // Mark session A's LayoutCells as changed to trigger a rebuild on A only.
+        // Session B has no LayoutCells, so the Changed<LayoutCells> filter
+        // will not include it.
         {
             let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid_a = *mux
-                .sessions
-                .keys()
-                .find(|s| **s != sid_b)
-                .expect("session A (distinct from B)");
-            mux.rename_session(&sid_a, "renamed".into())
-                .expect("rename");
-            mux.bump_epoch(&sid_a);
+            let session_a = world
+                .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+                .single(world)
+                .expect("attached session A");
+            world
+                .entity_mut(session_a)
+                .get_mut::<LayoutCells>()
+                .expect("LayoutCells on session A")
+                .set_changed();
         }
         app.update();
 
@@ -520,19 +488,12 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(
             children_before, children_after,
-            "Session B's subtree children must not change when only Session A's epoch bumped",
+            "Session B's subtree children must not change when only Session A's LayoutCells changed",
         );
     }
 
     #[test]
     fn session_subtree_root_has_explicit_sizing() {
-        // Regression guard: the SessionUiSubtree root must carry explicit
-        // `width: Percent(100), height: Percent(100)`. Without this,
-        // `Node::default()` (`width: Auto, height: Auto, flex_grow: 0.0`)
-        // makes the subtree collapse to zero size when attached to
-        // SessionUiRoot, so taffy lays out every descendant (pane frames,
-        // activity slots, terminal hosts) as zero-sized and
-        // `resize_terminals_to_node` clamps the PTY grid to 1x1.
         let (mut app, _guard) = make_test_app_v2();
         app.update();
         app.update();
@@ -556,6 +517,102 @@ mod tests {
             node.height,
             bevy::ui::Val::Percent(100.0),
             "subtree root must set height: Percent(100) so it fills SessionUiRoot",
+        );
+    }
+
+    #[test]
+    fn new_session_action_reparents_new_subtree_to_session_ui_root() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::MultiplexerCommands;
+
+        let (mut app, _guard) = make_test_app_v2();
+        // Two ticks for Startup + first Update so bootstrap settles and
+        // sync_active_session runs at least once in PostUpdate.
+        app.update();
+        app.update();
+
+        let session_ui_root = app
+            .world_mut()
+            .query_filtered::<Entity, With<SessionUiRoot>>()
+            .single(app.world())
+            .expect("SessionUiRoot");
+        let bootstrap_session = app
+            .world_mut()
+            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .single(app.world())
+            .expect("exactly one bootstrap session");
+        let bootstrap_subtree = app
+            .world()
+            .get::<SessionUiSubtree>(bootstrap_session)
+            .expect("bootstrap session has SessionUiSubtree pointer")
+            .0;
+        assert_eq!(
+            app.world()
+                .get::<ChildOf>(bootstrap_subtree)
+                .expect("bootstrap subtree has ChildOf")
+                .parent(),
+            session_ui_root,
+            "bootstrap subtree must start under SessionUiRoot",
+        );
+
+        app.world_mut()
+            .init_resource::<crate::multiplexer::SessionNameCounter>();
+        app.world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 mut commands: Commands,
+                 mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
+                 attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    crate::input::dispatch_new_session(
+                        &mut commands,
+                        &mut mux,
+                        &mut counter,
+                        &attached_q,
+                    );
+                },
+            )
+            .unwrap();
+        // One tick for commands to flush + rebuild_session_ui to run, one for
+        // PostUpdate sync_active_session to react.
+        app.update();
+        app.update();
+
+        let new_session = app
+            .world_mut()
+            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .single(app.world())
+            .expect("exactly one attached session after CMD+R");
+        assert_ne!(
+            new_session, bootstrap_session,
+            "new session entity must differ from bootstrap",
+        );
+
+        let new_subtree = app
+            .world()
+            .get::<SessionUiSubtree>(new_session)
+            .expect("new session has SessionUiSubtree pointer")
+            .0;
+        assert_eq!(
+            app.world()
+                .get::<ChildOf>(new_subtree)
+                .expect("new subtree has ChildOf")
+                .parent(),
+            session_ui_root,
+            "new session's subtree must be reparented to SessionUiRoot",
+        );
+
+        let old_subtree = app
+            .world()
+            .get::<SessionUiSubtree>(bootstrap_session)
+            .expect("old session retains SessionUiSubtree pointer")
+            .0;
+        assert_eq!(
+            app.world()
+                .get::<ChildOf>(old_subtree)
+                .expect("old subtree has ChildOf")
+                .parent(),
+            bootstrap_session,
+            "old session's subtree must be parked under its session entity",
         );
     }
 }

@@ -9,8 +9,8 @@
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
 use crate::input::resolve_focused_terminal;
-use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId};
 use crate::ui::registry::ActivityEntityRegistry;
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
 use bevy::app::{App, Plugin, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -178,8 +178,8 @@ fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
 /// `ImeState`.
 pub(crate) fn position_ime_overlay(
     state: Res<ImeState>,
-    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
-    mux: Res<Multiplexer>,
+    mux: MultiplexerCommands,
+    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
     anchor_q: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -223,7 +223,7 @@ pub(crate) fn position_ime_overlay(
     let Some(comp) = state.composition() else {
         return;
     };
-    let Some(entity) = resolve_focused_terminal(&attached_sid_q, &mux, &registry) else {
+    let Some(entity) = resolve_focused_terminal(&mux, &attached_q, &registry) else {
         return;
     };
     let Ok((node, ui_xform, grid)) = anchor_q.get(entity) else {
@@ -320,13 +320,13 @@ pub(crate) fn position_ime_overlay(
 /// "show cursors" rather than blanket-hide.
 fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
-    attached_sid_q: Query<&SessionEntityId, With<AttachedSession>>,
-    mux: Res<Multiplexer>,
+    mux: MultiplexerCommands,
+    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
     mut grids: Query<(Entity, &mut TerminalGrid)>,
 ) {
     let focused = if state.is_composing() {
-        resolve_focused_terminal(&attached_sid_q, &mux, &registry)
+        resolve_focused_terminal(&mux, &attached_q, &registry)
     } else {
         None
     };

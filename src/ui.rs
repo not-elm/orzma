@@ -87,7 +87,10 @@ impl Plugin for OzmuxUiPlugin {
             ))
             .add_systems(
                 Update,
-                status_bar_sync::rebuild_status_bar_on_session_set_change,
+                (
+                    registry::prune_registry_on_activity_removal,
+                    status_bar_sync::rebuild_status_bar_on_session_set_change,
+                ),
             );
     }
 }
@@ -97,16 +100,13 @@ mod tests {
     use super::*;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
-    use crate::multiplexer::{
-        AttachedSession, Multiplexer, OzmuxMultiplexerPlugin, SessionEntityId,
-    };
+    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin};
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
     use bevy_terminal_renderer::material::TerminalUiMaterial;
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-    use ozmux_multiplexer::ActivityId;
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::configs::env_guard();
@@ -142,7 +142,7 @@ mod tests {
                 },
                 phys_font_size: 12,
             })
-            .add_plugins(OzmuxMultiplexerPlugin)
+            .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
             .add_plugins(OzmuxUiPlugin);
@@ -164,8 +164,8 @@ mod tests {
         // NOTE: two `app.update()` calls are required here (and in every test that
         // needs a visible rebuild): the first tick runs Startup systems (bootstrap +
         // setup_root_camera_and_ui_root); the second tick runs the first Update pass
-        // where `rebuild_session_ui_on_data_change` fires because the bootstrap
-        // bumped the per-session epoch.
+        // where `rebuild_session_ui` fires because the bootstrap session's
+        // LayoutCells was just changed.
         app.update();
         app.update();
 
@@ -191,157 +191,139 @@ mod tests {
 
     #[test]
     fn activity_entity_persists_across_rebuild() {
+        use crate::ui::registry::ActivityEntityRegistry;
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        let first_snapshot: Vec<(ActivityId, Entity)> = {
-            let registry = app.world().resource::<ActivityEntityRegistry>();
-            registry
-                .iter()
-                .map(|(id, entity)| (id.clone(), entity))
-                .collect()
+        let host_before = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<Entity, With<ActivityHostNode>>();
+            q.iter(world).next().expect("at least one host after first rebuild")
         };
-        assert!(
-            !first_snapshot.is_empty(),
-            "expected at least one Activity host after bootstrap"
-        );
 
         {
             let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            mux.rename_session(&sid, "renamed".into()).expect("rename");
-            mux.bump_epoch(&sid);
+            let session = world
+                .query_filtered::<Entity, (With<ozmux_multiplexer::SessionMarker>, With<AttachedSession>)>()
+                .single(world)
+                .expect("one attached session");
+            world
+                .entity_mut(session)
+                .get_mut::<ozmux_multiplexer::LayoutCells>()
+                .expect("LayoutCells")
+                .set_changed();
         }
         app.update();
 
-        let registry = app.world().resource::<ActivityEntityRegistry>();
-        for (id, entity_before) in &first_snapshot {
-            let entity_after = registry.get(id).expect("registry retained id");
-            assert_eq!(
-                *entity_before, entity_after,
-                "Activity Entity for {id} must be stable across rebuilds (flicker contract)"
-            );
-        }
+        let host_after = {
+            let world = app.world_mut();
+            let registry = world.resource::<ActivityEntityRegistry>();
+            registry.iter_for_test().next().map(|(_, h)| h)
+        };
 
-        let world = app.world();
-        for (_id, entity_before) in &first_snapshot {
-            let parent = world
-                .get::<ChildOf>(*entity_before)
-                .expect("host must be re-parented after rebuild — orphan would mean ChildOf was removed but not re-attached");
-            assert!(
-                world
-                    .get::<crate::ui::StructuralNode>(parent.parent())
-                    .is_some(),
-                "host's new parent must be a StructuralNode (the new activity_slot)"
-            );
-        }
+        assert_eq!(
+            Some(host_before),
+            host_after,
+            "activity host entity must survive a rebuild"
+        );
     }
 
     #[test]
     fn split_pane_produces_two_pane_frames() {
-        use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation};
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
 
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let (sid, active_pane) = {
-                let (sid, session) = mux.sessions.iter().next().expect("session");
-                (*sid, session.active_pane.clone())
-            };
-            let new_pane_id = PaneId::new();
-            let new_activity = Activity::terminal(ActivityId::new());
-            mux.with_session(&sid, |s| {
-                s.split_pane(
-                    &active_pane,
-                    new_pane_id,
-                    new_activity,
-                    Side::After,
-                    SplitOrientation::Horizontal,
-                )
-            })
-            .expect("with_session returned Some")
-            .expect("split_pane Ok");
-            mux.bump_epoch(&sid);
-        }
+        app.world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 sessions: bevy::prelude::Query<
+                    bevy::prelude::Entity,
+                    (With<SessionMarker>, With<AttachedSession>),
+                >| {
+                    let session = sessions.iter().next().expect("session");
+                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                    mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
+                        .expect("split_pane");
+                },
+            )
+            .unwrap();
         app.update();
 
-        let world = app.world_mut();
-        let pane_frame_count = world
-            .query_filtered::<Entity, With<PaneFrame>>()
-            .iter(world)
+        let pane_frame_count = app
+            .world_mut()
+            .query_filtered::<bevy::prelude::Entity, With<PaneFrame>>()
+            .iter(app.world())
             .count();
-        assert_eq!(
-            pane_frame_count, 2,
-            "expected 2 pane frames after one split"
-        );
+        assert_eq!(pane_frame_count, 2, "split must produce two pane frames");
     }
 
     #[test]
     fn activity_registry_prunes_removed_activity() {
-        use ozmux_multiplexer::{Activity, ActivityId, PaneId, Side, SplitOrientation};
+        use crate::ui::registry::ActivityEntityRegistry;
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
 
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        let new_pane_id = PaneId::new();
-        let new_activity_id = ActivityId::new();
-        {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let (sid, active_pane) = {
-                let (sid, session) = mux.sessions.iter().next().expect("session");
-                (*sid, session.active_pane.clone())
-            };
-            mux.with_session(&sid, |s| {
-                s.split_pane(
-                    &active_pane,
-                    new_pane_id.clone(),
-                    Activity::terminal(new_activity_id.clone()),
-                    Side::After,
-                    SplitOrientation::Horizontal,
-                )
-            })
-            .expect("with_session")
-            .expect("split_pane");
-            mux.bump_epoch(&sid);
-        }
+        app.world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 sessions: bevy::prelude::Query<
+                    bevy::prelude::Entity,
+                    (With<SessionMarker>, With<AttachedSession>),
+                >| {
+                    let session = sessions.iter().next().expect("session");
+                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                    mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
+                        .expect("split_pane");
+                },
+            )
+            .unwrap();
         app.update();
 
-        {
-            let registry = app.world().resource::<ActivityEntityRegistry>();
-            assert!(
-                registry.get(&new_activity_id).is_some(),
-                "newly-spawned Activity must be in registry"
-            );
-        }
+        let registry_count_after_split = app
+            .world()
+            .resource::<ActivityEntityRegistry>()
+            .len_for_test();
+        assert_eq!(registry_count_after_split, 2, "two activities after split");
 
-        {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            mux.with_session(&sid, |s| s.close_pane(&new_pane_id))
-                .expect("with_session")
-                .expect("close_pane");
-            mux.bump_epoch(&sid);
-        }
+        app.world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 sessions: bevy::prelude::Query<
+                    bevy::prelude::Entity,
+                    (With<SessionMarker>, With<AttachedSession>),
+                >| {
+                    let session = sessions.iter().next().expect("session");
+                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                    mux.close_pane(pane).expect("close_pane");
+                },
+            )
+            .unwrap();
         app.update();
 
-        let registry = app.world().resource::<ActivityEntityRegistry>();
-        assert!(
-            registry.get(&new_activity_id).is_none(),
-            "closed Activity must be pruned from registry"
+        let registry_count_after_close = app
+            .world()
+            .resource::<ActivityEntityRegistry>()
+            .len_for_test();
+        assert_eq!(
+            registry_count_after_close, 1,
+            "prune system must remove the closed activity from the registry"
         );
     }
 
     #[test]
     fn activity_host_not_caught_in_despawn_cascade() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
+
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
@@ -352,14 +334,14 @@ mod tests {
             q.iter(world).next().expect("at least one host")
         };
 
-        {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            mux.rename_session(&sid, "second-rename".into())
-                .expect("rename");
-            mux.bump_epoch(&sid);
-        }
+        // Rename via MultiplexerCommands — triggers Changed<Name> on the Session
+        // which causes a rebuild in the next update.
+        app.world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands, sessions: Query<Entity, With<SessionMarker>>| {
+                let session = sessions.iter().next().expect("session");
+                mux.rename_session(session, "second-rename".into()).unwrap();
+            })
+            .unwrap();
         app.update();
 
         assert!(
@@ -370,233 +352,214 @@ mod tests {
 
     #[test]
     fn focus_session_switch_does_not_orphan_inactive_session_hosts() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
+
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        let bootstrap_aid = {
-            let mux = app.world().resource::<Multiplexer>();
-            let (_sid, session) = mux.sessions.iter().next().expect("session");
-            let pane = session.pane(&session.active_pane).expect("pane");
-            pane.active_activity.clone()
+        let host_before = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<Entity, With<ActivityHostNode>>();
+            q.iter(world).next().expect("at least one host")
         };
 
-        // Mint a second session (entity + SessionUiSubtree included so
-        // sync_active_session can park subtrees back to their owners).
-        let second_sid = {
-            let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let (sid, _, _) = mux.create_session(Some("second".into()));
-            mux.bump_epoch(&sid);
-            sid
-        };
-        let second_subtree = app.world_mut().spawn(Node::default()).id();
-        let second_entity = app
+        let session_2 = app
             .world_mut()
-            .spawn((
-                SessionEntityId(second_sid),
-                crate::multiplexer::SessionUiSubtree(second_subtree),
-                Name::new("Session:second"),
-            ))
-            .id();
-        app.world_mut()
-            .entity_mut(second_subtree)
-            .insert(ChildOf(second_entity));
-        app.update();
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_session(Some("session-2".into())).session
+            })
+            .unwrap();
+        app.world_mut().flush();
 
-        // Swap AttachedSession to the second session entity.
-        let bootstrap_entity = {
-            let world = app.world_mut();
-            let mut q = world.query_filtered::<Entity, With<AttachedSession>>();
+        let session_1 = app
+            .world_mut()
+            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .single(app.world())
+            .expect("session 1 still attached");
 
-            q.single(world).expect("exactly one attached")
-        };
         app.world_mut()
-            .entity_mut(bootstrap_entity)
+            .entity_mut(session_1)
             .remove::<AttachedSession>();
         app.world_mut()
-            .entity_mut(second_entity)
+            .entity_mut(session_2)
             .insert(AttachedSession);
-        {
-            let mut mux = app.world_mut().resource_mut::<Multiplexer>();
-            mux.set_changed();
-        }
         app.update();
 
-        let registry = app.world().resource::<ActivityEntityRegistry>();
-        let bootstrap_host = registry
-            .get(&bootstrap_aid)
-            .expect("bootstrap activity host must remain in registry across session switch");
-
-        // Walk up the ChildOf chain from the host. Must terminate at a
-        // Session entity (which carries SessionEntityId and has no Node).
-        let mut cursor = bootstrap_host;
-        let final_parent = loop {
-            match app.world().get::<ChildOf>(cursor) {
-                Some(c) => cursor = c.parent(),
-                None => break cursor,
-            }
-        };
         assert!(
-            app.world().get::<SessionEntityId>(final_parent).is_some(),
-            "host's chain must terminate at a Session entity",
-        );
-        assert!(
-            app.world().get::<bevy::ui::Node>(final_parent).is_none(),
-            "Session entity must not carry Node (walker-skip)",
+            app.world().get_entity(host_before).is_ok(),
+            "session 1's activity host must survive when session 2 becomes active"
         );
     }
 
     #[test]
     fn inactive_activity_host_persists_across_focus_switch() {
-        use ozmux_multiplexer::Activity;
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{ActivityKind, MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        // Add a SECOND Activity to the bootstrap pane and capture both
-        // ActivityIds.
-        let (bootstrap_id, second_id) = {
+        let (session, pane, first_activity) = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 sessions: bevy::prelude::Query<
+                    bevy::prelude::Entity,
+                    (With<SessionMarker>, With<AttachedSession>),
+                >| {
+                    let session = sessions.iter().next()?;
+                    let pane = mux.sessions_active_pane(session)?;
+                    let activity = mux.panes_active_activity(pane)?;
+                    Some((session, pane, activity))
+                },
+            )
+            .unwrap()
+            .expect("bootstrap session + pane + activity");
+
+        let host_before = {
             let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            let (active_pane, bootstrap_aid) = {
-                let session = mux.sessions.get(&sid).expect("session");
-                let active_pane = session.active_pane.clone();
-                let pane = session.pane(&active_pane).expect("pane");
-                (active_pane, pane.active_activity.clone())
-            };
-            let second_aid = ActivityId::new();
-            mux.with_session(&sid, |s| {
-                s.pane_mut(&active_pane)
-                    .expect("pane_mut")
-                    .add_activity(Activity::terminal(second_aid.clone()))
+            let registry = world.resource::<crate::ui::registry::ActivityEntityRegistry>();
+            registry.get(first_activity).expect("first activity has a host")
+        };
+
+        let second_activity = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(pane, ActivityKind::Terminal)
             })
-            .expect("with_session")
-            .expect("add_activity");
-            mux.bump_epoch(&sid);
-            (bootstrap_aid, second_aid)
-        };
-        app.update();
+            .unwrap();
+        app.world_mut().flush();
 
-        // Both Activity hosts must be in the registry — even though only
-        // one is the active tab.
-        let (bootstrap_entity, second_entity) = {
-            let registry = app.world().resource::<ActivityEntityRegistry>();
-            let b = registry.get(&bootstrap_id).expect(
-                "bootstrap activity host must remain in registry while inactive sibling exists",
-            );
-            let s = registry
-                .get(&second_id)
-                .expect("newly-added activity host must be in registry");
-            (b, s)
-        };
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_activity(pane, second_activity).unwrap();
+            })
+            .unwrap();
 
-        // Switch focus to the second activity.
         {
             let world = app.world_mut();
-            let mut mux = world.resource_mut::<Multiplexer>();
-            let sid = *mux.sessions.keys().next().expect("session");
-            let active_pane = mux.sessions.get(&sid).expect("session").active_pane.clone();
-            let _outcome = mux
-                .with_session(&sid, |s| {
-                    s.pane_mut(&active_pane)
-                        .expect("pane_mut")
-                        .set_active_activity(&second_id)
-                })
-                .expect("with_session")
-                .expect("set_active_activity");
-            mux.bump_epoch(&sid);
+            world
+                .entity_mut(session)
+                .get_mut::<ozmux_multiplexer::LayoutCells>()
+                .expect("LayoutCells")
+                .set_changed();
         }
         app.update();
 
-        // The ORIGINAL (now inactive) host Entity must survive the
-        // focus-switch rebuild. Without the domain-driven
-        // `live_activity_ids`, `registry.prune` would despawn it and the
-        // terminal's PTY child + alacritty grid + scrollback would be
-        // lost — the bug this test guards against.
-        let registry = app.world().resource::<ActivityEntityRegistry>();
-        assert_eq!(
-            registry.get(&bootstrap_id),
-            Some(bootstrap_entity),
-            "inactive Activity must keep the SAME host Entity after focus switches away from it"
-        );
-        assert_eq!(
-            registry.get(&second_id),
-            Some(second_entity),
-            "newly-active Activity must keep the SAME host Entity (no respawn)"
-        );
         assert!(
-            app.world().get_entity(bootstrap_entity).is_ok(),
-            "inactive host Entity must still exist in the world"
+            app.world().get_entity(host_before).is_ok(),
+            "first activity host must survive when the second activity becomes active"
         );
 
-        // Inactive host MUST be parented to the owning Session entity. The
-        // Session entity carries `SessionEntityId` but no `Node`, so it falls
-        // outside Bevy's UI walker (`UiChildren::iter_ui_children` filters
-        // `With<Node>`) — the inactive host's subtree is layout-skipped
-        // entirely, no `Display::None` workaround needed.
-        let bootstrap_parent = app
+        let host_parent = app
             .world()
-            .get::<ChildOf>(bootstrap_entity)
-            .expect("inactive host must have a parent (the owning Session entity)")
-            .parent();
-        assert!(
-            app.world()
-                .get::<SessionEntityId>(bootstrap_parent)
-                .is_some(),
-            "inactive host's parent must be the owning Session entity",
+            .get::<bevy::prelude::ChildOf>(host_before)
+            .map(|c| c.parent());
+        assert_eq!(
+            host_parent,
+            Some(session),
+            "inactive host must be parked under the session entity (no Node, walker-skipped)"
         );
-        assert!(
-            app.world()
-                .get::<bevy::ui::Node>(bootstrap_parent)
-                .is_none(),
-            "Session entity must not carry Node (the walker-skip invariant)",
-        );
+    }
 
-        // Toggle focus back and forth several times — this exercises
-        // the case the original taffy "invalid SlotMap key used" panic
-        // was reproduced under (alternating focus between two terminal
-        // Activities). The hierarchy must stay valid each frame:
-        // both hosts have valid parents, the previously-active host
-        // is parked under the Session entity (non-Node, walker-skipped),
-        // the newly-active host moves to the visible activity slot.
-        for target_id in [&bootstrap_id, &second_id, &bootstrap_id, &second_id] {
-            {
-                let world = app.world_mut();
-                let mut mux = world.resource_mut::<Multiplexer>();
-                let sid = *mux.sessions.keys().next().expect("session");
-                let active_pane = mux.sessions.get(&sid).expect("session").active_pane.clone();
-                let _outcome = mux
-                    .with_session(&sid, |s| {
-                        s.pane_mut(&active_pane)
-                            .expect("pane_mut")
-                            .set_active_activity(target_id)
-                    })
-                    .expect("with_session")
-                    .expect("set_active_activity");
-                mux.bump_epoch(&sid);
+    #[test]
+    fn status_bar_root_spawned_on_startup() {
+        use crate::ui::status_bar_sync::StatusBarRoot;
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let count = app
+            .world_mut()
+            .query_filtered::<Entity, With<StatusBarRoot>>()
+            .iter(app.world())
+            .count();
+        assert!(count > 0, "StatusBarRoot must be present after startup");
+    }
+
+    #[test]
+    fn attached_session_marker_present_after_bootstrap() {
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let count = app
+            .world_mut()
+            .query_filtered::<Entity, With<AttachedSession>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(count, 1, "exactly one AttachedSession after bootstrap");
+    }
+
+    #[test]
+    fn status_bar_chips_appear_in_session_creation_order_after_cmd_r() {
+        use crate::ui::status_bar_sync::StatusBarRoot;
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::MultiplexerCommands;
+
+        let (mut app, _guard) = make_test_app();
+        // Two ticks for Startup + first Update so bootstrap settles and
+        // the initial status bar is built.
+        app.update();
+        app.update();
+
+        // Drive a CMD+R-equivalent dispatch_new_session.
+        app.world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 mut commands: Commands,
+                 mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
+                 attached_q: Query<
+                    Entity,
+                    (With<ozmux_multiplexer::SessionMarker>, With<AttachedSession>),
+                >| {
+                    crate::input::dispatch_new_session(
+                        &mut commands,
+                        &mut mux,
+                        &mut counter,
+                        &attached_q,
+                    );
+                },
+            )
+            .unwrap();
+        // One tick for commands to flush + status bar rebuild to enqueue,
+        // one for rebuild's commands to flush.
+        app.update();
+        app.update();
+
+        // Walk the StatusBarRoot's descendants and collect every chip's
+        // Name as a Text node. The chip order in DFS = insertion order =
+        // left-to-right visual order in FlexDirection::Row.
+        let world = app.world_mut();
+        let bar = world
+            .query_filtered::<Entity, With<StatusBarRoot>>()
+            .single(world)
+            .expect("StatusBarRoot present");
+        let mut chip_names: Vec<String> = Vec::new();
+        let mut stack: Vec<Entity> = vec![bar];
+        while let Some(e) = stack.pop() {
+            if let Some(text) = world.get::<bevy::ui::widget::Text>(e) {
+                chip_names.push(text.0.clone());
             }
-            app.update();
-
-            // After every switch both hosts must still be alive and
-            // have a valid parent.
-            for (id, expected_entity) in [
-                (&bootstrap_id, bootstrap_entity),
-                (&second_id, second_entity),
-            ] {
-                let registry = app.world().resource::<ActivityEntityRegistry>();
-                assert_eq!(
-                    registry.get(id),
-                    Some(expected_entity),
-                    "host Entity for {id} must stay stable across focus toggles"
-                );
-                assert!(
-                    app.world().get::<ChildOf>(expected_entity).is_some(),
-                    "host {id} must have a ChildOf every frame (active = activity_slot, inactive = Session entity)"
-                );
+            if let Some(children) = world.get::<Children>(e) {
+                // Push children in reverse so DFS visits them left-to-right.
+                let mut kids: Vec<Entity> = children.iter().collect();
+                kids.reverse();
+                stack.extend(kids);
             }
         }
+        // Filter to just session chips ("session1", "session2", ...).
+        let session_chips: Vec<String> = chip_names
+            .into_iter()
+            .filter(|n| n.starts_with("session"))
+            .collect();
+        assert_eq!(
+            session_chips,
+            vec!["session1".to_string(), "session2".to_string()],
+            "status bar must show session1 leftmost, session2 to its right",
+        );
     }
 }

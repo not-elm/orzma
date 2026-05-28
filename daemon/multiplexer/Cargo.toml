@@ -1,5 +1,5 @@
 [package]
-name = "ozmux_multiplexer"
+name = "ozmux_multiplexer_legacy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,7 +1,8 @@
 //! Status bar Bevy UI builder. Spawns one Row Node containing one chip
-//! per Session, sorted by `SessionId` (numeric, since `SessionEntityId`
-//! wraps the monotonic counter). The attached session's chip gets the
-//! accent color.
+//! per Session, in the order provided by the caller (status_bar_sync
+//! sorts by `SessionCreatedAt` so chips appear in creation order with
+//! the oldest leftmost). The attached session's chip gets the accent
+//! color.
 
 use crate::theme;
 use crate::theme::UI_FONT_SIZE;
@@ -10,22 +11,17 @@ use crate::ui::palette;
 use crate::ui::status_bar_sync::StatusBarRoot;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, AlignSelf, FlexDirection, UiRect, Val};
-use ozmux_multiplexer::{Session, SessionId};
-use std::collections::HashMap;
 
-/// Spawn the status bar as a child of `parent`. `sessions_by_id` is the
-/// domain HashMap from `MultiplexerService`. `attached_sid` colors the
-/// matching chip with the accent.
+/// Spawn the status bar as a child of `parent`. `sessions` is a slice of
+/// `(entity, name, is_attached)` tuples, one per Session entity, sorted
+/// by the caller. `attached_entity` is the Entity with `AttachedSession`,
+/// used to accent the matching chip.
 pub(crate) fn build_status_bar(
     commands: &mut Commands,
     parent: Entity,
-    sessions_by_id: &HashMap<SessionId, Session>,
-    attached_sid: Option<SessionId>,
+    sessions: &[(Entity, String, bool)],
     ui_font: &Handle<Font>,
 ) {
-    let mut ordered: Vec<&SessionId> = sessions_by_id.keys().collect();
-    ordered.sort();
-
     let bar = commands
         .spawn((
             Node {
@@ -69,22 +65,13 @@ pub(crate) fn build_status_bar(
         ChildOf(bar),
     ));
 
-    build_session_chips(
-        commands,
-        bar,
-        &ordered,
-        sessions_by_id,
-        attached_sid,
-        ui_font,
-    );
+    build_session_chips(commands, bar, sessions, ui_font);
 }
 
 fn build_session_chips(
     commands: &mut Commands,
     bar: Entity,
-    ordered: &[&SessionId],
-    sessions_by_id: &HashMap<SessionId, Session>,
-    attached_sid: Option<SessionId>,
+    sessions: &[(Entity, String, bool)],
     ui_font: &Handle<Font>,
 ) {
     let container = commands
@@ -103,19 +90,15 @@ fn build_session_chips(
         ))
         .id();
 
-    for sid in ordered {
-        let session = match sessions_by_id.get(sid) {
-            Some(s) => s,
-            None => continue,
-        };
-        let font_color = if Some(**sid) == attached_sid {
+    for (_entity, name, is_attached) in sessions {
+        let font_color = if *is_attached {
             palette::COPY_MODE_INDICATOR_BG
         } else {
             palette::FOREGROUND
         };
 
         commands.spawn((
-            Text::new(session.name.clone()),
+            Text::new(name.clone()),
             TextColor(font_color),
             TextFont {
                 font: ui_font.clone(),

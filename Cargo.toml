@@ -20,7 +20,7 @@ bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
 open = { workspace = true }
 ozmux_configs = { path = "daemon/configs" }
-ozmux_multiplexer = { path = "daemon/multiplexer" }
+ozmux_multiplexer = { path = "crates/multiplexer" }
 tracing = { workspace = true }
 unicode-width = { workspace = true }
 
@@ -34,7 +34,6 @@ members = [
   "daemon/configs",
   "daemon/extension",
   "daemon/macros",
-  "daemon/multiplexer",
   "crates/*",
   "xtask",
 ]
@@ -45,6 +44,7 @@ exclude = [
   "daemon/browser_cef_protocol",
   "daemon/cef_host",
   "daemon/http_server",
+  "daemon/multiplexer",
   "client",
 ]
 
