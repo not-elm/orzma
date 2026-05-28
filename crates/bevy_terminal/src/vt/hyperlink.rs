@@ -46,7 +46,18 @@ impl HyperlinkInterner {
             }
         }
         let id = self.next_id;
-        self.next_id = HyperlinkId(self.next_id.0.wrapping_add(1));
+        // NOTE: `checked_add` (not `wrapping_add`) preserves the
+        //       `HyperlinkId(0)` reservation — wrapping past
+        //       `u32::MAX` would silently emit the sentinel and break
+        //       the GPU "no link" branch. The panic is reachable only
+        //       after ~4 billion distinct hyperlinks in one session,
+        //       far beyond any realistic budget.
+        self.next_id = HyperlinkId(
+            self.next_id
+                .0
+                .checked_add(1)
+                .expect("hyperlink id space exhausted"),
+        );
         self.entries.push((
             (
                 AlacrittyHyperlinkId(alac_id.to_owned()),

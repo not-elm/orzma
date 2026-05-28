@@ -125,15 +125,11 @@ fn hyperlink_hover_and_cursor(
     let Some((entity, local)) =
         crate::input::mouse_buttons::resolve_pane_at_phys(&hosts, cursor_phys)
     else {
-        hover.entity = None;
-        hover.hyperlink_id = None;
-        write_cursor_icon(&mut cursor_icons, SystemCursorIcon::Text);
+        clear_target(&mut hover, &mut cursor_icons);
         return;
     };
     let Ok(grid) = grids.get(entity) else {
-        hover.entity = None;
-        hover.hyperlink_id = None;
-        write_cursor_icon(&mut cursor_icons, SystemCursorIcon::Text);
+        clear_target(&mut hover, &mut cursor_icons);
         return;
     };
     let (col, row, _side) = crate::input::mouse_buttons::cell_at_local(
@@ -159,6 +155,9 @@ fn hyperlink_hover_and_cursor(
     write_cursor_icon(&mut cursor_icons, desired);
 }
 
+/// Resets every field of the hover state and forces the I-beam cursor.
+/// Used when the window or cursor is unobservable — modifier state
+/// cannot be trusted because the system bailed before reading keys.
 fn clear_hover(
     hover: &mut HyperlinkHoverState,
     cursor_icons: &mut Query<&mut CursorIcon, With<PrimaryWindow>>,
@@ -166,6 +165,19 @@ fn clear_hover(
     hover.entity = None;
     hover.hyperlink_id = None;
     hover.modifier_held = false;
+    write_cursor_icon(cursor_icons, SystemCursorIcon::Text);
+}
+
+/// Resets only the per-cursor fields (entity + hyperlink_id) and the
+/// cursor icon, preserving `modifier_held` set earlier this frame. Used
+/// when the cursor is observable but lands outside any pane or the
+/// hovered entity has no `TerminalGrid` — modifier state remains valid.
+fn clear_target(
+    hover: &mut HyperlinkHoverState,
+    cursor_icons: &mut Query<&mut CursorIcon, With<PrimaryWindow>>,
+) {
+    hover.entity = None;
+    hover.hyperlink_id = None;
     write_cursor_icon(cursor_icons, SystemCursorIcon::Text);
 }
 
