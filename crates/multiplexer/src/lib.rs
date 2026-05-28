@@ -6,3 +6,7 @@
 //! No typed IDs (`SessionId` / `PaneId` / `ActivityId`) — every reference
 //! is a Bevy `Entity`. Each entity also carries `Name` (from
 //! `bevy::prelude::Name`) for tracing readability.
+
+pub mod error;
+
+pub use error::{MultiplexerError, MultiplexerResult};
