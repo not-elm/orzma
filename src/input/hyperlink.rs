@@ -13,6 +13,9 @@ use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;
 
+use crate::input::mouse_buttons::{cell_at_local, resolve_pane_at_phys};
+use crate::ui::ActivityHostNode;
+
 /// Plugin: registers `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
 pub(crate) struct HyperlinkInputPlugin;
 
@@ -96,12 +99,9 @@ fn is_allowed(uri: &str) -> bool {
 
 fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
-    hosts: Query<
-        (Entity, &ComputedNode, &UiGlobalTransform),
-        With<crate::ui::ActivityHostNode>,
-    >,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<ActivityHostNode>>,
     grids: Query<&TerminalGrid>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -122,9 +122,7 @@ fn hyperlink_hover_and_cursor(
     let mods = crate::input::current_modifiers(&keys);
     hover.modifier_held = link_modifier_held(&mods);
 
-    let Some((entity, local)) =
-        crate::input::mouse_buttons::resolve_pane_at_phys(&hosts, cursor_phys)
-    else {
+    let Some((entity, local)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
         clear_target(&mut hover, &mut cursor_icons);
         return;
     };
@@ -132,15 +130,7 @@ fn hyperlink_hover_and_cursor(
         clear_target(&mut hover, &mut cursor_icons);
         return;
     };
-    let (col, row, _side) = crate::input::mouse_buttons::cell_at_local(
-        local,
-        cell_w_phys,
-        cell_h_phys,
-        grid.cols,
-        grid.rows,
-    );
-    // NOTE: cell_at_local returns 1-indexed coords; convert to 0-indexed
-    //       for the grid lookup. Overlooking this misaligns hover by one cell.
+    let (col, row, _side) = cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows);
     let id = grid
         .hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
         .map(|(id, _uri)| id);
@@ -334,14 +324,7 @@ mod tests {
     fn should_open_at_returns_none_for_non_left_button() {
         let grid = make_grid_with_link(0, 0, HyperlinkId(1));
         for button in [MouseButtonKind::Middle, MouseButtonKind::Right] {
-            let result = should_open_at(
-                &grid,
-                0,
-                0,
-                button,
-                ButtonEventKind::Press,
-                true,
-            );
+            let result = should_open_at(&grid, 0, 0, button, ButtonEventKind::Press, true);
             assert!(result.is_none(), "button={:?}", button);
         }
     }
