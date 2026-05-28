@@ -4,7 +4,7 @@ use crate::{
         font::{FONT_SIZE_PX, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
     material::state::TerminalMaterialState,
-    schema::{Cell, SelectionKind, TerminalGrid},
+    schema::{Cell, HyperlinkHoverState, SelectionKind, TerminalGrid},
 };
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
@@ -18,16 +18,6 @@ use bevy::{
 };
 
 mod state;
-
-/// Schema version of the `GpuGlyph` / `TerminalParams` layout. Bumped when
-/// the meaning of fields changes incompatibly so `TerminalMaterialState`
-/// can force a full LUT rebuild on the first frame after upgrade.
-///
-/// History: 0 = pre-Tier1 (logical-px `GpuGlyph`, hardcoded 8x16 cell,
-/// shader stretches `cell_pitch`); 1 = Tier 1 (physical-px schema,
-/// font-derived cell metrics, shader uses `params.cell_size_px` directly,
-/// `bg_padding_color` fallback, `STYLE_WIDE_RIGHT_HALF` cells).
-const SCHEMA_VERSION_TIER1: u32 = 1;
 
 /// Render-side public SystemSet anchor for `update_terminal_material`.
 ///
@@ -137,6 +127,8 @@ impl UiMaterial for TerminalUiMaterial {
 /// | 72     | `underline_thickness_phys`  |
 /// | 76     | `max_overflow_phys`         |
 /// | 80     | `bg_padding_color`          |
+/// | 96     | `hover_hyperlink_id`        |
+/// | 100    | `hover_active`              |
 #[derive(Clone, Copy, ShaderType, Default, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -164,6 +156,13 @@ struct TerminalParams {
     /// strip; the host reserves the same amount from the node width.
     max_overflow_phys: f32,
     bg_padding_color: Vec4,
+    /// Wire id of the hovered link (across all panes); `0` = nothing
+    /// hovered, or hovered cell is unlinked.
+    hover_hyperlink_id: u32,
+    /// `1` when the activation modifier is held AND the hovered link
+    /// is in this entity's pane; else `0`. Drives the accent-underline
+    /// path in the shader.
+    hover_active: u32,
 }
 
 impl TerminalParams {
@@ -188,6 +187,8 @@ impl TerminalParams {
         underline_thickness_phys: f32,
         max_overflow_phys: f32,
         bg_padding_color: Vec4,
+        hover_hyperlink_id: u32,
+        hover_active: u32,
     ) -> Self {
         let cols = u32::from(grid.cols);
         let rows = u32::from(grid.rows);
@@ -226,11 +227,13 @@ impl TerminalParams {
             underline_thickness_phys,
             max_overflow_phys,
             bg_padding_color,
+            hover_hyperlink_id,
+            hover_active,
         }
     }
 }
 
-/// One GPU-side cell — 16 bytes, indexed `row * cols + col` in the storage buffer.
+/// One GPU-side cell — 20 bytes, indexed `row * cols + col` in the storage buffer.
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct GpuCell {
     /// Index into the glyph LUT, or `u32::MAX` for an empty cell (space / blank).
@@ -241,6 +244,9 @@ struct GpuCell {
     bg_packed: u32,
     /// Mirror of `ozmux_terminal_protocol::style::*` bit flags.
     style_flags: u32,
+    /// OSC 8 wire id of this cell, or `0` for "no link". Safe because
+    /// `HyperlinkInterner` reserves `HyperlinkId(0)`.
+    hyperlink_id: u32,
 }
 
 /// Set on the right-half cell of a width=2 (CJK / wide) grapheme so the
@@ -266,6 +272,7 @@ impl Default for GpuCell {
             fg_packed: 0,
             bg_packed: 0,
             style_flags: 0,
+            hyperlink_id: 0,
         }
     }
 }
@@ -301,6 +308,7 @@ fn update_terminal_material(
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     mut terminals: Query<(
+        Entity,
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
         &TerminalGrid,
@@ -309,6 +317,7 @@ fn update_terminal_material(
     palette_time: Res<Time>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
+    hover: Res<HyperlinkHoverState>,
 ) {
     // TODO: load font size from config.
 
@@ -337,26 +346,23 @@ fn update_terminal_material(
     let dpr = window.scale_factor();
     let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
 
-    for (handle, mut state, grid) in terminals.iter_mut() {
+    for (entity, handle, mut state, grid) in terminals.iter_mut() {
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
         let dims_changed = (grid.cols, grid.rows) != state.last_grid_dims;
         let grid_changed = grid.last_seq != state.last_grid_seq;
         let phys_size_changed = phys_font_size != state.last_phys_font_size;
-        let schema_changed = state.last_schema_version != SCHEMA_VERSION_TIER1;
 
         let needs_rebuild = !state.initialized
             || grid_changed
             || atlas_invalidated
             || dims_changed
-            || phys_size_changed
-            || schema_changed;
+            || phys_size_changed;
 
-        if phys_size_changed || schema_changed {
+        if phys_size_changed {
             state.invalidate_all();
             state.last_phys_font_size = phys_font_size;
-            state.last_schema_version = SCHEMA_VERSION_TIER1;
         }
 
         // NOTE: atlas.generation can advance during this very system (via
@@ -438,6 +444,11 @@ fn update_terminal_material(
         // TODO: source from a theme / TerminalGrid::default_bg instead of opaque black.
         let bg_padding_color = Vec4::new(0.0, 0.0, 0.0, 1.0);
 
+        let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
+            (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
+            _ => (0, 0),
+        };
+
         if let Some(mat) = materials.get_mut(&handle.0) {
             mat.params = TerminalParams::new(
                 grid,
@@ -450,6 +461,8 @@ fn update_terminal_material(
                 metrics.underline_thickness_phys.max(1.0),
                 metrics.max_overflow_phys,
                 bg_padding_color,
+                hover_hyperlink_id,
+                hover_active,
             );
         }
     }
@@ -490,6 +503,7 @@ fn rebuild_cells(
                     fg_packed: fg,
                     bg_packed: bg,
                     style_flags,
+                    hyperlink_id: cell.hyperlink_id.map_or(0, |h| h.0),
                 };
             }
 
@@ -510,6 +524,7 @@ fn rebuild_cells(
                         fg_packed: fg,
                         bg_packed: bg,
                         style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
+                        hyperlink_id: cell.hyperlink_id.map_or(0, |h| h.0),
                     };
                 }
             }
@@ -585,4 +600,75 @@ fn resolve_glyph_index(
     state.cpu_glyphs.push(GpuGlyph::new(rect));
     state.glyph_index_map.insert(key, idx);
     idx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn gpu_cell_is_twenty_bytes() {
+        assert_eq!(size_of::<GpuCell>(), 20);
+    }
+
+    #[test]
+    fn gpu_cell_default_has_zero_hyperlink_id() {
+        let cell = GpuCell::default();
+        assert_eq!(cell.hyperlink_id, 0);
+    }
+
+    #[test]
+    fn rebuild_cells_writes_hyperlink_id_when_present() {
+        use crate::schema::HyperlinkId;
+        use bevy::platform::collections::HashMap;
+
+        let linked = Cell {
+            text: "x".to_string(),
+            width: 1,
+            fg: Color::WHITE,
+            bg: Color::BLACK,
+            style: 0,
+            hyperlink_id: Some(HyperlinkId(7)),
+        };
+        let unlinked = Cell {
+            text: "y".to_string(),
+            width: 1,
+            fg: Color::WHITE,
+            bg: Color::BLACK,
+            style: 0,
+            hyperlink_id: None,
+        };
+        let grid = TerminalGrid {
+            cols: 2,
+            rows: 1,
+            cells: vec![vec![linked, unlinked]],
+            ..Default::default()
+        };
+        let mut state = TerminalMaterialState {
+            glyph_index_map: HashMap::new(),
+            cpu_cells: vec![GpuCell::default(); 2],
+            cpu_glyphs: Vec::new(),
+            last_atlas_generation: 0,
+            last_grid_seq: 0,
+            last_grid_dims: (0, 0),
+            last_phys_font_size: 0,
+            cached_metrics: None,
+            initialized: false,
+        };
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+
+        rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 16, 2);
+
+        assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
+        assert_eq!(state.cpu_cells[1].hyperlink_id, 0);
+    }
+
+    #[test]
+    fn terminal_params_default_hyperlink_uniforms_are_zero() {
+        let params = TerminalParams::default();
+        assert_eq!(params.hover_hyperlink_id, 0);
+        assert_eq!(params.hover_active, 0);
+    }
 }

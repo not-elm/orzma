@@ -11,6 +11,9 @@ mod system_set;
 mod theme;
 mod ui;
 
+use crate::input::hyperlink::HyperlinkInputPlugin;
+use crate::input::mouse_buttons::MouseButtonsInputPlugin;
+use crate::input::mouse_wheel::MouseWheelInputPlugin;
 use bevy::prelude::*;
 use bevy_terminal::TerminalHandlePlugin;
 use bevy_terminal_renderer::TerminalRendererPlugin;
@@ -39,8 +42,11 @@ fn main() {
             OzmuxUiPlugin,
             CopyModePlugin,
             CopyModeIndicatorPlugin,
-            crate::input::mouse_wheel::MouseWheelInputPlugin,
-            crate::input::mouse_buttons::MouseButtonsInputPlugin,
+        ))
+        .add_plugins((
+            MouseWheelInputPlugin,
+            MouseButtonsInputPlugin,
+            HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
         ))

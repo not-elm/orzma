@@ -1,8 +1,8 @@
-use bevy::prelude::*;
-
 use crate::{
     glyph::TerminalGlyphPlugin, grid::TerminalGridPlugin, material::TerminalMaterialPlugin,
+    schema::HyperlinkHoverState,
 };
+use bevy::prelude::*;
 
 mod bundle;
 pub mod bundled;
@@ -26,7 +26,7 @@ pub struct TerminalRendererPlugin;
 
 impl Plugin for TerminalRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
+        app.init_resource::<HyperlinkHoverState>().add_plugins((
             TerminalGridPlugin,
             TerminalMaterialPlugin,
             TerminalGlyphPlugin,

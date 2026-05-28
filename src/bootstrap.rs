@@ -4,6 +4,7 @@
 
 use crate::multiplexer::{AttachedSession, Multiplexer, SessionEntityId, SessionUiSubtree};
 use bevy::prelude::*;
+use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 
 /// Bevy Plugin that registers the `bootstrap` system in the `Startup`
 /// schedule.
@@ -11,7 +12,7 @@ pub struct OzmuxBootstrapPlugin;
 
 impl Plugin for OzmuxBootstrapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, bootstrap);
+        app.add_systems(Startup, (bootstrap, insert_initial_cursor_icon));
     }
 }
 
@@ -46,6 +47,20 @@ pub(crate) fn bootstrap(mut commands: Commands, mut mux: ResMut<Multiplexer>) {
         .insert(ChildOf(session_entity));
 
     mux.bump_epoch(&sid);
+}
+
+/// Inserts an initial `CursorIcon::System(SystemCursorIcon::Text)` on
+/// the primary window so the hover system in `src/input/hyperlink.rs`
+/// can mutate the component without first having to insert it.
+fn insert_initial_cursor_icon(
+    mut commands: Commands,
+    windows: Query<Entity, (With<PrimaryWindow>, Without<CursorIcon>)>,
+) {
+    for window in windows.iter() {
+        commands
+            .entity(window)
+            .insert(CursorIcon::System(SystemCursorIcon::Text));
+    }
 }
 
 #[cfg(test)]
