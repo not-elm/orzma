@@ -5,10 +5,10 @@
 //!
 //! Observer registration happens in `MultiplexerPlugin::build`.
 
-use bevy::prelude::*;
 use crate::components::{
     ActiveActivity, ActivePane, ActivityMarker, LayoutCells, PaneMarker, SessionMarker,
 };
+use bevy::prelude::*;
 
 /// When a Pane is despawned, any Session whose `ActivePane(Entity)`
 /// pointed at it must be repointed. Otherwise the field would dangle
@@ -34,7 +34,10 @@ pub fn on_remove_pane_marker(
     if active.0 != pane {
         return;
     }
-    let panes_in_layout = cells.cells.ordered_pane_cells(&cells.root).unwrap_or_default();
+    let panes_in_layout = cells
+        .cells
+        .ordered_pane_cells(&cells.root)
+        .unwrap_or_default();
     if let Some((_, survivor)) = panes_in_layout.into_iter().find(|(_, p)| *p != pane) {
         active.0 = survivor;
     }
@@ -62,7 +65,10 @@ pub fn on_remove_activity_marker(
     let Ok(sibs) = children.get(pane) else {
         return;
     };
-    if let Some(survivor) = sibs.iter().find(|&e| e != activity && activities.get(e).is_ok()) {
+    if let Some(survivor) = sibs
+        .iter()
+        .find(|&e| e != activity && activities.get(e).is_ok())
+    {
         active.0 = survivor;
     }
 }
@@ -87,11 +93,14 @@ mod tests {
         let new_pane = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal).unwrap()
+                mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal)
+                    .unwrap()
             })
             .unwrap();
 
-        app.world_mut().entity_mut(outcome.session).insert(ActivePane(new_pane));
+        app.world_mut()
+            .entity_mut(outcome.session)
+            .insert(ActivePane(new_pane));
         app.world_mut().entity_mut(new_pane).despawn();
         app.update();
 

@@ -5,7 +5,7 @@
 use crate::ui::{SessionUiRoot, UiRoot};
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
-use bevy::ui::IsDefaultUiCamera;
+use bevy::ui::{FlexDirection, IsDefaultUiCamera, Val};
 use bevy::window::{PrimaryWindow, WindowRef};
 
 /// Marker for the `Camera2d` entity that renders the primary GUI window.
@@ -42,9 +42,9 @@ fn spawn_root_ui(mut commands: Commands) {
         .spawn((
             Name::new("UI Root"),
             Node {
-                flex_direction: bevy::ui::FlexDirection::Column,
-                width: bevy::ui::Val::Percent(100.0),
-                height: bevy::ui::Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
                 ..default()
             },
             UiRoot,
@@ -55,8 +55,8 @@ fn spawn_root_ui(mut commands: Commands) {
         Name::new("Session UI Root"),
         Node {
             flex_grow: 1.0,
-            width: bevy::ui::Val::Percent(100.0),
-            height: bevy::ui::Val::Percent(100.0),
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
             ..default()
         },
         SessionUiRoot,

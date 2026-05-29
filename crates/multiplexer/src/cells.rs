@@ -3,17 +3,15 @@
 //! internal `pane_to_cell` index maps each Pane entity back to its
 //! `CellId` so split / close / swap operations are O(1) lookups.
 
+use crate::error::{MultiplexerError, MultiplexerResult};
 use bevy::ecs::entity::Entity;
 use std::collections::HashMap;
-use crate::error::{MultiplexerError, MultiplexerResult};
 
 /// Counter-newtype identifier for a Cell inside `LayoutCellState`. Cells
 /// are minted by mutator methods; the counter restarts at 0 for each new
 /// `LayoutCellState` instance (only Session-local uniqueness matters).
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct CellId(u64);
-
 
 impl std::fmt::Display for CellId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -249,7 +247,12 @@ impl LayoutCellState {
                 pane,
             }),
         );
-        self.cells.insert(root_id, Cell::Root(RootCell { child: pane_cell_id }));
+        self.cells.insert(
+            root_id,
+            Cell::Root(RootCell {
+                child: pane_cell_id,
+            }),
+        );
         self.pane_to_cell.insert(pane, pane_cell_id);
         (root_id, pane_cell_id)
     }
@@ -286,7 +289,8 @@ impl LayoutCellState {
         let split_id = self.mint_cell_id();
         self.cell_mut(&target)?.set_parent(Some(split_id));
         self.cell_mut(&new_cell)?.set_parent(Some(split_id));
-        self.cell_mut(&target_parent)?.replace_child(&target, split_id);
+        self.cell_mut(&target_parent)?
+            .replace_child(&target, split_id);
 
         let (lhs_cell, rhs_cell) = match new_cell_side {
             Side::Before => (new_cell, target),
@@ -294,7 +298,12 @@ impl LayoutCellState {
         };
         self.cells.insert(
             split_id,
-            Cell::Split(SplitCell::new(Some(target_parent), lhs_cell, rhs_cell, orientation)),
+            Cell::Split(SplitCell::new(
+                Some(target_parent),
+                lhs_cell,
+                rhs_cell,
+                orientation,
+            )),
         );
         Ok(split_id)
     }
@@ -353,10 +362,7 @@ impl LayoutCellState {
 
     /// Collect every pane leaf reachable from `start`, yielding each leaf's
     /// (`CellId`, `Entity`) in depth-first lhs-before-rhs order.
-    pub fn ordered_pane_cells(
-        &self,
-        start: &CellId,
-    ) -> MultiplexerResult<Vec<(CellId, Entity)>> {
+    pub fn ordered_pane_cells(&self, start: &CellId) -> MultiplexerResult<Vec<(CellId, Entity)>> {
         let mut out = Vec::new();
         self.collect_pane_cells(start, &mut out)?;
         Ok(out)
@@ -404,7 +410,16 @@ impl LayoutCellState {
     ///   bounds sum to the parent rect because `rhs_size = parent_size - lhs_size`.
     pub fn pane_bounds(&self, root: &CellId) -> MultiplexerResult<Vec<(Entity, Rect)>> {
         let mut out = Vec::new();
-        self.walk_bounds(root, Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }, &mut out)?;
+        self.walk_bounds(
+            root,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            &mut out,
+        )?;
         Ok(out)
     }
 
@@ -460,13 +475,18 @@ impl LayoutCellState {
             Cell::Pane(_) => return Err(MultiplexerError::InvalidCellType(parent_id)),
         };
         let sibling_id = *parent_split.sibling_cell_id(target_id);
-        let grandparent_id =
-            parent_split.parent.ok_or(MultiplexerError::MissingParentCell)?;
+        let grandparent_id = parent_split
+            .parent
+            .ok_or(MultiplexerError::MissingParentCell)?;
         match self.cell(&grandparent_id)? {
             Cell::Root(_) | Cell::Split(_) => {}
             Cell::Pane(_) => return Err(MultiplexerError::InvalidCellType(grandparent_id)),
         }
-        Ok(CollapsePlan { parent_id, sibling_id, grandparent_id })
+        Ok(CollapsePlan {
+            parent_id,
+            sibling_id,
+            grandparent_id,
+        })
     }
 
     fn apply_collapse(&mut self, target_id: &CellId, plan: CollapsePlan) -> CloseOutcome {
@@ -565,7 +585,12 @@ impl LayoutCellState {
                         let lhs_w = bounds.w * ratio;
                         self.walk_bounds(
                             &lhs_cell,
-                            Rect { x: bounds.x, y: bounds.y, w: lhs_w, h: bounds.h },
+                            Rect {
+                                x: bounds.x,
+                                y: bounds.y,
+                                w: lhs_w,
+                                h: bounds.h,
+                            },
                             out,
                         )?;
                         self.walk_bounds(
@@ -583,7 +608,12 @@ impl LayoutCellState {
                         let lhs_h = bounds.h * ratio;
                         self.walk_bounds(
                             &lhs_cell,
-                            Rect { x: bounds.x, y: bounds.y, w: bounds.w, h: lhs_h },
+                            Rect {
+                                x: bounds.x,
+                                y: bounds.y,
+                                w: bounds.w,
+                                h: lhs_h,
+                            },
                             out,
                         )?;
                         self.walk_bounds(
@@ -786,7 +816,15 @@ mod tests {
         let bounds = state.pane_bounds(&root_id).unwrap();
         assert_eq!(bounds.len(), 1);
         assert_eq!(bounds[0].0, p);
-        assert_eq!(bounds[0].1, Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 });
+        assert_eq!(
+            bounds[0].1,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0
+            }
+        );
     }
 
     #[test]
@@ -802,8 +840,30 @@ mod tests {
 
         let bounds = state.pane_bounds(&root_id).unwrap();
         assert_eq!(bounds.len(), 2);
-        assert_eq!(bounds[0], (lhs_pane, Rect { x: 0.0, y: 0.0, w: 0.5, h: 1.0 }));
-        assert_eq!(bounds[1], (rhs_pane, Rect { x: 0.5, y: 0.0, w: 0.5, h: 1.0 }));
+        assert_eq!(
+            bounds[0],
+            (
+                lhs_pane,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 0.5,
+                    h: 1.0
+                }
+            )
+        );
+        assert_eq!(
+            bounds[1],
+            (
+                rhs_pane,
+                Rect {
+                    x: 0.5,
+                    y: 0.0,
+                    w: 0.5,
+                    h: 1.0
+                }
+            )
+        );
     }
 
     #[test]
@@ -818,8 +878,30 @@ mod tests {
             .unwrap();
 
         let bounds = state.pane_bounds(&root_id).unwrap();
-        assert_eq!(bounds[0], (top_pane, Rect { x: 0.0, y: 0.0, w: 1.0, h: 0.5 }));
-        assert_eq!(bounds[1], (bottom_pane, Rect { x: 0.0, y: 0.5, w: 1.0, h: 0.5 }));
+        assert_eq!(
+            bounds[0],
+            (
+                top_pane,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 0.5
+                }
+            )
+        );
+        assert_eq!(
+            bounds[1],
+            (
+                bottom_pane,
+                Rect {
+                    x: 0.0,
+                    y: 0.5,
+                    w: 1.0,
+                    h: 0.5
+                }
+            )
+        );
     }
 
     #[test]

@@ -3,8 +3,8 @@
 //! `MultiplexerCommands` — without it, `ActivePane` / `ActiveActivity`
 //! pointers will leak after Pane / Activity despawns.
 
-use bevy::prelude::*;
 use crate::observers::{on_remove_activity_marker, on_remove_pane_marker};
+use bevy::prelude::*;
 
 /// Bevy plugin that registers the multiplexer's dangling-reference
 /// cleanup observers. Required for correct `MultiplexerCommands` use.

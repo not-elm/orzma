@@ -1,9 +1,9 @@
 //! Direction-resolution algorithm for pane focus movement. Owns `PaneDirection`,
 //! `CycleDirection`, and the pure adjacency / overlap helpers. No I/O.
 
-use bevy::ecs::entity::Entity;
 use crate::cells::{CellId, LayoutCellState, Rect};
 use crate::error::{MultiplexerError, MultiplexerResult};
+use bevy::ecs::entity::Entity;
 
 /// Cardinal direction for pane-focus movement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +106,14 @@ fn find_in_direction(
     from: Entity,
     score: impl Fn(Entity) -> u64,
 ) -> Option<Entity> {
-    if let Some(p) = pick_best(panes, from, me, direction, direction.primary_edge(me), &score) {
+    if let Some(p) = pick_best(
+        panes,
+        from,
+        me,
+        direction,
+        direction.primary_edge(me),
+        &score,
+    ) {
         return Some(p);
     }
     pick_best(panes, from, me, direction, direction.wrap_edge(), &score)
@@ -144,9 +151,7 @@ mod tests {
         Entity::from_raw_u32(n).expect("nonzero entity id")
     }
 
-    fn setup_two_panes(
-        orientation: SplitOrientation,
-    ) -> (LayoutCellState, CellId, Entity, Entity) {
+    fn setup_two_panes(orientation: SplitOrientation) -> (LayoutCellState, CellId, Entity, Entity) {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
@@ -160,8 +165,7 @@ mod tests {
 
     #[test]
     fn horizontal_split_right_then_left_wraps() {
-        let (state, root, left, right) =
-            setup_two_panes(SplitOrientation::Horizontal);
+        let (state, root, left, right) = setup_two_panes(SplitOrientation::Horizontal);
 
         assert_eq!(
             pane_in_direction(&state, &root, left, PaneDirection::Right, |_| 0).unwrap(),
@@ -181,8 +185,7 @@ mod tests {
 
     #[test]
     fn vertical_split_down_and_up_wrap() {
-        let (state, root, top, bottom) =
-            setup_two_panes(SplitOrientation::Vertical);
+        let (state, root, top, bottom) = setup_two_panes(SplitOrientation::Vertical);
         assert_eq!(
             pane_in_direction(&state, &root, top, PaneDirection::Down, |_| 0).unwrap(),
             Some(bottom),
@@ -205,10 +208,7 @@ mod tests {
             PaneDirection::Left,
             PaneDirection::Right,
         ] {
-            assert_eq!(
-                pane_in_direction(&state, &root, p, d, |_| 0).unwrap(),
-                None,
-            );
+            assert_eq!(pane_in_direction(&state, &root, p, d, |_| 0).unwrap(), None,);
         }
     }
 
@@ -263,7 +263,12 @@ mod tests {
             let next_pane = pane(n);
             let next_cell = state.new_pane(next_pane, None);
             state
-                .split_cell(current_cell, next_cell, Side::After, SplitOrientation::Horizontal)
+                .split_cell(
+                    current_cell,
+                    next_cell,
+                    Side::After,
+                    SplitOrientation::Horizontal,
+                )
                 .unwrap();
             current_cell = next_cell;
             current_pane = next_pane;
@@ -290,14 +295,30 @@ mod tests {
             .split_cell(cell_tl, cell_bl, Side::After, SplitOrientation::Vertical)
             .unwrap();
 
-        let scores_tl_higher = |p: Entity| if p == tl { 2u64 } else if p == bl { 1 } else { 0 };
+        let scores_tl_higher = |p: Entity| {
+            if p == tl {
+                2u64
+            } else if p == bl {
+                1
+            } else {
+                0
+            }
+        };
         assert_eq!(
             pane_in_direction(&state, &root, r, PaneDirection::Left, scores_tl_higher).unwrap(),
             Some(tl),
             "tl has higher score so wins tiebreak",
         );
 
-        let scores_bl_higher = |p: Entity| if p == bl { 2u64 } else if p == tl { 1 } else { 0 };
+        let scores_bl_higher = |p: Entity| {
+            if p == bl {
+                2u64
+            } else if p == tl {
+                1
+            } else {
+                0
+            }
+        };
         assert_eq!(
             pane_in_direction(&state, &root, r, PaneDirection::Left, scores_bl_higher).unwrap(),
             Some(bl),

@@ -8,9 +8,10 @@
 use crate::system_set::OzmuxSystems;
 use crate::ui::{TerminalActivityMarker, TerminalSpawnFailed};
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::material::TerminalUiMaterial;
+use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 
 pub struct OzmuxTerminalUiPlugin;
@@ -24,9 +25,9 @@ impl Plugin for OzmuxTerminalUiPlugin {
         .add_systems(
             PostUpdate,
             resize_terminals_to_node
-                .after(bevy::ui::UiSystems::Layout)
-                .before(bevy::ui::UiSystems::PostLayout)
-                .before(bevy_terminal_renderer::material::TerminalMaterialSystems::UpdateMaterial),
+                .after(UiSystems::Layout)
+                .before(UiSystems::PostLayout)
+                .before(TerminalMaterialSystems::UpdateMaterial),
         );
     }
 }

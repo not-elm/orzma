@@ -1,53 +1,94 @@
-//! Pure(ish) functions that apply a `configs::Action` to the multiplexer
-//! via `MultiplexerCommands`. Called by the shortcut dispatcher in
-//! `src/input.rs`.
+//! Translates `configs::Action` into the matching multiplexer
+//! `EntityEvent`. Called by the shortcut dispatcher in `src/input.rs`.
 //!
-//! `apply()` handles in-session mutations only. Actions that mint
-//! sessions (`NewSession`) or move the `AttachedSession` marker between
-//! Session entities (`FocusSession`, `FocusSessionNumber`) are
-//! dispatched in Bevy-side systems in `src/input.rs` because they
-//! require entity-spawning side effects.
+//! Actions handled outside `dispatch()` (`NewSession`, `FocusSession`,
+//! `FocusSessionNumber`, `EnterCopyMode`) are short-circuited because
+//! they require entity-spawning or marker-moving side effects the Bevy
+//! dispatcher performs directly.
 
+use crate::multiplexer::commands::close_activity::{CloseActivityActionPlugin, CloseActivityEvent};
+use crate::multiplexer::commands::close_pane::{ClosePaneActionPlugin, ClosePaneEvent};
+use crate::multiplexer::commands::focus_activity::{FocusActivityActionPlugin, FocusActivityEvent};
+use crate::multiplexer::commands::focus_pane::{FocusPaneActionPlugin, FocusPaneEvent};
+use crate::multiplexer::commands::new_terminal_activity::{
+    NewTerminalActivityActionPlugin, NewTerminalActivityEvent,
+};
+use crate::multiplexer::commands::split_pane::{SplitPaneActionPlugin, SplitPaneEvent};
+use crate::multiplexer::commands::swap_pane::{SwapPaneActionPlugin, SwapPaneEvent};
 use bevy::prelude::*;
 use ozmux_configs::shortcuts::{
     Action, ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, SplitDirection,
     SwapOffset as ConfigSwapOffset,
 };
-use ozmux_multiplexer::{
-    ActivityKind, CycleDirection, MultiplexerCommands, PaneDirection, Side, SplitOrientation,
-    SwapOffset,
-};
+use ozmux_multiplexer::{CycleDirection, PaneDirection, SplitOrientation, SwapOffset};
 
-/// Applies `action` to the multiplexer for the given session entity.
-/// Returns `true` if state was mutated, `false` otherwise.
+pub mod close_activity;
+pub mod close_pane;
+pub mod focus_activity;
+pub mod focus_pane;
+pub mod new_terminal_activity;
+pub mod split_pane;
+pub mod swap_pane;
+
+pub struct OzmuxShortcutActionPlugin;
+
+impl Plugin for OzmuxShortcutActionPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins((
+            SplitPaneActionPlugin,
+            NewTerminalActivityActionPlugin,
+            FocusPaneActionPlugin,
+            FocusActivityActionPlugin,
+            SwapPaneActionPlugin,
+            ClosePaneActionPlugin,
+            CloseActivityActionPlugin,
+        ));
+    }
+}
+
+/// Translates a `configs::Action` into the matching multiplexer
+/// EntityEvent and triggers it on `session`.
 ///
-/// Actions handled outside `apply()` (`NewSession`, `FocusSession`,
-/// `FocusSessionNumber`) are short-circuited to `false` because their
-/// side effects are entity-spawning / marker-moving operations the Bevy
-/// dispatcher performs directly.
-pub fn apply(action: Action, mux: &mut MultiplexerCommands, session: Entity) -> bool {
+/// Actions handled outside `dispatch()` (`NewSession`, `FocusSession`,
+/// `FocusSessionNumber`, `EnterCopyMode`) are silently ignored — their
+/// entity-spawning side effects live in the Bevy dispatcher in
+/// `src/input.rs`.
+pub fn dispatch(action: Action, commands: &mut Commands, session: Entity) {
     match action {
-        Action::SplitPane { direction } => apply_split(mux, session, split_orientation(direction)),
-        Action::NewTerminalActivity => apply_new_activity(mux, session),
-        Action::FocusPane { direction } => apply_focus_pane(mux, session, focus_direction(direction)),
-        Action::FocusActivity { offset } => match cycle_direction(offset) {
-            Some(direction) => apply_focus_activity(mux, session, direction),
-            None => {
-                tracing::debug!(
-                    target: "ozmux_gui::commands",
-                    "FocusActivity::Last not yet implemented"
-                );
-                false
-            }
-        },
-        Action::SwapPane { offset } => apply_swap_pane(mux, session, swap_offset(offset)),
-        Action::ClosePane => apply_close_pane(mux, session),
-        Action::CloseActivity => apply_close_activity(mux, session),
-        Action::NewSession | Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => false,
-        other => {
-            tracing::debug!(target: "ozmux_gui::commands", ?other, "shortcut action not yet implemented");
-            false
+        Action::SplitPane { direction } => {
+            commands.trigger(SplitPaneEvent {
+                session,
+                orientation: split_orientation(direction),
+            });
         }
+        Action::NewTerminalActivity => {
+            commands.trigger(NewTerminalActivityEvent { session });
+        }
+        Action::FocusPane { direction } => {
+            commands.trigger(FocusPaneEvent {
+                session,
+                direction: focus_direction(direction),
+            });
+        }
+        Action::FocusActivity { offset } => {
+            if let Some(direction) = cycle_direction(offset) {
+                commands.trigger(FocusActivityEvent { session, direction });
+            }
+        }
+        Action::SwapPane { offset } => {
+            commands.trigger(SwapPaneEvent {
+                session,
+                offset: swap_offset(offset),
+            });
+        }
+        Action::ClosePane => commands.trigger(ClosePaneEvent { session }),
+        Action::CloseActivity => commands.trigger(CloseActivityEvent { session }),
+        Action::NewSession | Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => {}
+        other => tracing::debug!(
+            target: "ozmux_gui::commands",
+            ?other,
+            "shortcut action not yet implemented"
+        ),
     }
 }
 
@@ -82,162 +123,58 @@ fn cycle_direction(o: ConfigActivityOffset) -> Option<CycleDirection> {
     }
 }
 
-fn apply_split(mux: &mut MultiplexerCommands, session: Entity, orientation: SplitOrientation) -> bool {
-    let Some(active_pane) = read_active_pane(mux, session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "Split: session vanished");
-        return false;
-    };
-    match mux.split_pane(active_pane, Side::After, orientation) {
-        Ok(_) => true,
-        Err(err) => {
-            tracing::warn!(target: "ozmux_gui::commands", ?err, "split_pane failed");
-            false
-        }
-    }
-}
-
-fn apply_new_activity(mux: &mut MultiplexerCommands, session: Entity) -> bool {
-    let Some(active_pane) = read_active_pane(mux, session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "NewActivity: session vanished");
-        return false;
-    };
-    let new_activity = mux.add_activity(active_pane, ActivityKind::Terminal);
-    if let Err(err) = mux.set_active_activity(active_pane, new_activity) {
-        tracing::warn!(target: "ozmux_gui::commands", ?err, "NewActivity: set_active_activity failed");
-        return false;
-    }
-    true
-}
-
-fn apply_focus_pane(mux: &mut MultiplexerCommands, session: Entity, direction: PaneDirection) -> bool {
-    // TODO: pane_in_direction needs layout access through MultiplexerCommands.
-    // Deferred to follow-up task — direction-based focus requires reading
-    // LayoutCells and calling ozmux_multiplexer::direction::pane_in_direction,
-    // which is not yet surfaced through MultiplexerCommands.
-    let _ = (mux, session, direction);
-    tracing::debug!(target: "ozmux_gui::commands", "FocusPane: deferred to follow-up task");
-    false
-}
-
-fn apply_focus_activity(
-    mux: &mut MultiplexerCommands,
-    session: Entity,
-    direction: CycleDirection,
-) -> bool {
-    let Some(active_pane) = read_active_pane(mux, session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "FocusActivity: session vanished");
-        return false;
-    };
-    let Some(active_activity) = read_active_activity(mux, active_pane) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?active_pane, "FocusActivity: pane vanished");
-        return false;
-    };
-
-    // Collect into Vec to allow indexing and to release the iterator borrow
-    // before calling set_active_activity.
-    let activities: Vec<Entity> = mux.activities_of_pane(active_pane).collect();
-    if activities.len() < 2 {
-        return false;
-    }
-
-    let i = activities.iter().position(|a| *a == active_activity).unwrap_or(0);
-    let len = activities.len() as isize;
-    let delta: isize = match direction {
-        CycleDirection::Next => 1,
-        CycleDirection::Prev => -1,
-    };
-    let j = ((i as isize + delta).rem_euclid(len)) as usize;
-    let target = activities[j];
-
-    match mux.set_active_activity(active_pane, target) {
-        Ok(()) => true,
-        Err(err) => {
-            tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusActivity failed");
-            false
-        }
-    }
-}
-
-fn apply_swap_pane(mux: &mut MultiplexerCommands, session: Entity, offset: SwapOffset) -> bool {
-    let Some(active_pane) = read_active_pane(mux, session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "SwapPane: session vanished");
-        return false;
-    };
-    match mux.swap_pane(active_pane, offset) {
-        Ok(ozmux_multiplexer::SwapOutcome::Swapped { .. }) => true,
-        Ok(ozmux_multiplexer::SwapOutcome::NoOp) => false,
-        Err(err) => {
-            tracing::warn!(target: "ozmux_gui::commands", ?err, "swap_pane failed");
-            false
-        }
-    }
-}
-
-fn apply_close_pane(mux: &mut MultiplexerCommands, session: Entity) -> bool {
-    let Some(active_pane) = read_active_pane(mux, session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "ClosePane: session vanished");
-        return false;
-    };
-    match mux.close_pane(active_pane) {
-        Ok(()) => true,
-        Err(err) => {
-            tracing::warn!(target: "ozmux_gui::commands", ?err, "ClosePane failed");
-            false
-        }
-    }
-}
-
-fn apply_close_activity(mux: &mut MultiplexerCommands, session: Entity) -> bool {
-    let Some(active_pane) = read_active_pane(mux, session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "CloseActivity: session vanished");
-        return false;
-    };
-    let Some(active_activity) = read_active_activity(mux, active_pane) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?active_pane, "CloseActivity: pane vanished");
-        return false;
-    };
-
-    let activity_count = mux.activities_of_pane(active_pane).count();
-    if activity_count > 1 {
-        // TODO: despawn a single Activity without closing the Pane. Requires
-        // a `despawn_activity` method on MultiplexerCommands (or equivalent)
-        // that handles ActiveActivity repointing. Deferred to Task 16.
-        tracing::debug!(target: "ozmux_gui::commands", "CloseActivity (multi-activity): deferred to Task 16");
-        let _ = active_activity;
-        false
-    } else {
-        match mux.close_pane(active_pane) {
-            Ok(()) => true,
-            Err(err) => {
-                tracing::warn!(target: "ozmux_gui::commands", ?err, "CloseActivity (single): close_pane failed");
-                false
-            }
-        }
-    }
-}
-
-fn read_active_pane(mux: &MultiplexerCommands, session: Entity) -> Option<Entity> {
-    mux.sessions_active_pane(session)
-}
-
-fn read_active_activity(mux: &MultiplexerCommands, pane: Entity) -> Option<Entity> {
-    mux.panes_active_activity(pane)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use ozmux_configs::shortcuts::{ActivityOffset, Direction, SessionOffset, SwapOffset as CfgSwapOffset};
-    use ozmux_multiplexer::{MultiplexerPlugin, SessionMarker, ActivePane, ActiveActivity};
+    use ozmux_configs::shortcuts::{
+        ActivityOffset, Direction, SessionOffset, SwapOffset as CfgSwapOffset,
+    };
+    use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, SessionMarker};
 
-    fn setup_app() -> bevy::app::App {
-        let mut app = bevy::app::App::new();
+    /// Records which event observer fired. One enum variant per event
+    /// type so dispatch translation tests can assert the right event
+    /// was emitted without relying on the multiplexer side effects.
+    #[derive(Debug, Default, Resource)]
+    struct CapturedEvents(Vec<&'static str>);
+
+    fn capture_split(_: On<SplitPaneEvent>, mut cap: ResMut<CapturedEvents>) {
+        cap.0.push("SplitPane");
+    }
+    fn capture_new_activity(_: On<NewTerminalActivityEvent>, mut cap: ResMut<CapturedEvents>) {
+        cap.0.push("NewTerminalActivity");
+    }
+    fn capture_focus_pane(_: On<FocusPaneEvent>, mut cap: ResMut<CapturedEvents>) {
+        cap.0.push("FocusPane");
+    }
+    fn capture_focus_activity(_: On<FocusActivityEvent>, mut cap: ResMut<CapturedEvents>) {
+        cap.0.push("FocusActivity");
+    }
+    fn capture_swap(_: On<SwapPaneEvent>, mut cap: ResMut<CapturedEvents>) {
+        cap.0.push("SwapPane");
+    }
+    fn capture_close_pane(_: On<ClosePaneEvent>, mut cap: ResMut<CapturedEvents>) {
+        cap.0.push("ClosePane");
+    }
+    fn capture_close_activity(_: On<CloseActivityEvent>, mut cap: ResMut<CapturedEvents>) {
+        cap.0.push("CloseActivity");
+    }
+
+    fn setup_app() -> App {
+        let mut app = App::new();
         app.add_plugins(MultiplexerPlugin);
+        app.init_resource::<CapturedEvents>();
+        app.add_observer(capture_split);
+        app.add_observer(capture_new_activity);
+        app.add_observer(capture_focus_pane);
+        app.add_observer(capture_focus_activity);
+        app.add_observer(capture_swap);
+        app.add_observer(capture_close_pane);
+        app.add_observer(capture_close_activity);
         app
     }
 
-    fn bootstrap_session(world: &mut bevy::ecs::world::World) -> Entity {
+    fn bootstrap_session(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_session(Some("test".into())).session
@@ -245,355 +182,158 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn new_session_action_short_circuits_in_apply() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::NewSession, &mut mux, session)
-            })
-            .unwrap();
-        assert!(!mutated);
-    }
-
-    #[test]
-    fn focus_session_action_short_circuits_in_apply() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::FocusSession { offset: SessionOffset::Next },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        assert!(!mutated);
-    }
-
-    #[test]
-    fn focus_session_number_action_short_circuits_in_apply() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::FocusSessionNumber { index: 0 }, &mut mux, session)
-            })
-            .unwrap();
-        assert!(!mutated);
-    }
-
-    #[test]
-    fn split_pane_horizontal_action_adds_pane_to_session() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::SplitPane { direction: SplitDirection::Horizontal },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        assert!(mutated);
-        app.world_mut().flush();
-        let pane_count = app
-            .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| {
-                mux.panes_of_session(session).count()
-            })
-            .unwrap();
-        assert_eq!(pane_count, 2);
-    }
-
-    #[test]
-    fn split_pane_vertical_action_adds_pane_to_session() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::SplitPane { direction: SplitDirection::Vertical },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        assert!(mutated);
-        app.world_mut().flush();
-        let pane_count = app
-            .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| {
-                mux.panes_of_session(session).count()
-            })
-            .unwrap();
-        assert_eq!(pane_count, 2);
-    }
-
-    #[test]
-    fn split_pane_promotes_new_pane_to_active() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let original_active = app
-            .world()
-            .get::<ActivePane>(session)
-            .map(|a| a.0)
-            .unwrap();
+    fn run_dispatch(app: &mut App, action: Action, session: Entity) {
         app.world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::SplitPane { direction: SplitDirection::Horizontal },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        let new_active = app
-            .world()
-            .get::<ActivePane>(session)
-            .map(|a| a.0)
-            .unwrap();
-        assert_ne!(new_active, original_active);
-    }
-
-    #[test]
-    fn new_terminal_activity_adds_and_activates_activity_on_active_pane() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let active_pane = app
-            .world()
-            .get::<ActivePane>(session)
-            .map(|a| a.0)
-            .unwrap();
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::NewTerminalActivity, &mut mux, session)
-            })
-            .unwrap();
-        assert!(mutated);
-        app.world_mut().flush();
-        let activity_count = app
-            .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| {
-                mux.activities_of_pane(active_pane).count()
-            })
-            .unwrap();
-        assert_eq!(activity_count, 2);
-    }
-
-    #[test]
-    fn unimplemented_action_returns_false_without_state_change() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::ZoomPane, &mut mux, session)
-            })
-            .unwrap();
-        assert!(!mutated);
-    }
-
-    #[test]
-    fn focus_pane_in_single_pane_session_returns_false() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::FocusPane { direction: Direction::Right },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        // NOTE: FocusPane is stubbed — always returns false until Task 14.
-        assert!(!mutated);
-    }
-
-    #[test]
-    fn swap_pane_in_single_pane_session_returns_false() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::SwapPane { offset: CfgSwapOffset::Prev },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        assert!(!mutated);
-    }
-
-    #[test]
-    fn close_pane_action_removes_pane_and_promotes_survivor() {
-        let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        app.world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::SplitPane { direction: SplitDirection::Horizontal },
-                    &mut mux,
-                    session,
-                )
+            .run_system_once(move |mut commands: Commands| {
+                dispatch(action.clone(), &mut commands, session);
             })
             .unwrap();
         app.world_mut().flush();
-        let active_before = app
-            .world()
-            .get::<ActivePane>(session)
-            .map(|a| a.0)
-            .unwrap();
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::ClosePane, &mut mux, session)
-            })
-            .unwrap();
-        assert!(mutated);
-        app.world_mut().flush();
-        let active_after = app
-            .world()
-            .get::<ActivePane>(session)
-            .map(|a| a.0)
-            .unwrap();
-        assert_ne!(active_after, active_before, "active pane should change after close");
+    }
+
+    fn captured(app: &App) -> Vec<&'static str> {
+        app.world().resource::<CapturedEvents>().0.clone()
     }
 
     #[test]
-    fn close_pane_in_single_pane_session_returns_false() {
+    fn dispatch_split_pane_triggers_split_pane_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::ClosePane, &mut mux, session)
-            })
-            .unwrap();
-        assert!(!mutated);
+        run_dispatch(
+            &mut app,
+            Action::SplitPane {
+                direction: SplitDirection::Horizontal,
+            },
+            session,
+        );
+        assert_eq!(captured(&app), vec!["SplitPane"]);
     }
 
     #[test]
-    fn close_activity_in_single_activity_pane_returns_false() {
+    fn dispatch_new_terminal_activity_triggers_new_terminal_activity_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::CloseActivity, &mut mux, session)
-            })
-            .unwrap();
-        assert!(!mutated);
+        run_dispatch(&mut app, Action::NewTerminalActivity, session);
+        assert_eq!(captured(&app), vec!["NewTerminalActivity"]);
     }
 
     #[test]
-    fn focus_activity_next_advances_active_activity() {
+    fn dispatch_focus_pane_triggers_focus_pane_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
-        app.world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::NewTerminalActivity, &mut mux, session)
-            })
-            .unwrap();
-        app.world_mut().flush();
-        let active_before = app
-            .world()
-            .get::<ActiveActivity>(active_pane)
-            .map(|a| a.0)
-            .unwrap();
-        // Reset to first activity so we can test Next advances it.
-        let first_activity = app
-            .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| {
-                mux.activities_of_pane(active_pane)
-                    .find(|a| *a != active_before)
-            })
-            .unwrap()
-            .expect("second activity exists");
-        app.world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(active_pane, first_activity).unwrap();
-            })
-            .unwrap();
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::FocusActivity { offset: ActivityOffset::Next },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        assert!(mutated);
-        let active_after = app
-            .world()
-            .get::<ActiveActivity>(active_pane)
-            .map(|a| a.0)
-            .unwrap();
-        assert_ne!(active_after, first_activity);
+        run_dispatch(
+            &mut app,
+            Action::FocusPane {
+                direction: Direction::Right,
+            },
+            session,
+        );
+        assert_eq!(captured(&app), vec!["FocusPane"]);
     }
 
     #[test]
-    fn focus_activity_in_single_activity_pane_returns_false() {
+    fn dispatch_focus_activity_next_triggers_focus_activity_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::FocusActivity { offset: ActivityOffset::Next },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        assert!(!mutated);
+        run_dispatch(
+            &mut app,
+            Action::FocusActivity {
+                offset: ActivityOffset::Next,
+            },
+            session,
+        );
+        assert_eq!(captured(&app), vec!["FocusActivity"]);
     }
 
     #[test]
-    fn focus_activity_last_returns_false_without_state_change() {
+    fn dispatch_focus_activity_last_emits_no_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(
-                    Action::FocusActivity { offset: ActivityOffset::Last },
-                    &mut mux,
-                    session,
-                )
-            })
-            .unwrap();
-        assert!(!mutated);
+        run_dispatch(
+            &mut app,
+            Action::FocusActivity {
+                offset: ActivityOffset::Last,
+            },
+            session,
+        );
+        assert!(captured(&app).is_empty());
     }
 
     #[test]
-    fn apply_on_vanished_session_returns_false() {
+    fn dispatch_swap_pane_triggers_swap_pane_event() {
+        let mut app = setup_app();
+        let session = bootstrap_session(app.world_mut());
+        run_dispatch(
+            &mut app,
+            Action::SwapPane {
+                offset: CfgSwapOffset::Prev,
+            },
+            session,
+        );
+        assert_eq!(captured(&app), vec!["SwapPane"]);
+    }
+
+    #[test]
+    fn dispatch_close_pane_triggers_close_pane_event() {
+        let mut app = setup_app();
+        let session = bootstrap_session(app.world_mut());
+        run_dispatch(&mut app, Action::ClosePane, session);
+        assert_eq!(captured(&app), vec!["ClosePane"]);
+    }
+
+    #[test]
+    fn dispatch_close_activity_triggers_close_activity_event() {
+        let mut app = setup_app();
+        let session = bootstrap_session(app.world_mut());
+        run_dispatch(&mut app, Action::CloseActivity, session);
+        assert_eq!(captured(&app), vec!["CloseActivity"]);
+    }
+
+    #[test]
+    fn dispatch_new_session_emits_no_event() {
+        let mut app = setup_app();
+        let session = bootstrap_session(app.world_mut());
+        run_dispatch(&mut app, Action::NewSession, session);
+        assert!(captured(&app).is_empty());
+    }
+
+    #[test]
+    fn dispatch_focus_session_emits_no_event() {
+        let mut app = setup_app();
+        let session = bootstrap_session(app.world_mut());
+        run_dispatch(
+            &mut app,
+            Action::FocusSession {
+                offset: SessionOffset::Next,
+            },
+            session,
+        );
+        assert!(captured(&app).is_empty());
+    }
+
+    #[test]
+    fn dispatch_focus_session_number_emits_no_event() {
+        let mut app = setup_app();
+        let session = bootstrap_session(app.world_mut());
+        run_dispatch(&mut app, Action::FocusSessionNumber { index: 0 }, session);
+        assert!(captured(&app).is_empty());
+    }
+
+    #[test]
+    fn dispatch_unknown_action_emits_no_event() {
+        let mut app = setup_app();
+        let session = bootstrap_session(app.world_mut());
+        run_dispatch(&mut app, Action::ZoomPane, session);
+        assert!(captured(&app).is_empty());
+    }
+
+    #[test]
+    fn dispatch_on_vanished_session_emits_event_without_panic() {
         let mut app = setup_app();
         let bogus = app.world_mut().spawn(SessionMarker).id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
-        let mutated = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply(Action::ClosePane, &mut mux, bogus)
-            })
-            .unwrap();
-        assert!(!mutated);
+        run_dispatch(&mut app, Action::ClosePane, bogus);
+        assert_eq!(captured(&app), vec!["ClosePane"]);
     }
 }

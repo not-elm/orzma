@@ -100,13 +100,13 @@ mod tests {
     use super::*;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
-    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin};
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
     use bevy_terminal_renderer::material::TerminalUiMaterial;
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
+    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin};
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::configs::env_guard();
@@ -199,13 +199,18 @@ mod tests {
         let host_before = {
             let world = app.world_mut();
             let mut q = world.query_filtered::<Entity, With<ActivityHostNode>>();
-            q.iter(world).next().expect("at least one host after first rebuild")
+            q.iter(world)
+                .next()
+                .expect("at least one host after first rebuild")
         };
 
         {
             let world = app.world_mut();
             let session = world
-                .query_filtered::<Entity, (With<ozmux_multiplexer::SessionMarker>, With<AttachedSession>)>()
+                .query_filtered::<Entity, (
+                    With<ozmux_multiplexer::SessionMarker>,
+                    With<AttachedSession>,
+                )>()
                 .single(world)
                 .expect("one attached session");
             world
@@ -337,10 +342,12 @@ mod tests {
         // Rename via MultiplexerCommands — triggers Changed<Name> on the Session
         // which causes a rebuild in the next update.
         app.world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands, sessions: Query<Entity, With<SessionMarker>>| {
-                let session = sessions.iter().next().expect("session");
-                mux.rename_session(session, "second-rename".into()).unwrap();
-            })
+            .run_system_once(
+                |mut mux: MultiplexerCommands, sessions: Query<Entity, With<SessionMarker>>| {
+                    let session = sessions.iter().next().expect("session");
+                    mux.rename_session(session, "second-rename".into()).unwrap();
+                },
+            )
             .unwrap();
         app.update();
 
@@ -422,7 +429,9 @@ mod tests {
         let host_before = {
             let world = app.world_mut();
             let registry = world.resource::<crate::ui::registry::ActivityEntityRegistry>();
-            registry.get(first_activity).expect("first activity has a host")
+            registry
+                .get(first_activity)
+                .expect("first activity has a host")
         };
 
         let second_activity = app
@@ -512,15 +521,18 @@ mod tests {
                 |mut mux: MultiplexerCommands,
                  mut commands: Commands,
                  mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-                 attached_q: Query<
+                 attached_session: Query<
                     Entity,
-                    (With<ozmux_multiplexer::SessionMarker>, With<AttachedSession>),
+                    (
+                        With<ozmux_multiplexer::SessionMarker>,
+                        With<AttachedSession>,
+                    ),
                 >| {
                     crate::input::dispatch_new_session(
                         &mut commands,
                         &mut mux,
                         &mut counter,
-                        &attached_q,
+                        &attached_session,
                     );
                 },
             )

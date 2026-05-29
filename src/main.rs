@@ -13,6 +13,7 @@ mod ui;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
+use crate::multiplexer::commands::OzmuxShortcutActionPlugin;
 use bevy::prelude::*;
 use bevy_terminal::TerminalHandlePlugin;
 use bevy_terminal_renderer::TerminalRendererPlugin;
@@ -28,7 +29,13 @@ use ui::{OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyMode
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "ozmux".to_string(),
+                ..default()
+            }),
+            ..default()
+        }))
         .add_plugins((
             TerminalHandlePlugin,
             TerminalRendererPlugin,
@@ -48,6 +55,8 @@ fn main() {
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
+            OzmuxShortcutActionPlugin,
         ))
+        // .insert_resource(WinitSettings::desktop_app())
         .run();
 }

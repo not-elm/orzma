@@ -5,6 +5,7 @@
 //! `Handle<TerminalMaterial>` and prepared GPU resources alive across
 //! split/focus changes.
 
+use crate::ui::{ActivityHostNode, TerminalActivityMarker};
 use bevy::prelude::*;
 use ozmux_multiplexer::{ActivityKind, ActivityMarker};
 use std::collections::HashMap;
@@ -32,9 +33,9 @@ impl ActivityEntityRegistry {
         if let Some(&existing) = self.hosts.get(&activity) {
             return existing;
         }
-        let mut spawn = commands.spawn(crate::ui::ActivityHostNode);
+        let mut spawn = commands.spawn(ActivityHostNode);
         if matches!(kind, ActivityKind::Terminal) {
-            spawn.insert(crate::ui::TerminalActivityMarker);
+            spawn.insert(TerminalActivityMarker);
         }
         let host = spawn.id();
         self.hosts.insert(activity, host);
@@ -122,8 +123,8 @@ mod tests {
 
     #[test]
     fn prune_system_removes_despawned_activity_and_despawns_its_host() {
-        use bevy::app::App;
         use bevy::MinimalPlugins;
+        use bevy::app::App;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);

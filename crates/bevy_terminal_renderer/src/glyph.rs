@@ -2,6 +2,7 @@ use crate::glyph::{
     atlas::{GlyphAtlas, TerminalGlyphAtlasPlugin},
     font::TerminalFontPlugin,
 };
+use crate::material::TerminalMaterialSystems;
 use bevy::{
     asset::RenderAssetUsages,
     image::ImageSampler,
@@ -15,7 +16,7 @@ pub(crate) mod font;
 pub struct TerminalGlyphPlugin;
 
 impl Plugin for TerminalGlyphPlugin {
-    fn build(&self, app: &mut bevy::app::App) {
+    fn build(&self, app: &mut App) {
         app.add_plugins((TerminalGlyphAtlasPlugin, TerminalFontPlugin))
             .add_systems(Startup, init_atlas_image)
             // NOTE: Must run in the same schedule as
@@ -25,7 +26,7 @@ impl Plugin for TerminalGlyphPlugin {
             .add_systems(
                 PostUpdate,
                 sync_atlas_image
-                    .after(crate::material::TerminalMaterialSystems::UpdateMaterial)
+                    .after(TerminalMaterialSystems::UpdateMaterial)
                     .run_if(resource_changed::<GlyphAtlas>),
             );
     }

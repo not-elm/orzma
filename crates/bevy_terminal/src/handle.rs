@@ -297,8 +297,7 @@ impl TerminalHandle {
         ty: alacritty_terminal::selection::SelectionType,
     ) {
         use alacritty_terminal::index::Side as ASide;
-        let line =
-            crate::vt::frame_builder::viewport_row_to_line(&self.term, viewport_point.line.0);
+        let line = viewport_row_to_line(&self.term, viewport_point.line.0);
         let anchor = alacritty_terminal::index::Point::new(line, viewport_point.column);
         let mut sel = alacritty_terminal::selection::Selection::new(ty, anchor, side);
         let opposite = match side {
@@ -326,8 +325,7 @@ impl TerminalHandle {
         if self.term.selection.is_none() {
             return;
         }
-        let line =
-            crate::vt::frame_builder::viewport_row_to_line(&self.term, viewport_point.line.0);
+        let line = viewport_row_to_line(&self.term, viewport_point.line.0);
         let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
         if let Some(sel) = self.term.selection.as_mut() {
             sel.update(point, side);
@@ -357,8 +355,7 @@ impl TerminalHandle {
         {
             return;
         }
-        let line =
-            crate::vt::frame_builder::viewport_row_to_line(&self.term, viewport_point.line.0);
+        let line = viewport_row_to_line(&self.term, viewport_point.line.0);
         let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
         self.term.vi_goto_point(point);
         self.stage_full_damage_and_arm(coalescer);

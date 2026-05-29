@@ -2,9 +2,9 @@
 //! whose orientation matches the requested axis and re-weights it in
 //! integer cells per spec §7.
 
-use bevy::ecs::entity::Entity;
 use crate::cells::{Cell, CellId, LayoutCellState, SplitOrientation};
 use crate::direction::PaneDirection;
+use bevy::ecs::entity::Entity;
 
 /// Hard floor on a leaf pane's cell count along the LEFTRIGHT axis.
 pub(crate) const MIN_PANE_COLS: u16 = 10;
@@ -21,6 +21,71 @@ pub enum ResizePaneOutcome {
     NoOp,
 }
 
+/// Resolve direction → axis/sign → matching ancestor → availability → apply.
+///
+/// The `pane_to_cell` index is owned by `state`; callers pass the pane
+/// entity directly. `session_cols` and `session_rows` are the current
+/// terminal dimensions of the owning session.
+pub fn resize_split_for_pane(
+    state: &mut LayoutCellState,
+    pane: Entity,
+    direction: PaneDirection,
+    amount: u16,
+    session_cols: u16,
+    session_rows: u16,
+) -> ResizePaneOutcome {
+    let Ok(leaf_id) = state.lookup_cell_for_pane(pane) else {
+        return ResizePaneOutcome::NoOp;
+    };
+    let (axis, sign) = direction_to_axis_sign(direction);
+    let Some(ancestor_id) = find_matching_ancestor(state, &leaf_id, axis) else {
+        return ResizePaneOutcome::NoOp;
+    };
+
+    let session_p = match axis {
+        SplitOrientation::Horizontal => session_cols,
+        SplitOrientation::Vertical => session_rows,
+    };
+    let min_cells = match axis {
+        SplitOrientation::Horizontal => MIN_PANE_COLS,
+        SplitOrientation::Vertical => MIN_PANE_ROWS,
+    };
+    let p_ancestor = compute_p_at(state, &ancestor_id, axis, session_p);
+
+    let (current_lhs, current_rhs, lhs_cell, rhs_cell) = match state.cell(&ancestor_id) {
+        Ok(Cell::Split(s)) => {
+            let (lhs, rhs) = split_cells(p_ancestor, s.lhs_weight, s.rhs_weight);
+            (lhs, rhs, s.lhs_cell, s.rhs_cell)
+        }
+        _ => return ResizePaneOutcome::NoOp,
+    };
+
+    let (shrink_cell, shrink_p) = if sign > 0 {
+        (rhs_cell, current_rhs)
+    } else {
+        (lhs_cell, current_lhs)
+    };
+
+    let applied = available_to_shrink(state, &shrink_cell, axis, shrink_p, min_cells, amount);
+    if applied == 0 {
+        return ResizePaneOutcome::NoOp;
+    }
+
+    let signed_delta = sign * applied as i16;
+    let new_lhs_cells: u16 =
+        ((current_lhs as i32) + (signed_delta as i32)).clamp(0, p_ancestor as i32) as u16;
+    let new_rhs_cells = p_ancestor - new_lhs_cells;
+    let new_lhs_w = new_lhs_cells as f32 / p_ancestor as f32;
+    let new_rhs_w = new_rhs_cells as f32 / p_ancestor as f32;
+
+    if let Ok(Cell::Split(s)) = state.cell_mut(&ancestor_id) {
+        s.lhs_weight = new_lhs_w;
+        s.rhs_weight = new_rhs_w;
+    }
+
+    ResizePaneOutcome::Applied
+}
+
 fn direction_to_axis_sign(d: PaneDirection) -> (SplitOrientation, i16) {
     match d {
         PaneDirection::Right => (SplitOrientation::Horizontal, 1),
@@ -35,7 +100,10 @@ fn find_matching_ancestor(
     start_cell: &CellId,
     axis: SplitOrientation,
 ) -> Option<CellId> {
-    let mut cursor = state.cell(start_cell).ok().and_then(|c| c.parent().cloned());
+    let mut cursor = state
+        .cell(start_cell)
+        .ok()
+        .and_then(|c| c.parent().cloned());
     while let Some(parent_id) = cursor {
         let parent = state.cell(&parent_id).ok()?;
         match parent {
@@ -132,71 +200,6 @@ fn available_to_shrink(
     max_d
 }
 
-/// Resolve direction → axis/sign → matching ancestor → availability → apply.
-///
-/// The `pane_to_cell` index is owned by `state`; callers pass the pane
-/// entity directly. `session_cols` and `session_rows` are the current
-/// terminal dimensions of the owning session.
-pub fn resize_split_for_pane(
-    state: &mut LayoutCellState,
-    pane: Entity,
-    direction: PaneDirection,
-    amount: u16,
-    session_cols: u16,
-    session_rows: u16,
-) -> ResizePaneOutcome {
-    let Ok(leaf_id) = state.lookup_cell_for_pane(pane) else {
-        return ResizePaneOutcome::NoOp;
-    };
-    let (axis, sign) = direction_to_axis_sign(direction);
-    let Some(ancestor_id) = find_matching_ancestor(state, &leaf_id, axis) else {
-        return ResizePaneOutcome::NoOp;
-    };
-
-    let session_p = match axis {
-        SplitOrientation::Horizontal => session_cols,
-        SplitOrientation::Vertical => session_rows,
-    };
-    let min_cells = match axis {
-        SplitOrientation::Horizontal => MIN_PANE_COLS,
-        SplitOrientation::Vertical => MIN_PANE_ROWS,
-    };
-    let p_ancestor = compute_p_at(state, &ancestor_id, axis, session_p);
-
-    let (current_lhs, current_rhs, lhs_cell, rhs_cell) = match state.cell(&ancestor_id) {
-        Ok(Cell::Split(s)) => {
-            let (lhs, rhs) = split_cells(p_ancestor, s.lhs_weight, s.rhs_weight);
-            (lhs, rhs, s.lhs_cell, s.rhs_cell)
-        }
-        _ => return ResizePaneOutcome::NoOp,
-    };
-
-    let (shrink_cell, shrink_p) = if sign > 0 {
-        (rhs_cell, current_rhs)
-    } else {
-        (lhs_cell, current_lhs)
-    };
-
-    let applied = available_to_shrink(state, &shrink_cell, axis, shrink_p, min_cells, amount);
-    if applied == 0 {
-        return ResizePaneOutcome::NoOp;
-    }
-
-    let signed_delta = sign * applied as i16;
-    let new_lhs_cells: u16 =
-        ((current_lhs as i32) + (signed_delta as i32)).clamp(0, p_ancestor as i32) as u16;
-    let new_rhs_cells = p_ancestor - new_lhs_cells;
-    let new_lhs_w = new_lhs_cells as f32 / p_ancestor as f32;
-    let new_rhs_w = new_rhs_cells as f32 / p_ancestor as f32;
-
-    if let Ok(Cell::Split(s)) = state.cell_mut(&ancestor_id) {
-        s.lhs_weight = new_lhs_w;
-        s.rhs_weight = new_rhs_w;
-    }
-
-    ResizePaneOutcome::Applied
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,9 +209,7 @@ mod tests {
         Entity::from_raw_u32(n).expect("nonzero entity id")
     }
 
-    fn setup_two_panes(
-        orientation: SplitOrientation,
-    ) -> (LayoutCellState, CellId, Entity, Entity) {
+    fn setup_two_panes(orientation: SplitOrientation) -> (LayoutCellState, CellId, Entity, Entity) {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
@@ -394,22 +395,15 @@ mod tests {
             s.lhs_weight = 0.0;
             s.rhs_weight = 0.0;
         }
-        let result = available_to_shrink(
-            &state,
-            &split_id,
-            SplitOrientation::Horizontal,
-            20,
-            10,
-            5,
-        );
+        let result =
+            available_to_shrink(&state, &split_id, SplitOrientation::Horizontal, 20, 10, 5);
         assert_eq!(result, 0);
     }
 
     #[test]
     fn resize_right_in_two_column_split_grows_lhs_shrinks_rhs() {
         let (mut state, _, pa, _) = setup_two_panes(SplitOrientation::Horizontal);
-        let outcome =
-            resize_split_for_pane(&mut state, pa, PaneDirection::Right, 1, 120, 40);
+        let outcome = resize_split_for_pane(&mut state, pa, PaneDirection::Right, 1, 120, 40);
         assert_eq!(outcome, ResizePaneOutcome::Applied);
         let leaf = state.lookup_cell_for_pane(pa).unwrap();
         let p_after = compute_p_at(&state, &leaf, SplitOrientation::Horizontal, 120);
@@ -419,8 +413,7 @@ mod tests {
     #[test]
     fn resize_right_with_active_in_rhs_still_shrinks_rhs() {
         let (mut state, _, _, pb) = setup_two_panes(SplitOrientation::Horizontal);
-        let outcome =
-            resize_split_for_pane(&mut state, pb, PaneDirection::Right, 1, 120, 40);
+        let outcome = resize_split_for_pane(&mut state, pb, PaneDirection::Right, 1, 120, 40);
         assert_eq!(outcome, ResizePaneOutcome::Applied);
         let leaf = state.lookup_cell_for_pane(pb).unwrap();
         let p_after = compute_p_at(&state, &leaf, SplitOrientation::Horizontal, 120);
@@ -430,8 +423,7 @@ mod tests {
     #[test]
     fn resize_returns_no_op_when_no_matching_ancestor_orientation() {
         let (mut state, _, pa, _) = setup_two_panes(SplitOrientation::Horizontal);
-        let outcome =
-            resize_split_for_pane(&mut state, pa, PaneDirection::Down, 1, 120, 40);
+        let outcome = resize_split_for_pane(&mut state, pa, PaneDirection::Down, 1, 120, 40);
         assert_eq!(outcome, ResizePaneOutcome::NoOp);
     }
 
@@ -444,16 +436,14 @@ mod tests {
             s.lhs_weight = 110.0;
             s.rhs_weight = 10.0;
         }
-        let outcome =
-            resize_split_for_pane(&mut state, pa, PaneDirection::Right, 5, 120, 40);
+        let outcome = resize_split_for_pane(&mut state, pa, PaneDirection::Right, 5, 120, 40);
         assert_eq!(outcome, ResizePaneOutcome::NoOp);
     }
 
     #[test]
     fn resize_partially_applies_when_amount_exceeds_available_budget() {
         let (mut state, _, pa, _) = setup_two_panes(SplitOrientation::Horizontal);
-        let outcome =
-            resize_split_for_pane(&mut state, pa, PaneDirection::Right, 100, 120, 40);
+        let outcome = resize_split_for_pane(&mut state, pa, PaneDirection::Right, 100, 120, 40);
         assert_eq!(outcome, ResizePaneOutcome::Applied);
         let leaf = state.lookup_cell_for_pane(pa).unwrap();
         let p_after = compute_p_at(&state, &leaf, SplitOrientation::Horizontal, 120);

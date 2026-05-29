@@ -7,7 +7,6 @@
 //! `Window::ime_enabled` and `.ime_position`).
 
 use crate::ui::TerminalActivityMarker;
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::registry::ActivityEntityRegistry;
 use bevy::app::{App, Plugin, Update};
@@ -23,6 +22,7 @@ use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_terminal::{TerminalKey, TerminalModifiers};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::prelude::TerminalGrid;
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before
@@ -146,27 +146,27 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// the window scale factor.
 pub(crate) fn ime_policy_system(
     mux: MultiplexerCommands,
-    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
-    terminal_q: Query<(), With<TerminalActivityMarker>>,
-    copy_mode_q: Query<(), With<CopyModeState>>,
-    anchor_q: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    terminals: Query<(), With<TerminalActivityMarker>>,
+    copy_modes: Query<(), With<CopyModeState>>,
+    anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
-    mut window_q: Query<&mut Window, With<PrimaryWindow>>,
+    mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
-    let Ok(mut window) = window_q.single_mut() else {
+    let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
 
-    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_q, &registry) else {
+    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_session, &registry) else {
         if window.ime_enabled {
             window.ime_enabled = false;
         }
         return;
     };
 
-    let is_terminal = terminal_q.get(entity).is_ok();
-    let in_copy_mode = copy_mode_q.get(entity).is_ok();
+    let is_terminal = terminals.get(entity).is_ok();
+    let in_copy_mode = copy_modes.get(entity).is_ok();
     let desired = is_terminal && !in_copy_mode;
 
     if window.ime_enabled != desired {
@@ -198,7 +198,7 @@ pub(crate) fn ime_policy_system(
     // is also physical px). To get the node's top-left in physical
     // px, subtract `0.5 * node.size()`. Do NOT multiply translation
     // by `scale` — it's already physical.
-    let Ok((node, ui_xform, grid)) = anchor_q.get(entity) else {
+    let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
         return;
     };
     let scale = window.resolution.scale_factor();
@@ -230,12 +230,12 @@ pub(crate) fn read_ime_events(
     mut state: ResMut<ImeState>,
     mut commands: Commands,
     mux: MultiplexerCommands,
-    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
 ) {
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
-            let Some(session) = attached_q.iter().next() else {
+            let Some(session) = attached_session.iter().next() else {
                 tracing::warn!(
                     target: "ozmux_gui::input::ime",
                     "commit dropped: no attached terminal",
@@ -258,7 +258,6 @@ pub(crate) fn read_ime_events(
 mod tests {
     use super::*;
     use crate::ui::registry::ActivityEntityRegistry;
-    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker};
     use bevy::app::{App, Update};
     use bevy::ecs::entity::Entity;
     use bevy::ecs::observer::On;
@@ -268,6 +267,7 @@ mod tests {
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
     use ozmux_multiplexer::MultiplexerCommands;
+    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker};
     use std::sync::{Arc, Mutex};
 
     #[test]

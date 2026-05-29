@@ -7,6 +7,7 @@
 use crate::font::TerminalUiFont;
 use crate::multiplexer::SessionCreatedAt;
 use crate::ui::UiRoot;
+use crate::ui::status_bar::build_status_bar;
 use bevy::prelude::*;
 use ozmux_multiplexer::{AttachedSession, SessionMarker};
 
@@ -25,12 +26,17 @@ pub fn rebuild_status_bar_on_session_set_change(
     mut commands: Commands,
     mut attached_removed: RemovedComponents<AttachedSession>,
     mut sessions_removed: RemovedComponents<SessionMarker>,
-    sessions_q: Query<
-        (Entity, &Name, Has<AttachedSession>, Option<&SessionCreatedAt>),
+    sessions: Query<
+        (
+            Entity,
+            &Name,
+            Has<AttachedSession>,
+            Option<&SessionCreatedAt>,
+        ),
         With<SessionMarker>,
     >,
-    ui_root_q: Query<Entity, With<UiRoot>>,
-    status_bar_q: Query<Entity, With<StatusBarRoot>>,
+    ui_root: Query<Entity, With<UiRoot>>,
+    status_bar: Query<Entity, With<StatusBarRoot>>,
     sessions_added: Query<(), Added<SessionMarker>>,
     attached_added: Query<(), Added<AttachedSession>>,
     ui_font: Option<Res<TerminalUiFont>>,
@@ -44,11 +50,11 @@ pub fn rebuild_status_bar_on_session_set_change(
         return;
     }
 
-    let Ok(ui_root) = ui_root_q.single() else {
+    let Ok(ui_root) = ui_root.single() else {
         return;
     };
 
-    for e in status_bar_q.iter() {
+    for e in status_bar.iter() {
         commands.entity(e).try_despawn();
     }
 
@@ -58,7 +64,7 @@ pub fn rebuild_status_bar_on_session_set_change(
     // so an Entity-based sort would not match session creation order.
     // Externally-spawned sessions without `SessionCreatedAt` sort last via
     // the `u32::MAX` fallback.
-    let mut sessions: Vec<(Entity, String, bool, u32)> = sessions_q
+    let mut sessions: Vec<(Entity, String, bool, u32)> = sessions
         .iter()
         .map(|(e, name, attached, created)| {
             (
@@ -76,5 +82,5 @@ pub fn rebuild_status_bar_on_session_set_change(
         .collect();
 
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
-    crate::ui::status_bar::build_status_bar(&mut commands, ui_root, &sessions, &ui_font_handle);
+    build_status_bar(&mut commands, ui_root, &sessions, &ui_font_handle);
 }

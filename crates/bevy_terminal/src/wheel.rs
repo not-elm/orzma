@@ -21,6 +21,7 @@
 //! means (this matches alacritty: in mouse mode the multiplier is
 //! forced to 1).
 
+use crate::mouse_encode::{ProtocolModifiers, encode_protocol_event};
 use alacritty_terminal::term::TermMode;
 
 /// Configuration for wheel routing. Mirrors the `[mouse]` config block.
@@ -79,8 +80,8 @@ pub enum WheelAction {
     Noop,
 }
 
-fn protocol_mods_from(mods: WheelModifiers) -> crate::mouse_encode::ProtocolModifiers {
-    crate::mouse_encode::ProtocolModifiers {
+fn protocol_mods_from(mods: WheelModifiers) -> ProtocolModifiers {
+    ProtocolModifiers {
         shift: mods.shift,
         ctrl: mods.ctrl,
         // NOTE: WheelModifiers.alt → ProtocolModifiers.meta. The xterm
@@ -110,14 +111,7 @@ fn encode_wheel_report(
         WheelDir::Up => 64,
         WheelDir::Down => 65,
     };
-    crate::mouse_encode::encode_protocol_event(
-        modes,
-        cb_base,
-        cell,
-        protocol_mods_from(mods),
-        false,
-        false,
-    )
+    encode_protocol_event(modes, cb_base, cell, protocol_mods_from(mods), false, false)
 }
 
 impl WheelAction {

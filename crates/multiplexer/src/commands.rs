@@ -4,8 +4,6 @@
 //! native change detection (`Changed<T>`) carries the signal to downstream
 //! rebuild systems.
 
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
 use crate::cells::{Side, SplitOrientation};
 use crate::components::{
     ActiveActivity, ActivePane, ActivityKind, ActivityMarker, CopyMode, LayoutCells, PaneMarker,
@@ -13,8 +11,10 @@ use crate::components::{
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
-use crate::resize::{resize_split_for_pane, ResizePaneOutcome};
+use crate::resize::{ResizePaneOutcome, resize_split_for_pane};
 use crate::swap::{SwapOffset, SwapOutcome};
+use bevy::ecs::system::SystemParam;
+use bevy::prelude::*;
 
 /// Result of `create_session` — the three freshly-spawned entities.
 #[derive(Debug, Clone, Copy)]
@@ -47,7 +47,11 @@ pub struct MultiplexerCommands<'w, 's> {
     panes: Query<
         'w,
         's,
-        (&'static mut ActiveActivity, &'static mut CopyMode, &'static ChildOf),
+        (
+            &'static mut ActiveActivity,
+            &'static mut CopyMode,
+            &'static ChildOf,
+        ),
         With<PaneMarker>,
     >,
     activities: Query<'w, 's, (&'static ActivityKind, &'static ChildOf), With<ActivityMarker>>,
@@ -92,7 +96,11 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         self.commands.entity(pane).insert(ChildOf(session));
         self.commands.entity(activity).insert(ChildOf(pane));
 
-        SessionCreated { session, pane, activity }
+        SessionCreated {
+            session,
+            pane,
+            activity,
+        }
     }
 
     /// Mutate the Session's `Name` component. Uses `set_if_neq` so a
@@ -111,10 +119,11 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     pub fn set_session_dimensions(&mut self, session: Entity, cols: u16, rows: u16) {
         let new = SessionDimensions { cols, rows };
         if let Ok((_, _, _, dims)) = self.sessions.get_mut(session)
-            && let Some(mut dims) = dims {
-                dims.set_if_neq(new);
-                return;
-            }
+            && let Some(mut dims) = dims
+        {
+            dims.set_if_neq(new);
+            return;
+        }
         self.commands.entity(session).insert(new);
     }
 
@@ -130,11 +139,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     }
 
     /// Update the Pane's `ActiveActivity` pointer.
-    pub fn set_active_activity(
-        &mut self,
-        pane: Entity,
-        activity: Entity,
-    ) -> MultiplexerResult<()> {
+    pub fn set_active_activity(&mut self, pane: Entity, activity: Entity) -> MultiplexerResult<()> {
         let (mut active_activity, _, _) = self
             .panes
             .get_mut(pane)
@@ -166,7 +171,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         let result = self.split_pane_inner(target_pane, side, orientation);
         match result {
             Ok((new_pane, _)) => {
-                self.commands.entity(new_pane).insert(ActiveActivity(new_activity));
+                self.commands
+                    .entity(new_pane)
+                    .insert(ActiveActivity(new_activity));
                 self.commands.entity(new_activity).insert(ChildOf(new_pane));
                 Ok(new_pane)
             }
@@ -270,7 +277,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         let (new_pane, _) = self.split_pane_inner(source_pane, side, orientation)?;
 
         self.commands.entity(activity).insert(ChildOf(new_pane));
-        self.commands.entity(new_pane).insert(ActiveActivity(activity));
+        self.commands
+            .entity(new_pane)
+            .insert(ActiveActivity(activity));
 
         Ok(new_pane)
     }
@@ -298,29 +307,42 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .sessions
             .get_mut(session)
             .map_err(|_| MultiplexerError::SessionNotFound(session))?;
-        let (cols, rows) = dims
-            .as_ref()
-            .map(|d| (d.cols, d.rows))
-            .unwrap_or((0, 0));
+        let (cols, rows) = dims.as_ref().map(|d| (d.cols, d.rows)).unwrap_or((0, 0));
         if cols == 0 || rows == 0 {
             return Ok(ResizePaneOutcome::NoOp);
         }
-        Ok(resize_split_for_pane(&mut layout.cells, pane, direction, amount, cols, rows))
+        Ok(resize_split_for_pane(
+            &mut layout.cells,
+            pane,
+            direction,
+            amount,
+            cols,
+            rows,
+        ))
     }
 
     /// Walk up `ChildOf` from a Pane entity to find its owning Session.
     pub fn session_of_pane(&self, pane: Entity) -> Option<Entity> {
-        self.panes.get(pane).ok().map(|(_, _, child_of)| child_of.parent())
+        self.panes
+            .get(pane)
+            .ok()
+            .map(|(_, _, child_of)| child_of.parent())
     }
 
     /// Walk up `ChildOf` from an Activity entity to find its owning Pane.
     pub fn pane_of_activity(&self, activity: Entity) -> Option<Entity> {
-        self.activities.get(activity).ok().map(|(_, child_of)| child_of.parent())
+        self.activities
+            .get(activity)
+            .ok()
+            .map(|(_, child_of)| child_of.parent())
     }
 
     /// Read the Session's `ActivePane` pointer.
     pub fn sessions_active_pane(&self, session: Entity) -> Option<Entity> {
-        self.sessions.get(session).ok().map(|(_, active, _, _)| active.0)
+        self.sessions
+            .get(session)
+            .ok()
+            .map(|(_, active, _, _)| active.0)
     }
 
     /// Read the Pane's `ActiveActivity` pointer.
@@ -361,11 +383,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 
         let new_pane = self
             .commands
-            .spawn((
-                PaneMarker,
-                CopyMode::default(),
-                Name::new("pane: split"),
-            ))
+            .spawn((PaneMarker, CopyMode::default(), Name::new("pane: split")))
             .id();
         self.commands.entity(new_pane).insert(ChildOf(session));
 
@@ -375,7 +393,10 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .map_err(|_| MultiplexerError::SessionNotFound(session))?;
         let target_cell = layout.cells.lookup_cell_for_pane(target_pane)?;
         let new_cell = layout.cells.new_pane(new_pane, None);
-        if let Err(e) = layout.cells.split_cell(target_cell, new_cell, side, orientation) {
+        if let Err(e) = layout
+            .cells
+            .split_cell(target_cell, new_cell, side, orientation)
+        {
             let _ = layout.cells.remove_subtree(&new_cell);
             self.commands.entity(new_pane).despawn();
             return Err(e);
@@ -395,9 +416,7 @@ mod tests {
     fn create_session_spawns_session_pane_activity_with_correct_markers_and_childof() {
         let mut world = World::new();
         let outcome = world
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("test".into()))
-            })
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(Some("test".into())))
             .unwrap();
 
         assert!(world.get::<SessionMarker>(outcome.session).is_some());
@@ -467,7 +486,10 @@ mod tests {
         world.flush();
         assert_eq!(
             world.get::<SessionDimensions>(outcome.session).copied(),
-            Some(SessionDimensions { cols: 120, rows: 40 }),
+            Some(SessionDimensions {
+                cols: 120,
+                rows: 40
+            }),
         );
     }
 
@@ -516,7 +538,8 @@ mod tests {
 
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(outcome.pane, other_activity).unwrap();
+                mux.set_active_activity(outcome.pane, other_activity)
+                    .unwrap();
             })
             .unwrap();
 
@@ -692,13 +715,15 @@ mod tests {
     fn break_activity_to_pane_returns_error_when_source_pane_has_only_one_activity() {
         let mut world = World::new();
         let outcome = world
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(None)
-            })
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
         let result = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.break_activity_to_pane(outcome.activity, Side::After, SplitOrientation::Horizontal)
+                mux.break_activity_to_pane(
+                    outcome.activity,
+                    Side::After,
+                    SplitOrientation::Horizontal,
+                )
             })
             .unwrap();
         assert!(
@@ -714,7 +739,9 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
         let active = world
-            .run_system_once(move |mux: MultiplexerCommands| mux.sessions_active_pane(outcome.session))
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.sessions_active_pane(outcome.session)
+            })
             .unwrap();
         assert_eq!(active, Some(outcome.pane));
     }
@@ -726,7 +753,9 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
         let active = world
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_activity(outcome.pane))
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.panes_active_activity(outcome.pane)
+            })
             .unwrap();
         assert_eq!(active, Some(outcome.activity));
     }

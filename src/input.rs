@@ -7,24 +7,32 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
+use crate::clipboard::{Clipboard, build_paste_bytes};
+use crate::configs::OzmuxConfigsResource;
 use crate::input::ime::{ImeState, read_ime_events};
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
+use crate::multiplexer::commands;
+use crate::multiplexer::{SessionCreatedAt, SessionNameCounter};
+use crate::system_set::OzmuxSystems;
+use crate::ui::copy_mode::{
+    CopyModeState, EnterCopyModeRequest, dispatch_key as dispatch_copy_mode_key,
+};
 use crate::ui::registry::ActivityEntityRegistry;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers, SessionOffset};
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
 use std::collections::HashSet;
 
 /// Resolves the focused activity's entity via the attached session →
 /// multiplexer → registry chain.
 pub(crate) fn resolve_focused_terminal(
     mux: &MultiplexerCommands,
-    attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: &ActivityEntityRegistry,
 ) -> Option<Entity> {
-    let session = attached_q.iter().next()?;
+    let session = attached_session.iter().next()?;
     let pane = mux.sessions_active_pane(session)?;
     let activity = mux.panes_active_activity(pane)?;
     registry.get(activity)
@@ -54,7 +62,7 @@ impl Plugin for OzmuxShortcutPlugin {
                 InputPhase::FocusedKey,
             )
                 .chain()
-                .in_set(crate::system_set::OzmuxSystems::Input),
+                .in_set(OzmuxSystems::Input),
         )
         .add_systems(
             Update,
@@ -75,23 +83,20 @@ pub(crate) fn dispatch_focused_key(
     mut mux: MultiplexerCommands,
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
-    mut clipboard: ResMut<crate::clipboard::Clipboard>,
-    mut session_name_counter: ResMut<crate::multiplexer::SessionNameCounter>,
+    mut clipboard: ResMut<Clipboard>,
+    mut session_name_counter: ResMut<SessionNameCounter>,
     mut handles: Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
-    windows_q: Query<&Window>,
-    sessions_q: Query<
-        (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
-        With<SessionMarker>,
-    >,
-    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    windows: Query<&Window>,
+    sessions: Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
+    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     keys: Res<ButtonInput<KeyCode>>,
-    configs: Res<crate::configs::OzmuxConfigsResource>,
-    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
-    copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+    configs: Res<OzmuxConfigsResource>,
+    registry: Res<ActivityEntityRegistry>,
+    copy_modes: Query<(), With<CopyModeState>>,
     ime_state: Res<ImeState>,
 ) {
     let bindings = &configs.shortcuts.bindings;
@@ -106,7 +111,7 @@ pub(crate) fn dispatch_focused_key(
     // double-taps Cmd+R), both would read the same pre-flush attached entity,
     // resulting in zero or multiple AttachedSession entities after flush —
     // breaking the `exactly one attached` invariant relied on by
-    // attached_q.single() and downstream rebuild systems. Drop the
+    // attached_session.single() and downstream rebuild systems. Drop the
     // second-and-onward marker mutations in this frame.
     let mut marker_dirty_this_frame = false;
 
@@ -119,14 +124,14 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        let Ok(win) = windows_q.get(ev.window) else {
+        let Ok(win) = windows.get(ev.window) else {
             continue;
         };
         if !win.focused {
             continue;
         }
 
-        let session = match attached_q.single() {
+        let session = match attached_session.single() {
             Ok(e) => e,
             Err(err) => {
                 // NOTE: silently dropping keystrokes here would be invisible to
@@ -137,7 +142,7 @@ pub(crate) fn dispatch_focused_key(
                 tracing::warn!(
                     target: "ozmux_gui::input",
                     ?err,
-                    "attached_q.single() failed; dropping keystroke (AttachedSession invariant violated)"
+                    "attached_session.single() failed; dropping keystroke (AttachedSession invariant violated)"
                 );
                 continue;
             }
@@ -149,7 +154,7 @@ pub(crate) fn dispatch_focused_key(
 
         if matches!(ev.logical_key, Key::Escape)
             && let Some(entity) = focused_entity
-            && copy_mode_q.get(entity).is_err()
+            && copy_modes.get(entity).is_err()
             && let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(entity)
             && !handle.is_at_bottom()
         {
@@ -168,10 +173,10 @@ pub(crate) fn dispatch_focused_key(
         }
 
         if let Some(entity) = focused_entity
-            && copy_mode_q.get(entity).is_ok()
+            && copy_modes.get(entity).is_ok()
             && !just_exited.contains(&entity)
         {
-            let exited = crate::ui::copy_mode::dispatch_key(
+            let exited = dispatch_copy_mode_key(
                 &mut commands,
                 &mut handles,
                 &mut clipboard,
@@ -192,7 +197,7 @@ pub(crate) fn dispatch_focused_key(
                 && !text.is_empty()
             {
                 let bracketed = handle.bracketed_paste_enabled();
-                let bytes = crate::clipboard::build_paste_bytes(&text, bracketed);
+                let bytes = build_paste_bytes(&text, bracketed);
                 if let Err(err) = handle.write(&mut pty, &bytes) {
                     tracing::warn!(
                         target: "ozmux_gui::input",
@@ -224,8 +229,8 @@ pub(crate) fn dispatch_focused_key(
                     &mut mux,
                     &mut session_name_counter,
                     session,
-                    &sessions_q,
-                    &attached_q,
+                    &sessions,
+                    &attached_session,
                     &registry,
                     &mut marker_dirty_this_frame,
                 );
@@ -367,13 +372,10 @@ fn execute_action(
     action: Action,
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
-    session_name_counter: &mut crate::multiplexer::SessionNameCounter,
+    session_name_counter: &mut SessionNameCounter,
     session: Entity,
-    sessions_q: &Query<
-        (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
-        With<SessionMarker>,
-    >,
-    attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
+    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: &ActivityEntityRegistry,
     marker_dirty_this_frame: &mut bool,
 ) {
@@ -383,7 +385,7 @@ fn execute_action(
                 && let Some(activity) = mux.panes_active_activity(pane)
                 && let Some(entity) = registry.get(activity)
             {
-                commands.trigger(crate::ui::copy_mode::EnterCopyModeRequest { entity });
+                commands.trigger(EnterCopyModeRequest { entity });
             }
         }
         Action::NewSession => {
@@ -400,7 +402,7 @@ fn execute_action(
                 ?session,
                 "NewSession action dispatched"
             );
-            dispatch_new_session(commands, mux, session_name_counter, attached_q);
+            dispatch_new_session(commands, mux, session_name_counter, attached_session);
         }
         Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => {
             if *marker_dirty_this_frame {
@@ -412,12 +414,9 @@ fn execute_action(
                 return;
             }
             *marker_dirty_this_frame = true;
-            dispatch_focus_session(commands, sessions_q, attached_q, &action);
+            dispatch_focus_session(commands, sessions, attached_session, &action);
         }
-        _ => {
-            let mutated = crate::multiplexer::commands::apply(action, mux, session);
-            let _ = mutated;
-        }
+        _ => commands::dispatch(action, commands, session),
     }
 }
 
@@ -428,14 +427,11 @@ fn execute_action(
 /// because deferred command queues do not guarantee monotonic indices.
 fn dispatch_focus_session(
     commands: &mut Commands,
-    sessions_q: &Query<
-        (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
-        With<SessionMarker>,
-    >,
-    attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
+    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     action: &Action,
 ) {
-    let mut pairs: Vec<(Entity, u32)> = sessions_q
+    let mut pairs: Vec<(Entity, u32)> = sessions
         .iter()
         .map(|(e, created)| (e, created.map(|c| c.0).unwrap_or(u32::MAX)))
         .collect();
@@ -445,7 +441,7 @@ fn dispatch_focus_session(
     pairs.sort_by_key(|(_, c)| *c);
     let entries: Vec<Entity> = pairs.into_iter().map(|(e, _)| e).collect();
 
-    let Ok(current_entity) = attached_q.single() else {
+    let Ok(current_entity) = attached_session.single() else {
         return;
     };
     let current_idx = entries
@@ -495,10 +491,10 @@ fn dispatch_focus_session(
 pub(crate) fn dispatch_new_session(
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
-    counter: &mut crate::multiplexer::SessionNameCounter,
-    attached_q: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    counter: &mut SessionNameCounter,
+    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
 ) {
-    match attached_q.single() {
+    match attached_session.single() {
         Ok(previous_attached) => {
             tracing::debug!(
                 target: "ozmux_gui::input",
@@ -536,7 +532,7 @@ pub(crate) fn dispatch_new_session(
 pub(crate) fn spawn_attached_session(
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
-    counter: &mut crate::multiplexer::SessionNameCounter,
+    counter: &mut SessionNameCounter,
 ) -> Entity {
     let n = counter.next();
     let outcome = mux.create_session(Some(format!("session{n}")));
@@ -550,7 +546,7 @@ pub(crate) fn spawn_attached_session(
     commands.entity(outcome.session).insert((
         AttachedSession,
         SessionUiSubtree(subtree),
-        crate::multiplexer::SessionCreatedAt(n),
+        SessionCreatedAt(n),
     ));
     commands.entity(subtree).insert(ChildOf(outcome.session));
     outcome.session
@@ -601,7 +597,7 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
 fn forward_to_active_terminal(
     commands: &mut Commands,
     mux: &MultiplexerCommands,
-    registry: &crate::ui::registry::ActivityEntityRegistry,
+    registry: &ActivityEntityRegistry,
     session: Entity,
     key: TerminalKey,
     mods: TerminalModifiers,
@@ -656,9 +652,7 @@ mod tests {
             .session;
         app.world_mut().flush();
         // Mark the session entity with AttachedSession (mirrors bootstrap).
-        app.world_mut()
-            .entity_mut(session)
-            .insert(AttachedSession);
+        app.world_mut().entity_mut(session).insert(AttachedSession);
 
         let window_entity = app
             .world_mut()
@@ -704,15 +698,21 @@ mod tests {
     /// observer still records the trigger regardless of observer order.
     fn install_active_terminal_activity(app: &mut App) -> Entity {
         let activity_entity = app.world_mut().spawn_empty().id();
-        let activity_id = app
-            .world_mut()
-            .run_system_once(|mux: MultiplexerCommands, attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                let session = attached_q.iter().next()?;
-                let pane = mux.sessions_active_pane(session)?;
-                mux.panes_active_activity(pane)
-            })
-            .unwrap()
-            .unwrap();
+        let activity_id =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     attached_session: Query<
+                        Entity,
+                        (With<SessionMarker>, With<AttachedSession>),
+                    >| {
+                        let session = attached_session.iter().next()?;
+                        let pane = mux.sessions_active_pane(session)?;
+                        mux.panes_active_activity(pane)
+                    },
+                )
+                .unwrap()
+                .unwrap();
         let mut registry = app
             .world_mut()
             .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
@@ -735,15 +735,21 @@ mod tests {
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let entity = app.world_mut().spawn(bundle).id();
-        let activity_id = app
-            .world_mut()
-            .run_system_once(|mux: MultiplexerCommands, attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                let session = attached_q.iter().next()?;
-                let pane = mux.sessions_active_pane(session)?;
-                mux.panes_active_activity(pane)
-            })
-            .unwrap()
-            .unwrap();
+        let activity_id =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     attached_session: Query<
+                        Entity,
+                        (With<SessionMarker>, With<AttachedSession>),
+                    >| {
+                        let session = attached_session.iter().next()?;
+                        let pane = mux.sessions_active_pane(session)?;
+                        mux.panes_active_activity(pane)
+                    },
+                )
+                .unwrap()
+                .unwrap();
         let mut registry = app
             .world_mut()
             .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
@@ -1336,7 +1342,9 @@ mod tests {
         let (mut app, _window_entity) = make_app(true);
         let second_session = app
             .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(Some("second".into())))
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_session(Some("second".into()))
+            })
             .unwrap()
             .session;
         app.world_mut().flush();
@@ -1344,15 +1352,15 @@ mod tests {
 
         let id = app.world_mut().register_system(
             |mut commands: Commands,
-             sessions_q: Query<
+             sessions: Query<
                 (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
                 With<SessionMarker>,
             >,
-             attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                 super::dispatch_focus_session(
                     &mut commands,
-                    &sessions_q,
-                    &attached_q,
+                    &sessions,
+                    &attached_session,
                     &ozmux_configs::shortcuts::Action::FocusSession {
                         offset: ozmux_configs::shortcuts::SessionOffset::Next,
                     },
@@ -1377,22 +1385,24 @@ mod tests {
         let (mut app, _window_entity) = make_app(true);
         let second_session = app
             .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(Some("second".into())))
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_session(Some("second".into()))
+            })
             .unwrap()
             .session;
         app.world_mut().flush();
 
         let id = app.world_mut().register_system(
             |mut commands: Commands,
-             sessions_q: Query<
+             sessions: Query<
                 (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
                 With<SessionMarker>,
             >,
-             attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                 super::dispatch_focus_session(
                     &mut commands,
-                    &sessions_q,
-                    &attached_q,
+                    &sessions,
+                    &attached_session,
                     &ozmux_configs::shortcuts::Action::FocusSessionNumber { index: 1 },
                 );
             },
@@ -1415,7 +1425,10 @@ mod tests {
             v.sort_by_key(|e| e.to_bits());
             v
         };
-        assert_eq!(attached, sessions_sorted[1], "index 1 should target the second sorted session");
+        assert_eq!(
+            attached, sessions_sorted[1],
+            "index 1 should target the second sorted session"
+        );
         let _ = second_session;
     }
 
@@ -1449,12 +1462,12 @@ mod tests {
                 |mut mux: MultiplexerCommands,
                  mut commands: Commands,
                  mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-                 attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                 attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                     super::dispatch_new_session(
                         &mut commands,
                         &mut mux,
                         &mut counter,
-                        &attached_q,
+                        &attached_session,
                     );
                 },
             )
@@ -1485,8 +1498,8 @@ mod tests {
             |mut mux: MultiplexerCommands,
              mut commands: Commands,
              mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_q);
+             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_session);
             },
         );
         let _ = app.world_mut().run_system(id);
@@ -1495,8 +1508,8 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        let mut q = world
-            .query_filtered::<&crate::multiplexer::SessionCreatedAt, With<SessionMarker>>();
+        let mut q =
+            world.query_filtered::<&crate::multiplexer::SessionCreatedAt, With<SessionMarker>>();
         let mut values: Vec<u32> = q.iter(world).map(|c| c.0).collect();
         values.sort();
         assert_eq!(
@@ -1520,8 +1533,8 @@ mod tests {
             |mut mux: MultiplexerCommands,
              mut commands: Commands,
              mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_q);
+             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_session);
             },
         );
         let _ = app.world_mut().run_system(id);
@@ -1558,8 +1571,8 @@ mod tests {
             |mut mux: MultiplexerCommands,
              mut commands: Commands,
              mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_q);
+             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_session);
             },
         );
         let _ = app.world_mut().run_system(id);
@@ -1596,22 +1609,25 @@ mod tests {
             |mut mux: MultiplexerCommands,
              mut commands: Commands,
              mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             sessions_q: Query<
+             sessions: Query<
                 (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
                 With<SessionMarker>,
             >,
-             attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
              registry: Res<crate::ui::registry::ActivityEntityRegistry>| {
                 let mut marker_dirty = false;
-                let bootstrap_session = attached_q.iter().next().unwrap_or(Entity::PLACEHOLDER);
+                let bootstrap_session = attached_session
+                    .iter()
+                    .next()
+                    .unwrap_or(Entity::PLACEHOLDER);
                 super::execute_action(
                     ozmux_configs::shortcuts::Action::NewSession,
                     &mut commands,
                     &mut mux,
                     &mut counter,
                     bootstrap_session,
-                    &sessions_q,
-                    &attached_q,
+                    &sessions,
+                    &attached_session,
                     &registry,
                     &mut marker_dirty,
                 );
@@ -1621,8 +1637,8 @@ mod tests {
                     &mut mux,
                     &mut counter,
                     bootstrap_session,
-                    &sessions_q,
-                    &attached_q,
+                    &sessions,
+                    &attached_session,
                     &registry,
                     &mut marker_dirty,
                 );

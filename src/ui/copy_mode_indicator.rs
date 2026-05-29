@@ -380,13 +380,13 @@ mod tests {
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
     use crate::ui::OzmuxUiPlugin;
-    use ozmux_multiplexer::MultiplexerPlugin;
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
     use bevy_terminal_renderer::material::TerminalUiMaterial;
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
+    use ozmux_multiplexer::MultiplexerPlugin;
 
     fn make_ui_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::configs::env_guard();
@@ -453,10 +453,12 @@ mod tests {
 
         // Rebuild structure by renaming the attached session via ECS-native API.
         app.world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands, sessions: Query<Entity, With<SessionMarker>>| {
-                let session = sessions.iter().next().expect("session");
-                mux.rename_session(session, "renamed".into()).unwrap();
-            })
+            .run_system_once(
+                |mut mux: MultiplexerCommands, sessions: Query<Entity, With<SessionMarker>>| {
+                    let session = sessions.iter().next().expect("session");
+                    mux.rename_session(session, "renamed".into()).unwrap();
+                },
+            )
             .unwrap();
         app.update();
 
@@ -479,7 +481,9 @@ mod tests {
     #[test]
     fn inactive_host_parent_is_walker_skipped_session_entity() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{
+            ActivityKind, AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker,
+        };
 
         let (mut app, _guard) = make_ui_test_app();
         app.update();
@@ -527,10 +531,7 @@ mod tests {
             .set_changed();
         app.update();
 
-        let first_host_parent = app
-            .world()
-            .get::<ChildOf>(first_host)
-            .map(|c| c.parent());
+        let first_host_parent = app.world().get::<ChildOf>(first_host).map(|c| c.parent());
         assert_eq!(
             first_host_parent,
             Some(session),

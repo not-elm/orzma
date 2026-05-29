@@ -11,7 +11,7 @@
 
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
-use bevy::text::Font;
+use bevy::text::{CosmicFontSystem, Font};
 use bevy_terminal_renderer::{FontFace, TerminalFontInitSet, TerminalFonts, bundled};
 use ozmux_configs::font::FontConfig;
 use ozmux_configs::path::{SystemEnv, expand_user_path};
@@ -21,17 +21,13 @@ use std::path::Path;
 /// `bridge_font_config`. UI builders read this resource to set
 /// `TextFont { font, ... }`.
 #[derive(Resource, Clone)]
-pub(crate) struct TerminalUiFont(pub Handle<Font>);
+pub struct TerminalUiFont(pub Handle<Font>);
 
 /// Bevy plugin that wires `bridge_font_config` into Startup.
-pub(crate) struct FontBridgePlugin;
+pub struct FontBridgePlugin;
 
 impl Plugin for FontBridgePlugin {
     fn build(&self, app: &mut App) {
-        // NOTE: must run before TerminalFontInitSet::InitCellMetrics so
-        // the metrics computed inside the renderer's
-        // init_cell_metrics_from_primary_window reflect any user-supplied
-        // font override.
         app.add_systems(
             Startup,
             (
@@ -94,12 +90,7 @@ fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -
 /// is never referenced as a primary `TextFont`, call
 /// `db_mut().load_font_source(...)` explicitly so cosmic-text's
 /// `FontFallbackIter::other_i` last-resort loop sees it.
-///
-/// NOTE: zero-copy `Source::Binary` form. `fontdb::Source::Binary`
-/// accepts `Arc<dyn AsRef<[u8]> + Sync + Send>`. The static slice
-/// already lives in `.rodata`, so wrapping it directly (without
-/// `.to_vec()`) avoids a ~3.9 MB allocation + copy at Startup.
-fn register_cjk_fallback_with_cosmic(mut font_system: ResMut<bevy::text::CosmicFontSystem>) {
+fn register_cjk_fallback_with_cosmic(mut font_system: ResMut<CosmicFontSystem>) {
     let source = cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
         bevy_terminal_renderer::bundled::FALLBACK_REGULAR,
     )

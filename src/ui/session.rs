@@ -5,6 +5,7 @@
 
 use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
+use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ActivityHostNode, SessionUiRoot, StructuralNode};
 use bevy::prelude::*;
@@ -18,11 +19,8 @@ pub struct OzmuxSessionUiPlugin;
 
 impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            rebuild_session_ui.in_set(OzmuxSystems::SessionUi),
-        )
-        .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
+        app.add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
+            .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
 }
 
@@ -36,17 +34,6 @@ fn sync_active_session(
     sessions: Query<(Entity, &SessionUiSubtree), Without<AttachedSession>>,
     session_ui_root: Query<Entity, With<SessionUiRoot>>,
 ) {
-    let added_count = attached_session.iter().count();
-    if added_count != 1 {
-        if added_count > 1 {
-            tracing::debug!(
-                target: "ozmux_gui::ui",
-                added_count,
-                "sync_active_session: Added<AttachedSession> matched multiple entities — skipping reparent (would break .single())"
-            );
-        }
-        return;
-    }
     let Ok(newly_attached_subtree) = attached_session.single() else {
         return;
     };
@@ -54,23 +41,11 @@ fn sync_active_session(
         return;
     };
 
-    tracing::debug!(
-        target: "ozmux_gui::ui",
-        new_subtree = ?newly_attached_subtree.0,
-        ?session_ui_root,
-        "sync_active_session: reparenting newly-attached subtree under SessionUiRoot"
-    );
     commands
         .entity(newly_attached_subtree.0)
         .insert(ChildOf(session_ui_root));
 
     for (session_entity, tree) in sessions.iter() {
-        tracing::debug!(
-            target: "ozmux_gui::ui",
-            ?session_entity,
-            parked_subtree = ?tree.0,
-            "sync_active_session: parking inactive session's subtree under its session entity"
-        );
         commands.entity(tree.0).insert(ChildOf(session_entity));
     }
 }
@@ -87,14 +62,19 @@ fn rebuild_session_ui(
     mut commands: Commands,
     mut registry: ResMut<ActivityEntityRegistry>,
     sessions: Query<
-        (Entity, &LayoutCells, &SessionUiSubtree, Has<AttachedSession>),
+        (
+            Entity,
+            &LayoutCells,
+            &SessionUiSubtree,
+            Has<AttachedSession>,
+        ),
         (With<SessionMarker>, Changed<LayoutCells>),
     >,
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     activity_hosts: Query<(Entity, &ActivityHostNode)>,
     children: Query<&Children>,
-    activity_q: Query<(&ActivityKind, &Name), With<ActivityMarker>>,
-    active_activity_q: Query<&ActiveActivity, With<PaneMarker>>,
+    activities: Query<(&ActivityKind, &Name), With<ActivityMarker>>,
+    active_activities: Query<&ActiveActivity, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
@@ -106,7 +86,7 @@ fn rebuild_session_ui(
         let root_cell_id = layout.root;
         match layout.cells.cell(&root_cell_id) {
             Ok(Cell::Root(root)) => {
-                crate::ui::layout::build_cell_recursive(
+                build_cell_recursive(
                     &mut commands,
                     subtree.0,
                     &layout.cells,
@@ -115,8 +95,8 @@ fn rebuild_session_ui(
                     session_entity,
                     &ui_font_handle,
                     &children,
-                    &activity_q,
-                    &active_activity_q,
+                    &activities,
+                    &active_activities,
                 );
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
@@ -207,11 +187,7 @@ mod tests {
         let subtree = app.world_mut().spawn(Node::default()).id();
         let session = app
             .world_mut()
-            .spawn((
-                SessionMarker,
-                AttachedSession,
-                SessionUiSubtree(subtree),
-            ))
+            .spawn((SessionMarker, AttachedSession, SessionUiSubtree(subtree)))
             .id();
         app.world_mut().entity_mut(subtree).insert(ChildOf(session));
 
@@ -240,11 +216,7 @@ mod tests {
         let subtree_a = app.world_mut().spawn(Node::default()).id();
         let session_a = app
             .world_mut()
-            .spawn((
-                SessionMarker,
-                AttachedSession,
-                SessionUiSubtree(subtree_a),
-            ))
+            .spawn((SessionMarker, AttachedSession, SessionUiSubtree(subtree_a)))
             .id();
         app.world_mut()
             .entity_mut(subtree_a)
@@ -382,10 +354,7 @@ mod tests {
             .set_changed();
         app.update();
 
-        let first_host_parent = app
-            .world()
-            .get::<ChildOf>(first_host)
-            .map(|c| c.parent());
+        let first_host_parent = app.world().get::<ChildOf>(first_host).map(|c| c.parent());
         assert_eq!(
             first_host_parent,
             Some(session),
@@ -446,11 +415,7 @@ mod tests {
             let world = app.world_mut();
             let subtree = world.spawn(Node::default()).id();
             let entity = world
-                .spawn((
-                    SessionMarker,
-                    SessionUiSubtree(subtree),
-                    Name::new("b"),
-                ))
+                .spawn((SessionMarker, SessionUiSubtree(subtree), Name::new("b")))
                 .id();
             world.entity_mut(subtree).insert(ChildOf(entity));
             (entity, subtree)
@@ -562,12 +527,12 @@ mod tests {
                 |mut mux: MultiplexerCommands,
                  mut commands: Commands,
                  mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-                 attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                 attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                     crate::input::dispatch_new_session(
                         &mut commands,
                         &mut mux,
                         &mut counter,
-                        &attached_q,
+                        &attached_session,
                     );
                 },
             )

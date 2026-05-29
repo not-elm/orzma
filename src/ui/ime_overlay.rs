@@ -10,8 +10,7 @@ use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
 use crate::input::resolve_focused_terminal;
 use crate::ui::registry::ActivityEntityRegistry;
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
-use bevy::app::{App, Plugin, Startup};
+use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
@@ -32,6 +31,7 @@ use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::TerminalFontInitSet;
 use bevy_terminal_renderer::material::TerminalMaterialSystems;
 use bevy_terminal_renderer::prelude::TerminalGrid;
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
 use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -64,7 +64,7 @@ impl Plugin for ImeOverlayPlugin {
         // the same cosmetic latency the caret-bar `left` calc already
         // had.
         .add_systems(
-            bevy::app::PostUpdate,
+            PostUpdate,
             (
                 position_ime_overlay.before(UiSystems::Content),
                 suppress_terminal_cursor_during_ime.before(TerminalMaterialSystems::UpdateMaterial),
@@ -179,13 +179,13 @@ fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
 pub(crate) fn position_ime_overlay(
     state: Res<ImeState>,
     mux: MultiplexerCommands,
-    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
-    anchor_q: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
-    window_q: Query<&Window, With<PrimaryWindow>>,
-    mut root_q: Query<(&mut Node, &mut Text), With<ImeOverlayNode>>,
-    mut bar_q: Query<
+    primary_window: Query<&Window, With<PrimaryWindow>>,
+    mut overlay_root: Query<(&mut Node, &mut Text), With<ImeOverlayNode>>,
+    mut caret_bar: Query<
         &mut Node,
         (
             With<ImeCaretBar>,
@@ -193,7 +193,7 @@ pub(crate) fn position_ime_overlay(
             Without<ImeClauseHighlight>,
         ),
     >,
-    mut clause_q: Query<
+    mut clause_highlight: Query<
         &mut Node,
         (
             With<ImeClauseHighlight>,
@@ -202,11 +202,11 @@ pub(crate) fn position_ime_overlay(
         ),
     >,
 ) {
-    let Ok((mut root_node, mut root_text)) = root_q.single_mut() else {
+    let Ok((mut root_node, mut root_text)) = overlay_root.single_mut() else {
         return;
     };
-    let mut bar = bar_q.single_mut().ok();
-    let mut clause = clause_q.single_mut().ok();
+    let mut bar = caret_bar.single_mut().ok();
+    let mut clause = clause_highlight.single_mut().ok();
 
     // Default: hide every overlay part. The success path below re-shows
     // root + (bar OR clause) as needed. Every early-return arm leaves
@@ -223,13 +223,13 @@ pub(crate) fn position_ime_overlay(
     let Some(comp) = state.composition() else {
         return;
     };
-    let Some(entity) = resolve_focused_terminal(&mux, &attached_q, &registry) else {
+    let Some(entity) = resolve_focused_terminal(&mux, &attached_session, &registry) else {
         return;
     };
-    let Ok((node, ui_xform, grid)) = anchor_q.get(entity) else {
+    let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
         return;
     };
-    let Ok(window) = window_q.single() else {
+    let Ok(window) = primary_window.single() else {
         return;
     };
 
@@ -284,28 +284,26 @@ pub(crate) fn position_ime_overlay(
     let clause_x_logical = pos.x + begin_cells * cell_w_logical;
     let clause_w_logical = (end_cells - begin_cells) * cell_w_logical;
 
-    if has_beam
-        && let Some(b) = bar.as_mut() {
-            // Caret bar is a top-level UI entity (not a child of the
-            // Text root), so its position is in window-absolute coords:
-            // overlay origin + per-character horizontal offset.
-            b.display = Display::Flex;
-            b.left = Val::Px(beam_x_logical);
-            b.top = Val::Px(pos.y);
-            b.height = Val::Px(line_h_logical);
-        }
+    if has_beam && let Some(b) = bar.as_mut() {
+        // Caret bar is a top-level UI entity (not a child of the
+        // Text root), so its position is in window-absolute coords:
+        // overlay origin + per-character horizontal offset.
+        b.display = Display::Flex;
+        b.left = Val::Px(beam_x_logical);
+        b.top = Val::Px(pos.y);
+        b.height = Val::Px(line_h_logical);
+    }
 
-    if has_clause
-        && let Some(c) = clause.as_mut() {
-            // Hollow block over the macOS-IME clause-selection range.
-            // Positioned in window-absolute coords for the same
-            // leaf-Text-no-children reason as ImeCaretBar.
-            c.display = Display::Flex;
-            c.left = Val::Px(clause_x_logical);
-            c.top = Val::Px(pos.y);
-            c.width = Val::Px(clause_w_logical);
-            c.height = Val::Px(line_h_logical);
-        }
+    if has_clause && let Some(c) = clause.as_mut() {
+        // Hollow block over the macOS-IME clause-selection range.
+        // Positioned in window-absolute coords for the same
+        // leaf-Text-no-children reason as ImeCaretBar.
+        c.display = Display::Flex;
+        c.left = Val::Px(clause_x_logical);
+        c.top = Val::Px(pos.y);
+        c.width = Val::Px(clause_w_logical);
+        c.height = Val::Px(line_h_logical);
+    }
 }
 
 /// Sets `TerminalGrid.suppress_cursor = true` on the currently-focused
@@ -321,12 +319,12 @@ pub(crate) fn position_ime_overlay(
 fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
     mux: MultiplexerCommands,
-    attached_q: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
     mut grids: Query<(Entity, &mut TerminalGrid)>,
 ) {
     let focused = if state.is_composing() {
-        resolve_focused_terminal(&mux, &attached_q, &registry)
+        resolve_focused_terminal(&mux, &attached_session, &registry)
     } else {
         None
     };

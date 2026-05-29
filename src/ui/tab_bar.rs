@@ -47,7 +47,10 @@ fn tab_colors(is_active: bool, is_active_pane: bool) -> TabColors {
 pub(crate) struct TabEntry {
     /// Activity entity. Not read by the tab bar builder today, but load-bearing
     /// for future tab interactivity (click-to-switch) and equality checks.
-    #[expect(dead_code, reason = "reserved for future tab interactivity; do not remove")]
+    #[expect(
+        dead_code,
+        reason = "reserved for future tab interactivity; do not remove"
+    )]
     pub entity: Entity,
     /// Display name of the activity.
     pub name: String,

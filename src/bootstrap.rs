@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_multiplexer::MultiplexerCommands;
 
+use crate::input::spawn_attached_session;
 use crate::multiplexer::SessionNameCounter;
 
 /// Bevy Plugin that registers the `bootstrap` system in the `Startup`
@@ -34,7 +35,7 @@ pub(crate) fn bootstrap(
     // (CMD+R-created sessions take "session2", "session3", …). The
     // helper in src/input.rs does the spawn + UI subtree + AttachedSession
     // dance identically — call it instead of duplicating.
-    let _ = crate::input::spawn_attached_session(&mut commands, &mut mux, &mut counter);
+    let _ = spawn_attached_session(&mut commands, &mut mux, &mut counter);
 }
 
 /// Inserts an initial `CursorIcon::System(SystemCursorIcon::Text)` on
@@ -54,15 +55,15 @@ fn insert_initial_cursor_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_multiplexer::{
-        AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree,
-    };
+    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
 
     #[test]
     fn bootstrap_spawns_session_entity_with_attached_marker() {
         let _guard = crate::configs::env_guard();
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
-        unsafe { std::env::remove_var("OZMUX_CONFIG"); }
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
@@ -72,14 +73,20 @@ mod tests {
 
         let world = app.world_mut();
         let mut q = world.query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>();
-        assert_eq!(q.iter(world).count(), 1, "exactly one attached session entity");
+        assert_eq!(
+            q.iter(world).count(),
+            1,
+            "exactly one attached session entity"
+        );
     }
 
     #[test]
     fn bootstrap_names_the_initial_session_session1() {
         let _guard = crate::configs::env_guard();
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
-        unsafe { std::env::remove_var("OZMUX_CONFIG"); }
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
@@ -101,7 +108,9 @@ mod tests {
     fn bootstrap_attaches_subtree_pointer() {
         let _guard = crate::configs::env_guard();
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
-        unsafe { std::env::remove_var("OZMUX_CONFIG"); }
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)

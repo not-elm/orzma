@@ -1,3 +1,7 @@
+use crate::bundled::{
+    BOLD, BOLD_ITALIC, FALLBACK_BOLD, FALLBACK_BOLD_ITALIC, FALLBACK_ITALIC, FALLBACK_REGULAR,
+    ITALIC, REGULAR,
+};
 use ab_glyph::{Font, FontArc, ScaleFont};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -376,21 +380,18 @@ impl Default for TerminalFonts {
         // crate boundaries without LTO; without this single source of
         // truth the binary carries the font data twice).
         Self {
-            regular: FontArc::try_from_slice(crate::bundled::REGULAR)
+            regular: FontArc::try_from_slice(REGULAR)
                 .expect("JetBrainsMonoNerdFontMono-Regular load"),
-            bold: FontArc::try_from_slice(crate::bundled::BOLD)
-                .expect("JetBrainsMonoNerdFontMono-Bold load"),
-            italic: FontArc::try_from_slice(crate::bundled::ITALIC)
-                .expect("JetBrainsMonoNerdFontMono-Italic load"),
-            bold_italic: FontArc::try_from_slice(crate::bundled::BOLD_ITALIC)
+            bold: FontArc::try_from_slice(BOLD).expect("JetBrainsMonoNerdFontMono-Bold load"),
+            italic: FontArc::try_from_slice(ITALIC).expect("JetBrainsMonoNerdFontMono-Italic load"),
+            bold_italic: FontArc::try_from_slice(BOLD_ITALIC)
                 .expect("JetBrainsMonoNerdFontMono-BoldItalic load"),
-            fallback_regular: FontArc::try_from_slice(crate::bundled::FALLBACK_REGULAR)
+            fallback_regular: FontArc::try_from_slice(FALLBACK_REGULAR)
                 .expect("UDEVGothic35-Regular load"),
-            fallback_bold: FontArc::try_from_slice(crate::bundled::FALLBACK_BOLD)
-                .expect("UDEVGothic35-Bold load"),
-            fallback_italic: FontArc::try_from_slice(crate::bundled::FALLBACK_ITALIC)
+            fallback_bold: FontArc::try_from_slice(FALLBACK_BOLD).expect("UDEVGothic35-Bold load"),
+            fallback_italic: FontArc::try_from_slice(FALLBACK_ITALIC)
                 .expect("UDEVGothic35-Italic load"),
-            fallback_bold_italic: FontArc::try_from_slice(crate::bundled::FALLBACK_BOLD_ITALIC)
+            fallback_bold_italic: FontArc::try_from_slice(FALLBACK_BOLD_ITALIC)
                 .expect("UDEVGothic35-BoldItalic load"),
         }
     }

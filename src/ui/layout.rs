@@ -49,8 +49,8 @@ pub(crate) fn build_cell_recursive(
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
     pane_children: &Query<&Children>,
-    activity_q: &Query<(&ActivityKind, &Name), With<ActivityMarker>>,
-    active_activity_q: &Query<&ActiveActivity, With<PaneMarker>>,
+    activities: &Query<(&ActivityKind, &Name), With<ActivityMarker>>,
+    active_activities: &Query<&ActiveActivity, With<PaneMarker>>,
 ) {
     let cell = match cells.cell(cell_id) {
         Ok(c) => c,
@@ -81,8 +81,8 @@ pub(crate) fn build_cell_recursive(
             inactive_host_parent,
             ui_font,
             pane_children,
-            activity_q,
-            active_activity_q,
+            activities,
+            active_activities,
         ),
         Cell::Split(s) => {
             let (lhs_grow, rhs_grow) = split_ratio_to_flex_grows(s.lhs_weight, s.rhs_weight);
@@ -124,8 +124,8 @@ pub(crate) fn build_cell_recursive(
                 inactive_host_parent,
                 ui_font,
                 pane_children,
-                activity_q,
-                active_activity_q,
+                activities,
+                active_activities,
             );
 
             let rhs = commands
@@ -148,8 +148,8 @@ pub(crate) fn build_cell_recursive(
                 inactive_host_parent,
                 ui_font,
                 pane_children,
-                activity_q,
-                active_activity_q,
+                activities,
+                active_activities,
             );
         }
     }
@@ -164,10 +164,10 @@ fn build_pane(
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
     pane_children: &Query<&Children>,
-    activity_q: &Query<(&ActivityKind, &Name), With<ActivityMarker>>,
-    active_activity_q: &Query<&ActiveActivity, With<PaneMarker>>,
+    activities: &Query<(&ActivityKind, &Name), With<ActivityMarker>>,
+    active_activities: &Query<&ActiveActivity, With<PaneMarker>>,
 ) {
-    let active_activity = active_activity_q
+    let active_activity = active_activities
         .get(pane_entity)
         .map(|a| a.0)
         .unwrap_or(Entity::PLACEHOLDER);
@@ -191,17 +191,13 @@ fn build_pane(
 
     let activity_entities: Vec<Entity> = pane_children
         .get(pane_entity)
-        .map(|c| {
-            c.iter()
-                .filter(|e| activity_q.get(*e).is_ok())
-                .collect()
-        })
+        .map(|c| c.iter().filter(|e| activities.get(*e).is_ok()).collect())
         .unwrap_or_default();
 
     let tabs: Vec<TabEntry> = activity_entities
         .iter()
         .filter_map(|&ae| {
-            let (_, name) = activity_q.get(ae).ok()?;
+            let (_, name) = activities.get(ae).ok()?;
             Some(TabEntry {
                 entity: ae,
                 name: name.as_str().to_string(),
@@ -231,7 +227,7 @@ fn build_pane(
         .id();
 
     for &activity_entity in &activity_entities {
-        let Ok((kind, name)) = activity_q.get(activity_entity) else {
+        let Ok((kind, name)) = activities.get(activity_entity) else {
             continue;
         };
         let host = registry.get_or_spawn(commands, activity_entity, kind);

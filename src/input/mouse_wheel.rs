@@ -35,6 +35,7 @@ use ozmux_configs::mouse::FineModifier;
 
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
+use crate::ui::copy_mode::CopyModeState;
 use crate::ui::registry::ActivityEntityRegistry;
 
 /// Per-frame accumulator that carries fractional Pixel deltas across
@@ -65,9 +66,9 @@ fn dispatch_mouse_wheel(
     configs: Res<OzmuxConfigsResource>,
     registry: Res<ActivityEntityRegistry>,
     mux: ozmux_multiplexer::MultiplexerCommands,
-    copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
-    attached_q: Query<
-        bevy::prelude::Entity,
+    copy_modes: Query<(), With<CopyModeState>>,
+    attached_session: Query<
+        Entity,
         (
             With<ozmux_multiplexer::SessionMarker>,
             With<ozmux_multiplexer::AttachedSession>,
@@ -91,10 +92,10 @@ fn dispatch_mouse_wheel(
     let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
         return;
     };
-    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_q, &registry) else {
+    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_session, &registry) else {
         return;
     };
-    if copy_mode_q.get(entity).is_ok() {
+    if copy_modes.get(entity).is_ok() {
         return;
     }
     let mouse_cfg = &configs.mouse;

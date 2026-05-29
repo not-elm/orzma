@@ -8,9 +8,9 @@
 //! design doc §3 "Naming" for why and for the `With<SessionMarker>`
 //! filter discipline that follows.
 
-use std::path::PathBuf;
-use bevy::prelude::*;
 use crate::cells::{CellId, LayoutCellState};
+use bevy::prelude::*;
+use std::path::PathBuf;
 
 /// Zero-sized marker on every Session entity. Used as the `With<>` filter
 /// in queries that want to scope to Sessions, and as the trigger target
@@ -42,7 +42,7 @@ impl LayoutCells {
     /// Construct a `LayoutCells` from a freshly-spawned bootstrap pane:
     /// builds a `LayoutCellState`, mints the root, and stashes the root
     /// id together so callers do not need to track it separately.
-    pub fn new_session_layout(pane: bevy::ecs::entity::Entity) -> Self {
+    pub fn new_session_layout(pane: Entity) -> Self {
         let mut cells = LayoutCellState::default();
         let (root, _pane_cell) = cells.new_session_layout(pane);
         Self { cells, root }
@@ -142,7 +142,9 @@ pub enum BrowserProfile {
 
 impl Default for BrowserProfile {
     fn default() -> Self {
-        BrowserProfile::Named { name: "default".to_string() }
+        BrowserProfile::Named {
+            name: "default".to_string(),
+        }
     }
 }
 

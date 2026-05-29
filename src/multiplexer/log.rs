@@ -53,7 +53,10 @@ fn count_panes(layout: &LayoutCells) -> usize {
 }
 
 /// Collect the display names of all panes in DFS order.
-fn collect_pane_names<'a>(layout: &LayoutCells, panes: &'a Query<&Name, With<PaneMarker>>) -> Vec<&'a str> {
+fn collect_pane_names<'a>(
+    layout: &LayoutCells,
+    panes: &'a Query<&Name, With<PaneMarker>>,
+) -> Vec<&'a str> {
     let mut names = Vec::new();
     let mut stack = vec![layout.root];
     while let Some(cell_id) = stack.pop() {

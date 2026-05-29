@@ -6,7 +6,17 @@
 //! State is owned by the `MouseSelectionState` resource — see spec
 //! §6.
 
+use crate::configs::OzmuxConfigsResource;
+use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
+use crate::input::{InputPhase, current_modifiers};
+use crate::ui::ActivityHostNode;
+use crate::ui::copy_mode::CopyModeState;
+use crate::ui::registry::ActivityEntityRegistry;
+use bevy::input::ButtonState;
+use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
+use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType, Side};
 use std::time::Instant;
 
@@ -70,10 +80,8 @@ pub(crate) struct MouseButtonsInputPlugin;
 
 impl Plugin for MouseButtonsInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<MouseSelectionState>().add_systems(
-            Update,
-            dispatch_mouse_buttons.in_set(crate::input::InputPhase::Dispatch),
-        );
+        app.init_resource::<MouseSelectionState>()
+            .add_systems(Update, dispatch_mouse_buttons.in_set(InputPhase::Dispatch));
     }
 }
 
@@ -87,14 +95,7 @@ impl Plugin for MouseButtonsInputPlugin {
 /// must convert from `Window::cursor_position()` (logical) by
 /// multiplying by `Window::scale_factor()` first.
 pub(crate) fn resolve_pane_at_phys(
-    hosts: &Query<
-        (
-            Entity,
-            &bevy::ui::ComputedNode,
-            &bevy::ui::UiGlobalTransform,
-        ),
-        With<crate::ui::ActivityHostNode>,
-    >,
+    hosts: &Query<(Entity, &ComputedNode, &UiGlobalTransform), With<ActivityHostNode>>,
     cursor_phys_px: Vec2,
 ) -> Option<(Entity, Vec2)> {
     for (entity, node, transform) in hosts.iter() {
@@ -188,7 +189,7 @@ pub(crate) fn next_click_count(
 /// session's panes; an unknown target falls through as a no-op.
 pub(crate) fn try_click_to_focus(
     mux: &mut ozmux_multiplexer::MultiplexerCommands,
-    registry: &crate::ui::registry::ActivityEntityRegistry,
+    registry: &ActivityEntityRegistry,
     attached_session: Entity,
     target_entity: Entity,
 ) -> bool {
@@ -257,8 +258,8 @@ fn run_autoscroll_tick(
     drag: &ActiveDrag,
     cursor_phys: Vec2,
     now: Instant,
-    node: bevy::ui::ComputedNode,
-    transform: bevy::ui::UiGlobalTransform,
+    node: ComputedNode,
+    transform: UiGlobalTransform,
     cell_h_phys: f32,
     cell_w_phys: f32,
     configs: &ozmux_configs::mouse::MouseConfig,
@@ -267,7 +268,7 @@ fn run_autoscroll_tick(
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
-    copy_mode_q: &Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+    copy_modes: &Query<(), With<CopyModeState>>,
 ) {
     // NOTE: UiGlobalTransform.translation is the node CENTER, not the
     // top-left corner — every hit-test in this file relies on the
@@ -302,7 +303,7 @@ fn run_autoscroll_tick(
     // Time to tick. Compute the edge cell (clamped to pane bounds).
     let edge_local_y = if above { 0.0 } else { node.size.y };
     let edge_local_x = (cursor_phys.x - (translation.x - half.x)).clamp(0.0, node.size.x);
-    let edge_local = bevy::math::Vec2::new(edge_local_x, edge_local_y);
+    let edge_local = Vec2::new(edge_local_x, edge_local_y);
 
     let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(drag.entity) else {
         return;
@@ -311,7 +312,7 @@ fn run_autoscroll_tick(
     let (col, row, side) = cell_at_local(edge_local, cell_w_phys, cell_h_phys, cols, rows);
     let pt = to_viewport_point(CellCoord { col, row });
 
-    let in_copy_mode = copy_mode_q.get(drag.entity).is_ok();
+    let in_copy_mode = copy_modes.get(drag.entity).is_ok();
     let scroll_delta: i32 = if above { 1 } else { -1 };
 
     if in_copy_mode {
@@ -346,12 +347,7 @@ fn synthesize_drag_cell(
     cursor_phys: Vec2,
     cell_w_phys: f32,
     cell_h_phys: f32,
-    pane_geometry: Option<(
-        bevy::ui::ComputedNode,
-        bevy::ui::UiGlobalTransform,
-        u16,
-        u16,
-    )>,
+    pane_geometry: Option<(ComputedNode, UiGlobalTransform, u16, u16)>,
 ) -> Option<(CellCoord, Side)> {
     let drag = state.drag.as_ref()?;
     let (node, transform, cols, rows) = pane_geometry?;
@@ -382,38 +378,31 @@ fn synthesize_drag_cell(
 fn dispatch_mouse_buttons(
     mut state: ResMut<MouseSelectionState>,
     mut mux: ozmux_multiplexer::MultiplexerCommands,
-    mut buttons_msg: MessageReader<bevy::input::mouse::MouseButtonInput>,
-    mut cursor_msg: MessageReader<bevy::window::CursorMoved>,
+    mut buttons_msg: MessageReader<MouseButtonInput>,
+    mut cursor_msg: MessageReader<CursorMoved>,
     mut handles: Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
     keys: Res<ButtonInput<KeyCode>>,
-    configs: Res<crate::configs::OzmuxConfigsResource>,
-    hosts_q: Query<
-        (
-            Entity,
-            &bevy::ui::ComputedNode,
-            &bevy::ui::UiGlobalTransform,
-        ),
-        With<crate::ui::ActivityHostNode>,
-    >,
-    grids_q: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
-    copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
-    windows_q: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    configs: Res<OzmuxConfigsResource>,
+    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<ActivityHostNode>>,
+    grids: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
+    copy_modes: Query<(), With<CopyModeState>>,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
     time: Res<Time<Real>>,
-    attached_q: Query<
-        bevy::prelude::Entity,
+    attached_session: Query<
+        Entity,
         (
             With<ozmux_multiplexer::SessionMarker>,
             With<ozmux_multiplexer::AttachedSession>,
         ),
     >,
-    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
+    registry: Res<ActivityEntityRegistry>,
 ) {
-    let Ok(window) = windows_q.single() else {
+    let Ok(window) = primary_window.single() else {
         buttons_msg.clear();
         cursor_msg.clear();
         return;
@@ -428,7 +417,7 @@ fn dispatch_mouse_buttons(
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    let mods = crate::input::current_modifiers(&keys);
+    let mods = current_modifiers(&keys);
     let proto_mods = bevy_terminal::ProtocolModifiers {
         shift: mods.shift,
         ctrl: mods.ctrl,
@@ -446,12 +435,12 @@ fn dispatch_mouse_buttons(
 
     for ev in buttons_msg.read() {
         let bevy_button = match ev.button {
-            bevy::input::mouse::MouseButton::Left => bevy_terminal::MouseButtonKind::Left,
-            bevy::input::mouse::MouseButton::Middle => bevy_terminal::MouseButtonKind::Middle,
-            bevy::input::mouse::MouseButton::Right => bevy_terminal::MouseButtonKind::Right,
+            MouseButton::Left => bevy_terminal::MouseButtonKind::Left,
+            MouseButton::Middle => bevy_terminal::MouseButtonKind::Middle,
+            MouseButton::Right => bevy_terminal::MouseButtonKind::Right,
             _ => continue,
         };
-        let Some((entity, local)) = resolve_pane_at_phys(&hosts_q, cursor_phys) else {
+        let Some((entity, local)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
             continue;
         };
         let (cols, rows) = match handles.get(entity) {
@@ -465,8 +454,8 @@ fn dispatch_mouse_buttons(
         let cell = bevy_terminal::CellCoord { col, row };
 
         let kind = match ev.state {
-            bevy::input::ButtonState::Pressed => bevy_terminal::ButtonEventKind::Press,
-            bevy::input::ButtonState::Released => bevy_terminal::ButtonEventKind::Release,
+            ButtonState::Pressed => bevy_terminal::ButtonEventKind::Press,
+            ButtonState::Released => bevy_terminal::ButtonEventKind::Release,
         };
 
         let click_count = if matches!(kind, bevy_terminal::ButtonEventKind::Press)
@@ -485,7 +474,7 @@ fn dispatch_mouse_buttons(
         };
 
         if matches!(kind, bevy_terminal::ButtonEventKind::Press) {
-            let Ok(attached_session) = attached_q.single() else {
+            let Ok(attached_session) = attached_session.single() else {
                 continue;
             };
             try_click_to_focus(&mut mux, &registry, attached_session, entity);
@@ -497,31 +486,27 @@ fn dispatch_mouse_buttons(
         //       without a matching press. The existing try_click_to_focus
         //       call above is preserved so the pane still focuses.
         if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
-            let modifier_held = crate::input::hyperlink::link_modifier_held(&mods);
-            if modifier_held
-                && let Ok(grid) = grids_q.get(entity) {
-                    if let Some(uri) = crate::input::hyperlink::should_open_at(
-                        grid,
-                        row.saturating_sub(1) as u16,
-                        col.saturating_sub(1) as u16,
-                        bevy_button,
-                        kind,
-                        modifier_held,
-                    ) {
-                        crate::input::hyperlink::try_open_uri(uri.as_str());
-                        continue;
-                    }
-                    if matches!(kind, bevy_terminal::ButtonEventKind::Release)
-                        && grid
-                            .hyperlink_at(
-                                row.saturating_sub(1) as u16,
-                                col.saturating_sub(1) as u16,
-                            )
-                            .is_some()
-                    {
-                        continue;
-                    }
+            let modifier_held = link_modifier_held(&mods);
+            if modifier_held && let Ok(grid) = grids.get(entity) {
+                if let Some(uri) = should_open_at(
+                    grid,
+                    row.saturating_sub(1) as u16,
+                    col.saturating_sub(1) as u16,
+                    bevy_button,
+                    kind,
+                    modifier_held,
+                ) {
+                    try_open_uri(uri.as_str());
+                    continue;
                 }
+                if matches!(kind, bevy_terminal::ButtonEventKind::Release)
+                    && grid
+                        .hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
+                        .is_some()
+                {
+                    continue;
+                }
+            }
         }
 
         let evt = bevy_terminal::ButtonEvent {
@@ -544,7 +529,7 @@ fn dispatch_mouse_buttons(
             action,
             entity,
             &mut handles,
-            &copy_mode_q,
+            &copy_modes,
         );
     }
 
@@ -553,7 +538,7 @@ fn dispatch_mouse_buttons(
     // drag pane. De-duplicated by cell (spec §4.3): only one Drag event
     // per cell crossing per frame.
     if let Some(drag_entity) = state.drag.as_ref().map(|d| d.entity) {
-        let pane_geometry = hosts_q.get(drag_entity).ok().and_then(|(_, node, xf)| {
+        let pane_geometry = hosts.get(drag_entity).ok().and_then(|(_, node, xf)| {
             handles.get(drag_entity).ok().map(|(h, _, _)| {
                 let (cols, rows, _) = h.read_geometry();
                 (*node, *xf, cols, rows)
@@ -585,7 +570,7 @@ fn dispatch_mouse_buttons(
                 action,
                 drag_entity,
                 &mut handles,
-                &copy_mode_q,
+                &copy_modes,
             );
         }
     }
@@ -595,7 +580,7 @@ fn dispatch_mouse_buttons(
     // pane's vertical rect.
     let now = time.last_update().unwrap_or_else(Instant::now);
     if let Some(drag) = state.drag.as_ref().filter(|d| d.is_active()).cloned() {
-        if let Ok((_, node_ref, transform_ref)) = hosts_q.get(drag.entity) {
+        if let Ok((_, node_ref, transform_ref)) = hosts.get(drag.entity) {
             let node = *node_ref;
             let transform = *transform_ref;
             run_autoscroll_tick(
@@ -609,7 +594,7 @@ fn dispatch_mouse_buttons(
                 cell_w_phys,
                 &configs.mouse,
                 &mut handles,
-                &copy_mode_q,
+                &copy_modes,
             );
         }
     } else {
@@ -674,7 +659,7 @@ fn apply_action(
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
-    copy_mode_q: &Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+    copy_modes: &Query<(), With<CopyModeState>>,
 ) {
     let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
         return;
@@ -695,7 +680,7 @@ fn apply_action(
         state.next_autoscroll_at = None;
     }
 
-    let in_copy_mode = copy_mode_q.get(entity).is_ok();
+    let in_copy_mode = copy_modes.get(entity).is_ok();
 
     match action {
         ButtonAction::Noop => {}
@@ -913,6 +898,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
+        app.add_plugins(crate::multiplexer::commands::split_pane::SplitPaneActionPlugin);
         app.insert_resource(crate::ui::registry::ActivityEntityRegistry::default());
 
         let (session, original_pane, original_activity) = app
@@ -924,19 +910,23 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
-        let new_pane = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                crate::multiplexer::commands::apply(
-                    Action::SplitPane { direction: SplitDirection::Horizontal },
-                    &mut mux,
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                crate::multiplexer::commands::dispatch(
+                    Action::SplitPane {
+                        direction: SplitDirection::Horizontal,
+                    },
+                    &mut commands,
                     session,
                 );
-                mux.sessions_active_pane(session)
             })
+            .unwrap();
+        app.world_mut().flush();
+        let new_pane = app
+            .world_mut()
+            .run_system_once(move |mux: MultiplexerCommands| mux.sessions_active_pane(session))
             .unwrap()
             .expect("active pane after split");
-        app.world_mut().flush();
         assert_ne!(new_pane, original_pane, "split must promote fresh pane");
 
         let new_activity = app
@@ -1125,7 +1115,7 @@ mod tests {
                     &mut bevy_terminal::PtyHandle,
                     &mut bevy_terminal::Coalescer,
                 )>,
-                      copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
+                      copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
                         &mut state,
                         bevy_terminal::ButtonEventKind::Press,
@@ -1137,7 +1127,7 @@ mod tests {
                         },
                         entity,
                         &mut handles,
-                        &copy_mode_q,
+                        &copy_modes,
                     );
                 },
             )
@@ -1207,7 +1197,7 @@ mod tests {
                     &mut bevy_terminal::PtyHandle,
                     &mut bevy_terminal::Coalescer,
                 )>,
-                      copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
+                      copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
                         &mut state,
                         bevy_terminal::ButtonEventKind::Drag,
@@ -1218,7 +1208,7 @@ mod tests {
                         },
                         entity,
                         &mut handles,
-                        &copy_mode_q,
+                        &copy_modes,
                     );
                 },
             )
@@ -1370,7 +1360,7 @@ mod tests {
                     &mut bevy_terminal::PtyHandle,
                     &mut bevy_terminal::Coalescer,
                 )>,
-                      copy_mode_q: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
+                      copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
                         &mut state,
                         bevy_terminal::ButtonEventKind::Release,
@@ -1378,7 +1368,7 @@ mod tests {
                         bevy_terminal::ButtonAction::WriteToPty(b"\x1b[<0;1;1m".to_vec()),
                         entity,
                         &mut handles,
-                        &copy_mode_q,
+                        &copy_modes,
                     );
                 },
             )
