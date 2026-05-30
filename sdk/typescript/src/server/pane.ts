@@ -4,6 +4,7 @@ import {
   registerActivityChannels,
   unregisterActivityChannels,
 } from "./channels-server.ts";
+import { callControl, type SplitControlReply } from "./control-client.ts";
 import {
   deleteNoContent,
   paths,
@@ -66,33 +67,29 @@ export class Pane {
   }
 
   /**
-   * Atomic split: generate UUIDs, prime local handler/channel registries,
-   * then POST. The pre-POST register is what makes the in-CEF extension
-   * client race-free — see plan §5.3 "race-free invariant". On POST failure
-   * we roll the local registries back so no stale entries survive.
+   * Atomic split over the control socket. Primes local handler/channel
+   * registries (consumed by the rendered activity in a later sub-project),
+   * sends the split, and adopts the host-authoritative pane/activity ids for
+   * the returned handle. On failure the local registries roll back.
    */
   async split(args: SplitArgs): Promise<Pane> {
-    const newPaneId: PaneId = crypto.randomUUID();
     const activityId: ActivityId = crypto.randomUUID();
-
     primeActivityRegistries(activityId, args.activity);
 
-    const body = {
-      side: args.side,
-      orientation: args.orientation,
-      new_pane_id: newPaneId,
-      activity: buildActivityPayload(activityId, args.activity),
-    };
-
+    let reply: SplitControlReply;
     try {
-      await postJson(paths.paneSplit(this.windowId, this.id), body);
+      reply = await callControl("split", this.id, {
+        side: args.side,
+        orientation: args.orientation,
+        activity: controlActivity(args.activity),
+      });
     } catch (err) {
       rollbackActivityRegistries(activityId, args.activity);
       throw err;
     }
 
     return new Pane({
-      id: newPaneId,
+      id: reply.new_pane_id,
       windowId: this.windowId,
       sessionId: this.sessionId,
     });
@@ -154,6 +151,14 @@ function rollbackActivityRegistries(
 function activityKindForSpec(spec: ActivitySpecInput): ActivityKind {
   if (spec.kind === "terminal") return { type: "terminal" };
   return { type: "extension", html_root: path.dirname(spec.html) };
+}
+
+function controlActivity(spec: ActivitySpecInput): { kind: "extension"; html_root: string; name?: string } {
+  // TODO: terminal splits over the control socket are not supported in #2; a future op should carry a terminal kind instead of this extension fallback.
+  if (spec.kind !== "extension") {
+    return { kind: "extension", html_root: "", name: spec.name };
+  }
+  return { kind: "extension", html_root: path.dirname(spec.html), name: spec.name };
 }
 
 function buildActivityPayload(
