@@ -371,10 +371,26 @@ fn lifecycle(
     endpoints.set(sock);
     let _ = tx.send(LifecycleEvent::Ready);
 
-    // NOTE: take the child out before wait() so Drop's lock().take() returns
-    // None rather than blocking forever on a lock held across a blocking wait().
-    let taken = child.lock().unwrap().take();
-    let status = taken.and_then(|mut c| c.wait().ok().and_then(|s| s.code()));
+    // NOTE: poll try_wait() rather than blocking in wait() so that Drop can
+    // acquire the mutex, kill the child, and have the poll loop detect exit.
+    // A blocking wait() after take() would prevent Drop from killing the child
+    // and cause t.join() to hang until the extension exits on its own.
+    let status = loop {
+        {
+            let mut guard = child.lock().unwrap();
+            if let Some(ref mut c) = *guard {
+                match c.try_wait() {
+                    Ok(Some(s)) => break s.code(),
+                    Ok(None) => {}
+                    Err(_) => break None,
+                }
+            } else {
+                // Drop took and killed the child.
+                break None;
+            }
+        }
+        std::thread::sleep(PROBE_INTERVAL);
+    };
     endpoints.clear();
     let _ = tx.send(LifecycleEvent::Exited { status });
 }
