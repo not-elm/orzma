@@ -4743,6 +4743,8 @@ dependencies = [
  "bevy_cef_core",
  "crossbeam-channel",
  "portable-pty",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

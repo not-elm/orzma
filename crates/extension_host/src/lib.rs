@@ -4,12 +4,18 @@
 //! `ozmux-ext://` custom scheme.
 
 pub mod command;
+pub mod control;
 pub mod host;
 pub mod path_prefix;
 pub mod protocol;
 pub mod scheme;
 
 pub use command::{CommandExtension, CommandExtensionConfig};
+pub use control::{
+    ActivityKindSpec, ActivitySpec, ControlError, ControlOp, ControlOrientation, ControlParseError,
+    ControlRequest, ControlResponse, ControlSide, SplitParams, SplitReply, encode_response,
+    parse_call,
+};
 pub use host::{
     ExtensionConfig, ExtensionEndpoints, ExtensionHost, FetchError, HostError, HostResult,
     LifecycleEvent, fetch,
