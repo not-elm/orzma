@@ -5,6 +5,7 @@
 
 pub mod host;
 pub mod protocol;
+pub mod scheme;
 
 pub use host::{
     ExtensionConfig, ExtensionEndpoints, ExtensionHost, FetchError, HostError, LifecycleEvent,
