@@ -14,20 +14,24 @@ use std::time::{Duration, Instant};
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A per-PID runtime directory tree (`<base>/<pid>/sock/`), removed on drop.
+/// A per-PID runtime directory tree (`<base>/<pid>/{sock,bin}/`), removed on drop.
 pub struct RuntimeRoot {
     root: PathBuf,
     sock_dir: PathBuf,
+    bin_dir: PathBuf,
 }
 
 impl RuntimeRoot {
     /// Resolves a runtime root under `parent/<pid>/`, falling back to
     /// `/tmp/ozmux-ext` when the socket path would overflow the `sun_path` limit.
     pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> std::io::Result<Self> {
+        // NOTE: measure the LONGEST socket filename a command extension uses
+        // (`<name>.handlers.sock`) so the sun_path fit check is not optimistic;
+        // `socket_path` produces the shorter `<name>.sock`.
         let needed = |base: &Path| -> usize {
             base.join(pid.to_string())
                 .join("sock")
-                .join(format!("{name}.sock"))
+                .join(format!("{name}.handlers.sock"))
                 .as_os_str()
                 .len()
         };
@@ -62,18 +66,29 @@ impl RuntimeRoot {
         &self.sock_dir
     }
 
+    /// The directory holding extension command shims.
+    pub fn bin_dir(&self) -> &Path {
+        &self.bin_dir
+    }
+
     fn new_in(parent: &Path, pid: u32) -> std::io::Result<Self> {
         let root = parent.join(pid.to_string());
         let sock_dir = root.join("sock");
+        let bin_dir = root.join("bin");
         std::fs::create_dir_all(&sock_dir)?;
+        std::fs::create_dir_all(&bin_dir)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            for p in [&root, &sock_dir] {
+            for p in [&root, &sock_dir, &bin_dir] {
                 std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700))?;
             }
         }
-        Ok(Self { root, sock_dir })
+        Ok(Self {
+            root,
+            sock_dir,
+            bin_dir,
+        })
     }
 }
 
@@ -462,6 +477,19 @@ mod tests {
             rt.root().to_path_buf()
         };
         assert!(!path.exists(), "Drop must remove the tree");
+    }
+
+    #[test]
+    fn runtime_root_creates_bin_dir_0700() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        let rt = RuntimeRoot::resolve_in(parent.path(), 4243, "memo").unwrap();
+        let mode = std::fs::metadata(rt.bin_dir())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
     }
 
     #[test]
