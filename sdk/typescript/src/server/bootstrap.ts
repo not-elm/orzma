@@ -18,7 +18,8 @@ export interface BootstrapEnv {
   binDir: string;
   sockPath: string;
   extensionName: string;
-  daemonUrl: string;
+  /** Extension-host control endpoint. Absent outside a running host (tests/dev); daemon-client write ops no-op when unset. */
+  extensionHostUrl?: string;
   handlersSockPath: string;
 }
 
@@ -28,13 +29,11 @@ export function resolveBootstrapEnv(
   const binDir = env.OZMUX_BIN_DIR;
   const sockPath = env.OZMUX_SOCK_PATH;
   const extensionName = env.EXTENSION_NAME;
-  const daemonUrl = env.OZMUX_DAEMON_URL;
   const handlersSockPath = env.OZMUX_HANDLERS_SOCK_PATH;
   for (const [k, v] of Object.entries({
     OZMUX_BIN_DIR: binDir,
     OZMUX_SOCK_PATH: sockPath,
     EXTENSION_NAME: extensionName,
-    OZMUX_DAEMON_URL: daemonUrl,
     OZMUX_HANDLERS_SOCK_PATH: handlersSockPath,
   })) {
     if (!v) throw new Error(`missing required env: ${k}`);
@@ -43,7 +42,7 @@ export function resolveBootstrapEnv(
     binDir: binDir!,
     sockPath: sockPath!,
     extensionName: extensionName!,
-    daemonUrl: daemonUrl!,
+    extensionHostUrl: env.OZMUX_EXTENSION_HOST_URL,
     handlersSockPath: handlersSockPath!,
   };
 }

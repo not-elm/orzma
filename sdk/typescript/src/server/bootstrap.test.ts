@@ -9,20 +9,29 @@ import { Writable } from "node:stream";
 import { bindServer, handleConnection, materializeShims, resolveBootstrapEnv, type CommandHandler } from "./bootstrap.ts";
 
 describe("resolveBootstrapEnv", () => {
-  it("returns the quartet when all are set", () => {
+  it("returns the quintet when all are set including extensionHostUrl", () => {
     expect(resolveBootstrapEnv({
       OZMUX_BIN_DIR: "/b",
       OZMUX_SOCK_PATH: "/s.sock",
       EXTENSION_NAME: "memo",
-      OZMUX_DAEMON_URL: "http://127.0.0.1:3200",
+      OZMUX_EXTENSION_HOST_URL: "http://127.0.0.1:3200",
       OZMUX_HANDLERS_SOCK_PATH: "/h",
     })).toEqual({
       binDir: "/b",
       sockPath: "/s.sock",
       extensionName: "memo",
-      daemonUrl: "http://127.0.0.1:3200",
+      extensionHostUrl: "http://127.0.0.1:3200",
       handlersSockPath: "/h",
     });
+  });
+  it("does not throw when OZMUX_EXTENSION_HOST_URL is absent and returns undefined for extensionHostUrl", () => {
+    const result = resolveBootstrapEnv({
+      OZMUX_BIN_DIR: "/b",
+      OZMUX_SOCK_PATH: "/s.sock",
+      EXTENSION_NAME: "memo",
+      OZMUX_HANDLERS_SOCK_PATH: "/h",
+    });
+    expect(result.extensionHostUrl).toBeUndefined();
   });
   it("throws when any required key is missing", () => {
     expect(() => resolveBootstrapEnv({ OZMUX_BIN_DIR: "/b", OZMUX_SOCK_PATH: "/s.sock" }))
@@ -33,7 +42,6 @@ describe("resolveBootstrapEnv", () => {
       OZMUX_BIN_DIR: "/b",
       OZMUX_SOCK_PATH: "/s",
       EXTENSION_NAME: "memo",
-      OZMUX_DAEMON_URL: "http://x",
       // OZMUX_HANDLERS_SOCK_PATH intentionally missing
     };
     expect(() => resolveBootstrapEnv(env)).toThrow(
@@ -45,14 +53,14 @@ describe("resolveBootstrapEnv", () => {
       OZMUX_BIN_DIR: "/b",
       OZMUX_SOCK_PATH: "/s",
       EXTENSION_NAME: "memo",
-      OZMUX_DAEMON_URL: "http://x",
+      OZMUX_EXTENSION_HOST_URL: "http://x",
       OZMUX_HANDLERS_SOCK_PATH: "/h",
     };
     expect(resolveBootstrapEnv(env)).toEqual({
       binDir: "/b",
       sockPath: "/s",
       extensionName: "memo",
-      daemonUrl: "http://x",
+      extensionHostUrl: "http://x",
       handlersSockPath: "/h",
     });
   });
@@ -162,7 +170,7 @@ describe("bootstrap()", () => {
         OZMUX_BIN_DIR: binDir,
         OZMUX_SOCK_PATH: sockPath,
         EXTENSION_NAME: "memo",
-        OZMUX_DAEMON_URL: "http://127.0.0.1:3200",
+        OZMUX_EXTENSION_HOST_URL: "http://127.0.0.1:3200",
         OZMUX_HANDLERS_SOCK_PATH: handlersSockPath,
       },
       stdio: "inherit",
