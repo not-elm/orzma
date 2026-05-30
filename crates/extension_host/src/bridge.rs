@@ -71,7 +71,7 @@ fn drain_control_requests(ext: Option<Res<ControlExtension>>, mut mux: Multiplex
     }
 }
 
-pub(crate) fn apply_control_request(
+pub fn apply_control_request(
     mux: &mut MultiplexerCommands,
     req: ControlRequest,
     responder: Responder,

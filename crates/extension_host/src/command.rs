@@ -267,7 +267,7 @@ mod tests {
 
         let bridge = std::thread::spawn(move || {
             let (_req, responder) = req_rx
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(10))
                 .expect("request");
             responder
                 .send(ControlResponse::Ok(SplitReply {
@@ -279,7 +279,7 @@ mod tests {
 
         // NOTE: poll until the server thread has bound the socket — bind is async
         // relative to the spawning thread; connecting before bind yields ENOENT.
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             if sock.exists() {
                 break;
@@ -295,7 +295,7 @@ mod tests {
         stream.write_all(format!("{call}\n").as_bytes()).unwrap();
         let mut buf = String::new();
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         stream.read_to_string(&mut buf).unwrap();
         assert!(buf.contains("\"kind\":\"result\""), "got: {buf}");
@@ -339,14 +339,22 @@ mod tests {
             eprintln!("skipping: node or memo's @ozmux/sdk link not available");
             return;
         }
-        let ext = CommandExtension::spawn(CommandExtensionConfig {
-            name: "memo".into(),
-            dir: memo_dir(),
-            main: "bootstrap.ts".into(),
-            commands: vec!["@memo".into()],
-        })
+        // NOTE: spawn_with_timeout (not spawn) — the lifecycle thread polls for
+        // shim creation up to this budget. The default 10s starves under
+        // parallel-test CPU contention (the e2e adds a third concurrent node
+        // spawner); a too-low spawn budget makes the thread emit a timeout
+        // event that fails wait_ready regardless of its own (larger) timeout.
+        let ext = CommandExtension::spawn_with_timeout(
+            CommandExtensionConfig {
+                name: "memo".into(),
+                dir: memo_dir(),
+                main: "bootstrap.ts".into(),
+                commands: vec!["@memo".into()],
+            },
+            Duration::from_secs(20),
+        )
         .expect("spawn memo");
-        ext.wait_ready(Duration::from_secs(10)).expect("memo ready");
+        ext.wait_ready(Duration::from_secs(20)).expect("memo ready");
         assert!(
             ext.bin_dir().join("@memo").exists(),
             "@memo shim must be written"
