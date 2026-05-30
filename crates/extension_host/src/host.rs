@@ -385,10 +385,12 @@ fn lifecycle(
                     Err(_) => break None,
                 }
             } else {
-                // Drop took and killed the child.
                 break None;
             }
         }
+        // TODO: replace this busy-poll with a shutdown signal (AtomicBool /
+        // channel set by Drop before kill) so Drop-kill exits in O(1) and a
+        // long-lived extension does not wake this thread every PROBE_INTERVAL.
         std::thread::sleep(PROBE_INTERVAL);
     };
     endpoints.clear();
