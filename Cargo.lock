@@ -4647,6 +4647,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_extension_host"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "ozmux_macros"
 version = "0.1.0"
 dependencies = [
