@@ -4742,7 +4742,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_cef_core",
  "crossbeam-channel",
- "libc",
+ "portable-pty",
  "tempfile",
 ]
 

@@ -23,3 +23,4 @@ bevy_cef_core = { path = "/Users/watanabe/workspace/bevy_cef/crates/bevy_cef_cor
 
 [dev-dependencies]
 tempfile = { workspace = true }
+portable-pty = { workspace = true }
