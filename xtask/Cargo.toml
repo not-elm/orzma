@@ -1,9 +1,14 @@
+# NOTE: standalone (own `[workspace]` below) — excluded from the root workspace
+# so its cef v148 dep does not collide with bevy_cef_core's cef v145
+# (`links = "cef_dll_wrapper"`). Keep deps concrete here, not workspace-inherited.
 [package]
 name = "xtask"
 version = "0.0.0"
 edition = "2024"
-license.workspace = true
+license = "MIT"
 publish = false
+
+[workspace]
 
 [[bin]]
 name = "xtask"

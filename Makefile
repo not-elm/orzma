@@ -53,12 +53,12 @@ dev-frontend:
 bundle-ozmux-daemon:
 	cargo build -p daemon_bootstrap --bin ozmux-daemon
 	cargo build -p ozmux_cef_host --bin cef_helper
-	cargo run -p xtask -- bundle-ozmux-daemon
+	cargo run --manifest-path xtask/Cargo.toml -- bundle-ozmux-daemon
 
 bundle-ozmux-daemon-release:
 	cargo build --release -p daemon_bootstrap --bin ozmux-daemon
 	cargo build --release -p ozmux_cef_host --bin cef_helper
-	cargo run -p xtask -- bundle-ozmux-daemon --release
+	cargo run --manifest-path xtask/Cargo.toml -- bundle-ozmux-daemon --release
 
 dev-daemon: memo-build-sdk $(BUNDLE_OZMUX_DAEMON_DEP)
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) \

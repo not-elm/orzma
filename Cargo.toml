@@ -35,7 +35,6 @@ members = [
   "daemon/extension",
   "daemon/macros",
   "crates/*",
-  "xtask",
 ]
 exclude = [
   "cli",
@@ -46,6 +45,10 @@ exclude = [
   "daemon/http_server",
   "daemon/multiplexer",
   "client",
+  # NOTE: xtask pulls cef v148 (links = "cef_dll_wrapper"); excluded so the
+  # workspace graph stays free of it, letting crates/extension_host depend on
+  # bevy_cef_core (cef v145) behind its `cef` feature without a links conflict.
+  "xtask",
 ]
 
 [workspace.package]
