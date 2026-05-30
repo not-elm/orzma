@@ -4740,8 +4740,10 @@ dependencies = [
 name = "ozmux_extension_host"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "bevy_cef_core",
  "crossbeam-channel",
+ "ozmux_multiplexer",
  "portable-pty",
  "serde",
  "serde_json",

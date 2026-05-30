@@ -17,6 +17,8 @@ cef = ["dep:bevy_cef_core"]
 crossbeam-channel = "0.5"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+bevy = { workspace = true }
+ozmux_multiplexer = { path = "../multiplexer" }
 # Local-only path dep (the bevy_cef feat/ui-material branch is unmerged); the
 # `cef` feature is OFF by default. Resolvable only because xtask (cef v148) is
 # excluded from the workspace, so there is no `links = "cef_dll_wrapper"`

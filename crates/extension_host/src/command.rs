@@ -99,6 +99,7 @@ fn handle_control_conn(stream: UnixStream, req_tx: Sender<(ControlRequest, Respo
 }
 
 /// How to launch a command (bootstrap) extension.
+#[derive(Clone)]
 pub struct CommandExtensionConfig {
     /// Extension name (also the `EXTENSION_NAME` env + runtime-root key).
     pub name: String,
