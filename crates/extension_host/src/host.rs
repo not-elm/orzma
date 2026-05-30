@@ -293,10 +293,22 @@ impl ExtensionHost {
         let endpoints = ExtensionEndpoints::default();
         let (tx, rx) = bounded::<LifecycleEvent>(8);
 
+        let endpoints_for_clear = endpoints.clone();
         let thread = std::thread::spawn({
             let endpoints = endpoints.clone();
             let child = Arc::clone(&child);
-            move || lifecycle(sock, ready_timeout, endpoints, child, tx)
+            let sock = sock.clone();
+            move || {
+                let ready_sock = sock.clone();
+                run_lifecycle(
+                    ready_timeout,
+                    move || fetch_at(&ready_sock, "index.html").is_ok(),
+                    move || endpoints.set(sock),
+                    child,
+                    tx,
+                );
+                endpoints_for_clear.clear();
+            }
         });
 
         Ok(Self {
@@ -342,10 +354,10 @@ impl Drop for ExtensionHost {
     }
 }
 
-fn lifecycle(
-    sock: PathBuf,
+pub(crate) fn run_lifecycle(
     ready_timeout: Duration,
-    endpoints: ExtensionEndpoints,
+    is_ready: impl Fn() -> bool,
+    on_ready: impl FnOnce(),
     child: Arc<std::sync::Mutex<Option<Child>>>,
     tx: Sender<LifecycleEvent>,
 ) {
@@ -359,7 +371,7 @@ fn lifecycle(
     // attempts, not during one hung attempt. Parametrize fetch_at's timeout if
     // an extension can bind the socket but stall on the first request.
     let ready = loop {
-        if fetch_at(&sock, "index.html").is_ok() {
+        if is_ready() {
             break true;
         }
         if Instant::now() >= deadline {
@@ -383,7 +395,7 @@ fn lifecycle(
         return;
     }
 
-    endpoints.set(sock);
+    on_ready();
     let _ = tx.send(LifecycleEvent::Ready);
 
     // NOTE: poll try_wait() rather than blocking in wait() so that Drop can
@@ -391,24 +403,22 @@ fn lifecycle(
     // A blocking wait() after take() would prevent Drop from killing the child
     // and cause t.join() to hang until the extension exits on its own.
     let status = loop {
-        {
-            let mut guard = child.lock().unwrap();
-            if let Some(ref mut c) = *guard {
-                match c.try_wait() {
-                    Ok(Some(s)) => break s.code(),
-                    Ok(None) => {}
-                    Err(_) => break None,
+        let taken = { child.lock().unwrap().take() };
+        match taken {
+            Some(mut c) => match c.try_wait() {
+                Ok(Some(s)) => break s.code(),
+                Ok(None) => {
+                    *child.lock().unwrap() = Some(c);
                 }
-            } else {
-                break None;
-            }
+                Err(_) => break None,
+            },
+            None => break None,
         }
         // TODO: replace this busy-poll with a shutdown signal (AtomicBool /
         // channel set by Drop before kill) so Drop-kill exits in O(1) and a
         // long-lived extension does not wake this thread every PROBE_INTERVAL.
         std::thread::sleep(PROBE_INTERVAL);
     };
-    endpoints.clear();
     let _ = tx.send(LifecycleEvent::Exited { status });
 }
 
