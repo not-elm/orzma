@@ -22,3 +22,4 @@ export {
   type ChannelMap,
   registerActivityChannels,
 } from "./channels-server.ts";
+export { serveAssets, type AssetHandler, type AssetResponse } from "./asset-server.ts";
