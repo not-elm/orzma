@@ -117,10 +117,11 @@ fn read_bytes<R: Read>(r: &mut R, max: u32) -> Result<Vec<u8>, ProtocolError> {
 mod tests {
     use super::*;
 
-    // Fixed wire bytes for Request { path: "hi" }: version=1, path_len=2, "hi".
+    // NOTE: cross-language byte fixture — must match the Node serveAssets encoder exactly.
+    // Layout: version=1 | u32 path_len=2 (BE) | "hi"
     const REQ_HI: &[u8] = &[1, 0, 0, 0, 2, b'h', b'i'];
-    // Fixed wire bytes for Response { 200, "text/html", "ok" }:
-    // status=200 (0x00C8), ctype_len=9, "text/html", body_len=2, "ok".
+    // NOTE: cross-language byte fixture — must match the Node serveAssets decoder exactly.
+    // Layout: u16 status=200 (0x00C8) | u32 ctype_len=9 (BE) | "text/html" | u32 body_len=2 (BE) | "ok"
     const RESP_OK: &[u8] = &[
         0x00, 0xC8, 0, 0, 0, 9, b't', b'e', b'x', b't', b'/', b'h', b't', b'm', b'l', 0, 0, 0, 2,
         b'o', b'k',

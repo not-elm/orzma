@@ -13,8 +13,8 @@ publish.workspace = true
 cef = ["dep:bevy_cef_core"]
 
 [dependencies]
+# TODO: used by the host lifecycle channel (Task 3)
 crossbeam-channel = "0.5"
-libc = { workspace = true }
 # Local-only path dep (the bevy_cef feat/ui-material branch is unmerged); the
 # `cef` feature is OFF by default. Resolvable only because xtask (cef v148) is
 # excluded from the workspace, so there is no `links = "cef_dll_wrapper"`
