@@ -31,6 +31,9 @@ impl RuntimeRoot {
         if needed(parent) <= SUN_PATH_MAX {
             return Self::new_in(parent, pid);
         }
+        // NOTE: the shared fallback parent is created with the process umask (so
+        // it is world-listable, like the legacy /tmp/ozmux); only the per-PID
+        // subdir below is 0700, which is what protects the sockets.
         let fallback = Path::new("/tmp/ozmux-ext");
         std::fs::create_dir_all(fallback)?;
         if needed(fallback) <= SUN_PATH_MAX {
@@ -145,17 +148,14 @@ fn map_proto(e: ProtocolError) -> FetchError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Response, write_response};
-    use std::io::Read;
+    use crate::protocol::{Response, read_request, write_response};
     use std::os::unix::net::UnixListener;
 
-    // Spawns a one-shot UDS server that reads a request then writes `resp`.
     fn serve_once(sock: std::path::PathBuf, resp: Response) -> std::thread::JoinHandle<()> {
         let listener = UnixListener::bind(&sock).unwrap();
         std::thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
-                let mut scratch = [0u8; 64];
-                let _ = stream.read(&mut scratch); // drain the request frame
+                let _ = read_request(&mut stream);
                 let _ = write_response(&mut stream, &resp);
             }
         })
