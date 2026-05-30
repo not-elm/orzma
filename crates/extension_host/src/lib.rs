@@ -3,6 +3,8 @@
 //! (behind the `cef` feature) bridges its UI bytes through a `bevy_cef`
 //! `ozmux-ext://` custom scheme.
 
+pub mod host;
 pub mod protocol;
 
+pub use host::{ExtensionEndpoints, FetchError, fetch};
 pub use protocol::{ProtocolError, Request, Response};
