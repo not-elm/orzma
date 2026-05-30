@@ -39,7 +39,7 @@ export function serveAssets(
       const pathLen = buf.readUInt32BE(1);
       if (pathLen > MAX_PATH_LEN) return void socket.destroy();
       if (buf.length < 5 + pathLen) return;
-      if (buf.length > 5 + pathLen) return void socket.destroy(); // surplus bytes
+      if (buf.length > 5 + pathLen) return void socket.destroy();
       const reqPath = buf.subarray(5, 5 + pathLen).toString("utf8");
       Promise.resolve(handler(reqPath))
         .then((res) => socket.end(encodeResponse(res)))
@@ -51,6 +51,7 @@ export function serveAssets(
   server.listen(sockPath);
   const close = () => {
     server.close();
+    for (const sig of ["SIGINT", "SIGTERM"] as const) process.off(sig, close);
     try {
       fs.unlinkSync(sockPath);
     } catch {
