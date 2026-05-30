@@ -116,6 +116,26 @@ pub enum FetchError {
     Protocol(ProtocolError),
 }
 
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FetchError::NotReady => write!(f, "extension endpoint is not ready"),
+            FetchError::Io(e) => write!(f, "extension fetch I/O error: {e}"),
+            FetchError::Protocol(e) => write!(f, "extension protocol error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for FetchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            FetchError::Io(e) => Some(e),
+            FetchError::Protocol(e) => Some(e),
+            FetchError::NotReady => None,
+        }
+    }
+}
+
 /// Fetches `path` from the currently-live extension endpoint.
 pub fn fetch(endpoints: &ExtensionEndpoints, path: &str) -> Result<Response, FetchError> {
     let sock = endpoints.get().ok_or(FetchError::NotReady)?;
@@ -204,6 +224,25 @@ pub enum HostError {
     NotReady,
 }
 
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HostError::Spawn(e) => write!(f, "failed to spawn extension process: {e}"),
+            HostError::Runtime(e) => write!(f, "failed to create extension runtime root: {e}"),
+            HostError::NotReady => write!(f, "extension did not become ready"),
+        }
+    }
+}
+
+impl std::error::Error for HostError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            HostError::Spawn(e) | HostError::Runtime(e) => Some(e),
+            HostError::NotReady => None,
+        }
+    }
+}
+
 /// A running extension: owns the runtime root + lifecycle thread.
 pub struct ExtensionHost {
     endpoints: ExtensionEndpoints,
@@ -219,7 +258,7 @@ impl ExtensionHost {
         Self::spawn_with_timeout(cfg, DEFAULT_READY_TIMEOUT)
     }
 
-    /// Spawns with an explicit readiness timeout (used by tests).
+    /// Spawns with an explicit readiness timeout.
     pub fn spawn_with_timeout(
         cfg: ExtensionConfig,
         ready_timeout: Duration,
@@ -300,6 +339,10 @@ fn lifecycle(
     // "listener-up ≠ app-ready" gap where a process could accept connections
     // before its handler is registered.
     let deadline = Instant::now() + ready_timeout;
+    // TODO: each fetch_at attempt uses the fixed FETCH_TIMEOUT (5s) for its
+    // read/write, so a ready_timeout shorter than 5s is only honored between
+    // attempts, not during one hung attempt. Parametrize fetch_at's timeout if
+    // an extension can bind the socket but stall on the first request.
     let ready = loop {
         if fetch_at(&sock, "index.html").is_ok() {
             break true;
@@ -331,9 +374,7 @@ fn lifecycle(
     // NOTE: take the child out before wait() so Drop's lock().take() returns
     // None rather than blocking forever on a lock held across a blocking wait().
     let taken = child.lock().unwrap().take();
-    let status = taken
-        .map(|mut c| c.wait().ok().and_then(|s| s.code()))
-        .unwrap_or(None);
+    let status = taken.and_then(|mut c| c.wait().ok().and_then(|s| s.code()));
     endpoints.clear();
     let _ = tx.send(LifecycleEvent::Exited { status });
 }
@@ -421,7 +462,6 @@ mod tests {
 
     #[test]
     fn spawn_failed_when_program_never_binds() {
-        // `sleep 5` never binds the socket -> readiness times out -> SpawnFailed.
         let cfg = ExtensionConfig {
             name: "never-binds".into(),
             program: "sleep".into(),
@@ -437,8 +477,6 @@ mod tests {
 
     #[test]
     fn ready_when_program_binds_socket() {
-        // A shell one-liner that binds the socket with `nc -lU` (BSD/macOS nc).
-        // Skipped automatically if `nc` is unavailable.
         if std::process::Command::new("sh")
             .arg("-c")
             .arg("command -v nc")

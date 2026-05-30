@@ -53,6 +53,27 @@ impl From<std::io::Error> for ProtocolError {
     }
 }
 
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProtocolError::Io(e) => write!(f, "protocol I/O error: {e}"),
+            ProtocolError::VersionMismatch(v) => write!(f, "unsupported protocol version: {v}"),
+            ProtocolError::TooLarge => write!(f, "frame length exceeds the permitted maximum"),
+            ProtocolError::Utf8 => write!(f, "frame field was not valid UTF-8"),
+            ProtocolError::UnexpectedEof => write!(f, "stream ended before a complete frame"),
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ProtocolError::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 /// Writes a request frame: `version`, `u32 path_len`, `path`.
 pub fn write_request<W: Write>(w: &mut W, req: &Request) -> Result<(), ProtocolError> {
     w.write_all(&[PROTOCOL_VERSION])?;
