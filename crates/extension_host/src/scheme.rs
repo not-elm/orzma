@@ -1,13 +1,25 @@
 //! `ozmux-ext://<name>/<path>` custom-scheme handler bridging a webview URL to
 //! the extension's bytes via [`crate::fetch`]. Behind the `cef` feature.
 
+#[cfg(feature = "cef")]
+use crate::host::{ExtensionEndpoints, FetchError, fetch};
+#[cfg(feature = "cef")]
+use bevy_cef_core::prelude::{
+    CefCustomScheme, CefSchemeBody, CefSchemeHandler, CefSchemeOptions, CefSchemeRequest,
+    CefSchemeResponse,
+};
+#[cfg(feature = "cef")]
+use std::sync::Arc;
+
 /// Parses `ozmux-ext://<name>/<path>[?query]` into `(name, path)`; strips the
 /// query and defaults an empty path to `"index.html"`. Returns `None` if the
 /// URL is not a well-formed `ozmux-ext://` URL with a non-empty `<name>`.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
-pub(crate) fn parse_url(url: &str) -> Option<(&str, &str)> {
+fn parse_url(url: &str) -> Option<(&str, &str)> {
     let rest = url.strip_prefix("ozmux-ext://")?;
-    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let rest = rest
+        .split_once(['?', '#'])
+        .map_or(rest, |(before, _)| before);
     let (name, path) = match rest.split_once('/') {
         Some((n, p)) => (n, p),
         None => (rest, ""),
@@ -18,16 +30,6 @@ pub(crate) fn parse_url(url: &str) -> Option<(&str, &str)> {
     let path = if path.is_empty() { "index.html" } else { path };
     Some((name, path))
 }
-
-#[cfg(feature = "cef")]
-use crate::host::{ExtensionEndpoints, FetchError, fetch};
-#[cfg(feature = "cef")]
-use bevy_cef_core::prelude::{
-    CefCustomScheme, CefSchemeBody, CefSchemeHandler, CefSchemeOptions, CefSchemeRequest,
-    CefSchemeResponse,
-};
-#[cfg(feature = "cef")]
-use std::sync::Arc;
 
 /// The custom scheme name registered with CEF.
 #[cfg(feature = "cef")]
@@ -133,6 +135,10 @@ mod tests {
     fn strips_query_and_fragment() {
         assert_eq!(
             parse_url("ozmux-ext://hello/a.js?v=2"),
+            Some(("hello", "a.js"))
+        );
+        assert_eq!(
+            parse_url("ozmux-ext://hello/a.js#anchor"),
             Some(("hello", "a.js"))
         );
     }
