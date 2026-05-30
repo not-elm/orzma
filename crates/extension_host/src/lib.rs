@@ -4,6 +4,7 @@
 //! `ozmux-ext://` custom scheme.
 
 pub mod host;
+pub mod path_prefix;
 pub mod protocol;
 pub mod scheme;
 
@@ -11,4 +12,5 @@ pub use host::{
     ExtensionConfig, ExtensionEndpoints, ExtensionHost, FetchError, HostError, HostResult,
     LifecycleEvent, fetch,
 };
+pub use path_prefix::extension_path_prefix;
 pub use protocol::{ProtocolError, Request, Response};
