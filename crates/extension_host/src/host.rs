@@ -2,11 +2,14 @@
 //! endpoint, a blocking `fetch`, and (Task 3) the process spawn + lifecycle.
 
 use crate::protocol::{ProtocolError, Request, Response, read_response, write_request};
+use crossbeam_channel::{Receiver, Sender, bounded};
+use std::ffi::OsString;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -145,6 +148,196 @@ fn map_proto(e: ProtocolError) -> FetchError {
     }
 }
 
+const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const PROBE_INTERVAL: Duration = Duration::from_millis(20);
+
+/// How to launch an extension. Generic over the program for testability; use
+/// [`ExtensionConfig::node`] for the real Node launch contract.
+pub struct ExtensionConfig {
+    /// Extension name (the `<name>` in `ozmux-ext://<name>/…`).
+    pub name: String,
+    /// Program to spawn (e.g. `"node"`).
+    pub program: OsString,
+    /// Arguments (e.g. `[main.ts]`).
+    pub args: Vec<OsString>,
+    /// Working directory for the child.
+    pub dir: PathBuf,
+}
+
+impl ExtensionConfig {
+    /// Builds a config that launches `node <main>` (the legacy launch contract).
+    pub fn node(name: impl Into<String>, dir: PathBuf, main: impl Into<OsString>) -> Self {
+        Self {
+            name: name.into(),
+            program: "node".into(),
+            args: vec![main.into()],
+            dir,
+        }
+    }
+}
+
+/// A lifecycle transition emitted by the host thread.
+#[derive(Debug)]
+pub enum LifecycleEvent {
+    /// The extension bound its socket and answered a readiness round-trip.
+    Ready,
+    /// The extension process exited.
+    Exited {
+        /// Exit code, if known.
+        status: Option<i32>,
+    },
+    /// The process never became ready within the timeout.
+    SpawnFailed {
+        /// Human-readable reason.
+        error: String,
+    },
+}
+
+/// A failure to start the host.
+#[derive(Debug)]
+pub enum HostError {
+    /// Spawning the child process failed.
+    Spawn(std::io::Error),
+    /// The runtime root / socket path could not be created.
+    Runtime(std::io::Error),
+    /// `wait_ready` timed out or the extension failed to start.
+    NotReady,
+}
+
+/// A running extension: owns the runtime root + lifecycle thread.
+pub struct ExtensionHost {
+    endpoints: ExtensionEndpoints,
+    events: Receiver<LifecycleEvent>,
+    _runtime: Arc<RuntimeRoot>,
+    child: Arc<std::sync::Mutex<Option<Child>>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ExtensionHost {
+    /// Spawns the extension with the default readiness timeout (non-blocking).
+    pub fn spawn(cfg: ExtensionConfig) -> Result<Self, HostError> {
+        Self::spawn_with_timeout(cfg, DEFAULT_READY_TIMEOUT)
+    }
+
+    /// Spawns with an explicit readiness timeout (used by tests).
+    pub fn spawn_with_timeout(
+        cfg: ExtensionConfig,
+        ready_timeout: Duration,
+    ) -> Result<Self, HostError> {
+        let runtime = RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), &cfg.name)
+            .map_err(HostError::Runtime)?;
+        let sock = runtime.socket_path(&cfg.name);
+        let child = Command::new(&cfg.program)
+            .args(&cfg.args)
+            .current_dir(&cfg.dir)
+            .env("OZMUX_SOCK_PATH", &sock)
+            .spawn()
+            .map_err(HostError::Spawn)?;
+
+        let runtime = Arc::new(runtime);
+        let child = Arc::new(std::sync::Mutex::new(Some(child)));
+        let endpoints = ExtensionEndpoints::default();
+        let (tx, rx) = bounded::<LifecycleEvent>(8);
+
+        let thread = std::thread::spawn({
+            let endpoints = endpoints.clone();
+            let child = Arc::clone(&child);
+            move || lifecycle(sock, ready_timeout, endpoints, child, tx)
+        });
+
+        Ok(Self {
+            endpoints,
+            events: rx,
+            _runtime: runtime,
+            child,
+            thread: Some(thread),
+        })
+    }
+
+    /// A clone of the shared endpoint handle (for the scheme handler).
+    pub fn endpoints(&self) -> ExtensionEndpoints {
+        self.endpoints.clone()
+    }
+
+    /// The lifecycle event stream (the stable seam the ECS plugin will drain).
+    pub fn events(&self) -> &Receiver<LifecycleEvent> {
+        &self.events
+    }
+
+    /// Blocks until `Ready`, or returns `NotReady` on `SpawnFailed`/timeout.
+    pub fn wait_ready(&self, timeout: Duration) -> Result<(), HostError> {
+        match self.events.recv_timeout(timeout) {
+            Ok(LifecycleEvent::Ready) => Ok(()),
+            Ok(LifecycleEvent::SpawnFailed { .. }) | Ok(LifecycleEvent::Exited { .. }) => {
+                Err(HostError::NotReady)
+            }
+            Err(_) => Err(HostError::NotReady),
+        }
+    }
+}
+
+impl Drop for ExtensionHost {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+fn lifecycle(
+    sock: PathBuf,
+    ready_timeout: Duration,
+    endpoints: ExtensionEndpoints,
+    child: Arc<std::sync::Mutex<Option<Child>>>,
+    tx: Sender<LifecycleEvent>,
+) {
+    // NOTE: readiness is verified via a real protocol round-trip (any well-formed
+    // response), not merely a successful connect — this closes the
+    // "listener-up ≠ app-ready" gap where a process could accept connections
+    // before its handler is registered.
+    let deadline = Instant::now() + ready_timeout;
+    let ready = loop {
+        if fetch_at(&sock, "index.html").is_ok() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(PROBE_INTERVAL);
+    };
+
+    if !ready {
+        // NOTE: we take the child out of the mutex before killing so Drop's
+        // lock().take() returns None and does not deadlock waiting for a lock
+        // held across a blocking wait().
+        let taken = child.lock().unwrap().take();
+        if let Some(mut c) = taken {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        let _ = tx.send(LifecycleEvent::SpawnFailed {
+            error: "readiness timeout".into(),
+        });
+        return;
+    }
+
+    endpoints.set(sock);
+    let _ = tx.send(LifecycleEvent::Ready);
+
+    // NOTE: take the child out before wait() so Drop's lock().take() returns
+    // None rather than blocking forever on a lock held across a blocking wait().
+    let taken = child.lock().unwrap().take();
+    let status = taken
+        .map(|mut c| c.wait().ok().and_then(|s| s.code()))
+        .unwrap_or(None);
+    endpoints.clear();
+    let _ = tx.send(LifecycleEvent::Exited { status });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +417,46 @@ mod tests {
             "expected /tmp fallback, got {:?}",
             rt.root()
         );
+    }
+
+    #[test]
+    fn spawn_failed_when_program_never_binds() {
+        // `sleep 5` never binds the socket -> readiness times out -> SpawnFailed.
+        let cfg = ExtensionConfig {
+            name: "never-binds".into(),
+            program: "sleep".into(),
+            args: vec!["5".into()],
+            dir: std::env::temp_dir(),
+        };
+        let host = ExtensionHost::spawn_with_timeout(cfg, Duration::from_millis(300)).unwrap();
+        match host.events().recv_timeout(Duration::from_secs(2)) {
+            Ok(LifecycleEvent::SpawnFailed { .. }) => {}
+            other => panic!("expected SpawnFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ready_when_program_binds_socket() {
+        // A shell one-liner that binds the socket with `nc -lU` (BSD/macOS nc).
+        // Skipped automatically if `nc` is unavailable.
+        if std::process::Command::new("sh")
+            .arg("-c")
+            .arg("command -v nc")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            eprintln!("skipping: nc not available");
+            return;
+        }
+        let cfg = ExtensionConfig {
+            name: "nc-ready".into(),
+            program: "sh".into(),
+            args: vec!["-c".into(),
+                "printf '\\000\\310\\000\\000\\000\\011text/html\\000\\000\\000\\002ok' | nc -lU \"$OZMUX_SOCK_PATH\"".into()],
+            dir: std::env::temp_dir(),
+        };
+        let host = ExtensionHost::spawn(cfg).unwrap();
+        assert!(host.wait_ready(Duration::from_secs(3)).is_ok());
     }
 }

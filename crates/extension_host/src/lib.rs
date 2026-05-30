@@ -6,5 +6,8 @@
 pub mod host;
 pub mod protocol;
 
-pub use host::{ExtensionEndpoints, FetchError, fetch};
+pub use host::{
+    ExtensionConfig, ExtensionEndpoints, ExtensionHost, FetchError, HostError, LifecycleEvent,
+    fetch,
+};
 pub use protocol::{ProtocolError, Request, Response};
