@@ -243,6 +243,9 @@ impl std::error::Error for HostError {
     }
 }
 
+/// Convenience alias for fallible host operations.
+pub type HostResult<T = ()> = Result<T, HostError>;
+
 /// A running extension: owns the runtime root + lifecycle thread.
 pub struct ExtensionHost {
     endpoints: ExtensionEndpoints,
@@ -254,15 +257,12 @@ pub struct ExtensionHost {
 
 impl ExtensionHost {
     /// Spawns the extension with the default readiness timeout (non-blocking).
-    pub fn spawn(cfg: ExtensionConfig) -> Result<Self, HostError> {
+    pub fn spawn(cfg: ExtensionConfig) -> HostResult<Self> {
         Self::spawn_with_timeout(cfg, DEFAULT_READY_TIMEOUT)
     }
 
     /// Spawns with an explicit readiness timeout.
-    pub fn spawn_with_timeout(
-        cfg: ExtensionConfig,
-        ready_timeout: Duration,
-    ) -> Result<Self, HostError> {
+    pub fn spawn_with_timeout(cfg: ExtensionConfig, ready_timeout: Duration) -> HostResult<Self> {
         let runtime = RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), &cfg.name)
             .map_err(HostError::Runtime)?;
         let sock = runtime.socket_path(&cfg.name);
@@ -304,7 +304,7 @@ impl ExtensionHost {
     }
 
     /// Blocks until `Ready`, or returns `NotReady` on `SpawnFailed`/timeout.
-    pub fn wait_ready(&self, timeout: Duration) -> Result<(), HostError> {
+    pub fn wait_ready(&self, timeout: Duration) -> HostResult {
         match self.events.recv_timeout(timeout) {
             Ok(LifecycleEvent::Ready) => Ok(()),
             Ok(LifecycleEvent::SpawnFailed { .. }) | Ok(LifecycleEvent::Exited { .. }) => {

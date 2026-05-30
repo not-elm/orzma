@@ -8,7 +8,7 @@ pub mod protocol;
 pub mod scheme;
 
 pub use host::{
-    ExtensionConfig, ExtensionEndpoints, ExtensionHost, FetchError, HostError, LifecycleEvent,
-    fetch,
+    ExtensionConfig, ExtensionEndpoints, ExtensionHost, FetchError, HostError, HostResult,
+    LifecycleEvent, fetch,
 };
 pub use protocol::{ProtocolError, Request, Response};
