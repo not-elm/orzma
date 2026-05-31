@@ -15,12 +15,13 @@ path = "src/main.rs"
 ab_glyph = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
+bevy_cef = { path = "/Users/watanabe/workspace/bevy_cef", features = ["debug"] }
 bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
 open = { workspace = true }
 ozmux_configs = { path = "daemon/configs" }
-ozmux_extension_host = { path = "crates/extension_host" }
+ozmux_extension_host = { path = "crates/extension_host", features = ["cef"] }
 ozmux_multiplexer = { path = "crates/multiplexer" }
 tracing = { workspace = true }
 unicode-width = { workspace = true }

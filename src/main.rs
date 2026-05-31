@@ -3,6 +3,7 @@
 mod bootstrap;
 mod clipboard;
 mod configs;
+mod extension_render;
 mod font;
 mod input;
 mod multiplexer;
@@ -10,6 +11,7 @@ mod system_set;
 mod theme;
 mod ui;
 
+use crate::extension_render::{AssetEndpoint, cef_plugin};
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
@@ -29,14 +31,19 @@ use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin};
 
 fn main() {
+    let asset_endpoint = AssetEndpoint::default();
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "ozmux".to_string(),
+        .add_plugins((
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "ozmux".to_string(),
+                    ..default()
+                }),
                 ..default()
             }),
-            ..default()
-        }))
+            cef_plugin(&asset_endpoint),
+        ))
+        .insert_resource(asset_endpoint)
         .add_plugins((
             TerminalHandlePlugin,
             TerminalRendererPlugin,
