@@ -14,7 +14,7 @@ interface Pending {
 
 interface SubState {
   queue: unknown[];
-  waiter?: (r: IteratorResult<unknown>) => void;
+  waiter?: { resolve: (r: IteratorResult<unknown>) => void; reject: (e: Error) => void };
   done: boolean;
   error?: Error;
 }
@@ -85,7 +85,7 @@ export function installOzmux(cef: CefApi): OzmuxApi {
               if (state.queue.length) return Promise.resolve({ value: state.queue.shift(), done: false });
               if (state.error) return Promise.reject(state.error);
               if (state.done) return Promise.resolve({ value: undefined, done: true });
-              return new Promise((res) => { state.waiter = res; });
+              return new Promise((resolve, reject) => { state.waiter = { resolve, reject }; });
             },
           };
         },
@@ -98,7 +98,7 @@ export function installOzmux(cef: CefApi): OzmuxApi {
     if (s.waiter) {
       const w = s.waiter;
       s.waiter = undefined;
-      w({ value: payload, done: false });
+      w.resolve({ value: payload, done: false });
     } else {
       s.queue.push(payload);
     }
@@ -112,7 +112,8 @@ export function installOzmux(cef: CefApi): OzmuxApi {
     if (s.waiter) {
       const w = s.waiter;
       s.waiter = undefined;
-      w({ value: undefined, done: true });
+      if (err) w.reject(err);
+      else w.resolve({ value: undefined, done: true });
     }
     subs.delete(id);
   }

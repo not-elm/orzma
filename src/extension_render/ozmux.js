@@ -45,7 +45,7 @@
     if (s.waiter) {
       var w = s.waiter;
       s.waiter = undefined;
-      w({ value: payload, done: false });
+      w.resolve({ value: payload, done: false });
     } else {
       s.queue.push(payload);
     }
@@ -59,7 +59,8 @@
     if (s.waiter) {
       var w = s.waiter;
       s.waiter = undefined;
-      w({ value: undefined, done: true });
+      if (err) w.reject(err);
+      else w.resolve({ value: undefined, done: true });
     }
     subs.delete(id);
   }
@@ -94,8 +95,8 @@
                 return Promise.resolve({ value: state.queue.shift(), done: false });
               if (state.error) return Promise.reject(state.error);
               if (state.done) return Promise.resolve({ value: undefined, done: true });
-              return new Promise(function (res) {
-                state.waiter = res;
+              return new Promise(function (resolve, reject) {
+                state.waiter = { resolve: resolve, reject: reject };
               });
             },
           };
