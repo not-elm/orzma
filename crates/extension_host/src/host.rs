@@ -111,7 +111,8 @@ impl ExtensionEndpoints {
         self.0.read().unwrap().clone()
     }
 
-    pub(crate) fn set(&self, path: PathBuf) {
+    /// Publishes the live socket path so the scheme handler can fetch from it.
+    pub fn set(&self, path: PathBuf) {
         *self.0.write().unwrap() = Some(path);
     }
 

@@ -4717,6 +4717,8 @@ dependencies = [
  "ozmux_configs",
  "ozmux_extension_host",
  "ozmux_multiplexer",
+ "serde",
+ "serde_json",
  "tracing",
  "unicode-width",
 ]

@@ -23,6 +23,8 @@ open = { workspace = true }
 ozmux_configs = { path = "daemon/configs" }
 ozmux_extension_host = { path = "crates/extension_host", features = ["cef"] }
 ozmux_multiplexer = { path = "crates/multiplexer" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 unicode-width = { workspace = true }
 
