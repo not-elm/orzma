@@ -62,14 +62,21 @@ pub fn cef_plugin(endpoint: &AssetEndpoint) -> CefPlugin {
         // ozmux-ext://<name>/…, not the URL scheme name — the scheme is always
         // "ozmux-ext" (scheme::SCHEME_NAME). Frames for other extension names 404.
         custom_schemes: vec![custom_scheme("memo", endpoint.0.clone())],
-        // TODO: remote-debugging-port exposes a local Chromium DevTools (CDP)
-        // endpoint for diagnosing the extension webview; gate behind a debug
-        // env/feature (or remove) before this ships. `default()` preserves the
-        // macOS `use-mock-keychain` switch.
-        command_line_config: CommandLineConfig::default()
-            .with_switch_value("remote-debugging-port", "9222"),
+        command_line_config: cef_command_line_config(),
         ..Default::default()
     }
+}
+
+/// CEF command-line switches for the embedded webview. The `debug` feature adds
+/// `remote-debugging-port` — a local Chromium DevTools (CDP) endpoint on
+/// `127.0.0.1:9222` for inspecting the extension webview — and is off by default
+/// so that endpoint is never exposed in normal builds. `CommandLineConfig::default()`
+/// already carries the macOS `use-mock-keychain` switch in either case.
+fn cef_command_line_config() -> CommandLineConfig {
+    let config = CommandLineConfig::default();
+    #[cfg(feature = "debug")]
+    let config = config.with_switch_value("remote-debugging-port", "9222");
+    config
 }
 
 /// Wires the spawn-once system that attaches a `bevy_cef` webview to each

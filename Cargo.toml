@@ -11,6 +11,13 @@ publish.workspace = true
 name = "ozmux-gui"
 path = "src/main.rs"
 
+[features]
+# Dev-only diagnostics. Enables the CEF `remote-debugging-port` (a local
+# Chromium DevTools/CDP endpoint on 127.0.0.1:9222) for inspecting the embedded
+# extension webview. Off by default so the endpoint is not exposed in normal
+# builds; enable with `cargo run --features debug`.
+debug = []
+
 [dependencies]
 ab_glyph = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
