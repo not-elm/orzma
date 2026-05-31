@@ -2,7 +2,7 @@
 //! the extension's bytes via [`crate::fetch`]. Behind the `cef` feature.
 
 #[cfg(feature = "cef")]
-use crate::host::{ExtensionEndpoints, FetchError, fetch};
+use crate::host::{EndpointRegistry, ExtensionEndpoints, FetchError, fetch};
 #[cfg(feature = "cef")]
 use bevy_cef_core::prelude::{
     CefCustomScheme, CefSchemeBody, CefSchemeHandler, CefSchemeOptions, CefSchemeRequest,
@@ -52,35 +52,44 @@ fn bare_mime(content_type: &str) -> String {
 #[cfg(feature = "cef")]
 pub const SCHEME_NAME: &str = "ozmux-ext";
 
-/// Serves `ozmux-ext://<name>/<path>` for one extension by fetching from its
-/// live socket endpoint.
+/// Serves `ozmux-ext://<name>/<path>` for every registered extension by
+/// dispatching on `<name>` through a shared endpoint registry and fetching from
+/// the matched extension's live socket endpoint.
 #[cfg(feature = "cef")]
 pub struct OzmuxExtScheme {
-    name: String,
-    endpoints: ExtensionEndpoints,
+    registry: EndpointRegistry,
 }
 
 #[cfg(feature = "cef")]
 impl OzmuxExtScheme {
-    /// Builds a handler bound to one extension `name` + its endpoint handle.
-    pub fn new(name: impl Into<String>, endpoints: ExtensionEndpoints) -> Self {
-        Self {
-            name: name.into(),
-            endpoints,
-        }
+    /// Builds a handler bound to the shared endpoint registry.
+    pub fn new(registry: EndpointRegistry) -> Self {
+        Self { registry }
     }
+}
+
+/// Resolves the extension endpoint for an `ozmux-ext://<name>/<path>` URL via the
+/// registry. Returns `Ok((endpoints, path))` to fetch, or `Err(status)` for a
+/// direct error response (404 unknown/unparseable name).
+#[cfg(feature = "cef")]
+fn resolve_request<'a>(
+    registry: &EndpointRegistry,
+    url: &'a str,
+) -> Result<(ExtensionEndpoints, &'a str), u16> {
+    let (name, path) = parse_url(url).ok_or(404u16)?;
+    let endpoints = registry.get(name).ok_or(404u16)?;
+    Ok((endpoints, path))
 }
 
 #[cfg(feature = "cef")]
 impl CefSchemeHandler for OzmuxExtScheme {
     fn handle(&self, request: &CefSchemeRequest) -> CefSchemeResponse {
-        let Some((name, path)) = parse_url(&request.url) else {
-            return CefSchemeResponse::not_found();
+        let (endpoints, path) = match resolve_request(&self.registry, &request.url) {
+            Ok(resolved) => resolved,
+            Err(404) => return CefSchemeResponse::not_found(),
+            Err(status) => return status_text(status, "extension dispatch failed"),
         };
-        if name != self.name {
-            return CefSchemeResponse::not_found();
-        }
-        match fetch(&self.endpoints, path) {
+        match fetch(&endpoints, path) {
             Ok(r) => {
                 let mime = bare_mime(&r.content_type);
                 bevy::log::debug!(
@@ -121,9 +130,10 @@ fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
     }
 }
 
-/// Builds the `ozmux-ext` scheme registration to pass to `CefPlugin`.
+/// Builds the `ozmux-ext` scheme registration to pass to `CefPlugin`, dispatching
+/// every `ozmux-ext://<name>/…` URL through the shared endpoint registry.
 #[cfg(feature = "cef")]
-pub fn custom_scheme(name: impl Into<String>, endpoints: ExtensionEndpoints) -> CefCustomScheme {
+pub fn custom_scheme(registry: EndpointRegistry) -> CefCustomScheme {
     CefCustomScheme {
         name: SCHEME_NAME.to_string(),
         options: CefSchemeOptions::STANDARD
@@ -132,7 +142,7 @@ pub fn custom_scheme(name: impl Into<String>, endpoints: ExtensionEndpoints) -> 
             | CefSchemeOptions::FETCH_ENABLED
             | CefSchemeOptions::DISPLAY_ISOLATED,
         domain: None,
-        handler: Arc::new(OzmuxExtScheme::new(name, endpoints)),
+        handler: Arc::new(OzmuxExtScheme::new(registry)),
     }
 }
 
@@ -197,5 +207,25 @@ mod tests {
         assert_eq!(bare_mime(""), "application/octet-stream");
         assert_eq!(bare_mime("   "), "application/octet-stream");
         assert_eq!(bare_mime("; charset=utf-8"), "application/octet-stream");
+    }
+
+    #[cfg(feature = "cef")]
+    #[test]
+    fn dispatch_resolves_registered_name_and_404s_unknown_even_after_late_insert() {
+        use crate::host::{EndpointRegistry, ExtensionEndpoints};
+        let registry = EndpointRegistry::default();
+        // unknown name → 404
+        assert_eq!(
+            resolve_request(&registry, "ozmux-ext://ghost/index.html").err(),
+            Some(404)
+        );
+        // register AFTER construction → now resolvable (handler reads live registry)
+        registry.insert("memo", ExtensionEndpoints::default());
+        let (_ep, path) =
+            resolve_request(&registry, "ozmux-ext://memo/app.js").expect("registered");
+        assert_eq!(path, "app.js");
+        // empty path defaults to index.html (parse_url behavior preserved)
+        let (_ep, path2) = resolve_request(&registry, "ozmux-ext://memo").expect("registered");
+        assert_eq!(path2, "index.html");
     }
 }

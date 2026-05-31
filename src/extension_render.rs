@@ -10,7 +10,7 @@ use crate::ui::{ExtensionActivityMarker, HostActivityEntity};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use ozmux_extension_host::host::ExtensionEndpoints;
+use ozmux_extension_host::host::{EndpointRegistry, ExtensionEndpoints};
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_extension_host::{ControlExtension, HandlersBridge};
 use ozmux_multiplexer::{
@@ -60,11 +60,15 @@ pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 /// registered as a global extension here; it is injected per-webview via
 /// `PreloadScripts` in `finish_extension_setup` (see the NOTE there).
 pub fn cef_plugin(endpoint: &AssetEndpoint) -> CefPlugin {
+    // NOTE: "memo" is the extension-NAME segment matched inside
+    // ozmux-ext://<name>/…, not the URL scheme name — the scheme is always
+    // "ozmux-ext" (scheme::SCHEME_NAME). The registry is seeded with the single
+    // memo endpoint today; dynamic per-extension population is a later task.
+    // Frames for unregistered extension names 404.
+    let registry = EndpointRegistry::default();
+    registry.insert("memo", endpoint.0.clone());
     CefPlugin {
-        // NOTE: "memo" is the extension-NAME segment matched inside
-        // ozmux-ext://<name>/…, not the URL scheme name — the scheme is always
-        // "ozmux-ext" (scheme::SCHEME_NAME). Frames for other extension names 404.
-        custom_schemes: vec![custom_scheme("memo", endpoint.0.clone())],
+        custom_schemes: vec![custom_scheme(registry)],
         command_line_config: cef_command_line_config(),
         ..Default::default()
     }

@@ -3,6 +3,7 @@
 
 use crate::protocol::{ProtocolError, Request, Response, read_response, write_request};
 use crossbeam_channel::Sender;
+use std::collections::HashMap;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -115,6 +116,25 @@ impl ExtensionEndpoints {
     /// Publishes the live socket path so the scheme handler can fetch from it.
     pub fn set(&self, path: PathBuf) {
         *self.0.write().unwrap() = Some(path);
+    }
+}
+
+/// A shared, interior-mutable map of extension name → its live endpoint. Built
+/// before extensions launch (the CEF scheme handler is constructed at
+/// `CefPlugin::build()`) and populated by the host as each extension becomes
+/// ready, so the handler reads names registered after its own construction.
+#[derive(Clone, Default)]
+pub struct EndpointRegistry(Arc<RwLock<HashMap<String, ExtensionEndpoints>>>);
+
+impl EndpointRegistry {
+    /// Returns (cloning) the endpoint handle for `name`, if registered.
+    pub fn get(&self, name: &str) -> Option<ExtensionEndpoints> {
+        self.0.read().unwrap().get(name).cloned()
+    }
+
+    /// Inserts/replaces the endpoint handle for `name`.
+    pub fn insert(&self, name: impl Into<String>, endpoints: ExtensionEndpoints) {
+        self.0.write().unwrap().insert(name.into(), endpoints);
     }
 }
 
