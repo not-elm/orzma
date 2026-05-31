@@ -4,165 +4,96 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-ozmux is a terminal multiplexer with a web UI. It is a hybrid Rust + TypeScript codebase organized as one Cargo workspace and one pnpm workspace sharing the same tree.
+ozmux is a terminal multiplexer that runs as a single native GUI application. It is a hybrid Rust + TypeScript codebase organized as one Cargo workspace and one pnpm workspace sharing the same tree. There is no daemon, no HTTP server, and no browser-side frontend — terminal emulation, GPU rendering, layout, input, and webview rendering all run in one Bevy ECS world.
 
 ### Rust workspace (`Cargo.toml`)
 
-Members live under `cli/`, `daemon/*`, and `client/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
+The workspace root package is the one and only binary; library crates live under `crates/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
 
-- `cli` (`ozmux`) — CLI front-end. Exposes `ozmux daemon {start, stop, status}`; `daemon start --foreground` delegates to `daemon_bootstrap::run()` (the daemon now lives inside this binary). The detached `daemon start` mode spawns `ozmux daemon start --foreground` via `setsid` and waits for `/health` to return 200. Also exposes `ozmux browser [URL]` — open an embedded browser activity in the current pane (reads `OZMUX_{WINDOW,PANE}_ID` from the PTY env) and `ozmux session new` (with optional `--open` flag — launches `ozmux-client` to open the new session in a webview window with a `?session=<id>` deep-link). Also exposes `ozmux session attach <SESSION_ID>` — open an existing daemon session in the Tauri client window. Unlike `session new`, this command does **not** auto-start the daemon (fails fast with a hint to run `ozmux daemon start`), and any spawn failure of `ozmux-client` is a hard error rather than a warning. `OZMUX_CLIENT_BIN` — override the binary used by `ozmux session new --open` and `ozmux session attach` to launch the Tauri client (default: in debug builds, an `ozmux-client` sibling next to the running `ozmux` executable is preferred so `cargo run`/`target/debug/ozmux` picks up the freshly-built `target/debug/ozmux-client` automatically; in release builds, `ozmux-client` is resolved via PATH; useful for tests (`/usr/bin/true`) and dev workflows where the client is not yet installed). Future verbs from Issue #31 (`ls`, `kill-session`, etc.) will be added here.
-- `client` (`ozmux-client`, lib name `ozmux_client_lib`) — Tauri 2 launcher. Invokes `ozmux daemon start` to ensure the daemon is running, then opens a webview pointing at `http://127.0.0.1:3200`. All probe/lock/spawn/readiness logic lives in the CLI, so the launcher itself is a ~30 line wrapper that requires `ozmux` to be on `PATH` (installed via `cargo install --path ./cli --locked` for development).
-- `daemon/bootstrap` (`daemon_bootstrap` lib) — daemon entry point as a library (no longer a bin). `pub async fn run()` sets up tracing, runs `pidfile::cleanup_if_stale()`, creates a per-PID runtime root under `$TMPDIR/ozmux/<pid>/{bin,sock}` (0700), loads extensions, wires `AppState` (including the `CefHostHandles` supervisor + `BrowserCefRegistry`), writes `$TMPDIR/ozmux/daemon.pid` (cleaned up via `PidFileGuard` on any unwind), and runs `ozmux_http_server::serve` until SIGINT or SIGTERM. The CLI's `daemon start --foreground` is now the only entry point.
-- `daemon/browser` (`ozmux_browser`) — daemon-side client for the out-of-process CEF browser. `CefHostSupervisor` spawns the `cef_host` child and handshakes over a Unix-domain control socket; `CefHostHandles` exposes its command/event channels and an `is_dead` crash flag (a bootstrap watcher flips it and broadcasts `BrowserUnavailable` to WS subscribers when the child exits). `BrowserCefRegistry` holds, per Activity, a `FrameRing` plus a `NavState` watch channel. `FrameRing` (128 MiB / 60-frame budget) answers `subscribe()` with `FreshSnapshot` / `ResumeReplay` / `AwaitingKeyframe` / `MustRestart`. Frames are raw BGRA delivered through POSIX shared memory (`shm_alloc` / `shm_reader`); the shm fd is handed to `cef_host` per-`BrowserCreate` via `SCM_RIGHTS`. `cookie_extractor` seeds the embedded browser from the host Chrome cookie store via `decrypt-cookies` (macOS only). `OZMUX_BROWSER_SITE_ISOLATION=1` — restore Chromium's default Site Isolation in the embedded Browser Activity (off by default; local single-user tool, the trade-off is acceptable). `OZMUX_BROWSER_SKIP_COOKIE_IMPORT=1` — skip the host-Chrome cookie import; on macOS that import reads the `Chrome Safe Storage` Keychain item and raises an authorization dialog on every launch, so the embedded browser opens unauthenticated. Set to `1` for every cargo invocation via `.cargo/config.toml [env]`, so `cargo test`/`cargo run`/`make dev-*` all get it automatically; shell override `OZMUX_BROWSER_SKIP_COOKIE_IMPORT=0` re-enables the real host-cookie path for end-to-end smoke testing.
-- `daemon/cef_host` (`ozmux_cef_host`, `cef_host` binary) — out-of-process CEF host built on `cef-rs`. Drives the Chromium message loop on the main thread and owns a `BrowserPool` of windowless (offscreen-rendered) CEF browsers, one per Browser Activity. A Tokio thread serves the UDS control plane: it receives `HostCommand`s (`BrowserCreate`, `Navigate`, `NavigateHistory`, `SendInput`, `Resize`, `Pause`/`ResumeScreencast`, …) and emits `HostEvent`s (`NavStateChanged`, …). `RenderHandler::on_paint` writes BGRA frames into the daemon-allocated shared-memory slots. On macOS the browser process launches with `--no-sandbox --disable-gpu --use-mock-keychain` (the last avoids a `Chromium Safe Storage` Keychain dialog — injected in every process including helpers); CEF runs multi-process, spawning GPU / Renderer / Network helper processes from the `cef_helper` binary so per-browser `CefRequestContext` objects take effect. The host compiles in-process into `ozmux-daemon`, which is packaged as an `ozmux-daemon.app` macOS bundle (assembled by `make bundle-ozmux-daemon` via the `xtask` workspace member); Mach port rendezvous between parent and helpers is namespaced by `CFBundleIdentifier`, so a bare binary launch SIGTRAPs on first lazy helper spawn.
-- `daemon/http_server` (`ozmux_http_server`) — axum router on `127.0.0.1:3200`. `AppState` aggregates `MultiplexerState` (`Arc<Mutex<MultiplexerService>>`), `TerminalService`, `ExtensionRegistry`, `CefHostHandles`, and `BrowserCefRegistry`, each wired in via `FromRef`. Top-level REST nests are `/sessions`, `/windows`, `/configs`; panes and activities are nested under windows (e.g. `/windows/{wid}/panes/{pid}/activities/{aid}/...`). Per-activity endpoints include a terminal WebSocket (`/.../terminal/ws`, msgpack `WireMessage` frames), a browser WebSocket (`/.../browser/ws`, msgpack `BrowserServerMsg`/`BrowserClientMsg` frames, BGRA screencast), an extension handlers WebSocket (`/.../handlers/ws`), and an iframe passthrough (`/.../iframe/{*path}`). `serve` bootstraps one session/window/pane/activity and spawns its PTY before the listener binds. The embedded `index.html` lives at `src/handlers/index.html`, where `vite build` writes it.
-- `daemon/multiplexer` (`ozmux_multiplexer`) — pure in-memory domain model. `MultiplexerService` owns five stores (`SessionState`, `WindowState`, `PaneState`, `LayoutCellState`, `ActivityState`) plus a `pane_to_cell` index. The Session → Window → Pane → Activity hierarchy is layered with a separate cell tree (`Cell::Root` / `Cell::Pane` / split nodes) that drives layout; mutations like `split_pane` and `close_pane` keep the indices and `active_pane` consistent transactionally. No I/O — terminal lifecycle is delegated.
-- `daemon/terminal` (`ozmux_terminal`) — PTY service + server-side VT emulator. `TerminalService::spawn(pane, activity, SpawnOptions)` launches a `portable-pty` child and a per-activity bridge task that feeds PTY bytes into `alacritty_terminal::Term` inside `VtState` (`src/vt/bridge.rs`). `VtState` produces snapshot/delta frames via `frame_builder.rs`, encodes them as msgpack `WireMessage`s, and fans them out on a `broadcast::Sender<WireMessage>`. WS clients call `subscribe_frames()` and receive a `FrameSubscription` (`FreshSnapshot` or `ResumeReplay` with backfilled deltas from the in-memory `FrameRing`). Raw `TerminalEvent`s are internal — the WS does not see PTY bytes directly. msgpack wire format is contract-tested against fixtures under `tests/fixtures/wire_msgpack/` (see `make test-wire-*`).
-- `daemon/extension` (`ozmux_extension`) — extension host. `RuntimeRoot::resolve_in` picks a parent directory whose resulting UDS sun_path fits the platform limit (104 macOS / 108 Linux), falling back to `/tmp`. `ExtensionHandles::load` discovers Node extensions under `$OZMUX_EXTENSION_ROOT` and registers them in `ExtensionRegistry`. `bootstrap::longest_extension_name` is used to size the sock_dir conservatively at startup.
-- `daemon/configs` (`ozmux_configs`) — config loader. Reads `~/.config/ozmux/config.toml` (or `$OZMUX_CONFIG` / `$XDG_CONFIG_HOME` overrides), merges onto built-in defaults, and exposes `shortcuts`, `theme`, `mouse` submodules. Returns `Default::default()` when no file is present.
-- `daemon/macros` (`ozmux_macros`) — proc-macro crate (syn/quote/darling); compile-fail tests use `trybuild`.
+- `ozmux-gui` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.18 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "ozmux") plus `cef_plugin(&asset_endpoint)` (from `bevy_cef`), then the ozmux plugins:
+  - `TerminalHandlePlugin` (from `bevy_terminal`), `TerminalRendererPlugin` (from `bevy_terminal_renderer`), `MultiplexerPlugin` (from `ozmux_multiplexer`), `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxLayoutLogPlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxExtensionRenderPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`;
+  - the input plugins `MouseWheelInputPlugin`, `MouseButtonsInputPlugin`, `HyperlinkInputPlugin`, `ImePlugin`, `ImeOverlayPlugin`, and `OzmuxShortcutActionPlugin`;
+  - `ExtensionControlPlugin::new(CommandExtensionConfig { name: "memo", dir: <CARGO_MANIFEST_DIR>/extensions/memo, main: "bootstrap.ts", commands: ["@memo"] })` — wires the `@memo` Node extension into the app.
+
+  The root `Cargo.toml` depends on `bevy_cef` (path dep, `features = ["debug"]`) and on `ozmux_extension_host` with the `cef` feature enabled. A root `[features] debug` flag enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded extension webview; it is off by default (`cargo run --features debug`).
+
+- `crates/bevy_terminal` (`bevy_terminal`) — Bevy-native terminal: PTY ownership and `alacritty_terminal` VT emulation, emitting coalesced `FrameSnapshot` / `FrameDelta` against the `bevy_terminal_renderer` schema. Exposes `TerminalHandlePlugin`.
+- `crates/bevy_terminal_renderer` (`bevy_terminal_renderer`) — GPU terminal renderer plus the grid schema shared with `bevy_terminal`. `TerminalRendererPlugin` wires the grid, material, and glyph sub-plugins (`TerminalGridPlugin`, `TerminalMaterialPlugin`, `TerminalGlyphPlugin`) and hyperlink-hover state; `schema` holds the cell/grid types both crates render against.
+- `crates/extension_host` (`ozmux_extension_host`) — Tokio-free host for ozmux Node extensions: spawns an extension process, speaks a minimal length-prefixed byte protocol over its Unix socket, and (behind the `cef` feature) bridges its UI bytes through a `bevy_cef` `ozmux-ext://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std + crossbeam only. Exposes `ExtensionControlPlugin` and `CommandExtensionConfig`.
+- `crates/multiplexer` (`ozmux_multiplexer`) — ECS-native multiplexer. Session, Pane, and Activity are Bevy entities related by `ChildOf`; there are no typed IDs (every reference is a Bevy `Entity`, each carrying a `Name`). All mutations route through the `MultiplexerCommands` `SystemParam`; the only observers handle dangling `Entity` references when a child is despawned. Exposes `MultiplexerPlugin`.
+- `crates/configs` (`ozmux_configs`) — config loader. Reads `~/.config/ozmux/config.toml` (or `$OZMUX_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
+
+In-process webview rendering is provided by the external `bevy_cef` crate (a path dependency on CEF v145, pinned to `145.6.1+145.0.28` in the Makefile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `make setup-cef`.
 
 ### TypeScript workspace (`pnpm-workspace.yaml`)
 
-`packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@playwright/test`, `@types/node`, `typescript`, `vitest`, `zod`, etc. live under `pnpm-workspace.yaml`'s `catalog:`. Workspace globs:
+`packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest`, `zod` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace globs are `sdk/*` and `extensions/*`:
 
-- `daemon/frontend` (`ozmux-ui`) — Vite 8 + React 19 (with React Compiler) + Tailwind v4. The terminal is a **custom React DOM renderer** (no xterm.js): `src/terminal/` decodes msgpack `WireMessage` frames over WebSocket (`msgpackr`), maintains a grid store, and renders each visible cell as a Tailwind-styled `<span>` (`renderer/TerminalGrid.tsx`, `renderer/Row.tsx`). Grapheme widths use `string-width`; font metrics are probed from a `font-mono` element (`renderer/font.ts`). Cursor and IME live in DOM overlays (`overlay/`); mouse/keyboard input is handled in `input/`. Browser Activities (`src/browser/`) are rendered by a toolbar plus a `<canvas>` whose control is transferred to a Web Worker; the worker decodes msgpack `BrowserServerMsg` frames and paints the BGRA screencast via a WebGPU or WebGL2 renderer (`renderer/factory.ts` picks per platform), with keyboard/mouse/wheel/IME input forwarded back over the same socket. Built with `vite-plugin-singlefile` so `vite build` produces one self-contained `index.html`, written to `daemon/http_server/src/handlers/index.html` and embedded into the Rust binary. The Makefile's `verify-out-dir` target fails the build if anything other than `*.rs` and `index.html` shows up alongside it — the inliner is supposed to leave no sidecars.
-- `sdk/*` — TypeScript SDKs. Currently `sdk/typescript` (`@ozmux/sdk`): server-side SDK for extensions with `./server` and `./cmd-shim` exports; tests via `vitest`.
-- `extensions/*` — Node extensions. Currently `extensions/memo`, consuming `@ozmux/sdk` via `workspace:*`. Extensions are discovered at daemon startup via `OZMUX_EXTENSION_ROOT`.
-- `daemon/extension/tests/fixtures/*` — fixture packages for the Rust extension host's integration tests.
+- `sdk/typescript` (`@ozmux/sdk`) — server-side SDK for extensions, with `./server`, `./cmd-shim`, and `./cef` exports; tests via `vitest`.
+- `extensions/memo` (`memo`) — the `@memo` Node extension, consuming `@ozmux/sdk` via `workspace:*`. Its `build:sdk` script (`make memo-build-sdk`) bundles the SDK's CEF entry into `extensions/memo/dist`.
 
 ### How the pieces connect at runtime
 
-1. `ozmux daemon start --foreground` (via `daemon_bootstrap::run()`) reads `OZMUX_EXTENSION_ROOT`, creates the runtime root, spawns extension Node processes (UDS in `sock/`), and starts the axum server.
-2. The browser loads the embedded `index.html` from `GET /`. When `OZMUX_FRONTEND_DEV=1` is set on the daemon process, `/` redirects to `http://localhost:5173` so Vite HMR can be used; otherwise the embedded bundle is served regardless of build profile. `make dev-daemon` / `make dev-e2e` set the env var; `make dev` (Tauri) does not, so a stale debug daemon does not break the Tauri webview.
-3. The frontend opens a WebSocket to `/windows/{wid}/panes/{pid}/activities/{aid}/terminal/ws` for the bootstrap activity. The daemon does server-side VT emulation (`alacritty_terminal::Term` inside `VtState`) and broadcasts msgpack `WireMessage` frames (snapshot + delta); the frontend's custom DOM renderer applies them to its grid store. Keyboard, mouse, and resize messages travel back over the same socket.
-4. Extensions are reachable via `/windows/{wid}/panes/{pid}/activities/{aid}/iframe/*` (proxied to the extension's HTTP server over its UDS).
+1. `ozmux-gui` boots a single Bevy `App`. `OzmuxBootstrapPlugin` seeds the initial session / pane / activity; `bevy_terminal` spawns the PTY and runs VT emulation, emitting frame snapshots/deltas that `bevy_terminal_renderer` draws on the GPU. Layout, input, copy-mode, IME, and shortcuts are all plugins in the same world.
+2. `ozmux_extension_host`'s `ExtensionControlPlugin` launches the `@memo` extension as `node bootstrap.ts` (working dir `extensions/memo`), wiring it up over Unix sockets and (behind the `cef` feature) bridging its UI through `bevy_cef`'s `ozmux-ext://` scheme so the webview renders in-process. `node bootstrap.ts` runs the TypeScript entry directly, so it relies on a Node with native TypeScript type-stripping (Node ≥ 23.6); run `make memo-build-sdk` once to bundle the SDK's CEF entry into `extensions/memo/dist`.
+
+### `src/` module map
+
+`src/main.rs` plus: `bootstrap`, `clipboard`, `configs`, `extension_render`, `font`, `input`, `multiplexer`, `system_set`, `theme`, `ui`.
 
 ## Commands
 
 ### Rust
 
-| Action                               | Command                                                                                                                                                                   |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build everything                     | `cargo build`                                                                                                                                                             |
-| Build the CLI (and embedded daemon)  | `cargo build -p ozmux_cli`                                                                                                                                                |
-| Run the daemon (with extensions)     | `make dev-daemon` (sets `OZMUX_EXTENSION_ROOT=$PWD/extensions`, runs `ozmux daemon start --foreground`)                                                                   |
-| Build + launch the Tauri client      | `make dev-tauri` (release-builds the frontend, `cargo install`s `ozmux` to `$CARGO_HOME/bin`, then runs `cargo tauri dev`; no Vite HMR — UI is the embedded `index.html`) |
-| Run a single test                    | `cargo test -p ozmux_multiplexer close_pane_after_split_fully_reverts_state`                                                                                              |
-| Run one crate's tests                | `cargo test -p ozmux_http_server`                                                                                                                                         |
-| Lint + format (Rust)                 | `cargo clippy --fix --allow-dirty --allow-staged && cargo fmt`                                                                                                            |
-| Fix everything                       | `make fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`)                                                                                                           |
-| Terminal wire-protocol golden tests  | `make test-wire-goldens` (diff `*.diag.txt` fixtures)                                                                                                                     |
-| Regenerate + verify msgpack fixtures | `make test-wire-contract` (uses `tools/verify-msgpack.ts`)                                                                                                                |
+| Action                  | Command                                                                            |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| Build the workspace     | `cargo build` (or `make build`)                                                    |
+| Run the app             | `cargo run` (or `make run`)                                                         |
+| Run all tests           | `cargo test`                                                                        |
+| Run one crate's tests   | `cargo test -p ozmux_multiplexer` (e.g. `cargo test -p ozmux_multiplexer <name>`)  |
+| Lint + format (Rust)    | `cargo clippy --workspace --fix --allow-dirty --allow-staged && cargo fmt`         |
+| Fix everything          | `make fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`)                     |
+| Provision CEF (one-time) | `make setup-cef` (installs the CEF framework + debug render process; macOS)        |
 
-Logs go through `tracing-subscriber`. Default filter is `info,hyper=warn,tower=warn,tokio_tungstenite=warn,tungstenite=warn`; override with `RUST_LOG`.
+Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 
-### TypeScript / frontend
+### TypeScript
 
-| Action                           | Command                                                         |
-| -------------------------------- | --------------------------------------------------------------- |
-| Install workspace deps           | `pnpm install --frozen-lockfile`                                |
-| Vite dev server on `:5173` (HMR) | `pnpm dev` or `make dev-frontend`                               |
-| Typecheck every package          | `pnpm check-types`                                              |
-| Run all vitest suites            | `pnpm test`                                                     |
-| Run one SDK test file            | `pnpm --filter @ozmux/sdk exec vitest run path/to/file.test.ts` |
-| Lint (biome)                     | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci`                  |
+| Action                  | Command                                                |
+| ----------------------- | ------------------------------------------------------ |
+| Install workspace deps  | `pnpm install`                                         |
+| Run all vitest suites   | `pnpm -r test`                                         |
+| Typecheck every package | `pnpm check-types`                                     |
+| Lint (biome)            | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci`         |
+| Bundle the SDK CEF entry | `make memo-build-sdk` (`pnpm --filter memo run build:sdk`) |
 
-Biome (`biome.json`) only scans `daemon/frontend/**` — it is the JS/TS/CSS lint+format tool for this repo, configured for 2-space indent, single quotes, 100-col width, and Tailwind directives in CSS. Custom GritQL plugins under `biome-plugins/` enforce the styling rules (no inline styles, no arbitrary Tailwind values, no raw `--tn-*` palette refs).
+Biome (`biome.json`) scans `sdk/**` and `extensions/**` — it is the JS/TS lint+format tool for this repo.
 
 ## Other notable paths
 
-- `tools/` — wire-protocol diagnostic helpers (`bin-to-diag.sh`, `verify-msgpack.ts`). Used by `make test-wire-*`.
-- `scripts/dev-e2e.sh` — lifecycle script behind the `make dev-e2e*` targets.
-- `.claude/rules/` — repo-wide Rust and styling conventions (linked from the rules sections below).
-- `.ozmux/` — runtime state from the e2e harness (PID file, logs); gitignored.
+- `.claude/rules/` — repo-wide Rust and TypeScript conventions (linked from the rules sections below).
 - `docs/` — gitignored; safe place to drop specs/notes that should not be committed.
 
 ## Comment language
 
 All in-code comments — line comments (`//`), doc comments (`///`, `//!`),
 and block comments in any language under this repo — must be written in
-English. This applies to Rust (`cli/`, `daemon/*`), TypeScript/React
-(`daemon/frontend`, `sdk/*`, `extensions/*`), CSS, shell scripts, and
-config files. Use English even when the conversation with the user is in
-another language. Identifiers and string literals are not constrained by
-this rule; only comments are.
-
-## Styling
-
-Frontend styling (utility-first Tailwind v4, semantic tokens, no inline
-styles, no arbitrary values, no raw palette references) is governed by
-[`.claude/rules/styling.md`](.claude/rules/styling.md) and enforced by
-Biome GritQL plugins in `biome-plugins/`.
+English. This applies to Rust (`src/`, `crates/*`), TypeScript
+(`sdk/*`, `extensions/*`), shell scripts, and config files. Use English
+even when the conversation with the user is in another language.
+Identifiers and string literals are not constrained by this rule; only
+comments are.
 
 ## Rust Coding Rules
 
 Rust style and conventions (no `mod.rs`, restricted comment taxonomy,
 doc-comment policy, import discipline) are governed by
-[`.claude/rules/rust.md`](.claude/rules/rust.md). Applies to all crates
-under `cli/` and `daemon/*`.
+[`.claude/rules/rust.md`](.claude/rules/rust.md). Applies to the root
+binary (`src/`) and all crates under `crates/`.
 
 ## TypeScript Coding Rules
 
 TypeScript style and conventions (restricted comment taxonomy, JSDoc on
 exports, export-visibility minimization, justified suppressions) are
 governed by [`.claude/rules/typescript.md`](.claude/rules/typescript.md).
-Applies to `daemon/frontend`, `sdk/*`, `extensions/*`, `tools/*.ts`, and
-`biome-plugins/`.
-
-## UI verification workflow
-
-Use this when you have changed anything under `daemon/frontend/src/**`, the showcase, theme tokens, pane layout, or daemon-side endpoints that the UI consumes. Skip it for purely backend-internal changes that the UI does not exercise.
-
-### First-time setup (per checkout)
-
-1. Run prerequisites once:
-
-   ```bash
-   make dev-e2e-setup
-   ```
-
-   This installs JS dependencies, warms the Rust build cache, and downloads the Playwright Chromium binary.
-
-2. In Claude Code, approve the project-scoped Playwright MCP server once:
-
-   ```
-   /mcp
-   ```
-
-   Approve the `playwright` server. The pinned version is `@playwright/mcp@0.0.75` with `--isolated --headless`.
-
-### Verification loop
-
-1. Start the harness in the background:
-
-   ```bash
-   make dev-e2e
-   ```
-
-   Wait for the single `ready` line on stdout. If it errors with "port already in use", inspect with `lsof -nP -iTCP:<port> -sTCP:LISTEN` and free the port before retrying.
-
-2. Drive the browser via the Playwright MCP tools. Navigate to `http://localhost:5173`. Use `browser_snapshot` for DOM inspection, `browser_take_screenshot` for visual checks, and `browser_console_messages` to read errors.
-
-3. When done, stop everything:
-
-   ```bash
-   make dev-e2e-stop
-   ```
-
-### Failure modes
-
-| Symptom                                                | Cause                            | Recovery                                                                                |
-| ------------------------------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------- |
-| `error: port 5173 is already in use.`                  | Stray Vite or another process    | `lsof -nP -iTCP:5173 -sTCP:LISTEN`, kill the holder                                     |
-| `error: port 3200 is already in use.`                  | Stray daemon                     | same, for port 3200                                                                     |
-| `error: harness already running (see .ozmux/e2e.pid).` | A previous harness is still up   | `make dev-e2e-stop`                                                                     |
-| `error: readiness timeout after 30s.`                  | Vite or daemon failed to come up | Read the last 20 lines printed from `.ozmux/logs/vite.log` and `.ozmux/logs/daemon.log` |
-| MCP tools missing or fail                              | Server not approved              | Run `/mcp` and approve `playwright`                                                     |
-
-### What lives where
-
-- `scripts/dev-e2e.sh` — lifecycle script (start/stop/setup).
-- `Makefile` — `dev-e2e`, `dev-e2e-setup`, `dev-e2e-stop` targets dispatch to the script.
-- `.mcp.json` — registers `@playwright/mcp` (pinned).
-- `.ozmux/` — runtime state (PID file, logs); gitignored.
+Applies to `sdk/*` and `extensions/*`.
