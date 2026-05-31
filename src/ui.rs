@@ -91,6 +91,18 @@ pub struct TerminalSpawnFailed;
 #[derive(Component)]
 pub struct PaneFrame;
 
+/// Marks the per-pane dim veil — a translucent overlay node, last child of
+/// the pane frame, drawn over both terminal and webview content when the
+/// pane is NOT its session's active pane. `pane` is the multiplexer Pane
+/// entity this veil belongs to; `sync_pane_dim` reads it to toggle
+/// `Visibility` on focus changes.
+#[derive(Component)]
+pub(crate) struct PaneDimOverlay {
+    // TODO: remove this allow once sync_pane_dim (Task 3) reads this field in production code
+    #[allow(dead_code)]
+    pub(crate) pane: Entity,
+}
+
 /// Bevy Plugin wiring the native Bevy UI rebuild pipeline.
 pub struct OzmuxUiPlugin;
 
@@ -521,6 +533,138 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(count, 1, "exactly one AttachedSession after bootstrap");
+    }
+
+    #[test]
+    fn split_panes_get_dim_overlays_with_active_hidden() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        app.world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next().expect("session");
+                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                    mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
+                        .expect("split_pane");
+                },
+            )
+            .unwrap();
+        app.update();
+
+        let active_pane = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next().unwrap();
+                    mux.sessions_active_pane(session).unwrap()
+                },
+            )
+            .unwrap();
+
+        let world = app.world_mut();
+        let overlays: Vec<(Entity, Visibility)> = world
+            .query::<(&PaneDimOverlay, &Visibility)>()
+            .iter(world)
+            .map(|(o, v)| (o.pane, *v))
+            .collect();
+        assert_eq!(overlays.len(), 2, "exactly one dim overlay per pane");
+        for (pane, vis) in overlays {
+            if pane == active_pane {
+                assert_eq!(vis, Visibility::Hidden, "active pane's veil is hidden");
+            } else {
+                assert_eq!(vis, Visibility::Visible, "inactive pane's veil is visible");
+            }
+        }
+    }
+
+    #[test]
+    fn lone_bootstrap_pane_veil_is_hidden() {
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let visibilities: Vec<Visibility> = world
+            .query::<(&PaneDimOverlay, &Visibility)>()
+            .iter(world)
+            .map(|(_, v)| *v)
+            .collect();
+        assert_eq!(
+            visibilities.len(),
+            1,
+            "exactly one overlay for the lone pane"
+        );
+        assert_eq!(
+            visibilities[0],
+            Visibility::Hidden,
+            "lone active pane is not dimmed"
+        );
+    }
+
+    #[test]
+    fn dim_overlay_is_not_pickable() {
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let overlay = world
+            .query_filtered::<Entity, With<PaneDimOverlay>>()
+            .iter(world)
+            .next()
+            .expect("one overlay after bootstrap");
+        let pickable = world
+            .get::<Pickable>(overlay)
+            .expect("overlay must carry Pickable");
+        assert!(
+            !pickable.should_block_lower,
+            "veil must not block picks below it"
+        );
+        assert!(!pickable.is_hoverable, "veil must not be hoverable");
+    }
+
+    #[test]
+    fn disabled_config_spawns_no_dim_overlays() {
+        use ozmux_multiplexer::{LayoutCells, SessionMarker};
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let custom = ozmux_configs::OzmuxConfigs {
+            inactive_pane: ozmux_configs::inactive_pane::InactivePaneConfig {
+                enabled: false,
+                opacity: 0.45,
+                color: "#000000".to_string(),
+            },
+            ..Default::default()
+        };
+        app.insert_resource(crate::configs::OzmuxConfigsResource(custom));
+
+        {
+            let world = app.world_mut();
+            let session = world
+                .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+                .single(world)
+                .expect("attached session");
+            world
+                .entity_mut(session)
+                .get_mut::<LayoutCells>()
+                .expect("LayoutCells")
+                .set_changed();
+        }
+        app.update();
+
+        let world = app.world_mut();
+        let count = world.query::<&PaneDimOverlay>().iter(world).count();
+        assert_eq!(count, 0, "no overlays spawned when dimming is disabled");
     }
 
     #[test]

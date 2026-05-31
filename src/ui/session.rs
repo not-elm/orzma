@@ -3,6 +3,7 @@
 //! Session entity is non-`Node`, so a parked subtree is skipped by Bevy's
 //! UI walker — no layout, no `ComputedNode` updates, no resize-pass work.
 
+use crate::configs::OzmuxConfigsResource;
 use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
 use crate::ui::layout::build_cell_recursive;
@@ -12,8 +13,8 @@ use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActiveActivity, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells, PaneMarker,
-    SessionMarker, SessionUiSubtree,
+    ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells,
+    PaneMarker, SessionMarker, SessionUiSubtree,
 };
 
 pub struct OzmuxSessionUiPlugin;
@@ -94,6 +95,7 @@ fn rebuild_session_ui(
             Entity,
             &LayoutCells,
             &SessionUiSubtree,
+            Option<&ActivePane>,
             Has<AttachedSession>,
         ),
         (With<SessionMarker>, Changed<LayoutCells>),
@@ -104,10 +106,26 @@ fn rebuild_session_ui(
     activities: Query<(&ActivityKind, &Name), With<ActivityMarker>>,
     active_activities: Query<&ActiveActivity, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
+    configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
 
-    for (session_entity, layout, subtree, _is_attached) in sessions.iter() {
+    let veil: Option<Color> = match configs.as_deref() {
+        Some(cfg) if cfg.inactive_pane.enabled => {
+            let ip = &cfg.inactive_pane;
+            let (r, g, b) = ip.rgb();
+            Some(Color::srgba(
+                r as f32 / 255.0,
+                g as f32 / 255.0,
+                b as f32 / 255.0,
+                ip.opacity,
+            ))
+        }
+        _ => None,
+    };
+
+    for (session_entity, layout, subtree, active_pane, _is_attached) in sessions.iter() {
+        let active_pane = active_pane.map(|a| a.0).unwrap_or(Entity::PLACEHOLDER);
         descend_and_detach_hosts(&mut commands, subtree.0, &children, &activity_hosts);
         descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
 
@@ -125,6 +143,8 @@ fn rebuild_session_ui(
                     &children,
                     &activities,
                     &active_activities,
+                    active_pane,
+                    veil,
                 );
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
