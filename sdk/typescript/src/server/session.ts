@@ -1,5 +1,5 @@
-import { deleteNoContent, getJson, paths } from "./daemon-client.ts";
-import type { WindowId } from "./window.ts";
+import { deleteNoContent, getJson, paths } from './daemon-client.ts';
+import type { WindowId } from './window.ts';
 
 export type SessionId = string;
 

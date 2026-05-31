@@ -1,9 +1,0 @@
-{
-  "name": "clock-ext",
-  "main": "bootstrap.mjs",
-  "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "@ozmux/sdk": "workspace:*"
-  }
-}

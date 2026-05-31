@@ -6,10 +6,12 @@ function fakeCef() {
   const emitted: any[] = [];
   const cef = {
     emit: (payload: unknown) => emitted.push(payload),
-    listen: (id: string, cb: (raw: unknown) => void) => { listeners[id] = cb; },
+    listen: (id: string, cb: (raw: unknown) => void) => {
+      listeners[id] = cb;
+    },
   };
   // deliver a server frame the way HostEmitEvent does: as a JSON STRING
-  const deliver = (frame: object) => listeners['ozmux'](JSON.stringify(frame));
+  const deliver = (frame: object) => listeners.ozmux(JSON.stringify(frame));
   return { cef, emitted, deliver };
 }
 

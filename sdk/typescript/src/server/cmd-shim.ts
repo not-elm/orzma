@@ -1,8 +1,8 @@
-import * as net from "node:net";
-import { pathToFileURL } from "node:url";
-import type { Writable } from "node:stream";
-import type { InvokeFrame, ServerFrame } from "./protocol.ts";
-import { encodeFrame } from "./protocol.ts";
+import * as net from 'node:net';
+import type { Writable } from 'node:stream';
+import { pathToFileURL } from 'node:url';
+import type { InvokeFrame, ServerFrame } from './protocol.ts';
+import { encodeFrame } from './protocol.ts';
 
 export interface BuildInvokeArgs {
   command: string;
@@ -14,12 +14,12 @@ export interface BuildInvokeArgs {
 export function buildInvokeFrame(args: BuildInvokeArgs): InvokeFrame {
   const env: Record<string, string> = {};
   for (const key of Object.keys(args.env)) {
-    if (!key.startsWith("OZMUX_")) continue;
+    if (!key.startsWith('OZMUX_')) continue;
     const value = args.env[key];
-    if (typeof value === "string") env[key] = value;
+    if (typeof value === 'string') env[key] = value;
   }
   return {
-    type: "invoke",
+    type: 'invoke',
     command: args.command,
     argv: args.argv,
     cwd: args.cwd,
@@ -28,12 +28,12 @@ export function buildInvokeFrame(args: BuildInvokeArgs): InvokeFrame {
 }
 
 export class LineSplitter {
-  private buffer = "";
+  private buffer = '';
 
   feed(chunk: Buffer): ServerFrame[] {
-    this.buffer += chunk.toString("utf8");
-    const parts = this.buffer.split("\n");
-    this.buffer = parts.pop() ?? "";
+    this.buffer += chunk.toString('utf8');
+    const parts = this.buffer.split('\n');
+    this.buffer = parts.pop() ?? '';
     return parts.filter((s) => s.length > 0).map((line) => JSON.parse(line) as ServerFrame);
   }
 }
@@ -63,8 +63,8 @@ export function runShim(args: RunShimArgs): Promise<number> {
     let settled = false;
     let connected = false;
 
-    const onSigint = () => sock.write(encodeFrame({ type: "signal", signal: "SIGINT" }));
-    const cleanup = () => args.signals.removeListener("SIGINT", onSigint);
+    const onSigint = () => sock.write(encodeFrame({ type: 'signal', signal: 'SIGINT' }));
+    const cleanup = () => args.signals.removeListener('SIGINT', onSigint);
 
     const settle = (code: number, msg?: string) => {
       if (settled) return;
@@ -76,53 +76,66 @@ export function runShim(args: RunShimArgs): Promise<number> {
 
     const timer = setTimeout(() => {
       sock.destroy();
-      settle(127, `ozmux: failed to connect to extension socket within ${args.connectTimeoutMs}ms\n`);
+      settle(
+        127,
+        `ozmux: failed to connect to extension socket within ${args.connectTimeoutMs}ms\n`,
+      );
     }, args.connectTimeoutMs);
 
-    sock.once("connect", () => {
+    sock.once('connect', () => {
       connected = true;
       clearTimeout(timer);
-      args.signals.addListener("SIGINT", onSigint);
-      sock.write(encodeFrame(buildInvokeFrame({
-        command: args.command,
-        argv: args.argv,
-        cwd: args.cwd,
-        env: args.env,
-      })));
+      args.signals.addListener('SIGINT', onSigint);
+      sock.write(
+        encodeFrame(
+          buildInvokeFrame({
+            command: args.command,
+            argv: args.argv,
+            cwd: args.cwd,
+            env: args.env,
+          }),
+        ),
+      );
     });
 
-    sock.on("data", (chunk: Buffer) => {
+    sock.on('data', (chunk: Buffer) => {
       let frames: ServerFrame[];
       try {
         frames = splitter.feed(chunk);
       } catch {
         sock.destroy();
-        settle(2, "ozmux: malformed frame from extension server\n");
+        settle(2, 'ozmux: malformed frame from extension server\n');
         return;
       }
       for (const f of frames) {
-        if (f.type === "stdout") args.stdout.write(Buffer.from(f.data, "base64"));
-        else if (f.type === "stderr") args.stderr.write(Buffer.from(f.data, "base64"));
-        else if (f.type === "exit") exitCode = f.code;
+        if (f.type === 'stdout') args.stdout.write(Buffer.from(f.data, 'base64'));
+        else if (f.type === 'stderr') args.stderr.write(Buffer.from(f.data, 'base64'));
+        else if (f.type === 'exit') exitCode = f.code;
       }
     });
 
-    sock.on("close", () => {
+    sock.on('close', () => {
       clearTimeout(timer);
       if (!connected) {
         settle(127, `ozmux: failed to connect to extension socket\n`);
       } else if (exitCode === null) {
-        settle(1, "ozmux: extension server closed unexpectedly\n");
+        settle(1, 'ozmux: extension server closed unexpectedly\n');
       } else {
         settle(exitCode);
       }
     });
 
-    sock.on("error", () => { /* close handler resolves */ });
+    sock.on('error', () => {
+      /* close handler resolves */
+    });
   });
 }
 
-interface ParsedArgs { socket: string; command: string; argv: string[] }
+interface ParsedArgs {
+  socket: string;
+  command: string;
+  argv: string[];
+}
 
 export function parseShimArgs(argv: string[]): ParsedArgs {
   let socket: string | undefined;
@@ -130,12 +143,23 @@ export function parseShimArgs(argv: string[]): ParsedArgs {
   let i = 0;
   while (i < argv.length) {
     const a = argv[i];
-    if (a === "--socket") { socket = argv[++i]; i++; continue; }
-    if (a === "--command") { command = argv[++i]; i++; continue; }
-    if (a === "--") { i++; break; }
+    if (a === '--socket') {
+      socket = argv[++i];
+      i++;
+      continue;
+    }
+    if (a === '--command') {
+      command = argv[++i];
+      i++;
+      continue;
+    }
+    if (a === '--') {
+      i++;
+      break;
+    }
     throw new Error(`unexpected argument: ${a}`);
   }
-  if (!socket || !command) throw new Error("missing --socket or --command");
+  if (!socket || !command) throw new Error('missing --socket or --command');
   return { socket, command, argv: argv.slice(i) };
 }
 

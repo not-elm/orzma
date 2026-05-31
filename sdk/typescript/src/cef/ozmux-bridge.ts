@@ -82,10 +82,13 @@ export function installOzmux(cef: CefApi): OzmuxApi {
           return {
             // NOTE: single-waiter — callers must await each next() before calling again; for-await is the only safe usage. Concurrent next() calls would overwrite the pending waiter.
             next(): Promise<IteratorResult<unknown>> {
-              if (state.queue.length) return Promise.resolve({ value: state.queue.shift(), done: false });
+              if (state.queue.length)
+                return Promise.resolve({ value: state.queue.shift(), done: false });
               if (state.error) return Promise.reject(state.error);
               if (state.done) return Promise.resolve({ value: undefined, done: true });
-              return new Promise((resolve, reject) => { state.waiter = { resolve, reject }; });
+              return new Promise((resolve, reject) => {
+                state.waiter = { resolve, reject };
+              });
             },
           };
         },

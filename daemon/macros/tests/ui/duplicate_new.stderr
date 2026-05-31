@@ -1,5 +1,0 @@
-error: Duplicate field `new`
- --> tests/ui/duplicate_new.rs:4:32
-  |
-4 | #[newtype(new(uuid_v4_string), new(default))]
-  |                                ^^^

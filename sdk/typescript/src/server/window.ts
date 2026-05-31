@@ -1,5 +1,4 @@
-import { deleteNoContent, getJson, postNoContent } from "./daemon-client.ts";
-import { paths } from "./daemon-client.ts";
+import { deleteNoContent, getJson, paths, postNoContent } from './daemon-client.ts';
 
 export type WindowId = string;
 
@@ -22,9 +21,7 @@ export class Window {
 
   /** Reify a Window class from its id by asking the daemon. */
   static async fetch(id: WindowId): Promise<Window> {
-    const data = await getJson<{ window_id: string; name: string }>(
-      paths.window(id),
-    );
+    const data = await getJson<{ window_id: string; name: string }>(paths.window(id));
     return new Window({ id: data.window_id, name: data.name });
   }
 

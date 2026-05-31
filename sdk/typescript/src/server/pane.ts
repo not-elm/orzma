@@ -1,29 +1,24 @@
-import * as path from "node:path";
+import * as path from 'node:path';
+import { Activity, type ActivityId, type ActivityKind } from './activity.ts';
 import {
   type ChannelMap,
   registerActivityChannels,
   unregisterActivityChannels,
-} from "./channels-server.ts";
-import { callControl, type SplitControlReply } from "./control-client.ts";
-import {
-  deleteNoContent,
-  paths,
-  postJson,
-  postNoContent,
-} from "./daemon-client.ts";
+} from './channels-server.ts';
+import { callControl, type SplitControlReply } from './control-client.ts';
+import { deleteNoContent, paths, postJson, postNoContent } from './daemon-client.ts';
 import {
   type HandlerMap,
   registerActivityHandlers,
   unregisterActivityHandlers,
-} from "./handlers-server.ts";
-import { Activity, type ActivityId, type ActivityKind } from "./activity.ts";
+} from './handlers-server.ts';
 
 export type PaneId = string;
 export type WindowId = string;
 export type SessionId = string;
 
-export type Side = "before" | "after";
-export type Orientation = "horizontal" | "vertical";
+export type Side = 'before' | 'after';
+export type Orientation = 'horizontal' | 'vertical';
 
 /**
  * What the caller hands to `Pane.split()` / `Pane.addActivity()`. The
@@ -31,9 +26,9 @@ export type Orientation = "horizontal" | "vertical";
  * entry path plus optional handlers/channels.
  */
 export type ActivitySpecInput =
-  | { kind: "terminal"; name?: string }
+  | { kind: 'terminal'; name?: string }
   | {
-      kind: "extension";
+      kind: 'extension';
       html: string;
       name?: string;
       handlers?: HandlerMap;
@@ -78,7 +73,7 @@ export class Pane {
 
     let reply: SplitControlReply;
     try {
-      reply = await callControl("split", this.id, {
+      reply = await callControl('split', this.id, {
         side: args.side,
         orientation: args.orientation,
         activity: controlActivity(activityId, args.activity),
@@ -130,38 +125,37 @@ export class Pane {
   }
 }
 
-function primeActivityRegistries(
-  activityId: ActivityId,
-  spec: ActivitySpecInput,
-): void {
-  if (spec.kind !== "extension") return;
+function primeActivityRegistries(activityId: ActivityId, spec: ActivitySpecInput): void {
+  if (spec.kind !== 'extension') return;
   if (spec.handlers) registerActivityHandlers(activityId, spec.handlers);
   if (spec.channels) registerActivityChannels(activityId, spec.channels);
 }
 
-function rollbackActivityRegistries(
-  activityId: ActivityId,
-  spec: ActivitySpecInput,
-): void {
-  if (spec.kind !== "extension") return;
+function rollbackActivityRegistries(activityId: ActivityId, spec: ActivitySpecInput): void {
+  if (spec.kind !== 'extension') return;
   if (spec.handlers) unregisterActivityHandlers(activityId);
   if (spec.channels) unregisterActivityChannels(activityId);
 }
 
 function activityKindForSpec(spec: ActivitySpecInput): ActivityKind {
-  if (spec.kind === "terminal") return { type: "terminal" };
-  return { type: "extension", html_root: path.dirname(spec.html) };
+  if (spec.kind === 'terminal') return { type: 'terminal' };
+  return { type: 'extension', html_root: path.dirname(spec.html) };
 }
 
 function controlActivity(
   activityId: ActivityId,
   spec: ActivitySpecInput,
-): { kind: "extension"; html_root: string; name?: string; activity_id: string } {
+): { kind: 'extension'; html_root: string; name?: string; activity_id: string } {
   // TODO: terminal splits over the control socket are not supported in #2/#3; a future op should carry a terminal kind instead of this extension fallback.
-  if (spec.kind !== "extension") {
-    return { kind: "extension", html_root: "", name: spec.name, activity_id: activityId };
+  if (spec.kind !== 'extension') {
+    return { kind: 'extension', html_root: '', name: spec.name, activity_id: activityId };
   }
-  return { kind: "extension", html_root: path.dirname(spec.html), name: spec.name, activity_id: activityId };
+  return {
+    kind: 'extension',
+    html_root: path.dirname(spec.html),
+    name: spec.name,
+    activity_id: activityId,
+  };
 }
 
 function buildActivityPayload(
@@ -170,8 +164,8 @@ function buildActivityPayload(
 ): Record<string, unknown> {
   const base: Record<string, unknown> = { activity_id: activityId };
   if (spec.name !== undefined) base.name = spec.name;
-  if (spec.kind === "terminal") {
-    base.kind = { type: "terminal" };
+  if (spec.kind === 'terminal') {
+    base.kind = { type: 'terminal' };
   } else {
     // `extension_name` lets the daemon populate its ExtensionRegistry so
     // the in-CEF extension client can resolve the owning extension's UDS.
@@ -179,7 +173,7 @@ function buildActivityPayload(
     // SDK is only ever used from inside a bootstrap()-driven extension process
     // where this is guaranteed to be set.
     base.kind = {
-      type: "extension",
+      type: 'extension',
       html_root: path.dirname(spec.html),
       extension_name: requireExtensionName(),
     };
@@ -198,7 +192,7 @@ function requireExtensionName(): string {
   const name = process.env.EXTENSION_NAME;
   if (!name) {
     throw new Error(
-      "missing required env: EXTENSION_NAME (must be set by the SDK bootstrap before splitting / adding an extension activity)",
+      'missing required env: EXTENSION_NAME (must be set by the SDK bootstrap before splitting / adding an extension activity)',
     );
   }
   extensionNameCache = name;

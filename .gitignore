@@ -23,11 +23,6 @@ docs/
 !.vscode/extensions.json
 .worktrees
 wt
-# Playwright verification harness PID file
-.ozmux/
-# Playwright E2E artifacts
-daemon/frontend/test-results/
-daemon/frontend/playwright-report/
 # Playwright MCP session artifacts (snapshots, console logs)
 .playwright-mcp/
 # Brainstorming visual companion artifacts
@@ -49,10 +44,6 @@ lerna-debug.log*
 
 node_modules
 *.local
-
-# Vite build output, embedded into ozmux_http_server via include_str!
-daemon/http_server/src/handlers/index.html
-
 
 docs/discussions/
 .serena/

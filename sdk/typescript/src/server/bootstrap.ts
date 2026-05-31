@@ -1,20 +1,16 @@
-import * as fs from "node:fs/promises";
-import * as net from "node:net";
-import * as path from "node:path";
-import { Writable } from "node:stream";
-import { fileURLToPath } from "node:url";
-import {
-  encodeFrame,
-  MAX_FRAME_PAYLOAD_BYTES,
-  type ClientFrame,
-} from "./protocol.ts";
-import { assertCommandName, writeShim } from "./shim-writer.ts";
-import { serveAssets } from "./asset-server.ts";
-import { fileAssetHandler } from "./file-assets.ts";
-import { bindHandlersServer } from "./handlers-server.ts";
-import { Pane } from "./pane.ts";
-import { Window } from "./window.ts";
-import { Session } from "./session.ts";
+import * as fs from 'node:fs/promises';
+import * as net from 'node:net';
+import * as path from 'node:path';
+import { Writable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
+import { serveAssets } from './asset-server.ts';
+import { fileAssetHandler } from './file-assets.ts';
+import { bindHandlersServer } from './handlers-server.ts';
+import { Pane } from './pane.ts';
+import { type ClientFrame, encodeFrame, MAX_FRAME_PAYLOAD_BYTES } from './protocol.ts';
+import { Session } from './session.ts';
+import { assertCommandName, writeShim } from './shim-writer.ts';
+import { Window } from './window.ts';
 
 export interface BootstrapEnv {
   binDir: string;
@@ -27,9 +23,7 @@ export interface BootstrapEnv {
   assetSockPath?: string;
 }
 
-export function resolveBootstrapEnv(
-  env: Record<string, string | undefined>,
-): BootstrapEnv {
+export function resolveBootstrapEnv(env: Record<string, string | undefined>): BootstrapEnv {
   const binDir = env.OZMUX_BIN_DIR;
   const sockPath = env.OZMUX_SOCK_PATH;
   const extensionName = env.EXTENSION_NAME;
@@ -67,9 +61,9 @@ export async function bindServer(
     server.maxConnections = options.maxConnections;
   }
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
+    server.once('error', reject);
     server.listen(sockPath, () => {
-      server.off("error", reject);
+      server.off('error', reject);
       resolve();
     });
   });
@@ -85,9 +79,7 @@ export interface MaterializeShimsArgs {
   helperPath: string;
 }
 
-export async function materializeShims(
-  args: MaterializeShimsArgs,
-): Promise<void> {
+export async function materializeShims(args: MaterializeShimsArgs): Promise<void> {
   await fs.mkdir(args.binDir, { recursive: true, mode: 0o700 });
   await fs.chmod(args.binDir, 0o700);
   for (const name of args.commandNames) {
@@ -115,19 +107,17 @@ export interface CommandContext {
   session: Session | null;
 }
 
-export type CommandHandler = (ctx: CommandContext) => Promise<number | void>;
+export type CommandHandler = (ctx: CommandContext) => Promise<number | undefined>;
 
-function chunkWriter(kind: "stdout" | "stderr", target: Writable): Writable {
+function chunkWriter(kind: 'stdout' | 'stderr', target: Writable): Writable {
   return new Writable({
     write(c: Buffer, _enc, cb) {
       let offset = 0;
       while (offset < c.length) {
         const slice = c.subarray(offset, offset + MAX_FRAME_PAYLOAD_BYTES);
-        const ok = target.write(
-          encodeFrame({ type: kind, data: slice.toString("base64") }),
-        );
+        const ok = target.write(encodeFrame({ type: kind, data: slice.toString('base64') }));
         offset += slice.length;
-        if (!ok) return target.once("drain", () => cb());
+        if (!ok) return target.once('drain', () => cb());
       }
       cb();
     },
@@ -141,44 +131,38 @@ export async function handleConnection(
   firstLine: string,
 ): Promise<void> {
   const frame = parseLine(firstLine);
-  if (frame.type !== "invoke") {
-    socket.write(encodeFrame({ type: "exit", code: 2 }));
+  if (frame.type !== 'invoke') {
+    socket.write(encodeFrame({ type: 'exit', code: 2 }));
     return;
   }
   const handler = handlers[frame.command];
   if (!handler) {
     socket.write(
       encodeFrame({
-        type: "stderr",
-        data: Buffer.from(
-          `ozmux: unknown command '${frame.command}'\n`,
-        ).toString("base64"),
+        type: 'stderr',
+        data: Buffer.from(`ozmux: unknown command '${frame.command}'\n`).toString('base64'),
       }),
     );
-    socket.write(encodeFrame({ type: "exit", code: 127 }));
+    socket.write(encodeFrame({ type: 'exit', code: 127 }));
     return;
   }
-  const stdout = chunkWriter("stdout", socket);
-  const stderr = chunkWriter("stderr", socket);
+  const stdout = chunkWriter('stdout', socket);
+  const stderr = chunkWriter('stderr', socket);
   const ac = new AbortController();
 
   // The PTY env carries the addressing tuple; bail early if anything required
   // is missing rather than letting the handler hit broken Pane methods.
-  const paneId = frame.env.OZMUX_PANE_ID ?? "";
+  const paneId = frame.env.OZMUX_PANE_ID ?? '';
   const sessionId = frame.env.OZMUX_SESSION_ID ?? null;
-  const windowId = sessionId ?? "";
+  const windowId = sessionId ?? '';
   if (!paneId || !sessionId) {
-    stderr.write(
-      Buffer.from("ozmux: missing OZMUX_PANE_ID / OZMUX_SESSION_ID\n"),
-    );
-    socket.write(encodeFrame({ type: "exit", code: 2 }));
+    stderr.write(Buffer.from('ozmux: missing OZMUX_PANE_ID / OZMUX_SESSION_ID\n'));
+    socket.write(encodeFrame({ type: 'exit', code: 2 }));
     return;
   }
   const pane = new Pane({ id: paneId, windowId, sessionId });
-  const window = new Window({ id: windowId, name: "", sessionId });
-  const session = sessionId
-    ? new Session({ id: sessionId, name: "" })
-    : null;
+  const window = new Window({ id: windowId, name: '', sessionId });
+  const session = sessionId ? new Session({ id: sessionId, name: '' }) : null;
 
   const ctx: CommandContext = {
     argv: frame.argv,
@@ -193,19 +177,18 @@ export async function handleConnection(
   let exitCode = 0;
   try {
     const result = await handler(ctx);
-    exitCode = typeof result === "number" ? result : 0;
+    exitCode = typeof result === 'number' ? result : 0;
   } catch (err) {
-    const stack =
-      err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const stack = err instanceof Error ? (err.stack ?? err.message) : String(err);
     socket.write(
       encodeFrame({
-        type: "stderr",
-        data: Buffer.from(stack + "\n").toString("base64"),
+        type: 'stderr',
+        data: Buffer.from(`${stack}\n`).toString('base64'),
       }),
     );
     exitCode = 1;
   }
-  socket.write(encodeFrame({ type: "exit", code: exitCode }));
+  socket.write(encodeFrame({ type: 'exit', code: exitCode }));
 }
 
 export interface BootstrapArgs {
@@ -215,7 +198,7 @@ export interface BootstrapArgs {
 export async function bootstrap(args: BootstrapArgs): Promise<void> {
   const env = resolveBootstrapEnv(process.env);
   for (const name of Object.keys(args.commands)) assertCommandName(name);
-  const helperPath = fileURLToPath(import.meta.resolve("./cmd-shim.ts"));
+  const helperPath = fileURLToPath(import.meta.resolve('./cmd-shim.ts'));
   await materializeShims({
     binDir: env.binDir,
     sockPath: env.sockPath,
@@ -225,12 +208,12 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
   });
 
   const server = await bindServer(env.sockPath, (conn) => {
-    let buffer = "";
+    let buffer = '';
     let dispatched = false;
-    conn.on("data", async (chunk: Buffer) => {
+    conn.on('data', async (chunk: Buffer) => {
       if (dispatched) return;
-      buffer += chunk.toString("utf8");
-      const idx = buffer.indexOf("\n");
+      buffer += chunk.toString('utf8');
+      const idx = buffer.indexOf('\n');
       if (idx === -1) return;
       const line = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 1);
@@ -239,7 +222,7 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
       try {
         frame = JSON.parse(line);
       } catch {
-        conn.write(encodeFrame({ type: "exit", code: 2 }));
+        conn.write(encodeFrame({ type: 'exit', code: 2 }));
         conn.end();
         return;
       }
@@ -281,14 +264,14 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
     return cleanupPromise;
   };
 
-  for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) {
     process.once(sig, () => {
       void cleanup();
     });
   }
   // NOTE: extension stdin is reserved by the SDK as a parent-death channel —
   // any other consumer that reads stdin will steal the EOF and break shutdown.
-  process.stdin.once("end", () => {
+  process.stdin.once('end', () => {
     void cleanup();
   });
   process.stdin.resume();

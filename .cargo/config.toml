@@ -1,9 +1,0 @@
-[env]
-# NOTE: skip the host Chrome cookie import for every cargo invocation
-# (build/run/test). Without it, `cookie_extractor::extract_for` reads the
-# `Chrome Safe Storage` Keychain item via `decrypt-cookies` and raises a macOS
-# authorization dialog on every `cargo test`/`cargo run`. `force = false` lets
-# an explicit shell override (e.g. for the rare end-to-end cookie smoke test)
-# still take effect. Mirrors the same env set by `make dev-daemon` /
-# `make dev-e2e` / `scripts/dev-e2e.sh`.
-OZMUX_BROWSER_SKIP_COOKIE_IMPORT = { value = "1", force = false }

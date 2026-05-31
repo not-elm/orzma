@@ -1,5 +1,5 @@
 export interface InvokeFrame {
-  type: "invoke";
+  type: 'invoke';
   command: string;
   argv: string[];
   cwd: string;
@@ -7,22 +7,31 @@ export interface InvokeFrame {
 }
 
 export interface SignalFrame {
-  type: "signal";
-  signal: "SIGINT";
+  type: 'signal';
+  signal: 'SIGINT';
 }
 
 export type ClientFrame = InvokeFrame | SignalFrame;
 
-export interface StdoutFrame { type: "stdout"; data: string }   // base64
-export interface StderrFrame { type: "stderr"; data: string }   // base64
-export interface ExitFrame   { type: "exit";   code: number }
+export interface StdoutFrame {
+  type: 'stdout';
+  data: string;
+} // base64
+export interface StderrFrame {
+  type: 'stderr';
+  data: string;
+} // base64
+export interface ExitFrame {
+  type: 'exit';
+  code: number;
+}
 
 export type ServerFrame = StdoutFrame | StderrFrame | ExitFrame;
 
 export const MAX_FRAME_PAYLOAD_BYTES = 64 * 1024;
 
 export function encodeFrame(frame: ClientFrame | ServerFrame): Buffer {
-  return Buffer.from(JSON.stringify(frame) + "\n", "utf8");
+  return Buffer.from(`${JSON.stringify(frame)}\n`, 'utf8');
 }
 
 // Handler RPC frames (browser ↔ daemon ↔ extension)
@@ -30,18 +39,18 @@ export function encodeFrame(frame: ClientFrame | ServerFrame): Buffer {
 // daemon's `{aid, frame: <here>}` UDS envelope.
 
 export interface HandlerCallFrame {
-  kind: "call";
+  kind: 'call';
   id: string;
   name: string;
   payload: unknown;
 }
 export interface HandlerResultFrame {
-  kind: "result";
+  kind: 'result';
   id: string;
   payload: unknown;
 }
 export interface HandlerErrorFrame {
-  kind: "error";
+  kind: 'error';
   id: string;
   code: string;
   message: string;
@@ -49,28 +58,28 @@ export interface HandlerErrorFrame {
 
 // Channel frames (one-way: extension → client; client sends open/cancel only in v1)
 export interface SubOpenFrame {
-  kind: "sub.open";
+  kind: 'sub.open';
   id: string;
   name: string;
   params: unknown;
 }
 export interface SubDataFrame {
-  kind: "sub.data";
+  kind: 'sub.data';
   id: string;
   payload: unknown;
 }
 export interface SubCompleteFrame {
-  kind: "sub.complete";
+  kind: 'sub.complete';
   id: string;
 }
 export interface SubErrorFrame {
-  kind: "sub.error";
+  kind: 'sub.error';
   id: string;
   code: string;
   message: string;
 }
 export interface SubCancelFrame {
-  kind: "sub.cancel";
+  kind: 'sub.cancel';
   id: string;
 }
 

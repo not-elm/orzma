@@ -1262,7 +1262,7 @@ mod tests {
             .world_mut()
             .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>();
         events.write(ev);
-        drop(events);
+        _ = events;
         app.update();
         let count = app
             .world_mut()
@@ -1309,7 +1309,7 @@ mod tests {
             .world_mut()
             .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>();
         events.write(ev);
-        drop(events);
+        _ = events;
         app.update();
         let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
         assert!(

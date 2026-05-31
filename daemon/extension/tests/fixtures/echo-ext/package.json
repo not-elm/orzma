@@ -1,8 +1,0 @@
-{
-  "name": "echoext",
-  "main": "bootstrap.mjs",
-  "type": "module",
-  "dependencies": {
-    "@ozmux/sdk": "workspace:*"
-  }
-}

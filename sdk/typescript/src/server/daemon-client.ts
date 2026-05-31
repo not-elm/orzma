@@ -5,7 +5,7 @@ export class DaemonError extends Error {
 
   constructor(status: number, bodyText: string, path: string) {
     super(`daemon ${path} → ${status}: ${bodyText}`);
-    this.name = "DaemonError";
+    this.name = 'DaemonError';
     this.status = status;
     this.bodyText = bodyText;
     this.path = path;
@@ -20,13 +20,13 @@ function requireEnv(name: string): string {
 
 function buildHeaders(): Record<string, string> {
   return {
-    "Content-Type": "application/json",
-    "X-Ozmux-Extension": requireEnv("EXTENSION_NAME"),
+    'Content-Type': 'application/json',
+    'X-Ozmux-Extension': requireEnv('EXTENSION_NAME'),
   };
 }
 
 function buildUrl(path: string): string {
-  return `${requireEnv("OZMUX_EXTENSION_HOST_URL")}${path}`;
+  return `${requireEnv('OZMUX_EXTENSION_HOST_URL')}${path}`;
 }
 
 function warnNoOp(path: string): void {
@@ -36,10 +36,10 @@ function warnNoOp(path: string): void {
 async function send(path: string, body: unknown): Promise<Response> {
   if (!process.env.OZMUX_EXTENSION_HOST_URL) {
     warnNoOp(path);
-    return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
   const response = await fetch(buildUrl(path), {
-    method: "POST",
+    method: 'POST',
     headers: buildHeaders(),
     body: JSON.stringify(body),
   });
@@ -63,10 +63,10 @@ export async function getJson<T>(path: string): Promise<T> {
   // value), so when the host is absent surface an explicit host-unavailable
   // error rather than buildUrl's misleading "missing required env".
   if (!process.env.OZMUX_EXTENSION_HOST_URL) {
-    throw new DaemonError(503, "extension host unavailable (OZMUX_EXTENSION_HOST_URL unset)", path);
+    throw new DaemonError(503, 'extension host unavailable (OZMUX_EXTENSION_HOST_URL unset)', path);
   }
   const response = await fetch(buildUrl(path), {
-    method: "GET",
+    method: 'GET',
     headers: buildHeaders(),
   });
   if (!response.ok) {
@@ -82,7 +82,7 @@ export async function deleteNoContent(path: string): Promise<void> {
     return;
   }
   const response = await fetch(buildUrl(path), {
-    method: "DELETE",
+    method: 'DELETE',
     headers: buildHeaders(),
   });
   if (!response.ok) {
@@ -101,12 +101,9 @@ export const paths = {
   window: (wid: string) => `/windows/${wid}`,
   windowSelect: (wid: string) => `/windows/${wid}/select`,
   pane: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}`,
-  paneSplit: (wid: string, pid: string) =>
-    `/windows/${wid}/panes/${pid}/split`,
-  paneActivate: (wid: string, pid: string) =>
-    `/windows/${wid}/panes/${pid}/activate`,
-  paneActivities: (wid: string, pid: string) =>
-    `/windows/${wid}/panes/${pid}/activities`,
+  paneSplit: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/split`,
+  paneActivate: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/activate`,
+  paneActivities: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/activities`,
   activity: (wid: string, pid: string, aid: string) =>
     `/windows/${wid}/panes/${pid}/activities/${aid}`,
   activityActivate: (wid: string, pid: string, aid: string) =>

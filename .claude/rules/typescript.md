@@ -1,9 +1,7 @@
 # TypeScript Coding Rules
 
-TypeScript code in this repo (`daemon/frontend`, `sdk/*`, `extensions/*`,
-`tools/*.ts`, and `biome-plugins/`) follows the rules below. These rules
-complement [`.claude/rules/styling.md`](styling.md) (Tailwind / theme
-tokens) and the conventions in `CLAUDE.md`. They mirror the spirit of
+TypeScript code in this repo (`sdk/*`, `extensions/*`) follows the rules below. These rules
+complement the conventions in `CLAUDE.md`. They mirror the spirit of
 [`.claude/rules/rust.md`](rust.md) for Rust — same taste, translated.
 
 ## Comments
@@ -111,11 +109,11 @@ TypeScript's escape hatches require justification, the same way Rust's
 `#[expect(..., reason = "...")]` does:
 
 ```ts
-// biome-ignore lint/correctness/useExhaustiveDependencies: liveWid is load-bearing — the effect must re-run after the live container actually mounts
-useEffect(...);
+// biome-ignore lint/suspicious/noExplicitAny: msgpack frame decodes to an unknown shape, validated by the schema check below
+const frame = decode(buf) as any;
 
-// @ts-expect-error vite-singlefile types lag the runtime API
-import vitePlugin from 'vite-plugin-singlefile';
+// @ts-expect-error the installed @types/node lags the runtime API we call here
+process.someNewerApi();
 ```
 
 - Always include a one-line reason. "Easier this way" or "the type is wrong" is not a reason — name the upstream bug, the specific tool limitation, or the non-obvious invariant that justifies the suppression.
@@ -136,7 +134,6 @@ Tool-enforced (biome):
 
 - Import ordering
 - `biome-ignore` requires a reason string (existing rule)
-- Inline-style / arbitrary Tailwind value bans (see `styling.md`)
 - Run via `pnpm lint` / `pnpm lint:fix` / `make fix-lint`
 
 Not tool-enforced — review-time check required. The following rules cannot
@@ -154,8 +151,4 @@ the corresponding entry into the tool-enforced list above.
 
 ## Existing legitimate exceptions
 
-- `daemon/frontend/src/test-setup.ts` — jsdom shim setup uses block comments to delimit stub sections. Pre-existing; permitted as long as the surrounding context is non-trivial.
-- `daemon/frontend/src/vendor.d.ts` — third-party type re-export notes. Pre-existing; permitted.
-- `daemon/frontend/src/showcase/**` — design-system showcase files; comment requirements relaxed in line with the styling.md exception for the same files.
-
-(Append entries here as they are discovered, with a brief justification.)
+- (None recorded yet — append entries here as they are discovered, with a brief justification.)

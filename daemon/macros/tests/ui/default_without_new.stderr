@@ -1,7 +1,0 @@
-error: default attribute requires new(...) to be specified
- --> tests/ui/default_without_new.rs:3:10
-  |
-3 | #[derive(NewType)]
-  |          ^^^^^^^
-  |
-  = note: this error originates in the derive macro `NewType` (in Nightly builds, run with -Z macro-backtrace for more info)

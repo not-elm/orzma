@@ -35,9 +35,8 @@ pub struct SpawnOptions {
     /// **PATH ordering is load-bearing**: if the caller prepends
     /// extension `bin/` directories to PATH, the ozmux `__builtin/`
     /// directory MUST appear FIRST so that built-in shims win over
-    /// same-named extension binaries. The daemon enforced this in
-    /// `daemon/terminal/src/service.rs::build_path_prefix`; this
-    /// port pushes the responsibility to the caller.
+    /// same-named extension binaries. This responsibility lives with
+    /// the caller (see `ozmux_extension_host::path_prefix`).
     pub env: Vec<(String, String)>,
 }
 

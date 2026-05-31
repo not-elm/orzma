@@ -133,8 +133,7 @@ pub enum ActivityKind {
     },
 }
 
-/// Storage profile for a Browser Activity. 1:1 port of the old enum
-/// (`daemon/multiplexer/src/session/pane/activity.rs`), minus serde.
+/// Storage profile for a Browser Activity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserProfile {
     /// A named persistent profile stored under the given name.

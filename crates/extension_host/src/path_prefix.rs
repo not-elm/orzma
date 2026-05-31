@@ -1,10 +1,5 @@
 //! Builds the `PATH` prefix that puts extension command shims on a terminal's
 //! `PATH`, pinning `__builtin` first so built-in shims shadow extension commands.
-//!
-//! NOTE: this is the Bevy-native port of the legacy daemon's `build_path_prefix`
-//! (`daemon/terminal/src/service.rs`, `daemon/extension/src/runtime.rs`). Those
-//! copies have a different signature (they scan bin subdirs) and retire with the
-//! daemon; this is the canonical version going forward.
 
 use std::path::{Path, PathBuf};
 

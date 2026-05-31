@@ -10,28 +10,7 @@ version = 2
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-# NOTE: All ignores below are 'unmaintained' advisories from transitive
-# dependencies of tauri/wry/muda (GTK 3 bindings, proc-macro-error, unic-*).
-# They are not vulnerabilities. Re-evaluate when tauri ships a release
-# that switches its Linux dependency tree to GTK 4 / proc-macro-error2.
-ignore = [
-    "RUSTSEC-2024-0370",  # proc-macro-error
-    "RUSTSEC-2024-0411",  # unic-char-property
-    "RUSTSEC-2024-0412",  # unic-char-range
-    "RUSTSEC-2024-0413",  # unic-common
-    "RUSTSEC-2024-0414",  # unic-ucd-ident
-    "RUSTSEC-2024-0415",  # unic-ucd-version
-    "RUSTSEC-2024-0416",  # gtk-rs bindings (atk)
-    "RUSTSEC-2024-0417",  # gtk-rs bindings (gdk)
-    "RUSTSEC-2024-0418",  # gtk-rs bindings (gdkx11)
-    "RUSTSEC-2024-0419",  # gtk-rs bindings (gtk)
-    "RUSTSEC-2024-0420",  # gtk-rs bindings (gtk-sys et al)
-    "RUSTSEC-2025-0075",
-    "RUSTSEC-2025-0080",
-    "RUSTSEC-2025-0081",
-    "RUSTSEC-2025-0098",
-    "RUSTSEC-2025-0100",
-]
+ignore = []
 
 [licenses]
 version = 2
@@ -49,21 +28,6 @@ allow = [
     "0BSD",
     "MPL-2.0",
     "CDLA-Permissive-2.0",
-]
-exceptions = [
-    # NOTE: `decrypt-cookies` and its `chromium-crypto` companion are LGPL-3.0;
-    # they are pulled in only by `ozmux_browser`'s host-Chrome cookie import
-    # path and are not embedded statically into shipped binaries beyond
-    # standard dynamic linking. Allowed by exception.
-    { allow = ["LGPL-3.0-or-later"], crate = "chromium-crypto" },
-    { allow = ["LGPL-3.0-or-later"], crate = "decrypt-cookies" },
-    # NOTE: `libbz2-rs-sys` is a Rust port of the original bzip2 library
-    # released under the original bzip2 license — non-restrictive but not in
-    # SPDX's permissive default set. Pulled transitively via `decrypt-cookies`.
-    { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" },
-    # NOTE: `tiny-keccak` is CC0-1.0 (public domain dedication). Pulled
-    # transitively via `decrypt-cookies` → `chromium-crypto`.
-    { allow = ["CC0-1.0"], crate = "tiny-keccak" },
 ]
 
 [bans]
