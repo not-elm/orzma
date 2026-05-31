@@ -1,9 +1,0 @@
-{
-  "name": "@ozmux/ext-hello",
-  "private": true,
-  "type": "module",
-  "main": "index.ts",
-  "dependencies": {
-    "@ozmux/sdk": "workspace:*"
-  }
-}
