@@ -59,6 +59,10 @@ pub struct ActivitySpec {
     /// Optional display name.
     #[serde(default)]
     pub name: Option<String>,
+    /// The SDK's client-generated activity id (the key its handlers/channels
+    /// are registered under). The bridge addresses `{aid, frame}` envelopes
+    /// with this.
+    pub activity_id: String,
 }
 
 /// Protocol-side activity kind. #2 supports only `extension`.
@@ -178,13 +182,14 @@ mod tests {
 
     #[test]
     fn parses_memo_style_split_call() {
-        let line = r#"{"kind":"call","id":"abc","op":"split","pane":"4294967297","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","html_root":"/x/memo","name":null}}}"#;
+        let line = r#"{"kind":"call","id":"abc","op":"split","pane":"4294967297","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","html_root":"/x/memo","name":null,"activity_id":"aid-123"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "abc");
         assert_eq!(req.pane_bits, 4294967297);
         let ControlOp::Split(p) = req.op;
         assert!(matches!(p.side, ControlSide::After));
         assert!(matches!(p.orientation, ControlOrientation::Vertical));
+        assert_eq!(p.activity.activity_id, "aid-123");
         let ActivityKindSpec::Extension { html_root } = p.activity.kind;
         assert_eq!(html_root, "/x/memo");
     }
@@ -200,7 +205,7 @@ mod tests {
 
     #[test]
     fn rejects_non_numeric_pane() {
-        let line = r#"{"kind":"call","id":"x","op":"split","pane":"not-a-number","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","html_root":"/x","name":null}}}"#;
+        let line = r#"{"kind":"call","id":"x","op":"split","pane":"not-a-number","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","html_root":"/x","name":null,"activity_id":"x"}}}"#;
         assert!(matches!(
             parse_call(line),
             Err(ControlParseError::BadRequest(_))

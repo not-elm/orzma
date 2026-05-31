@@ -137,6 +137,7 @@ mod tests {
                         html_root: "/x/memo".into(),
                     },
                     name: None,
+                    activity_id: "aid-test".into(),
                 },
             }),
         }
