@@ -19,7 +19,7 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        // NOTE: values mirror Layer 1 raw tokens in daemon/frontend/src/styles/theme.css.
+        // NOTE: values mirror Layer 1 raw tokens in `src/theme.rs` (Bevy UI palette).
         Self {
             background: "#1a1b26".into(),
             foreground: "#c0caf5".into(),

@@ -1,7 +1,5 @@
-//! Domain errors for the multiplexer layer. Adapted from the old
-//! `daemon/multiplexer` error enum; every variant that previously carried
-//! a typed ID (`SessionId` / `PaneId` / `ActivityId`) now carries a Bevy
-//! `Entity` instead, since the new crate is Entity-addressed.
+//! Domain errors for the multiplexer layer. Every variant carries a Bevy
+//! `Entity` (the crate is Entity-addressed) rather than a typed ID.
 
 use bevy::ecs::entity::Entity;
 use thiserror::Error;

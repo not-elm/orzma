@@ -45,7 +45,7 @@ impl BrowserPatch {
 /// Resolves a user-typed input into a fully-qualified URL using the
 /// omnibox algorithm.
 ///
-/// Mirrors `daemon/frontend/src/browser/omnibox.ts::resolveOmniboxInput`.
+/// Mirrors the TypeScript `resolveOmniboxInput` in the frontend browser module.
 /// Inputs that look like URLs are returned ready for navigation
 /// (`https://` is prepended for bare hosts); everything else is rendered
 /// into `search_template` after percent-encoding (compatible with the
