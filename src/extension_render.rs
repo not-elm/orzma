@@ -82,6 +82,9 @@ impl Plugin for OzmuxExtensionRenderPlugin {
             .init_resource::<ExtensionHandlersBridge>()
             .init_resource::<WebviewAidMap>()
             .add_observer(on_ozmux_frame)
+            .add_observer(log_webview_load_started)
+            .add_observer(log_webview_load_finished)
+            .add_observer(log_webview_load_error)
             .add_systems(
                 Update,
                 (
@@ -184,6 +187,33 @@ fn drain_handler_responses(
             serde_json::from_str(&frame).unwrap_or(serde_json::Value::Null);
         commands.trigger(HostEmitEvent::new(webview, "ozmux", &value));
     }
+}
+
+/// Logs the start of a webview page load. Diagnostics for the extension
+/// render path (a blank webview is otherwise silent).
+fn log_webview_load_started(load: On<LoadStarted>) {
+    tracing::info!(webview = ?load.webview, "extension webview load started");
+}
+
+/// Logs a finished page load + its HTTP status. A `LoadFinished` with no
+/// visible content points at a render/size issue rather than a load failure.
+fn log_webview_load_finished(load: On<LoadFinished>) {
+    tracing::info!(
+        webview = ?load.webview,
+        status = load.http_status_code,
+        "extension webview load finished"
+    );
+}
+
+/// Logs a page load failure (CEF `OnLoadError`) — the signal that the scheme
+/// fetch / navigation failed (e.g. a mis-classified MIME or 5xx).
+fn log_webview_load_error(load: On<LoadError>) {
+    tracing::warn!(
+        webview = ?load.webview,
+        code = load.error_code,
+        url = %load.url,
+        "extension webview load error"
+    );
 }
 
 /// Publishes the (single, memo) extension's asset socket into the

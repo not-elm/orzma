@@ -31,6 +31,20 @@ fn parse_url(url: &str) -> Option<(&str, &str)> {
     Some((name, path))
 }
 
+/// Returns the bare media type (drops any `;`-delimited parameters) for CEF's
+/// `mime_type` field. CEF expects a bare type (e.g. `text/html`); a full
+/// `Content-Type` value with parameters (`text/html; charset=utf-8`) is not
+/// recognized, so Chromium fails to classify the document and renders blank.
+#[cfg_attr(not(feature = "cef"), allow(dead_code))]
+fn bare_mime(content_type: &str) -> String {
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
 /// The custom scheme name registered with CEF.
 #[cfg(feature = "cef")]
 pub const SCHEME_NAME: &str = "ozmux-ext";
@@ -66,7 +80,7 @@ impl CefSchemeHandler for OzmuxExtScheme {
         match fetch(&self.endpoints, path) {
             Ok(r) => CefSchemeResponse {
                 status: r.status,
-                mime_type: r.content_type,
+                mime_type: bare_mime(&r.content_type),
                 headers: Vec::new(),
                 body: CefSchemeBody::Bytes(r.body),
             },
@@ -147,5 +161,16 @@ mod tests {
     fn rejects_foreign_or_empty() {
         assert_eq!(parse_url("https://hello/x"), None);
         assert_eq!(parse_url("ozmux-ext:///x"), None);
+    }
+
+    #[test]
+    fn bare_mime_strips_charset_parameter() {
+        assert_eq!(bare_mime("text/html; charset=utf-8"), "text/html");
+        assert_eq!(
+            bare_mime("text/javascript; charset=utf-8"),
+            "text/javascript"
+        );
+        assert_eq!(bare_mime("application/wasm"), "application/wasm");
+        assert_eq!(bare_mime(""), "");
     }
 }

@@ -2,12 +2,16 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { AssetHandler, AssetResponse } from './asset-server.ts';
 
+// NOTE: bare media types (no charset parameter). The asset protocol's
+// content_type is a bare MIME, and CEF's custom-scheme mime_type field rejects
+// a full Content-Type value ("text/html; charset=utf-8" renders blank in the
+// webview). Pages declare their own <meta charset>.
 const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.wasm': 'application/wasm',
