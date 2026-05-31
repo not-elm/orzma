@@ -81,7 +81,7 @@ export class Pane {
       reply = await callControl("split", this.id, {
         side: args.side,
         orientation: args.orientation,
-        activity: controlActivity(args.activity),
+        activity: controlActivity(activityId, args.activity),
       });
     } catch (err) {
       rollbackActivityRegistries(activityId, args.activity);
@@ -153,12 +153,15 @@ function activityKindForSpec(spec: ActivitySpecInput): ActivityKind {
   return { type: "extension", html_root: path.dirname(spec.html) };
 }
 
-function controlActivity(spec: ActivitySpecInput): { kind: "extension"; html_root: string; name?: string } {
-  // TODO: terminal splits over the control socket are not supported in #2; a future op should carry a terminal kind instead of this extension fallback.
+function controlActivity(
+  activityId: ActivityId,
+  spec: ActivitySpecInput,
+): { kind: "extension"; html_root: string; name?: string; activity_id: string } {
+  // TODO: terminal splits over the control socket are not supported in #2/#3; a future op should carry a terminal kind instead of this extension fallback.
   if (spec.kind !== "extension") {
-    return { kind: "extension", html_root: "", name: spec.name };
+    return { kind: "extension", html_root: "", name: spec.name, activity_id: activityId };
   }
-  return { kind: "extension", html_root: path.dirname(spec.html), name: spec.name };
+  return { kind: "extension", html_root: path.dirname(spec.html), name: spec.name, activity_id: activityId };
 }
 
 function buildActivityPayload(

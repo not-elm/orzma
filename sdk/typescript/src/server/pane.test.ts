@@ -177,6 +177,25 @@ describe("Pane.split", () => {
     server.close();
   });
 
+  it("split sends the client activity_id in the control frame", async () => {
+    const sock = tmpSock();
+    let seen: any;
+    const server = net.createServer((conn) => {
+      conn.on("data", (chunk) => {
+        seen = JSON.parse(chunk.toString("utf8").trim());
+        conn.write(JSON.stringify({ kind: "result", id: seen.id, payload: { new_pane_id: "p1", new_activity_id: "a1" } }) + "\n");
+      });
+    });
+    await new Promise<void>((r) => server.listen(sock, r));
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+    process.env.EXTENSION_NAME = "memo";
+    const pane = new Pane({ id: "100", windowId: "w", sessionId: "s" });
+    await pane.split({ side: "after", orientation: "vertical", activity: { kind: "extension", html: "/x/memo/index.html" } });
+    expect(typeof seen.params.activity.activity_id).toBe("string");
+    expect(seen.params.activity.activity_id.length).toBeGreaterThan(0);
+    server.close();
+  });
+
   it("does not require EXTENSION_NAME for terminal-kind activities (no-op fallback)", async () => {
     delete process.env.EXTENSION_NAME;
     delete process.env.OZMUX_CONTROL_SOCK_PATH;

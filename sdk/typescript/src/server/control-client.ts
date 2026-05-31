@@ -4,7 +4,7 @@ import * as net from 'node:net';
 export interface SplitControlParams {
   side: 'before' | 'after';
   orientation: 'horizontal' | 'vertical';
-  activity: { kind: 'extension'; html_root: string; name?: string | null };
+  activity: { kind: 'extension'; html_root: string; name?: string | null; activity_id: string };
 }
 
 /** The host's reply to a successful split. */
