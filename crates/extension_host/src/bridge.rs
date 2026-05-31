@@ -18,6 +18,22 @@ use std::path::PathBuf;
 #[derive(Resource)]
 pub struct ControlExtension(pub CommandExtension);
 
+/// System-set label for the control-bridge drain, so a consumer (`ozmux-gui`)
+/// can order its UI rebuild after it.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
+pub enum ExtensionControlSet {
+    /// `drain_control_requests` — applies pending control requests (e.g. an
+    /// `@memo` split) via `MultiplexerCommands`.
+    ///
+    /// The split mutates `LayoutCells` immediately but spawns the new pane and
+    /// inserts its `ActiveActivity` / `ChildOf` through the deferred `Commands`
+    /// queue. A UI rebuild that reacts to `Changed<LayoutCells>` MUST run after
+    /// this set so the inserted `ApplyDeferred` sync point flushes those
+    /// commands first — otherwise the rebuild sees a pane with no activity yet
+    /// (no tab, no extension host, no webview).
+    Drain,
+}
+
 /// Launches the configured command extension at Startup and drains its
 /// control requests into the multiplexer each frame.
 pub struct ExtensionControlPlugin {
@@ -39,7 +55,10 @@ impl Plugin for ExtensionControlPlugin {
             }
             Err(e) => eprintln!("ozmux: failed to launch command extension: {e}"),
         }
-        app.add_systems(Update, drain_control_requests);
+        app.add_systems(
+            Update,
+            drain_control_requests.in_set(ExtensionControlSet::Drain),
+        );
     }
 }
 

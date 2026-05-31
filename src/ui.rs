@@ -10,6 +10,7 @@
 //! active session's pane slot, inactive hosts under the owning Session
 //! entity (a non-Node walker-skipped park).
 
+use crate::system_set::OzmuxSystems;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::session::OzmuxSessionUiPlugin;
@@ -104,7 +105,10 @@ impl Plugin for OzmuxUiPlugin {
             .add_systems(
                 Update,
                 (
-                    registry::prune_registry_on_activity_removal,
+                    // Host despawns must commit before the rebuild and activity
+                    // setup observe them, else setup inserts a bundle onto a
+                    // host this prune is despawning (insert-after-despawn panic).
+                    registry::prune_registry_on_activity_removal.before(OzmuxSystems::SessionUi),
                     status_bar_sync::rebuild_status_bar_on_session_set_change,
                 ),
             );

@@ -10,6 +10,7 @@ use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ActivityHostNode, SessionUiRoot, StructuralNode};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
+use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
     ActiveActivity, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells, PaneMarker,
     SessionMarker, SessionUiSubtree,
@@ -19,9 +20,36 @@ pub struct OzmuxSessionUiPlugin;
 
 impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
+        order_activity_pipeline(app);
         app.add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
             .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
+}
+
+/// Orders the per-frame activity pipeline so each stage sees the previous
+/// stage's committed `Commands` — Bevy inserts an `ApplyDeferred` sync point on
+/// each ordering edge: control-bridge drain ([`ExtensionControlSet::Drain`]) →
+/// session-UI rebuild ([`OzmuxSystems::SessionUi`]) → activity setup
+/// ([`OzmuxSystems::SetupActivity`], which attaches terminals/webviews).
+///
+/// Without this, unordered stages race nondeterministically:
+/// - the rebuild can run before the split's deferred pane/`ActiveActivity`/
+///   `ChildOf` commands flush → a pane with no activity tab, no host, no webview
+///   (sticky: the one-shot `Changed<LayoutCells>` is already consumed);
+/// - activity setup can queue a bundle insert onto a host the rebuild/prune is
+///   about to despawn → an insert-after-despawn panic.
+///
+/// `prune_registry_on_activity_removal` is ordered before `SessionUi` separately
+/// (in `OzmuxUiPlugin`), so host despawns are committed before both the rebuild
+/// and activity setup observe them.
+fn order_activity_pipeline(app: &mut App) {
+    app.configure_sets(
+        Update,
+        (
+            OzmuxSystems::SessionUi.after(ExtensionControlSet::Drain),
+            OzmuxSystems::SetupActivity.after(OzmuxSystems::SessionUi),
+        ),
+    );
 }
 
 /// Runs every Update; only does work when the set of `AttachedSession`
@@ -178,6 +206,52 @@ mod tests {
             .spawn((Node::default(), SessionUiRoot, ChildOf(ui_root)));
         app.add_systems(Update, sync_active_session);
         app
+    }
+
+    #[test]
+    fn session_ui_runs_after_control_drain_so_deferred_commands_are_visible() {
+        // Regression for the intermittent dark/empty extension pane: the `@memo`
+        // split mutates `LayoutCells` immediately but wires the new pane's
+        // `ActiveActivity` / `ChildOf` through deferred `Commands`.
+        // `rebuild_session_ui` (in `OzmuxSystems::SessionUi`) must run after the
+        // control-bridge drain (`ExtensionControlSet::Drain`) so the inserted
+        // `ApplyDeferred` flushes those commands before the rebuild reads the
+        // layout. This adds the real `OzmuxSessionUiPlugin` (which wires the
+        // ordering) and proves a SessionUi-set system observes a Drain-set
+        // system's deferred spawn within the same frame.
+        #[derive(Resource, Default)]
+        struct RebuildSaw(Option<bool>);
+        #[derive(Component)]
+        struct DrainSpawned;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ActivityEntityRegistry>()
+            .init_resource::<RebuildSaw>()
+            .add_plugins(OzmuxSessionUiPlugin);
+        app.add_systems(
+            Update,
+            (
+                (|mut commands: Commands| {
+                    commands.spawn(DrainSpawned);
+                })
+                .in_set(ExtensionControlSet::Drain),
+                (|q: Query<(), With<DrainSpawned>>, mut saw: ResMut<RebuildSaw>| {
+                    saw.0 = Some(!q.is_empty());
+                })
+                .in_set(OzmuxSystems::SessionUi),
+            ),
+        );
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<RebuildSaw>().0,
+            Some(true),
+            "a SessionUi-set system must observe the control drain's deferred \
+             spawn within the same frame; SessionUi must be ordered after \
+             ExtensionControlSet::Drain (inserting an ApplyDeferred sync point)"
+        );
     }
 
     #[test]

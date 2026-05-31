@@ -14,7 +14,7 @@ pub mod scheme;
 
 #[doc(hidden)]
 pub use bridge::apply_control_request as __bridge_apply;
-pub use bridge::{ControlExtension, ExtensionControlPlugin, terminal_env};
+pub use bridge::{ControlExtension, ExtensionControlPlugin, ExtensionControlSet, terminal_env};
 pub use command::{CommandExtension, CommandExtensionConfig};
 pub use control::{
     ActivityKindSpec, ActivitySpec, ControlError, ControlOp, ControlOrientation, ControlParseError,
