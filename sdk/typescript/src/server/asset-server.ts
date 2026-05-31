@@ -30,7 +30,11 @@ export function serveAssets(
     // no stale socket to remove
   }
 
-  const server = net.createServer((socket) => {
+  // NOTE: allowHalfOpen keeps the writable side open after the client
+  // half-closes (the host's fetch shuts down its write end once the
+  // length-prefixed request is sent). Without it, Node auto-ends the socket on
+  // the client FIN and the async file-read response is dropped before it sends.
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     let buf = Buffer.alloc(0);
     socket.on("data", (chunk) => {
       buf = Buffer.concat([buf, chunk]);
