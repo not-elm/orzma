@@ -943,8 +943,10 @@ mod tests {
 
     #[test]
     fn validate_no_conflicts_detects_user_conflict() {
-        let mut b = Bindings::default();
-        b.close_pane = Some(parse_key_chord("Cmd+J").unwrap());
+        let b = Bindings {
+            close_pane: Some(parse_key_chord("Cmd+J").unwrap()),
+            ..Default::default()
+        };
         let err = b.validate_no_conflicts().unwrap_err();
         assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
         assert!(err[0].actions.contains(&"close-pane"));

@@ -1233,16 +1233,20 @@ mod tests {
         // 800×480 physical px, centered at (400, 240) — so its
         // top-left corner is (0, 0) and bottom-right is (800, 480).
         // Cell pitch is 10×20 physical px → 80 cols, 24 rows.
-        let mut state = MouseSelectionState::default();
-        state.drag = Some(ActiveDrag {
-            entity: Entity::from_bits(1),
-            anchor_cell: CellCoord { col: 1, row: 1 },
-            last_drag_cell: None,
-            phase: DragPhase::Active,
-        });
+        let mut state = MouseSelectionState {
+            drag: Some(ActiveDrag {
+                entity: Entity::from_bits(1),
+                anchor_cell: CellCoord { col: 1, row: 1 },
+                last_drag_cell: None,
+                phase: DragPhase::Active,
+            }),
+            ..Default::default()
+        };
 
-        let mut node = bevy::ui::ComputedNode::default();
-        node.size = Vec2::new(800.0, 480.0);
+        let node = bevy::ui::ComputedNode {
+            size: Vec2::new(800.0, 480.0),
+            ..Default::default()
+        };
         let transform = bevy::ui::UiGlobalTransform::from_xy(400.0, 240.0);
 
         // Cursor at (155, 25) → pane-local (155, 25). With 10×20-px
@@ -1280,8 +1284,10 @@ mod tests {
     #[test]
     fn synthesize_drag_cell_returns_none_without_drag() {
         let mut state = MouseSelectionState::default();
-        let mut node = bevy::ui::ComputedNode::default();
-        node.size = Vec2::new(800.0, 480.0);
+        let node = bevy::ui::ComputedNode {
+            size: Vec2::new(800.0, 480.0),
+            ..Default::default()
+        };
         let transform = bevy::ui::UiGlobalTransform::from_xy(400.0, 240.0);
         let result = super::synthesize_drag_cell(
             &mut state,
@@ -1299,15 +1305,19 @@ mod tests {
         // 800×480. Cursor at (-50, 500) is outside the pane on both
         // axes → clamps to (0, 480). With 10×20 cells, that's col 1,
         // row 24.
-        let mut state = MouseSelectionState::default();
-        state.drag = Some(ActiveDrag {
-            entity: Entity::from_bits(1),
-            anchor_cell: CellCoord { col: 1, row: 1 },
-            last_drag_cell: None,
-            phase: DragPhase::Active,
-        });
-        let mut node = bevy::ui::ComputedNode::default();
-        node.size = Vec2::new(800.0, 480.0);
+        let mut state = MouseSelectionState {
+            drag: Some(ActiveDrag {
+                entity: Entity::from_bits(1),
+                anchor_cell: CellCoord { col: 1, row: 1 },
+                last_drag_cell: None,
+                phase: DragPhase::Active,
+            }),
+            ..Default::default()
+        };
+        let node = bevy::ui::ComputedNode {
+            size: Vec2::new(800.0, 480.0),
+            ..Default::default()
+        };
         let transform = bevy::ui::UiGlobalTransform::from_xy(400.0, 240.0);
         let result = super::synthesize_drag_cell(
             &mut state,

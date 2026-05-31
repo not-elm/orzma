@@ -330,7 +330,7 @@ mod tests {
             .unwrap();
 
         let cell_b_id = state.lookup_cell_for_pane(pb).unwrap();
-        let inner_split_id = state.cell(&cell_b_id).unwrap().parent().unwrap().clone();
+        let inner_split_id = *state.cell(&cell_b_id).unwrap().parent().unwrap();
         if let Ok(Cell::Split(s)) = state.cell_mut(&inner_split_id) {
             s.lhs_weight = 10.0;
             s.rhs_weight = 100.0;
@@ -390,7 +390,7 @@ mod tests {
             .split_cell(cell_a, cell_b, Side::After, SplitOrientation::Horizontal)
             .unwrap();
         let cell_b_id = state.lookup_cell_for_pane(pb).unwrap();
-        let split_id = state.cell(&cell_b_id).unwrap().parent().unwrap().clone();
+        let split_id = *state.cell(&cell_b_id).unwrap().parent().unwrap();
         if let Ok(Cell::Split(s)) = state.cell_mut(&split_id) {
             s.lhs_weight = 0.0;
             s.rhs_weight = 0.0;
@@ -431,7 +431,7 @@ mod tests {
     fn resize_clamps_at_min_cells_when_shrinking_subtree_is_at_floor() {
         let (mut state, _, pa, _) = setup_two_panes(SplitOrientation::Horizontal);
         let cell_a = state.lookup_cell_for_pane(pa).unwrap();
-        let split_id = state.cell(&cell_a).unwrap().parent().unwrap().clone();
+        let split_id = *state.cell(&cell_a).unwrap().parent().unwrap();
         if let Ok(Cell::Split(s)) = state.cell_mut(&split_id) {
             s.lhs_weight = 110.0;
             s.rhs_weight = 10.0;
@@ -454,7 +454,7 @@ mod tests {
     fn resize_no_drift_across_repeated_one_cell_adjustments() {
         let (mut state, _, pa, _) = setup_two_panes(SplitOrientation::Horizontal);
         let cell_a = state.lookup_cell_for_pane(pa).unwrap();
-        let split_id = state.cell(&cell_a).unwrap().parent().unwrap().clone();
+        let split_id = *state.cell(&cell_a).unwrap().parent().unwrap();
         let before = match state.cell(&split_id).unwrap() {
             Cell::Split(s) => (s.lhs_weight, s.rhs_weight),
             _ => panic!("not a split"),

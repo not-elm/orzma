@@ -258,7 +258,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin::default())
+            .add_plugins(TextPlugin)
             .init_asset::<Font>();
         // Spawn a PrimaryWindow so init_cell_metrics_from_primary_window
         // (which is registered as a Startup system by TerminalFontPlugin)
@@ -332,7 +332,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin::default())
+            .add_plugins(TextPlugin)
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -375,7 +375,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin::default())
+            .add_plugins(TextPlugin)
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -419,7 +419,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin::default())
+            .add_plugins(TextPlugin)
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
@@ -487,7 +487,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin::default())
+            .add_plugins(TextPlugin)
             .init_asset::<Font>();
         let mut window = Window {
             resolution: WindowResolution::new(800, 600),
