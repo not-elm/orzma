@@ -195,7 +195,10 @@ mod tests {
         assert!(matches!(p.side, ControlSide::After));
         assert!(matches!(p.orientation, ControlOrientation::Vertical));
         assert_eq!(p.activity.activity_id, "aid-123");
-        let ActivityKindSpec::Extension { html_root, extension_name } = p.activity.kind;
+        let ActivityKindSpec::Extension {
+            html_root,
+            extension_name,
+        } = p.activity.kind;
         assert_eq!(html_root, "/x/memo");
         assert_eq!(extension_name.as_deref(), Some("memo"));
     }
@@ -206,7 +209,10 @@ mod tests {
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "xyz");
         let ControlOp::Split(p) = req.op;
-        let ActivityKindSpec::Extension { html_root, extension_name } = p.activity.kind;
+        let ActivityKindSpec::Extension {
+            html_root,
+            extension_name,
+        } = p.activity.kind;
         assert_eq!(html_root, "/x/memo");
         assert_eq!(extension_name, None);
     }
