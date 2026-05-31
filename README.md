@@ -19,7 +19,6 @@ one ECS world. Node extensions (e.g. `@memo`) are spawned as child processes.
 
 ```bash
 pnpm install            # link @ozmux/sdk into extensions
-make memo-build-sdk     # bundle the SDK CEF entry for the @memo extension
 cargo run               # or: make run
 ```
 

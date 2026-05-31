@@ -1,4 +1,4 @@
-.PHONY: run build clean help fix-lint memo-build-sdk setup-cef
+.PHONY: run build clean help fix-lint setup-cef
 
 OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
 CARGO_BIN_DIR := $(if $(CARGO_HOME),$(CARGO_HOME)/bin,$(HOME)/.cargo/bin)
@@ -13,7 +13,6 @@ help:
 	@echo "Targets:"
 	@echo "  run            - Run the ozmux-gui Bevy app (cargo run)"
 	@echo "  build          - Build the workspace (cargo build)"
-	@echo "  memo-build-sdk - Bundle the @ozmux/sdk CEF entry into extensions/memo/dist"
 	@echo "  setup-cef      - Install the CEF framework + debug render process for ozmux-gui (macOS, one-time)"
 	@echo "  fix-lint       - clippy --fix + rustfmt + biome lint:fix"
 	@echo "  clean          - cargo clean (remove the workspace target dir)"
@@ -23,9 +22,6 @@ run:
 
 build:
 	cargo build
-
-memo-build-sdk:
-	pnpm --filter memo run build:sdk
 
 setup-cef:
 	cargo install export-cef-dir@$(CEF_VERSION) --force

@@ -30,12 +30,12 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 `packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest`, `zod` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace globs are `sdk/*` and `extensions/*`:
 
 - `sdk/typescript` (`@ozmux/sdk`) — server-side SDK for extensions, with `./server`, `./cmd-shim`, and `./cef` exports; tests via `vitest`.
-- `extensions/memo` (`memo`) — the `@memo` Node extension, consuming `@ozmux/sdk` via `workspace:*`. Its `build:sdk` script (`make memo-build-sdk`) bundles the SDK's CEF entry into `extensions/memo/dist`.
+- `extensions/memo` (`memo`) — the `@memo` Node extension, consuming `@ozmux/sdk` via `workspace:*`.
 
 ### How the pieces connect at runtime
 
 1. `ozmux-gui` boots a single Bevy `App`. `OzmuxBootstrapPlugin` seeds the initial session / pane / activity; `bevy_terminal` spawns the PTY and runs VT emulation, emitting frame snapshots/deltas that `bevy_terminal_renderer` draws on the GPU. Layout, input, copy-mode, IME, and shortcuts are all plugins in the same world.
-2. `ozmux_extension_host`'s `ExtensionControlPlugin` launches the `@memo` extension as `node bootstrap.ts` (working dir `extensions/memo`), wiring it up over Unix sockets and (behind the `cef` feature) bridging its UI through `bevy_cef`'s `ozmux-ext://` scheme so the webview renders in-process. `node bootstrap.ts` runs the TypeScript entry directly, so it relies on a Node with native TypeScript type-stripping (Node ≥ 23.6); run `make memo-build-sdk` once to bundle the SDK's CEF entry into `extensions/memo/dist`.
+2. `ozmux_extension_host`'s `ExtensionControlPlugin` launches the `@memo` extension as `node bootstrap.ts` (working dir `extensions/memo`), wiring it up over Unix sockets and (behind the `cef` feature) bridging its UI through `bevy_cef`'s `ozmux-ext://` scheme so the webview renders in-process. `node bootstrap.ts` runs the TypeScript entry directly, so it relies on a Node with native TypeScript type-stripping (Node ≥ 23.6).
 
 ### `src/` module map
 
@@ -65,7 +65,6 @@ Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 | Run all vitest suites   | `pnpm -r test`                                         |
 | Typecheck every package | `pnpm check-types`                                     |
 | Lint (biome)            | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci`         |
-| Bundle the SDK CEF entry | `make memo-build-sdk` (`pnpm --filter memo run build:sdk`) |
 
 Biome (`biome.json`) scans `sdk/**` and `extensions/**` — it is the JS/TS lint+format tool for this repo.
 
