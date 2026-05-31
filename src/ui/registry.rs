@@ -140,7 +140,7 @@ mod tests {
         let drop_activity = app.world_mut().spawn(ActivityMarker).id();
         let kind = ActivityKind::Terminal;
 
-        let mut drop_host = None;
+        let drop_host;
         {
             let mut registry = app
                 .world_mut()
@@ -150,7 +150,7 @@ mod tests {
             {
                 let mut commands = Commands::new(&mut queue, app.world());
                 registry.get_or_spawn(&mut commands, keep_activity, &kind);
-                drop_host = Some(registry.get_or_spawn(&mut commands, drop_activity, &kind));
+                drop_host = registry.get_or_spawn(&mut commands, drop_activity, &kind);
             }
             app.world_mut().insert_resource(registry);
             queue.apply(app.world_mut());
@@ -164,7 +164,7 @@ mod tests {
         assert!(registry.get(keep_activity).is_some());
         assert!(registry.get(drop_activity).is_none());
         assert!(
-            app.world().get_entity(drop_host.unwrap()).is_err(),
+            app.world().get_entity(drop_host).is_err(),
             "dropped host Entity must be despawned"
         );
     }

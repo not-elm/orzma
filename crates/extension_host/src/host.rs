@@ -2,12 +2,11 @@
 //! endpoint, a blocking `fetch`, and (Task 3) the process spawn + lifecycle.
 
 use crate::protocol::{ProtocolError, Request, Response, read_response, write_request};
-use crossbeam_channel::{Receiver, Sender, bounded};
-use std::ffi::OsString;
+use crossbeam_channel::Sender;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -116,10 +115,6 @@ impl ExtensionEndpoints {
     pub fn set(&self, path: PathBuf) {
         *self.0.write().unwrap() = Some(path);
     }
-
-    pub(crate) fn clear(&self) {
-        *self.0.write().unwrap() = None;
-    }
 }
 
 /// A failure while fetching an asset from the extension.
@@ -185,33 +180,7 @@ fn map_proto(e: ProtocolError) -> FetchError {
     }
 }
 
-const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const PROBE_INTERVAL: Duration = Duration::from_millis(20);
-
-/// How to launch an extension. Generic over the program for testability; use
-/// [`ExtensionConfig::node`] for the real Node launch contract.
-pub struct ExtensionConfig {
-    /// Extension name (the `<name>` in `ozmux-ext://<name>/…`).
-    pub name: String,
-    /// Program to spawn (e.g. `"node"`).
-    pub program: OsString,
-    /// Arguments (e.g. `[main.ts]`).
-    pub args: Vec<OsString>,
-    /// Working directory for the child.
-    pub dir: PathBuf,
-}
-
-impl ExtensionConfig {
-    /// Builds a config that launches `node <main>` (the legacy launch contract).
-    pub fn node(name: impl Into<String>, dir: PathBuf, main: impl Into<OsString>) -> Self {
-        Self {
-            name: name.into(),
-            program: "node".into(),
-            args: vec![main.into()],
-            dir,
-        }
-    }
-}
 
 /// A lifecycle transition emitted by the host thread.
 #[derive(Debug)]
@@ -262,109 +231,6 @@ impl std::error::Error for HostError {
 
 /// Convenience alias for fallible host operations.
 pub type HostResult<T = ()> = Result<T, HostError>;
-
-/// A running extension: owns the runtime root + lifecycle thread.
-pub struct ExtensionHost {
-    endpoints: ExtensionEndpoints,
-    events: Receiver<LifecycleEvent>,
-    _runtime: Arc<RuntimeRoot>,
-    child: Arc<std::sync::Mutex<Option<Child>>>,
-    shutdown: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl ExtensionHost {
-    /// Spawns the extension with the default readiness timeout (non-blocking).
-    pub fn spawn(cfg: ExtensionConfig) -> HostResult<Self> {
-        Self::spawn_with_timeout(cfg, DEFAULT_READY_TIMEOUT)
-    }
-
-    /// Spawns with an explicit readiness timeout.
-    pub fn spawn_with_timeout(cfg: ExtensionConfig, ready_timeout: Duration) -> HostResult<Self> {
-        let runtime = RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), &cfg.name)
-            .map_err(HostError::Runtime)?;
-        let sock = runtime.socket_path(&cfg.name);
-        let child = Command::new(&cfg.program)
-            .args(&cfg.args)
-            .current_dir(&cfg.dir)
-            .env("OZMUX_SOCK_PATH", &sock)
-            .spawn()
-            .map_err(HostError::Spawn)?;
-
-        let runtime = Arc::new(runtime);
-        let child = Arc::new(std::sync::Mutex::new(Some(child)));
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let endpoints = ExtensionEndpoints::default();
-        let (tx, rx) = bounded::<LifecycleEvent>(8);
-
-        let endpoints_for_clear = endpoints.clone();
-        let thread = std::thread::spawn({
-            let endpoints = endpoints.clone();
-            let child = Arc::clone(&child);
-            let shutdown = Arc::clone(&shutdown);
-            let sock = sock.clone();
-            move || {
-                let ready_sock = sock.clone();
-                run_lifecycle(
-                    ready_timeout,
-                    move || fetch_at(&ready_sock, "index.html").is_ok(),
-                    move || endpoints.set(sock),
-                    child,
-                    shutdown,
-                    tx,
-                );
-                endpoints_for_clear.clear();
-            }
-        });
-
-        Ok(Self {
-            endpoints,
-            events: rx,
-            _runtime: runtime,
-            child,
-            shutdown,
-            thread: Some(thread),
-        })
-    }
-
-    /// A clone of the shared endpoint handle (for the scheme handler).
-    pub fn endpoints(&self) -> ExtensionEndpoints {
-        self.endpoints.clone()
-    }
-
-    /// The lifecycle event stream (the stable seam the ECS plugin will drain).
-    pub fn events(&self) -> &Receiver<LifecycleEvent> {
-        &self.events
-    }
-
-    /// Blocks until `Ready`, or returns `NotReady` on `SpawnFailed`/timeout.
-    pub fn wait_ready(&self, timeout: Duration) -> HostResult {
-        match self.events.recv_timeout(timeout) {
-            Ok(LifecycleEvent::Ready) => Ok(()),
-            Ok(LifecycleEvent::SpawnFailed { .. }) | Ok(LifecycleEvent::Exited { .. }) => {
-                Err(HostError::NotReady)
-            }
-            Err(_) => Err(HostError::NotReady),
-        }
-    }
-}
-
-impl Drop for ExtensionHost {
-    fn drop(&mut self) {
-        // Signal shutdown BEFORE taking the child: if the lifecycle thread holds
-        // the child out of the mutex right now, our take() returns None and we
-        // skip the kill — the thread must then kill it itself when it sees this
-        // flag, or our join() below would hang forever.
-        self.shutdown.store(true, Ordering::SeqCst);
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
-    }
-}
 
 pub(crate) fn run_lifecycle(
     ready_timeout: Duration,
@@ -537,43 +403,5 @@ mod tests {
             "expected /tmp fallback, got {:?}",
             rt.root()
         );
-    }
-
-    #[test]
-    fn spawn_failed_when_program_never_binds() {
-        let cfg = ExtensionConfig {
-            name: "never-binds".into(),
-            program: "sleep".into(),
-            args: vec!["5".into()],
-            dir: std::env::temp_dir(),
-        };
-        let host = ExtensionHost::spawn_with_timeout(cfg, Duration::from_millis(300)).unwrap();
-        match host.events().recv_timeout(Duration::from_secs(2)) {
-            Ok(LifecycleEvent::SpawnFailed { .. }) => {}
-            other => panic!("expected SpawnFailed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn ready_when_program_binds_socket() {
-        if std::process::Command::new("sh")
-            .arg("-c")
-            .arg("command -v nc")
-            .output()
-            .map(|o| !o.status.success())
-            .unwrap_or(true)
-        {
-            eprintln!("skipping: nc not available");
-            return;
-        }
-        let cfg = ExtensionConfig {
-            name: "nc-ready".into(),
-            program: "sh".into(),
-            args: vec!["-c".into(),
-                "printf '\\000\\310\\000\\000\\000\\011text/html\\000\\000\\000\\002ok' | nc -lU \"$OZMUX_SOCK_PATH\"".into()],
-            dir: std::env::temp_dir(),
-        };
-        let host = ExtensionHost::spawn(cfg).unwrap();
-        assert!(host.wait_ready(Duration::from_secs(3)).is_ok());
     }
 }

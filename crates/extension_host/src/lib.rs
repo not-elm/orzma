@@ -22,9 +22,5 @@ pub use control::{
     parse_call,
 };
 pub use handlers_bridge::{AidFrame, HandlersBridge};
-pub use host::{
-    ExtensionConfig, ExtensionEndpoints, ExtensionHost, FetchError, HostError, HostResult,
-    LifecycleEvent, fetch,
-};
 pub use path_prefix::extension_path_prefix;
 pub use protocol::{ProtocolError, Request, Response};

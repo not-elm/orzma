@@ -72,6 +72,5 @@ fn main() {
                 commands: vec!["@memo".into()],
             }),
         ))
-        // .insert_resource(WinitSettings::desktop_app())
         .run();
 }
