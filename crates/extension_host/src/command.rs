@@ -25,7 +25,7 @@ pub type Responder = Sender<ControlResponse>;
 /// Binds `sock`, accepts connections until `shutdown` is set, and turns each
 /// one-shot `call` frame into `(ControlRequest, Responder)` on `req_tx`,
 /// writing the bridge's verdict back as a `result`/`error` line.
-pub(crate) fn spawn_control_server(
+pub(crate) fn serve_extension_host(
     sock: PathBuf,
     req_tx: Sender<(ControlRequest, Responder)>,
     shutdown: Arc<AtomicBool>,
@@ -157,10 +157,6 @@ impl CommandExtension {
             .env("OZMUX_HANDLERS_SOCK_PATH", &handlers_sock)
             .env("OZMUX_ASSET_SOCK_PATH", &asset_sock)
             .env("OZMUX_CONTROL_SOCK_PATH", &control_sock)
-            // NOTE: piping stdin is required — the SDK uses the child's stdin as a
-            // parent-death channel; an EOF'd stdin makes bootstrap() self-clean
-            // (removing the shim) before readiness can observe it. Holding the
-            // write end open keeps it alive; dropping it later is graceful shutdown.
             .stdin(Stdio::piped())
             .spawn()
             .map_err(HostError::Spawn)?;
@@ -191,7 +187,7 @@ impl CommandExtension {
         let (control_tx, control_rx) = bounded::<(ControlRequest, Responder)>(16);
         let control_shutdown = Arc::new(AtomicBool::new(false));
         let control_thread =
-            spawn_control_server(control_sock.clone(), control_tx, control_shutdown.clone());
+            serve_extension_host(control_sock.clone(), control_tx, control_shutdown.clone());
 
         Ok(Self {
             bin_dir,
@@ -288,7 +284,7 @@ mod tests {
         let sock = dir.path().join("memo.control.sock");
         let (req_tx, req_rx) = crossbeam_channel::bounded(8);
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let handle = crate::command::spawn_control_server(sock.clone(), req_tx, shutdown.clone());
+        let handle = crate::command::serve_extension_host(sock.clone(), req_tx, shutdown.clone());
 
         let bridge = std::thread::spawn(move || {
             let (_req, responder) = req_rx
@@ -338,7 +334,7 @@ mod tests {
         let sock = dir.path().join("x.control.sock");
         let (tx, _rx) = crossbeam_channel::bounded(1);
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let handle = crate::command::spawn_control_server(sock.clone(), tx, shutdown.clone());
+        let handle = crate::command::serve_extension_host(sock.clone(), tx, shutdown.clone());
         shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = std::os::unix::net::UnixStream::connect(&sock);
         handle.join().expect("accept loop joins");

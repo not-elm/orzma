@@ -20,10 +20,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 bevy = { workspace = true }
 ozmux_multiplexer = { path = "../multiplexer" }
-# Local-only path dep (the bevy_cef feat/ui-material branch is unmerged); the
-# `cef` feature is OFF by default. Resolvable only because xtask (cef v148) is
-# excluded from the workspace, so there is no `links = "cef_dll_wrapper"`
-# conflict. Adjust this path to your bevy_cef checkout.
 bevy_cef_core = { path = "/Users/watanabe/workspace/bevy_cef/crates/bevy_cef_core", optional = true }
 
 [dev-dependencies]
