@@ -118,34 +118,17 @@ impl ExtensionEndpoints {
 }
 
 /// A failure while fetching an asset from the extension.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum FetchError {
     /// No live endpoint yet (pre-readiness or post-exit).
+    #[error("extension endpoint is not ready")]
     NotReady,
     /// Connect / read / write / timeout failure.
-    Io(std::io::Error),
+    #[error("extension fetch I/O error: {0}")]
+    Io(#[source] std::io::Error),
     /// The response frame was malformed.
-    Protocol(ProtocolError),
-}
-
-impl std::fmt::Display for FetchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FetchError::NotReady => write!(f, "extension endpoint is not ready"),
-            FetchError::Io(e) => write!(f, "extension fetch I/O error: {e}"),
-            FetchError::Protocol(e) => write!(f, "extension protocol error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for FetchError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            FetchError::Io(e) => Some(e),
-            FetchError::Protocol(e) => Some(e),
-            FetchError::NotReady => None,
-        }
-    }
+    #[error("extension protocol error: {0}")]
+    Protocol(#[source] ProtocolError),
 }
 
 /// Fetches `path` from the currently-live extension endpoint.
@@ -200,33 +183,17 @@ pub enum LifecycleEvent {
 }
 
 /// A failure to start the host.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum HostError {
     /// Spawning the child process failed.
-    Spawn(std::io::Error),
+    #[error("failed to spawn extension process: {0}")]
+    Spawn(#[source] std::io::Error),
     /// The runtime root / socket path could not be created.
-    Runtime(std::io::Error),
+    #[error("failed to create extension runtime root: {0}")]
+    Runtime(#[source] std::io::Error),
     /// `wait_ready` timed out or the extension failed to start.
+    #[error("extension did not become ready")]
     NotReady,
-}
-
-impl std::fmt::Display for HostError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HostError::Spawn(e) => write!(f, "failed to spawn extension process: {e}"),
-            HostError::Runtime(e) => write!(f, "failed to create extension runtime root: {e}"),
-            HostError::NotReady => write!(f, "extension did not become ready"),
-        }
-    }
-}
-
-impl std::error::Error for HostError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            HostError::Spawn(e) | HostError::Runtime(e) => Some(e),
-            HostError::NotReady => None,
-        }
-    }
 }
 
 /// Convenience alias for fallible host operations.

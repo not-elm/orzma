@@ -101,9 +101,10 @@ pub struct ControlError {
 }
 
 /// A failure to parse a control `call` line.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ControlParseError {
     /// Malformed JSON, unknown op, or bad field (maps to `bad_request`).
+    #[error("{0}")]
     BadRequest(String),
 }
 

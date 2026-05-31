@@ -29,47 +29,34 @@ pub struct Response {
 }
 
 /// A framing or transport failure while reading/writing the protocol.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProtocolError {
     /// Underlying I/O error.
-    Io(std::io::Error),
+    #[error("protocol I/O error: {0}")]
+    Io(#[source] std::io::Error),
     /// Request version byte did not match [`PROTOCOL_VERSION`].
+    #[error("unsupported protocol version: {0}")]
     VersionMismatch(u8),
     /// A length prefix exceeded its cap.
+    #[error("frame length exceeds the permitted maximum")]
     TooLarge,
     /// A field's bytes were not valid UTF-8.
+    #[error("frame field was not valid UTF-8")]
     Utf8,
     /// The stream ended before a complete frame.
+    #[error("stream ended before a complete frame")]
     UnexpectedEof,
 }
 
+// NOTE: a hand-written `From` (not thiserror's `#[from]`) because it remaps the
+// `UnexpectedEof` io kind to its own variant — `#[from]` would always wrap into
+// `Io`, losing that distinction.
 impl From<std::io::Error> for ProtocolError {
     fn from(e: std::io::Error) -> Self {
         if e.kind() == std::io::ErrorKind::UnexpectedEof {
             ProtocolError::UnexpectedEof
         } else {
             ProtocolError::Io(e)
-        }
-    }
-}
-
-impl std::fmt::Display for ProtocolError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProtocolError::Io(e) => write!(f, "protocol I/O error: {e}"),
-            ProtocolError::VersionMismatch(v) => write!(f, "unsupported protocol version: {v}"),
-            ProtocolError::TooLarge => write!(f, "frame length exceeds the permitted maximum"),
-            ProtocolError::Utf8 => write!(f, "frame field was not valid UTF-8"),
-            ProtocolError::UnexpectedEof => write!(f, "stream ended before a complete frame"),
-        }
-    }
-}
-
-impl std::error::Error for ProtocolError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ProtocolError::Io(e) => Some(e),
-            _ => None,
         }
     }
 }
