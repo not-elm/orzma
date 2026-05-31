@@ -6,6 +6,7 @@
 
 use crate::browser::BrowserConfig;
 use crate::font::FontConfig;
+use crate::inactive_pane::InactivePaneConfig;
 use crate::shortcuts::Shortcuts;
 use crate::theme::Theme;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
@@ -14,6 +15,7 @@ use std::path::Path;
 pub mod browser;
 pub mod error;
 pub mod font;
+pub mod inactive_pane;
 pub mod mouse;
 pub mod path;
 mod raw;
@@ -33,6 +35,8 @@ pub struct OzmuxConfigs {
     pub browser: BrowserConfig,
     /// Mouse-input configuration.
     pub mouse: mouse::MouseConfig,
+    /// Inactive-pane dimming configuration.
+    pub inactive_pane: InactivePaneConfig,
 }
 
 impl OzmuxConfigs {
