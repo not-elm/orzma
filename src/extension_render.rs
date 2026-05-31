@@ -112,9 +112,7 @@ impl Plugin for OzmuxExtensionRenderPlugin {
                     finish_extension_setup.in_set(OzmuxSystems::SetupActivity),
                     set_asset_endpoint_once,
                     drain_handler_responses,
-                    sync_focused_webview
-                        .run_if(resource_exists_and_changed::<FocusedWebview>)
-                        .after(OzmuxSystems::Input),
+                    sync_focused_webview.after(OzmuxSystems::Input),
                 ),
             );
     }
