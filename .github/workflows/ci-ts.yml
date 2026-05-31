@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "daemon/frontend/**"
+      - "sdk/**"
+      - "extensions/**"
       - "pnpm-workspace.yaml"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -13,7 +14,8 @@ on:
       - ".github/workflows/ci-ts.yml"
   pull_request:
     paths:
-      - "daemon/frontend/**"
+      - "sdk/**"
+      - "extensions/**"
       - "pnpm-workspace.yaml"
       - "package.json"
       - "pnpm-lock.yaml"
