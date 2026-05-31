@@ -116,7 +116,7 @@ pub struct CommandExtensionConfig {
 pub struct CommandExtension {
     bin_dir: PathBuf,
     events: Receiver<LifecycleEvent>,
-    _runtime: Arc<RuntimeRoot>,
+    _runtime: RuntimeRoot,
     _stdin: ChildStdin,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
     lifecycle_shutdown: Arc<AtomicBool>,
@@ -162,7 +162,6 @@ impl CommandExtension {
             .map_err(HostError::Spawn)?;
         let stdin = child.stdin.take().expect("piped stdin");
 
-        let runtime = Arc::new(runtime);
         let child = Arc::new(std::sync::Mutex::new(Some(child)));
         let lifecycle_shutdown = Arc::new(AtomicBool::new(false));
         let (tx, rx) = bounded::<LifecycleEvent>(8);
@@ -212,7 +211,7 @@ impl CommandExtension {
     }
 
     /// The channel of inbound control requests (drained by the ECS plugin).
-    pub fn control_requests(&self) -> &Receiver<(ControlRequest, Responder)> {
+    pub const fn control_requests(&self) -> &Receiver<(ControlRequest, Responder)> {
         &self.control_requests
     }
 
@@ -232,7 +231,7 @@ impl CommandExtension {
     }
 
     /// The lifecycle event stream.
-    pub fn events(&self) -> &Receiver<LifecycleEvent> {
+    pub const fn events(&self) -> &Receiver<LifecycleEvent> {
         &self.events
     }
 
