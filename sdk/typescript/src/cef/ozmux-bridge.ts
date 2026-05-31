@@ -1,6 +1,9 @@
 /** The bevy_cef JS primitives the bridge rides on (provided in-page). */
 export interface CefApi {
-  emit(name: string, payload: unknown): void;
+  // NOTE: bevy_cef's cef.emit serializes only its FIRST argument into one global
+  // Receive<E> on the Rust side — there is no channel-name arg (a second arg is
+  // silently dropped). cef.listen IS id-routed (Rust→JS keys by event id).
+  emit(payload: unknown): void;
   listen(id: string, cb: (raw: unknown) => void): void;
 }
 
@@ -62,16 +65,16 @@ export function installOzmux(cef: CefApi): OzmuxApi {
       const id = `c${nextId++}`;
       return new Promise((resolve, reject) => {
         calls.set(id, { resolve, reject });
-        cef.emit('ozmux', { kind: 'call', id, name, payload });
+        cef.emit({ kind: 'call', id, name, payload });
       });
     },
     subscribe(name, params, opts) {
       const id = `s${nextId++}`;
       const state: SubState = { queue: [], done: false };
       subs.set(id, state);
-      cef.emit('ozmux', { kind: 'sub.open', id, name, params });
+      cef.emit({ kind: 'sub.open', id, name, params });
       opts?.signal?.addEventListener('abort', () => {
-        cef.emit('ozmux', { kind: 'sub.cancel', id });
+        cef.emit({ kind: 'sub.cancel', id });
         endSub(id);
       });
       return {

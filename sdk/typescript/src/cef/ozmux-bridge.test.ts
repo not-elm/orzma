@@ -5,7 +5,7 @@ function fakeCef() {
   const listeners: Record<string, (raw: unknown) => void> = {};
   const emitted: any[] = [];
   const cef = {
-    emit: (_name: string, payload: unknown) => emitted.push(payload),
+    emit: (payload: unknown) => emitted.push(payload),
     listen: (id: string, cb: (raw: unknown) => void) => { listeners[id] = cb; },
   };
   // deliver a server frame the way HostEmitEvent does: as a JSON STRING
