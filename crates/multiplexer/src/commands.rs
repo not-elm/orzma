@@ -27,6 +27,15 @@ pub struct SessionCreated {
     pub activity: Entity,
 }
 
+/// Result of `split_pane_with_activity` — the new pane + its seeded activity.
+#[derive(Debug, Clone, Copy)]
+pub struct SplitOutcome {
+    /// The freshly-spawned pane.
+    pub pane: Entity,
+    /// The activity seeded into the new pane.
+    pub activity: Entity,
+}
+
 /// SystemParam exposing every mutation on the multiplexer state. Read
 /// helpers (`session_of_pane`, `panes_of_session`, etc.) are non-mut and
 /// can be called by other systems through the same SystemParam.
@@ -148,40 +157,51 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(())
     }
 
-    /// Split the target pane in two. Spawns a new Pane entity with one
-    /// bootstrap Terminal Activity, mutates `LayoutCells` to insert it
-    /// at the requested side/orientation, and promotes the new pane to
-    /// `ActivePane`. On error, the freshly-spawned entities are despawned
-    /// to leave no orphans in the world.
+    /// Split the target pane and seed the new pane with one activity of the
+    /// caller-chosen `kind`. Delegates to `split_pane_inner` (which does the
+    /// layout mutation + active-pane promotion) and attaches the activity; on
+    /// error the freshly-spawned activity is despawned to leave no orphan.
+    pub fn split_pane_with_activity(
+        &mut self,
+        target_pane: Entity,
+        side: Side,
+        orientation: SplitOrientation,
+        kind: ActivityKind,
+    ) -> MultiplexerResult<SplitOutcome> {
+        let activity = self
+            .commands
+            .spawn((ActivityMarker, kind, Name::new("activity: split")))
+            .id();
+        match self.split_pane_inner(target_pane, side, orientation) {
+            Ok((new_pane, _)) => {
+                self.commands
+                    .entity(new_pane)
+                    .insert(ActiveActivity(activity));
+                self.commands.entity(activity).insert(ChildOf(new_pane));
+                Ok(SplitOutcome {
+                    pane: new_pane,
+                    activity,
+                })
+            }
+            Err(e) => {
+                self.commands.entity(activity).despawn();
+                Err(e)
+            }
+        }
+    }
+
+    /// Split the target pane in two, seeding a bootstrap Terminal activity.
+    /// Mutates `LayoutCells` to insert the new pane at the requested
+    /// side/orientation and promotes it to `ActivePane`. On error,
+    /// freshly-spawned entities are despawned to leave no orphans.
     pub fn split_pane(
         &mut self,
         target_pane: Entity,
         side: Side,
         orientation: SplitOrientation,
     ) -> MultiplexerResult<Entity> {
-        let new_activity = self
-            .commands
-            .spawn((
-                ActivityMarker,
-                ActivityKind::Terminal,
-                Name::new("activity: split"),
-            ))
-            .id();
-
-        let result = self.split_pane_inner(target_pane, side, orientation);
-        match result {
-            Ok((new_pane, _)) => {
-                self.commands
-                    .entity(new_pane)
-                    .insert(ActiveActivity(new_activity));
-                self.commands.entity(new_activity).insert(ChildOf(new_pane));
-                Ok(new_pane)
-            }
-            Err(e) => {
-                self.commands.entity(new_activity).despawn();
-                Err(e)
-            }
-        }
+        self.split_pane_with_activity(target_pane, side, orientation, ActivityKind::Terminal)
+            .map(|o| o.pane)
     }
 
     /// Close a pane. Despawns the pane entity (which cascades to its
@@ -282,6 +302,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .insert(ActiveActivity(activity));
 
         Ok(new_pane)
+    }
+
+    /// Inserts `bundle` on an entity the multiplexer spawned. The caller must
+    /// ensure `entity` is a valid multiplexer-owned entity.
+    pub fn insert_on(&mut self, entity: Entity, bundle: impl Bundle) {
+        self.commands.entity(entity).insert(bundle);
     }
 
     /// Close a Session entirely. Cascading `ChildOf` despawn removes all
@@ -730,6 +756,52 @@ mod tests {
             matches!(result, Err(MultiplexerError::CannotRemoveLastActivity(_))),
             "expected CannotRemoveLastActivity, got {result:?}",
         );
+    }
+
+    #[test]
+    fn split_pane_with_activity_seeds_extension_activity() {
+        use std::path::PathBuf;
+        let mut world = World::new();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+
+        let split = world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane_with_activity(
+                    outcome.pane,
+                    Side::After,
+                    SplitOrientation::Vertical,
+                    ActivityKind::Extension {
+                        html_root: PathBuf::from("/x/memo"),
+                    },
+                )
+                .unwrap()
+            })
+            .unwrap();
+        world.flush();
+
+        assert!(world.get::<PaneMarker>(split.pane).is_some());
+        assert_eq!(
+            world.get::<ChildOf>(split.pane).map(|c| c.parent()),
+            Some(outcome.session)
+        );
+        assert_eq!(
+            world.get::<ActivePane>(outcome.session).map(|a| a.0),
+            Some(split.pane)
+        );
+        assert_eq!(
+            world.get::<ChildOf>(split.activity).map(|c| c.parent()),
+            Some(split.pane)
+        );
+        assert_eq!(
+            world.get::<ActiveActivity>(split.pane).map(|a| a.0),
+            Some(split.activity)
+        );
+        assert!(matches!(
+            world.get::<ActivityKind>(split.activity),
+            Some(ActivityKind::Extension { .. })
+        ));
     }
 
     #[test]

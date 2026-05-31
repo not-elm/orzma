@@ -107,6 +107,12 @@ pub struct PaneDimensions {
     pub rows: u16,
 }
 
+/// The SDK-side activity id (handler-registration key) for an extension
+/// activity. Stamped by the control bridge so the handlers bridge can address
+/// `{aid, frame}` envelopes to the right handler set.
+#[derive(Component, Debug, Clone)]
+pub struct ExtensionActivityAid(pub String);
+
 /// Activity kind discriminator. Ported from the old crate's
 /// `ActivityKind` enum; field types preserved.
 #[derive(Component, Debug, Clone)]

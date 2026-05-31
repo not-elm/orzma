@@ -11,16 +11,27 @@ publish.workspace = true
 name = "ozmux-gui"
 path = "src/main.rs"
 
+[features]
+# Dev-only diagnostics. Enables the CEF `remote-debugging-port` (a local
+# Chromium DevTools/CDP endpoint on 127.0.0.1:9222) for inspecting the embedded
+# extension webview. Off by default so the endpoint is not exposed in normal
+# builds; enable with `cargo run --features debug`.
+debug = []
+
 [dependencies]
 ab_glyph = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
+bevy_cef = { path = "/Users/watanabe/workspace/bevy_cef", features = ["debug"] }
 bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
 open = { workspace = true }
 ozmux_configs = { path = "daemon/configs" }
+ozmux_extension_host = { path = "crates/extension_host", features = ["cef"] }
 ozmux_multiplexer = { path = "crates/multiplexer" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 unicode-width = { workspace = true }
 
@@ -35,7 +46,6 @@ members = [
   "daemon/extension",
   "daemon/macros",
   "crates/*",
-  "xtask",
 ]
 exclude = [
   "cli",
@@ -46,6 +56,10 @@ exclude = [
   "daemon/http_server",
   "daemon/multiplexer",
   "client",
+  # NOTE: xtask pulls cef v148 (links = "cef_dll_wrapper"); excluded so the
+  # workspace graph stays free of it, letting crates/extension_host depend on
+  # bevy_cef_core (cef v145) behind its `cef` feature without a links conflict.
+  "xtask",
 ]
 
 [workspace.package]

@@ -5,7 +5,9 @@
 //! `Handle<TerminalMaterial>` and prepared GPU resources alive across
 //! split/focus changes.
 
-use crate::ui::{ActivityHostNode, TerminalActivityMarker};
+use crate::ui::{
+    ActivityHostNode, ExtensionActivityMarker, HostActivityEntity, TerminalActivityMarker,
+};
 use bevy::prelude::*;
 use ozmux_multiplexer::{ActivityKind, ActivityMarker};
 use std::collections::HashMap;
@@ -33,9 +35,12 @@ impl ActivityEntityRegistry {
         if let Some(&existing) = self.hosts.get(&activity) {
             return existing;
         }
-        let mut spawn = commands.spawn(ActivityHostNode);
+        let mut spawn = commands.spawn((ActivityHostNode, HostActivityEntity(activity)));
         if matches!(kind, ActivityKind::Terminal) {
             spawn.insert(TerminalActivityMarker);
+        }
+        if matches!(kind, ActivityKind::Extension { .. }) {
+            spawn.insert(ExtensionActivityMarker);
         }
         let host = spawn.id();
         self.hosts.insert(activity, host);
@@ -135,7 +140,7 @@ mod tests {
         let drop_activity = app.world_mut().spawn(ActivityMarker).id();
         let kind = ActivityKind::Terminal;
 
-        let mut drop_host = None;
+        let drop_host;
         {
             let mut registry = app
                 .world_mut()
@@ -145,7 +150,7 @@ mod tests {
             {
                 let mut commands = Commands::new(&mut queue, app.world());
                 registry.get_or_spawn(&mut commands, keep_activity, &kind);
-                drop_host = Some(registry.get_or_spawn(&mut commands, drop_activity, &kind));
+                drop_host = registry.get_or_spawn(&mut commands, drop_activity, &kind);
             }
             app.world_mut().insert_resource(registry);
             queue.apply(app.world_mut());
@@ -159,7 +164,7 @@ mod tests {
         assert!(registry.get(keep_activity).is_some());
         assert!(registry.get(drop_activity).is_none());
         assert!(
-            app.world().get_entity(drop_host.unwrap()).is_err(),
+            app.world().get_entity(drop_host).is_err(),
             "dropped host Entity must be despawned"
         );
     }
@@ -183,6 +188,38 @@ mod tests {
                 .get::<TerminalActivityMarker>()
                 .is_some(),
             "Terminal kind must carry TerminalActivityMarker"
+        );
+    }
+
+    #[test]
+    fn get_or_spawn_inserts_extension_marker_for_extension_kind() {
+        use crate::ui::ExtensionActivityMarker;
+        use std::path::PathBuf;
+        let mut world = World::new();
+        world.insert_resource(ActivityEntityRegistry::default());
+        let activity = world.spawn_empty().id();
+        let kind = ActivityKind::Extension {
+            html_root: PathBuf::from("/tmp/memo"),
+        };
+
+        let mut host = None;
+        drive(&mut world, |commands, registry| {
+            host = Some(registry.get_or_spawn(commands, activity, &kind));
+        });
+
+        assert!(
+            world
+                .entity(host.unwrap())
+                .get::<ExtensionActivityMarker>()
+                .is_some(),
+            "Extension kind must carry ExtensionActivityMarker"
+        );
+        assert!(
+            world
+                .entity(host.unwrap())
+                .get::<TerminalActivityMarker>()
+                .is_none(),
+            "Extension kind must NOT carry TerminalActivityMarker"
         );
     }
 

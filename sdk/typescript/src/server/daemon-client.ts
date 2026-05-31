@@ -26,18 +26,25 @@ function buildHeaders(): Record<string, string> {
 }
 
 function buildUrl(path: string): string {
-  return `${requireEnv("OZMUX_DAEMON_URL")}${path}`;
+  return `${requireEnv("OZMUX_EXTENSION_HOST_URL")}${path}`;
+}
+
+function warnNoOp(path: string): void {
+  console.warn(`ozmux: OZMUX_EXTENSION_HOST_URL unset — skipping ${path} (no-op)`);
 }
 
 async function send(path: string, body: unknown): Promise<Response> {
+  if (!process.env.OZMUX_EXTENSION_HOST_URL) {
+    warnNoOp(path);
+    return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  }
   const response = await fetch(buildUrl(path), {
     method: "POST",
     headers: buildHeaders(),
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    const bodyText = await response.text();
-    throw new DaemonError(response.status, bodyText, path);
+    throw new DaemonError(response.status, await response.text(), path);
   }
   return response;
 }
@@ -52,6 +59,12 @@ export async function postNoContent(path: string, body: unknown): Promise<void> 
 }
 
 export async function getJson<T>(path: string): Promise<T> {
+  // NOTE: reads cannot no-op like the write helpers (there is no sensible empty
+  // value), so when the host is absent surface an explicit host-unavailable
+  // error rather than buildUrl's misleading "missing required env".
+  if (!process.env.OZMUX_EXTENSION_HOST_URL) {
+    throw new DaemonError(503, "extension host unavailable (OZMUX_EXTENSION_HOST_URL unset)", path);
+  }
   const response = await fetch(buildUrl(path), {
     method: "GET",
     headers: buildHeaders(),
@@ -64,6 +77,10 @@ export async function getJson<T>(path: string): Promise<T> {
 }
 
 export async function deleteNoContent(path: string): Promise<void> {
+  if (!process.env.OZMUX_EXTENSION_HOST_URL) {
+    warnNoOp(path);
+    return;
+  }
   const response = await fetch(buildUrl(path), {
     method: "DELETE",
     headers: buildHeaders(),

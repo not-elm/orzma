@@ -155,14 +155,6 @@ impl GlyphAtlas {
         Some(rect)
     }
 
-    /// Clears the atlas — used in tests and after font-config changes.
-    pub fn clear(&mut self) {
-        self.pixels.fill(0);
-        self.glyphs.clear();
-        self.shelves.clear();
-        self.generation = self.generation.wrapping_add(1);
-    }
-
     fn write_outline_pixels(&mut self, outlined: &OutlinedGlyph) {
         let u = self.shelves.shelf.x;
         let v = self.shelves.y;
@@ -237,12 +229,6 @@ impl Shelves {
 struct Shelf {
     pub height: u32,
     pub x: u32,
-}
-
-impl Shelf {
-    pub fn reset(&mut self) {
-        self.x = 0;
-    }
 }
 
 #[cfg(test)]

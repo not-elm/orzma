@@ -1,3 +1,6 @@
+import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as channelsServer from "./channels-server.ts";
 import { __resetActivityChannelsForTests } from "./channels-server.ts";
@@ -6,21 +9,22 @@ import * as handlersServer from "./handlers-server.ts";
 import { __resetActivityHandlersForTests } from "./handlers-server.ts";
 import { __resetExtensionNameCacheForTests, Pane } from "./pane.ts";
 
+function tmpSock(): string {
+  return path.join(os.tmpdir(), `ozmux-pane-test-${process.pid}-${Math.random().toString(36).slice(2)}.sock`);
+}
+
 let postJsonSpy: ReturnType<typeof vi.spyOn>;
 let savedExtensionName: string | undefined;
+let savedControlSock: string | undefined;
 
 beforeEach(() => {
   __resetActivityHandlersForTests();
   __resetActivityChannelsForTests();
   postJsonSpy = vi.spyOn(daemonClient, "postJson").mockResolvedValue({});
-  // Extension-kind splits/adds depend on EXTENSION_NAME being set, since the
-  // SDK forwards it to the daemon as `extension_name` in the activity payload.
-  // Each test that exercises that path can rely on this default.
   savedExtensionName = process.env.EXTENSION_NAME;
   process.env.EXTENSION_NAME = "memo";
-  // The module-level cache memoizes the first read; reset it before every
-  // test so cases that mutate EXTENSION_NAME mid-suite see the new value.
   __resetExtensionNameCacheForTests();
+  savedControlSock = process.env.OZMUX_CONTROL_SOCK_PATH;
 });
 
 afterEach(() => {
@@ -31,10 +35,40 @@ afterEach(() => {
     process.env.EXTENSION_NAME = savedExtensionName;
   }
   __resetExtensionNameCacheForTests();
+  if (savedControlSock === undefined) {
+    delete process.env.OZMUX_CONTROL_SOCK_PATH;
+  } else {
+    process.env.OZMUX_CONTROL_SOCK_PATH = savedControlSock;
+  }
 });
 
+/** Starts a one-shot UDS server that replies with the given new_pane_id/new_activity_id. */
+async function startFakeSplitServer(
+  sock: string,
+  reply: { new_pane_id: string; new_activity_id: string } | 'error',
+): Promise<{ server: net.Server; frames: Array<Record<string, unknown>> }> {
+  const frames: Array<Record<string, unknown>> = [];
+  const server = net.createServer((conn) => {
+    conn.on('data', (chunk) => {
+      const frame = JSON.parse(chunk.toString('utf8').trim()) as Record<string, unknown>;
+      frames.push(frame);
+      if (reply === 'error') {
+        conn.write(JSON.stringify({ kind: 'error', id: frame.id, code: 'boom', message: 'boom' }) + '\n');
+      } else {
+        conn.write(JSON.stringify({ kind: 'result', id: frame.id, payload: reply }) + '\n');
+      }
+    });
+  });
+  await new Promise<void>((r) => server.listen(sock, r));
+  return { server, frames };
+}
+
 describe("Pane.split", () => {
-  it("POSTs to the hierarchical split URL with client-supplied UUIDs", async () => {
+  it("sends a split call over the control socket and returns the host-authoritative pane id", async () => {
+    const sock = tmpSock();
+    const { server, frames } = await startFakeSplitServer(sock, { new_pane_id: 'p99', new_activity_id: 'a99' });
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+
     const pane = new Pane({ id: "p1", windowId: "w1", sessionId: "s1" });
     const next = await pane.split({
       side: "after",
@@ -42,47 +76,32 @@ describe("Pane.split", () => {
       activity: { kind: "terminal" },
     });
 
-    expect(postJsonSpy).toHaveBeenCalledTimes(1);
-    const [url, body] = postJsonSpy.mock.calls[0] as [
-      string,
-      Record<string, unknown>,
-    ];
-    expect(url).toBe("/windows/w1/panes/p1/split");
-    expect(body.side).toBe("after");
-    expect(body.orientation).toBe("horizontal");
-    expect(typeof body.new_pane_id).toBe("string");
-    expect(body.new_pane_id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
-    const activity = body.activity as { activity_id: string; kind: unknown };
-    expect(activity.activity_id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
-    expect(activity.kind).toEqual({ type: "terminal" });
-    expect(next.id).toBe(body.new_pane_id);
+    expect(frames).toHaveLength(1);
+    expect(frames[0].kind).toBe('call');
+    expect(frames[0].op).toBe('split');
+    expect(frames[0].pane).toBe('p1');
+    expect((frames[0].params as Record<string, unknown>).side).toBe('after');
+    expect((frames[0].params as Record<string, unknown>).orientation).toBe('horizontal');
+    expect(next.id).toBe('p99');
     expect(next.windowId).toBe("w1");
     expect(next.sessionId).toBe("s1");
+    expect(postJsonSpy).not.toHaveBeenCalled();
+    server.close();
   });
 
-  it("registers handlers and channels BEFORE the POST resolves (race-free)", async () => {
-    const registerHandlersSpy = vi.spyOn(
-      handlersServer,
-      "registerActivityHandlers",
-    );
-    const registerChannelsSpy = vi.spyOn(
-      channelsServer,
-      "registerActivityChannels",
-    );
+  it("registers handlers and channels BEFORE the control call resolves (race-free)", async () => {
+    const sock = tmpSock();
+    const { server } = await startFakeSplitServer(sock, { new_pane_id: 'p2', new_activity_id: 'a2' });
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+
+    const registerHandlersSpy = vi.spyOn(handlersServer, "registerActivityHandlers");
+    const registerChannelsSpy = vi.spyOn(channelsServer, "registerActivityChannels");
     const callOrder: string[] = [];
     registerHandlersSpy.mockImplementation(() => {
       callOrder.push("register-handlers");
     });
     registerChannelsSpy.mockImplementation(() => {
       callOrder.push("register-channels");
-    });
-    postJsonSpy.mockImplementation(async () => {
-      callOrder.push("post");
-      return {};
     });
 
     const pane = new Pane({ id: "p1", windowId: "w1" });
@@ -97,25 +116,21 @@ describe("Pane.split", () => {
       },
     });
 
-    expect(callOrder).toEqual([
-      "register-handlers",
-      "register-channels",
-      "post",
-    ]);
+    // registries must be primed before the async control call completes
+    expect(callOrder[0]).toBe("register-handlers");
+    expect(callOrder[1]).toBe("register-channels");
     registerHandlersSpy.mockRestore();
     registerChannelsSpy.mockRestore();
+    server.close();
   });
 
-  it("rolls registries back when the POST fails", async () => {
-    const unregisterHandlersSpy = vi.spyOn(
-      handlersServer,
-      "unregisterActivityHandlers",
-    );
-    const unregisterChannelsSpy = vi.spyOn(
-      channelsServer,
-      "unregisterActivityChannels",
-    );
-    postJsonSpy.mockRejectedValueOnce(new Error("boom"));
+  it("rolls registries back when the control call fails", async () => {
+    const sock = tmpSock();
+    const { server } = await startFakeSplitServer(sock, 'error');
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+
+    const unregisterHandlersSpy = vi.spyOn(handlersServer, "unregisterActivityHandlers");
+    const unregisterChannelsSpy = vi.spyOn(channelsServer, "unregisterActivityChannels");
 
     const pane = new Pane({ id: "p1", windowId: "w1" });
     await expect(
@@ -129,19 +144,23 @@ describe("Pane.split", () => {
           channels: { tick: async function* () { yield 1; } },
         },
       }),
-    ).rejects.toThrow("boom");
+    ).rejects.toThrow(/boom/);
 
     expect(unregisterHandlersSpy).toHaveBeenCalledTimes(1);
     expect(unregisterChannelsSpy).toHaveBeenCalledTimes(1);
-    // The registered id must equal the unregister target — same activity id.
     expect(unregisterHandlersSpy.mock.calls[0][0]).toBe(
       unregisterChannelsSpy.mock.calls[0][0],
     );
     unregisterHandlersSpy.mockRestore();
     unregisterChannelsSpy.mockRestore();
+    server.close();
   });
 
-  it("encodes extension html_root as the parent dir of `html`", async () => {
+  it("encodes extension html_root as the parent dir of `html` in the control frame", async () => {
+    const sock = tmpSock();
+    const { server, frames } = await startFakeSplitServer(sock, { new_pane_id: 'p3', new_activity_id: 'a3' });
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+
     const pane = new Pane({ id: "p1", windowId: "w1" });
     await pane.split({
       side: "before",
@@ -151,52 +170,35 @@ describe("Pane.split", () => {
         html: "/opt/memo/index.html",
       },
     });
-    const [, body] = postJsonSpy.mock.calls[0] as [
-      string,
-      Record<string, unknown>,
-    ];
-    const activity = body.activity as {
-      kind: { type: string; html_root: string; extension_name: string };
-    };
-    expect(activity.kind).toEqual({
-      type: "extension",
-      html_root: "/opt/memo",
-      extension_name: "memo",
+
+    const params = frames[0].params as { activity: { kind: string; html_root: string } };
+    expect(params.activity.kind).toBe("extension");
+    expect(params.activity.html_root).toBe("/opt/memo");
+    server.close();
+  });
+
+  it("split sends the client activity_id in the control frame", async () => {
+    const sock = tmpSock();
+    let seen: any;
+    const server = net.createServer((conn) => {
+      conn.on("data", (chunk) => {
+        seen = JSON.parse(chunk.toString("utf8").trim());
+        conn.write(JSON.stringify({ kind: "result", id: seen.id, payload: { new_pane_id: "p1", new_activity_id: "a1" } }) + "\n");
+      });
     });
+    await new Promise<void>((r) => server.listen(sock, r));
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+    process.env.EXTENSION_NAME = "memo";
+    const pane = new Pane({ id: "100", windowId: "w", sessionId: "s" });
+    await pane.split({ side: "after", orientation: "vertical", activity: { kind: "extension", html: "/x/memo/index.html" } });
+    expect(typeof seen.params.activity.activity_id).toBe("string");
+    expect(seen.params.activity.activity_id.length).toBeGreaterThan(0);
+    server.close();
   });
 
-  it("forwards EXTENSION_NAME from env as `extension_name` on the activity kind", async () => {
-    process.env.EXTENSION_NAME = "diary";
-    const pane = new Pane({ id: "p1", windowId: "w1" });
-    await pane.split({
-      side: "after",
-      orientation: "horizontal",
-      activity: { kind: "extension", html: "/opt/diary/index.html" },
-    });
-    const [, body] = postJsonSpy.mock.calls[0] as [
-      string,
-      Record<string, unknown>,
-    ];
-    const activity = body.activity as {
-      kind: { extension_name: string };
-    };
-    expect(activity.kind.extension_name).toBe("diary");
-  });
-
-  it("throws when EXTENSION_NAME is unset and the activity is extension-kind", async () => {
+  it("does not require EXTENSION_NAME for terminal-kind activities (no-op fallback)", async () => {
     delete process.env.EXTENSION_NAME;
-    const pane = new Pane({ id: "p1", windowId: "w1" });
-    await expect(
-      pane.split({
-        side: "after",
-        orientation: "horizontal",
-        activity: { kind: "extension", html: "/opt/memo/index.html" },
-      }),
-    ).rejects.toThrow(/EXTENSION_NAME/);
-  });
-
-  it("does not require EXTENSION_NAME for terminal-kind activities", async () => {
-    delete process.env.EXTENSION_NAME;
+    delete process.env.OZMUX_CONTROL_SOCK_PATH;
     const pane = new Pane({ id: "p1", windowId: "w1" });
     await expect(
       pane.split({

@@ -653,6 +653,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_cef"
+version = "0.9.0-dev"
+dependencies = [
+ "async-channel",
+ "bevy",
+ "bevy_cef_core",
+ "bevy_remote",
+ "cef",
+ "objc",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bevy_cef_core"
+version = "0.9.0-dev"
+dependencies = [
+ "async-channel",
+ "bevy",
+ "bevy_remote",
+ "cef",
+ "cef-dll-sys",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "bevy_color"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1325,6 +1355,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_remote"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0129e24bf3e281dd52996a9290c35f8c4821ca09e1ce8b8b222671e1ad9da0c"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-io",
+ "bevy_app",
+ "bevy_asset",
+ "bevy_derive",
+ "bevy_ecs",
+ "bevy_log",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_tasks",
+ "bevy_utils",
+ "http-body-util",
+ "hyper",
+ "serde",
+ "serde_json",
+ "smol-hyper",
+]
+
+[[package]]
 name = "bevy_render"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1517,6 +1572,7 @@ checksum = "384eb04d80aa38664d69988fd30cbbe03e937ecb65c66aa6abe60ce0bca826aa"
 dependencies = [
  "async-channel",
  "async-executor",
+ "async-io",
  "async-task",
  "atomic-waker",
  "bevy_platform",
@@ -1993,9 +2049,9 @@ dependencies = [
 
 [[package]]
 name = "cef"
-version = "148.2.0+148.0.8"
+version = "145.6.1+145.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89442ad338365f6a9a32f5595a734860921133a9aad6f9adb0af5624a9121597"
+checksum = "549537e80f5655f48678e6496282cdea6f2b34b66d0e729d3517d7c7ec78954b"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -2013,9 +2069,9 @@ dependencies = [
 
 [[package]]
 name = "cef-dll-sys"
-version = "148.2.0+148.0.8"
+version = "145.6.1+145.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22c85e020ec1e6fc257ef1f089a2fc3ada82ec87de52684e3eaac480bb0bdec5"
+checksum = "687f31c0937d9914d3e5887b94c6194bd8e3e533026cef2cc3ae7b4fe5245b6d"
 dependencies = [
  "anyhow",
  "cmake",
@@ -3362,10 +3418,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-body"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1efedce1fb8e6913f23e0c92de8e62cd5b772a67e7b3946df930a62566c93184"
+dependencies = [
+ "bytes",
+ "http",
+]
+
+[[package]]
+name = "http-body-util"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b021d93e26becf5dc7e1b75b1bed1fd93124b374ceb73f43d4d4eafec896a64a"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "http",
+ "http-body",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
+name = "hyper"
+version = "1.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55281c53a1894c864990125767da440a4e630446785086f52523b20033b74498"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "http",
+ "http-body",
+ "httparse",
+ "httpdate",
+ "itoa",
+ "pin-project-lite",
+ "smallvec",
+ "tokio",
+]
 
 [[package]]
 name = "icu_collections"
@@ -4604,12 +4709,16 @@ dependencies = [
  "ab_glyph",
  "arboard",
  "bevy",
+ "bevy_cef",
  "bevy_terminal",
  "bevy_terminal_renderer",
  "cosmic-text",
  "open",
  "ozmux_configs",
+ "ozmux_extension_host",
  "ozmux_multiplexer",
+ "serde",
+ "serde_json",
  "tracing",
  "unicode-width",
 ]
@@ -4644,6 +4753,21 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "ozmux_extension_host"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_cef_core",
+ "crossbeam-channel",
+ "ozmux_multiplexer",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5625,6 +5749,19 @@ dependencies = [
  "wayland-protocols-wlr",
  "wayland-scanner",
  "xkeysym",
+]
+
+[[package]]
+name = "smol-hyper"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7428a49d323867702cd12b97b08a6b0104f39ec13b49117911f101271321bc1a"
+dependencies = [
+ "async-executor",
+ "async-io",
+ "futures-io",
+ "hyper",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -7744,16 +7881,6 @@ name = "xml-rs"
 version = "0.8.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
-
-[[package]]
-name = "xtask"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "cef",
- "clap",
- "semver",
-]
 
 [[package]]
 name = "yazi"

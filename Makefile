@@ -1,10 +1,16 @@
-.PHONY: build dev-frontend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-ozmux-daemon bundle-ozmux-daemon-release
+.PHONY: build dev-frontend dev-daemon dev-tauri dev-e2e dev-e2e-setup dev-e2e-stop kill-daemon verify-out-dir clean help fix-lint test-frontend test-wire-goldens test-wire-contract memo-build-sdk bundle-ozmux-daemon bundle-ozmux-daemon-release setup-cef
 
 FRONTEND_DIR := daemon/frontend
 HTTP_DIR := daemon/http_server/src/handlers
 INDEX_HTML := $(HTTP_DIR)/index.html
 OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
 CARGO_BIN_DIR := $(if $(CARGO_HOME),$(CARGO_HOME)/bin,$(HOME)/.cargo/bin)
+
+# bevy_cef (ozmux-gui) CEF integration. The version is pinned by bevy_cef's
+# `cef` workspace dep; keep these in sync with /Users/watanabe/workspace/bevy_cef.
+CEF_VERSION := 145.6.1+145.0.28
+CEF_FRAMEWORK_LIB := $(HOME)/.local/share/Chromium Embedded Framework.framework/Libraries
+CEF_DEBUG_RENDER_PROCESS := bevy_cef_debug_render_process
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -27,6 +33,7 @@ help:
 	@echo "  bundle-ozmux-daemon - Assemble target/debug/ozmux-daemon.app (in-process CEF daemon bundle, macOS)"
 	@echo "  bundle-ozmux-daemon-release - Same as bundle-ozmux-daemon but for the release profile"
 	@echo "  kill-daemon        - Kill the daemon listening on :3200 and any stray ozmux-daemon helpers"
+	@echo "  setup-cef          - Install the CEF framework + debug render process for ozmux-gui (macOS, one-time)"
 	@echo "  clean              - Remove frontend node_modules, entire cargo target (workspace-wide), and built index.html"
 
 verify-out-dir:
@@ -53,17 +60,23 @@ dev-frontend:
 bundle-ozmux-daemon:
 	cargo build -p daemon_bootstrap --bin ozmux-daemon
 	cargo build -p ozmux_cef_host --bin cef_helper
-	cargo run -p xtask -- bundle-ozmux-daemon
+	cargo run --manifest-path xtask/Cargo.toml -- bundle-ozmux-daemon
 
 bundle-ozmux-daemon-release:
 	cargo build --release -p daemon_bootstrap --bin ozmux-daemon
 	cargo build --release -p ozmux_cef_host --bin cef_helper
-	cargo run -p xtask -- bundle-ozmux-daemon --release
+	cargo run --manifest-path xtask/Cargo.toml -- bundle-ozmux-daemon --release
 
 dev-daemon: memo-build-sdk $(BUNDLE_OZMUX_DAEMON_DEP)
 	OZMUX_EXTENSION_ROOT=$(OZMUX_EXTENSION_ROOT) \
 	OZMUX_FRONTEND_DEV=1 \
 	  target/debug/ozmux-daemon.app/Contents/MacOS/ozmux-daemon
+
+setup-cef:
+	cargo install export-cef-dir@$(CEF_VERSION) --force
+	export-cef-dir --force "$(HOME)/.local/share"
+	cargo install $(CEF_DEBUG_RENDER_PROCESS)
+	cp "$(CARGO_BIN_DIR)/$(CEF_DEBUG_RENDER_PROCESS)" "$(CEF_FRAMEWORK_LIB)/$(CEF_DEBUG_RENDER_PROCESS)"
 
 clean:
 	rm -rf $(FRONTEND_DIR)/node_modules target $(INDEX_HTML)

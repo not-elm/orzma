@@ -1,0 +1,27 @@
+[package]
+name = "ozmux_extension_host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+# Pulls the bevy_cef_core path-dep + the ozmux-ext:// scheme handler.
+# Off by default so the core builds/tests with std + crossbeam only.
+cef = ["dep:bevy_cef_core"]
+
+[dependencies]
+# Bridges the host lifecycle thread's events to the (future) ECS drain.
+crossbeam-channel = "0.5"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bevy = { workspace = true }
+ozmux_multiplexer = { path = "../multiplexer" }
+bevy_cef_core = { path = "/Users/watanabe/workspace/bevy_cef/crates/bevy_cef_core", optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+portable-pty = { workspace = true }

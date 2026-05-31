@@ -42,31 +42,31 @@ Members live under `cli/`, `daemon/*`, and `client/`. Edition 2024, toolchain pi
 
 ### Rust
 
-| Action | Command |
-| --- | --- |
-| Build everything | `cargo build` |
-| Build the CLI (and embedded daemon) | `cargo build -p ozmux_cli` |
-| Run the daemon (with extensions) | `make dev-daemon` (sets `OZMUX_EXTENSION_ROOT=$PWD/extensions`, runs `ozmux daemon start --foreground`) |
-| Build + launch the Tauri client | `make dev-tauri` (release-builds the frontend, `cargo install`s `ozmux` to `$CARGO_HOME/bin`, then runs `cargo tauri dev`; no Vite HMR — UI is the embedded `index.html`) |
-| Run a single test | `cargo test -p ozmux_multiplexer close_pane_after_split_fully_reverts_state` |
-| Run one crate's tests | `cargo test -p ozmux_http_server` |
-| Lint + format (Rust) | `cargo clippy --fix --allow-dirty --allow-staged && cargo fmt` |
-| Fix everything | `make fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`) |
-| Terminal wire-protocol golden tests | `make test-wire-goldens` (diff `*.diag.txt` fixtures) |
-| Regenerate + verify msgpack fixtures | `make test-wire-contract` (uses `tools/verify-msgpack.ts`) |
+| Action                               | Command                                                                                                                                                                   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build everything                     | `cargo build`                                                                                                                                                             |
+| Build the CLI (and embedded daemon)  | `cargo build -p ozmux_cli`                                                                                                                                                |
+| Run the daemon (with extensions)     | `make dev-daemon` (sets `OZMUX_EXTENSION_ROOT=$PWD/extensions`, runs `ozmux daemon start --foreground`)                                                                   |
+| Build + launch the Tauri client      | `make dev-tauri` (release-builds the frontend, `cargo install`s `ozmux` to `$CARGO_HOME/bin`, then runs `cargo tauri dev`; no Vite HMR — UI is the embedded `index.html`) |
+| Run a single test                    | `cargo test -p ozmux_multiplexer close_pane_after_split_fully_reverts_state`                                                                                              |
+| Run one crate's tests                | `cargo test -p ozmux_http_server`                                                                                                                                         |
+| Lint + format (Rust)                 | `cargo clippy --fix --allow-dirty --allow-staged && cargo fmt`                                                                                                            |
+| Fix everything                       | `make fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`)                                                                                                           |
+| Terminal wire-protocol golden tests  | `make test-wire-goldens` (diff `*.diag.txt` fixtures)                                                                                                                     |
+| Regenerate + verify msgpack fixtures | `make test-wire-contract` (uses `tools/verify-msgpack.ts`)                                                                                                                |
 
 Logs go through `tracing-subscriber`. Default filter is `info,hyper=warn,tower=warn,tokio_tungstenite=warn,tungstenite=warn`; override with `RUST_LOG`.
 
 ### TypeScript / frontend
 
-| Action | Command |
-| --- | --- |
-| Install workspace deps | `pnpm install --frozen-lockfile` |
-| Vite dev server on `:5173` (HMR) | `pnpm dev` or `make dev-frontend` |
-| Typecheck every package | `pnpm check-types` |
-| Run all vitest suites | `pnpm test` |
-| Run one SDK test file | `pnpm --filter @ozmux/sdk exec vitest run path/to/file.test.ts` |
-| Lint (biome) | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci` |
+| Action                           | Command                                                         |
+| -------------------------------- | --------------------------------------------------------------- |
+| Install workspace deps           | `pnpm install --frozen-lockfile`                                |
+| Vite dev server on `:5173` (HMR) | `pnpm dev` or `make dev-frontend`                               |
+| Typecheck every package          | `pnpm check-types`                                              |
+| Run all vitest suites            | `pnpm test`                                                     |
+| Run one SDK test file            | `pnpm --filter @ozmux/sdk exec vitest run path/to/file.test.ts` |
+| Lint (biome)                     | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci`                  |
 
 Biome (`biome.json`) only scans `daemon/frontend/**` — it is the JS/TS/CSS lint+format tool for this repo, configured for 2-space indent, single quotes, 100-col width, and Tailwind directives in CSS. Custom GritQL plugins under `biome-plugins/` enforce the styling rules (no inline styles, no arbitrary Tailwind values, no raw `--tn-*` palette refs).
 
@@ -152,13 +152,13 @@ Use this when you have changed anything under `daemon/frontend/src/**`, the show
 
 ### Failure modes
 
-| Symptom | Cause | Recovery |
-| --- | --- | --- |
-| `error: port 5173 is already in use.` | Stray Vite or another process | `lsof -nP -iTCP:5173 -sTCP:LISTEN`, kill the holder |
-| `error: port 3200 is already in use.` | Stray daemon | same, for port 3200 |
-| `error: harness already running (see .ozmux/e2e.pid).` | A previous harness is still up | `make dev-e2e-stop` |
-| `error: readiness timeout after 30s.` | Vite or daemon failed to come up | Read the last 20 lines printed from `.ozmux/logs/vite.log` and `.ozmux/logs/daemon.log` |
-| MCP tools missing or fail | Server not approved | Run `/mcp` and approve `playwright` |
+| Symptom                                                | Cause                            | Recovery                                                                                |
+| ------------------------------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------- |
+| `error: port 5173 is already in use.`                  | Stray Vite or another process    | `lsof -nP -iTCP:5173 -sTCP:LISTEN`, kill the holder                                     |
+| `error: port 3200 is already in use.`                  | Stray daemon                     | same, for port 3200                                                                     |
+| `error: harness already running (see .ozmux/e2e.pid).` | A previous harness is still up   | `make dev-e2e-stop`                                                                     |
+| `error: readiness timeout after 30s.`                  | Vite or daemon failed to come up | Read the last 20 lines printed from `.ozmux/logs/vite.log` and `.ozmux/logs/daemon.log` |
+| MCP tools missing or fail                              | Server not approved              | Run `/mcp` and approve `playwright`                                                     |
 
 ### What lives where
 

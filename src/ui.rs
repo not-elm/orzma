@@ -10,6 +10,7 @@
 //! active session's pane slot, inactive hosts under the owning Session
 //! entity (a non-Node walker-skipped park).
 
+use crate::system_set::OzmuxSystems;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::session::OzmuxSessionUiPlugin;
@@ -64,6 +65,22 @@ pub struct ActivityHostNode;
 #[derive(Component)]
 pub struct TerminalActivityMarker;
 
+/// Marks an Activity Host whose `kind` is `Extension`.
+/// `finish_extension_setup` queries for `With<ExtensionActivityMarker>` to
+/// find hosts that need a `bevy_cef` webview (`WebviewSource` +
+/// `MaterialNode<WebviewUiMaterial>`) attached.
+#[derive(Component)]
+pub(crate) struct ExtensionActivityMarker;
+
+/// Back-pointer from a stable Activity host entity to its owning
+/// multiplexer Activity entity. Stamped by
+/// `ActivityEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
+/// this to resolve the host's multiplexer Pane / Session entities (via
+/// `ChildOf`) so the spawned terminal's env carries the correct
+/// `OZMUX_PANE_ID` for the `@memo` control bridge.
+#[derive(Component)]
+pub struct HostActivityEntity(pub Entity);
+
 /// Records that `TerminalBundle::spawn` failed for this host, so
 /// `finish_terminal_setup` will not retry on subsequent frames.
 #[derive(Component)]
@@ -88,7 +105,10 @@ impl Plugin for OzmuxUiPlugin {
             .add_systems(
                 Update,
                 (
-                    registry::prune_registry_on_activity_removal,
+                    // Host despawns must commit before the rebuild and activity
+                    // setup observe them, else setup inserts a bundle onto a
+                    // host this prune is despawning (insert-after-despawn panic).
+                    registry::prune_registry_on_activity_removal.before(OzmuxSystems::SessionUi),
                     status_bar_sync::rebuild_status_bar_on_session_set_change,
                 ),
             );

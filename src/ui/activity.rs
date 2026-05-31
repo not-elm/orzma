@@ -28,10 +28,11 @@ fn kind_color(kind: &ActivityKind) -> Color {
 /// `commands.entity(host).insert(...)` so the existing entity remains;
 /// children are spawned fresh.
 ///
-/// For `ActivityKind::Terminal` the placeholder children are skipped
-/// because the renderer-side `MaterialNode<TerminalUiMaterial>` covers
-/// the host node entirely. The terminal-colored `BackgroundColor` still
-/// shows briefly between activity creation and material readiness.
+/// For `ActivityKind::Terminal` and `ActivityKind::Extension` the
+/// placeholder children are skipped because a full-size `MaterialNode`
+/// (`TerminalUiMaterial` / `WebviewUiMaterial`) covers the host node
+/// entirely. The kind-colored `BackgroundColor` still shows briefly
+/// between activity creation and material readiness.
 pub(crate) fn build_activity_host_children(
     commands: &mut Commands,
     host: Entity,
@@ -50,7 +51,10 @@ pub(crate) fn build_activity_host_children(
         BackgroundColor(kind_color(kind)),
     ));
 
-    if matches!(kind, ActivityKind::Terminal) {
+    if matches!(
+        kind,
+        ActivityKind::Terminal | ActivityKind::Extension { .. }
+    ) {
         return;
     }
 
