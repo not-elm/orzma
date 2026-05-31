@@ -8,6 +8,7 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -268,6 +269,7 @@ pub struct ExtensionHost {
     events: Receiver<LifecycleEvent>,
     _runtime: Arc<RuntimeRoot>,
     child: Arc<std::sync::Mutex<Option<Child>>>,
+    shutdown: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -291,6 +293,7 @@ impl ExtensionHost {
 
         let runtime = Arc::new(runtime);
         let child = Arc::new(std::sync::Mutex::new(Some(child)));
+        let shutdown = Arc::new(AtomicBool::new(false));
         let endpoints = ExtensionEndpoints::default();
         let (tx, rx) = bounded::<LifecycleEvent>(8);
 
@@ -298,6 +301,7 @@ impl ExtensionHost {
         let thread = std::thread::spawn({
             let endpoints = endpoints.clone();
             let child = Arc::clone(&child);
+            let shutdown = Arc::clone(&shutdown);
             let sock = sock.clone();
             move || {
                 let ready_sock = sock.clone();
@@ -306,6 +310,7 @@ impl ExtensionHost {
                     move || fetch_at(&ready_sock, "index.html").is_ok(),
                     move || endpoints.set(sock),
                     child,
+                    shutdown,
                     tx,
                 );
                 endpoints_for_clear.clear();
@@ -317,6 +322,7 @@ impl ExtensionHost {
             events: rx,
             _runtime: runtime,
             child,
+            shutdown,
             thread: Some(thread),
         })
     }
@@ -345,6 +351,11 @@ impl ExtensionHost {
 
 impl Drop for ExtensionHost {
     fn drop(&mut self) {
+        // Signal shutdown BEFORE taking the child: if the lifecycle thread holds
+        // the child out of the mutex right now, our take() returns None and we
+        // skip the kill — the thread must then kill it itself when it sees this
+        // flag, or our join() below would hang forever.
+        self.shutdown.store(true, Ordering::SeqCst);
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -360,6 +371,7 @@ pub(crate) fn run_lifecycle(
     is_ready: impl Fn() -> bool,
     on_ready: impl FnOnce(),
     child: Arc<std::sync::Mutex<Option<Child>>>,
+    shutdown: Arc<AtomicBool>,
     tx: Sender<LifecycleEvent>,
 ) {
     // NOTE: readiness is verified via a real protocol round-trip (any well-formed
@@ -409,15 +421,25 @@ pub(crate) fn run_lifecycle(
             Some(mut c) => match c.try_wait() {
                 Ok(Some(s)) => break s.code(),
                 Ok(None) => {
+                    // NOTE: if Drop set `shutdown` while we held the child out of
+                    // the mutex, Drop's take() saw None and skipped the kill, so
+                    // we MUST kill it here — otherwise Drop's join() hangs
+                    // forever (the child never exits and we would loop putting it
+                    // back). Drop signals before its take(), so this load
+                    // observes it within one PROBE_INTERVAL.
+                    if shutdown.load(Ordering::SeqCst) {
+                        let _ = c.kill();
+                        break c.wait().ok().and_then(|s| s.code());
+                    }
                     *child.lock().unwrap() = Some(c);
                 }
                 Err(_) => break None,
             },
             None => break None,
         }
-        // TODO: replace this busy-poll with a shutdown signal (AtomicBool /
-        // channel set by Drop before kill) so Drop-kill exits in O(1) and a
-        // long-lived extension does not wake this thread every PROBE_INTERVAL.
+        // TODO: replace this busy-poll with an event/condvar so a long-lived
+        // extension does not wake this thread every PROBE_INTERVAL (the
+        // shutdown flag already makes Drop-kill exit within one interval).
         std::thread::sleep(PROBE_INTERVAL);
     };
     let _ = tx.send(LifecycleEvent::Exited { status });

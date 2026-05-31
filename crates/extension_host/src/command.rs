@@ -119,6 +119,7 @@ pub struct CommandExtension {
     _runtime: Arc<RuntimeRoot>,
     _stdin: ChildStdin,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
+    lifecycle_shutdown: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     control_requests: Receiver<(ControlRequest, Responder)>,
     control_sock_path: PathBuf,
@@ -167,10 +168,12 @@ impl CommandExtension {
 
         let runtime = Arc::new(runtime);
         let child = Arc::new(std::sync::Mutex::new(Some(child)));
+        let lifecycle_shutdown = Arc::new(AtomicBool::new(false));
         let (tx, rx) = bounded::<LifecycleEvent>(8);
 
         let thread = std::thread::spawn({
             let child = Arc::clone(&child);
+            let shutdown = Arc::clone(&lifecycle_shutdown);
             let bin_dir = bin_dir.clone();
             let commands = cfg.commands.clone();
             move || {
@@ -179,6 +182,7 @@ impl CommandExtension {
                     move || commands.iter().all(|c| bin_dir.join(c).exists()),
                     || {},
                     child,
+                    shutdown,
                     tx,
                 );
             }
@@ -195,6 +199,7 @@ impl CommandExtension {
             _runtime: runtime,
             _stdin: stdin,
             child,
+            lifecycle_shutdown,
             thread: Some(thread),
             control_requests: control_rx,
             control_sock_path: control_sock,
@@ -249,7 +254,11 @@ impl CommandExtension {
 
 impl Drop for CommandExtension {
     fn drop(&mut self) {
+        // Signal both shutdown flags before any take()/join(): the lifecycle
+        // thread may hold the child out of the mutex, in which case it must kill
+        // it itself (see run_lifecycle) or the join() below hangs.
         self.control_shutdown.store(true, Ordering::SeqCst);
+        self.lifecycle_shutdown.store(true, Ordering::SeqCst);
         let _ = UnixStream::connect(&self.control_sock_path);
         if let Some(t) = self.control_thread.take() {
             let _ = t.join();
