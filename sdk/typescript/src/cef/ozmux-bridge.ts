@@ -19,10 +19,21 @@ interface SubState {
   error?: Error;
 }
 
-/** The `window.ozmux` surface consumed by `cef/client.ts`. */
+/** The `window.ozmux` surface consumed by `cef/client.ts` and extension pages. */
 export interface OzmuxApi {
   call(name: string, payload: unknown): Promise<unknown>;
   subscribe(name: string, params: unknown, opts?: { signal?: AbortSignal }): AsyncIterable<unknown>;
+  createClient(): {
+    call(name: string, payload: unknown): Promise<unknown>;
+    subscribe(
+      name: string,
+      params: unknown,
+      opts?: { signal?: AbortSignal },
+    ): AsyncIterable<unknown>;
+    close(): void;
+  };
+  // NOTE: per-webview context injected by the host as window.__ozmuxContext; read lazily so preload eval order is irrelevant.
+  readonly context: unknown;
 }
 
 /**
@@ -60,7 +71,7 @@ export function installOzmux(cef: CefApi): OzmuxApi {
     }
   });
 
-  return {
+  const api: OzmuxApi = {
     call(name, payload) {
       const id = `c${nextId++}`;
       return new Promise((resolve, reject) => {
@@ -94,7 +105,14 @@ export function installOzmux(cef: CefApi): OzmuxApi {
         },
       };
     },
+    createClient() {
+      return { call: api.call, subscribe: api.subscribe, close() {} };
+    },
+    get context(): unknown {
+      return (globalThis as { window?: { __ozmuxContext?: unknown } }).window?.__ozmuxContext;
+    },
   };
+  return api;
 
   function pushSub(s: SubState | undefined, payload: unknown) {
     if (!s) return;

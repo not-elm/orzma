@@ -45,4 +45,24 @@ describe('installOzmux', () => {
     deliver({ kind: 'sub.complete', id: openId });
     expect((await it_.next()).done).toBe(true);
   });
+
+  it('exposes createClient() that proxies call/subscribe and a no-op close', async () => {
+    const { cef, emitted, deliver } = fakeCef();
+    const ozmux = installOzmux(cef as any);
+    const client = ozmux.createClient();
+    const p = client.call('greet', { name: 'Z' });
+    deliver({ kind: 'result', id: emitted[0].id, payload: { message: 'Hello, Z!' } });
+    expect(await p).toEqual({ message: 'Hello, Z!' });
+    expect(() => client.close()).not.toThrow();
+  });
+
+  it('exposes context read from window.__ozmuxContext', () => {
+    (globalThis as any).window = { __ozmuxContext: { paneId: 'p1', role: 'extension' } };
+    try {
+      const ozmux = installOzmux(fakeCef().cef as any);
+      expect(ozmux.context).toEqual({ paneId: 'p1', role: 'extension' });
+    } finally {
+      delete (globalThis as any).window;
+    }
+  });
 });
