@@ -32,17 +32,20 @@ fn parse_url(url: &str) -> Option<(&str, &str)> {
 }
 
 /// Returns the bare media type (drops any `;`-delimited parameters) for CEF's
-/// `mime_type` field. CEF expects a bare type (e.g. `text/html`); a full
-/// `Content-Type` value with parameters (`text/html; charset=utf-8`) is not
-/// recognized, so Chromium fails to classify the document and renders blank.
+/// `mime_type` field, flooring an empty/blank input to `application/octet-stream`.
+/// CEF expects a bare type (e.g. `text/html`); a full `Content-Type` value with
+/// parameters (`text/html; charset=utf-8`) is not recognized, so Chromium fails
+/// to classify the document and renders blank. An empty `mime_type` triggers the
+/// same blank render, so it is floored to `application/octet-stream` (matching
+/// the SDK file handler's default) rather than passed through empty.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
 fn bare_mime(content_type: &str) -> String {
-    content_type
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string()
+    let bare = content_type.split(';').next().unwrap_or("").trim();
+    if bare.is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        bare.to_string()
+    }
 }
 
 /// The custom scheme name registered with CEF.
@@ -78,14 +81,30 @@ impl CefSchemeHandler for OzmuxExtScheme {
             return CefSchemeResponse::not_found();
         }
         match fetch(&self.endpoints, path) {
-            Ok(r) => CefSchemeResponse {
-                status: r.status,
-                mime_type: bare_mime(&r.content_type),
-                headers: Vec::new(),
-                body: CefSchemeBody::Bytes(r.body),
-            },
-            Err(FetchError::NotReady) => status_text(503, "extension not ready"),
-            Err(_) => status_text(502, "extension fetch failed"),
+            Ok(r) => {
+                let mime = bare_mime(&r.content_type);
+                bevy::log::debug!(
+                    url = %request.url,
+                    status = r.status,
+                    mime = %mime,
+                    bytes = r.body.len(),
+                    "ozmux-ext asset served"
+                );
+                CefSchemeResponse {
+                    status: r.status,
+                    mime_type: mime,
+                    headers: Vec::new(),
+                    body: CefSchemeBody::Bytes(r.body),
+                }
+            }
+            Err(FetchError::NotReady) => {
+                bevy::log::debug!(url = %request.url, "ozmux-ext asset endpoint not ready");
+                status_text(503, "extension not ready")
+            }
+            Err(e) => {
+                bevy::log::warn!(url = %request.url, error = %e, "ozmux-ext asset fetch failed");
+                status_text(502, "extension fetch failed")
+            }
         }
     }
 }
@@ -171,6 +190,12 @@ mod tests {
             "text/javascript"
         );
         assert_eq!(bare_mime("application/wasm"), "application/wasm");
-        assert_eq!(bare_mime(""), "");
+    }
+
+    #[test]
+    fn bare_mime_floors_empty_to_octet_stream() {
+        assert_eq!(bare_mime(""), "application/octet-stream");
+        assert_eq!(bare_mime("   "), "application/octet-stream");
+        assert_eq!(bare_mime("; charset=utf-8"), "application/octet-stream");
     }
 }

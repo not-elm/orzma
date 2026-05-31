@@ -47,19 +47,27 @@ struct ExtensionHandlersBridge(HandlersBridge);
 #[derive(Resource, Default)]
 struct WebviewAidMap(HashMap<String, Entity>);
 
-/// JS defining `window.ozmux` over `cef.emit` / `cef.listen`, injected as a
-/// global CEF extension. Mirrors `sdk/typescript/src/cef/ozmux-bridge.ts`.
+/// JS defining `window.ozmux` over `cef.emit` / `cef.listen`, injected per
+/// webview as a `PreloadScripts` entry (see `finish_extension_setup`). Mirrors
+/// `sdk/typescript/src/cef/ozmux-bridge.ts`.
 pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 
-/// Builds the `CefPlugin` with the `ozmux-ext://` scheme + `window.ozmux`
-/// extension, bound to the given asset endpoint handle.
+/// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the given
+/// asset endpoint handle. The `window.ozmux` bridge is intentionally NOT
+/// registered as a global extension here; it is injected per-webview via
+/// `PreloadScripts` in `finish_extension_setup` (see the NOTE there).
 pub fn cef_plugin(endpoint: &AssetEndpoint) -> CefPlugin {
     CefPlugin {
         // NOTE: "memo" is the extension-NAME segment matched inside
         // ozmux-ext://<name>/…, not the URL scheme name — the scheme is always
         // "ozmux-ext" (scheme::SCHEME_NAME). Frames for other extension names 404.
         custom_schemes: vec![custom_scheme("memo", endpoint.0.clone())],
-        extensions: CefExtensions::new().add("ozmux", OZMUX_EXTENSION_JS),
+        // TODO: remote-debugging-port exposes a local Chromium DevTools (CDP)
+        // endpoint for diagnosing the extension webview; gate behind a debug
+        // env/feature (or remove) before this ships. `default()` preserves the
+        // macOS `use-mock-keychain` switch.
+        command_line_config: CommandLineConfig::default()
+            .with_switch_value("remote-debugging-port", "9222"),
         ..Default::default()
     }
 }
@@ -67,13 +75,16 @@ pub fn cef_plugin(endpoint: &AssetEndpoint) -> CefPlugin {
 /// Wires the spawn-once system that attaches a `bevy_cef` webview to each
 /// Extension Activity host.
 ///
-/// Resize is intentionally NOT handled here: `bevy_cef`'s `UiWebviewPlugin`
+/// `finish_extension_setup` seeds each webview's INITIAL `WebviewSize` exactly
+/// once, at creation, from its laid-out pane (see that fn for why). ONGOING
+/// resize is intentionally NOT handled here: `bevy_cef`'s `UiWebviewPlugin`
 /// (pulled in by `CefPlugin`) already runs `update_webview_ui_size` in
-/// `PostUpdate` after `UiSystems::Layout`, syncing each UI webview's
-/// `WebviewSize` from its `ComputedNode`. Adding a second writer would thrash
-/// the same component. The terminal path needs its own resize only because it
-/// derives grid `cols`/`rows` from font metrics, which `bevy_cef` knows nothing
-/// about.
+/// `PostUpdate` after `UiSystems::Layout`, keeping each UI webview's
+/// `WebviewSize` in step with its `ComputedNode` on every layout pass. The
+/// one-time seed and that per-frame sync do not conflict — the seed equals the
+/// first synced value, so `update_webview_ui_size`'s `set_if_neq` is a no-op.
+/// The terminal path needs its own resize only because it derives grid
+/// `cols`/`rows` from font metrics, which `bevy_cef` knows nothing about.
 pub struct OzmuxExtensionRenderPlugin;
 
 impl Plugin for OzmuxExtensionRenderPlugin {
@@ -96,26 +107,67 @@ impl Plugin for OzmuxExtensionRenderPlugin {
     }
 }
 
-/// Attaches a `bevy_cef` webview to each freshly-spawned Extension Activity
-/// host: a `WebviewSource` pointed at the memo extension plus a
-/// `MaterialNode<WebviewUiMaterial>`. Runs every Update tick but only targets
-/// hosts that lack `WebviewSource`, so the per-entity insertion happens
+/// Attaches a `bevy_cef` webview to each Extension Activity host once its pane
+/// has a real laid-out size: a `WebviewSource` pointed at the memo extension, a
+/// `WebviewSize` seeded from the host's `ComputedNode`, and a
+/// `MaterialNode<WebviewUiMaterial>`. Runs every Update tick but skips a host
+/// until its `ComputedNode` reports a real (≥ 1 logical px) size, and only
+/// targets hosts that lack `WebviewSource`, so the per-entity insertion happens
 /// exactly once.
 ///
-/// The host already carries a full-size `Node` (`width`/`height: 100%`) from
-/// `build_activity_host_children`, so the webview fills its pane; `bevy_cef`'s
-/// `update_webview_ui_size` keeps `WebviewSize` in step with the node's
-/// `ComputedNode` extents on every layout pass.
+/// Seeding `WebviewSize` at insert time is load-bearing. `bevy_cef`'s
+/// `create_webview` reads `WebviewSize` when it builds the CEF browser, and the
+/// component defaults to 800×800. If the webview were inserted before layout,
+/// the browser would be created at 800×800 and then resized to the real pane
+/// size a frame later (when `update_webview_ui_size` syncs `WebviewSize` from
+/// `ComputedNode`). That mid-load `was_resized()` races CEF's offscreen
+/// renderer-widget init and wedges it (`blink.mojom.Widget` message rejections →
+/// no `LoadFinished`, no paint → a permanently white pane). By waiting for
+/// layout and creating the browser at the final size, the first
+/// `update_webview_ui_size` pass is a `set_if_neq` no-op, so no resize fires
+/// during the load.
 fn finish_extension_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<WebviewUiMaterial>>,
-    hosts: Query<Entity, (With<ExtensionActivityMarker>, Without<WebviewSource>)>,
+    hosts: Query<(Entity, &ComputedNode), (With<ExtensionActivityMarker>, Without<WebviewSource>)>,
 ) {
-    for host in hosts.iter() {
+    for (host, computed) in hosts.iter() {
+        let Some(logical) = pane_logical_size(computed.size(), computed.inverse_scale_factor())
+        else {
+            continue;
+        };
+        tracing::debug!(
+            ?host,
+            ?logical,
+            url = MEMO_WEBVIEW_URL,
+            "spawning extension webview"
+        );
+        // NOTE: `window.ozmux` MUST be a PreloadScript, not a global CefExtension.
+        // ozmux.js calls cef.listen() at top level; a global extension runs that
+        // during V8 context creation, where there is no entered V8 context, so the
+        // native cef.listen handler's v8_context_get_current_context() crashes the
+        // render process. PreloadScripts are eval'd at on_context_created inside an
+        // entered context (and their exceptions are caught, not fatal), so
+        // cef.listen registers correctly there.
         commands.entity(host).insert((
             WebviewSource::new(MEMO_WEBVIEW_URL),
+            WebviewSize(logical),
+            PreloadScripts::from([OZMUX_EXTENSION_JS]),
             MaterialNode(materials.add(WebviewUiMaterial::default())),
         ));
+    }
+}
+
+/// Converts a host pane's `ComputedNode` physical-pixel size to the logical
+/// (DIP) size `WebviewSize` expects, or `None` when the pane has no real area
+/// yet (pre-layout / sub-pixel). Mirrors `bevy_cef`'s `webview_size_from_computed`,
+/// duplicated here because that fn is `pub(crate)`.
+fn pane_logical_size(physical: Vec2, inverse_scale_factor: f32) -> Option<Vec2> {
+    let logical = physical * inverse_scale_factor;
+    if logical.x < 1.0 || logical.y < 1.0 {
+        None
+    } else {
+        Some(logical)
     }
 }
 
@@ -189,30 +241,31 @@ fn drain_handler_responses(
     }
 }
 
-/// Logs the start of a webview page load. Diagnostics for the extension
-/// render path (a blank webview is otherwise silent).
+/// Logs the start of a webview page load. Debug-level diagnostics: these
+/// observers fire for every `bevy_cef` webview, not only extension hosts.
 fn log_webview_load_started(load: On<LoadStarted>) {
-    tracing::info!(webview = ?load.webview, "extension webview load started");
+    tracing::debug!(webview = ?load.webview, "webview load started");
 }
 
 /// Logs a finished page load + its HTTP status. A `LoadFinished` with no
 /// visible content points at a render/size issue rather than a load failure.
 fn log_webview_load_finished(load: On<LoadFinished>) {
-    tracing::info!(
+    tracing::debug!(
         webview = ?load.webview,
         status = load.http_status_code,
-        "extension webview load finished"
+        "webview load finished"
     );
 }
 
 /// Logs a page load failure (CEF `OnLoadError`) — the signal that the scheme
-/// fetch / navigation failed (e.g. a mis-classified MIME or 5xx).
+/// fetch / navigation failed (e.g. a mis-classified MIME or 5xx). Kept at
+/// `warn` because, unlike start/finish, it always indicates a real fault.
 fn log_webview_load_error(load: On<LoadError>) {
     tracing::warn!(
         webview = ?load.webview,
         code = load.error_code,
         url = %load.url,
-        "extension webview load error"
+        "webview load error"
     );
 }
 
@@ -231,7 +284,9 @@ fn set_asset_endpoint_once(
     // TODO: multi-extension — one asset endpoint is shared by the single memo
     // custom scheme; per-extension schemes need per-extension endpoints.
     if let Some(ext) = ext {
-        endpoint.0.set(ext.0.asset_sock_path().to_path_buf());
+        let sock = ext.0.asset_sock_path().to_path_buf();
+        tracing::debug!(asset_sock = ?sock, "published ozmux-ext asset endpoint");
+        endpoint.0.set(sock);
         *done = true;
     }
 }
@@ -257,11 +312,22 @@ mod tests {
         app
     }
 
+    fn laid_out_node(physical: Vec2) -> ComputedNode {
+        ComputedNode {
+            size: physical,
+            inverse_scale_factor: 1.0,
+            ..ComputedNode::DEFAULT
+        }
+    }
+
     #[test]
     fn skips_entities_without_extension_marker() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app.world_mut().spawn_empty().id();
+        let host = app
+            .world_mut()
+            .spawn(laid_out_node(Vec2::new(800.0, 600.0)))
+            .id();
         app.update();
         assert!(
             app.world().get::<WebviewSource>(host).is_none(),
@@ -273,7 +339,13 @@ mod tests {
     fn attaches_webview_pointed_at_memo_to_extension_host() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app.world_mut().spawn(ExtensionActivityMarker).id();
+        let host = app
+            .world_mut()
+            .spawn((
+                ExtensionActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
         app.update();
 
         let source = app
@@ -290,13 +362,56 @@ mod tests {
                 .is_some(),
             "extension host must receive a WebviewUiMaterial MaterialNode"
         );
+        assert_eq!(
+            app.world().get::<WebviewSize>(host).map(|s| s.0),
+            Some(Vec2::new(800.0, 600.0)),
+            "the webview must be seeded with the pane's laid-out logical size, not the 800x800 default"
+        );
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(host)
+            .expect("the webview must carry the window.ozmux bridge as a PreloadScript");
+        assert!(
+            preload.0.iter().any(|s| s == OZMUX_EXTENSION_JS),
+            "window.ozmux must be injected as a PreloadScript (a global CefExtension calling cef.listen at load crashes the renderer)"
+        );
+    }
+
+    #[test]
+    fn defers_webview_until_pane_is_laid_out() {
+        let mut app = make_test_app();
+        app.add_systems(Update, finish_extension_setup);
+        let host = app
+            .world_mut()
+            .spawn((ExtensionActivityMarker, ComputedNode::DEFAULT))
+            .id();
+        app.update();
+        assert!(
+            app.world().get::<WebviewSource>(host).is_none(),
+            "a zero-area (pre-layout) host must not receive a webview yet"
+        );
+
+        app.world_mut()
+            .entity_mut(host)
+            .insert(laid_out_node(Vec2::new(640.0, 480.0)));
+        app.update();
+        assert!(
+            app.world().get::<WebviewSource>(host).is_some(),
+            "once the pane has a real size, the webview must be attached"
+        );
     }
 
     #[test]
     fn webview_inserted_exactly_once() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app.world_mut().spawn(ExtensionActivityMarker).id();
+        let host = app
+            .world_mut()
+            .spawn((
+                ExtensionActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
         app.update();
         let first = app
             .world()
@@ -310,6 +425,25 @@ mod tests {
         assert_eq!(
             first, second,
             "the second tick must not re-insert (and so not replace) the webview material"
+        );
+    }
+
+    #[test]
+    fn pane_logical_size_rejects_zero_and_subpixel() {
+        assert_eq!(pane_logical_size(Vec2::ZERO, 1.0), None);
+        assert_eq!(pane_logical_size(Vec2::new(0.0, 600.0), 1.0), None);
+        assert_eq!(pane_logical_size(Vec2::new(0.5, 0.5), 1.0), None);
+    }
+
+    #[test]
+    fn pane_logical_size_scales_physical_to_logical() {
+        assert_eq!(
+            pane_logical_size(Vec2::new(640.0, 480.0), 1.0),
+            Some(Vec2::new(640.0, 480.0))
+        );
+        assert_eq!(
+            pane_logical_size(Vec2::new(1600.0, 1200.0), 0.5),
+            Some(Vec2::new(800.0, 600.0))
         );
     }
 

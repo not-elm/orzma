@@ -12,9 +12,19 @@ const MIME: Record<string, string> = {
   '.mjs': 'text/javascript',
   '.css': 'text/css',
   '.json': 'application/json',
+  '.map': 'application/json',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
-  '.wasm': 'application/wasm',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
 };
 
 /**
