@@ -122,6 +122,8 @@ pub struct CommandExtension {
     thread: Option<std::thread::JoinHandle<()>>,
     control_requests: Receiver<(ControlRequest, Responder)>,
     control_sock_path: PathBuf,
+    handlers_sock_path: PathBuf,
+    asset_sock_path: PathBuf,
     control_shutdown: Arc<AtomicBool>,
     control_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -142,6 +144,7 @@ impl CommandExtension {
         let bin_dir = runtime.bin_dir().to_path_buf();
         let command_sock = runtime.socket_path(&cfg.name);
         let handlers_sock = runtime.socket_path(&format!("{}.handlers", cfg.name));
+        let asset_sock = runtime.socket_path(&format!("{}.assets", cfg.name));
         let control_sock = runtime.socket_path(&format!("{}.control", cfg.name));
 
         let mut child = Command::new("node")
@@ -151,6 +154,7 @@ impl CommandExtension {
             .env("OZMUX_SOCK_PATH", &command_sock)
             .env("EXTENSION_NAME", &cfg.name)
             .env("OZMUX_HANDLERS_SOCK_PATH", &handlers_sock)
+            .env("OZMUX_ASSET_SOCK_PATH", &asset_sock)
             .env("OZMUX_CONTROL_SOCK_PATH", &control_sock)
             // NOTE: piping stdin is required — the SDK uses the child's stdin as a
             // parent-death channel; an EOF'd stdin makes bootstrap() self-clean
@@ -194,6 +198,8 @@ impl CommandExtension {
             thread: Some(thread),
             control_requests: control_rx,
             control_sock_path: control_sock,
+            handlers_sock_path: handlers_sock,
+            asset_sock_path: asset_sock,
             control_shutdown,
             control_thread: Some(control_thread),
         })
@@ -212,6 +218,16 @@ impl CommandExtension {
     /// The control socket path passed to the extension as `OZMUX_CONTROL_SOCK_PATH`.
     pub fn control_sock_path(&self) -> &Path {
         &self.control_sock_path
+    }
+
+    /// The handlers socket path the SDK binds (`OZMUX_HANDLERS_SOCK_PATH`).
+    pub fn handlers_sock_path(&self) -> &Path {
+        &self.handlers_sock_path
+    }
+
+    /// The asset socket path the SDK serves files on (`OZMUX_ASSET_SOCK_PATH`).
+    pub fn asset_sock_path(&self) -> &Path {
+        &self.asset_sock_path
     }
 
     /// The lifecycle event stream.

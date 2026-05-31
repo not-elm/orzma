@@ -9,7 +9,9 @@ use crate::control::{
 };
 use crate::path_prefix::extension_path_prefix;
 use bevy::prelude::*;
-use ozmux_multiplexer::{ActivityKind, MultiplexerCommands, Side, SplitOrientation};
+use ozmux_multiplexer::{
+    ActivityKind, ExtensionActivityAid, MultiplexerCommands, Side, SplitOrientation,
+};
 use std::path::PathBuf;
 
 /// The launched command extension, owned by the app as a Resource.
@@ -94,6 +96,7 @@ fn resolve_and_split(
             message: format!("no live pane for bits {}", req.pane_bits),
         })?;
     let ControlOp::Split(p) = req.op;
+    let activity_id = p.activity.activity_id.clone();
     let kind = match p.activity.kind {
         ActivityKindSpec::Extension { html_root } => ActivityKind::Extension {
             html_root: PathBuf::from(html_root),
@@ -113,6 +116,7 @@ fn resolve_and_split(
             code: "internal".into(),
             message: e.to_string(),
         })?;
+    mux.insert_on(outcome.activity, ExtensionActivityAid(activity_id));
     Ok(SplitReply {
         new_pane_id: outcome.pane.to_bits(),
         new_activity_id: outcome.activity.to_bits(),
@@ -137,7 +141,7 @@ mod tests {
                         html_root: "/x/memo".into(),
                     },
                     name: None,
-                    activity_id: "aid-test".into(),
+                    activity_id: "aid-xyz".into(),
                 },
             }),
         }
@@ -175,6 +179,8 @@ mod tests {
                     world.get::<ActivityKind>(new_act),
                     Some(ActivityKind::Extension { .. })
                 ));
+                let aid = world.get::<ozmux_multiplexer::ExtensionActivityAid>(new_act);
+                assert_eq!(aid.map(|a| a.0.as_str()), Some("aid-xyz"));
             }
             ControlResponse::Err(e) => panic!("expected Ok, got {}", e.code),
         }

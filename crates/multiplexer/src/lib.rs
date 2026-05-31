@@ -24,8 +24,8 @@ pub use cells::{
 pub use commands::{MultiplexerCommands, SessionCreated, SplitOutcome};
 pub use components::{
     ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, BrowserProfile,
-    CopyMode, LayoutCells, PaneDimensions, PaneMarker, SessionDimensions, SessionMarker,
-    SessionUiSubtree,
+    CopyMode, ExtensionActivityAid, LayoutCells, PaneDimensions, PaneMarker, SessionDimensions,
+    SessionMarker, SessionUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};

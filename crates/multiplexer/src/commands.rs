@@ -304,6 +304,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(new_pane)
     }
 
+    /// Inserts `bundle` on an entity the multiplexer spawned. The caller must
+    /// ensure `entity` is a valid multiplexer-owned entity.
+    pub fn insert_on(&mut self, entity: Entity, bundle: impl Bundle) {
+        self.commands.entity(entity).insert(bundle);
+    }
+
     /// Close a Session entirely. Cascading `ChildOf` despawn removes all
     /// Pane and Activity descendants.
     pub fn close_session(&mut self, session: Entity) {
