@@ -1,7 +1,7 @@
 export {
+  type Client,
   createClient,
   getOzmuxContext,
-  type Client,
   type OzmuxContext,
   type SubscribeOptions,
-} from "./client.ts";
+} from './client.ts';

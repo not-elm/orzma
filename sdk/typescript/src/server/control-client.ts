@@ -29,7 +29,10 @@ export function callControl(
   const sockPath = process.env.OZMUX_CONTROL_SOCK_PATH;
   if (!sockPath) {
     console.warn(`ozmux: OZMUX_CONTROL_SOCK_PATH unset — skipping ${op} (no-op)`);
-    return Promise.resolve({ new_pane_id: crypto.randomUUID(), new_activity_id: crypto.randomUUID() });
+    return Promise.resolve({
+      new_pane_id: crypto.randomUUID(),
+      new_activity_id: crypto.randomUUID(),
+    });
   }
 
   return new Promise((resolve, reject) => {
@@ -46,7 +49,10 @@ export function callControl(
       sock.destroy();
       reject(err);
     };
-    timer = setTimeout(() => fail(new Error(`ozmux: control connect timeout after ${CONNECT_TIMEOUT_MS}ms`)), CONNECT_TIMEOUT_MS);
+    timer = setTimeout(
+      () => fail(new Error(`ozmux: control connect timeout after ${CONNECT_TIMEOUT_MS}ms`)),
+      CONNECT_TIMEOUT_MS,
+    );
 
     sock.once('connect', () => {
       clearTimeout(timer);

@@ -1,5 +1,5 @@
-import fs from "node:fs";
-import net from "node:net";
+import fs from 'node:fs';
+import net from 'node:net';
 
 const MAX_PATH_LEN = 4096;
 
@@ -29,7 +29,7 @@ export function serveAssets(
   opts: { sockPath?: string } = {},
 ): { close(): void } {
   const sockPath = opts.sockPath ?? process.env.OZMUX_SOCK_PATH;
-  if (!sockPath) throw new Error("serveAssets: OZMUX_SOCK_PATH not set");
+  if (!sockPath) throw new Error('serveAssets: OZMUX_SOCK_PATH not set');
   try {
     fs.unlinkSync(sockPath);
   } catch {
@@ -44,11 +44,11 @@ export function serveAssets(
   // the client FIN and the async file-read response is dropped before it sends.
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
+    socket.on('close', () => sockets.delete(socket));
     socket.setTimeout(SOCKET_IDLE_TIMEOUT_MS, () => socket.destroy());
     let buf = Buffer.alloc(0);
     let consumed = false;
-    socket.on("data", (chunk) => {
+    socket.on('data', (chunk) => {
       if (consumed) return;
       buf = Buffer.concat([buf, chunk]);
       if (buf.length < 5) return;
@@ -58,14 +58,14 @@ export function serveAssets(
       if (buf.length < 5 + pathLen) return;
       if (buf.length > 5 + pathLen) return void socket.destroy();
       consumed = true;
-      const reqPath = buf.subarray(5, 5 + pathLen).toString("utf8");
+      const reqPath = buf.subarray(5, 5 + pathLen).toString('utf8');
       Promise.resolve(handler(reqPath))
         .then((res) => {
           if (!socket.destroyed) socket.end(encodeResponse(res));
         })
         .catch(() => socket.destroy());
     });
-    socket.on("error", () => socket.destroy());
+    socket.on('error', () => socket.destroy());
   });
 
   server.listen(sockPath);
@@ -75,21 +75,21 @@ export function serveAssets(
     // means a half-open peer would otherwise keep the server from closing.
     for (const socket of sockets) socket.destroy();
     sockets.clear();
-    for (const sig of ["SIGINT", "SIGTERM"] as const) process.off(sig, close);
+    for (const sig of ['SIGINT', 'SIGTERM'] as const) process.off(sig, close);
     try {
       fs.unlinkSync(sockPath);
     } catch {
       // already gone
     }
   };
-  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, close);
+  for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, close);
   return { close };
 }
 
 /** Encodes an {@link AssetResponse} into a protocol response frame. */
 export function encodeResponse(r: AssetResponse): Buffer {
-  const ctype = Buffer.from(r.contentType, "utf8");
-  const body = Buffer.isBuffer(r.body) ? r.body : Buffer.from(r.body, "utf8");
+  const ctype = Buffer.from(r.contentType, 'utf8');
+  const body = Buffer.isBuffer(r.body) ? r.body : Buffer.from(r.body, 'utf8');
   const head = Buffer.alloc(2 + 4 + ctype.length + 4);
   head.writeUInt16BE(r.status, 0);
   head.writeUInt32BE(ctype.length, 2);

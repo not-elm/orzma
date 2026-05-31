@@ -1,17 +1,17 @@
-import { abortableSleep, bootstrap } from "@ozmux/sdk/server";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath } from 'node:url';
+import { abortableSleep, bootstrap } from '@ozmux/sdk/server';
 
 bootstrap({
   commands: {
-    "@memo": async (ctx) => {
+    '@memo': async (ctx) => {
       ctx.stdout.write(`memo invoked in pane ${ctx.pane.id}\n`);
 
       await ctx.pane.split({
-        orientation: "vertical",
-        side: "after",
+        orientation: 'vertical',
+        side: 'after',
         activity: {
-          kind: "extension",
-          html: fileURLToPath(new URL("./index.html", import.meta.url)),
+          kind: 'extension',
+          html: fileURLToPath(new URL('./index.html', import.meta.url)),
           handlers: {
             greet: async ({ name }: { name: string }) => ({
               message: `Hello, ${name}!`,

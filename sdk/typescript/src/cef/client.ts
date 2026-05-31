@@ -8,11 +8,7 @@
 
 interface MinimalAbortSignal {
   readonly aborted: boolean;
-  addEventListener(
-    type: "abort",
-    listener: () => void,
-    options?: { once?: boolean },
-  ): void;
+  addEventListener(type: 'abort', listener: () => void, options?: { once?: boolean }): void;
 }
 
 /** Per-extension activity context populated by the daemon at browser create. */
@@ -22,7 +18,7 @@ export interface OzmuxContext {
   paneId: string;
   activityId: string;
   /** Role of the surrounding browser — always `"extension"` for this binding. */
-  role: "extension";
+  role: 'extension';
   /** Owning extension name (empty/undefined for non-extension browsers). */
   extensionName?: string;
 }
@@ -56,7 +52,7 @@ interface NativeOzmux {
 declare const window: { ozmux?: NativeOzmux };
 
 const MISSING =
-  "ozmux cef SDK: window.ozmux is missing. The page must be loaded via ozmux-ext:// inside an extension Browser Activity.";
+  'ozmux cef SDK: window.ozmux is missing. The page must be loaded via ozmux-ext:// inside an extension Browser Activity.';
 
 /**
  * Reads the activity context installed by the cef_host render process. Throws
