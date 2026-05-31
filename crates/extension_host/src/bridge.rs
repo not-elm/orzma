@@ -57,7 +57,9 @@ impl Plugin for ExtensionControlPlugin {
         }
         app.add_systems(
             Update,
-            drain_control_requests.in_set(ExtensionControlSet::Drain),
+            drain_control_requests
+                .in_set(ExtensionControlSet::Drain)
+                .run_if(resource_exists::<ControlExtension>),
         );
     }
 }
@@ -83,20 +85,13 @@ pub fn terminal_env(
     ]
 }
 
-fn drain_control_requests(ext: Option<Res<ControlExtension>>, mut mux: MultiplexerCommands) {
-    let Some(ext) = ext else {
-        return;
-    };
+fn drain_control_requests(ext: Res<ControlExtension>, mut mux: MultiplexerCommands) {
     while let Ok((req, responder)) = ext.0.control_requests().try_recv() {
         apply_control_request(&mut mux, req, responder);
     }
 }
 
-pub fn apply_control_request(
-    mux: &mut MultiplexerCommands,
-    req: ControlRequest,
-    responder: Responder,
-) {
+fn apply_control_request(mux: &mut MultiplexerCommands, req: ControlRequest, responder: Responder) {
     let resp = match resolve_and_split(mux, req) {
         Ok(reply) => ControlResponse::Ok(reply),
         Err(e) => ControlResponse::Err(e),
