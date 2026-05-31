@@ -8,6 +8,7 @@ pub mod command;
 pub mod control;
 pub mod handlers_bridge;
 pub mod host;
+pub mod manifest;
 pub mod path_prefix;
 pub mod protocol;
 pub mod scheme;
@@ -20,5 +21,6 @@ pub use control::{
     parse_call,
 };
 pub use handlers_bridge::{AidFrame, HandlersBridge};
+pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
 pub use protocol::{ProtocolError, Request, Response};
