@@ -1,5 +1,0 @@
-error: NewType does not support generic parameters
- --> tests/ui/with_generics.rs:4:15
-  |
-4 | struct Generic<T>(T);
-  |               ^^^

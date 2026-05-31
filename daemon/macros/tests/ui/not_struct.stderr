@@ -1,5 +1,0 @@
-error: NewType can only be derived for structs
- --> tests/ui/not_struct.rs:4:6
-  |
-4 | enum NotAStruct {
-  |      ^^^^^^^^^^

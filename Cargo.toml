@@ -41,14 +41,8 @@ workspace = true
 [workspace]
 resolver = "2"
 members = [
-  "daemon/terminal",
   "daemon/configs",
-  "daemon/extension",
-  "daemon/macros",
   "crates/*",
-]
-exclude = [
-  "daemon/multiplexer",
 ]
 
 [workspace.package]

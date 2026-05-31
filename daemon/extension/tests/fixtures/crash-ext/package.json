@@ -1,8 +1,0 @@
-{
-  "name": "crashext",
-  "main": "bootstrap.mjs",
-  "type": "module",
-  "dependencies": {
-    "@ozmux/sdk": "workspace:*"
-  }
-}
