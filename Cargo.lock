@@ -4699,6 +4699,7 @@ dependencies = [
  "cosmic-text",
  "open",
  "ozmux_configs",
+ "ozmux_extension_host",
  "ozmux_multiplexer",
  "tracing",
  "unicode-width",

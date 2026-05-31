@@ -6,13 +6,14 @@
 //! not retry on subsequent frames.
 
 use crate::system_set::OzmuxSystems;
-use crate::ui::{TerminalActivityMarker, TerminalSpawnFailed};
+use crate::ui::{HostActivityEntity, TerminalActivityMarker, TerminalSpawnFailed};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
+use ozmux_extension_host::{ControlExtension, terminal_env};
 
 pub struct OzmuxTerminalUiPlugin;
 
@@ -36,25 +37,43 @@ impl Plugin for OzmuxTerminalUiPlugin {
 /// freshly-spawned Terminal Activity host. Runs every Update tick but only
 /// targets entities that lack `TerminalHandle` and `TerminalSpawnFailed`,
 /// so the per-entity work happens exactly once.
+///
+/// When a command extension was launched (`ControlExtension` present), the
+/// spawned terminal's env is seeded via `terminal_env` so its `@<cmd>`
+/// shims can reach the control bridge. The bridge keys on `OZMUX_PANE_ID`
+/// being the multiplexer Pane `Entity`, so the host's owning Pane / Session
+/// are resolved by walking `ChildOf` from the host's `HostActivityEntity`:
+/// activity → Pane → Session. If the chain cannot be resolved (or no
+/// extension launched) the env is empty — the terminal still works, just
+/// without `@<cmd>` support.
 fn finish_terminal_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     hosts: Query<
-        Entity,
+        (Entity, &HostActivityEntity),
         (
             With<TerminalActivityMarker>,
             Without<TerminalHandle>,
             Without<TerminalSpawnFailed>,
         ),
     >,
+    child_of: Query<&ChildOf>,
+    ext: Option<Res<ControlExtension>>,
 ) {
-    for host in hosts.iter() {
+    for (host, host_activity) in hosts.iter() {
+        let env = match ext.as_ref() {
+            Some(ext) => match resolve_pane_session(host_activity.0, &child_of) {
+                Some((pane, session)) => terminal_env(&ext.0, pane, session),
+                None => Vec::new(),
+            },
+            None => Vec::new(),
+        };
         let opts = SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
             cwd: std::env::var_os("HOME").map(std::path::PathBuf::from),
-            env: Vec::new(),
+            env,
         };
         let bundle = match TerminalBundle::spawn(opts) {
             Ok(b) => b,
@@ -69,6 +88,17 @@ fn finish_terminal_setup(
             .entity(host)
             .insert((bundle, TerminalRenderBundle::new(material_handle)));
     }
+}
+
+/// Resolves a multiplexer Activity entity to its `(pane, session)` pair by
+/// walking `ChildOf` up the multiplexer hierarchy (activity → Pane →
+/// Session). Returns `None` when either link is missing — mirrors
+/// `MultiplexerCommands::pane_of_activity` + `session_of_pane` without
+/// borrowing the full mutation SystemParam.
+fn resolve_pane_session(activity: Entity, child_of: &Query<&ChildOf>) -> Option<(Entity, Entity)> {
+    let pane = child_of.get(activity).ok()?.parent();
+    let session = child_of.get(pane).ok()?.parent();
+    Some((pane, session))
 }
 
 /// Computes grid dimensions for a host node, reserving `max_overflow_phys`
@@ -212,7 +242,11 @@ mod tests {
         }
         let mut app = make_test_app();
         app.add_systems(Update, finish_terminal_setup);
-        let host = app.world_mut().spawn(TerminalActivityMarker).id();
+        let activity = app.world_mut().spawn_empty().id();
+        let host = app
+            .world_mut()
+            .spawn((TerminalActivityMarker, HostActivityEntity(activity)))
+            .id();
         app.update();
         // SAFETY: env_guard is still held; restore SHELL state so concurrent
         // tests don't see a dirty env.

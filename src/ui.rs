@@ -64,6 +64,15 @@ pub struct ActivityHostNode;
 #[derive(Component)]
 pub struct TerminalActivityMarker;
 
+/// Back-pointer from a stable Activity host entity to its owning
+/// multiplexer Activity entity. Stamped by
+/// `ActivityEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
+/// this to resolve the host's multiplexer Pane / Session entities (via
+/// `ChildOf`) so the spawned terminal's env carries the correct
+/// `OZMUX_PANE_ID` for the `@memo` control bridge.
+#[derive(Component)]
+pub struct HostActivityEntity(pub Entity);
+
 /// Records that `TerminalBundle::spawn` failed for this host, so
 /// `finish_terminal_setup` will not retry on subsequent frames.
 #[derive(Component)]

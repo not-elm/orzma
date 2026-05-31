@@ -23,6 +23,7 @@ use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
+use ozmux_extension_host::{CommandExtensionConfig, ExtensionControlPlugin};
 use ozmux_multiplexer::MultiplexerPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin};
@@ -56,6 +57,12 @@ fn main() {
             ImePlugin,
             ImeOverlayPlugin,
             OzmuxShortcutActionPlugin,
+            ExtensionControlPlugin::new(CommandExtensionConfig {
+                name: "memo".into(),
+                dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions/memo"),
+                main: "bootstrap.ts".into(),
+                commands: vec!["@memo".into()],
+            }),
         ))
         // .insert_resource(WinitSettings::desktop_app())
         .run();

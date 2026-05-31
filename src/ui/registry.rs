@@ -5,7 +5,7 @@
 //! `Handle<TerminalMaterial>` and prepared GPU resources alive across
 //! split/focus changes.
 
-use crate::ui::{ActivityHostNode, TerminalActivityMarker};
+use crate::ui::{ActivityHostNode, HostActivityEntity, TerminalActivityMarker};
 use bevy::prelude::*;
 use ozmux_multiplexer::{ActivityKind, ActivityMarker};
 use std::collections::HashMap;
@@ -33,7 +33,7 @@ impl ActivityEntityRegistry {
         if let Some(&existing) = self.hosts.get(&activity) {
             return existing;
         }
-        let mut spawn = commands.spawn(ActivityHostNode);
+        let mut spawn = commands.spawn((ActivityHostNode, HostActivityEntity(activity)));
         if matches!(kind, ActivityKind::Terminal) {
             spawn.insert(TerminalActivityMarker);
         }

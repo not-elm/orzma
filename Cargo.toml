@@ -20,6 +20,7 @@ bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
 open = { workspace = true }
 ozmux_configs = { path = "daemon/configs" }
+ozmux_extension_host = { path = "crates/extension_host" }
 ozmux_multiplexer = { path = "crates/multiplexer" }
 tracing = { workspace = true }
 unicode-width = { workspace = true }
