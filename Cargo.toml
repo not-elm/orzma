@@ -62,34 +62,15 @@ publish = false
 bevy = { version = "0.18", features = ["default_font"] }
 tokio = { version = "1.52" }
 anyhow = { version = "1" }
-dashmap = "6"
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
-interprocess = { version = "2.4", features = ["tokio", "async"] }
-axum = { version = "0.8", features = ["ws"] }
 portable-pty = "0.9"
-uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-futures-util = { version = "0.3", default-features = false, features = [
-  "sink",
-] }
 tempfile = "3"
-mime_guess = "2.0"
-libc = "0.2"
 toml = "0.8"
 dirs = "5"
-rmp-serde = "1"
 unicode-width = "0.2"
-bytes = "1"
-tokio-util = "0.7"
-clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.13", default-features = false, features = [
-  "rustls",
-  "json",
-] }
-derive_more = { version = "2" }
 open = "5"
 
 [workspace.lints.clippy]
