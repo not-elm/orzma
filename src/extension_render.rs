@@ -177,10 +177,16 @@ fn active_webview(
 fn finish_extension_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<WebviewUiMaterial>>,
+    mux: MultiplexerCommands,
+    activity_hosts: Query<&HostActivityEntity>,
     hosts: Query<(Entity, &ComputedNode), (With<ExtensionActivityMarker>, Without<WebviewSource>)>,
 ) {
     for (host, computed) in hosts.iter() {
         let Some(logical) = pane_logical_size(computed.size(), computed.inverse_scale_factor())
+        else {
+            continue;
+        };
+        let Some((session, pane, activity)) = host_multiplexer_chain(host, &activity_hosts, &mux)
         else {
             continue;
         };
@@ -197,13 +203,50 @@ fn finish_extension_setup(
         // render process. PreloadScripts are eval'd at on_context_created inside an
         // entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
+        let ctx_js = context_preload_js(session, pane, activity, "memo");
         commands.entity(host).insert((
             WebviewSource::new(MEMO_WEBVIEW_URL),
             WebviewSize(logical),
-            PreloadScripts::from([OZMUX_EXTENSION_JS]),
+            PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
             MaterialNode(materials.add(WebviewUiMaterial::default())),
         ));
     }
+}
+
+/// Resolves the `(session, pane, activity)` multiplexer entities backing an
+/// extension webview host: host → activity via `HostActivityEntity`, activity →
+/// pane via `pane_of_activity`, pane → session via `session_of_pane`. Returns
+/// `None` until every link exists (e.g. before the activity is laid out into a
+/// pane).
+fn host_multiplexer_chain(
+    host: Entity,
+    activity_hosts: &Query<&HostActivityEntity>,
+    mux: &MultiplexerCommands,
+) -> Option<(Entity, Entity, Entity)> {
+    let activity = activity_hosts.get(host).ok()?.0;
+    let pane = mux.pane_of_activity(activity)?;
+    let session = mux.session_of_pane(pane)?;
+    Some((session, pane, activity))
+}
+
+/// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`.
+///
+/// NOTE: PreloadScripts are joined with `;` and eval'd as one unit, so this MUST
+/// be a complete statement; a syntax error here would break the bridge eval too.
+fn context_preload_js(
+    session: Entity,
+    pane: Entity,
+    activity: Entity,
+    extension_name: &str,
+) -> String {
+    let session_id = session.to_bits().to_string();
+    format!(
+        "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},activityId:{a:?},role:\"extension\",extensionName:{n:?}}};",
+        s = session_id,
+        p = pane.to_bits().to_string(),
+        a = activity.to_bits().to_string(),
+        n = extension_name,
+    )
 }
 
 /// Converts a host pane's `ComputedNode` physical-pixel size to the logical
@@ -343,7 +386,9 @@ fn set_asset_endpoint_once(
 mod tests {
     use super::*;
     use bevy::asset::AssetPlugin;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::image::ImagePlugin;
+    use ozmux_multiplexer::MultiplexerPlugin;
 
     fn make_test_app() -> App {
         // NOTE: `bevy_cef`'s `UiWebviewPlugin` registers `WebviewUiMaterial`
@@ -356,8 +401,29 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
             .add_plugins(ImagePlugin::default())
+            .add_plugins(MultiplexerPlugin)
             .init_asset::<WebviewUiMaterial>();
         app
+    }
+
+    /// Spawns a session/pane/extension-activity chain and an extension host
+    /// entity carrying that activity via `HostActivityEntity`, returning the
+    /// `(host, session, pane, activity)` handles. `finish_extension_setup`
+    /// needs the chain to resolve the per-webview context.
+    fn spawn_extension_host(app: &mut App, extra: impl Bundle) -> (Entity, Entity, Entity, Entity) {
+        let (session, pane, activity) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("t".into()));
+                (o.session, o.pane, o.activity)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        let host = app
+            .world_mut()
+            .spawn((ExtensionActivityMarker, HostActivityEntity(activity), extra))
+            .id();
+        (host, session, pane, activity)
     }
 
     #[test]
@@ -468,13 +534,7 @@ mod tests {
     fn attaches_webview_pointed_at_memo_to_extension_host() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app
-            .world_mut()
-            .spawn((
-                ExtensionActivityMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
-            .id();
+        let (host, ..) = spawn_extension_host(&mut app, laid_out_node(Vec2::new(800.0, 600.0)));
         app.update();
 
         let source = app
@@ -504,16 +564,25 @@ mod tests {
             preload.0.iter().any(|s| s == OZMUX_EXTENSION_JS),
             "window.ozmux must be injected as a PreloadScript (a global CefExtension calling cef.listen at load crashes the renderer)"
         );
+        assert!(
+            preload
+                .0
+                .first()
+                .is_some_and(|s| s.starts_with("window.__ozmuxContext=")),
+            "the context PreloadScript must be injected before the bridge, so window.__ozmuxContext is set when the getter reads it"
+        );
+        assert!(
+            preload.0[0].contains("role:\"extension\"")
+                && preload.0[0].contains("extensionName:\"memo\""),
+            "the context PreloadScript must carry the extension role and name"
+        );
     }
 
     #[test]
     fn defers_webview_until_pane_is_laid_out() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app
-            .world_mut()
-            .spawn((ExtensionActivityMarker, ComputedNode::DEFAULT))
-            .id();
+        let (host, ..) = spawn_extension_host(&mut app, ComputedNode::DEFAULT);
         app.update();
         assert!(
             app.world().get::<WebviewSource>(host).is_none(),
@@ -534,13 +603,7 @@ mod tests {
     fn webview_inserted_exactly_once() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app
-            .world_mut()
-            .spawn((
-                ExtensionActivityMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
-            .id();
+        let (host, ..) = spawn_extension_host(&mut app, laid_out_node(Vec2::new(800.0, 600.0)));
         app.update();
         let first = app
             .world()
@@ -562,6 +625,36 @@ mod tests {
         assert_eq!(pane_logical_size(Vec2::ZERO, 1.0), None);
         assert_eq!(pane_logical_size(Vec2::new(0.0, 600.0), 1.0), None);
         assert_eq!(pane_logical_size(Vec2::new(0.5, 0.5), 1.0), None);
+    }
+
+    #[test]
+    fn context_preload_js_assigns_window_context_with_session_bits_as_window_id() {
+        let world = &mut App::new();
+        world
+            .add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        let (session, pane, activity) = world
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("t".into()));
+                (o.session, o.pane, o.activity)
+            })
+            .unwrap();
+        world.world_mut().flush();
+
+        let js = context_preload_js(session, pane, activity, "memo");
+        let s = session.to_bits().to_string();
+        assert!(js.starts_with("window.__ozmuxContext="));
+        assert!(js.ends_with("};"));
+        assert!(js.contains(&format!("sessionId:\"{s}\"")));
+        assert!(
+            js.contains(&format!("windowId:\"{s}\"")),
+            "windowId must equal sessionId per the design"
+        );
+        assert!(js.contains(&format!("paneId:\"{}\"", pane.to_bits())));
+        assert!(js.contains(&format!("activityId:\"{}\"", activity.to_bits())));
+        assert!(js.contains("role:\"extension\""));
+        assert!(js.contains("extensionName:\"memo\""));
     }
 
     #[test]
