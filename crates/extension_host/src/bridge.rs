@@ -10,7 +10,8 @@ use crate::control::{
 use crate::path_prefix::extension_path_prefix;
 use bevy::prelude::*;
 use ozmux_multiplexer::{
-    ActivityKind, ExtensionActivityAid, MultiplexerCommands, Side, SplitOrientation,
+    ActivityKind, ExtensionActivityAid, MultiplexerCommands, OwningExtension, Side,
+    SplitOrientation,
 };
 use std::path::PathBuf;
 
@@ -111,10 +112,12 @@ fn resolve_and_split(
         })?;
     let ControlOp::Split(p) = req.op;
     let activity_id = p.activity.activity_id.clone();
-    let kind = match p.activity.kind {
-        ActivityKindSpec::Extension { html_root, .. } => ActivityKind::Extension {
-            html_root: PathBuf::from(html_root),
-        },
+    let ActivityKindSpec::Extension {
+        html_root,
+        extension_name,
+    } = p.activity.kind;
+    let kind = ActivityKind::Extension {
+        html_root: PathBuf::from(html_root),
     };
     let side = match p.side {
         ControlSide::Before => Side::Before,
@@ -131,6 +134,9 @@ fn resolve_and_split(
             message: e.to_string(),
         })?;
     mux.insert_on(outcome.activity, ExtensionActivityAid(activity_id));
+    if let Some(name) = extension_name {
+        mux.insert_on(outcome.activity, OwningExtension(name));
+    }
     Ok(SplitReply {
         new_pane_id: outcome.pane.to_bits(),
         new_activity_id: outcome.activity.to_bits(),
@@ -153,7 +159,7 @@ mod tests {
                 activity: crate::control::ActivitySpec {
                     kind: ActivityKindSpec::Extension {
                         html_root: "/x/memo".into(),
-                        extension_name: None,
+                        extension_name: Some("memo".into()),
                     },
                     name: None,
                     activity_id: "aid-xyz".into(),
@@ -196,6 +202,8 @@ mod tests {
                 ));
                 let aid = world.get::<ozmux_multiplexer::ExtensionActivityAid>(new_act);
                 assert_eq!(aid.map(|a| a.0.as_str()), Some("aid-xyz"));
+                let owner = world.get::<ozmux_multiplexer::OwningExtension>(new_act);
+                assert_eq!(owner.map(|o| o.0.as_str()), Some("memo"));
             }
             ControlResponse::Err(e) => panic!("expected Ok, got {}", e.code),
         }

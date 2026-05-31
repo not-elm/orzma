@@ -113,6 +113,12 @@ pub struct PaneDimensions {
 #[derive(Component, Debug, Clone)]
 pub struct ExtensionActivityAid(pub String);
 
+/// The name of the extension that owns an extension activity. Stamped by the
+/// control bridge from the split request so the renderer can resolve the
+/// webview URL host and the handlers socket per extension.
+#[derive(Component, Debug, Clone)]
+pub struct OwningExtension(pub String);
+
 /// Activity kind discriminator. Ported from the old crate's
 /// `ActivityKind` enum; field types preserved.
 #[derive(Component, Debug, Clone)]
