@@ -1,4 +1,4 @@
-//! Tokio-free extension host: a per-PID runtime root, the shared socket-path
+//! Tokio-free extension host: a per-extension runtime root, the shared socket-path
 //! endpoint, a blocking `fetch`, and (Task 3) the process spawn + lifecycle.
 
 use crate::protocol::{ProtocolError, Request, Response, read_response, write_request};
