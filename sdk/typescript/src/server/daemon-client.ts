@@ -59,6 +59,12 @@ export async function postNoContent(path: string, body: unknown): Promise<void> 
 }
 
 export async function getJson<T>(path: string): Promise<T> {
+  // NOTE: reads cannot no-op like the write helpers (there is no sensible empty
+  // value), so when the host is absent surface an explicit host-unavailable
+  // error rather than buildUrl's misleading "missing required env".
+  if (!process.env.OZMUX_EXTENSION_HOST_URL) {
+    throw new DaemonError(503, "extension host unavailable (OZMUX_EXTENSION_HOST_URL unset)", path);
+  }
   const response = await fetch(buildUrl(path), {
     method: "GET",
     headers: buildHeaders(),
