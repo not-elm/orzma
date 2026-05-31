@@ -12,7 +12,8 @@ pub struct InactivePaneConfig {
     /// Veil alpha in `0.0..=1.0`. Higher = darker inactive panes.
     pub opacity: f32,
     /// Veil color as a `#RRGGBB` hex string. Alpha comes from `opacity`,
-    /// not from this string.
+    /// not from this string. Hex is case-insensitive on input and stored
+    /// normalized to lowercase.
     pub color: String,
 }
 
@@ -54,7 +55,7 @@ impl InactivePaneConfigPatch {
         if let Some(v) = self.color
             && parse_hex_rgb(&v).is_some()
         {
-            base.color = v;
+            base.color = v.to_ascii_lowercase();
         }
         base
     }
@@ -142,6 +143,17 @@ mod tests {
         assert_eq!(patch.enabled, Some(false));
         assert_eq!(patch.opacity, Some(0.6));
         assert_eq!(patch.color.as_deref(), Some("#112233"));
+    }
+
+    #[test]
+    fn uppercase_color_is_normalized_and_parsed() {
+        let merged = InactivePaneConfigPatch {
+            color: Some("#FF00AB".to_string()),
+            ..Default::default()
+        }
+        .apply_to(InactivePaneConfig::default());
+        assert_eq!(merged.color, "#ff00ab");
+        assert_eq!(merged.rgb(), (0xff, 0x00, 0xab));
     }
 
     #[test]
