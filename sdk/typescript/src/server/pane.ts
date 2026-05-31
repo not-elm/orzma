@@ -145,7 +145,13 @@ function activityKindForSpec(spec: ActivitySpecInput): ActivityKind {
 function controlActivity(
   activityId: ActivityId,
   spec: ActivitySpecInput,
-): { kind: 'extension'; html_root: string; name?: string; activity_id: string } {
+): {
+  kind: 'extension';
+  html_root: string;
+  name?: string;
+  activity_id: string;
+  extension_name?: string;
+} {
   // TODO: terminal splits over the control socket are not supported in #2/#3; a future op should carry a terminal kind instead of this extension fallback.
   if (spec.kind !== 'extension') {
     return { kind: 'extension', html_root: '', name: spec.name, activity_id: activityId };
@@ -155,6 +161,7 @@ function controlActivity(
     html_root: path.dirname(spec.html),
     name: spec.name,
     activity_id: activityId,
+    extension_name: requireExtensionName(),
   };
 }
 

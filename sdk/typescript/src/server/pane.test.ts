@@ -191,9 +191,12 @@ describe('Pane.split', () => {
       },
     });
 
-    const params = frames[0].params as { activity: { kind: string; html_root: string } };
+    const params = frames[0].params as {
+      activity: { kind: string; html_root: string; extension_name: string };
+    };
     expect(params.activity.kind).toBe('extension');
     expect(params.activity.html_root).toBe('/opt/memo');
+    expect(params.activity.extension_name).toBe('memo');
     server.close();
   });
 

@@ -73,6 +73,10 @@ pub enum ActivityKindSpec {
     Extension {
         /// Filesystem directory the extension serves (SDK sends `dirname(html)`).
         html_root: String,
+        /// Owning extension name (so the host can route per extension). Optional
+        /// for back-compat; absent on older SDK payloads.
+        #[serde(default)]
+        extension_name: Option<String>,
     },
 }
 
@@ -183,7 +187,7 @@ mod tests {
 
     #[test]
     fn parses_memo_style_split_call() {
-        let line = r#"{"kind":"call","id":"abc","op":"split","pane":"4294967297","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","html_root":"/x/memo","name":null,"activity_id":"aid-123"}}}"#;
+        let line = r#"{"kind":"call","id":"abc","op":"split","pane":"4294967297","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","html_root":"/x/memo","extension_name":"memo","name":null,"activity_id":"aid-123"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "abc");
         assert_eq!(req.pane_bits, 4294967297);
@@ -191,8 +195,20 @@ mod tests {
         assert!(matches!(p.side, ControlSide::After));
         assert!(matches!(p.orientation, ControlOrientation::Vertical));
         assert_eq!(p.activity.activity_id, "aid-123");
-        let ActivityKindSpec::Extension { html_root } = p.activity.kind;
+        let ActivityKindSpec::Extension { html_root, extension_name } = p.activity.kind;
         assert_eq!(html_root, "/x/memo");
+        assert_eq!(extension_name.as_deref(), Some("memo"));
+    }
+
+    #[test]
+    fn parses_split_without_extension_name() {
+        let line = r#"{"kind":"call","id":"xyz","op":"split","pane":"1","params":{"side":"before","orientation":"horizontal","activity":{"kind":"extension","html_root":"/x/memo","name":null,"activity_id":"aid-456"}}}"#;
+        let (id, req) = parse_call(line).expect("parse");
+        assert_eq!(id, "xyz");
+        let ControlOp::Split(p) = req.op;
+        let ActivityKindSpec::Extension { html_root, extension_name } = p.activity.kind;
+        assert_eq!(html_root, "/x/memo");
+        assert_eq!(extension_name, None);
     }
 
     #[test]

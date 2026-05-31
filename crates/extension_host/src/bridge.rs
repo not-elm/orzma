@@ -112,7 +112,7 @@ fn resolve_and_split(
     let ControlOp::Split(p) = req.op;
     let activity_id = p.activity.activity_id.clone();
     let kind = match p.activity.kind {
-        ActivityKindSpec::Extension { html_root } => ActivityKind::Extension {
+        ActivityKindSpec::Extension { html_root, .. } => ActivityKind::Extension {
             html_root: PathBuf::from(html_root),
         },
     };
@@ -153,6 +153,7 @@ mod tests {
                 activity: crate::control::ActivitySpec {
                     kind: ActivityKindSpec::Extension {
                         html_root: "/x/memo".into(),
+                        extension_name: None,
                     },
                     name: None,
                     activity_id: "aid-xyz".into(),
