@@ -9,6 +9,8 @@ import {
   type ClientFrame,
 } from "./protocol.ts";
 import { assertCommandName, writeShim } from "./shim-writer.ts";
+import { serveAssets } from "./asset-server.ts";
+import { fileAssetHandler } from "./file-assets.ts";
 import { bindHandlersServer } from "./handlers-server.ts";
 import { Pane } from "./pane.ts";
 import { Window } from "./window.ts";
@@ -21,6 +23,8 @@ export interface BootstrapEnv {
   /** Extension-host control endpoint. Absent outside a running host (tests/dev); daemon-client write ops no-op when unset. */
   extensionHostUrl?: string;
   handlersSockPath: string;
+  /** Dedicated asset socket; when set, bootstrap serves the extension dir over it. */
+  assetSockPath?: string;
 }
 
 export function resolveBootstrapEnv(
@@ -44,6 +48,7 @@ export function resolveBootstrapEnv(
     extensionName: extensionName!,
     extensionHostUrl: env.OZMUX_EXTENSION_HOST_URL,
     handlersSockPath: handlersSockPath!,
+    assetSockPath: env.OZMUX_ASSET_SOCK_PATH,
   };
 }
 
@@ -247,6 +252,11 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
   });
 
   const handlersServer = await bindHandlersServer(env.handlersSockPath);
+  // NOTE: process.cwd() is the extension dir — CommandExtension spawns node
+  // with the extension root as cwd, making it the correct asset root.
+  const assetServer = env.assetSockPath
+    ? serveAssets(fileAssetHandler(process.cwd()), { sockPath: env.assetSockPath })
+    : undefined;
 
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = (): Promise<void> => {
@@ -254,11 +264,13 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
       await Promise.all([
         new Promise<void>((res) => server.close(() => res())),
         new Promise<void>((res) => handlersServer.close(() => res())),
+        Promise.resolve(assetServer?.close()),
       ]);
       await Promise.all([
         fs.rm(env.binDir, { recursive: true, force: true }),
         fs.unlink(env.sockPath).catch(() => {}),
         fs.unlink(env.handlersSockPath).catch(() => {}),
+        ...(env.assetSockPath ? [fs.unlink(env.assetSockPath).catch(() => {})] : []),
       ]);
       // NOTE: required for the SIGTERM/SIGINT and inherited-stdin paths —
       // server.close() releases the server refs but process.stdin.resume()
