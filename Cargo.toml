@@ -27,7 +27,7 @@ bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
 open = { workspace = true }
-ozmux_configs = { path = "daemon/configs" }
+ozmux_configs = { path = "crates/configs" }
 ozmux_extension_host = { path = "crates/extension_host", features = ["cef"] }
 ozmux_multiplexer = { path = "crates/multiplexer" }
 serde = { workspace = true }
@@ -41,7 +41,6 @@ workspace = true
 [workspace]
 resolver = "2"
 members = [
-  "daemon/configs",
   "crates/*",
 ]
 
