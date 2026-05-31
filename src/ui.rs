@@ -674,8 +674,7 @@ mod tests {
         app.update();
         app.update();
 
-        let original_pane = app
-            .world_mut()
+        app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
                  sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
@@ -683,7 +682,6 @@ mod tests {
                     let pane = mux.sessions_active_pane(session).expect("active pane");
                     mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
                         .expect("split_pane");
-                    pane
                 },
             )
             .unwrap();
@@ -704,7 +702,6 @@ mod tests {
                 },
             )
             .unwrap();
-        let _ = original_pane;
 
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -720,7 +717,11 @@ mod tests {
             .iter(world)
             .map(|(o, v)| (o.pane, *v))
             .collect();
-        assert_eq!(overlays.len(), 2);
+        assert_eq!(
+            overlays.len(),
+            2,
+            "two overlays after split and focus change"
+        );
         for (pane, vis) in overlays {
             if pane == target_pane {
                 assert_eq!(

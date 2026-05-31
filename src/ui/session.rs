@@ -154,35 +154,6 @@ fn rebuild_session_ui(
     }
 }
 
-/// Flips each pane's dim veil when its session's `ActivePane` changes
-/// (focus moves between panes without a layout rebuild). For every session
-/// whose `ActivePane` changed, sets each `PaneDimOverlay` belonging to that
-/// session to `Hidden` iff its pane is the new active pane, else `Visible`.
-/// Pane→session is resolved via `ChildOf`; using `MultiplexerCommands` here
-/// would conflict on its `&mut ActivePane`.
-fn sync_pane_dim(
-    changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
-    panes: Query<&ChildOf, With<PaneMarker>>,
-    mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
-) {
-    for (session, active) in changed_sessions.iter() {
-        for (overlay, mut visibility) in overlays.iter_mut() {
-            let Ok(child_of) = panes.get(overlay.pane) else {
-                continue;
-            };
-            if child_of.parent() != session {
-                continue;
-            }
-            let want = if overlay.pane == active.0 {
-                Visibility::Hidden
-            } else {
-                Visibility::Visible
-            };
-            visibility.set_if_neq(want);
-        }
-    }
-}
-
 fn descend_and_detach_hosts(
     commands: &mut Commands,
     root: Entity,
@@ -223,6 +194,35 @@ fn descend_and_despawn_structural(
     }
     for e in to_despawn {
         commands.entity(e).try_despawn();
+    }
+}
+
+/// Flips each pane's dim veil when its session's `ActivePane` changes
+/// (focus moves between panes without a layout rebuild). For every session
+/// whose `ActivePane` changed, sets each `PaneDimOverlay` belonging to that
+/// session to `Hidden` iff its pane is the new active pane, else `Visible`.
+/// Pane→session is resolved via `ChildOf`; using `MultiplexerCommands` here
+/// would conflict on its `&mut ActivePane`.
+fn sync_pane_dim(
+    changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
+    panes: Query<&ChildOf, With<PaneMarker>>,
+    mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
+) {
+    for (session, active) in changed_sessions.iter() {
+        for (overlay, mut visibility) in overlays.iter_mut() {
+            let Ok(child_of) = panes.get(overlay.pane) else {
+                continue;
+            };
+            if child_of.parent() != session {
+                continue;
+            }
+            let want = if overlay.pane == active.0 {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            };
+            visibility.set_if_neq(want);
+        }
     }
 }
 
