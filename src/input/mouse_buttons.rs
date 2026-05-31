@@ -443,6 +443,18 @@ fn dispatch_mouse_buttons(
         let Some((entity, local)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
             continue;
         };
+
+        // Click-to-focus runs for EVERY pane kind (terminal, extension, browser)
+        // and MUST happen before the terminal-handle lookup below: that lookup
+        // `continue`s past panes with no `TerminalHandle` (extension / browser
+        // webviews), so focusing only afterwards would never switch to a webview
+        // pane — keystrokes would keep routing to the previously-active terminal.
+        if matches!(ev.state, ButtonState::Pressed)
+            && let Ok(attached_session) = attached_session.single()
+        {
+            try_click_to_focus(&mut mux, &registry, attached_session, entity);
+        }
+
         let (cols, rows) = match handles.get(entity) {
             Ok((h, _, _)) => {
                 let (c, r, _) = h.read_geometry();
@@ -472,13 +484,6 @@ fn dispatch_mouse_buttons(
         } else {
             1
         };
-
-        if matches!(kind, bevy_terminal::ButtonEventKind::Press) {
-            let Ok(attached_session) = attached_session.single() else {
-                continue;
-            };
-            try_click_to_focus(&mut mux, &registry, attached_session, entity);
-        }
 
         // NOTE: OSC 8 hyperlink interception — Cmd+Left (or Ctrl+Left) on
         //       a linked cell. Press opens the URI and skips PTY routing;
@@ -1434,6 +1439,136 @@ mod tests {
         assert!(
             state.drag.is_none(),
             "end-of-frame guard must drop state.drag when entity is gone (Armed phase)",
+        );
+    }
+
+    #[test]
+    fn click_focuses_pane_whose_host_has_no_terminal_handle() {
+        // Regression: clicking an extension/browser pane — an `ActivityHostNode`
+        // whose host entity has NO `TerminalHandle` — must still move focus.
+        // dispatch_mouse_buttons previously `continue`d at the terminal-handle
+        // lookup *before* `try_click_to_focus` ran, so focus stayed on the
+        // terminal and keystrokes kept routing to it.
+        use bevy::ecs::message::Messages;
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::math::DVec2;
+        use bevy::window::WindowResolution;
+        use ozmux_multiplexer::{
+            ActivePane, AttachedSession, MultiplexerCommands, MultiplexerPlugin, Side,
+            SplitOrientation,
+        };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<MouseSelectionState>();
+        app.init_resource::<ActivityEntityRegistry>();
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.insert_resource(OzmuxConfigsResource(ozmux_configs::OzmuxConfigs::default()));
+        app.insert_resource(bevy_terminal_renderer::TerminalCellMetricsResource {
+            metrics: bevy_terminal_renderer::CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+        app.add_message::<MouseButtonInput>();
+        app.add_message::<CursorMoved>();
+        app.add_systems(Update, dispatch_mouse_buttons);
+
+        // Two-pane session: original (terminal) is re-focused after the split,
+        // so the test starts with the terminal pane active.
+        // create_session / split / focus-reset each queue deferred Commands, so
+        // flush between steps — split_pane reads the pane via a query and would
+        // PaneNotFound it before the create flush.
+        let (session, original_pane) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("t".into()));
+                (o.session, o.pane)
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        let ext_pane = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                let ext_pane = mux
+                    .split_pane(original_pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split_pane");
+                // Re-focus the original (terminal) pane so the test starts there.
+                mux.set_active_pane(session, original_pane)
+                    .expect("set_active_pane");
+                ext_pane
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        // The new pane's ActiveActivity is wired via deferred Commands, so read
+        // it only after the flush above.
+        let ext_activity = app
+            .world_mut()
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_activity(ext_pane))
+            .unwrap()
+            .expect("new pane has an active activity");
+        app.world_mut().entity_mut(session).insert(AttachedSession);
+
+        // The clicked pane's host: ActivityHostNode + a laid-out node under the
+        // cursor, but NO TerminalHandle (a webview host).
+        let ext_host = app
+            .world_mut()
+            .spawn((
+                ActivityHostNode,
+                ComputedNode {
+                    size: Vec2::new(800.0, 600.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(400.0, 300.0),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ActivityEntityRegistry>()
+            .insert_for_test(ext_activity, ext_host);
+
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(800, 600),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(DVec2::new(400.0, 300.0)));
+
+        assert_eq!(
+            app.world().get::<ActivePane>(session).map(|a| a.0),
+            Some(original_pane),
+            "precondition: the terminal pane is focused before the click",
+        );
+
+        app.world_mut()
+            .resource_mut::<Messages<MouseButtonInput>>()
+            .write(MouseButtonInput {
+                button: MouseButton::Left,
+                state: ButtonState::Pressed,
+                window,
+            });
+        app.update();
+
+        assert_eq!(
+            app.world().get::<ActivePane>(session).map(|a| a.0),
+            Some(ext_pane),
+            "clicking a pane whose host has no TerminalHandle must still move focus to it",
         );
     }
 }
