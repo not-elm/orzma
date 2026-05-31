@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod command;
 pub mod control;
+pub mod handlers_bridge;
 pub mod host;
 pub mod path_prefix;
 pub mod protocol;
@@ -20,6 +21,7 @@ pub use control::{
     ControlRequest, ControlResponse, ControlSide, SplitParams, SplitReply, encode_response,
     parse_call,
 };
+pub use handlers_bridge::{AidFrame, HandlersBridge};
 pub use host::{
     ExtensionConfig, ExtensionEndpoints, ExtensionHost, FetchError, HostError, HostResult,
     LifecycleEvent, fetch,
