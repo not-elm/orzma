@@ -112,9 +112,9 @@ impl Plugin for OzmuxExtensionRenderPlugin {
                     finish_extension_setup.in_set(OzmuxSystems::SetupActivity),
                     set_asset_endpoint_once,
                     drain_handler_responses,
-                    // After Input so it observes this frame's click-to-focus /
-                    // pane-navigation result.
-                    sync_focused_webview.after(OzmuxSystems::Input),
+                    sync_focused_webview
+                        .run_if(resource_exists_and_changed::<FocusedWebview>)
+                        .after(OzmuxSystems::Input),
                 ),
             );
     }
