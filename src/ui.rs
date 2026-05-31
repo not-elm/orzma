@@ -98,8 +98,6 @@ pub struct PaneFrame;
 /// `Visibility` on focus changes.
 #[derive(Component)]
 pub(crate) struct PaneDimOverlay {
-    // TODO: remove this allow once sync_pane_dim (Task 3) reads this field in production code
-    #[allow(dead_code)]
     pub(crate) pane: Entity,
 }
 
@@ -665,6 +663,79 @@ mod tests {
         let world = app.world_mut();
         let count = world.query::<&PaneDimOverlay>().iter(world).count();
         assert_eq!(count, 0, "no overlays spawned when dimming is disabled");
+    }
+
+    #[test]
+    fn focus_change_moves_dim_to_newly_inactive_pane() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let original_pane = app
+            .world_mut()
+            .run_system_once(
+                |mut mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next().expect("session");
+                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                    mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
+                        .expect("split_pane");
+                    pane
+                },
+            )
+            .unwrap();
+        app.update();
+
+        let (session, target_pane) = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next().unwrap();
+                    let active = mux.sessions_active_pane(session).unwrap();
+                    let target = mux
+                        .panes_of_session(session)
+                        .find(|p| *p != active)
+                        .expect("a non-active pane exists after split");
+                    (session, target)
+                },
+            )
+            .unwrap();
+        let _ = original_pane;
+
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_pane(session, target_pane)
+                    .expect("set_active_pane");
+            })
+            .unwrap();
+        app.update();
+
+        let world = app.world_mut();
+        let overlays: Vec<(Entity, Visibility)> = world
+            .query::<(&PaneDimOverlay, &Visibility)>()
+            .iter(world)
+            .map(|(o, v)| (o.pane, *v))
+            .collect();
+        assert_eq!(overlays.len(), 2);
+        for (pane, vis) in overlays {
+            if pane == target_pane {
+                assert_eq!(
+                    vis,
+                    Visibility::Hidden,
+                    "newly-focused pane's veil is hidden"
+                );
+            } else {
+                assert_eq!(
+                    vis,
+                    Visibility::Visible,
+                    "newly-inactive pane's veil is visible"
+                );
+            }
+        }
     }
 
     #[test]

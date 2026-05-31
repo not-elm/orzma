@@ -8,7 +8,7 @@ use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
 use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::ActivityEntityRegistry;
-use crate::ui::{ActivityHostNode, SessionUiRoot, StructuralNode};
+use crate::ui::{ActivityHostNode, PaneDimOverlay, SessionUiRoot, StructuralNode};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use ozmux_extension_host::ExtensionControlSet;
@@ -23,6 +23,7 @@ impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
         order_activity_pipeline(app);
         app.add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
+            .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
             .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
 }
@@ -149,6 +150,35 @@ fn rebuild_session_ui(
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
             Err(err) => tracing::warn!(target: "ozmux_gui::ui", ?err, "root_cell missing"),
+        }
+    }
+}
+
+/// Flips each pane's dim veil when its session's `ActivePane` changes
+/// (focus moves between panes without a layout rebuild). For every session
+/// whose `ActivePane` changed, sets each `PaneDimOverlay` belonging to that
+/// session to `Hidden` iff its pane is the new active pane, else `Visible`.
+/// Pane→session is resolved via `ChildOf`; using `MultiplexerCommands` here
+/// would conflict on its `&mut ActivePane`.
+fn sync_pane_dim(
+    changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
+    panes: Query<&ChildOf, With<PaneMarker>>,
+    mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
+) {
+    for (session, active) in changed_sessions.iter() {
+        for (overlay, mut visibility) in overlays.iter_mut() {
+            let Ok(child_of) = panes.get(overlay.pane) else {
+                continue;
+            };
+            if child_of.parent() != session {
+                continue;
+            }
+            let want = if overlay.pane == active.0 {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            };
+            visibility.set_if_neq(want);
         }
     }
 }
