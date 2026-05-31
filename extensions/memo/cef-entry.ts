@@ -1,1 +1,1 @@
-export * from '@ozmux/sdk/cef';
+export type * from '@ozmux/sdk/cef';

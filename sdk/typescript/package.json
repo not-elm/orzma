@@ -13,8 +13,10 @@
       "default": "./src/server/cmd-shim.ts"
     },
     "./cef": {
-      "types": "./src/cef/index.ts",
-      "default": "./src/cef/index.ts"
+      "types": "./src/cef/index.ts"
+    },
+    "./ozmux-global": {
+      "types": "./src/cef/ozmux-global.d.ts"
     }
   },
   "scripts": {
