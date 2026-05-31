@@ -5,6 +5,7 @@
 //! extension's handlers socket.
 
 use crate::system_set::OzmuxSystems;
+use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ExtensionActivityMarker, HostActivityEntity};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -12,7 +13,9 @@ use bevy_cef::prelude::*;
 use ozmux_extension_host::host::ExtensionEndpoints;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_extension_host::{ControlExtension, HandlersBridge};
-use ozmux_multiplexer::ExtensionActivityAid;
+use ozmux_multiplexer::{
+    AttachedSession, ExtensionActivityAid, MultiplexerCommands, SessionMarker,
+};
 
 /// The `ozmux-ext://` URL the memo extension webview is pointed at. The host
 /// segment (`memo`) matches the extension name registered as a custom scheme
@@ -109,9 +112,49 @@ impl Plugin for OzmuxExtensionRenderPlugin {
                     finish_extension_setup.in_set(OzmuxSystems::SetupActivity),
                     set_asset_endpoint_once,
                     drain_handler_responses,
+                    // After Input so it observes this frame's click-to-focus /
+                    // pane-navigation result.
+                    sync_focused_webview.after(OzmuxSystems::Input),
                 ),
             );
     }
+}
+
+/// Keeps `bevy_cef`'s `FocusedWebview` in step with ozmux's active pane.
+///
+/// bevy_cef only updates `FocusedWebview` when a *webview* node is clicked
+/// (`set_focus_on_press`), so moving focus to a terminal pane (a non-webview)
+/// leaves the extension webview focused: its DOM text area keeps the caret and
+/// `send_key_event` keeps routing keystrokes to it. Driving `FocusedWebview`
+/// from the active pane fixes both — keyboard follows the focused pane, and CEF
+/// blurs the webview on focus-leave (`bevy_cef`'s `apply_webview_focus` releases
+/// CEF focus when `FocusedWebview` becomes `None`).
+fn sync_focused_webview(
+    mut focused: ResMut<FocusedWebview>,
+    mux: MultiplexerCommands,
+    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    registry: Res<ActivityEntityRegistry>,
+    webviews: Query<(), With<WebviewSource>>,
+) {
+    let active = active_webview(&mux, &attached_session, &registry, &webviews);
+    if focused.0 != active {
+        focused.0 = active;
+    }
+}
+
+/// The active pane's webview host entity, or `None` when the active activity is
+/// not a webview (e.g. a terminal pane).
+fn active_webview(
+    mux: &MultiplexerCommands,
+    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    registry: &ActivityEntityRegistry,
+    webviews: &Query<(), With<WebviewSource>>,
+) -> Option<Entity> {
+    let session = attached_session.iter().next()?;
+    let pane = mux.sessions_active_pane(session)?;
+    let activity = mux.panes_active_activity(pane)?;
+    let host = registry.get(activity)?;
+    webviews.contains(host).then_some(host)
 }
 
 /// Attaches a `bevy_cef` webview to each Extension Activity host once its pane
@@ -317,6 +360,87 @@ mod tests {
             .add_plugins(ImagePlugin::default())
             .init_asset::<WebviewUiMaterial>();
         app
+    }
+
+    #[test]
+    fn focused_webview_follows_active_pane() {
+        // Regression: moving focus to a terminal pane must clear FocusedWebview,
+        // so bevy_cef blurs the extension webview (releasing its DOM text area
+        // and stopping keyboard from routing to it). When the extension pane is
+        // active, its webview must be focused.
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<ActivityEntityRegistry>();
+        app.init_resource::<FocusedWebview>();
+        app.add_systems(Update, sync_focused_webview);
+
+        let (session, terminal_pane) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("t".into()));
+                (o.session, o.pane)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        let ext_pane = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(terminal_pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split_pane")
+            })
+            .unwrap();
+        app.world_mut().flush();
+        let (terminal_activity, ext_activity) = app
+            .world_mut()
+            .run_system_once(move |mux: MultiplexerCommands| {
+                (
+                    mux.panes_active_activity(terminal_pane)
+                        .expect("terminal activity"),
+                    mux.panes_active_activity(ext_pane).expect("ext activity"),
+                )
+            })
+            .unwrap();
+        app.world_mut().entity_mut(session).insert(AttachedSession);
+
+        // Terminal host: no WebviewSource. Extension host: carries WebviewSource.
+        let terminal_host = app.world_mut().spawn_empty().id();
+        let ext_host = app
+            .world_mut()
+            .spawn(WebviewSource::new(MEMO_WEBVIEW_URL))
+            .id();
+        {
+            let mut reg = app.world_mut().resource_mut::<ActivityEntityRegistry>();
+            reg.insert_for_test(terminal_activity, terminal_host);
+            reg.insert_for_test(ext_activity, ext_host);
+        }
+
+        let set_active = move |app: &mut App, pane: Entity| {
+            app.world_mut()
+                .run_system_once(move |mut mux: MultiplexerCommands| {
+                    mux.set_active_pane(session, pane).expect("set_active_pane");
+                })
+                .unwrap();
+            app.world_mut().flush();
+            app.update();
+        };
+
+        set_active(&mut app, ext_pane);
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(ext_host),
+            "active extension pane must focus its webview"
+        );
+
+        set_active(&mut app, terminal_pane);
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "moving focus to the terminal pane must clear the focused webview",
+        );
     }
 
     fn laid_out_node(physical: Vec2) -> ComputedNode {
