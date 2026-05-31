@@ -11,7 +11,7 @@ mod system_set;
 mod theme;
 mod ui;
 
-use crate::extension_render::{AssetEndpoint, cef_plugin};
+use crate::extension_render::{AssetEndpoint, OzmuxExtensionRenderPlugin, cef_plugin};
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
@@ -54,6 +54,7 @@ fn main() {
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
+            OzmuxExtensionRenderPlugin,
             CopyModePlugin,
             CopyModeIndicatorPlugin,
         ))

@@ -64,6 +64,13 @@ pub struct ActivityHostNode;
 #[derive(Component)]
 pub struct TerminalActivityMarker;
 
+/// Marks an Activity Host whose `kind` is `Extension`.
+/// `finish_extension_setup` queries for `With<ExtensionActivityMarker>` to
+/// find hosts that need a `bevy_cef` webview (`WebviewSource` +
+/// `MaterialNode<WebviewUiMaterial>`) attached.
+#[derive(Component)]
+pub(crate) struct ExtensionActivityMarker;
+
 /// Back-pointer from a stable Activity host entity to its owning
 /// multiplexer Activity entity. Stamped by
 /// `ActivityEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
