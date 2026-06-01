@@ -19,9 +19,9 @@ pub use bridge::{
 };
 pub use command::{CommandExtension, CommandExtensionConfig};
 pub use control::{
-    ActivityKindSpec, ActivitySpec, ControlError, ControlOp, ControlOrientation, ControlParseError,
-    ControlRequest, ControlResponse, ControlSide, SplitParams, SplitReply, encode_response,
-    parse_call,
+    ActivateParams, ActivityKindSpec, ActivitySpec, AddActivityParams, ControlError, ControlOp,
+    ControlOrientation, ControlParseError, ControlReply, ControlRequest, ControlResponse,
+    ControlSide, SplitParams, encode_response, parse_call,
 };
 pub use handlers_bridge::{AidFrame, HandlersBridge};
 pub use manifest::{Manifest, ManifestError};

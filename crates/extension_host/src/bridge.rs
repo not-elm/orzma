@@ -1,11 +1,11 @@
 //! Bevy glue: owns the launched `CommandExtension`, drains its control
 //! requests each frame, resolves `OZMUX_PANE_ID` entity bits, and applies the
-//! split via `MultiplexerCommands`. Depends on `bevy` + `ozmux_multiplexer`.
+//! requested op via `MultiplexerCommands`. Depends on `bevy` + `ozmux_multiplexer`.
 
 use crate::command::{CommandExtension, CommandExtensionConfig, Responder};
 use crate::control::{
-    ActivityKindSpec, ControlError, ControlOp, ControlOrientation, ControlRequest, ControlResponse,
-    ControlSide, SplitReply,
+    ActivateParams, ActivityKindSpec, AddActivityParams, ControlError, ControlOp,
+    ControlOrientation, ControlReply, ControlRequest, ControlResponse, ControlSide, SplitParams,
 };
 use crate::path_prefix::extension_path_prefix;
 use bevy::prelude::*;
@@ -115,30 +115,50 @@ fn drain_control_requests(ext: Res<ControlExtension>, mut mux: MultiplexerComman
 /// Resolves a control request against the multiplexer and replies to the
 /// extension via `responder`. Shared by the single-extension
 /// `drain_control_requests` and the multi-extension manager's drain, so every
-/// extension's control socket applies splits through the same path.
+/// extension's control socket applies ops through the same path.
 pub fn apply_control_request(
     mux: &mut MultiplexerCommands,
     req: ControlRequest,
     responder: Responder,
 ) {
-    let resp = match resolve_and_split(mux, req) {
+    let resp = match req.op {
+        ControlOp::Split(p) => handle_split(mux, req.pane_bits, p),
+        ControlOp::AddActivity(p) => handle_add_activity(mux, req.pane_bits, p),
+        ControlOp::Activate(p) => handle_activate(mux, req.pane_bits, p),
+    };
+    let _ = responder.send(match resp {
         Ok(reply) => ControlResponse::Ok(reply),
         Err(e) => ControlResponse::Err(e),
-    };
-    let _ = responder.send(resp);
+    });
 }
 
-fn resolve_and_split(
-    mux: &mut MultiplexerCommands,
-    req: ControlRequest,
-) -> Result<SplitReply, ControlError> {
-    let pane = Entity::try_from_bits(req.pane_bits)
+fn resolve_pane(mux: &MultiplexerCommands, pane_bits: u64) -> Result<Entity, ControlError> {
+    Entity::try_from_bits(pane_bits)
         .filter(|e| mux.session_of_pane(*e).is_some())
         .ok_or_else(|| ControlError {
             code: "pane_not_found".into(),
-            message: format!("no live pane for bits {}", req.pane_bits),
-        })?;
-    let ControlOp::Split(p) = req.op;
+            message: format!("no live pane for bits {pane_bits}"),
+        })
+}
+
+fn stamp_extension_activity(
+    mux: &mut MultiplexerCommands,
+    activity: Entity,
+    activity_id: String,
+    extension_name: Option<String>,
+) {
+    mux.insert_on(activity, ExtensionActivityAid(activity_id));
+    if let Some(name) = extension_name {
+        mux.insert_on(activity, OwningExtension(name));
+    }
+}
+
+fn handle_split(
+    mux: &mut MultiplexerCommands,
+    pane_bits: u64,
+    p: SplitParams,
+) -> Result<ControlReply, ControlError> {
+    let pane = resolve_pane(mux, pane_bits)?;
     let activity_id = p.activity.activity_id.clone();
     let ActivityKindSpec::Extension {
         entry,
@@ -161,14 +181,53 @@ fn resolve_and_split(
             code: "internal".into(),
             message: e.to_string(),
         })?;
-    mux.insert_on(outcome.activity, ExtensionActivityAid(activity_id));
-    if let Some(name) = extension_name {
-        mux.insert_on(outcome.activity, OwningExtension(name));
-    }
-    Ok(SplitReply {
+    stamp_extension_activity(mux, outcome.activity, activity_id, extension_name);
+    Ok(ControlReply::Split {
         new_pane_id: outcome.pane.to_bits(),
         new_activity_id: outcome.activity.to_bits(),
     })
+}
+
+fn handle_add_activity(
+    mux: &mut MultiplexerCommands,
+    pane_bits: u64,
+    p: AddActivityParams,
+) -> Result<ControlReply, ControlError> {
+    let pane = resolve_pane(mux, pane_bits)?;
+    let activity_id = p.activity.activity_id.clone();
+    let ActivityKindSpec::Extension {
+        entry,
+        extension_name,
+    } = p.activity.kind;
+    let activity = mux.add_activity(pane, ActivityKind::Extension {
+        entry: PathBuf::from(entry),
+    });
+    stamp_extension_activity(mux, activity, activity_id, extension_name);
+    Ok(ControlReply::AddActivity {
+        new_activity_id: activity.to_bits(),
+    })
+}
+
+fn handle_activate(
+    mux: &mut MultiplexerCommands,
+    pane_bits: u64,
+    p: ActivateParams,
+) -> Result<ControlReply, ControlError> {
+    let pane = resolve_pane(mux, pane_bits)?;
+    let activity = p
+        .activity_id
+        .parse::<u64>()
+        .ok()
+        .and_then(Entity::try_from_bits)
+        .ok_or_else(|| ControlError {
+            code: "bad_request".into(),
+            message: format!("bad activity_id: {}", p.activity_id),
+        })?;
+    mux.set_active_activity(pane, activity).map_err(|e| ControlError {
+        code: "internal".into(),
+        message: e.to_string(),
+    })?;
+    Ok(ControlReply::Activate)
 }
 
 #[cfg(test)]
@@ -196,6 +255,22 @@ mod tests {
         }
     }
 
+    fn add_activity_request(pane_bits: u64) -> ControlRequest {
+        ControlRequest {
+            pane_bits,
+            op: ControlOp::AddActivity(crate::control::AddActivityParams {
+                activity: crate::control::ActivitySpec {
+                    kind: ActivityKindSpec::Extension {
+                        entry: "index.html".into(),
+                        extension_name: Some("md".into()),
+                    },
+                    name: Some("x.md".into()),
+                    activity_id: "aid-1".into(),
+                },
+            }),
+        }
+    }
+
     #[test]
     fn handles_split_and_creates_extension_pane() {
         let mut world = World::new();
@@ -216,14 +291,14 @@ mod tests {
         world.flush();
 
         match resp_rx.try_recv().unwrap() {
-            ControlResponse::Ok(reply) => {
-                let new_pane = Entity::try_from_bits(reply.new_pane_id).unwrap();
+            ControlResponse::Ok(ControlReply::Split { new_pane_id, new_activity_id }) => {
+                let new_pane = Entity::try_from_bits(new_pane_id).unwrap();
                 assert!(
                     world
                         .get::<ozmux_multiplexer::PaneMarker>(new_pane)
                         .is_some()
                 );
-                let new_act = Entity::try_from_bits(reply.new_activity_id).unwrap();
+                let new_act = Entity::try_from_bits(new_activity_id).unwrap();
                 assert!(matches!(
                     world.get::<ActivityKind>(new_act),
                     Some(ActivityKind::Extension { .. })
@@ -233,6 +308,7 @@ mod tests {
                 let owner = world.get::<ozmux_multiplexer::OwningExtension>(new_act);
                 assert_eq!(owner.map(|o| o.0.as_str()), Some("memo"));
             }
+            ControlResponse::Ok(_) => panic!("expected Split reply"),
             ControlResponse::Err(e) => panic!("expected Ok, got {}", e.code),
         }
         let mut q = world.query_filtered::<&ActivityKind, With<ActivityMarker>>();
@@ -264,5 +340,81 @@ mod tests {
             ControlResponse::Err(e) => assert_eq!(e.code, "pane_not_found"),
             ControlResponse::Ok(_) => panic!("expected pane_not_found"),
         }
+    }
+
+    #[test]
+    fn handles_add_activity_on_existing_pane() {
+        let mut world = World::new();
+        let created = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let pane_bits = created.pane.to_bits();
+        let (tx, rx) = bounded(1);
+        let mut tx = Some(tx);
+        world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                apply_control_request(&mut mux, add_activity_request(pane_bits), tx.take().unwrap());
+            })
+            .unwrap();
+        world.flush();
+        match rx.try_recv().unwrap() {
+            ControlResponse::Ok(ControlReply::AddActivity { new_activity_id }) => {
+                let act = Entity::try_from_bits(new_activity_id).unwrap();
+                assert!(matches!(
+                    world.get::<ActivityKind>(act),
+                    Some(ActivityKind::Extension { .. })
+                ));
+                assert_eq!(
+                    world
+                        .get::<ozmux_multiplexer::ExtensionActivityAid>(act)
+                        .map(|a| a.0.as_str()),
+                    Some("aid-1")
+                );
+                assert_eq!(
+                    world.get::<ChildOf>(act).map(|c| c.parent()),
+                    Some(created.pane)
+                );
+            }
+            _ => panic!("expected AddActivity ok"),
+        }
+    }
+
+    #[test]
+    fn handles_activate_repoints_active_activity() {
+        let mut world = World::new();
+        let created = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let pane = created.pane;
+        let second = world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(pane, ActivityKind::Terminal)
+            })
+            .unwrap();
+        world.flush();
+        let (tx, rx) = bounded(1);
+        let mut tx = Some(tx);
+        let mut req = Some(ControlRequest {
+            pane_bits: pane.to_bits(),
+            op: ControlOp::Activate(crate::control::ActivateParams {
+                activity_id: second.to_bits().to_string(),
+            }),
+        });
+        world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                apply_control_request(&mut mux, req.take().unwrap(), tx.take().unwrap());
+            })
+            .unwrap();
+        world.flush();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ControlResponse::Ok(ControlReply::Activate)
+        ));
+        assert_eq!(
+            world
+                .get::<ozmux_multiplexer::ActiveActivity>(pane)
+                .map(|a| a.0),
+            Some(second)
+        );
     }
 }
