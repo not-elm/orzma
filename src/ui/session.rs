@@ -8,9 +8,14 @@ use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
 use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::ActivityEntityRegistry;
-use crate::ui::{ActivityHostNode, PaneDimOverlay, SessionUiRoot, StructuralNode};
+use crate::ui::terminal::resolve_pane_session;
+use crate::ui::{
+    ActivityHostNode, HostActivityEntity, PaneDimOverlay, SessionUiRoot, StructuralNode,
+    TerminalActivityMarker,
+};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
+use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
     ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells,
@@ -24,6 +29,12 @@ impl Plugin for OzmuxSessionUiPlugin {
         order_activity_pipeline(app);
         app.add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
             .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
+            .add_systems(
+                Update,
+                sync_terminal_dim
+                    .after(OzmuxSystems::Input)
+                    .after(OzmuxSystems::SetupActivity),
+            )
             .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
 }
@@ -219,6 +230,66 @@ fn sync_pane_dim(
             };
             visibility.set_if_neq(want);
         }
+    }
+}
+
+/// Sets each terminal host's [`PaneDim`] from its session's `ActivePane` so
+/// the renderer dims inactive terminals (a darkening veil is invisible on a
+/// black terminal, so terminals are dimmed at the renderer instead). Reacts
+/// to focus changes (`Changed<ActivePane>`) and to terminal hosts whose
+/// material was just mounted (`Added<MaterialNode<..>>`, since hosts attach
+/// lazily after a rebuild). Pane→session is resolved via `ChildOf`;
+/// `MultiplexerCommands` can't be used here (it holds `&mut ActivePane`).
+fn sync_terminal_dim(
+    mut commands: Commands,
+    changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
+    hosts: Query<
+        (Entity, &HostActivityEntity),
+        (
+            With<TerminalActivityMarker>,
+            With<MaterialNode<TerminalUiMaterial>>,
+        ),
+    >,
+    newly_mounted: Query<
+        (Entity, &HostActivityEntity),
+        (
+            With<TerminalActivityMarker>,
+            Added<MaterialNode<TerminalUiMaterial>>,
+        ),
+    >,
+    active_panes: Query<&ActivePane>,
+    child_of: Query<&ChildOf>,
+    configs: Option<Res<OzmuxConfigsResource>>,
+) {
+    let dim_factor = match configs.as_deref() {
+        Some(cfg) if cfg.inactive_pane.enabled => cfg.inactive_pane.dim,
+        _ => 1.0,
+    };
+
+    for (session, active) in changed_sessions.iter() {
+        for (host, host_activity) in hosts.iter() {
+            let Some((pane, host_session)) = resolve_pane_session(host_activity.0, &child_of)
+            else {
+                continue;
+            };
+            if host_session != session {
+                continue;
+            }
+            let want = if pane == active.0 { 1.0 } else { dim_factor };
+            commands.entity(host).insert(PaneDim(want));
+        }
+    }
+
+    for (host, host_activity) in newly_mounted.iter() {
+        let Some((pane, session)) = resolve_pane_session(host_activity.0, &child_of) else {
+            continue;
+        };
+        let is_active = active_panes
+            .get(session)
+            .map(|a| a.0 == pane)
+            .unwrap_or(true);
+        let want = if is_active { 1.0 } else { dim_factor };
+        commands.entity(host).insert(PaneDim(want));
     }
 }
 

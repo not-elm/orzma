@@ -83,6 +83,19 @@ impl UiMaterial for TerminalUiMaterial {
     }
 }
 
+/// Per-pane brightness multiplier for the terminal renderer. The consumer
+/// (e.g. ozmux-gui) sets this on a terminal host from its active-pane state;
+/// [`update_terminal_material`] bakes it into the material's `dim` uniform
+/// each frame. An absent component is treated as `1.0` (full-bright / active).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PaneDim(pub f32);
+
+impl Default for PaneDim {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
 /// Uniform block uploaded once per frame alongside the storage buffers.
 ///
 /// # Invariants
@@ -129,7 +142,8 @@ impl UiMaterial for TerminalUiMaterial {
 /// | 80     | `bg_padding_color`          |
 /// | 96     | `hover_hyperlink_id`        |
 /// | 100    | `hover_active`              |
-#[derive(Clone, Copy, ShaderType, Default, Debug)]
+/// | 104    | `dim`                       |
+#[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
     cell_size_px: Vec2,
@@ -163,6 +177,38 @@ struct TerminalParams {
     /// is in this entity's pane; else `0`. Drives the accent-underline
     /// path in the shader.
     hover_active: u32,
+    /// Pane brightness multiplier applied to the final fragment RGB.
+    /// `1.0` = active / full-bright; `< 1.0` dims an inactive pane. The
+    /// hand-written `Default` below sets this to `1.0` so an un-updated
+    /// material never renders dark (a derived `Default` would give `0.0`).
+    dim: f32,
+}
+
+impl Default for TerminalParams {
+    fn default() -> Self {
+        Self {
+            grid_size: UVec2::ZERO,
+            cell_size_px: Vec2::ZERO,
+            atlas_size_px: Vec2::ZERO,
+            ascent_px: 0.0,
+            dpr: 0.0,
+            cursor_pos: UVec2::ZERO,
+            cursor_style: 0,
+            time_seconds: 0.0,
+            sel_start_row: 0,
+            sel_start_col: 0,
+            sel_end_row: 0,
+            sel_end_col: 0,
+            sel_kind: 0,
+            underline_position_phys: 0.0,
+            underline_thickness_phys: 0.0,
+            max_overflow_phys: 0.0,
+            bg_padding_color: Vec4::ZERO,
+            hover_hyperlink_id: 0,
+            hover_active: 0,
+            dim: 1.0,
+        }
+    }
 }
 
 impl TerminalParams {
@@ -189,6 +235,7 @@ impl TerminalParams {
         bg_padding_color: Vec4,
         hover_hyperlink_id: u32,
         hover_active: u32,
+        dim: f32,
     ) -> Self {
         let cols = u32::from(grid.cols);
         let rows = u32::from(grid.rows);
@@ -229,6 +276,7 @@ impl TerminalParams {
             bg_padding_color,
             hover_hyperlink_id,
             hover_active,
+            dim,
         }
     }
 }
@@ -312,6 +360,7 @@ fn update_terminal_material(
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
         &TerminalGrid,
+        Option<&PaneDim>,
     )>,
     fonts: Res<TerminalFonts>,
     palette_time: Res<Time>,
@@ -346,7 +395,7 @@ fn update_terminal_material(
     let dpr = window.scale_factor();
     let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
 
-    for (entity, handle, mut state, grid) in terminals.iter_mut() {
+    for (entity, handle, mut state, grid, pane_dim) in terminals.iter_mut() {
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
@@ -449,6 +498,7 @@ fn update_terminal_material(
             _ => (0, 0),
         };
 
+        let dim = pane_dim.map_or(1.0, |d| d.0).clamp(0.0, 1.0);
         if let Some(mat) = materials.get_mut(&handle.0) {
             mat.params = TerminalParams::new(
                 grid,
@@ -463,6 +513,7 @@ fn update_terminal_material(
                 bg_padding_color,
                 hover_hyperlink_id,
                 hover_active,
+                dim,
             );
         }
     }
@@ -670,5 +721,15 @@ mod tests {
         let params = TerminalParams::default();
         assert_eq!(params.hover_hyperlink_id, 0);
         assert_eq!(params.hover_active, 0);
+    }
+
+    #[test]
+    fn terminal_params_default_dim_is_one() {
+        assert_eq!(TerminalParams::default().dim, 1.0);
+    }
+
+    #[test]
+    fn terminal_params_uniform_size_is_112() {
+        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 112);
     }
 }

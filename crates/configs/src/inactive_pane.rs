@@ -13,16 +13,23 @@ pub struct InactivePaneConfig {
     pub opacity: f32,
     /// Veil color as a `#RRGGBB` hex string. Alpha comes from `opacity`,
     /// not from this string. Hex is case-insensitive on input and stored
-    /// normalized to lowercase.
+    /// normalized to lowercase. `opacity`/`color` dim non-terminal panes
+    /// (e.g. the webview); terminal panes use `dim`.
     pub color: String,
+    /// Inactive-terminal brightness multiplier in `0.0..=1.0`. The terminal
+    /// renderer multiplies an inactive pane's rendered content by this
+    /// (lower = dimmer); `1.0` leaves it full-bright. Separate from `opacity`
+    /// because a darkening veil is invisible on a black terminal background.
+    pub dim: f32,
 }
 
 impl Default for InactivePaneConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            opacity: 0.45,
+            opacity: 0.5,
             color: "#000000".to_string(),
+            dim: 0.5,
         }
     }
 }
@@ -42,6 +49,7 @@ pub(crate) struct InactivePaneConfigPatch {
     pub(crate) enabled: Option<bool>,
     pub(crate) opacity: Option<f32>,
     pub(crate) color: Option<String>,
+    pub(crate) dim: Option<f32>,
 }
 
 impl InactivePaneConfigPatch {
@@ -58,6 +66,11 @@ impl InactivePaneConfigPatch {
             && parse_hex_rgb(&v).is_some()
         {
             base.color = v.to_ascii_lowercase();
+        }
+        if let Some(v) = self.dim
+            && !v.is_nan()
+        {
+            base.dim = v.clamp(0.0, 1.0);
         }
         base
     }
@@ -87,9 +100,10 @@ mod tests {
     fn defaults_match_expected_values() {
         let cfg = InactivePaneConfig::default();
         assert!(cfg.enabled);
-        assert_eq!(cfg.opacity, 0.45);
+        assert_eq!(cfg.opacity, 0.5);
         assert_eq!(cfg.color, "#000000");
         assert_eq!(cfg.rgb(), (0, 0, 0));
+        assert_eq!(cfg.dim, 0.5);
     }
 
     #[test]
@@ -98,6 +112,7 @@ mod tests {
             enabled: true,
             opacity: 0.5,
             color: "#1a2b3c".to_string(),
+            dim: 0.5,
         };
         assert_eq!(cfg.rgb(), (0x1a, 0x2b, 0x3c));
     }
@@ -144,10 +159,12 @@ mod tests {
     #[test]
     fn patch_parses_from_toml() {
         let patch: InactivePaneConfigPatch =
-            toml::from_str("enabled = false\nopacity = 0.6\ncolor = \"#112233\"").unwrap();
+            toml::from_str("enabled = false\nopacity = 0.6\ncolor = \"#112233\"\ndim = 0.3")
+                .unwrap();
         assert_eq!(patch.enabled, Some(false));
         assert_eq!(patch.opacity, Some(0.6));
         assert_eq!(patch.color.as_deref(), Some("#112233"));
+        assert_eq!(patch.dim, Some(0.3));
     }
 
     #[test]
@@ -186,6 +203,7 @@ mod tests {
             enabled: true,
             opacity: 0.5,
             color: "#中文".to_string(),
+            dim: 0.5,
         };
         assert_eq!(
             cfg.rgb(),
@@ -198,7 +216,7 @@ mod tests {
     fn nan_opacity_is_rejected_and_keeps_base() {
         let patch: InactivePaneConfigPatch = toml::from_str("opacity = nan").unwrap();
         let merged = patch.apply_to(InactivePaneConfig::default());
-        assert_eq!(merged.opacity, 0.45, "NaN opacity must fall back to base");
+        assert_eq!(merged.opacity, 0.5, "NaN opacity must fall back to base");
         assert!(merged.opacity.is_finite(), "stored opacity must be finite");
     }
 
@@ -210,5 +228,30 @@ mod tests {
         }
         .apply_to(InactivePaneConfig::default());
         assert_eq!(merged.opacity, 1.0, "+inf opacity clamps to 1.0");
+    }
+
+    #[test]
+    fn dim_clamps_into_unit_range() {
+        let high = InactivePaneConfigPatch {
+            dim: Some(4.0),
+            ..Default::default()
+        }
+        .apply_to(InactivePaneConfig::default());
+        assert_eq!(high.dim, 1.0);
+
+        let low = InactivePaneConfigPatch {
+            dim: Some(-1.0),
+            ..Default::default()
+        }
+        .apply_to(InactivePaneConfig::default());
+        assert_eq!(low.dim, 0.0);
+    }
+
+    #[test]
+    fn nan_dim_is_rejected_and_keeps_base() {
+        let patch: InactivePaneConfigPatch = toml::from_str("dim = nan").unwrap();
+        let merged = patch.apply_to(InactivePaneConfig::default());
+        assert_eq!(merged.dim, 0.5, "NaN dim must fall back to base");
+        assert!(merged.dim.is_finite());
     }
 }

@@ -249,7 +249,16 @@ fn build_pane(
         }
     }
 
-    if let Some(veil_color) = veil {
+    // NOTE: terminal panes are dimmed at the renderer (PaneDim uniform), so
+    // they must NOT also get the veil — double-dimming would over-darken their
+    // content. The veil is for non-terminal (e.g. webview) panes only.
+    let active_is_terminal = matches!(
+        activities.get(active_activity).map(|(kind, _)| kind),
+        Ok(ActivityKind::Terminal)
+    );
+    if let Some(veil_color) = veil
+        && !active_is_terminal
+    {
         let visibility = if pane_entity == active_pane {
             Visibility::Hidden
         } else {

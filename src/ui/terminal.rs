@@ -95,7 +95,10 @@ fn finish_terminal_setup(
 /// Session). Returns `None` when either link is missing — mirrors
 /// `MultiplexerCommands::pane_of_activity` + `session_of_pane` without
 /// borrowing the full mutation SystemParam.
-fn resolve_pane_session(activity: Entity, child_of: &Query<&ChildOf>) -> Option<(Entity, Entity)> {
+pub(crate) fn resolve_pane_session(
+    activity: Entity,
+    child_of: &Query<&ChildOf>,
+) -> Option<(Entity, Entity)> {
     let pane = child_of.get(activity).ok()?.parent();
     let session = child_of.get(pane).ok()?.parent();
     Some((pane, session))
