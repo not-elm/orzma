@@ -3,14 +3,13 @@ use bevy::prelude::*;
 /// The label enum labeling the types of systems in Ozmux
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
 pub enum OzmuxSystems {
+    /// Flags sessions needing a UI rebuild after an in-pane activity add /
+    /// active-activity switch (which do not change `LayoutCells`). Runs after
+    /// the control-bridge drain and before `SessionUi` so the inserted
+    /// `SessionUiDirty` marker is visible to the rebuild the same frame.
+    ChromeInvalidate,
     /// The phase for building the session UI.
     SessionUi,
-    /// The phase that updates per-pane activity chrome (tab-bar contents +
-    /// active-host mounting + veil) in reaction to `Changed<Children>` /
-    /// `Changed<ActiveActivity>`. Runs after `SessionUi` (so the stable chrome
-    /// containers are reparented under the new pane frame) and before
-    /// `SetupActivity`.
-    ActivityChrome,
     /// The phase that setup activities.
     SetupActivity,
     /// Per-frame input handling — keyboard and mouse. Members run in

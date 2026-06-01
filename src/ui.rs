@@ -23,7 +23,6 @@ pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
 pub mod layout;
 pub mod palette;
-pub(crate) mod pane_chrome;
 pub mod registry;
 pub mod root;
 pub mod session;
@@ -59,16 +58,6 @@ pub struct StructuralNode;
 /// exists only so queries can filter for activity hosts.
 #[derive(Component)]
 pub struct ActivityHostNode;
-
-/// Marks chrome-content entities owned by `sync_pane_activities` (the tab
-/// entities and the per-pane dim veil). These ride along on the stable
-/// `PaneChrome` containers across geometry rebuilds and must NOT carry
-/// `StructuralNode` — the geometry rebuild's structural despawn sweep would
-/// otherwise tear them down (without `sync_pane_activities` running to rebuild
-/// them on a pure resize, leaving them gone). `sync_pane_activities` clears the
-/// tab bar's `ActivityChromeRoot` children before repopulating.
-#[derive(Component)]
-pub(crate) struct ActivityChromeRoot;
 
 /// Marks an Activity Host whose `kind` is `Terminal`. `finish_terminal_setup`
 /// queries for `With<TerminalActivityMarker>` to find hosts that need a
@@ -112,6 +101,17 @@ pub(crate) struct PaneDimOverlay {
     pub(crate) pane: Entity,
 }
 
+/// Marks a Session whose UI subtree must be rebuilt for a reason other than a
+/// layout-geometry change — i.e. an in-pane activity was added or the active
+/// activity switched (neither mutates `LayoutCells`). Set by
+/// `flag_chrome_dirty_on_activity_change` and consumed (removed) by
+/// `rebuild_session_ui`, which gates on `Or<(Changed<LayoutCells>,
+/// With<SessionUiDirty>)>`. Keeping the single full-rebuild path is deliberate:
+/// reparenting stable UI nodes across a rebuild does not survive Bevy's UI
+/// layout, so every rebuild despawns + respawns chrome as fresh nodes.
+#[derive(Component)]
+pub(crate) struct SessionUiDirty;
+
 /// Bevy Plugin wiring the native Bevy UI rebuild pipeline.
 pub struct OzmuxUiPlugin;
 
@@ -123,7 +123,6 @@ impl Plugin for OzmuxUiPlugin {
                 OzmuxSessionUiPlugin,
                 OzmuxTerminalUiPlugin,
             ))
-            .add_observer(pane_chrome::despawn_pane_chrome_on_pane_removal)
             .add_systems(
                 Update,
                 (
@@ -132,9 +131,6 @@ impl Plugin for OzmuxUiPlugin {
                     // host this prune is despawning (insert-after-despawn panic).
                     registry::prune_registry_on_activity_removal.before(OzmuxSystems::SessionUi),
                     status_bar_sync::rebuild_status_bar_on_session_set_change,
-                    pane_chrome::sync_pane_activities
-                        .in_set(OzmuxSystems::ActivityChrome)
-                        .after(OzmuxSystems::Input),
                 ),
             );
     }
@@ -241,16 +237,11 @@ mod tests {
         app.update();
         app.update();
 
-        // `ActivityHostNode` now also marks the stable `PaneChrome` containers,
-        // so the activity host is resolved via the registry (the genuine
-        // activity-host mapping) rather than a raw `ActivityHostNode` query.
         let host_before = {
             let world = app.world_mut();
-            let registry = world.resource::<ActivityEntityRegistry>();
-            registry
-                .iter_for_test()
+            let mut q = world.query_filtered::<Entity, With<ActivityHostNode>>();
+            q.iter(world)
                 .next()
-                .map(|(_, h)| h)
                 .expect("at least one host after first rebuild")
         };
 
@@ -498,9 +489,14 @@ mod tests {
             })
             .unwrap();
 
-        // No forced rebuild: sync_pane_activities reacts to the pane's
-        // Changed<Children>/Changed<ActiveActivity> from the mutations above.
-        app.world_mut().flush();
+        {
+            let world = app.world_mut();
+            world
+                .entity_mut(session)
+                .get_mut::<ozmux_multiplexer::LayoutCells>()
+                .expect("LayoutCells")
+                .set_changed();
+        }
         app.update();
 
         assert!(
@@ -647,7 +643,7 @@ mod tests {
     #[test]
     fn extension_pane_keeps_pickable_ignore_veil() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{ActivityKind, LayoutCells, MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
@@ -675,9 +671,16 @@ mod tests {
                 mux.set_active_activity(pane, ext).unwrap();
             })
             .unwrap();
-        // No forced rebuild: sync_pane_activities reacts to the pane's
-        // Changed<Children>/Changed<ActiveActivity> and (re)spawns the veil.
-        app.world_mut().flush();
+        // An activity switch reparents hosts via a rebuild; force it in the harness.
+        app.world_mut()
+            .run_system_once(
+                |mut sessions: Query<&mut LayoutCells, With<SessionMarker>>| {
+                    for mut lc in sessions.iter_mut() {
+                        lc.set_changed();
+                    }
+                },
+            )
+            .unwrap();
         for _ in 0..2 {
             app.update();
         }

@@ -4,20 +4,22 @@
 //! UI walker — no layout, no `ComputedNode` updates, no resize-pass work.
 
 use crate::configs::OzmuxConfigsResource;
+use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
 use crate::ui::layout::build_cell_recursive;
-use crate::ui::pane_chrome::PaneChrome;
+use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::terminal::resolve_pane_session;
 use crate::ui::{
-    ActivityHostNode, HostActivityEntity, PaneDimOverlay, SessionUiRoot, StructuralNode,
-    TerminalActivityMarker,
+    ActivityHostNode, HostActivityEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot,
+    StructuralNode, TerminalActivityMarker,
 };
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActivePane, AttachedSession, Cell, LayoutCells, PaneMarker, SessionMarker, SessionUiSubtree,
+    ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells,
+    PaneMarker, SessionMarker, SessionUiSubtree,
 };
 
 pub struct OzmuxSessionUiPlugin;
@@ -25,17 +27,21 @@ pub struct OzmuxSessionUiPlugin;
 impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
         order_activity_pipeline(app);
-        app.add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
-            .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
-            .add_systems(
-                Update,
-                sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
-            )
-            .add_systems(
-                Update,
-                sync_terminal_dim_on_mount.after(OzmuxSystems::SetupActivity),
-            )
-            .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
+        app.add_systems(
+            Update,
+            flag_chrome_dirty_on_activity_change.in_set(OzmuxSystems::ChromeInvalidate),
+        )
+        .add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
+        .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
+        .add_systems(
+            Update,
+            sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
+        )
+        .add_systems(
+            Update,
+            sync_terminal_dim_on_mount.after(OzmuxSystems::SetupActivity),
+        )
+        .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
 }
 
@@ -59,9 +65,11 @@ fn order_activity_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            OzmuxSystems::SessionUi.after(ExtensionControlSet::Drain),
-            OzmuxSystems::ActivityChrome.after(OzmuxSystems::SessionUi),
-            OzmuxSystems::SetupActivity.after(OzmuxSystems::ActivityChrome),
+            OzmuxSystems::ChromeInvalidate
+                .after(ExtensionControlSet::Drain)
+                .after(OzmuxSystems::Input),
+            OzmuxSystems::SessionUi.after(OzmuxSystems::ChromeInvalidate),
+            OzmuxSystems::SetupActivity.after(OzmuxSystems::SessionUi),
         ),
     );
 }
@@ -92,29 +100,52 @@ fn sync_active_session(
     }
 }
 
-/// Rebuilds the **geometry** of every Session whose `LayoutCells` changed
-/// since the last run (native Bevy `Changed<LayoutCells>`). It despawns the
-/// transient `StructuralNode` descendants (split containers, pane frames) and
-/// detaches the stable `ActivityHostNode` entities (activity hosts and each
-/// pane's `PaneChrome` containers), then rebuilds split containers + pane
-/// frames and reparents each pane's stable chrome containers under its new
-/// frame. Tab/host/veil content is owned by `sync_pane_activities` and rides
-/// along on the reparented chrome containers — this system builds no chrome
-/// content. Pruning of stale registry entries is handled by
-/// `prune_registry_on_activity_removal` driven by
+/// Rebuilds the UI subtree of every Session whose `LayoutCells` changed
+/// since the last run. Native Bevy `Changed<LayoutCells>` replaces the
+/// old epoch-comparison gate. The rebuild walks `layout.cells` and
+/// replaces every `StructuralNode` descendant of the session's
+/// `SessionUiSubtree` root — Activity hosts are preserved via
+/// `ActivityEntityRegistry` and re-parented. Pruning of stale registry
+/// entries is handled by `prune_registry_on_activity_removal` driven by
 /// `RemovedComponents<ActivityMarker>`.
 fn rebuild_session_ui(
     mut commands: Commands,
+    mut registry: ResMut<ActivityEntityRegistry>,
     sessions: Query<
-        (Entity, &LayoutCells, &SessionUiSubtree),
-        (With<SessionMarker>, Changed<LayoutCells>),
+        (
+            Entity,
+            &LayoutCells,
+            &SessionUiSubtree,
+            Option<&ActivePane>,
+            Has<AttachedSession>,
+        ),
+        (
+            With<SessionMarker>,
+            Or<(Changed<LayoutCells>, With<SessionUiDirty>)>,
+        ),
     >,
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     activity_hosts: Query<(Entity, &ActivityHostNode)>,
     children: Query<&Children>,
-    pane_chromes: Query<&PaneChrome>,
+    activities: Query<(&ActivityKind, &Name), With<ActivityMarker>>,
+    active_activities: Query<&ActiveActivity, With<PaneMarker>>,
+    ui_font: Option<Res<TerminalUiFont>>,
+    configs: Option<Res<OzmuxConfigsResource>>,
 ) {
-    for (_session_entity, layout, subtree) in sessions.iter() {
+    let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
+
+    let veil: Option<Color> = match configs.as_deref() {
+        Some(cfg) if cfg.inactive_pane.enabled => {
+            let (r, g, b) = cfg.inactive_pane.rgb();
+            Some(Color::srgb_u8(r, g, b).with_alpha(cfg.inactive_pane.opacity))
+        }
+        _ => None,
+    };
+
+    for (session_entity, layout, subtree, active_pane, _is_attached) in sessions.iter() {
+        let active_pane = active_pane.map(|a| a.0);
+        let session_veil = if active_pane.is_some() { veil } else { None };
+        let active_pane = active_pane.unwrap_or(Entity::PLACEHOLDER);
         descend_and_detach_hosts(&mut commands, subtree.0, &children, &activity_hosts);
         descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
 
@@ -126,12 +157,48 @@ fn rebuild_session_ui(
                     subtree.0,
                     &layout.cells,
                     &root.child,
-                    &pane_chromes,
+                    &mut registry,
+                    session_entity,
+                    &ui_font_handle,
+                    &children,
+                    &activities,
+                    &active_activities,
+                    active_pane,
+                    session_veil,
                 );
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
             Err(err) => tracing::warn!(target: "ozmux_gui::ui", ?err, "root_cell missing"),
         }
+        // NOTE: must remove the marker after rebuilding, or `With<SessionUiDirty>`
+        // keeps matching and the session rebuilds every frame. No-op when the
+        // rebuild was triggered by `Changed<LayoutCells>` (marker absent).
+        commands.entity(session_entity).remove::<SessionUiDirty>();
+    }
+}
+
+/// Flags a session `SessionUiDirty` when one of its panes gains an activity
+/// (`Added<ActivityMarker>`) or switches its active activity
+/// (`Changed<ActiveActivity>`) — in-pane changes that do not mutate
+/// `LayoutCells` and so would otherwise not trigger `rebuild_session_ui`.
+/// Covers both the `@md` control-bridge path and the in-app shortcuts via a
+/// single UI-layer hook, keeping the multiplexer crate free of UI concerns.
+/// Ordered after the drain / input and before `SessionUi` so the marker is
+/// visible to the rebuild the same frame. The split case already changes
+/// `LayoutCells`; a redundant flag there is harmless.
+fn flag_chrome_dirty_on_activity_change(
+    mut commands: Commands,
+    added_activities: Query<&ChildOf, Added<ActivityMarker>>,
+    switched_panes: Query<&ChildOf, (With<PaneMarker>, Changed<ActiveActivity>)>,
+    panes: Query<&ChildOf, With<PaneMarker>>,
+) {
+    for activity_parent in added_activities.iter() {
+        if let Ok(pane_parent) = panes.get(activity_parent.parent()) {
+            commands.entity(pane_parent.parent()).insert(SessionUiDirty);
+        }
+    }
+    for pane_parent in switched_panes.iter() {
+        commands.entity(pane_parent.parent()).insert(SessionUiDirty);
     }
 }
 
@@ -289,7 +356,6 @@ mod tests {
     use crate::configs::OzmuxConfigsPlugin;
     use crate::ui::OzmuxUiPlugin;
     use crate::ui::SessionUiRoot;
-    use crate::ui::registry::ActivityEntityRegistry;
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
@@ -486,6 +552,51 @@ mod tests {
     }
 
     #[test]
+    fn in_pane_activity_add_triggers_rebuild_via_session_ui_dirty() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands};
+
+        let (mut app, _guard) = make_test_app_v2();
+        app.update();
+        app.update();
+
+        let pane = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next()?;
+                    mux.sessions_active_pane(session)
+                },
+            )
+            .unwrap()
+            .expect("bootstrap session + active pane");
+
+        // Add an in-pane activity WITHOUT touching LayoutCells. The only path
+        // that can drive a rebuild here is flag_chrome_dirty_on_activity_change
+        // setting SessionUiDirty from Added<ActivityMarker>.
+        let added = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(pane, ActivityKind::Terminal)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<ActivityEntityRegistry>()
+                .get(added)
+                .is_some(),
+            "adding an in-pane activity (no LayoutCells change) must trigger a \
+             SessionUiDirty rebuild; build_pane proves it ran by spawning a host \
+             for the new activity"
+        );
+    }
+
+    #[test]
     fn inactive_activity_within_active_session_parks_under_session_entity() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands};
@@ -528,10 +639,11 @@ mod tests {
             })
             .unwrap();
 
-        // No forced rebuild: sync_pane_activities reacts to the pane's
-        // Changed<Children>/Changed<ActiveActivity> and parks the now-inactive
-        // host under the session entity.
-        app.world_mut().flush();
+        app.world_mut()
+            .entity_mut(session)
+            .get_mut::<LayoutCells>()
+            .expect("LayoutCells")
+            .set_changed();
         app.update();
 
         let first_host_parent = app.world().get::<ChildOf>(first_host).map(|c| c.parent());
