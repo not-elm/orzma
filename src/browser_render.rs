@@ -43,6 +43,10 @@ impl Plugin for OzmuxBrowserRenderPlugin {
                     nav_button_hover_cursor.after(crate::input::InputPhase::Hover),
                     focus_address_bar_on_click,
                     focus_address_bar_on_cmd_l.before(crate::input::dispatch_focused_key),
+                    blur_address_bar_on_focus_leave
+                        .after(crate::input::InputPhase::Dispatch)
+                        .before(crate::input::dispatch_focused_key)
+                        .run_if(address_bar_is_focused),
                     browser_address_editor.after(crate::input::dispatch_focused_key),
                 ),
             );
@@ -470,6 +474,37 @@ fn focus_address_bar_on_cmd_l(
     focus.0 = Some(host);
 }
 
+/// Run condition gating `blur_address_bar_on_focus_leave`: only poll while the
+/// address bar actually owns focus, so its heavy params (`MultiplexerCommands`,
+/// queries) are not fetched on the common unfocused path.
+fn address_bar_is_focused(focus: Res<AddressBarFocus>) -> bool {
+    focus.0.is_some()
+}
+
+/// Clears `AddressBarFocus` when focus leaves the bar — when the active pane is
+/// no longer the focused browser host, or a left-click lands outside any address
+/// bar. Without this the bar stays focused after the user moves to a terminal,
+/// and `dispatch_focused_key`'s guard then suppresses all keyboard input.
+fn blur_address_bar_on_focus_leave(
+    mut focus: ResMut<AddressBarFocus>,
+    mux: MultiplexerCommands,
+    attached: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    addr_bars: Query<&Interaction, With<AddrBarText>>,
+) {
+    let Some(focused_host) = focus.0 else {
+        return;
+    };
+    let active_host = crate::input::resolve_focused_terminal(&mux, &attached, &registry);
+    let pane_left = active_host != Some(focused_host);
+    let clicked_outside = mouse.just_pressed(MouseButton::Left)
+        && !addr_bars.iter().any(|i| *i == Interaction::Pressed);
+    if pane_left || clicked_outside {
+        focus.0 = None;
+    }
+}
+
 /// Returns the byte offset in `e.buffer` for the character at `idx`.
 fn char_byte(e: &AddressEdit, idx: usize) -> usize {
     e.buffer
@@ -869,6 +904,117 @@ mod tests {
                 Some(CursorIcon::System(SystemCursorIcon::Text))
             ),
             "no hovered button leaves the cursor unchanged"
+        );
+    }
+
+    /// Builds an app with one attached session whose active activity maps (in the
+    /// registry) to `host`, and the address bar focused on that same `host` — so
+    /// `blur_address_bar_on_focus_leave`'s pane-left condition is false by default.
+    fn focused_app_on_active_host() -> (App, Entity) {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<crate::ui::AddressBarFocus>();
+        app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+
+        let (session, _pane, activity) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("t".into()));
+                (o.session, o.pane, o.activity)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut().entity_mut(session).insert(AttachedSession);
+
+        let host = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<crate::ui::registry::ActivityEntityRegistry>()
+            .insert_for_test(activity, host);
+        app.world_mut()
+            .resource_mut::<crate::ui::AddressBarFocus>()
+            .0 = Some(host);
+        (app, host)
+    }
+
+    #[test]
+    fn blur_clears_focus_when_active_pane_is_not_the_focused_host() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _active_host) = focused_app_on_active_host();
+        // Focus a DIFFERENT host than the active pane's host.
+        let other_host = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<crate::ui::AddressBarFocus>()
+            .0 = Some(other_host);
+
+        app.world_mut()
+            .run_system_once(blur_address_bar_on_focus_leave)
+            .unwrap();
+
+        assert_eq!(
+            app.world().resource::<crate::ui::AddressBarFocus>().0,
+            None,
+            "the bar blurs when the active pane is not the focused host"
+        );
+    }
+
+    #[test]
+    fn blur_clears_focus_on_left_click_outside_bar() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _host) = focused_app_on_active_host();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+
+        app.world_mut()
+            .run_system_once(blur_address_bar_on_focus_leave)
+            .unwrap();
+
+        assert_eq!(
+            app.world().resource::<crate::ui::AddressBarFocus>().0,
+            None,
+            "a left-click outside any address bar blurs the bar"
+        );
+    }
+
+    #[test]
+    fn blur_keeps_focus_when_clicking_the_bar() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, host) = focused_app_on_active_host();
+        app.world_mut()
+            .spawn((crate::ui::AddrBarText(host), Interaction::Pressed));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+
+        app.world_mut()
+            .run_system_once(blur_address_bar_on_focus_leave)
+            .unwrap();
+
+        assert_eq!(
+            app.world().resource::<crate::ui::AddressBarFocus>().0,
+            Some(host),
+            "clicking the address bar itself does not blur it"
+        );
+    }
+
+    #[test]
+    fn blur_keeps_focus_when_staying_on_focused_pane() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, host) = focused_app_on_active_host();
+
+        app.world_mut()
+            .run_system_once(blur_address_bar_on_focus_leave)
+            .unwrap();
+
+        assert_eq!(
+            app.world().resource::<crate::ui::AddressBarFocus>().0,
+            Some(host),
+            "staying on the focused browser pane keeps the bar focused"
         );
     }
 
