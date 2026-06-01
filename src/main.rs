@@ -32,7 +32,10 @@ use multiplexer::log::OzmuxLayoutLogPlugin;
 use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
-use ui::{OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin};
+use ui::{
+    OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
+    tab_input::TabInteractionPlugin,
+};
 
 fn main() {
     let endpoints = EndpointRegistry::default();
@@ -62,6 +65,7 @@ fn main() {
             OzmuxBrowserRenderPlugin,
             CopyModePlugin,
             CopyModeIndicatorPlugin,
+            TabInteractionPlugin,
         ))
         .add_plugins((
             MouseWheelInputPlugin,

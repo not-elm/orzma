@@ -31,6 +31,7 @@ pub mod status_bar_sync;
 #[cfg(test)]
 pub(crate) mod stress_test;
 pub mod tab_bar;
+pub(crate) mod tab_input;
 pub mod terminal;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
@@ -125,6 +126,14 @@ pub(crate) enum NavAction {
 pub(crate) struct BrowserNavButton {
     pub(crate) host: Entity,
     pub(crate) action: NavAction,
+}
+
+/// On a tab-bar Node: marks it clickable and records which Activity (in which
+/// Pane) selecting it activates. Read by `drive_tab_clicks` / `tab_hover_cursor`.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct TabButton {
+    pub(crate) pane: Entity,
+    pub(crate) activity: Entity,
 }
 
 /// The browser activity host whose address bar currently owns the keyboard, or
@@ -869,6 +878,23 @@ mod tests {
                 assert_eq!(dim, 0.5, "newly-inactive terminal is dimmed");
             }
         }
+    }
+
+    #[test]
+    fn rebuilt_tabs_carry_tab_button() {
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let tab_count = world
+            .query_filtered::<Entity, With<TabButton>>()
+            .iter(world)
+            .count();
+        assert_eq!(
+            tab_count, 1,
+            "the bootstrap pane has one activity, so its tab bar has one TabButton-tagged tab",
+        );
     }
 
     #[test]
