@@ -98,6 +98,12 @@ pub enum ActivityKindSpec {
         #[serde(default)]
         extension_name: Option<String>,
     },
+    /// An embedded browser activity. `url` is the raw `@browser open` input
+    /// (a URL or search words), passed through verbatim for the host to resolve.
+    Browser {
+        /// Raw user input (a URL or search words).
+        url: String,
+    },
 }
 
 /// Successful reply payload per op.
@@ -255,7 +261,10 @@ mod tests {
         let ActivityKindSpec::Extension {
             entry,
             extension_name,
-        } = p.activity.kind;
+        } = p.activity.kind
+        else {
+            panic!("expected Extension kind");
+        };
         assert_eq!(entry, "index.html");
         assert_eq!(extension_name.as_deref(), Some("memo"));
     }
@@ -271,7 +280,10 @@ mod tests {
         let ActivityKindSpec::Extension {
             entry,
             extension_name,
-        } = p.activity.kind;
+        } = p.activity.kind
+        else {
+            panic!("expected Extension kind");
+        };
         assert_eq!(entry, "index.html");
         assert_eq!(extension_name, None);
     }
@@ -292,6 +304,21 @@ mod tests {
             parse_call(line),
             Err(ControlParseError::BadRequest(_))
         ));
+    }
+
+    #[test]
+    fn parses_browser_split_call() {
+        let line = r#"{"kind":"call","id":"b1","op":"split","pane":"1","params":{"side":"after","orientation":"vertical","activity":{"kind":"browser","url":"github.com","name":null,"activity_id":"aid-b"}}}"#;
+        let (id, req) = parse_call(line).expect("parse");
+        assert_eq!(id, "b1");
+        let ControlOp::Split(p) = req.op else {
+            panic!("expected Split");
+        };
+        assert_eq!(p.activity.activity_id, "aid-b");
+        let ActivityKindSpec::Browser { url } = p.activity.kind else {
+            panic!("expected Browser kind");
+        };
+        assert_eq!(url, "github.com");
     }
 
     #[test]

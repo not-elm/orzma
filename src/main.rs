@@ -1,6 +1,7 @@
 //! ozmux Bevy GUI entry point.
 
 mod bootstrap;
+mod browser_render;
 mod clipboard;
 mod configs;
 mod extension_manager;
@@ -12,6 +13,7 @@ mod system_set;
 mod theme;
 mod ui;
 
+use crate::browser_render::OzmuxBrowserRenderPlugin;
 use crate::extension_manager::ExtensionManagerPlugin;
 use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
 use crate::input::hyperlink::HyperlinkInputPlugin;
@@ -57,6 +59,7 @@ fn main() {
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
             OzmuxExtensionRenderPlugin,
+            OzmuxBrowserRenderPlugin,
             CopyModePlugin,
             CopyModeIndicatorPlugin,
         ))

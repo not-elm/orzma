@@ -4,18 +4,16 @@ import * as net from 'node:net';
 export interface SplitControlParams {
   side: 'before' | 'after';
   orientation: 'horizontal' | 'vertical';
-  activity: { kind: 'extension'; entry: string; name?: string | null; activity_id: string };
+  activity:
+    | { kind: 'extension'; entry: string; name?: string | null; activity_id: string }
+    | { kind: 'browser'; url: string; name?: string | null; activity_id: string };
 }
 
 /** Parameters for an `add_activity` control call. */
 export interface AddActivityControlParams {
-  activity: {
-    kind: 'extension';
-    entry: string;
-    name?: string | null;
-    activity_id: string;
-    extension_name?: string;
-  };
+  activity:
+    | { kind: 'extension'; entry: string; name?: string | null; activity_id: string }
+    | { kind: 'browser'; url: string; name?: string | null; activity_id: string };
 }
 
 /** Parameters for an `activate` control call. */
