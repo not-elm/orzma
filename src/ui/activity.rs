@@ -31,21 +31,38 @@ fn kind_color(kind: &ActivityKind) -> Color {
 /// For `ActivityKind::Terminal` and `ActivityKind::Extension` the
 /// placeholder children are skipped because a full-size `MaterialNode`
 /// (`TerminalUiMaterial` / `WebviewUiMaterial`) covers the host node
-/// entirely. The kind-colored `BackgroundColor` still shows briefly
-/// between activity creation and material readiness.
+/// entirely. For `ActivityKind::Browser` the host is a `FlexDirection::Column`
+/// so the browser renderer can stack a toolbar above a page webview; the
+/// placeholder children are also skipped (the browser renderer spawns the
+/// real toolbar + webview children). The kind-colored `BackgroundColor` still
+/// shows briefly between activity creation and renderer readiness.
 pub(crate) fn build_activity_host_children(
     commands: &mut Commands,
     host: Entity,
     kind: &ActivityKind,
     name: &Name,
 ) {
+    let is_browser = matches!(kind, ActivityKind::Browser { .. });
     commands.entity(host).insert((
         Node {
             flex_grow: 1.0,
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
+            flex_direction: if is_browser {
+                FlexDirection::Column
+            } else {
+                FlexDirection::Row
+            },
+            justify_content: if is_browser {
+                JustifyContent::FlexStart
+            } else {
+                JustifyContent::Center
+            },
+            align_items: if is_browser {
+                AlignItems::Stretch
+            } else {
+                AlignItems::Center
+            },
             ..default()
         },
         BackgroundColor(kind_color(kind)),
@@ -53,7 +70,7 @@ pub(crate) fn build_activity_host_children(
 
     if matches!(
         kind,
-        ActivityKind::Terminal | ActivityKind::Extension { .. }
+        ActivityKind::Terminal | ActivityKind::Extension { .. } | ActivityKind::Browser { .. }
     ) {
         return;
     }
@@ -80,6 +97,7 @@ pub(crate) fn build_activity_host_children(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::world::CommandQueue;
     use ozmux_multiplexer::BrowserProfile;
 
     #[test]
@@ -97,5 +115,60 @@ mod tests {
             profile: BrowserProfile::default(),
         };
         assert_eq!(kind_color(&kind), palette::ACTIVITY_BROWSER);
+    }
+
+    #[test]
+    fn browser_host_is_column_and_skips_placeholder() {
+        let mut world = World::new();
+        let host = world.spawn_empty().id();
+
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            build_activity_host_children(
+                &mut commands,
+                host,
+                &ActivityKind::Browser {
+                    initial_url: Some("https://example.com".into()),
+                    profile: BrowserProfile::default(),
+                },
+                &Name::new("browser"),
+            );
+        }
+        queue.apply(&mut world);
+
+        let node = world.get::<Node>(host).expect("host must have a Node");
+        assert_eq!(
+            node.flex_direction,
+            FlexDirection::Column,
+            "browser host must use FlexDirection::Column"
+        );
+        assert!(
+            world.get::<Children>(host).is_none(),
+            "browser host must not spawn placeholder children"
+        );
+    }
+
+    #[test]
+    fn terminal_host_skips_placeholder_children() {
+        let mut world = World::new();
+        let host = world.spawn_empty().id();
+
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            build_activity_host_children(
+                &mut commands,
+                host,
+                &ActivityKind::Terminal,
+                &Name::new("terminal"),
+            );
+        }
+        queue.apply(&mut world);
+
+        assert!(
+            world.get::<Children>(host).is_none(),
+            "terminal host must not spawn placeholder children"
+        );
     }
 }
