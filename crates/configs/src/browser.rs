@@ -1,6 +1,7 @@
-//! Browser activity configuration: search-engine template for the toolbar
-//! URL bar's Chrome-style omnibox behavior, plus the omnibox classifier
-//! used by both the toolbar (via the TS port) and the `ozmux browser` CLI.
+//! Browser activity configuration: the search-engine template for the address
+//! bar's Chrome-style omnibox behavior, plus the `resolve_omnibox_input`
+//! classifier the browser renderer uses for the initial load and toolbar
+//! navigations.
 
 use serde::{Deserialize, Serialize};
 

@@ -60,6 +60,19 @@ importers:
         specifier: 'catalog:'
         version: 24.12.2
 
+  extensions/browser:
+    dependencies:
+      '@ozmux/sdk':
+        specifier: workspace:*
+        version: link:../../sdk/typescript
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.12.2
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+
   extensions/md:
     dependencies:
       '@ozmux/sdk':

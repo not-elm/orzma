@@ -32,7 +32,8 @@ export type Orientation = 'horizontal' | 'vertical';
 /**
  * What the caller hands to `Pane.split()` / `Pane.addActivity()`. The
  * terminal variant just creates a shell; the extension variant takes an HTML
- * entry path plus optional handlers/channels.
+ * entry path plus optional handlers/channels; the browser variant opens a URL
+ * directly in the embedded webview without binding to any extension.
  */
 export type ActivitySpecInput =
   | { kind: 'terminal'; name?: string }
@@ -42,7 +43,8 @@ export type ActivitySpecInput =
       name?: string;
       handlers?: HandlerMap;
       channels?: ChannelMap;
-    };
+    }
+  | { kind: 'browser'; url: string; name?: string };
 
 export interface SplitArgs {
   side: Side;
@@ -148,19 +150,25 @@ function rollbackActivityRegistries(activityId: ActivityId, spec: ActivitySpecIn
 
 function activityKindForSpec(spec: ActivitySpecInput): ActivityKind {
   if (spec.kind === 'terminal') return { type: 'terminal' };
+  if (spec.kind === 'browser') return { type: 'browser', initial_url: spec.url };
   return { type: 'extension', entry: toEntry(spec.html) };
 }
 
 function controlActivity(
   activityId: ActivityId,
   spec: ActivitySpecInput,
-): {
-  kind: 'extension';
-  entry: string;
-  name?: string;
-  activity_id: string;
-  extension_name?: string;
-} {
+):
+  | {
+      kind: 'extension';
+      entry: string;
+      name?: string;
+      activity_id: string;
+      extension_name?: string;
+    }
+  | { kind: 'browser'; url: string; name?: string; activity_id: string } {
+  if (spec.kind === 'browser') {
+    return { kind: 'browser', url: spec.url, name: spec.name, activity_id: activityId };
+  }
   // TODO: terminal splits over the control socket are not supported in #2/#3; a future op should carry a terminal kind instead of this extension fallback.
   if (spec.kind !== 'extension') {
     return { kind: 'extension', entry: '', name: spec.name, activity_id: activityId };
@@ -182,6 +190,8 @@ function buildActivityPayload(
   if (spec.name !== undefined) base.name = spec.name;
   if (spec.kind === 'terminal') {
     base.kind = { type: 'terminal' };
+  } else if (spec.kind === 'browser') {
+    base.kind = { type: 'browser', initial_url: spec.url };
   } else {
     // `extension_name` lets the daemon populate its ExtensionRegistry so
     // the in-CEF extension client can resolve the owning extension's UDS.

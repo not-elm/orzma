@@ -99,6 +99,12 @@ pub(crate) fn dispatch_focused_key(
     copy_modes: Query<(), With<CopyModeState>>,
     ime_state: Res<ImeState>,
 ) {
+    // NOTE: when the browser address bar owns focus, the active pane is always a
+    // browser host (no `TerminalHandle`), so every terminal action below
+    // (forward/paste/copy/scroll) no-ops on it and `browser_address_editor`
+    // (ordered after this) consumes the bar's typed keys. App-global chords are
+    // intentionally NOT suppressed — they keep working in the bar, as in a real
+    // browser omnibox.
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
     // sees the same modifier snapshot. Read once outside the loop.
