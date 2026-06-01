@@ -104,6 +104,40 @@ fn attach_browser_webview(
     }
 }
 
+/// Mirrors a page webview's `AddressChanged` onto its host's `BrowserToolbarState`.
+fn on_address_changed(
+    ev: On<AddressChanged>,
+    owners: Query<&PageWebviewOf>,
+    mut states: Query<&mut BrowserToolbarState>,
+) {
+    let Ok(owner) = owners.get(ev.webview) else {
+        return;
+    };
+    let Ok(mut state) = states.get_mut(owner.0) else {
+        return;
+    };
+    state.url = ev.url.clone();
+    state.can_go_back = ev.can_go_back;
+    state.can_go_forward = ev.can_go_forward;
+}
+
+/// Mirrors a page webview's `LoadingStateChanged` onto its host's `BrowserToolbarState`.
+fn on_loading_state_changed(
+    ev: On<LoadingStateChanged>,
+    owners: Query<&PageWebviewOf>,
+    mut states: Query<&mut BrowserToolbarState>,
+) {
+    let Ok(owner) = owners.get(ev.webview) else {
+        return;
+    };
+    let Ok(mut state) = states.get_mut(owner.0) else {
+        return;
+    };
+    state.is_loading = ev.is_loading;
+    state.can_go_back = ev.can_go_back;
+    state.can_go_forward = ev.can_go_forward;
+}
+
 fn spawn_nav_button(commands: &mut Commands, host: Entity, action: NavAction, label: &str) -> Entity {
     commands
         .spawn((
@@ -203,6 +237,58 @@ mod tests {
             Some(Vec2::new(800.0, 568.0)),
             "webview seeded at the CHILD's laid-out size, not the host's"
         );
+    }
+
+    #[test]
+    fn address_changed_updates_host_toolbar_state() {
+        let mut app = make_test_app();
+        app.add_systems(Update, build_browser_chrome);
+        app.add_observer(on_address_changed);
+        let host = app
+            .world_mut()
+            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .id();
+        app.update();
+        let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
+
+        app.world_mut().trigger(AddressChanged {
+            webview: page,
+            url: "https://example.com/x".into(),
+            can_go_back: true,
+            can_go_forward: false,
+        });
+        app.world_mut().flush();
+
+        let state = app.world().get::<BrowserToolbarState>(host).unwrap();
+        assert_eq!(state.url, "https://example.com/x");
+        assert!(state.can_go_back);
+        assert!(!state.can_go_forward);
+    }
+
+    #[test]
+    fn loading_state_changed_updates_host_toolbar_state() {
+        let mut app = make_test_app();
+        app.add_systems(Update, build_browser_chrome);
+        app.add_observer(on_loading_state_changed);
+        let host = app
+            .world_mut()
+            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .id();
+        app.update();
+        let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
+
+        app.world_mut().trigger(LoadingStateChanged {
+            webview: page,
+            is_loading: true,
+            can_go_back: false,
+            can_go_forward: true,
+        });
+        app.world_mut().flush();
+
+        let state = app.world().get::<BrowserToolbarState>(host).unwrap();
+        assert!(state.is_loading);
+        assert!(!state.can_go_back);
+        assert!(state.can_go_forward);
     }
 
     #[test]
