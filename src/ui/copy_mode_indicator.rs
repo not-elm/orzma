@@ -482,7 +482,7 @@ mod tests {
     fn inactive_host_parent_is_walker_skipped_session_entity() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{
-            ActivityKind, AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker,
+            ActivityKind, AttachedSession, MultiplexerCommands, SessionMarker,
         };
 
         let (mut app, _guard) = make_ui_test_app();
@@ -524,11 +524,10 @@ mod tests {
             })
             .unwrap();
 
-        app.world_mut()
-            .entity_mut(session)
-            .get_mut::<LayoutCells>()
-            .expect("LayoutCells")
-            .set_changed();
+        // No forced rebuild: sync_pane_activities reacts to the pane's
+        // Changed<Children>/Changed<ActiveActivity> and parks the now-inactive
+        // host under the session entity.
+        app.world_mut().flush();
         app.update();
 
         let first_host_parent = app.world().get::<ChildOf>(first_host).map(|c| c.parent());

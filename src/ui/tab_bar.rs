@@ -1,13 +1,13 @@
-//! Tab bar Bevy UI builder for a Pane. `build_pane_tab_bar` spawns one
-//! Row Node per Pane with one child per Activity. `tab_colors` computes
-//! the (background, indicator, text) color triple for a single tab.
+//! Tab bar Bevy UI builder for a Pane. `populate_tab_bar` spawns one tab
+//! child per Activity under an already-existing (stable) bar Node;
+//! `tab_colors` computes the (background, indicator, text) color triple for a
+//! single tab.
 
 use crate::theme;
-use crate::ui::StructuralNode;
 use crate::ui::palette;
 use bevy::color::Color;
 use bevy::prelude::*;
-use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, UiRect, Val};
+use bevy::ui::{AlignItems, BorderRadius, JustifyContent, UiRect, Val};
 
 /// Color triple for one tab.
 struct TabColors {
@@ -72,32 +72,6 @@ pub(crate) fn populate_tab_bar(
     }
 }
 
-/// Spawn the per-pane tab bar (a Row node) as a child of `parent`, then
-/// populate it. Every spawned Entity carries `StructuralNode`.
-pub fn build_pane_tab_bar(
-    commands: &mut Commands,
-    parent: Entity,
-    tabs: &[TabEntry],
-    is_active_pane: bool,
-    ui_font: &Handle<Font>,
-) {
-    let bar = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                width: Val::Percent(100.0),
-                height: Val::Auto,
-                padding: UiRect::ZERO,
-                ..default()
-            },
-            BackgroundColor(palette::TAB_BAR_BG),
-            StructuralNode,
-            ChildOf(parent),
-        ))
-        .id();
-    populate_tab_bar(commands, bar, tabs, is_active_pane, ui_font);
-}
-
 fn build_tab(
     commands: &mut Commands,
     parent: Entity,
@@ -135,7 +109,7 @@ fn build_tab(
                 right: theme::BORDER,
                 bottom: Color::NONE,
             },
-            StructuralNode,
+            crate::ui::ActivityChromeRoot,
             ChildOf(parent),
         ))
         .id();
@@ -148,7 +122,7 @@ fn build_tab(
             font_size: 12.0,
             ..default()
         },
-        StructuralNode,
+        crate::ui::ActivityChromeRoot,
         ChildOf(tab_entity),
     ));
 }
