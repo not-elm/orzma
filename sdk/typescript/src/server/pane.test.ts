@@ -242,6 +242,31 @@ describe('Pane.split', () => {
       }),
     ).resolves.toBeDefined();
   });
+
+  it('sends a browser split carrying the raw url, no extension_name', async () => {
+    const sock = tmpSock();
+    const { server, frames } = await startFakeSplitServer(sock, {
+      new_pane_id: 'p7',
+      new_activity_id: 'a7',
+    });
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+
+    const pane = new Pane({ id: 'p1', windowId: 'w1' });
+    await pane.split({
+      side: 'after',
+      orientation: 'vertical',
+      activity: { kind: 'browser', url: 'github.com' },
+    });
+
+    const params = frames[0].params as {
+      activity: { kind: string; url: string; activity_id: string; extension_name?: string };
+    };
+    expect(params.activity.kind).toBe('browser');
+    expect(params.activity.url).toBe('github.com');
+    expect(params.activity.extension_name).toBeUndefined();
+    expect(typeof params.activity.activity_id).toBe('string');
+    server.close();
+  });
 });
 
 describe('Pane.addActivity', () => {
