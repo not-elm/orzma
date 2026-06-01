@@ -3,8 +3,8 @@
 //! the (background, indicator, text) color triple for a single tab.
 
 use crate::theme;
-use crate::ui::{StructuralNode, TabButton};
 use crate::ui::palette;
+use crate::ui::{StructuralNode, TabButton};
 use bevy::color::Color;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, UiRect, Val};

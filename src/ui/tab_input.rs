@@ -17,10 +17,7 @@ impl Plugin for TabInteractionPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (
-                drive_tab_clicks,
-                tab_hover_cursor.after(InputPhase::Hover),
-            ),
+            (drive_tab_clicks, tab_hover_cursor.after(InputPhase::Hover)),
         );
     }
 }
@@ -86,7 +83,8 @@ mod tests {
     #[test]
     fn tab_press_focuses_pane_and_switches_activity() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).add_plugins(MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
         app.add_systems(Update, drive_tab_clicks);
 
         let (session, pane, first) = app
@@ -141,7 +139,8 @@ mod tests {
     #[test]
     fn tab_hovered_not_pressed_does_not_switch() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).add_plugins(MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
         app.add_systems(Update, drive_tab_clicks);
 
         let (session, pane, first) = app
