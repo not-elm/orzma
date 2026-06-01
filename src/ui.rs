@@ -126,6 +126,11 @@ pub(crate) struct BrowserNavButton {
     pub(crate) action: NavAction,
 }
 
+/// The browser activity host whose address bar currently owns the keyboard, or
+/// `None`. Read by the browser editor + `dispatch_focused_key` (later task).
+#[derive(Resource, Default)]
+pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
+
 /// Back-pointer from a stable Activity host entity to its owning
 /// multiplexer Activity entity. Stamped by
 /// `ActivityEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads

@@ -6,8 +6,8 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::ui::{
-    AddrBarText, AddressEdit, BrowserActivityMarker, BrowserNavButton, BrowserPageWebview,
-    BrowserToolbarState, HostActivityEntity, NavAction, PageWebviewOf,
+    AddrBarText, AddressBarFocus, AddressEdit, BrowserActivityMarker, BrowserNavButton,
+    BrowserPageWebview, BrowserToolbarState, HostActivityEntity, NavAction, PageWebviewOf,
 };
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
@@ -136,6 +136,68 @@ fn on_loading_state_changed(
     state.is_loading = ev.is_loading;
     state.can_go_back = ev.can_go_back;
     state.can_go_forward = ev.can_go_forward;
+}
+
+/// Renders each address-bar `Text` from its host's edit buffer (when that host
+/// owns address-bar focus) or its toolbar-state URL (when unfocused).
+fn render_address_text(
+    focus: Res<AddressBarFocus>,
+    hosts: Query<(Entity, &BrowserToolbarState, &AddressEdit), With<BrowserActivityMarker>>,
+    children: Query<&Children>,
+    mut texts: Query<&mut Text, With<AddrBarText>>,
+) {
+    for (host, state, edit) in hosts.iter() {
+        let display = if focus.0 == Some(host) {
+            edit.buffer.clone()
+        } else {
+            state.url.clone()
+        };
+        for descendant in descendants(host, &children) {
+            if let Ok(mut text) = texts.get_mut(descendant) {
+                if text.0 != display {
+                    text.0 = display.clone();
+                }
+            }
+        }
+    }
+}
+
+/// Routes toolbar button presses to `bevy_cef` navigation requests.
+fn drive_nav_buttons(
+    mut commands: Commands,
+    buttons: Query<(&Interaction, &BrowserNavButton), Changed<Interaction>>,
+    pages: Query<&BrowserPageWebview>,
+) {
+    for (interaction, button) in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Ok(page) = pages.get(button.host) else {
+            continue;
+        };
+        let webview = page.0;
+        match button.action {
+            NavAction::Back => commands.trigger(RequestGoBack { webview }),
+            NavAction::Forward => commands.trigger(RequestGoForward { webview }),
+            NavAction::Reload => commands.trigger(RequestReload { webview }),
+        }
+    }
+}
+
+/// Depth-first descendants of `root` (excluding `root`).
+fn descendants(root: Entity, children: &Query<&Children>) -> Vec<Entity> {
+    let mut out = Vec::new();
+    let mut stack: Vec<Entity> = children
+        .get(root)
+        .map(|c| c.iter().collect())
+        .unwrap_or_default();
+    while let Some(e) = stack.pop() {
+        out.push(e);
+        if let Ok(c) = children.get(e) {
+            stack.extend(c.iter());
+        }
+    }
+    out
 }
 
 fn spawn_nav_button(commands: &mut Commands, host: Entity, action: NavAction, label: &str) -> Entity {
@@ -289,6 +351,67 @@ mod tests {
         assert!(state.is_loading);
         assert!(!state.can_go_back);
         assert!(state.can_go_forward);
+    }
+
+    #[derive(Resource, Default)]
+    struct Captured(Vec<Entity>);
+
+    #[test]
+    fn back_button_press_triggers_request_go_back() {
+        let mut app = make_test_app();
+        app.init_resource::<Captured>();
+        app.add_systems(Update, (build_browser_chrome, drive_nav_buttons).chain());
+        app.add_observer(|ev: On<RequestGoBack>, mut r: ResMut<Captured>| {
+            r.0.push(ev.webview);
+        });
+
+        let host = app
+            .world_mut()
+            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .id();
+        app.update(); // build chrome
+
+        let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
+
+        // Find the Back button entity.
+        let back_btn: Entity = {
+            let mut q = app.world_mut().query::<(Entity, &BrowserNavButton)>();
+            q.iter(app.world())
+                .find(|(_, b)| b.action == NavAction::Back && b.host == host)
+                .map(|(e, _)| e)
+                .expect("back button must exist")
+        };
+
+        // Simulate a press by inserting Interaction::Pressed.
+        app.world_mut().entity_mut(back_btn).insert(Interaction::Pressed);
+        app.update();
+
+        let captured = app.world().resource::<Captured>();
+        assert_eq!(captured.0, vec![page], "RequestGoBack must fire with the page webview");
+    }
+
+    #[test]
+    fn address_text_follows_toolbar_state_when_unfocused() {
+        let mut app = make_test_app();
+        app.init_resource::<crate::ui::AddressBarFocus>();
+        app.add_systems(Update, (build_browser_chrome, render_address_text).chain());
+        let host = app
+            .world_mut()
+            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .id();
+        app.update(); // build chrome + render (empty url)
+        app.world_mut().get_mut::<BrowserToolbarState>(host).unwrap().url =
+            "https://example.com".into();
+        app.update(); // render picks up the new url
+
+        let mut found: Option<String> = None;
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Text, With<crate::ui::AddrBarText>>();
+        for text in q.iter(app.world()) {
+            found = Some(text.0.clone());
+        }
+        assert_eq!(found.as_deref(), Some("https://example.com"));
     }
 
     #[test]
