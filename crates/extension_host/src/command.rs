@@ -18,6 +18,7 @@ use std::time::Duration;
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTROL_ACCEPT_POLL: Duration = Duration::from_millis(20);
+const READY_MARKER: &str = ".ready";
 
 /// The oneshot the control server blocks on for the bridge's verdict.
 pub type Responder = Sender<ControlResponse>;
@@ -107,8 +108,6 @@ pub struct CommandExtensionConfig {
     pub dir: PathBuf,
     /// Entry script, launched as `node <main>` (e.g. `bootstrap.ts`).
     pub main: OsString,
-    /// Command names whose shim files signal readiness (e.g. `["@memo"]`).
-    pub commands: Vec<String>,
 }
 
 /// A running command extension. Owns the runtime root, the piped stdin (the
@@ -170,11 +169,10 @@ impl CommandExtension {
             let child = Arc::clone(&child);
             let shutdown = Arc::clone(&lifecycle_shutdown);
             let bin_dir = bin_dir.clone();
-            let commands = cfg.commands.clone();
             move || {
                 run_lifecycle(
                     ready_timeout,
-                    move || commands.iter().all(|c| bin_dir.join(c).exists()),
+                    move || bin_dir.join(READY_MARKER).exists(),
                     || {},
                     child,
                     shutdown,
@@ -369,7 +367,6 @@ mod tests {
                 name: "memo".into(),
                 dir: memo_dir(),
                 main: "bootstrap.ts".into(),
-                commands: vec!["@memo".into()],
             },
             Duration::from_secs(20),
         )

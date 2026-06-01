@@ -1,15 +1,13 @@
-//! Parses an extension's `package.json` for its ozmux manifest fields (name +
-//! commands), used by discovery to build a `CommandExtensionConfig`.
+//! Parses an extension's `package.json` for its ozmux manifest field (name),
+//! used by discovery to build a `CommandExtensionConfig`.
 
 use serde::Deserialize;
 
-/// An extension's resolved manifest: its name and the command shims it provides.
+/// An extension's resolved manifest: its name.
 #[derive(Debug, Clone)]
 pub struct Manifest {
     /// Extension name (from package.json `name`); the `ozmux-ext://<name>` host.
     pub name: String,
-    /// Command names whose shims trigger the extension (e.g. `["@memo"]`).
-    pub commands: Vec<String>,
 }
 
 impl Manifest {
@@ -24,10 +22,7 @@ impl Manifest {
         {
             return Err(ManifestError::InvalidName(name));
         }
-        Ok(Self {
-            name,
-            commands: raw.ozmux.unwrap_or_default().commands,
-        })
+        Ok(Self { name })
     }
 }
 
@@ -48,14 +43,6 @@ pub enum ManifestError {
 #[derive(Deserialize)]
 struct RawPackageJson {
     name: Option<String>,
-    #[serde(default)]
-    ozmux: Option<OzmuxField>,
-}
-
-#[derive(Deserialize, Default)]
-struct OzmuxField {
-    #[serde(default)]
-    commands: Vec<String>,
 }
 
 #[cfg(test)]
@@ -63,17 +50,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_name_and_commands_from_package_json() {
+    fn reads_name_from_package_json() {
         let json = r#"{ "name": "memo", "ozmux": { "commands": ["@memo"] } }"#;
         let m = Manifest::parse(json).unwrap();
         assert_eq!(m.name, "memo");
-        assert_eq!(m.commands, vec!["@memo".to_string()]);
     }
 
     #[test]
-    fn defaults_commands_to_empty_and_requires_name() {
-        let m = Manifest::parse(r#"{ "name": "x" }"#).unwrap();
-        assert!(m.commands.is_empty());
+    fn requires_name() {
         assert!(matches!(
             Manifest::parse(r#"{ "ozmux": {} }"#),
             Err(ManifestError::MissingName)

@@ -55,12 +55,6 @@ impl Plugin for ExtensionManagerPlugin {
     fn build(&self, app: &mut App) {
         let roots = discovery_roots();
         let found = discover_extensions(&roots);
-        for cmd in command_collisions(&found) {
-            tracing::warn!(
-                command = %cmd,
-                "extension command declared by more than one extension; the @<cmd> shim is ambiguous"
-            );
-        }
 
         let mut extensions = HashMap::new();
         let endpoints = self.endpoints.clone();
@@ -156,29 +150,11 @@ fn discover_extensions(roots: &[PathBuf]) -> Vec<DiscoveredExtension> {
                     name: manifest.name,
                     dir,
                     main: EXTENSION_MAIN.into(),
-                    commands: manifest.commands,
                 },
             });
         }
     }
     found
-}
-
-/// Returns the command names declared by more than one discovered extension.
-/// Such commands map to an ambiguous `@<cmd>` shim, so the caller warns.
-fn command_collisions(found: &[DiscoveredExtension]) -> Vec<String> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for d in found {
-        for cmd in &d.config.commands {
-            *counts.entry(cmd.clone()).or_insert(0) += 1;
-        }
-    }
-    let mut collisions: Vec<String> = counts
-        .into_iter()
-        .filter_map(|(cmd, n)| (n > 1).then_some(cmd))
-        .collect();
-    collisions.sort();
-    collisions
 }
 
 fn drain_all_control_requests(registry: Res<ExtensionRegistry>, mut mux: MultiplexerCommands) {
@@ -231,7 +207,6 @@ mod tests {
                 name: "memo".into(),
                 dir: memo_dir(),
                 main: EXTENSION_MAIN.into(),
-                commands: vec!["@memo".into()],
             },
             Duration::from_secs(20),
         )
@@ -270,58 +245,35 @@ mod tests {
     }
 
     #[test]
-    fn discovers_dirs_with_package_json_and_detects_command_collisions() {
+    fn discovers_dirs_with_package_json() {
         let tmp = tempfile::tempdir().unwrap();
-        let mk = |name: &str, cmds: &str| {
+        let mk = |name: &str| {
             let d = tmp.path().join(name);
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(
                 d.join("package.json"),
-                format!(
-                    r#"{{"name":"{name}","main":"bootstrap.ts","ozmux":{{"commands":[{cmds}]}}}}"#
-                ),
+                format!(r#"{{"name":"{name}","main":"bootstrap.ts"}}"#),
             )
             .unwrap();
         };
-        mk("memo", "\"@memo\"");
-        mk("note", "\"@note\"");
+        mk("memo");
+        mk("note");
         std::fs::create_dir_all(tmp.path().join("not-an-ext")).unwrap();
         let found = discover_extensions(&[tmp.path().to_path_buf()]);
         assert_eq!(found.len(), 2);
-
-        let tmp2 = tempfile::tempdir().unwrap();
-        let mk2 = |name: &str| {
-            let d = tmp2.path().join(name);
-            std::fs::create_dir_all(&d).unwrap();
-            std::fs::write(
-                d.join("package.json"),
-                format!(r#"{{"name":"{name}","ozmux":{{"commands":["@dup"]}}}}"#),
-            )
-            .unwrap();
-        };
-        mk2("a");
-        mk2("b");
-        assert!(
-            command_collisions(&discover_extensions(&[tmp2.path().to_path_buf()]))
-                .contains(&"@dup".to_string())
-        );
     }
 
     #[test]
     fn dedups_by_name_across_roots_first_wins() {
         let root_a = tempfile::tempdir().unwrap();
         let root_b = tempfile::tempdir().unwrap();
-        let mk = |root: &std::path::Path, name: &str, cmd: &str| {
+        let mk = |root: &std::path::Path, name: &str| {
             let d = root.join(name);
             std::fs::create_dir_all(&d).unwrap();
-            std::fs::write(
-                d.join("package.json"),
-                format!(r#"{{"name":"{name}","ozmux":{{"commands":["{cmd}"]}}}}"#),
-            )
-            .unwrap();
+            std::fs::write(d.join("package.json"), format!(r#"{{"name":"{name}"}}"#)).unwrap();
         };
-        mk(root_a.path(), "memo", "@memo");
-        mk(root_b.path(), "memo", "@other");
+        mk(root_a.path(), "memo");
+        mk(root_b.path(), "memo");
         let found =
             discover_extensions(&[root_a.path().to_path_buf(), root_b.path().to_path_buf()]);
         assert_eq!(
@@ -329,7 +281,7 @@ mod tests {
             1,
             "duplicate name across roots collapses to one"
         );
-        assert_eq!(found[0].config.commands, vec!["@memo".to_string()]);
+        assert_eq!(found[0].config.name, "memo");
     }
 
     #[test]
@@ -339,7 +291,7 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(
             d.join("package.json"),
-            r#"{"name":"memo","main":"other.js","ozmux":{"commands":["@memo"]}}"#,
+            r#"{"name":"memo","main":"other.js"}"#,
         )
         .unwrap();
         let found = discover_extensions(&[tmp.path().to_path_buf()]);
@@ -347,22 +299,5 @@ mod tests {
             found[0].config.main,
             std::ffi::OsString::from("bootstrap.ts")
         );
-    }
-
-    #[test]
-    fn no_collisions_when_commands_are_unique() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mk = |name: &str, cmd: &str| {
-            let d = tmp.path().join(name);
-            std::fs::create_dir_all(&d).unwrap();
-            std::fs::write(
-                d.join("package.json"),
-                format!(r#"{{"name":"{name}","ozmux":{{"commands":["{cmd}"]}}}}"#),
-            )
-            .unwrap();
-        };
-        mk("memo", "@memo");
-        mk("note", "@note");
-        assert!(command_collisions(&discover_extensions(&[tmp.path().to_path_buf()])).is_empty());
     }
 }

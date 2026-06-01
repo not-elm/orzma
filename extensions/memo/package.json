@@ -4,11 +4,6 @@
   "version": "1.0.0",
   "description": "",
   "type": "module",
-  "ozmux": {
-    "commands": [
-      "@memo"
-    ]
-  },
   "scripts": {
     "check-types": "tsc --noEmit"
   },
