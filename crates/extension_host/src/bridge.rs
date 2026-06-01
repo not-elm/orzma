@@ -78,7 +78,7 @@ impl Plugin for ExtensionControlPlugin {
 /// `OZMUX_CONTROL_SOCK_PATH` is a single value; it is set to the FIRST
 /// extension's control socket. This is correct for any extension's split call:
 /// the control bridge resolves the split purely from the request payload (the
-/// owning extension name, html_root, side/orientation come from the calling
+/// owning extension name, entry, side/orientation come from the calling
 /// extension's `callControl`), so applying a split through any extension's
 /// control socket produces the same multiplexer mutation. The env carries no
 /// per-extension control state — only a generic "reach the host" endpoint.
@@ -141,11 +141,11 @@ fn resolve_and_split(
     let ControlOp::Split(p) = req.op;
     let activity_id = p.activity.activity_id.clone();
     let ActivityKindSpec::Extension {
-        html_root,
+        entry,
         extension_name,
     } = p.activity.kind;
     let kind = ActivityKind::Extension {
-        html_root: PathBuf::from(html_root),
+        entry: PathBuf::from(entry),
     };
     let side = match p.side {
         ControlSide::Before => Side::Before,
@@ -186,7 +186,7 @@ mod tests {
                 orientation: ControlOrientation::Vertical,
                 activity: crate::control::ActivitySpec {
                     kind: ActivityKindSpec::Extension {
-                        html_root: "/x/memo".into(),
+                        entry: "/x/memo".into(),
                         extension_name: Some("memo".into()),
                     },
                     name: None,

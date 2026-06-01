@@ -127,8 +127,8 @@ pub enum ActivityKind {
     Terminal,
     /// An extension activity served from a Node process over a UDS.
     Extension {
-        /// Filesystem root that the extension's HTTP server serves.
-        html_root: PathBuf,
+        /// HTML entry path (relative to the extension dir) the webview loads.
+        entry: PathBuf,
     },
     /// An embedded Chromium browser activity.
     Browser {

@@ -13,6 +13,15 @@ import {
   unregisterActivityHandlers,
 } from './handlers-server.ts';
 
+/**
+ * The HTML entry path the webview loads, relative to the extension dir (the
+ * asset root = `process.cwd()`), normalized to forward slashes so it is a
+ * well-formed `ozmux-ext://<name>/<entry>` URL path on every OS.
+ */
+function toEntry(html: string): string {
+  return path.relative(process.cwd(), html).split(path.sep).join('/');
+}
+
 export type PaneId = string;
 export type WindowId = string;
 export type SessionId = string;
@@ -139,7 +148,7 @@ function rollbackActivityRegistries(activityId: ActivityId, spec: ActivitySpecIn
 
 function activityKindForSpec(spec: ActivitySpecInput): ActivityKind {
   if (spec.kind === 'terminal') return { type: 'terminal' };
-  return { type: 'extension', html_root: path.dirname(spec.html) };
+  return { type: 'extension', entry: toEntry(spec.html) };
 }
 
 function controlActivity(
@@ -147,18 +156,18 @@ function controlActivity(
   spec: ActivitySpecInput,
 ): {
   kind: 'extension';
-  html_root: string;
+  entry: string;
   name?: string;
   activity_id: string;
   extension_name?: string;
 } {
   // TODO: terminal splits over the control socket are not supported in #2/#3; a future op should carry a terminal kind instead of this extension fallback.
   if (spec.kind !== 'extension') {
-    return { kind: 'extension', html_root: '', name: spec.name, activity_id: activityId };
+    return { kind: 'extension', entry: '', name: spec.name, activity_id: activityId };
   }
   return {
     kind: 'extension',
-    html_root: path.dirname(spec.html),
+    entry: toEntry(spec.html),
     name: spec.name,
     activity_id: activityId,
     extension_name: requireExtensionName(),
@@ -181,7 +190,7 @@ function buildActivityPayload(
     // where this is guaranteed to be set.
     base.kind = {
       type: 'extension',
-      html_root: path.dirname(spec.html),
+      entry: toEntry(spec.html),
       extension_name: requireExtensionName(),
     };
   }

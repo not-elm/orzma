@@ -311,7 +311,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         let mut stream = UnixStream::connect(&sock).unwrap();
-        let call = r#"{"kind":"call","id":"req1","op":"split","pane":"100","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","html_root":"/x","name":null,"activity_id":"aid-test"}}}"#;
+        let call = r#"{"kind":"call","id":"req1","op":"split","pane":"100","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","entry":"/x","name":null,"activity_id":"aid-test"}}}"#;
         stream.write_all(format!("{call}\n").as_bytes()).unwrap();
         let mut buf = String::new();
         stream

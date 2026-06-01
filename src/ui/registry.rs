@@ -199,7 +199,7 @@ mod tests {
         world.insert_resource(ActivityEntityRegistry::default());
         let activity = world.spawn_empty().id();
         let kind = ActivityKind::Extension {
-            html_root: PathBuf::from("/tmp/memo"),
+            entry: PathBuf::from("/tmp/memo"),
         };
 
         let mut host = None;
