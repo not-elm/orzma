@@ -85,6 +85,12 @@ impl RuntimeRoot {
             for p in [&root, &sock_dir, &bin_dir] {
                 std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700))?;
             }
+            // NOTE: the intermediate `<parent>/<pid>` dir is created by
+            // `create_dir_all` at the process umask (0755, world-listable);
+            // chmod it 0700 too so extension names under it do not leak in /tmp.
+            if let Some(pid_dir) = root.parent() {
+                std::fs::set_permissions(pid_dir, std::fs::Permissions::from_mode(0o700))?;
+            }
         }
         Ok(Self {
             root,
@@ -364,6 +370,19 @@ mod tests {
             rt.root().to_path_buf()
         };
         assert!(!path.exists(), "Drop must remove the tree");
+    }
+
+    #[test]
+    fn runtime_root_creates_pid_dir_0700() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        let rt = RuntimeRoot::resolve_in(parent.path(), 4242, "hello").unwrap();
+        let pid_dir = rt.root().parent().unwrap();
+        let mode = std::fs::metadata(pid_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "the intermediate <pid> dir must be 0700 so extension names do not leak"
+        );
     }
 
     #[test]
