@@ -7,7 +7,7 @@
 use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
 use crate::ui::registry::ActivityEntityRegistry;
-use crate::ui::{ExtensionActivityMarker, HostActivityEntity};
+use crate::ui::{AddressBarFocus, BrowserPageWebview, ExtensionActivityMarker, HostActivityEntity};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
@@ -130,32 +130,62 @@ impl Plugin for OzmuxExtensionRenderPlugin {
 /// from the active pane fixes both — keyboard follows the focused pane, and CEF
 /// blurs the webview on focus-leave (`bevy_cef`'s `apply_webview_focus` releases
 /// CEF focus when `FocusedWebview` becomes `None`).
+///
+/// For browser activities the webview lives on a child entity pointed to by
+/// `BrowserPageWebview`; `active_webview` resolves through that indirection.
+/// When `AddressBarFocus` names the active host, CEF focus is released so the
+/// address bar can own the keyboard.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     mux: MultiplexerCommands,
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: Res<ActivityEntityRegistry>,
     webviews: Query<(), With<WebviewSource>>,
+    browser_hosts: Query<&BrowserPageWebview>,
+    address_focus: Option<Res<AddressBarFocus>>,
 ) {
-    let active = active_webview(&mux, &attached_session, &registry, &webviews);
+    let bar_focused_host = address_focus.as_ref().and_then(|f| f.0);
+    let active = active_webview(
+        &mux,
+        &attached_session,
+        &registry,
+        &webviews,
+        &browser_hosts,
+        bar_focused_host,
+    );
     if focused.0 != active {
         focused.0 = active;
     }
 }
 
-/// The active pane's webview host entity, or `None` when the active activity is
-/// not a webview (e.g. a terminal pane).
+/// The active pane's focused webview entity, or `None` when the active activity
+/// is not a webview (e.g. a terminal pane) or when the address bar owns input.
+///
+/// For extension activities the webview is on the host itself (`WebviewSource`).
+/// For browser activities the webview is on the `BrowserPageWebview` child;
+/// when `bar_focused_host` matches the host, returns `None` to release CEF focus.
 fn active_webview(
     mux: &MultiplexerCommands,
     attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: &ActivityEntityRegistry,
     webviews: &Query<(), With<WebviewSource>>,
+    browser_hosts: &Query<&BrowserPageWebview>,
+    bar_focused_host: Option<Entity>,
 ) -> Option<Entity> {
     let session = attached_session.iter().next()?;
     let pane = mux.sessions_active_pane(session)?;
     let activity = mux.panes_active_activity(pane)?;
     let host = registry.get(activity)?;
-    webviews.contains(host).then_some(host)
+    if webviews.contains(host) {
+        return Some(host);
+    }
+    if let Ok(page) = browser_hosts.get(host) {
+        if bar_focused_host == Some(host) {
+            return None;
+        }
+        return Some(page.0);
+    }
+    None
 }
 
 /// Attaches a `bevy_cef` webview to each Extension Activity host once its pane
@@ -781,6 +811,52 @@ mod tests {
         assert_eq!(
             resolved, None,
             "an unstamped activity (no ExtensionActivityAid) must resolve to no aid"
+        );
+    }
+
+    #[test]
+    fn focused_webview_resolves_browser_child_and_respects_address_focus() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::ui::{AddressBarFocus, BrowserPageWebview};
+        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(MultiplexerPlugin);
+        app.init_resource::<ActivityEntityRegistry>();
+        app.init_resource::<FocusedWebview>();
+        app.init_resource::<AddressBarFocus>();
+        app.add_systems(Update, sync_focused_webview);
+
+        let (session, _pane, activity) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("t".into()));
+                (o.session, o.pane, o.activity)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut().entity_mut(session).insert(AttachedSession);
+
+        let child = app.world_mut().spawn(WebviewSource::new("https://example.com")).id();
+        let host = app.world_mut().spawn(BrowserPageWebview(child)).id();
+        {
+            let mut reg = app.world_mut().resource_mut::<ActivityEntityRegistry>();
+            reg.insert_for_test(activity, host);
+        }
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "active browser pane focuses its page-webview child"
+        );
+
+        app.world_mut().resource_mut::<AddressBarFocus>().0 = Some(host);
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "address-bar focus releases CEF focus"
         );
     }
 }
