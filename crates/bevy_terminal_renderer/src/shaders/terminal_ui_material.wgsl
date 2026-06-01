@@ -25,6 +25,7 @@ struct TerminalParams {
     bg_padding_color: vec4<f32>,
     hover_hyperlink_id: u32,
     hover_active: u32,
+    dim: f32,
 };
 
 struct Cell {
@@ -96,18 +97,28 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     // strip) fall back to bg_padding_color so the surrounding band blends
     // with the terminal background instead of opaque black.
     let fallback = params.bg_padding_color;
+
+    var color: vec4<f32>;
     if params.grid_size.x == 0u || params.grid_size.y == 0u {
-        return fallback;
+        color = fallback;
+    } else {
+        // Shader runs entirely in PHYSICAL pixels. Bevy 0.18
+        // UiVertexOutput.size is physical px (verified in spec R1 audit), so
+        // we use it directly.
+        let p_px = in.uv * in.size;
+        let hit = locate_cell(p_px);
+        if !hit.valid {
+            color = paint_right_strip(p_px, fallback);
+        } else {
+            color = paint_grid_cell(hit, fallback);
+        }
     }
 
-    // Shader runs entirely in PHYSICAL pixels. Bevy 0.18 UiVertexOutput.size
-    // is physical px (verified in spec R1 audit), so we use it directly.
-    let p_px = in.uv * in.size;
-    let hit = locate_cell(p_px);
-    if !hit.valid {
-        return paint_right_strip(p_px, fallback);
-    }
-    return paint_grid_cell(hit, fallback);
+    // Pane-level dim: active pane => params.dim == 1.0 (no-op); inactive pane
+    // => params.dim < 1.0. RGB only; alpha is preserved so blending and the
+    // opaque-padding contract are unchanged. Composes with the per-cell SGR
+    // STYLE_DIM independently.
+    return vec4<f32>(color.rgb * params.dim, color.a);
 }
 
 // ============================================================================

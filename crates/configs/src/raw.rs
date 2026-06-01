@@ -6,6 +6,7 @@ use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
 use crate::browser::BrowserPatch;
 use crate::font::FontPatch;
+use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::mouse::MousePatch;
 use crate::shortcuts::Shortcuts;
 use crate::theme::ThemePatch;
@@ -21,13 +22,14 @@ pub(crate) struct RawConfigs {
     pub(crate) font: Option<FontPatch>,
     pub(crate) browser: Option<BrowserPatch>,
     pub(crate) mouse: Option<MousePatch>,
+    pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
 }
 
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `bindings` is full-replace when present.
-    /// The `theme`, `font`, `browser`, and `mouse` sections use their respective
-    /// `Patch::apply_to` for per-field merge.
+    /// The `theme`, `font`, `browser`, `mouse`, and `inactive_pane` sections use
+    /// their respective `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(shortcuts) = self.shortcuts {
             base.shortcuts = shortcuts;
@@ -43,6 +45,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.mouse {
             base.mouse = patch.apply_to(base.mouse);
+        }
+        if let Some(patch) = self.inactive_pane {
+            base.inactive_pane = patch.apply_to(base.inactive_pane);
         }
         base
     }
@@ -128,6 +133,30 @@ resize-pane-down = "Cmd+Shift+J"
         assert!(
             msg.contains("resize-pane-down") || msg.contains("unknown field"),
             "error message should mention the unknown field; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn inactive_pane_section_merges_and_clamps() {
+        let toml_str = r#"
+[inactive_pane]
+enabled = false
+opacity = 2.0
+"#;
+        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert!(!merged.inactive_pane.enabled);
+        assert_eq!(merged.inactive_pane.opacity, 1.0, "opacity clamps to 1.0");
+        assert_eq!(merged.inactive_pane.color, "#000000", "color keeps default");
+    }
+
+    #[test]
+    fn missing_inactive_pane_section_uses_defaults() {
+        let raw: RawConfigs = toml::from_str("").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(
+            merged.inactive_pane,
+            crate::inactive_pane::InactivePaneConfig::default()
         );
     }
 

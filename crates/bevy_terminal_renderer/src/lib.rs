@@ -19,6 +19,7 @@ pub use crate::glyph::font::{
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
     pub use crate::bundle::TerminalRenderBundle;
+    pub use crate::material::PaneDim;
     pub use crate::schema::*;
 }
 

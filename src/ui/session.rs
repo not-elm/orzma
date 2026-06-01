@@ -3,17 +3,23 @@
 //! Session entity is non-`Node`, so a parked subtree is skipped by Bevy's
 //! UI walker — no layout, no `ComputedNode` updates, no resize-pass work.
 
+use crate::configs::OzmuxConfigsResource;
 use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
 use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::ActivityEntityRegistry;
-use crate::ui::{ActivityHostNode, SessionUiRoot, StructuralNode};
+use crate::ui::terminal::resolve_pane_session;
+use crate::ui::{
+    ActivityHostNode, HostActivityEntity, PaneDimOverlay, SessionUiRoot, StructuralNode,
+    TerminalActivityMarker,
+};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
+use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActiveActivity, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells, PaneMarker,
-    SessionMarker, SessionUiSubtree,
+    ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells,
+    PaneMarker, SessionMarker, SessionUiSubtree,
 };
 
 pub struct OzmuxSessionUiPlugin;
@@ -22,6 +28,15 @@ impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
         order_activity_pipeline(app);
         app.add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
+            .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
+            .add_systems(
+                Update,
+                sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
+            )
+            .add_systems(
+                Update,
+                sync_terminal_dim_on_mount.after(OzmuxSystems::SetupActivity),
+            )
             .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
 }
@@ -94,6 +109,7 @@ fn rebuild_session_ui(
             Entity,
             &LayoutCells,
             &SessionUiSubtree,
+            Option<&ActivePane>,
             Has<AttachedSession>,
         ),
         (With<SessionMarker>, Changed<LayoutCells>),
@@ -104,10 +120,22 @@ fn rebuild_session_ui(
     activities: Query<(&ActivityKind, &Name), With<ActivityMarker>>,
     active_activities: Query<&ActiveActivity, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
+    configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
 
-    for (session_entity, layout, subtree, _is_attached) in sessions.iter() {
+    let veil: Option<Color> = match configs.as_deref() {
+        Some(cfg) if cfg.inactive_pane.enabled => {
+            let (r, g, b) = cfg.inactive_pane.rgb();
+            Some(Color::srgb_u8(r, g, b).with_alpha(cfg.inactive_pane.opacity))
+        }
+        _ => None,
+    };
+
+    for (session_entity, layout, subtree, active_pane, _is_attached) in sessions.iter() {
+        let active_pane = active_pane.map(|a| a.0);
+        let session_veil = if active_pane.is_some() { veil } else { None };
+        let active_pane = active_pane.unwrap_or(Entity::PLACEHOLDER);
         descend_and_detach_hosts(&mut commands, subtree.0, &children, &activity_hosts);
         descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
 
@@ -125,6 +153,8 @@ fn rebuild_session_ui(
                     &children,
                     &activities,
                     &active_activities,
+                    active_pane,
+                    session_veil,
                 );
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
@@ -173,6 +203,110 @@ fn descend_and_despawn_structural(
     }
     for e in to_despawn {
         commands.entity(e).try_despawn();
+    }
+}
+
+/// Flips each pane's dim veil when its session's `ActivePane` changes
+/// (focus moves between panes without a layout rebuild). For every session
+/// whose `ActivePane` changed, sets each `PaneDimOverlay` belonging to that
+/// session to `Hidden` iff its pane is the new active pane, else `Visible`.
+/// Pane→session is resolved via `ChildOf`; using `MultiplexerCommands` here
+/// would conflict on its `&mut ActivePane`.
+fn sync_pane_dim(
+    mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
+    changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
+    panes: Query<&ChildOf, With<PaneMarker>>,
+) {
+    for (session, active) in changed_sessions.iter() {
+        for (overlay, mut visibility) in overlays.iter_mut() {
+            let Ok(child_of) = panes.get(overlay.pane) else {
+                continue;
+            };
+            if child_of.parent() != session {
+                continue;
+            }
+            let want = if overlay.pane == active.0 {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            };
+            visibility.set_if_neq(want);
+        }
+    }
+}
+
+/// Inactive-terminal brightness multiplier from config: `inactive_pane.dim`
+/// when dimming is enabled, else `1.0` (disabled or absent config = no dim).
+fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
+    match configs {
+        Some(cfg) if cfg.inactive_pane.enabled => cfg.inactive_pane.dim,
+        _ => 1.0,
+    }
+}
+
+/// On focus change, sets each terminal host's [`PaneDim`] in the changed
+/// session: `1.0` for the active pane's terminal, the configured dim factor
+/// otherwise. A darkening veil is invisible on a black terminal, so terminals
+/// are dimmed at the renderer instead. Pane→session is resolved via `ChildOf`;
+/// `MultiplexerCommands` can't be used here (it holds `&mut ActivePane`).
+fn sync_terminal_dim_on_focus(
+    mut commands: Commands,
+    changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
+    hosts: Query<
+        (Entity, &HostActivityEntity),
+        (
+            With<TerminalActivityMarker>,
+            With<MaterialNode<TerminalUiMaterial>>,
+        ),
+    >,
+    child_of: Query<&ChildOf>,
+    configs: Option<Res<OzmuxConfigsResource>>,
+) {
+    let dim_factor = inactive_dim_factor(configs.as_deref());
+    for (session, active) in changed_sessions.iter() {
+        for (host, host_activity) in hosts.iter() {
+            let Some((pane, host_session)) = resolve_pane_session(host_activity.0, &child_of)
+            else {
+                continue;
+            };
+            if host_session != session {
+                continue;
+            }
+            let want = if pane == active.0 { 1.0 } else { dim_factor };
+            commands.entity(host).insert(PaneDim(want));
+        }
+    }
+}
+
+/// Sets the initial [`PaneDim`] on a terminal host the frame its material is
+/// mounted. Hosts attach lazily after a rebuild — possibly a frame after the
+/// focus change `sync_terminal_dim_on_focus` reacts to — so this reads the
+/// host's session `ActivePane` directly, dimming a freshly-split inactive
+/// terminal without waiting for the next focus change.
+fn sync_terminal_dim_on_mount(
+    mut commands: Commands,
+    newly_mounted: Query<
+        (Entity, &HostActivityEntity),
+        (
+            With<TerminalActivityMarker>,
+            Added<MaterialNode<TerminalUiMaterial>>,
+        ),
+    >,
+    active_panes: Query<&ActivePane>,
+    child_of: Query<&ChildOf>,
+    configs: Option<Res<OzmuxConfigsResource>>,
+) {
+    let dim_factor = inactive_dim_factor(configs.as_deref());
+    for (host, host_activity) in newly_mounted.iter() {
+        let Some((pane, session)) = resolve_pane_session(host_activity.0, &child_of) else {
+            continue;
+        };
+        let is_active = active_panes
+            .get(session)
+            .map(|a| a.0 == pane)
+            .unwrap_or(true);
+        let want = if is_active { 1.0 } else { dim_factor };
+        commands.entity(host).insert(PaneDim(want));
     }
 }
 

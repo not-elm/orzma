@@ -8,9 +8,9 @@ use crate::theme;
 use crate::ui::activity::build_activity_host_children;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::tab_bar::{TabEntry, build_pane_tab_bar};
-use crate::ui::{PaneFrame, StructuralNode, palette};
+use crate::ui::{PaneDimOverlay, PaneFrame, StructuralNode, palette};
 use bevy::prelude::*;
-use bevy::ui::{FlexDirection, UiRect, Val};
+use bevy::ui::{FlexDirection, PositionType, UiRect, Val};
 use ozmux_multiplexer::{
     ActiveActivity, ActivityKind, ActivityMarker, Cell, CellId, LayoutCellState, PaneMarker,
     SplitOrientation,
@@ -51,6 +51,8 @@ pub(crate) fn build_cell_recursive(
     pane_children: &Query<&Children>,
     activities: &Query<(&ActivityKind, &Name), With<ActivityMarker>>,
     active_activities: &Query<&ActiveActivity, With<PaneMarker>>,
+    active_pane: Entity,
+    veil: Option<Color>,
 ) {
     let cell = match cells.cell(cell_id) {
         Ok(c) => c,
@@ -83,6 +85,8 @@ pub(crate) fn build_cell_recursive(
             pane_children,
             activities,
             active_activities,
+            active_pane,
+            veil,
         ),
         Cell::Split(s) => {
             let (lhs_grow, rhs_grow) = split_ratio_to_flex_grows(s.lhs_weight, s.rhs_weight);
@@ -126,6 +130,8 @@ pub(crate) fn build_cell_recursive(
                 pane_children,
                 activities,
                 active_activities,
+                active_pane,
+                veil,
             );
 
             let rhs = commands
@@ -150,6 +156,8 @@ pub(crate) fn build_cell_recursive(
                 pane_children,
                 activities,
                 active_activities,
+                active_pane,
+                veil,
             );
         }
     }
@@ -166,6 +174,8 @@ fn build_pane(
     pane_children: &Query<&Children>,
     activities: &Query<(&ActivityKind, &Name), With<ActivityMarker>>,
     active_activities: &Query<&ActiveActivity, With<PaneMarker>>,
+    active_pane: Entity,
+    veil: Option<Color>,
 ) {
     let active_activity = active_activities
         .get(pane_entity)
@@ -237,6 +247,40 @@ fn build_pane(
         } else {
             commands.entity(host).insert(ChildOf(inactive_host_parent));
         }
+    }
+
+    // NOTE: terminal panes are dimmed at the renderer (PaneDim uniform), so
+    // they must NOT also get the veil — double-dimming would over-darken their
+    // content. The veil is for non-terminal (e.g. webview) panes only.
+    let active_is_terminal = matches!(
+        activities.get(active_activity).map(|(kind, _)| kind),
+        Ok(ActivityKind::Terminal)
+    );
+    if let Some(veil_color) = veil
+        && !active_is_terminal
+    {
+        let visibility = if pane_entity == active_pane {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+        commands.spawn((
+            Name::new(format!("PaneDim({pane_entity:?})")),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(veil_color),
+            visibility,
+            Pickable::IGNORE,
+            StructuralNode,
+            PaneDimOverlay { pane: pane_entity },
+            ChildOf(pane_frame),
+        ));
     }
 }
 
