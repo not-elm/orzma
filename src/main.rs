@@ -1,6 +1,7 @@
 //! ozmux Bevy GUI entry point.
 
 mod bootstrap;
+mod browser_render;
 mod clipboard;
 mod configs;
 mod extension_manager;

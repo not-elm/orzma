@@ -99,6 +99,33 @@ pub(crate) struct BrowserToolbarState {
     pub(crate) can_go_forward: bool,
 }
 
+/// On a browser activity host: the address-bar edit buffer + caret. Pure edit
+/// logic lives in `crate::browser_render`.
+#[derive(Component, Default, Clone)]
+pub(crate) struct AddressEdit {
+    pub(crate) buffer: String,
+    pub(crate) caret: usize,
+}
+
+/// Marker on the address-bar `Text` node inside a browser toolbar.
+#[derive(Component)]
+pub(crate) struct AddrBarText;
+
+/// A toolbar navigation action a `BrowserNavButton` performs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum NavAction {
+    Back,
+    Forward,
+    Reload,
+}
+
+/// On a toolbar button: its owning host + the action it triggers.
+#[derive(Component)]
+pub(crate) struct BrowserNavButton {
+    pub(crate) host: Entity,
+    pub(crate) action: NavAction,
+}
+
 /// Back-pointer from a stable Activity host entity to its owning
 /// multiplexer Activity entity. Stamped by
 /// `ActivityEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
