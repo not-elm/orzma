@@ -3,7 +3,7 @@
 //! the (background, indicator, text) color triple for a single tab.
 
 use crate::theme;
-use crate::ui::StructuralNode;
+use crate::ui::{StructuralNode, TabButton};
 use crate::ui::palette;
 use bevy::color::Color;
 use bevy::prelude::*;
@@ -45,12 +45,8 @@ fn tab_colors(is_active: bool, is_active_pane: bool) -> TabColors {
 
 /// A single tab's display data, derived from ECS components by the caller.
 pub(crate) struct TabEntry {
-    /// Activity entity. Not read by the tab bar builder today, but load-bearing
-    /// for future tab interactivity (click-to-switch) and equality checks.
-    #[expect(
-        dead_code,
-        reason = "reserved for future tab interactivity; do not remove"
-    )]
+    /// Activity entity this tab selects. Attached to the tab Node as
+    /// `TabButton.activity` so `drive_tab_clicks` can focus it.
     pub entity: Entity,
     /// Display name of the activity.
     pub name: String,
@@ -61,9 +57,10 @@ pub(crate) struct TabEntry {
 /// Spawn the per-pane tab bar (one tab per Activity) as a child of `parent`.
 /// Every spawned Entity carries `StructuralNode`. `is_active_pane` drives
 /// the indicator accent (accent vs border).
-pub fn build_pane_tab_bar(
+pub(crate) fn build_pane_tab_bar(
     commands: &mut Commands,
     parent: Entity,
+    pane: Entity,
     tabs: &[TabEntry],
     is_active_pane: bool,
     ui_font: &Handle<Font>,
@@ -84,13 +81,14 @@ pub fn build_pane_tab_bar(
         .id();
 
     for tab in tabs {
-        build_tab(commands, bar, tab, is_active_pane, ui_font);
+        build_tab(commands, bar, pane, tab, is_active_pane, ui_font);
     }
 }
 
 fn build_tab(
     commands: &mut Commands,
     parent: Entity,
+    pane: Entity,
     tab: &TabEntry,
     is_active_pane: bool,
     ui_font: &Handle<Font>,
@@ -100,6 +98,11 @@ fn build_tab(
     let tab_entity = commands
         .spawn((
             Name::new("Tab"),
+            Button,
+            TabButton {
+                pane,
+                activity: tab.entity,
+            },
             Node {
                 padding: UiRect::axes(Val::Px(theme::TAB_PADDING_X_PX), Val::Px(4.0)),
                 border: UiRect {

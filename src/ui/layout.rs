@@ -220,7 +220,7 @@ fn build_pane(
     // multi-session tab indicator would require knowing the session-level
     // active pane, which is not threaded here yet. Safe default: treat
     // every pane as the active one (solid accent indicator).
-    build_pane_tab_bar(commands, pane_frame, &tabs, true, ui_font);
+    build_pane_tab_bar(commands, pane_frame, pane_entity, &tabs, true, ui_font);
 
     let activity_slot = commands
         .spawn((

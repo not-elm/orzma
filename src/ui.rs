@@ -881,6 +881,23 @@ mod tests {
     }
 
     #[test]
+    fn rebuilt_tabs_carry_tab_button() {
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let tab_count = world
+            .query_filtered::<Entity, With<TabButton>>()
+            .iter(world)
+            .count();
+        assert_eq!(
+            tab_count, 1,
+            "the bootstrap pane has one activity, so its tab bar has one TabButton-tagged tab",
+        );
+    }
+
+    #[test]
     fn status_bar_chips_appear_in_session_creation_order_after_cmd_r() {
         use crate::ui::status_bar_sync::StatusBarRoot;
         use bevy::ecs::system::RunSystemOnce;
