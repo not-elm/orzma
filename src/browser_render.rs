@@ -16,6 +16,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
+use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
 use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands, SessionMarker};
@@ -39,6 +40,7 @@ impl Plugin for OzmuxBrowserRenderPlugin {
                     render_address_text,
                     drive_nav_buttons,
                     sync_nav_button_enabled,
+                    nav_button_hover_cursor.after(crate::input::InputPhase::Hover),
                     focus_address_bar_on_click,
                     focus_address_bar_on_cmd_l.before(crate::input::dispatch_focused_key),
                     browser_address_editor.after(crate::input::dispatch_focused_key),
@@ -289,6 +291,28 @@ fn sync_nav_button_enabled(
                 tc.0 = glyph;
             }
         }
+    }
+}
+
+/// Shows a pointer cursor while the mouse hovers any nav button, so the
+/// back/forward/reload buttons read as clickable. Runs after `InputPhase::Hover`
+/// so it wins over the hyperlink system's per-frame `Text` write over the
+/// browser pane; leaving a button reverts to `Text` when that system re-asserts.
+fn nav_button_hover_cursor(
+    buttons: Query<&Interaction, With<BrowserNavButton>>,
+    mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
+) {
+    let hovering = buttons
+        .iter()
+        .any(|i| matches!(i, Interaction::Hovered | Interaction::Pressed));
+    if !hovering {
+        return;
+    }
+    let Ok(mut icon) = cursor_icons.single_mut() else {
+        return;
+    };
+    if !matches!(&*icon, CursorIcon::System(e) if *e == SystemCursorIcon::Pointer) {
+        *icon = CursorIcon::System(SystemCursorIcon::Pointer);
     }
 }
 
@@ -804,6 +828,47 @@ mod tests {
             glyph(&mut app, NavAction::Forward),
             palette::MUTED,
             "disabled forward glyph is muted (MUTED)"
+        );
+    }
+
+    #[test]
+    fn nav_button_hover_sets_pointer_cursor() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        let window = world
+            .spawn((PrimaryWindow, CursorIcon::System(SystemCursorIcon::Text)))
+            .id();
+        let host = world.spawn_empty().id();
+        let button = world
+            .spawn((
+                BrowserNavButton {
+                    host,
+                    action: NavAction::Back,
+                },
+                Interaction::Hovered,
+            ))
+            .id();
+
+        world.run_system_once(nav_button_hover_cursor).unwrap();
+        assert!(
+            matches!(
+                world.get::<CursorIcon>(window),
+                Some(CursorIcon::System(SystemCursorIcon::Pointer))
+            ),
+            "hovering a nav button sets the pointer cursor"
+        );
+
+        // Not hovering: the system no-ops, leaving the cursor as the hover phase set it.
+        *world.get_mut::<Interaction>(button).unwrap() = Interaction::None;
+        *world.get_mut::<CursorIcon>(window).unwrap() = CursorIcon::System(SystemCursorIcon::Text);
+        world.run_system_once(nav_button_hover_cursor).unwrap();
+        assert!(
+            matches!(
+                world.get::<CursorIcon>(window),
+                Some(CursorIcon::System(SystemCursorIcon::Text))
+            ),
+            "no hovered button leaves the cursor unchanged"
         );
     }
 
