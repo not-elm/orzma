@@ -4,16 +4,19 @@
 //! page-webview node — and (in a later phase) a CEF webview attached to the
 //! laid-out page child after host-side omnibox resolution.
 
+use crate::clipboard::Clipboard;
 use crate::configs::OzmuxConfigsResource;
 use crate::ui::{
     AddrBarText, AddressBarFocus, AddressEdit, BrowserActivityMarker, BrowserNavButton,
     BrowserPageWebview, BrowserToolbarState, HostActivityEntity, NavAction, PageWebviewOf,
 };
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput, KeyCode};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
-use ozmux_multiplexer::ActivityKind;
+use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands, SessionMarker};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
 
@@ -219,6 +222,108 @@ fn spawn_nav_button(commands: &mut Commands, host: Entity, action: NavAction, la
         .id()
 }
 
+/// Applies keyboard input to the focused browser host's address-bar buffer.
+/// Enter resolves the omnibox and navigates the page webview, then blurs; Esc
+/// blurs without navigating.
+fn browser_address_editor(
+    mut commands: Commands,
+    mut focus: ResMut<AddressBarFocus>,
+    mut events: MessageReader<KeyboardInput>,
+    configs: Res<OzmuxConfigsResource>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut clipboard: Option<ResMut<Clipboard>>,
+    mut hosts: Query<(&mut AddressEdit, &BrowserPageWebview)>,
+) {
+    let Some(host) = focus.0 else {
+        events.clear();
+        return;
+    };
+    let Ok((mut edit, page)) = hosts.get_mut(host) else {
+        focus.0 = None;
+        events.clear();
+        return;
+    };
+    for ev in events.read() {
+        if ev.state != ButtonState::Pressed {
+            continue;
+        }
+        let cmd = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
+        if cmd && matches!(&ev.logical_key, Key::Character(s) if s.eq_ignore_ascii_case("v")) {
+            if let Some(clip) = clipboard.as_mut() {
+                if let Some(text) = clip.read() {
+                    let one_line: String = text.split(['\n', '\r']).collect();
+                    insert_str(&mut edit, &one_line);
+                }
+            }
+            continue;
+        }
+        match &ev.logical_key {
+            Key::Enter => {
+                let url = resolve_omnibox_input(&edit.buffer, &configs.browser.search_template);
+                if !url.is_empty() {
+                    commands.trigger(RequestNavigate { webview: page.0, url });
+                }
+                focus.0 = None;
+                return;
+            }
+            Key::Escape => {
+                focus.0 = None;
+                return;
+            }
+            Key::Backspace => backspace(&mut edit),
+            Key::Delete => delete(&mut edit),
+            Key::ArrowLeft => caret_left(&mut edit),
+            Key::ArrowRight => caret_right(&mut edit),
+            Key::Home => caret_home(&mut edit),
+            Key::End => caret_end(&mut edit),
+            Key::Space => insert_char(&mut edit, ' '),
+            Key::Character(s) => {
+                for c in s.chars() {
+                    insert_char(&mut edit, c);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `Cmd+L` focuses the active browser pane's address bar (browser convention).
+fn focus_address_bar_on_cmd_l(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut focus: ResMut<AddressBarFocus>,
+    mux: MultiplexerCommands,
+    attached: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
+    browser_hosts: Query<(), With<BrowserActivityMarker>>,
+    mut edits: Query<(&mut AddressEdit, &BrowserToolbarState)>,
+) {
+    let cmd = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
+    if !(cmd && keys.just_pressed(KeyCode::KeyL)) {
+        return;
+    }
+    let Some(session) = attached.iter().next() else {
+        return;
+    };
+    let Some(pane) = mux.sessions_active_pane(session) else {
+        return;
+    };
+    let Some(activity) = mux.panes_active_activity(pane) else {
+        return;
+    };
+    let Some(host) = registry.get(activity) else {
+        return;
+    };
+    if !browser_hosts.contains(host) {
+        return;
+    }
+    let Ok((mut edit, state)) = edits.get_mut(host) else {
+        return;
+    };
+    edit.buffer = state.url.clone();
+    edit.caret = edit.buffer.chars().count();
+    focus.0 = Some(host);
+}
+
 /// Returns the byte offset in `e.buffer` for the character at `idx`.
 fn char_byte(e: &AddressEdit, idx: usize) -> usize {
     e.buffer
@@ -293,6 +398,8 @@ mod tests {
     use super::*;
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
+    use bevy::input::ButtonState;
+    use bevy::input::keyboard::{Key, KeyboardInput, NativeKeyCode};
     use ozmux_multiplexer::MultiplexerPlugin;
 
     fn make_test_app() -> App {
@@ -558,5 +665,65 @@ mod tests {
         assert_eq!(e.caret, 3);
         super::backspace(&mut e); // removes 'b'
         assert_eq!(e.buffer, "aあc");
+    }
+
+    fn key_press(window: Entity, logical: Key) -> KeyboardInput {
+        KeyboardInput {
+            key_code: bevy::input::keyboard::KeyCode::Unidentified(NativeKeyCode::Unidentified),
+            logical_key: logical,
+            state: ButtonState::Pressed,
+            repeat: false,
+            window,
+            text: None,
+        }
+    }
+
+    #[derive(bevy::ecs::resource::Resource, Default)]
+    struct Navigated(Vec<(Entity, String)>);
+
+    #[test]
+    fn enter_resolves_and_navigates_then_clears_focus() {
+        let mut app = make_test_app();
+        app.init_resource::<crate::ui::AddressBarFocus>();
+        app.insert_resource(bevy::input::ButtonInput::<bevy::input::keyboard::KeyCode>::default());
+        app.add_message::<KeyboardInput>();
+        app.add_systems(Update, build_browser_chrome);
+        app.add_systems(Update, browser_address_editor.after(build_browser_chrome));
+
+        let window = app.world_mut().spawn_empty().id();
+        let host = app
+            .world_mut()
+            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .id();
+        app.update();
+        let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
+
+        app.world_mut().resource_mut::<crate::ui::AddressBarFocus>().0 = Some(host);
+        for c in "github.com".chars() {
+            app.world_mut()
+                .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+                .write(key_press(window, Key::Character(c.to_string().into())));
+        }
+        app.update();
+        assert_eq!(app.world().get::<AddressEdit>(host).unwrap().buffer, "github.com");
+
+        app.init_resource::<Navigated>();
+        app.add_observer(|ev: On<RequestNavigate>, mut n: ResMut<Navigated>| {
+            n.0.push((ev.webview, ev.url.clone()));
+        });
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+            .write(key_press(window, Key::Enter));
+        app.update();
+        app.world_mut().flush();
+
+        let nav = app.world().resource::<Navigated>();
+        assert_eq!(nav.0, vec![(page, "https://github.com".to_string())]);
+        assert_eq!(
+            app.world().resource::<crate::ui::AddressBarFocus>().0,
+            None,
+            "Enter clears focus"
+        );
     }
 }
