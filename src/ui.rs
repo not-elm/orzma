@@ -72,6 +72,33 @@ pub struct TerminalActivityMarker;
 #[derive(Component)]
 pub(crate) struct ExtensionActivityMarker;
 
+/// Marks an Activity Host whose `kind` is `Browser`. The browser renderer
+/// (`crate::browser_render`) queries `With<BrowserActivityMarker>` to find hosts
+/// that need a native toolbar + a `bevy_cef` page webview attached.
+#[derive(Component)]
+pub(crate) struct BrowserActivityMarker;
+
+/// On a browser activity host: points to its page-webview child entity. Its
+/// presence also marks the host's chrome as already built (mount-once gate).
+#[derive(Component)]
+pub(crate) struct BrowserPageWebview(pub(crate) Entity);
+
+/// On a browser page-webview child: points back to its owning activity host.
+/// Lets navigation observers (which fire on the webview entity) reach the host.
+#[derive(Component)]
+pub(crate) struct PageWebviewOf(pub(crate) Entity);
+
+/// On a browser activity host: the latest navigation state, written by the
+/// `AddressChanged` / `LoadingStateChanged` observers and read by the toolbar
+/// render + button-enablement systems.
+#[derive(Component, Default, Clone)]
+pub(crate) struct BrowserToolbarState {
+    pub(crate) url: String,
+    pub(crate) is_loading: bool,
+    pub(crate) can_go_back: bool,
+    pub(crate) can_go_forward: bool,
+}
+
 /// Back-pointer from a stable Activity host entity to its owning
 /// multiplexer Activity entity. Stamped by
 /// `ActivityEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads

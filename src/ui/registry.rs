@@ -6,7 +6,8 @@
 //! split/focus changes.
 
 use crate::ui::{
-    ActivityHostNode, ExtensionActivityMarker, HostActivityEntity, TerminalActivityMarker,
+    ActivityHostNode, BrowserActivityMarker, ExtensionActivityMarker, HostActivityEntity,
+    TerminalActivityMarker,
 };
 use bevy::prelude::*;
 use ozmux_multiplexer::{ActivityKind, ActivityMarker};
@@ -41,6 +42,9 @@ impl ActivityEntityRegistry {
         }
         if matches!(kind, ActivityKind::Extension { .. }) {
             spawn.insert(ExtensionActivityMarker);
+        }
+        if matches!(kind, ActivityKind::Browser { .. }) {
+            spawn.insert(BrowserActivityMarker);
         }
         let host = spawn.id();
         self.hosts.insert(activity, host);
@@ -246,6 +250,32 @@ mod tests {
                 .get::<TerminalActivityMarker>()
                 .is_none(),
             "Browser kind must NOT carry TerminalActivityMarker"
+        );
+    }
+
+    #[test]
+    fn get_or_spawn_tags_browser_host_with_browser_marker() {
+        use crate::ui::BrowserActivityMarker;
+        use ozmux_multiplexer::BrowserProfile;
+        let mut world = World::new();
+        world.insert_resource(ActivityEntityRegistry::default());
+        let activity = world.spawn_empty().id();
+        let kind = ActivityKind::Browser {
+            initial_url: Some("https://example.com".into()),
+            profile: BrowserProfile::default(),
+        };
+
+        let mut host = None;
+        drive(&mut world, |commands, registry| {
+            host = Some(registry.get_or_spawn(commands, activity, &kind));
+        });
+
+        assert!(
+            world
+                .entity(host.unwrap())
+                .get::<BrowserActivityMarker>()
+                .is_some(),
+            "a Browser kind host must carry BrowserActivityMarker"
         );
     }
 }
