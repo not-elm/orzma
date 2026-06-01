@@ -41,6 +41,7 @@ fn main() {
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "ozmux".to_string(),
+                    ime_enabled: true,
                     ..default()
                 }),
                 ..default()
