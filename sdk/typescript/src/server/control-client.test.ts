@@ -84,4 +84,60 @@ describe('callControl', () => {
     expect(typeof out.new_pane_id).toBe('string');
     expect(typeof out.new_activity_id).toBe('string');
   });
+
+  it('add_activity: sends the right frame and resolves with new_activity_id from reply', async () => {
+    const sock = tmpSock();
+    const receivedFrames: Array<Record<string, unknown>> = [];
+    const server = net.createServer((conn) => {
+      conn.on('data', (chunk) => {
+        const frame = JSON.parse(chunk.toString('utf8').trim()) as Record<string, unknown>;
+        receivedFrames.push(frame);
+        conn.write(
+          `${JSON.stringify({ kind: 'result', id: frame.id, payload: { new_activity_id: '7' } })}\n`,
+        );
+      });
+    });
+    await new Promise<void>((r) => server.listen(sock, r));
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+
+    const activity = {
+      kind: 'extension' as const,
+      entry: 'dist/index.html',
+      name: 'readme.md',
+      activity_id: 'aid-1',
+      extension_name: 'md',
+    };
+    const out = await callControl('add_activity', '1', { activity });
+
+    expect(receivedFrames).toHaveLength(1);
+    const frame = receivedFrames[0];
+    expect(frame.kind).toBe('call');
+    expect(frame.op).toBe('add_activity');
+    expect(frame.pane).toBe('1');
+    expect((frame.params as Record<string, unknown>).activity).toEqual(activity);
+    expect(out).toEqual({ new_activity_id: '7' });
+    server.close();
+  });
+
+  it('activate: resolves with an empty object when env unset (no throw)', async () => {
+    delete process.env.OZMUX_CONTROL_SOCK_PATH;
+    const out = await callControl('activate', '1', { activity_id: '9' });
+    expect(out).toEqual({});
+  });
+
+  it('activate: resolves with the empty payload {} from a real result frame', async () => {
+    const sock = tmpSock();
+    const server = net.createServer((conn) => {
+      conn.on('data', (chunk) => {
+        const frame = JSON.parse(chunk.toString('utf8').trim());
+        conn.write(`${JSON.stringify({ kind: 'result', id: frame.id, payload: {} })}\n`);
+      });
+    });
+    await new Promise<void>((r) => server.listen(sock, r));
+    process.env.OZMUX_CONTROL_SOCK_PATH = sock;
+
+    const out = await callControl('activate', '1', { activity_id: '9' });
+    expect(out).toEqual({});
+    server.close();
+  });
 });

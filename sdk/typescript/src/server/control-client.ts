@@ -1,5 +1,11 @@
 import * as net from 'node:net';
 
+/**
+ * The host's reply to a successful split. Alias for the op-generic reply type
+ * retained for backward compatibility.
+ */
+export type SplitControlReply = { new_pane_id: string; new_activity_id: string };
+
 /** Parameters for a `split` control call. */
 export interface SplitControlParams {
   side: 'before' | 'after';
@@ -7,32 +13,57 @@ export interface SplitControlParams {
   activity: { kind: 'extension'; entry: string; name?: string | null; activity_id: string };
 }
 
-/** The host's reply to a successful split. */
-export interface SplitControlReply {
-  new_pane_id: string;
-  new_activity_id: string;
+/** Parameters for an `add_activity` control call. */
+export interface AddActivityControlParams {
+  activity: {
+    kind: 'extension';
+    entry: string;
+    name?: string | null;
+    activity_id: string;
+    extension_name?: string;
+  };
 }
+
+/** Parameters for an `activate` control call. */
+export interface ActivateControlParams {
+  activity_id: string;
+}
+
+type ControlParamsByOp = {
+  split: SplitControlParams;
+  add_activity: AddActivityControlParams;
+  activate: ActivateControlParams;
+};
+
+type ControlReplyByOp = {
+  split: { new_pane_id: string; new_activity_id: string };
+  add_activity: { new_activity_id: string };
+  activate: Record<string, never>;
+};
+
+const SYNTHETIC_REPLY: { [K in keyof ControlReplyByOp]: () => ControlReplyByOp[K] } = {
+  split: () => ({ new_pane_id: crypto.randomUUID(), new_activity_id: crypto.randomUUID() }),
+  add_activity: () => ({ new_activity_id: crypto.randomUUID() }),
+  activate: () => ({}) as Record<string, never>,
+};
 
 const CONNECT_TIMEOUT_MS = 5000;
 
 /**
  * Sends one `call` frame over the control UDS and resolves with the `result`
- * payload (or rejects on an `error` frame / connection failure). When
- * `OZMUX_CONTROL_SOCK_PATH` is unset, resolves with synthetic ids (no-op) so a
- * bare `node bootstrap.ts` and host-less tests still pass.
+ * payload, or rejects on an `error` frame / connection failure. When
+ * `OZMUX_CONTROL_SOCK_PATH` is unset, resolves with a synthetic op-appropriate
+ * reply (no-op) so a bare `node bootstrap.ts` and host-less tests still pass.
  */
-export function callControl(
-  op: 'split',
+export function callControl<Op extends keyof ControlParamsByOp>(
+  op: Op,
   pane: string,
-  params: SplitControlParams,
-): Promise<SplitControlReply> {
+  params: ControlParamsByOp[Op],
+): Promise<ControlReplyByOp[Op]> {
   const sockPath = process.env.OZMUX_CONTROL_SOCK_PATH;
   if (!sockPath) {
     console.warn(`ozmux: OZMUX_CONTROL_SOCK_PATH unset — skipping ${op} (no-op)`);
-    return Promise.resolve({
-      new_pane_id: crypto.randomUUID(),
-      new_activity_id: crypto.randomUUID(),
-    });
+    return Promise.resolve(SYNTHETIC_REPLY[op]());
   }
 
   return new Promise((resolve, reject) => {
@@ -63,7 +94,12 @@ export function callControl(
       const nl = buffer.indexOf('\n');
       if (nl < 0) return;
       const line = buffer.slice(0, nl);
-      let frame: { kind?: string; payload?: SplitControlReply; code?: string; message?: string };
+      let frame: {
+        kind?: string;
+        payload?: ControlReplyByOp[Op];
+        code?: string;
+        message?: string;
+      };
       try {
         frame = JSON.parse(line);
       } catch {
@@ -73,7 +109,7 @@ export function callControl(
       if (settled) return;
       settled = true;
       sock.destroy();
-      if (frame.kind === 'result' && frame.payload) resolve(frame.payload);
+      if (frame.kind === 'result') resolve(frame.payload as ControlReplyByOp[Op]);
       else reject(new Error(`ozmux: control ${frame.code ?? 'error'}: ${frame.message ?? ''}`));
     });
     sock.on('error', (e) => fail(e instanceof Error ? e : new Error(String(e))));
