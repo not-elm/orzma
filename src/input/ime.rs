@@ -19,6 +19,7 @@ use bevy::math::Vec2;
 use bevy::prelude::Entity;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
+use bevy_cef::prelude::FocusedWebview;
 use bevy_terminal::{TerminalKey, TerminalModifiers};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::prelude::TerminalGrid;
@@ -137,8 +138,9 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// Derives whether IME should be on this tick and writes
 /// `PrimaryWindow.ime_enabled` and `.ime_position`.
 ///
-/// `ime_enabled` is `true` iff (a) the attached activity carries
-/// `TerminalActivityMarker`, and (b) it does NOT have `CopyModeState`.
+/// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
+/// IME through bevy_cef's `Ime` → CEF bridge), OR the attached activity
+/// carries `TerminalActivityMarker` and does NOT have `CopyModeState`.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
 /// window — computed from the attached terminal's `UiGlobalTransform`
@@ -152,11 +154,33 @@ pub(crate) fn ime_policy_system(
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
+    focused_webview: Res<FocusedWebview>,
+    webview_anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
+
+    // NOTE: a focused CEF webview drives its own IME through bevy_cef's
+    // `Ime` → CEF bridge. ozmux MUST keep `ime_enabled` true here, or
+    // bevy_winit calls winit `set_ime_allowed(false)` and the OS delivers
+    // no `Ime` events at all — starving that bridge so webview IME silently
+    // breaks. Removing this branch reintroduces that bug.
+    if let Some(webview) = focused_webview.0 {
+        if !window.ime_enabled {
+            window.ime_enabled = true;
+        }
+        if let Ok((node, ui_xform)) = webview_anchors.get(webview) {
+            let scale = window.resolution.scale_factor();
+            let top_left_phys = ui_xform.translation - 0.5 * node.size();
+            let pos = top_left_phys / scale;
+            if window.ime_position != pos {
+                window.ime_position = pos;
+            }
+        }
+        return;
+    }
 
     let Some(entity) = super::resolve_focused_terminal(&mux, &attached_session, &registry) else {
         if window.ime_enabled {
@@ -491,6 +515,55 @@ mod tests {
         });
 
         (app, term_entity)
+    }
+
+    #[test]
+    fn ime_stays_enabled_for_focused_webview() {
+        use bevy_terminal_renderer::CellMetrics;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<ActivityEntityRegistry>();
+        app.init_resource::<FocusedWebview>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+
+        // A CEF webview owns focus; no terminal is active.
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+
+        // Window starts with IME OFF — the policy must turn it back ON.
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ime_enabled: false,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+
+        app.world_mut().run_system_once(ime_policy_system).unwrap();
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Window, With<PrimaryWindow>>();
+        let enabled = q.single(app.world()).expect("primary window").ime_enabled;
+        assert!(
+            enabled,
+            "IME must stay enabled while a CEF webview owns focus, or bevy_cef's IME bridge is starved"
+        );
     }
 
     #[test]
