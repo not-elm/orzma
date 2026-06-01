@@ -16,7 +16,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
-use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
+use bevy::window::{CursorIcon, Ime, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
 use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands, SessionMarker};
@@ -48,6 +48,7 @@ impl Plugin for OzmuxBrowserRenderPlugin {
                         .before(crate::input::dispatch_focused_key)
                         .run_if(address_bar_is_focused),
                     browser_address_editor.after(crate::input::dispatch_focused_key),
+                    apply_ime_to_address_bar,
                 ),
             );
     }
@@ -129,6 +130,7 @@ fn attach_browser_webview(
     pages: Query<(Entity, &ComputedNode, &PageWebviewOf), Without<WebviewSource>>,
     hosts: Query<&HostActivityEntity>,
     kinds: Query<&ActivityKind>,
+    mut states: Query<&mut BrowserToolbarState>,
 ) {
     for (page, computed, owner) in pages.iter() {
         let size = computed.size() * computed.inverse_scale_factor();
@@ -145,6 +147,13 @@ fn attach_browser_webview(
         let resolved = resolve_omnibox_input(raw, &configs.browser.search_template);
         if resolved.is_empty() {
             continue;
+        }
+        // Seed the toolbar URL so the bar isn't blank (or caret-only on early
+        // focus) until CEF fires its first AddressChanged.
+        if let Ok(mut state) = states.get_mut(owner.0)
+            && state.url.is_empty()
+        {
+            state.url = resolved.clone();
         }
         commands.entity(page).insert((
             WebviewSource::new(resolved),
@@ -354,6 +363,7 @@ fn browser_address_editor(
     mut events: MessageReader<KeyboardInput>,
     configs: Res<OzmuxConfigsResource>,
     keys: Res<ButtonInput<KeyCode>>,
+    ime_state: Res<crate::input::ime::ImeState>,
     mut clipboard: Option<ResMut<Clipboard>>,
     mut hosts: Query<(&mut AddressEdit, &BrowserPageWebview)>,
 ) {
@@ -370,8 +380,26 @@ fn browser_address_editor(
         if ev.state != ButtonState::Pressed {
             continue;
         }
+        // NOTE: while an IME composition is active the OS owns the keystrokes;
+        // the committed text arrives via `apply_ime_to_address_bar`. Skipping
+        // raw keys here prevents inserting pre-composition ASCII on platforms
+        // that still deliver `KeyboardInput` during composition.
+        if ime_state.is_composing() {
+            continue;
+        }
         let cmd = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
-        if cmd && matches!(&ev.logical_key, Key::Character(s) if s.eq_ignore_ascii_case("v")) {
+        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+        let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+        // NOTE: strict Cmd+v paste (lowercase, no other modifiers), matching the
+        // terminal's `is_paste_chord` — Shift+Cmd+V is not a paste shortcut, so
+        // the same chord must not diverge between the address bar and a terminal.
+        if cmd
+            && !ctrl
+            && !shift
+            && !alt
+            && matches!(&ev.logical_key, Key::Character(s) if s.as_str() == "v")
+        {
             if let Some(clip) = clipboard.as_mut()
                 && let Some(text) = clip.read()
             {
@@ -380,7 +408,6 @@ fn browser_address_editor(
             }
             continue;
         }
-        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
         if cmd || ctrl {
             continue;
         }
@@ -413,6 +440,31 @@ fn browser_address_editor(
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// Routes IME-committed text (`Ime::Commit`) into the focused address bar's edit
+/// buffer. The OS candidate window shows the preedit (anchored by
+/// `ime_policy_system`); on commit the text is inserted here. CJK input into the
+/// URL/search bar would otherwise be lost, since `read_ime_events` forwards
+/// commits to the active terminal, which a browser pane has none of.
+fn apply_ime_to_address_bar(
+    mut events: MessageReader<Ime>,
+    focus: Res<AddressBarFocus>,
+    mut edits: Query<&mut AddressEdit>,
+) {
+    let Some(host) = focus.0 else {
+        events.clear();
+        return;
+    };
+    let Ok(mut edit) = edits.get_mut(host) else {
+        events.clear();
+        return;
+    };
+    for ev in events.read() {
+        if let Ime::Commit { value, .. } = ev {
+            insert_str(&mut edit, value);
         }
     }
 }
@@ -1019,6 +1071,35 @@ mod tests {
     }
 
     #[test]
+    fn ime_commit_inserts_into_focused_address_bar() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.init_resource::<crate::ui::AddressBarFocus>();
+        app.add_message::<Ime>();
+        let host = app.world_mut().spawn(AddressEdit::default()).id();
+        app.world_mut()
+            .resource_mut::<crate::ui::AddressBarFocus>()
+            .0 = Some(host);
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .write(Ime::Commit {
+                window: Entity::PLACEHOLDER,
+                value: "こんにちは".into(),
+            });
+
+        app.world_mut()
+            .run_system_once(apply_ime_to_address_bar)
+            .unwrap();
+
+        assert_eq!(
+            app.world().get::<AddressEdit>(host).unwrap().buffer,
+            "こんにちは",
+            "Ime::Commit must be inserted into the focused address bar's buffer"
+        );
+    }
+
+    #[test]
     fn address_text_follows_toolbar_state_when_unfocused() {
         let mut app = make_test_app();
         app.init_resource::<crate::ui::AddressBarFocus>();
@@ -1157,6 +1238,7 @@ mod tests {
     fn editor_ignores_text_when_cmd_held() {
         let mut app = make_test_app();
         app.init_resource::<crate::ui::AddressBarFocus>();
+        app.init_resource::<crate::input::ime::ImeState>();
         app.init_resource::<ButtonInput<KeyCode>>();
         app.add_message::<KeyboardInput>();
         app.add_systems(Update, build_browser_chrome);
@@ -1193,6 +1275,7 @@ mod tests {
     fn enter_resolves_and_navigates_then_clears_focus() {
         let mut app = make_test_app();
         app.init_resource::<crate::ui::AddressBarFocus>();
+        app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(bevy::input::ButtonInput::<bevy::input::keyboard::KeyCode>::default());
         app.add_message::<KeyboardInput>();
         app.add_systems(Update, build_browser_chrome);

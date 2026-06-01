@@ -98,16 +98,13 @@ pub(crate) fn dispatch_focused_key(
     registry: Res<ActivityEntityRegistry>,
     copy_modes: Query<(), With<CopyModeState>>,
     ime_state: Res<ImeState>,
-    address_bar_focus: Option<Res<crate::ui::AddressBarFocus>>,
 ) {
-    // NOTE: while the browser address bar owns the keyboard, suppress chord
-    // lookup + terminal forwarding here; browser_address_editor consumes the
-    // keys instead. Drain our own reader cursor so these keys are not
-    // re-read (and leaked to the terminal) on the tick the bar blurs.
-    if address_bar_focus.as_ref().is_some_and(|f| f.0.is_some()) {
-        events.clear();
-        return;
-    }
+    // NOTE: when the browser address bar owns focus, the active pane is always a
+    // browser host (no `TerminalHandle`), so every terminal action below
+    // (forward/paste/copy/scroll) no-ops on it and `browser_address_editor`
+    // (ordered after this) consumes the bar's typed keys. App-global chords are
+    // intentionally NOT suppressed — they keep working in the bar, as in a real
+    // browser omnibox.
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
     // sees the same modifier snapshot. Read once outside the loop.
