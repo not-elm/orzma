@@ -31,9 +31,11 @@ impl Plugin for OzmuxSessionUiPlugin {
             .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
             .add_systems(
                 Update,
-                sync_terminal_dim
-                    .after(OzmuxSystems::Input)
-                    .after(OzmuxSystems::SetupActivity),
+                sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
+            )
+            .add_systems(
+                Update,
+                sync_terminal_dim_on_mount.after(OzmuxSystems::SetupActivity),
             )
             .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
@@ -233,14 +235,21 @@ fn sync_pane_dim(
     }
 }
 
-/// Sets each terminal host's [`PaneDim`] from its session's `ActivePane` so
-/// the renderer dims inactive terminals (a darkening veil is invisible on a
-/// black terminal, so terminals are dimmed at the renderer instead). Reacts
-/// to focus changes (`Changed<ActivePane>`) and to terminal hosts whose
-/// material was just mounted (`Added<MaterialNode<..>>`, since hosts attach
-/// lazily after a rebuild). Pane→session is resolved via `ChildOf`;
+/// Inactive-terminal brightness multiplier from config: `inactive_pane.dim`
+/// when dimming is enabled, else `1.0` (disabled or absent config = no dim).
+fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
+    match configs {
+        Some(cfg) if cfg.inactive_pane.enabled => cfg.inactive_pane.dim,
+        _ => 1.0,
+    }
+}
+
+/// On focus change, sets each terminal host's [`PaneDim`] in the changed
+/// session: `1.0` for the active pane's terminal, the configured dim factor
+/// otherwise. A darkening veil is invisible on a black terminal, so terminals
+/// are dimmed at the renderer instead. Pane→session is resolved via `ChildOf`;
 /// `MultiplexerCommands` can't be used here (it holds `&mut ActivePane`).
-fn sync_terminal_dim(
+fn sync_terminal_dim_on_focus(
     mut commands: Commands,
     changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
     hosts: Query<
@@ -250,22 +259,10 @@ fn sync_terminal_dim(
             With<MaterialNode<TerminalUiMaterial>>,
         ),
     >,
-    newly_mounted: Query<
-        (Entity, &HostActivityEntity),
-        (
-            With<TerminalActivityMarker>,
-            Added<MaterialNode<TerminalUiMaterial>>,
-        ),
-    >,
-    active_panes: Query<&ActivePane>,
     child_of: Query<&ChildOf>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
-    let dim_factor = match configs.as_deref() {
-        Some(cfg) if cfg.inactive_pane.enabled => cfg.inactive_pane.dim,
-        _ => 1.0,
-    };
-
+    let dim_factor = inactive_dim_factor(configs.as_deref());
     for (session, active) in changed_sessions.iter() {
         for (host, host_activity) in hosts.iter() {
             let Some((pane, host_session)) = resolve_pane_session(host_activity.0, &child_of)
@@ -279,7 +276,27 @@ fn sync_terminal_dim(
             commands.entity(host).insert(PaneDim(want));
         }
     }
+}
 
+/// Sets the initial [`PaneDim`] on a terminal host the frame its material is
+/// mounted. Hosts attach lazily after a rebuild — possibly a frame after the
+/// focus change `sync_terminal_dim_on_focus` reacts to — so this reads the
+/// host's session `ActivePane` directly, dimming a freshly-split inactive
+/// terminal without waiting for the next focus change.
+fn sync_terminal_dim_on_mount(
+    mut commands: Commands,
+    newly_mounted: Query<
+        (Entity, &HostActivityEntity),
+        (
+            With<TerminalActivityMarker>,
+            Added<MaterialNode<TerminalUiMaterial>>,
+        ),
+    >,
+    active_panes: Query<&ActivePane>,
+    child_of: Query<&ChildOf>,
+    configs: Option<Res<OzmuxConfigsResource>>,
+) {
+    let dim_factor = inactive_dim_factor(configs.as_deref());
     for (host, host_activity) in newly_mounted.iter() {
         let Some((pane, session)) = resolve_pane_session(host_activity.0, &child_of) else {
             continue;
