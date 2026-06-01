@@ -1,7 +1,8 @@
 //! Launches a command (bootstrap-based) extension: spawns `node <main>` with the
-//! shim bin dir + command socket + piped stdin, awaits the shim files, and
-//! exposes `bin_dir()` for the terminal `PATH` prefix. The shim/command server
-//! live in the extension (TS); this only manages the process + readiness.
+//! shim bin dir + command socket + piped stdin, awaits the `.ready` readiness
+//! marker, and exposes `bin_dir()` for the terminal `PATH` prefix. The
+//! shim/command server live in the extension (TS); this only manages the
+//! process + readiness.
 
 use crate::control::{ControlError, ControlRequest, ControlResponse, encode_response, parse_call};
 use crate::host::{HostError, HostResult, LifecycleEvent, RuntimeRoot, run_lifecycle};

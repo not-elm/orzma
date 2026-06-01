@@ -238,7 +238,7 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
   // NOTE: process.cwd() is the extension dir — CommandExtension spawns node
   // with the extension root as cwd, making it the correct asset root.
   const assetServer = env.assetSockPath
-    ? serveAssets(fileAssetHandler(process.cwd()), { sockPath: env.assetSockPath })
+    ? await serveAssets(fileAssetHandler(process.cwd()), { sockPath: env.assetSockPath })
     : undefined;
 
   // NOTE: readiness marker written LAST (after all sockets bind) — the host polls

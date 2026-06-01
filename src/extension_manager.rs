@@ -55,7 +55,6 @@ impl Plugin for ExtensionManagerPlugin {
     fn build(&self, app: &mut App) {
         let roots = discovery_roots();
         let found = discover_extensions(&roots);
-
         let mut extensions = HashMap::new();
         let endpoints = self.endpoints.clone();
         for d in found {
