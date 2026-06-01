@@ -1,0 +1,65 @@
+@import "highlight.js/styles/github-dark.css";
+
+:root {
+  color-scheme: dark;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: #1a1b26;
+  color: #c0caf5;
+}
+.md-status {
+  padding: 1rem;
+  opacity: 0.7;
+}
+.md-scroll {
+  box-sizing: border-box;
+  height: 100vh;
+  overflow: auto;
+  padding: 1rem 1.25rem;
+  outline: none;
+}
+.md-scroll h1,
+.md-scroll h2,
+.md-scroll h3 {
+  border-bottom: 1px solid #2a2e42;
+  padding-bottom: 0.2em;
+}
+.md-scroll a {
+  color: #7aa2f7;
+}
+.md-scroll code {
+  background: #292e42;
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+}
+.md-scroll pre {
+  background: #16161e;
+  border-radius: 6px;
+  overflow: auto;
+  padding: 0.8rem;
+}
+.md-scroll pre code {
+  background: none;
+  padding: 0;
+}
+.md-scroll table {
+  border-collapse: collapse;
+}
+.md-scroll th,
+.md-scroll td {
+  border: 1px solid #2a2e42;
+  padding: 0.3em 0.6em;
+}
+.md-scroll blockquote {
+  border-left: 3px solid #414868;
+  color: #9aa5ce;
+  margin: 0;
+  padding-left: 1em;
+}
