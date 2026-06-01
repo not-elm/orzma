@@ -65,6 +65,7 @@ Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 | Run all vitest suites   | `pnpm -r test`                                         |
 | Typecheck every package | `pnpm check-types`                                     |
 | Lint (biome)            | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci`         |
+| Build extension clients | `pnpm build` (required before `cargo run` for extensions with a Vite client, e.g. `md`) |
 
 Biome (`biome.json`) scans `sdk/**` and `extensions/**` — it is the JS/TS lint+format tool for this repo.
 
