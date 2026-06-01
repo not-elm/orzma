@@ -98,7 +98,7 @@ export async function* watchFile(
 export function makeContentChannel(
   filePath: string,
   source: ChangeSource = watchFile,
-): ChannelGenerator {
+): ChannelGenerator<Record<string, never>, ContentEvent> {
   return async function* (_params, { signal }) {
     yield await readContent(filePath);
     let lastSig = await signatureOf(filePath);
