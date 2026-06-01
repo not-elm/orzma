@@ -48,6 +48,12 @@ struct ExtensionHandlersBridge(HandlersBridge);
 #[derive(Resource, Default)]
 struct WebviewAidMap(HashMap<String, Entity>);
 
+/// Marks an extension-activity host whose webview could not be mounted because
+/// its activity has no `OwningExtension`. Excluding marked hosts from the
+/// `finish_extension_setup` query makes its diagnostic fire once, not every frame.
+#[derive(Component)]
+struct WebviewMountUnresolved;
+
 /// JS defining `window.ozmux` over `cef.emit` / `cef.listen`, injected per
 /// webview as a `PreloadScripts` entry (see `finish_extension_setup`). Mirrors
 /// `sdk/typescript/src/cef/ozmux-bridge.ts`.
@@ -177,7 +183,14 @@ fn finish_extension_setup(
     mux: MultiplexerCommands,
     activity_hosts: Query<&HostActivityEntity>,
     owners: Query<&OwningExtension>,
-    hosts: Query<(Entity, &ComputedNode), (With<ExtensionActivityMarker>, Without<WebviewSource>)>,
+    hosts: Query<
+        (Entity, &ComputedNode),
+        (
+            With<ExtensionActivityMarker>,
+            Without<WebviewSource>,
+            Without<WebviewMountUnresolved>,
+        ),
+    >,
 ) {
     for (host, computed) in hosts.iter() {
         let Some(logical) = pane_logical_size(computed.size(), computed.inverse_scale_factor())
@@ -189,6 +202,12 @@ fn finish_extension_setup(
             continue;
         };
         let Ok(owner) = owners.get(activity) else {
+            tracing::warn!(
+                ?host,
+                ?activity,
+                "extension activity has no OwningExtension; webview cannot be mounted (terminal-kind split over control socket?)"
+            );
+            commands.entity(host).insert(WebviewMountUnresolved);
             continue;
         };
         let name = owner.0.as_str();
@@ -557,6 +576,45 @@ mod tests {
             preload.0[0].contains("role:\"extension\"")
                 && preload.0[0].contains("extensionName:\"memo\""),
             "the context PreloadScript must carry the extension role and name"
+        );
+    }
+
+    #[test]
+    fn warns_once_and_marks_host_when_activity_lacks_owning_extension() {
+        let mut app = make_test_app();
+        app.add_systems(Update, finish_extension_setup);
+
+        let activity = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_session(Some("t".into())).activity
+            })
+            .unwrap();
+        app.world_mut().flush();
+        let host = app
+            .world_mut()
+            .spawn((
+                ExtensionActivityMarker,
+                HostActivityEntity(activity),
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
+
+        app.update();
+        assert!(
+            app.world().get::<WebviewSource>(host).is_none(),
+            "a host whose activity lacks OwningExtension must not get a webview"
+        );
+        assert!(
+            app.world().get::<WebviewMountUnresolved>(host).is_some(),
+            "the host must be marked so the diagnostic fires once, not every frame"
+        );
+
+        // A second tick must not re-process the marked host (still no webview).
+        app.update();
+        assert!(
+            app.world().get::<WebviewSource>(host).is_none(),
+            "the marked host must stay excluded from the query"
         );
     }
 
