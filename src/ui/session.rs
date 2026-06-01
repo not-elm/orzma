@@ -211,9 +211,9 @@ fn descend_and_despawn_structural(
 /// Pane→session is resolved via `ChildOf`; using `MultiplexerCommands` here
 /// would conflict on its `&mut ActivePane`.
 fn sync_pane_dim(
+    mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
     changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
     panes: Query<&ChildOf, With<PaneMarker>>,
-    mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
 ) {
     for (session, active) in changed_sessions.iter() {
         for (overlay, mut visibility) in overlays.iter_mut() {
