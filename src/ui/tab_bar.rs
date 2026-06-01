@@ -58,9 +58,22 @@ pub(crate) struct TabEntry {
     pub is_active: bool,
 }
 
-/// Spawn the per-pane tab bar (one tab per Activity) as a child of `parent`.
-/// Every spawned Entity carries `StructuralNode`. `is_active_pane` drives
-/// the indicator accent (accent vs border).
+/// Spawn one tab per activity as children of the already-existing `bar` node.
+/// Caller is responsible for clearing `bar`'s previous tab children first.
+pub(crate) fn populate_tab_bar(
+    commands: &mut Commands,
+    bar: Entity,
+    tabs: &[TabEntry],
+    is_active_pane: bool,
+    ui_font: &Handle<Font>,
+) {
+    for tab in tabs {
+        build_tab(commands, bar, tab, is_active_pane, ui_font);
+    }
+}
+
+/// Spawn the per-pane tab bar (a Row node) as a child of `parent`, then
+/// populate it. Every spawned Entity carries `StructuralNode`.
 pub fn build_pane_tab_bar(
     commands: &mut Commands,
     parent: Entity,
@@ -82,10 +95,7 @@ pub fn build_pane_tab_bar(
             ChildOf(parent),
         ))
         .id();
-
-    for tab in tabs {
-        build_tab(commands, bar, tab, is_active_pane, ui_font);
-    }
+    populate_tab_bar(commands, bar, tabs, is_active_pane, ui_font);
 }
 
 fn build_tab(
