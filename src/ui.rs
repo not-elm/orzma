@@ -654,7 +654,7 @@ mod tests {
                 let ext = mux.add_activity(
                     pane,
                     ActivityKind::Extension {
-                        html_root: "/tmp".into(),
+                        entry: "/tmp".into(),
                     },
                 );
                 mux.set_active_activity(pane, ext).unwrap();
