@@ -161,6 +161,17 @@ pub(crate) struct PaneDimOverlay {
     pub(crate) pane: Entity,
 }
 
+/// Marks a Session whose UI subtree must be rebuilt for a reason other than a
+/// layout-geometry change — i.e. an in-pane activity was added or the active
+/// activity switched (neither mutates `LayoutCells`). Set by
+/// `flag_chrome_dirty_on_activity_change` and consumed (removed) by
+/// `rebuild_session_ui`, which gates on `Or<(Changed<LayoutCells>,
+/// With<SessionUiDirty>)>`. Keeping the single full-rebuild path is deliberate:
+/// reparenting stable UI nodes across a rebuild does not survive Bevy's UI
+/// layout, so every rebuild despawns + respawns chrome as fresh nodes.
+#[derive(Component)]
+pub(crate) struct SessionUiDirty;
+
 /// Bevy Plugin wiring the native Bevy UI rebuild pipeline.
 pub struct OzmuxUiPlugin;
 

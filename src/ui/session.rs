@@ -10,8 +10,8 @@ use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::terminal::resolve_pane_session;
 use crate::ui::{
-    ActivityHostNode, HostActivityEntity, PaneDimOverlay, SessionUiRoot, StructuralNode,
-    TerminalActivityMarker,
+    ActivityHostNode, HostActivityEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot,
+    StructuralNode, TerminalActivityMarker,
 };
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
@@ -27,17 +27,21 @@ pub struct OzmuxSessionUiPlugin;
 impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
         order_activity_pipeline(app);
-        app.add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
-            .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
-            .add_systems(
-                Update,
-                sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
-            )
-            .add_systems(
-                Update,
-                sync_terminal_dim_on_mount.after(OzmuxSystems::SetupActivity),
-            )
-            .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
+        app.add_systems(
+            Update,
+            flag_chrome_dirty_on_activity_change.in_set(OzmuxSystems::ChromeInvalidate),
+        )
+        .add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
+        .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
+        .add_systems(
+            Update,
+            sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
+        )
+        .add_systems(
+            Update,
+            sync_terminal_dim_on_mount.after(OzmuxSystems::SetupActivity),
+        )
+        .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
 }
 
@@ -61,7 +65,10 @@ fn order_activity_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            OzmuxSystems::SessionUi.after(ExtensionControlSet::Drain),
+            OzmuxSystems::ChromeInvalidate
+                .after(ExtensionControlSet::Drain)
+                .after(OzmuxSystems::Input),
+            OzmuxSystems::SessionUi.after(OzmuxSystems::ChromeInvalidate),
             OzmuxSystems::SetupActivity.after(OzmuxSystems::SessionUi),
         ),
     );
@@ -112,7 +119,10 @@ fn rebuild_session_ui(
             Option<&ActivePane>,
             Has<AttachedSession>,
         ),
-        (With<SessionMarker>, Changed<LayoutCells>),
+        (
+            With<SessionMarker>,
+            Or<(Changed<LayoutCells>, With<SessionUiDirty>)>,
+        ),
     >,
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     activity_hosts: Query<(Entity, &ActivityHostNode)>,
@@ -159,6 +169,37 @@ fn rebuild_session_ui(
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
             Err(err) => tracing::warn!(target: "ozmux_gui::ui", ?err, "root_cell missing"),
+        }
+        // NOTE: must remove the marker after rebuilding, or `With<SessionUiDirty>`
+        // keeps matching and the session rebuilds every frame. No-op when the
+        // rebuild was triggered by `Changed<LayoutCells>` (marker absent).
+        commands.entity(session_entity).remove::<SessionUiDirty>();
+    }
+}
+
+/// Flags a session `SessionUiDirty` when one of its panes gains an activity
+/// (`Added<ActivityMarker>`) or switches its active activity
+/// (`Changed<ActiveActivity>`) — in-pane changes that do not mutate
+/// `LayoutCells` and so would otherwise not trigger `rebuild_session_ui`.
+/// Covers both the `@md` control-bridge path and the in-app shortcuts via a
+/// single UI-layer hook, keeping the multiplexer crate free of UI concerns.
+/// Ordered after the drain / input and before `SessionUi` so the marker is
+/// visible to the rebuild the same frame. The split case already changes
+/// `LayoutCells`; a redundant flag there is harmless.
+fn flag_chrome_dirty_on_activity_change(
+    mut commands: Commands,
+    added_activities: Query<Entity, Added<ActivityMarker>>,
+    switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveActivity>)>,
+    child_of: Query<&ChildOf>,
+) {
+    for activity in added_activities.iter() {
+        if let Some((_pane, session)) = resolve_pane_session(activity, &child_of) {
+            commands.entity(session).insert(SessionUiDirty);
+        }
+    }
+    for pane in switched_panes.iter() {
+        if let Ok(pane_parent) = child_of.get(pane) {
+            commands.entity(pane_parent.parent()).insert(SessionUiDirty);
         }
     }
 }
@@ -510,6 +551,51 @@ mod tests {
             PrimaryWindow,
         ));
         (app, guard)
+    }
+
+    #[test]
+    fn in_pane_activity_add_triggers_rebuild_via_session_ui_dirty() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands};
+
+        let (mut app, _guard) = make_test_app_v2();
+        app.update();
+        app.update();
+
+        let pane = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
+                    let session = sessions.iter().next()?;
+                    mux.sessions_active_pane(session)
+                },
+            )
+            .unwrap()
+            .expect("bootstrap session + active pane");
+
+        // Add an in-pane activity WITHOUT touching LayoutCells. The only path
+        // that can drive a rebuild here is flag_chrome_dirty_on_activity_change
+        // setting SessionUiDirty from Added<ActivityMarker>.
+        let added = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(pane, ActivityKind::Terminal)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<ActivityEntityRegistry>()
+                .get(added)
+                .is_some(),
+            "adding an in-pane activity (no LayoutCells change) must trigger a \
+             SessionUiDirty rebuild; build_pane proves it ran by spawning a host \
+             for the new activity"
+        );
     }
 
     #[test]

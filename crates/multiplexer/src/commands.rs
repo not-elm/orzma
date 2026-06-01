@@ -436,7 +436,147 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::MultiplexerPlugin;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// Entities whose `Changed<Children>` fired during the last `Update` tick.
+    #[derive(Default, Resource)]
+    struct PanesWithChangedChildren(Vec<Entity>);
+
+    /// Entities whose `Changed<ActiveActivity>` fired during the last `Update` tick.
+    #[derive(Default, Resource)]
+    struct PanesWithChangedActiveActivity(Vec<Entity>);
+
+    fn collect_changed_children(
+        mut res: ResMut<PanesWithChangedChildren>,
+        query: Query<Entity, (With<PaneMarker>, Changed<Children>)>,
+    ) {
+        res.0.clear();
+        res.0.extend(query.iter());
+    }
+
+    fn collect_changed_active_activity(
+        mut res: ResMut<PanesWithChangedActiveActivity>,
+        query: Query<Entity, (With<PaneMarker>, Changed<ActiveActivity>)>,
+    ) {
+        res.0.clear();
+        res.0.extend(query.iter());
+    }
+
+    /// Builds a minimal `App` with capture systems for change-detection assertions.
+    fn make_change_detection_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MultiplexerPlugin);
+        app.init_resource::<PanesWithChangedChildren>();
+        app.init_resource::<PanesWithChangedActiveActivity>();
+        app.add_systems(
+            Update,
+            (collect_changed_children, collect_changed_active_activity),
+        );
+        app
+    }
+
+    #[test]
+    fn add_and_remove_activity_flag_changed_children_on_pane() {
+        let mut app = make_change_detection_app();
+
+        let outcome = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        app.world_mut().flush();
+        // NOTE: this settle tick must run before the mutation below, or the
+        // bootstrap `Changed<Children>` leaks into the assertion and the test
+        // passes vacuously.
+        app.update();
+
+        let added = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(outcome.pane, ActivityKind::Terminal)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<PanesWithChangedChildren>()
+                .0
+                .contains(&outcome.pane),
+            "adding an activity child must flag Changed<Children> on the pane",
+        );
+
+        app.update();
+
+        app.world_mut().entity_mut(added).despawn();
+        app.world_mut().flush();
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<PanesWithChangedChildren>()
+                .0
+                .contains(&outcome.pane),
+            "despawning an activity child must flag Changed<Children> on the pane",
+        );
+    }
+
+    #[test]
+    fn set_active_activity_flags_changed_only_on_real_change() {
+        let mut app = make_change_detection_app();
+
+        let outcome = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let second = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_activity(outcome.pane, ActivityKind::Terminal)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        // NOTE: both settle ticks must run before the no-op mutation below, or
+        // the bootstrap `Changed<ActiveActivity>` leaks into the negative
+        // assertion and the test passes vacuously.
+        app.update();
+        app.update();
+
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_activity(outcome.pane, outcome.activity)
+                    .unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<PanesWithChangedActiveActivity>()
+                .0
+                .is_empty(),
+            "no-op set_active_activity must NOT flag Changed<ActiveActivity>",
+        );
+
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_activity(outcome.pane, second).unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<PanesWithChangedActiveActivity>()
+                .0
+                .contains(&outcome.pane),
+            "a real switch must flag Changed<ActiveActivity> on the pane",
+        );
+    }
 
     #[test]
     fn create_session_spawns_session_pane_activity_with_correct_markers_and_childof() {

@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn control_socket_round_trips_a_split_call() {
-        use crate::control::{ControlResponse, SplitReply};
+        use crate::control::{ControlReply, ControlResponse};
         use std::io::{Read, Write};
         use std::os::unix::net::UnixStream;
         use std::time::Duration;
@@ -289,7 +289,7 @@ mod tests {
                 .recv_timeout(Duration::from_secs(10))
                 .expect("request");
             responder
-                .send(ControlResponse::Ok(SplitReply {
+                .send(ControlResponse::Ok(ControlReply::Split {
                     new_pane_id: 42,
                     new_activity_id: 43,
                 }))

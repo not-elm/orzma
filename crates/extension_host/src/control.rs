@@ -13,10 +13,14 @@ pub struct ControlRequest {
     pub pane_bits: u64,
 }
 
-/// The operation a control request carries. `split` is the only op in #2.
+/// The operation a control request carries.
 pub enum ControlOp {
     /// Split the invoking pane, seeding the new pane with `params.activity`.
     Split(SplitParams),
+    /// Add an activity (tab) to the invoking pane without splitting.
+    AddActivity(AddActivityParams),
+    /// Make `activity_id` the invoking pane's active activity.
+    Activate(ActivateParams),
 }
 
 /// Parameters of a `split` control request.
@@ -28,6 +32,20 @@ pub struct SplitParams {
     pub orientation: ControlOrientation,
     /// The activity to seed into the new pane.
     pub activity: ActivitySpec,
+}
+
+/// Parameters of an `add_activity` control request.
+#[derive(Deserialize)]
+pub struct AddActivityParams {
+    /// The activity to add to the invoking pane.
+    pub activity: ActivitySpec,
+}
+
+/// Parameters of an `activate` control request.
+#[derive(Deserialize)]
+pub struct ActivateParams {
+    /// The SDK activity id (entity bits, decimal string) to activate.
+    pub activity_id: String,
 }
 
 /// Protocol-side split side (mapped to `ozmux_multiplexer::Side` by the bridge).
@@ -50,7 +68,7 @@ pub enum ControlOrientation {
     Vertical,
 }
 
-/// The activity spec carried by a split request.
+/// The activity spec carried by a split or add_activity request.
 #[derive(Deserialize)]
 pub struct ActivitySpec {
     /// Activity kind discriminator (flattened so `kind` tag is at this level).
@@ -88,20 +106,25 @@ pub enum ActivityKindSpec {
     },
 }
 
-/// The bridge's verdict for a control request, sent back over the oneshot.
-pub enum ControlResponse {
+/// Successful reply payload per op.
+pub enum ControlReply {
     /// Split succeeded; carries the new entities' bits.
-    Ok(SplitReply),
-    /// Split failed.
-    Err(ControlError),
+    Split {
+        new_pane_id: u64,
+        new_activity_id: u64,
+    },
+    /// Add-activity succeeded; carries the new activity entity bits.
+    AddActivity { new_activity_id: u64 },
+    /// Activate succeeded (no payload).
+    Activate,
 }
 
-/// Successful split payload.
-pub struct SplitReply {
-    /// New pane entity bits.
-    pub new_pane_id: u64,
-    /// New activity entity bits.
-    pub new_activity_id: u64,
+/// The bridge's verdict for a control request, sent back over the oneshot.
+pub enum ControlResponse {
+    /// Operation succeeded.
+    Ok(ControlReply),
+    /// Operation failed.
+    Err(ControlError),
 }
 
 /// A control error (mapped to a wire `error` frame).
@@ -134,6 +157,16 @@ pub fn parse_call(line: &str) -> Result<(String, ControlRequest), ControlParseEr
                 .map_err(|e| ControlParseError::BadRequest(e.to_string()))?;
             ControlOp::Split(params)
         }
+        "add_activity" => {
+            let params: AddActivityParams = serde_json::from_value(raw.params)
+                .map_err(|e| ControlParseError::BadRequest(e.to_string()))?;
+            ControlOp::AddActivity(params)
+        }
+        "activate" => {
+            let params: ActivateParams = serde_json::from_value(raw.params)
+                .map_err(|e| ControlParseError::BadRequest(e.to_string()))?;
+            ControlOp::Activate(params)
+        }
         other => {
             return Err(ControlParseError::BadRequest(format!(
                 "unknown op: {other}"
@@ -146,10 +179,22 @@ pub fn parse_call(line: &str) -> Result<(String, ControlRequest), ControlParseEr
 /// Encodes a `ControlResponse` as one NDJSON line (with trailing `\n`).
 pub fn encode_response(id: &str, resp: &ControlResponse) -> String {
     #[derive(Serialize)]
+    #[serde(untagged)]
+    enum Payload {
+        Split {
+            new_pane_id: String,
+            new_activity_id: String,
+        },
+        AddActivity {
+            new_activity_id: String,
+        },
+        Empty {},
+    }
+    #[derive(Serialize)]
     #[serde(tag = "kind")]
     enum Wire<'a> {
         #[serde(rename = "result")]
-        Result { id: &'a str, payload: WirePayload },
+        Result { id: &'a str, payload: Payload },
         #[serde(rename = "error")]
         Error {
             id: &'a str,
@@ -157,18 +202,26 @@ pub fn encode_response(id: &str, resp: &ControlResponse) -> String {
             message: &'a str,
         },
     }
-    #[derive(Serialize)]
-    struct WirePayload {
-        new_pane_id: String,
-        new_activity_id: String,
-    }
     let wire = match resp {
-        ControlResponse::Ok(r) => Wire::Result {
+        ControlResponse::Ok(ControlReply::Split {
+            new_pane_id,
+            new_activity_id,
+        }) => Wire::Result {
             id,
-            payload: WirePayload {
-                new_pane_id: r.new_pane_id.to_string(),
-                new_activity_id: r.new_activity_id.to_string(),
+            payload: Payload::Split {
+                new_pane_id: new_pane_id.to_string(),
+                new_activity_id: new_activity_id.to_string(),
             },
+        },
+        ControlResponse::Ok(ControlReply::AddActivity { new_activity_id }) => Wire::Result {
+            id,
+            payload: Payload::AddActivity {
+                new_activity_id: new_activity_id.to_string(),
+            },
+        },
+        ControlResponse::Ok(ControlReply::Activate) => Wire::Result {
+            id,
+            payload: Payload::Empty {},
         },
         ControlResponse::Err(e) => Wire::Error {
             id,
@@ -199,7 +252,9 @@ mod tests {
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "abc");
         assert_eq!(req.pane_bits, 4294967297);
-        let ControlOp::Split(p) = req.op;
+        let ControlOp::Split(p) = req.op else {
+            panic!("expected Split")
+        };
         assert!(matches!(p.side, ControlSide::After));
         assert!(matches!(p.orientation, ControlOrientation::Vertical));
         assert_eq!(p.activity.activity_id, "aid-123");
@@ -219,7 +274,9 @@ mod tests {
         let line = r#"{"kind":"call","id":"xyz","op":"split","pane":"1","params":{"side":"before","orientation":"horizontal","activity":{"kind":"extension","entry":"index.html","name":null,"activity_id":"aid-456"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "xyz");
-        let ControlOp::Split(p) = req.op;
+        let ControlOp::Split(p) = req.op else {
+            panic!("expected Split")
+        };
         let ActivityKindSpec::Extension {
             entry,
             extension_name,
@@ -254,7 +311,9 @@ mod tests {
         let line = r#"{"kind":"call","id":"b1","op":"split","pane":"1","params":{"side":"after","orientation":"vertical","activity":{"kind":"browser","url":"github.com","name":null,"activity_id":"aid-b"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "b1");
-        let ControlOp::Split(p) = req.op;
+        let ControlOp::Split(p) = req.op else {
+            panic!("expected Split");
+        };
         assert_eq!(p.activity.activity_id, "aid-b");
         let ActivityKindSpec::Browser { url } = p.activity.kind else {
             panic!("expected Browser kind");
@@ -266,7 +325,7 @@ mod tests {
     fn encodes_result_and_error_lines() {
         let ok = encode_response(
             "id1",
-            &ControlResponse::Ok(SplitReply {
+            &ControlResponse::Ok(ControlReply::Split {
                 new_pane_id: 7,
                 new_activity_id: 9,
             }),
@@ -286,5 +345,41 @@ mod tests {
             err,
             "{\"kind\":\"error\",\"id\":\"id2\",\"code\":\"pane_not_found\",\"message\":\"nope\"}\n"
         );
+    }
+
+    #[test]
+    fn parses_add_activity_call() {
+        let line = r#"{"kind":"call","id":"a1","op":"add_activity","pane":"4294967297","params":{"activity":{"kind":"extension","entry":"index.html","extension_name":"md","name":"x.md","activity_id":"aid-1"}}}"#;
+        let (id, req) = parse_call(line).expect("parse");
+        assert_eq!(id, "a1");
+        let ControlOp::AddActivity(p) = req.op else {
+            panic!("expected AddActivity")
+        };
+        assert_eq!(p.activity.activity_id, "aid-1");
+    }
+
+    #[test]
+    fn parses_activate_call() {
+        let line = r#"{"kind":"call","id":"a2","op":"activate","pane":"1","params":{"activity_id":"aid-9"}}"#;
+        let (id, req) = parse_call(line).expect("parse");
+        assert_eq!(id, "a2");
+        let ControlOp::Activate(p) = req.op else {
+            panic!("expected Activate")
+        };
+        assert_eq!(p.activity_id, "aid-9");
+    }
+
+    #[test]
+    fn encodes_add_activity_and_activate_replies() {
+        let add = encode_response(
+            "i1",
+            &ControlResponse::Ok(ControlReply::AddActivity { new_activity_id: 7 }),
+        );
+        assert_eq!(
+            add,
+            "{\"kind\":\"result\",\"id\":\"i1\",\"payload\":{\"new_activity_id\":\"7\"}}\n"
+        );
+        let act = encode_response("i2", &ControlResponse::Ok(ControlReply::Activate));
+        assert_eq!(act, "{\"kind\":\"result\",\"id\":\"i2\",\"payload\":{}}\n");
     }
 }

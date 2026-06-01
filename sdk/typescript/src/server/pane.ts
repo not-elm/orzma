@@ -5,8 +5,8 @@ import {
   registerActivityChannels,
   unregisterActivityChannels,
 } from './channels-server.ts';
-import { callControl, type SplitControlReply } from './control-client.ts';
-import { deleteNoContent, paths, postJson, postNoContent } from './daemon-client.ts';
+import { callControl } from './control-client.ts';
+import { deleteNoContent, paths, postNoContent } from './daemon-client.ts';
 import {
   type HandlerMap,
   registerActivityHandlers,
@@ -82,7 +82,7 @@ export class Pane {
     const activityId: ActivityId = crypto.randomUUID();
     primeActivityRegistries(activityId, args.activity);
 
-    let reply: SplitControlReply;
+    let reply: { new_pane_id: string; new_activity_id: string };
     try {
       reply = await callControl('split', this.id, {
         side: args.side,
@@ -102,16 +102,18 @@ export class Pane {
   }
 
   /**
-   * Add a new Activity (tab) to this Pane without splitting. Same
-   * register-before-POST discipline as `split()`.
+   * Adds a new Activity (tab) to this Pane without splitting. Primes local
+   * handler/channel registries before the call and adopts the host-authoritative
+   * activity id for the returned handle. On failure the local registries roll back.
    */
   async addActivity(spec: ActivitySpecInput): Promise<Activity> {
     const activityId: ActivityId = crypto.randomUUID();
     primeActivityRegistries(activityId, spec);
 
+    let reply: { new_activity_id: string };
     try {
-      await postJson(paths.paneActivities(this.windowId, this.id), {
-        activity: buildActivityPayload(activityId, spec),
+      reply = await callControl('add_activity', this.id, {
+        activity: controlActivity(activityId, spec),
       });
     } catch (err) {
       rollbackActivityRegistries(activityId, spec);
@@ -119,7 +121,7 @@ export class Pane {
     }
 
     return new Activity({
-      id: activityId,
+      id: reply.new_activity_id,
       paneId: this.id,
       windowId: this.windowId,
       sessionId: this.sessionId,
@@ -180,31 +182,6 @@ function controlActivity(
     activity_id: activityId,
     extension_name: requireExtensionName(),
   };
-}
-
-function buildActivityPayload(
-  activityId: ActivityId,
-  spec: ActivitySpecInput,
-): Record<string, unknown> {
-  const base: Record<string, unknown> = { activity_id: activityId };
-  if (spec.name !== undefined) base.name = spec.name;
-  if (spec.kind === 'terminal') {
-    base.kind = { type: 'terminal' };
-  } else if (spec.kind === 'browser') {
-    base.kind = { type: 'browser', initial_url: spec.url };
-  } else {
-    // `extension_name` lets the daemon populate its ExtensionRegistry so
-    // the in-CEF extension client can resolve the owning extension's UDS.
-    // Resolved lazily from the env to match `daemon-client.ts`'s pattern; the
-    // SDK is only ever used from inside a bootstrap()-driven extension process
-    // where this is guaranteed to be set.
-    base.kind = {
-      type: 'extension',
-      entry: toEntry(spec.html),
-      extension_name: requireExtensionName(),
-    };
-  }
-  return base;
 }
 
 // `EXTENSION_NAME` is set once by the bootstrap before any user code runs
