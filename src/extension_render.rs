@@ -4,28 +4,26 @@
 //! bridge (Task 9) that routes `window.ozmux` frames between the page and the
 //! extension's handlers socket.
 
+use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ExtensionActivityMarker, HostActivityEntity};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use ozmux_extension_host::host::{EndpointRegistry, ExtensionEndpoints};
+use ozmux_extension_host::HandlersBridge;
+use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
-use ozmux_extension_host::{ControlExtension, HandlersBridge};
 use ozmux_multiplexer::{
-    AttachedSession, ExtensionActivityAid, MultiplexerCommands, SessionMarker,
+    AttachedSession, ExtensionActivityAid, MultiplexerCommands, OwningExtension, SessionMarker,
 };
 
-/// The `ozmux-ext://` URL the memo extension webview is pointed at. The host
-/// segment (`memo`) matches the extension name registered as a custom scheme
-/// in `cef_plugin`; frames for other extension names 404.
-const MEMO_WEBVIEW_URL: &str = "ozmux-ext://memo/index.html";
-
-/// The shared asset endpoint the `ozmux-ext://` scheme reads (set on memo-ready
-/// in Task 9). Empty until then, so the scheme returns 503.
-#[derive(Resource, Clone, Default)]
-pub struct AssetEndpoint(pub ExtensionEndpoints);
+/// Builds the `ozmux-ext://<name>/index.html` webview URL for an extension. The
+/// `<name>` host segment dispatches through the shared `EndpointRegistry` in the
+/// scheme handler; frames for unregistered names 404.
+fn webview_url(extension_name: &str) -> String {
+    format!("ozmux-ext://{extension_name}/index.html")
+}
 
 /// One handler/channel frame emitted by the page's `window.ozmux` (the JSON the
 /// SDK handlers-server speaks). Carried verbatim to the handlers bridge.
@@ -55,20 +53,16 @@ struct WebviewAidMap(HashMap<String, Entity>);
 /// `sdk/typescript/src/cef/ozmux-bridge.ts`.
 pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 
-/// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the given
-/// asset endpoint handle. The `window.ozmux` bridge is intentionally NOT
-/// registered as a global extension here; it is injected per-webview via
-/// `PreloadScripts` in `finish_extension_setup` (see the NOTE there).
-pub fn cef_plugin(endpoint: &AssetEndpoint) -> CefPlugin {
-    // NOTE: "memo" is the extension-NAME segment matched inside
-    // ozmux-ext://<name>/…, not the URL scheme name — the scheme is always
-    // "ozmux-ext" (scheme::SCHEME_NAME). The registry is seeded with the single
-    // memo endpoint today; dynamic per-extension population is a later task.
-    // Frames for unregistered extension names 404.
-    let registry = EndpointRegistry::default();
-    registry.insert("memo", endpoint.0.clone());
+/// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
+/// `EndpointRegistry` the extension manager populates per extension on launch.
+/// The handler reads the live registry on each request, so endpoints registered
+/// after `CefPlugin::build()` resolve; frames for unregistered names 404. The
+/// `window.ozmux` bridge is intentionally NOT registered as a global extension
+/// here; it is injected per-webview via `PreloadScripts` in
+/// `finish_extension_setup` (see the NOTE there).
+pub fn cef_plugin(endpoints: EndpointRegistry) -> CefPlugin {
     CefPlugin {
-        custom_schemes: vec![custom_scheme(registry)],
+        custom_schemes: vec![custom_scheme(endpoints)],
         command_line_config: cef_command_line_config(),
         ..Default::default()
     }
@@ -114,7 +108,6 @@ impl Plugin for OzmuxExtensionRenderPlugin {
                 Update,
                 (
                     finish_extension_setup.in_set(OzmuxSystems::SetupActivity),
-                    set_asset_endpoint_once,
                     drain_handler_responses,
                     sync_focused_webview.after(OzmuxSystems::Input),
                 ),
@@ -183,6 +176,7 @@ fn finish_extension_setup(
     mut materials: ResMut<Assets<WebviewUiMaterial>>,
     mux: MultiplexerCommands,
     activity_hosts: Query<&HostActivityEntity>,
+    owners: Query<&OwningExtension>,
     hosts: Query<(Entity, &ComputedNode), (With<ExtensionActivityMarker>, Without<WebviewSource>)>,
 ) {
     for (host, computed) in hosts.iter() {
@@ -194,12 +188,12 @@ fn finish_extension_setup(
         else {
             continue;
         };
-        tracing::debug!(
-            ?host,
-            ?logical,
-            url = MEMO_WEBVIEW_URL,
-            "spawning extension webview"
-        );
+        let Ok(owner) = owners.get(activity) else {
+            continue;
+        };
+        let name = owner.0.as_str();
+        let url = webview_url(name);
+        tracing::debug!(?host, ?logical, %url, "spawning extension webview");
         // NOTE: `window.ozmux` MUST be a PreloadScript, not a global CefExtension.
         // ozmux.js calls cef.listen() at top level; a global extension runs that
         // during V8 context creation, where there is no entered V8 context, so the
@@ -207,9 +201,9 @@ fn finish_extension_setup(
         // render process. PreloadScripts are eval'd at on_context_created inside an
         // entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
-        let ctx_js = context_preload_js(session, pane, activity, "memo");
+        let ctx_js = context_preload_js(session, pane, activity, name);
         commands.entity(host).insert((
-            WebviewSource::new(MEMO_WEBVIEW_URL),
+            WebviewSource::new(url),
             WebviewSize(logical),
             PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
             MaterialNode(materials.add(WebviewUiMaterial::default())),
@@ -281,31 +275,34 @@ fn aid_for_webview(
 }
 
 /// Inbound: a `window.ozmux` `cef.emit(frame)` arrives as `Receive<OzmuxFrame>`
-/// targeting the emitting webview. Resolves the webview's `aid` + the (single,
-/// memo) extension's handlers socket, connects idempotently, records the
-/// `aid → webview` mapping for the outbound path, and forwards the frame.
+/// targeting the emitting webview. Resolves the webview's `aid` and its owning
+/// extension's handlers socket (via the activity's `OwningExtension` and the
+/// `ExtensionRegistry`), connects idempotently, records the `aid → webview`
+/// mapping for the outbound path, and forwards the frame.
 ///
-/// Frames whose webview cannot be resolved to an `aid` are dropped — the
-/// activity has not been stamped yet, so there is no handler set to address.
+/// Frames are dropped when the webview cannot be resolved to an `aid`/owner
+/// (the activity has not been stamped yet) or the owning extension is not in
+/// the registry (failed to launch) — there is no handler set to address.
 fn on_ozmux_frame(
     frame: On<Receive<OzmuxFrame>>,
     bridge: Res<ExtensionHandlersBridge>,
-    ext: Option<Res<ControlExtension>>,
+    registry: Res<ExtensionRegistry>,
     mut aid_map: ResMut<WebviewAidMap>,
     hosts: Query<&HostActivityEntity>,
+    owners: Query<&OwningExtension>,
     aids: Query<&ExtensionActivityAid>,
 ) {
-    // TODO: multi-extension — `ControlExtension` is the single memo extension,
-    // so every webview routes to its one handlers socket. Resolve the socket
-    // per extension once more than one is launched.
-    let Some(ext) = ext else {
-        return;
-    };
     let webview = frame.webview;
     let Some(aid) = aid_for_webview(webview, &hosts, &aids) else {
         return;
     };
-    let sock = ext.0.handlers_sock_path().to_path_buf();
+    let Ok(owner) = hosts.get(webview).and_then(|h| owners.get(h.0)) else {
+        return;
+    };
+    let Some(ext) = registry.extensions.get(&owner.0) else {
+        return;
+    };
+    let sock = ext.handlers_sock_path().to_path_buf();
     if let Err(e) = bridge.0.connect(aid.clone(), sock) {
         tracing::warn!(%aid, error = %e, "extension handlers connect failed");
         return;
@@ -364,28 +361,6 @@ fn log_webview_load_error(load: On<LoadError>) {
     );
 }
 
-/// Publishes the (single, memo) extension's asset socket into the
-/// `ozmux-ext://` scheme's endpoint once the `ControlExtension` resource
-/// exists. Idempotent via a `Local<bool>` latch; the socket binds when memo's
-/// bootstrap starts, well before any webview load triggers a scheme fetch.
-fn set_asset_endpoint_once(
-    ext: Option<Res<ControlExtension>>,
-    endpoint: Res<AssetEndpoint>,
-    mut done: Local<bool>,
-) {
-    if *done {
-        return;
-    }
-    // TODO: multi-extension — one asset endpoint is shared by the single memo
-    // custom scheme; per-extension schemes need per-extension endpoints.
-    if let Some(ext) = ext {
-        let sock = ext.0.asset_sock_path().to_path_buf();
-        tracing::debug!(asset_sock = ?sock, "published ozmux-ext asset endpoint");
-        endpoint.0.set(sock);
-        *done = true;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +397,9 @@ mod tests {
                 (o.session, o.pane, o.activity)
             })
             .unwrap();
+        app.world_mut()
+            .entity_mut(activity)
+            .insert(OwningExtension("memo".into()));
         app.world_mut().flush();
         let host = app
             .world_mut()
@@ -478,7 +456,7 @@ mod tests {
         let terminal_host = app.world_mut().spawn_empty().id();
         let ext_host = app
             .world_mut()
-            .spawn(WebviewSource::new(MEMO_WEBVIEW_URL))
+            .spawn(WebviewSource::new(webview_url("memo")))
             .id();
         {
             let mut reg = app.world_mut().resource_mut::<ActivityEntityRegistry>();
@@ -546,7 +524,7 @@ mod tests {
             .get::<WebviewSource>(host)
             .expect("extension host must receive a WebviewSource");
         match source {
-            WebviewSource::Url(url) => assert_eq!(url, MEMO_WEBVIEW_URL),
+            WebviewSource::Url(url) => assert_eq!(url, &webview_url("memo")),
             other => panic!("expected a Url source, got {other:?}"),
         }
         assert!(

@@ -66,24 +66,44 @@ impl Plugin for ExtensionControlPlugin {
 }
 
 /// Builds the env a terminal must carry so its `@<cmd>` shims work and their
-/// control requests reach this host: PATH (extension bin dir first),
+/// control requests reach this host: PATH (every extension's bin dir prefixed),
 /// `OZMUX_PANE_ID`/`OZMUX_SESSION_ID` (entity bits), `OZMUX_CONTROL_SOCK_PATH`.
+///
+/// Every launched extension's `bin_dir` is prepended so any extension's
+/// `@<cmd>` shim resolves from a terminal. Each shim file already encodes its
+/// own extension's command socket (baked in at shim-write time from
+/// `OZMUX_SOCK_PATH`), so a command always reaches the right extension's server
+/// regardless of PATH order.
+///
+/// `OZMUX_CONTROL_SOCK_PATH` is a single value; it is set to the FIRST
+/// extension's control socket. This is correct for any extension's split call:
+/// the control bridge resolves the split purely from the request payload (the
+/// owning extension name, html_root, side/orientation come from the calling
+/// extension's `callControl`), so applying a split through any extension's
+/// control socket produces the same multiplexer mutation. The env carries no
+/// per-extension control state — only a generic "reach the host" endpoint.
 pub fn terminal_env(
-    ext: &CommandExtension,
+    extensions: &[&CommandExtension],
     pane: Entity,
     session: Entity,
 ) -> Vec<(String, String)> {
     let current = std::env::var("PATH").unwrap_or_default();
-    let bin = ext.bin_dir().to_path_buf();
-    vec![
-        ("PATH".into(), extension_path_prefix(&[bin], &current)),
+    let bins: Vec<PathBuf> = extensions
+        .iter()
+        .map(|e| e.bin_dir().to_path_buf())
+        .collect();
+    let mut env = vec![
+        ("PATH".into(), extension_path_prefix(&bins, &current)),
         ("OZMUX_PANE_ID".into(), pane.to_bits().to_string()),
         ("OZMUX_SESSION_ID".into(), session.to_bits().to_string()),
-        (
+    ];
+    if let Some(first) = extensions.first() {
+        env.push((
             "OZMUX_CONTROL_SOCK_PATH".into(),
-            ext.control_sock_path().to_string_lossy().into_owned(),
-        ),
-    ]
+            first.control_sock_path().to_string_lossy().into_owned(),
+        ));
+    }
+    env
 }
 
 fn drain_control_requests(ext: Res<ControlExtension>, mut mux: MultiplexerCommands) {
@@ -92,7 +112,15 @@ fn drain_control_requests(ext: Res<ControlExtension>, mut mux: MultiplexerComman
     }
 }
 
-fn apply_control_request(mux: &mut MultiplexerCommands, req: ControlRequest, responder: Responder) {
+/// Resolves a control request against the multiplexer and replies to the
+/// extension via `responder`. Shared by the single-extension
+/// `drain_control_requests` and the multi-extension manager's drain, so every
+/// extension's control socket applies splits through the same path.
+pub fn apply_control_request(
+    mux: &mut MultiplexerCommands,
+    req: ControlRequest,
+    responder: Responder,
+) {
     let resp = match resolve_and_split(mux, req) {
         Ok(reply) => ControlResponse::Ok(reply),
         Err(e) => ControlResponse::Err(e),

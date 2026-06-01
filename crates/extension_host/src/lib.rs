@@ -13,7 +13,10 @@ pub mod path_prefix;
 pub mod protocol;
 pub mod scheme;
 
-pub use bridge::{ControlExtension, ExtensionControlPlugin, ExtensionControlSet, terminal_env};
+pub use bridge::{
+    ControlExtension, ExtensionControlPlugin, ExtensionControlSet, apply_control_request,
+    terminal_env,
+};
 pub use command::{CommandExtension, CommandExtensionConfig};
 pub use control::{
     ActivityKindSpec, ActivitySpec, ControlError, ControlOp, ControlOrientation, ControlParseError,
