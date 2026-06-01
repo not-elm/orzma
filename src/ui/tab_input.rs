@@ -17,7 +17,17 @@ impl Plugin for TabInteractionPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (drive_tab_clicks, tab_hover_cursor.after(InputPhase::Hover)),
+            (
+                // NOTE: drive_tab_clicks mutates `Session::active_pane`, which
+                // dispatch_focused_key (InputPhase::FocusedKey) reads to route
+                // keystrokes, and which the chrome-rebuild / dim systems (run
+                // after OzmuxSystems::Input) react to. It MUST live in
+                // InputPhase::Dispatch so that focus change is visible the same
+                // frame — see the OzmuxSystems::Input invariant in system_set.rs
+                // and the matching placement of dispatch_mouse_buttons.
+                drive_tab_clicks.in_set(InputPhase::Dispatch),
+                tab_hover_cursor.after(InputPhase::Hover),
+            ),
         );
     }
 }
@@ -30,11 +40,12 @@ fn drive_tab_clicks(
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
     attached: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
 ) {
+    let attached_session = attached.single().ok();
     for (interaction, tab) in tabs.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        if let Ok(session) = attached.single()
+        if let Some(session) = attached_session
             && let Err(e) = mux.set_active_pane(session, tab.pane)
         {
             tracing::warn!(target: "ozmux_gui::ui", ?e, "tab click: set_active_pane failed");
@@ -80,8 +91,11 @@ mod tests {
         MultiplexerPlugin, Side, SplitOrientation,
     };
 
-    #[test]
-    fn tab_press_focuses_pane_and_switches_activity() {
+    /// Builds an app running `drive_tab_clicks`, with one attached session whose
+    /// single pane has two activities — the first active, the second added but
+    /// not activated. Returns `(app, session, pane, first_activity,
+    /// second_activity)`.
+    fn app_with_two_activities() -> (App, Entity, Entity, Entity, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
@@ -96,8 +110,8 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
-        // A second activity to switch to. `add_activity` does NOT activate it,
-        // so `first` stays the active activity.
+        // `add_activity` does NOT activate the new activity, so `first` stays
+        // the active one.
         let second = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -107,14 +121,20 @@ mod tests {
         app.world_mut().flush();
 
         app.world_mut().entity_mut(session).insert(AttachedSession);
+        (app, session, pane, first, second)
+    }
+
+    #[test]
+    fn tab_press_focuses_pane_and_switches_activity() {
+        let (mut app, session, pane, first, second) = app_with_two_activities();
         assert_eq!(
             app.world().get::<ActiveActivity>(pane).map(|a| a.0),
             Some(first),
             "precondition: the first activity is active before the click",
         );
 
-        // Spawn a tab for `second`, already pressed. A freshly-added
-        // Interaction::Pressed satisfies the Changed<Interaction> filter.
+        // A freshly-added Interaction::Pressed satisfies the Changed<Interaction>
+        // filter.
         app.world_mut().spawn((
             TabButton {
                 pane,
@@ -138,27 +158,7 @@ mod tests {
 
     #[test]
     fn tab_hovered_not_pressed_does_not_switch() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
-        app.add_systems(Update, drive_tab_clicks);
-
-        let (session, pane, first) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("test".into()));
-                (o.session, o.pane, o.activity)
-            })
-            .unwrap();
-        app.world_mut().flush();
-        let second = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(pane, ActivityKind::Terminal)
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.world_mut().entity_mut(session).insert(AttachedSession);
+        let (mut app, session, pane, first, second) = app_with_two_activities();
 
         app.world_mut().spawn((
             TabButton {
