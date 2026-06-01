@@ -23,6 +23,7 @@ pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
 pub mod layout;
 pub mod palette;
+pub(crate) mod pane_chrome;
 pub mod registry;
 pub mod root;
 pub mod session;
@@ -112,6 +113,7 @@ impl Plugin for OzmuxUiPlugin {
                 OzmuxSessionUiPlugin,
                 OzmuxTerminalUiPlugin,
             ))
+            .add_observer(pane_chrome::despawn_pane_chrome_on_pane_removal)
             .add_systems(
                 Update,
                 (
