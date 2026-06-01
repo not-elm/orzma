@@ -7,6 +7,7 @@
 use crate::clipboard::Clipboard;
 use crate::configs::OzmuxConfigsResource;
 use crate::system_set::OzmuxSystems;
+use crate::ui::palette;
 use crate::ui::{
     AddrBarText, AddressBarFocus, AddressEdit, BrowserActivityMarker, BrowserNavButton,
     BrowserPageWebview, BrowserToolbarState, HostActivityEntity, NavAction, PageWebviewOf,
@@ -252,12 +253,16 @@ fn drive_nav_buttons(
     }
 }
 
-/// Dims the back/forward buttons when navigation in that direction is unavailable.
+/// Distinguishes enabled vs disabled back/forward buttons: an enabled button
+/// shows a bright `FOREGROUND` glyph on a lighter `TAB_ACTIVE_BG` background; a
+/// disabled one is dimmed to `MUTED` on a transparent background. Mirrors the
+/// tab bar's active/inactive treatment so the states read consistently.
 fn sync_nav_button_enabled(
     states: Query<&BrowserToolbarState>,
-    mut buttons: Query<(&BrowserNavButton, &mut BackgroundColor)>,
+    mut buttons: Query<(&BrowserNavButton, &mut BackgroundColor, &Children)>,
+    mut text_colors: Query<&mut TextColor>,
 ) {
-    for (button, mut bg) in buttons.iter_mut() {
+    for (button, mut bg, children) in buttons.iter_mut() {
         let enabled = match button.action {
             NavAction::Back => states
                 .get(button.host)
@@ -269,13 +274,20 @@ fn sync_nav_button_enabled(
                 .unwrap_or(false),
             NavAction::Reload => true,
         };
-        let color = if enabled {
-            Color::srgb(0.3, 0.3, 0.3)
+        let (background, glyph) = if enabled {
+            (palette::TAB_ACTIVE_BG, palette::FOREGROUND)
         } else {
-            Color::srgb(0.15, 0.15, 0.15)
+            (Color::NONE, palette::MUTED)
         };
-        if bg.0 != color {
-            bg.0 = color;
+        if bg.0 != background {
+            bg.0 = background;
+        }
+        for child in children.iter() {
+            if let Ok(mut tc) = text_colors.get_mut(child)
+                && tc.0 != glyph
+            {
+                tc.0 = glyph;
+            }
         }
     }
 }
@@ -296,11 +308,11 @@ fn spawn_nav_button(
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
+            BackgroundColor(Color::NONE),
             BrowserNavButton { host, action },
         ))
         .with_children(|p| {
-            p.spawn(Text::new(label.to_string()));
+            p.spawn((Text::new(label.to_string()), TextColor(palette::MUTED)));
         })
         .id()
 }
@@ -735,6 +747,63 @@ mod tests {
             captured.0,
             vec![page],
             "RequestGoBack must fire with the page webview"
+        );
+    }
+
+    #[test]
+    fn nav_button_glyph_dims_when_disabled() {
+        let mut app = make_test_app();
+        app.add_systems(
+            Update,
+            (build_browser_chrome, sync_nav_button_enabled).chain(),
+        );
+        let host = app
+            .world_mut()
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
+        app.update(); // build chrome
+        {
+            let mut state = app
+                .world_mut()
+                .get_mut::<BrowserToolbarState>(host)
+                .unwrap();
+            state.can_go_back = true;
+            state.can_go_forward = false;
+        }
+        app.update(); // sync drives the button colors
+
+        let glyph = |app: &mut App, action: NavAction| -> Color {
+            let btn = {
+                let mut q = app.world_mut().query::<(Entity, &BrowserNavButton)>();
+                q.iter(app.world())
+                    .find(|(_, b)| b.action == action && b.host == host)
+                    .map(|(e, _)| e)
+                    .expect("button must exist")
+            };
+            let children: Vec<Entity> = app
+                .world()
+                .get::<Children>(btn)
+                .expect("button has a label child")
+                .iter()
+                .collect();
+            children
+                .into_iter()
+                .find_map(|c| app.world().get::<TextColor>(c).map(|tc| tc.0))
+                .expect("label has a TextColor")
+        };
+
+        assert_eq!(
+            glyph(&mut app, NavAction::Back),
+            palette::FOREGROUND,
+            "enabled back glyph is bright (FOREGROUND)"
+        );
+        assert_eq!(
+            glyph(&mut app, NavAction::Forward),
+            palette::MUTED,
+            "disabled forward glyph is muted (MUTED)"
         );
     }
 
