@@ -8,7 +8,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use ozmux_configs::path::{SystemEnv, extensions_dir};
-use ozmux_extension_host::host::{EndpointRegistry, ExtensionEndpoints};
+use ozmux_extension_host::host::{EndpointRegistry, ExtensionEndpoints, LifecycleEvent};
 use ozmux_extension_host::{
     CommandExtension, CommandExtensionConfig, ExtensionControlSet, Manifest, apply_control_request,
 };
@@ -32,14 +32,8 @@ pub(crate) struct ExtensionRegistry {
     /// Shared name → asset-endpoint map read by the `ozmux-ext://` scheme. The
     /// scheme handler reads its own clone (passed to `cef_plugin` in `main`);
     /// the resource holds the canonical handle so it stays alive for the app's
-    /// lifetime.
-    // NOTE: the scheme handler holds a separate clone, so the in-resource handle
-    // is written (populated on launch) but never read back here; it exists to
-    // own the shared registry for the world's lifetime.
-    #[expect(
-        dead_code,
-        reason = "canonical owner of the shared endpoint registry; scheme handler reads its own clone"
-    )]
+    /// lifetime, and `publish_ready_endpoints` writes each extension's live
+    /// asset socket path into it once the extension signals readiness.
     endpoints: EndpointRegistry,
 }
 
@@ -74,9 +68,12 @@ impl Plugin for ExtensionManagerPlugin {
             let name = d.config.name.clone();
             match CommandExtension::spawn(d.config) {
                 Ok(ext) => {
-                    let ep = ExtensionEndpoints::default();
-                    ep.set(ext.asset_sock_path().to_path_buf());
-                    endpoints.insert(name.clone(), ep);
+                    // NOTE: register the name with an EMPTY endpoint at spawn so an
+                    // early CEF fetch resolves the name but finds no socket yet
+                    // (FetchError::NotReady → 503), instead of hitting ECONNREFUSED
+                    // on a socket the child has not bound (502). The real socket
+                    // path is published by `publish_ready_endpoints` on readiness.
+                    endpoints.insert(name.clone(), ExtensionEndpoints::default());
                     extensions.insert(name, ext);
                 }
                 Err(e) => {
@@ -91,7 +88,10 @@ impl Plugin for ExtensionManagerPlugin {
         });
         app.add_systems(
             Update,
-            drain_all_control_requests.in_set(ExtensionControlSet::Drain),
+            (
+                drain_all_control_requests.in_set(ExtensionControlSet::Drain),
+                publish_ready_endpoints,
+            ),
         );
     }
 }
@@ -189,9 +189,85 @@ fn drain_all_control_requests(registry: Res<ExtensionRegistry>, mut mux: Multipl
     }
 }
 
+fn publish_ready_endpoints(registry: Res<ExtensionRegistry>) {
+    for (name, ext) in registry.extensions.iter() {
+        while let Ok(event) = ext.events().try_recv() {
+            if let LifecycleEvent::Ready = event
+                && let Some(ep) = registry.endpoints.get(name)
+            {
+                ep.set(ext.asset_sock_path().to_path_buf());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    fn memo_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions/memo")
+    }
+
+    fn node_and_memo_available() -> bool {
+        let node = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("command -v node")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        node && memo_dir().join("node_modules/@ozmux/sdk").exists()
+    }
+
+    #[test]
+    fn endpoint_stays_unpublished_until_extension_is_ready() {
+        if !node_and_memo_available() {
+            eprintln!("skipping: node or memo's @ozmux/sdk link not available");
+            return;
+        }
+        let ext = CommandExtension::spawn_with_timeout(
+            CommandExtensionConfig {
+                name: "memo".into(),
+                dir: memo_dir(),
+                main: EXTENSION_MAIN.into(),
+                commands: vec!["@memo".into()],
+            },
+            Duration::from_secs(20),
+        )
+        .expect("spawn memo");
+
+        let endpoints = EndpointRegistry::default();
+        endpoints.insert("memo", ExtensionEndpoints::default());
+        let mut extensions: HashMap<String, CommandExtension> = HashMap::new();
+        extensions.insert("memo".into(), ext);
+
+        let registered = endpoints.get("memo").expect("name resolves at spawn");
+        assert!(
+            registered.get().is_none(),
+            "before readiness the endpoint must resolve the name but have no socket (NotReady -> 503, not 502)"
+        );
+
+        let mut app = App::new();
+        app.insert_resource(ExtensionRegistry {
+            extensions,
+            endpoints: endpoints.clone(),
+        });
+        app.add_systems(Update, publish_ready_endpoints);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(25);
+        loop {
+            app.update();
+            if endpoints.get("memo").and_then(|ep| ep.get()).is_some() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "asset endpoint was never published after readiness"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 
     #[test]
     fn discovers_dirs_with_package_json_and_detects_command_collisions() {
