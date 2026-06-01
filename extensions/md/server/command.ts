@@ -6,8 +6,7 @@ import { resolveTarget, statOrNull } from './target.ts';
 /** Host-supplied bits the command needs: the built client entry, and the channel factory. */
 export interface MdDeps {
   distIndexPath: string;
-  // biome-ignore lint/suspicious/noExplicitAny: channel map values are typed as ChannelGenerator<any,any>; using any here avoids a variance error when callers supply a narrower generator
-  makeChannel: (filePath: string) => ChannelGenerator<any, any>;
+  makeChannel: (filePath: string) => ChannelGenerator<Record<string, never>, unknown>;
 }
 
 /** Runs the `@md` command: parse → gate → build-guard → open the preview activity. */
