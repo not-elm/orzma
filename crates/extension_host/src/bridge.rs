@@ -226,6 +226,17 @@ fn handle_activate(
             code: "bad_request".into(),
             message: format!("bad activity_id: {}", p.activity_id),
         })?;
+    // Reject an activity that is not a live child of the invoking pane:
+    // `set_active_activity` only validates the pane, so without this an
+    // extension could point a pane's `ActiveActivity` at a foreign, stale, or
+    // non-activity entity and corrupt its rendered state. `pane_of_activity`
+    // returns `None` for despawned / recycled / non-activity bits.
+    if mux.pane_of_activity(activity) != Some(pane) {
+        return Err(ControlError {
+            code: "bad_request".into(),
+            message: format!("activity {} is not in the invoking pane", p.activity_id),
+        });
+    }
     mux.set_active_activity(pane, activity)
         .map_err(|e| ControlError {
             code: "internal".into(),
@@ -426,6 +437,49 @@ mod tests {
                 .get::<ozmux_multiplexer::ActiveActivity>(pane)
                 .map(|a| a.0),
             Some(second)
+        );
+    }
+
+    #[test]
+    fn activate_rejects_activity_not_in_pane() {
+        let mut world = World::new();
+        let first = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let second = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        world.flush();
+        let active_before = world
+            .get::<ozmux_multiplexer::ActiveActivity>(first.pane)
+            .map(|a| a.0);
+
+        let (tx, rx) = bounded(1);
+        let mut tx = Some(tx);
+        // Try to activate session 2's activity on session 1's pane.
+        let mut req = Some(ControlRequest {
+            pane_bits: first.pane.to_bits(),
+            op: ControlOp::Activate(crate::control::ActivateParams {
+                activity_id: second.activity.to_bits().to_string(),
+            }),
+        });
+        world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                apply_control_request(&mut mux, req.take().unwrap(), tx.take().unwrap());
+            })
+            .unwrap();
+        world.flush();
+
+        match rx.try_recv().unwrap() {
+            ControlResponse::Err(e) => assert_eq!(e.code, "bad_request"),
+            ControlResponse::Ok(_) => panic!("expected bad_request for a foreign activity"),
+        }
+        assert_eq!(
+            world
+                .get::<ozmux_multiplexer::ActiveActivity>(first.pane)
+                .map(|a| a.0),
+            active_before,
+            "the foreign activate must not mutate the pane's ActiveActivity"
         );
     }
 }

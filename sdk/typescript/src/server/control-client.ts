@@ -38,7 +38,7 @@ type ControlReplyByOp = {
 const SYNTHETIC_REPLY: { [K in keyof ControlReplyByOp]: () => ControlReplyByOp[K] } = {
   split: () => ({ new_pane_id: crypto.randomUUID(), new_activity_id: crypto.randomUUID() }),
   add_activity: () => ({ new_activity_id: crypto.randomUUID() }),
-  activate: () => ({}) as Record<string, never>,
+  activate: () => ({}) satisfies Record<string, never>,
 };
 
 const CONNECT_TIMEOUT_MS = 5000;
@@ -103,8 +103,19 @@ export function callControl<Op extends keyof ControlParamsByOp>(
       if (settled) return;
       settled = true;
       sock.destroy();
-      if (frame.kind === 'result') resolve(frame.payload as ControlReplyByOp[Op]);
-      else reject(new Error(`ozmux: control ${frame.code ?? 'error'}: ${frame.message ?? ''}`));
+      if (frame.kind === 'result') {
+        // A `result` frame must carry a payload (`{}` for ops with no data,
+        // e.g. activate). Treat an absent/null payload as a malformed response
+        // rather than resolving `undefined`, which would crash callers that
+        // read `reply.new_*_id`.
+        if (frame.payload == null) {
+          reject(new Error('ozmux: malformed control result (missing payload)'));
+          return;
+        }
+        resolve(frame.payload as ControlReplyByOp[Op]);
+      } else {
+        reject(new Error(`ozmux: control ${frame.code ?? 'error'}: ${frame.message ?? ''}`));
+      }
     });
     sock.on('error', (e) => fail(e instanceof Error ? e : new Error(String(e))));
     sock.on('close', () => fail(new Error('ozmux: control socket closed before response')));

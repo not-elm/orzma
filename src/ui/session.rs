@@ -188,17 +188,19 @@ fn rebuild_session_ui(
 /// `LayoutCells`; a redundant flag there is harmless.
 fn flag_chrome_dirty_on_activity_change(
     mut commands: Commands,
-    added_activities: Query<&ChildOf, Added<ActivityMarker>>,
-    switched_panes: Query<&ChildOf, (With<PaneMarker>, Changed<ActiveActivity>)>,
-    panes: Query<&ChildOf, With<PaneMarker>>,
+    added_activities: Query<Entity, Added<ActivityMarker>>,
+    switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveActivity>)>,
+    child_of: Query<&ChildOf>,
 ) {
-    for activity_parent in added_activities.iter() {
-        if let Ok(pane_parent) = panes.get(activity_parent.parent()) {
-            commands.entity(pane_parent.parent()).insert(SessionUiDirty);
+    for activity in added_activities.iter() {
+        if let Some((_pane, session)) = resolve_pane_session(activity, &child_of) {
+            commands.entity(session).insert(SessionUiDirty);
         }
     }
-    for pane_parent in switched_panes.iter() {
-        commands.entity(pane_parent.parent()).insert(SessionUiDirty);
+    for pane in switched_panes.iter() {
+        if let Ok(pane_parent) = child_of.get(pane) {
+            commands.entity(pane_parent.parent()).insert(SessionUiDirty);
+        }
     }
 }
 
