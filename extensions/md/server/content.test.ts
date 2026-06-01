@@ -136,3 +136,36 @@ describe('makeContentChannel', () => {
     expect(events[1]).toEqual({ kind: 'missing' });
   });
 });
+
+/** Polls `pred` until true or the timeout elapses (for real-fs.watch timing). */
+async function waitUntil(pred: () => boolean, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (!pred()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitUntil timed out');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+describe('watchFile (real fs.watch via the default source)', () => {
+  it('re-yields after a real edit and terminates the consumer on abort', async () => {
+    const f = path.join(dir, 'real-watch.md');
+    await writeFile(f, 'first');
+    const ac = new AbortController();
+    const events: ContentEvent[] = [];
+
+    const channel = makeContentChannel(f); // default source = real watchFile
+    const consumer = (async () => {
+      for await (const ev of channel({}, { signal: ac.signal })) events.push(ev);
+    })();
+
+    await waitUntil(() => events.length >= 1, 3000);
+    expect(events[0]).toEqual({ kind: 'content', markdown: 'first' });
+
+    await writeFile(f, 'second');
+    await waitUntil(() => events.length >= 2, 3000);
+    expect(events[1]).toEqual({ kind: 'content', markdown: 'second' });
+
+    ac.abort();
+    await consumer; // resolves (no hang) because watchFile observes the abort and closes the watcher
+  });
+});
