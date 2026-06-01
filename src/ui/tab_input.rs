@@ -77,7 +77,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use ozmux_multiplexer::{
         ActiveActivity, ActivePane, ActivityKind, AttachedSession, MultiplexerCommands,
-        MultiplexerPlugin,
+        MultiplexerPlugin, Side, SplitOrientation,
     };
 
     #[test]
@@ -178,6 +178,68 @@ mod tests {
             app.world().get::<ActivePane>(session).map(|a| a.0),
             Some(pane),
             "a hovered (not pressed) tab must not change the active pane",
+        );
+    }
+
+    #[test]
+    fn tab_press_in_unfocused_pane_focuses_that_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.add_systems(Update, drive_tab_clicks);
+
+        let (session, original_pane) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("test".into()));
+                (o.session, o.pane)
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        // Split into a second pane, then re-focus the original so the new pane is
+        // the unfocused one (`split_pane` promotes the new pane to active).
+        let other_pane = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                let p = mux
+                    .split_pane(original_pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split");
+                mux.set_active_pane(session, original_pane)
+                    .expect("refocus original");
+                p
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut().entity_mut(session).insert(AttachedSession);
+
+        let other_activity = app
+            .world_mut()
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_activity(other_pane))
+            .unwrap()
+            .expect("the split pane has an active activity");
+
+        assert_eq!(
+            app.world().get::<ActivePane>(session).map(|a| a.0),
+            Some(original_pane),
+            "precondition: the original pane is focused, the split pane is not",
+        );
+
+        // Click the already-active tab of the unfocused pane: the activity switch
+        // is a no-op, but the pane focus must move to it in one click.
+        app.world_mut().spawn((
+            TabButton {
+                pane: other_pane,
+                activity: other_activity,
+            },
+            Interaction::Pressed,
+        ));
+        app.update();
+
+        assert_eq!(
+            app.world().get::<ActivePane>(session).map(|a| a.0),
+            Some(other_pane),
+            "clicking a tab in an unfocused pane focuses that pane",
         );
     }
 
