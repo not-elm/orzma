@@ -3,18 +3,15 @@ import { readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { ChannelGenerator } from '@ozmux/sdk/server';
 import type { ContentEvent } from '../content-event.ts';
+import { statOrNull } from './target.ts';
 
 /** Maximum file size streamed to the preview; larger files report `too-large`. */
 export const MAX_BYTES = 2 * 1024 * 1024;
 
 /** Reads the file as UTF-8, or reports `missing` / `too-large` without throwing. */
 export async function readContent(filePath: string): Promise<ContentEvent> {
-  let s;
-  try {
-    s = await stat(filePath);
-  } catch {
-    return { kind: 'missing' };
-  }
+  const s = await statOrNull(filePath);
+  if (!s) return { kind: 'missing' };
   if (s.size > MAX_BYTES) return { kind: 'too-large', bytes: s.size };
   try {
     return { kind: 'content', markdown: await readFile(filePath, 'utf8') };

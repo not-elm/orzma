@@ -3,10 +3,12 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { CommandContext, SplitArgs } from '@ozmux/sdk/server';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { mdCommand, type MdDeps } from './command.ts';
+import { type MdDeps, mdCommand } from './command.ts';
 
 const dir = await mkdtemp(path.join(tmpdir(), 'md-cmd-'));
-afterAll(async () => import('node:fs/promises').then((fs) => fs.rm(dir, { recursive: true, force: true })));
+afterAll(async () =>
+  import('node:fs/promises').then((fs) => fs.rm(dir, { recursive: true, force: true })),
+);
 
 function fakeCtx(argv: string[]) {
   const errs: string[] = [];
@@ -16,7 +18,12 @@ function fakeCtx(argv: string[]) {
   const ctx = {
     argv,
     cwd: dir,
-    stderr: { write: (s: string) => (errs.push(s), true) },
+    stderr: {
+      write: (s: string) => {
+        errs.push(s);
+        return true;
+      },
+    },
     pane: { split, addActivity },
   } as unknown as CommandContext;
   return { ctx, errs, split, addActivity, activate };
@@ -47,7 +54,10 @@ describe('mdCommand', () => {
   it('returns 1 with a build hint when dist/index.html is absent', async () => {
     await writeFile(path.join(dir, 'present.md'), '# x');
     const { ctx, errs } = fakeCtx(['present.md']);
-    const badDeps: MdDeps = { distIndexPath: path.join(dir, 'nope.html'), makeChannel: () => async function* () {} };
+    const badDeps: MdDeps = {
+      distIndexPath: path.join(dir, 'nope.html'),
+      makeChannel: () => async function* () {},
+    };
     expect(await mdCommand(ctx, badDeps)).toBe(1);
     expect(errs.join('')).toContain('client not built');
   });
