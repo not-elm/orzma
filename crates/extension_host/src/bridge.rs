@@ -199,9 +199,12 @@ fn handle_add_activity(
         entry,
         extension_name,
     } = p.activity.kind;
-    let activity = mux.add_activity(pane, ActivityKind::Extension {
-        entry: PathBuf::from(entry),
-    });
+    let activity = mux.add_activity(
+        pane,
+        ActivityKind::Extension {
+            entry: PathBuf::from(entry),
+        },
+    );
     stamp_extension_activity(mux, activity, activity_id, extension_name);
     Ok(ControlReply::AddActivity {
         new_activity_id: activity.to_bits(),
@@ -223,10 +226,11 @@ fn handle_activate(
             code: "bad_request".into(),
             message: format!("bad activity_id: {}", p.activity_id),
         })?;
-    mux.set_active_activity(pane, activity).map_err(|e| ControlError {
-        code: "internal".into(),
-        message: e.to_string(),
-    })?;
+    mux.set_active_activity(pane, activity)
+        .map_err(|e| ControlError {
+            code: "internal".into(),
+            message: e.to_string(),
+        })?;
     Ok(ControlReply::Activate)
 }
 
@@ -291,7 +295,10 @@ mod tests {
         world.flush();
 
         match resp_rx.try_recv().unwrap() {
-            ControlResponse::Ok(ControlReply::Split { new_pane_id, new_activity_id }) => {
+            ControlResponse::Ok(ControlReply::Split {
+                new_pane_id,
+                new_activity_id,
+            }) => {
                 let new_pane = Entity::try_from_bits(new_pane_id).unwrap();
                 assert!(
                     world
@@ -353,7 +360,11 @@ mod tests {
         let mut tx = Some(tx);
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply_control_request(&mut mux, add_activity_request(pane_bits), tx.take().unwrap());
+                apply_control_request(
+                    &mut mux,
+                    add_activity_request(pane_bits),
+                    tx.take().unwrap(),
+                );
             })
             .unwrap();
         world.flush();

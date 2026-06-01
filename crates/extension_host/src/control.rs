@@ -103,7 +103,10 @@ pub enum ActivityKindSpec {
 /// Successful reply payload per op.
 pub enum ControlReply {
     /// Split succeeded; carries the new entities' bits.
-    Split { new_pane_id: u64, new_activity_id: u64 },
+    Split {
+        new_pane_id: u64,
+        new_activity_id: u64,
+    },
     /// Add-activity succeeded; carries the new activity entity bits.
     AddActivity { new_activity_id: u64 },
     /// Activate succeeded (no payload).
@@ -172,8 +175,13 @@ pub fn encode_response(id: &str, resp: &ControlResponse) -> String {
     #[derive(Serialize)]
     #[serde(untagged)]
     enum Payload {
-        Split { new_pane_id: String, new_activity_id: String },
-        AddActivity { new_activity_id: String },
+        Split {
+            new_pane_id: String,
+            new_activity_id: String,
+        },
+        AddActivity {
+            new_activity_id: String,
+        },
         Empty {},
     }
     #[derive(Serialize)]
@@ -182,10 +190,17 @@ pub fn encode_response(id: &str, resp: &ControlResponse) -> String {
         #[serde(rename = "result")]
         Result { id: &'a str, payload: Payload },
         #[serde(rename = "error")]
-        Error { id: &'a str, code: &'a str, message: &'a str },
+        Error {
+            id: &'a str,
+            code: &'a str,
+            message: &'a str,
+        },
     }
     let wire = match resp {
-        ControlResponse::Ok(ControlReply::Split { new_pane_id, new_activity_id }) => Wire::Result {
+        ControlResponse::Ok(ControlReply::Split {
+            new_pane_id,
+            new_activity_id,
+        }) => Wire::Result {
             id,
             payload: Payload::Split {
                 new_pane_id: new_pane_id.to_string(),
@@ -231,7 +246,9 @@ mod tests {
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "abc");
         assert_eq!(req.pane_bits, 4294967297);
-        let ControlOp::Split(p) = req.op else { panic!("expected Split") };
+        let ControlOp::Split(p) = req.op else {
+            panic!("expected Split")
+        };
         assert!(matches!(p.side, ControlSide::After));
         assert!(matches!(p.orientation, ControlOrientation::Vertical));
         assert_eq!(p.activity.activity_id, "aid-123");
@@ -248,7 +265,9 @@ mod tests {
         let line = r#"{"kind":"call","id":"xyz","op":"split","pane":"1","params":{"side":"before","orientation":"horizontal","activity":{"kind":"extension","entry":"index.html","name":null,"activity_id":"aid-456"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "xyz");
-        let ControlOp::Split(p) = req.op else { panic!("expected Split") };
+        let ControlOp::Split(p) = req.op else {
+            panic!("expected Split")
+        };
         let ActivityKindSpec::Extension {
             entry,
             extension_name,
@@ -306,7 +325,9 @@ mod tests {
         let line = r#"{"kind":"call","id":"a1","op":"add_activity","pane":"4294967297","params":{"activity":{"kind":"extension","entry":"index.html","extension_name":"md","name":"x.md","activity_id":"aid-1"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "a1");
-        let ControlOp::AddActivity(p) = req.op else { panic!("expected AddActivity") };
+        let ControlOp::AddActivity(p) = req.op else {
+            panic!("expected AddActivity")
+        };
         assert_eq!(p.activity.activity_id, "aid-1");
     }
 
@@ -315,7 +336,9 @@ mod tests {
         let line = r#"{"kind":"call","id":"a2","op":"activate","pane":"1","params":{"activity_id":"aid-9"}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "a2");
-        let ControlOp::Activate(p) = req.op else { panic!("expected Activate") };
+        let ControlOp::Activate(p) = req.op else {
+            panic!("expected Activate")
+        };
         assert_eq!(p.activity_id, "aid-9");
     }
 
@@ -330,9 +353,6 @@ mod tests {
             "{\"kind\":\"result\",\"id\":\"i1\",\"payload\":{\"new_activity_id\":\"7\"}}\n"
         );
         let act = encode_response("i2", &ControlResponse::Ok(ControlReply::Activate));
-        assert_eq!(
-            act,
-            "{\"kind\":\"result\",\"id\":\"i2\",\"payload\":{}}\n"
-        );
+        assert_eq!(act, "{\"kind\":\"result\",\"id\":\"i2\",\"payload\":{}}\n");
     }
 }
