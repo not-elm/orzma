@@ -1,7 +1,8 @@
 //! Launches a command (bootstrap-based) extension: spawns `node <main>` with the
-//! shim bin dir + command socket + piped stdin, awaits the shim files, and
-//! exposes `bin_dir()` for the terminal `PATH` prefix. The shim/command server
-//! live in the extension (TS); this only manages the process + readiness.
+//! shim bin dir + command socket + piped stdin, awaits the `.ready` readiness
+//! marker, and exposes `bin_dir()` for the terminal `PATH` prefix. The
+//! shim/command server live in the extension (TS); this only manages the
+//! process + readiness.
 
 use crate::control::{ControlError, ControlRequest, ControlResponse, encode_response, parse_call};
 use crate::host::{HostError, HostResult, LifecycleEvent, RuntimeRoot, run_lifecycle};
@@ -18,6 +19,7 @@ use std::time::Duration;
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTROL_ACCEPT_POLL: Duration = Duration::from_millis(20);
+const READY_MARKER: &str = ".ready";
 
 /// The oneshot the control server blocks on for the bridge's verdict.
 pub type Responder = Sender<ControlResponse>;
@@ -107,8 +109,6 @@ pub struct CommandExtensionConfig {
     pub dir: PathBuf,
     /// Entry script, launched as `node <main>` (e.g. `bootstrap.ts`).
     pub main: OsString,
-    /// Command names whose shim files signal readiness (e.g. `["@memo"]`).
-    pub commands: Vec<String>,
 }
 
 /// A running command extension. Owns the runtime root, the piped stdin (the
@@ -170,11 +170,10 @@ impl CommandExtension {
             let child = Arc::clone(&child);
             let shutdown = Arc::clone(&lifecycle_shutdown);
             let bin_dir = bin_dir.clone();
-            let commands = cfg.commands.clone();
             move || {
                 run_lifecycle(
                     ready_timeout,
-                    move || commands.iter().all(|c| bin_dir.join(c).exists()),
+                    move || bin_dir.join(READY_MARKER).exists(),
                     || {},
                     child,
                     shutdown,
@@ -311,7 +310,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         let mut stream = UnixStream::connect(&sock).unwrap();
-        let call = r#"{"kind":"call","id":"req1","op":"split","pane":"100","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","html_root":"/x","name":null,"activity_id":"aid-test"}}}"#;
+        let call = r#"{"kind":"call","id":"req1","op":"split","pane":"100","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","entry":"/x","name":null,"activity_id":"aid-test"}}}"#;
         stream.write_all(format!("{call}\n").as_bytes()).unwrap();
         let mut buf = String::new();
         stream
@@ -369,7 +368,6 @@ mod tests {
                 name: "memo".into(),
                 dir: memo_dir(),
                 main: "bootstrap.ts".into(),
-                commands: vec!["@memo".into()],
             },
             Duration::from_secs(20),
         )

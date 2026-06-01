@@ -773,7 +773,7 @@ mod tests {
                     Side::After,
                     SplitOrientation::Vertical,
                     ActivityKind::Extension {
-                        html_root: PathBuf::from("/x/memo"),
+                        entry: PathBuf::from("/x/memo"),
                     },
                 )
                 .unwrap()

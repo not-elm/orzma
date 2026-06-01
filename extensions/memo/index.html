@@ -39,9 +39,7 @@
     </section>
 
     <script type="module">
-      import { createClient } from "./dist/sdk.js";
-
-      const client = createClient();
+      const client = window.ozmux.createClient();
       const sendBtn = document.getElementById("send");
       const result = document.getElementById("result");
       const startBtn = document.getElementById("start-clock");

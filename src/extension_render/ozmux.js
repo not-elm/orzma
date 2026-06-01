@@ -65,7 +65,7 @@
     subs.delete(id);
   }
 
-  window.ozmux = {
+  var api = {
     call: function (name, payload) {
       var id = 'c' + nextId++;
       return new Promise(function (resolve, reject) {
@@ -104,4 +104,14 @@
       };
     },
   };
+  api.createClient = function () {
+    return { call: api.call, subscribe: api.subscribe, close: function () {} };
+  };
+  // NOTE: context is injected by the host as a separate PreloadScript
+  // (window.__ozmuxContext) and read via a getter; reading eagerly at install
+  // time (before that script eval'd) would yield undefined.
+  Object.defineProperty(api, 'context', {
+    get: function () { return window.__ozmuxContext; },
+  });
+  window.ozmux = api;
 })();

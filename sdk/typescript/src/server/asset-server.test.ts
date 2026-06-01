@@ -21,14 +21,13 @@ it('encodeResponse matches the cross-language fixture', () => {
 
 it('serves a request over the UDS and round-trips', async () => {
   const sock = path.join(os.tmpdir(), `ozmux-test-${process.pid}-${Date.now()}.sock`);
-  closer = serveAssets(
+  closer = await serveAssets(
     (p) =>
       p === 'hi'
         ? { status: 200, contentType: 'text/html', body: 'ok' }
         : { status: 404, contentType: 'text/plain', body: 'no' },
     { sockPath: sock },
   );
-  await new Promise((r) => setTimeout(r, 50)); // let listen() settle
 
   const got: Buffer = await new Promise((resolve, reject) => {
     const c = net.connect(sock);

@@ -4628,6 +4628,7 @@ dependencies = [
  "ozmux_multiplexer",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "unicode-width",
 ]

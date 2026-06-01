@@ -5,8 +5,7 @@
   "description": "",
   "type": "module",
   "scripts": {
-    "check-types": "tsc --noEmit",
-    "build:sdk": "node build-sdk.mjs"
+    "check-types": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -17,7 +16,6 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "esbuild": "^0.25.0",
     "typescript": "catalog:"
   }
 }

@@ -1,8 +1,9 @@
-//! Tokio-free extension host: a per-PID runtime root, the shared socket-path
+//! Tokio-free extension host: a per-extension runtime root, the shared socket-path
 //! endpoint, a blocking `fetch`, and (Task 3) the process spawn + lifecycle.
 
 use crate::protocol::{ProtocolError, Request, Response, read_response, write_request};
 use crossbeam_channel::Sender;
+use std::collections::HashMap;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use std::time::{Duration, Instant};
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A per-PID runtime directory tree (`<base>/<pid>/{sock,bin}/`), removed on drop.
+/// A per-extension runtime directory tree (`<base>/<pid>/<name>/{sock,bin}/`), removed on drop.
 pub struct RuntimeRoot {
     root: PathBuf,
     sock_dir: PathBuf,
@@ -22,7 +23,7 @@ pub struct RuntimeRoot {
 }
 
 impl RuntimeRoot {
-    /// Resolves a runtime root under `parent/<pid>/`, falling back to
+    /// Resolves a runtime root under `parent/<pid>/<name>/`, falling back to
     /// `/tmp/ozmux-ext` when the socket path would overflow the `sun_path` limit.
     pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> std::io::Result<Self> {
         // NOTE: measure the LONGEST socket filename a command extension uses
@@ -30,21 +31,22 @@ impl RuntimeRoot {
         // `socket_path` produces the shorter `<name>.sock`.
         let needed = |base: &Path| -> usize {
             base.join(pid.to_string())
+                .join(name)
                 .join("sock")
                 .join(format!("{name}.handlers.sock"))
                 .as_os_str()
                 .len()
         };
         if needed(parent) <= SUN_PATH_MAX {
-            return Self::new_in(parent, pid);
+            return Self::new_in(parent, pid, name);
         }
         // NOTE: the shared fallback parent is created with the process umask (so
-        // it is world-listable, like the legacy /tmp/ozmux); only the per-PID
+        // it is world-listable, like the legacy /tmp/ozmux); only the per-extension
         // subdir below is 0700, which is what protects the sockets.
         let fallback = Path::new("/tmp/ozmux-ext");
         std::fs::create_dir_all(fallback)?;
         if needed(fallback) <= SUN_PATH_MAX {
-            return Self::new_in(fallback, pid);
+            return Self::new_in(fallback, pid, name);
         }
         Err(std::io::Error::other(format!(
             "extension '{name}' socket path exceeds {SUN_PATH_MAX} bytes"
@@ -71,8 +73,8 @@ impl RuntimeRoot {
         &self.bin_dir
     }
 
-    fn new_in(parent: &Path, pid: u32) -> std::io::Result<Self> {
-        let root = parent.join(pid.to_string());
+    fn new_in(parent: &Path, pid: u32, name: &str) -> std::io::Result<Self> {
+        let root = parent.join(pid.to_string()).join(name);
         let sock_dir = root.join("sock");
         let bin_dir = root.join("bin");
         std::fs::create_dir_all(&sock_dir)?;
@@ -82,6 +84,12 @@ impl RuntimeRoot {
             use std::os::unix::fs::PermissionsExt;
             for p in [&root, &sock_dir, &bin_dir] {
                 std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700))?;
+            }
+            // NOTE: the intermediate `<parent>/<pid>` dir is created by
+            // `create_dir_all` at the process umask (0755, world-listable);
+            // chmod it 0700 too so extension names under it do not leak in /tmp.
+            if let Some(pid_dir) = root.parent() {
+                std::fs::set_permissions(pid_dir, std::fs::Permissions::from_mode(0o700))?;
             }
         }
         Ok(Self {
@@ -114,6 +122,25 @@ impl ExtensionEndpoints {
     /// Publishes the live socket path so the scheme handler can fetch from it.
     pub fn set(&self, path: PathBuf) {
         *self.0.write().unwrap() = Some(path);
+    }
+}
+
+/// A shared, interior-mutable map of extension name → its live endpoint. Built
+/// before extensions launch (the CEF scheme handler is constructed at
+/// `CefPlugin::build()`) and populated by the host as each extension becomes
+/// ready, so the handler reads names registered after its own construction.
+#[derive(Clone, Default)]
+pub struct EndpointRegistry(Arc<RwLock<HashMap<String, ExtensionEndpoints>>>);
+
+impl EndpointRegistry {
+    /// Returns (cloning) the endpoint handle for `name`, if registered.
+    pub fn get(&self, name: &str) -> Option<ExtensionEndpoints> {
+        self.0.read().unwrap().get(name).cloned()
+    }
+
+    /// Inserts/replaces the endpoint handle for `name`.
+    pub fn insert(&self, name: impl Into<String>, endpoints: ExtensionEndpoints) {
+        self.0.write().unwrap().insert(name.into(), endpoints);
     }
 }
 
@@ -346,6 +373,19 @@ mod tests {
     }
 
     #[test]
+    fn runtime_root_creates_pid_dir_0700() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        let rt = RuntimeRoot::resolve_in(parent.path(), 4242, "hello").unwrap();
+        let pid_dir = rt.root().parent().unwrap();
+        let mode = std::fs::metadata(pid_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "the intermediate <pid> dir must be 0700 so extension names do not leak"
+        );
+    }
+
+    #[test]
     fn runtime_root_creates_bin_dir_0700() {
         use std::os::unix::fs::PermissionsExt;
         let parent = tempfile::tempdir().unwrap();
@@ -356,6 +396,25 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    #[test]
+    fn runtime_roots_for_different_names_are_isolated() {
+        let parent = tempfile::tempdir().unwrap();
+        let a = RuntimeRoot::resolve_in(parent.path(), 99, "alpha").unwrap();
+        let a_sock = a.sock_dir().to_path_buf();
+        {
+            let b = RuntimeRoot::resolve_in(parent.path(), 99, "beta").unwrap();
+            assert_ne!(
+                a.root(),
+                b.root(),
+                "same-PID extensions must not share a root"
+            );
+        } // b dropped here
+        assert!(
+            a_sock.exists(),
+            "dropping one extension must not remove another's sockets"
+        );
     }
 
     #[test]

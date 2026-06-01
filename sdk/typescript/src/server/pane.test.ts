@@ -173,7 +173,7 @@ describe('Pane.split', () => {
     server.close();
   });
 
-  it('encodes extension html_root as the parent dir of `html` in the control frame', async () => {
+  it('encodes the extension entry as the html path relative to cwd in the control frame', async () => {
     const sock = tmpSock();
     const { server, frames } = await startFakeSplitServer(sock, {
       new_pane_id: 'p3',
@@ -181,19 +181,23 @@ describe('Pane.split', () => {
     });
     process.env.OZMUX_CONTROL_SOCK_PATH = sock;
 
+    const html = path.join(process.cwd(), 'ui', 'app.html');
     const pane = new Pane({ id: 'p1', windowId: 'w1' });
     await pane.split({
       side: 'before',
       orientation: 'vertical',
       activity: {
         kind: 'extension',
-        html: '/opt/memo/index.html',
+        html,
       },
     });
 
-    const params = frames[0].params as { activity: { kind: string; html_root: string } };
+    const params = frames[0].params as {
+      activity: { kind: string; entry: string; extension_name: string };
+    };
     expect(params.activity.kind).toBe('extension');
-    expect(params.activity.html_root).toBe('/opt/memo');
+    expect(params.activity.entry).toBe('ui/app.html');
+    expect(params.activity.extension_name).toBe('memo');
     server.close();
   });
 
@@ -255,17 +259,18 @@ describe('Pane.addActivity', () => {
 
   it('forwards EXTENSION_NAME on extension-kind activities', async () => {
     const pane = new Pane({ id: 'p1', windowId: 'w1' });
+    const html = path.join(process.cwd(), 'index.html');
     await pane.addActivity({
       kind: 'extension',
-      html: '/opt/memo/index.html',
+      html,
     });
     const [, body] = postJsonSpy.mock.calls[0] as [string, Record<string, unknown>];
     const activity = body.activity as {
-      kind: { type: string; html_root: string; extension_name: string };
+      kind: { type: string; entry: string; extension_name: string };
     };
     expect(activity.kind).toEqual({
       type: 'extension',
-      html_root: '/opt/memo',
+      entry: 'index.html',
       extension_name: 'memo',
     });
   });

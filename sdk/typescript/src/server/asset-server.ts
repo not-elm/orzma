@@ -22,12 +22,13 @@ export type AssetHandler = (path: string) => AssetResponse | Promise<AssetRespon
 /**
  * Serves assets over the ozmux byte protocol on a Unix socket (one
  * request/response per connection). Listens on `opts.sockPath` or
- * `OZMUX_SOCK_PATH`. Mirrors the Rust `protocol.rs` framing.
+ * `OZMUX_SOCK_PATH`. Mirrors the Rust `protocol.rs` framing. Resolves once the
+ * socket is bound and listening (so callers can sequence work after it).
  */
 export function serveAssets(
   handler: AssetHandler,
   opts: { sockPath?: string } = {},
-): { close(): void } {
+): Promise<{ close(): void }> {
   const sockPath = opts.sockPath ?? process.env.OZMUX_SOCK_PATH;
   if (!sockPath) throw new Error('serveAssets: OZMUX_SOCK_PATH not set');
   try {
@@ -68,7 +69,6 @@ export function serveAssets(
     socket.on('error', () => socket.destroy());
   });
 
-  server.listen(sockPath);
   const close = () => {
     server.close();
     // Destroy lingering sockets so server.close() can complete: allowHalfOpen
@@ -82,8 +82,15 @@ export function serveAssets(
       // already gone
     }
   };
-  for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, close);
-  return { close };
+  return new Promise((resolve, reject) => {
+    const onError = (err: Error) => reject(err);
+    server.once('error', onError);
+    server.listen(sockPath, () => {
+      server.off('error', onError);
+      for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, close);
+      resolve({ close });
+    });
+  });
 }
 
 /** Encodes an {@link AssetResponse} into a protocol response frame. */

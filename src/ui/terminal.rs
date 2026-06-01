@@ -5,6 +5,7 @@
 //! Failures mark the entity with `TerminalSpawnFailed` so the system does
 //! not retry on subsequent frames.
 
+use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
 use crate::ui::{HostActivityEntity, TerminalActivityMarker, TerminalSpawnFailed};
 use bevy::prelude::*;
@@ -13,7 +14,7 @@ use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, Terminal
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
-use ozmux_extension_host::{ControlExtension, terminal_env};
+use ozmux_extension_host::terminal_env;
 
 pub struct OzmuxTerminalUiPlugin;
 
@@ -38,14 +39,14 @@ impl Plugin for OzmuxTerminalUiPlugin {
 /// targets entities that lack `TerminalHandle` and `TerminalSpawnFailed`,
 /// so the per-entity work happens exactly once.
 ///
-/// When a command extension was launched (`ControlExtension` present), the
-/// spawned terminal's env is seeded via `terminal_env` so its `@<cmd>`
-/// shims can reach the control bridge. The bridge keys on `OZMUX_PANE_ID`
-/// being the multiplexer Pane `Entity`, so the host's owning Pane / Session
-/// are resolved by walking `ChildOf` from the host's `HostActivityEntity`:
-/// activity → Pane → Session. If the chain cannot be resolved (or no
-/// extension launched) the env is empty — the terminal still works, just
-/// without `@<cmd>` support.
+/// When extensions were launched (the `ExtensionRegistry` resource), the
+/// spawned terminal's env is seeded via `terminal_env` with every launched
+/// extension's bin dir so any `@<cmd>` shim resolves and can reach the control
+/// bridge. The bridge keys on `OZMUX_PANE_ID` being the multiplexer Pane
+/// `Entity`, so the host's owning Pane / Session are resolved by walking
+/// `ChildOf` from the host's `HostActivityEntity`: activity → Pane → Session.
+/// If the chain cannot be resolved (or no extension launched) the env is
+/// empty — the terminal still works, just without `@<cmd>` support.
 fn finish_terminal_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -58,12 +59,15 @@ fn finish_terminal_setup(
         ),
     >,
     child_of: Query<&ChildOf>,
-    ext: Option<Res<ControlExtension>>,
+    registry: Option<Res<ExtensionRegistry>>,
 ) {
     for (host, host_activity) in hosts.iter() {
-        let env = match ext.as_ref() {
-            Some(ext) => match resolve_pane_session(host_activity.0, &child_of) {
-                Some((pane, session)) => terminal_env(&ext.0, pane, session),
+        let env = match registry.as_ref() {
+            Some(registry) => match resolve_pane_session(host_activity.0, &child_of) {
+                Some((pane, session)) => {
+                    let exts: Vec<_> = registry.extensions.values().collect();
+                    terminal_env(&exts, pane, session)
+                }
                 None => Vec::new(),
             },
             None => Vec::new(),

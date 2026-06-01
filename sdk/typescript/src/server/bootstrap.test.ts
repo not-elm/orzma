@@ -199,28 +199,30 @@ describe('bootstrap()', () => {
       stdio: 'inherit',
     });
     try {
-      // Wait until shim + sock exist
+      // Wait until the readiness marker + sockets exist
+      const readyPath = path.join(binDir, '.ready');
       const deadline = Date.now() + 3000;
       while (Date.now() < deadline) {
         try {
-          await fs.stat(path.join(binDir, 'memo'));
+          await fs.stat(readyPath);
           await fs.stat(sockPath);
-          await fs.stat(handlersSockPath); // NEW
+          await fs.stat(handlersSockPath);
           break;
         } catch {
           await new Promise((r) => setTimeout(r, 50));
         }
       }
+      await fs.stat(readyPath);
       await fs.stat(path.join(binDir, 'memo'));
       await fs.stat(sockPath);
-      await fs.stat(handlersSockPath); // NEW
+      await fs.stat(handlersSockPath);
 
       child.kill('SIGTERM');
       await new Promise<void>((res) => child.once('exit', () => res()));
 
-      await expect(fs.stat(path.join(binDir, 'memo'))).rejects.toBeTruthy();
+      await expect(fs.stat(readyPath)).rejects.toBeTruthy();
       await expect(fs.stat(sockPath)).rejects.toBeTruthy();
-      await expect(fs.stat(handlersSockPath)).rejects.toBeTruthy(); // NEW
+      await expect(fs.stat(handlersSockPath)).rejects.toBeTruthy();
     } finally {
       try {
         child.kill('SIGKILL');

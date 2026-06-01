@@ -238,8 +238,15 @@ export async function bootstrap(args: BootstrapArgs): Promise<void> {
   // NOTE: process.cwd() is the extension dir — CommandExtension spawns node
   // with the extension root as cwd, making it the correct asset root.
   const assetServer = env.assetSockPath
-    ? serveAssets(fileAssetHandler(process.cwd()), { sockPath: env.assetSockPath })
+    ? await serveAssets(fileAssetHandler(process.cwd()), { sockPath: env.assetSockPath })
     : undefined;
+
+  // NOTE: readiness marker written LAST (after all sockets bind) — the host polls
+  // for it instead of per-command shim files, so Ready never fires before the
+  // asset socket is serving.
+  const readyPath = path.join(env.binDir, '.ready');
+  await fs.writeFile(readyPath, '', { mode: 0o600 });
+  await fs.chmod(readyPath, 0o600);
 
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = (): Promise<void> => {

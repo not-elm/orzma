@@ -4,28 +4,26 @@
 //! bridge (Task 9) that routes `window.ozmux` frames between the page and the
 //! extension's handlers socket.
 
+use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
 use crate::ui::registry::ActivityEntityRegistry;
 use crate::ui::{ExtensionActivityMarker, HostActivityEntity};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use ozmux_extension_host::host::ExtensionEndpoints;
+use ozmux_extension_host::HandlersBridge;
+use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
-use ozmux_extension_host::{ControlExtension, HandlersBridge};
 use ozmux_multiplexer::{
-    AttachedSession, ExtensionActivityAid, MultiplexerCommands, SessionMarker,
+    ActivityKind, AttachedSession, ExtensionActivityAid, MultiplexerCommands, OwningExtension,
+    SessionMarker,
 };
 
-/// The `ozmux-ext://` URL the memo extension webview is pointed at. The host
-/// segment (`memo`) matches the extension name registered as a custom scheme
-/// in `cef_plugin`; frames for other extension names 404.
-const MEMO_WEBVIEW_URL: &str = "ozmux-ext://memo/index.html";
-
-/// The shared asset endpoint the `ozmux-ext://` scheme reads (set on memo-ready
-/// in Task 9). Empty until then, so the scheme returns 503.
-#[derive(Resource, Clone, Default)]
-pub struct AssetEndpoint(pub ExtensionEndpoints);
+/// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension activity,
+/// where `entry` is the client's HTML path relative to the extension dir.
+fn webview_url(extension_name: &str, entry: &str) -> String {
+    format!("ozmux-ext://{extension_name}/{entry}")
+}
 
 /// One handler/channel frame emitted by the page's `window.ozmux` (the JSON the
 /// SDK handlers-server speaks). Carried verbatim to the handlers bridge.
@@ -50,21 +48,27 @@ struct ExtensionHandlersBridge(HandlersBridge);
 #[derive(Resource, Default)]
 struct WebviewAidMap(HashMap<String, Entity>);
 
+/// Marks an extension-activity host whose webview could not be mounted because
+/// its activity has no `OwningExtension`. Excluding marked hosts from the
+/// `finish_extension_setup` query makes its diagnostic fire once, not every frame.
+#[derive(Component)]
+struct WebviewMountUnresolved;
+
 /// JS defining `window.ozmux` over `cef.emit` / `cef.listen`, injected per
 /// webview as a `PreloadScripts` entry (see `finish_extension_setup`). Mirrors
 /// `sdk/typescript/src/cef/ozmux-bridge.ts`.
 pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 
-/// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the given
-/// asset endpoint handle. The `window.ozmux` bridge is intentionally NOT
-/// registered as a global extension here; it is injected per-webview via
-/// `PreloadScripts` in `finish_extension_setup` (see the NOTE there).
-pub fn cef_plugin(endpoint: &AssetEndpoint) -> CefPlugin {
+/// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
+/// `EndpointRegistry` the extension manager populates per extension on launch.
+/// The handler reads the live registry on each request, so endpoints registered
+/// after `CefPlugin::build()` resolve; frames for unregistered names 404. The
+/// `window.ozmux` bridge is intentionally NOT registered as a global extension
+/// here; it is injected per-webview via `PreloadScripts` in
+/// `finish_extension_setup` (see the NOTE there).
+pub fn cef_plugin(endpoints: EndpointRegistry) -> CefPlugin {
     CefPlugin {
-        // NOTE: "memo" is the extension-NAME segment matched inside
-        // ozmux-ext://<name>/…, not the URL scheme name — the scheme is always
-        // "ozmux-ext" (scheme::SCHEME_NAME). Frames for other extension names 404.
-        custom_schemes: vec![custom_scheme("memo", endpoint.0.clone())],
+        custom_schemes: vec![custom_scheme(endpoints)],
         command_line_config: cef_command_line_config(),
         ..Default::default()
     }
@@ -110,7 +114,6 @@ impl Plugin for OzmuxExtensionRenderPlugin {
                 Update,
                 (
                     finish_extension_setup.in_set(OzmuxSystems::SetupActivity),
-                    set_asset_endpoint_once,
                     drain_handler_responses,
                     sync_focused_webview.after(OzmuxSystems::Input),
                 ),
@@ -177,19 +180,44 @@ fn active_webview(
 fn finish_extension_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<WebviewUiMaterial>>,
-    hosts: Query<(Entity, &ComputedNode), (With<ExtensionActivityMarker>, Without<WebviewSource>)>,
+    mux: MultiplexerCommands,
+    activity_hosts: Query<&HostActivityEntity>,
+    owners: Query<&OwningExtension>,
+    kinds: Query<&ActivityKind>,
+    hosts: Query<
+        (Entity, &ComputedNode),
+        (
+            With<ExtensionActivityMarker>,
+            Without<WebviewSource>,
+            Without<WebviewMountUnresolved>,
+        ),
+    >,
 ) {
     for (host, computed) in hosts.iter() {
         let Some(logical) = pane_logical_size(computed.size(), computed.inverse_scale_factor())
         else {
             continue;
         };
-        tracing::debug!(
-            ?host,
-            ?logical,
-            url = MEMO_WEBVIEW_URL,
-            "spawning extension webview"
-        );
+        let Some((session, pane, activity)) = host_multiplexer_chain(host, &activity_hosts, &mux)
+        else {
+            continue;
+        };
+        let Ok(owner) = owners.get(activity) else {
+            tracing::warn!(
+                ?host,
+                ?activity,
+                "extension activity has no OwningExtension; webview cannot be mounted (terminal-kind split over control socket?)"
+            );
+            commands.entity(host).insert(WebviewMountUnresolved);
+            continue;
+        };
+        let Ok(ActivityKind::Extension { entry }) = kinds.get(activity) else {
+            continue;
+        };
+        let entry = entry.to_string_lossy();
+        let name = owner.0.as_str();
+        let url = webview_url(name, &entry);
+        tracing::debug!(?host, ?logical, %url, "spawning extension webview");
         // NOTE: `window.ozmux` MUST be a PreloadScript, not a global CefExtension.
         // ozmux.js calls cef.listen() at top level; a global extension runs that
         // during V8 context creation, where there is no entered V8 context, so the
@@ -197,13 +225,50 @@ fn finish_extension_setup(
         // render process. PreloadScripts are eval'd at on_context_created inside an
         // entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
+        let ctx_js = context_preload_js(session, pane, activity, name);
         commands.entity(host).insert((
-            WebviewSource::new(MEMO_WEBVIEW_URL),
+            WebviewSource::new(url),
             WebviewSize(logical),
-            PreloadScripts::from([OZMUX_EXTENSION_JS]),
+            PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
             MaterialNode(materials.add(WebviewUiMaterial::default())),
         ));
     }
+}
+
+/// Resolves the `(session, pane, activity)` multiplexer entities backing an
+/// extension webview host: host → activity via `HostActivityEntity`, activity →
+/// pane via `pane_of_activity`, pane → session via `session_of_pane`. Returns
+/// `None` until every link exists (e.g. before the activity is laid out into a
+/// pane).
+fn host_multiplexer_chain(
+    host: Entity,
+    activity_hosts: &Query<&HostActivityEntity>,
+    mux: &MultiplexerCommands,
+) -> Option<(Entity, Entity, Entity)> {
+    let activity = activity_hosts.get(host).ok()?.0;
+    let pane = mux.pane_of_activity(activity)?;
+    let session = mux.session_of_pane(pane)?;
+    Some((session, pane, activity))
+}
+
+/// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`.
+///
+/// NOTE: PreloadScripts are joined with `;` and eval'd as one unit, so this MUST
+/// be a complete statement; a syntax error here would break the bridge eval too.
+fn context_preload_js(
+    session: Entity,
+    pane: Entity,
+    activity: Entity,
+    extension_name: &str,
+) -> String {
+    let session_id = session.to_bits().to_string();
+    format!(
+        "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},activityId:{a:?},role:\"extension\",extensionName:{n:?}}};",
+        s = session_id,
+        p = pane.to_bits().to_string(),
+        a = activity.to_bits().to_string(),
+        n = extension_name,
+    )
 }
 
 /// Converts a host pane's `ComputedNode` physical-pixel size to the logical
@@ -234,31 +299,34 @@ fn aid_for_webview(
 }
 
 /// Inbound: a `window.ozmux` `cef.emit(frame)` arrives as `Receive<OzmuxFrame>`
-/// targeting the emitting webview. Resolves the webview's `aid` + the (single,
-/// memo) extension's handlers socket, connects idempotently, records the
-/// `aid → webview` mapping for the outbound path, and forwards the frame.
+/// targeting the emitting webview. Resolves the webview's `aid` and its owning
+/// extension's handlers socket (via the activity's `OwningExtension` and the
+/// `ExtensionRegistry`), connects idempotently, records the `aid → webview`
+/// mapping for the outbound path, and forwards the frame.
 ///
-/// Frames whose webview cannot be resolved to an `aid` are dropped — the
-/// activity has not been stamped yet, so there is no handler set to address.
+/// Frames are dropped when the webview cannot be resolved to an `aid`/owner
+/// (the activity has not been stamped yet) or the owning extension is not in
+/// the registry (failed to launch) — there is no handler set to address.
 fn on_ozmux_frame(
     frame: On<Receive<OzmuxFrame>>,
     bridge: Res<ExtensionHandlersBridge>,
-    ext: Option<Res<ControlExtension>>,
+    registry: Res<ExtensionRegistry>,
     mut aid_map: ResMut<WebviewAidMap>,
     hosts: Query<&HostActivityEntity>,
+    owners: Query<&OwningExtension>,
     aids: Query<&ExtensionActivityAid>,
 ) {
-    // TODO: multi-extension — `ControlExtension` is the single memo extension,
-    // so every webview routes to its one handlers socket. Resolve the socket
-    // per extension once more than one is launched.
-    let Some(ext) = ext else {
-        return;
-    };
     let webview = frame.webview;
     let Some(aid) = aid_for_webview(webview, &hosts, &aids) else {
         return;
     };
-    let sock = ext.0.handlers_sock_path().to_path_buf();
+    let Ok(owner) = hosts.get(webview).and_then(|h| owners.get(h.0)) else {
+        return;
+    };
+    let Some(ext) = registry.extensions.get(&owner.0) else {
+        return;
+    };
+    let sock = ext.handlers_sock_path().to_path_buf();
     if let Err(e) = bridge.0.connect(aid.clone(), sock) {
         tracing::warn!(%aid, error = %e, "extension handlers connect failed");
         return;
@@ -317,33 +385,13 @@ fn log_webview_load_error(load: On<LoadError>) {
     );
 }
 
-/// Publishes the (single, memo) extension's asset socket into the
-/// `ozmux-ext://` scheme's endpoint once the `ControlExtension` resource
-/// exists. Idempotent via a `Local<bool>` latch; the socket binds when memo's
-/// bootstrap starts, well before any webview load triggers a scheme fetch.
-fn set_asset_endpoint_once(
-    ext: Option<Res<ControlExtension>>,
-    endpoint: Res<AssetEndpoint>,
-    mut done: Local<bool>,
-) {
-    if *done {
-        return;
-    }
-    // TODO: multi-extension — one asset endpoint is shared by the single memo
-    // custom scheme; per-extension schemes need per-extension endpoints.
-    if let Some(ext) = ext {
-        let sock = ext.0.asset_sock_path().to_path_buf();
-        tracing::debug!(asset_sock = ?sock, "published ozmux-ext asset endpoint");
-        endpoint.0.set(sock);
-        *done = true;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::asset::AssetPlugin;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::image::ImagePlugin;
+    use ozmux_multiplexer::MultiplexerPlugin;
 
     fn make_test_app() -> App {
         // NOTE: `bevy_cef`'s `UiWebviewPlugin` registers `WebviewUiMaterial`
@@ -356,8 +404,38 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
             .add_plugins(ImagePlugin::default())
+            .add_plugins(MultiplexerPlugin)
             .init_asset::<WebviewUiMaterial>();
         app
+    }
+
+    /// Spawns a session/pane/extension-activity chain and an extension host
+    /// entity carrying that activity via `HostActivityEntity`, returning the
+    /// `(host, session, pane, activity)` handles. `finish_extension_setup`
+    /// needs the chain to resolve the per-webview context. The activity is
+    /// stamped with `ActivityKind::Extension { entry: "ui/app.html" }` and
+    /// `OwningExtension("memo")`.
+    fn spawn_extension_host(app: &mut App, extra: impl Bundle) -> (Entity, Entity, Entity, Entity) {
+        use std::path::PathBuf;
+        let (session, pane, activity) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("t".into()));
+                (o.session, o.pane, o.activity)
+            })
+            .unwrap();
+        app.world_mut().entity_mut(activity).insert((
+            OwningExtension("memo".into()),
+            ActivityKind::Extension {
+                entry: PathBuf::from("ui/app.html"),
+            },
+        ));
+        app.world_mut().flush();
+        let host = app
+            .world_mut()
+            .spawn((ExtensionActivityMarker, HostActivityEntity(activity), extra))
+            .id();
+        (host, session, pane, activity)
     }
 
     #[test]
@@ -408,7 +486,7 @@ mod tests {
         let terminal_host = app.world_mut().spawn_empty().id();
         let ext_host = app
             .world_mut()
-            .spawn(WebviewSource::new(MEMO_WEBVIEW_URL))
+            .spawn(WebviewSource::new(webview_url("memo", "ui/app.html")))
             .id();
         {
             let mut reg = app.world_mut().resource_mut::<ActivityEntityRegistry>();
@@ -468,13 +546,7 @@ mod tests {
     fn attaches_webview_pointed_at_memo_to_extension_host() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app
-            .world_mut()
-            .spawn((
-                ExtensionActivityMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
-            .id();
+        let (host, ..) = spawn_extension_host(&mut app, laid_out_node(Vec2::new(800.0, 600.0)));
         app.update();
 
         let source = app
@@ -482,7 +554,10 @@ mod tests {
             .get::<WebviewSource>(host)
             .expect("extension host must receive a WebviewSource");
         match source {
-            WebviewSource::Url(url) => assert_eq!(url, MEMO_WEBVIEW_URL),
+            WebviewSource::Url(url) => {
+                assert_eq!(url, &webview_url("memo", "ui/app.html"));
+                assert_eq!(url, "ozmux-ext://memo/ui/app.html");
+            }
             other => panic!("expected a Url source, got {other:?}"),
         }
         assert!(
@@ -504,16 +579,64 @@ mod tests {
             preload.0.iter().any(|s| s == OZMUX_EXTENSION_JS),
             "window.ozmux must be injected as a PreloadScript (a global CefExtension calling cef.listen at load crashes the renderer)"
         );
+        assert!(
+            preload
+                .0
+                .first()
+                .is_some_and(|s| s.starts_with("window.__ozmuxContext=")),
+            "the context PreloadScript must be injected before the bridge, so window.__ozmuxContext is set when the getter reads it"
+        );
+        assert!(
+            preload.0[0].contains("role:\"extension\"")
+                && preload.0[0].contains("extensionName:\"memo\""),
+            "the context PreloadScript must carry the extension role and name"
+        );
+    }
+
+    #[test]
+    fn warns_once_and_marks_host_when_activity_lacks_owning_extension() {
+        let mut app = make_test_app();
+        app.add_systems(Update, finish_extension_setup);
+
+        let activity = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_session(Some("t".into())).activity
+            })
+            .unwrap();
+        app.world_mut().flush();
+        let host = app
+            .world_mut()
+            .spawn((
+                ExtensionActivityMarker,
+                HostActivityEntity(activity),
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
+
+        app.update();
+        assert!(
+            app.world().get::<WebviewSource>(host).is_none(),
+            "a host whose activity lacks OwningExtension must not get a webview"
+        );
+        assert!(
+            app.world().get::<WebviewMountUnresolved>(host).is_some(),
+            "the host must be marked so the diagnostic fires once, not every frame"
+        );
+
+        // A second tick must not re-process the marked host (still no webview).
+        app.update();
+        assert!(
+            app.world().get::<WebviewSource>(host).is_none(),
+            "the marked host must stay excluded from the query"
+        );
     }
 
     #[test]
     fn defers_webview_until_pane_is_laid_out() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app
-            .world_mut()
-            .spawn((ExtensionActivityMarker, ComputedNode::DEFAULT))
-            .id();
+        let (host, ..) = spawn_extension_host(&mut app, ComputedNode::DEFAULT);
         app.update();
         assert!(
             app.world().get::<WebviewSource>(host).is_none(),
@@ -534,13 +657,7 @@ mod tests {
     fn webview_inserted_exactly_once() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
-        let host = app
-            .world_mut()
-            .spawn((
-                ExtensionActivityMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
-            .id();
+        let (host, ..) = spawn_extension_host(&mut app, laid_out_node(Vec2::new(800.0, 600.0)));
         app.update();
         let first = app
             .world()
@@ -562,6 +679,36 @@ mod tests {
         assert_eq!(pane_logical_size(Vec2::ZERO, 1.0), None);
         assert_eq!(pane_logical_size(Vec2::new(0.0, 600.0), 1.0), None);
         assert_eq!(pane_logical_size(Vec2::new(0.5, 0.5), 1.0), None);
+    }
+
+    #[test]
+    fn context_preload_js_assigns_window_context_with_session_bits_as_window_id() {
+        let world = &mut App::new();
+        world
+            .add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        let (session, pane, activity) = world
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_session(Some("t".into()));
+                (o.session, o.pane, o.activity)
+            })
+            .unwrap();
+        world.world_mut().flush();
+
+        let js = context_preload_js(session, pane, activity, "memo");
+        let s = session.to_bits().to_string();
+        assert!(js.starts_with("window.__ozmuxContext="));
+        assert!(js.ends_with("};"));
+        assert!(js.contains(&format!("sessionId:\"{s}\"")));
+        assert!(
+            js.contains(&format!("windowId:\"{s}\"")),
+            "windowId must equal sessionId per the design"
+        );
+        assert!(js.contains(&format!("paneId:\"{}\"", pane.to_bits())));
+        assert!(js.contains(&format!("activityId:\"{}\"", activity.to_bits())));
+        assert!(js.contains("role:\"extension\""));
+        assert!(js.contains("extensionName:\"memo\""));
     }
 
     #[test]
