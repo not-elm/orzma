@@ -113,20 +113,16 @@ fn rebuild_session_ui(
 
     let veil: Option<Color> = match configs.as_deref() {
         Some(cfg) if cfg.inactive_pane.enabled => {
-            let ip = &cfg.inactive_pane;
-            let (r, g, b) = ip.rgb();
-            Some(Color::srgba(
-                r as f32 / 255.0,
-                g as f32 / 255.0,
-                b as f32 / 255.0,
-                ip.opacity,
-            ))
+            let (r, g, b) = cfg.inactive_pane.rgb();
+            Some(Color::srgb_u8(r, g, b).with_alpha(cfg.inactive_pane.opacity))
         }
         _ => None,
     };
 
     for (session_entity, layout, subtree, active_pane, _is_attached) in sessions.iter() {
-        let active_pane = active_pane.map(|a| a.0).unwrap_or(Entity::PLACEHOLDER);
+        let active_pane = active_pane.map(|a| a.0);
+        let session_veil = if active_pane.is_some() { veil } else { None };
+        let active_pane = active_pane.unwrap_or(Entity::PLACEHOLDER);
         descend_and_detach_hosts(&mut commands, subtree.0, &children, &activity_hosts);
         descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
 
@@ -145,7 +141,7 @@ fn rebuild_session_ui(
                     &activities,
                     &active_activities,
                     active_pane,
-                    veil,
+                    session_veil,
                 );
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),

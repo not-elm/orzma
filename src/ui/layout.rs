@@ -259,10 +259,10 @@ fn build_pane(
             Name::new(format!("PaneDim({pane_entity:?})")),
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
                 top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
                 ..default()
             },
             BackgroundColor(veil_color),

@@ -49,7 +49,9 @@ impl InactivePaneConfigPatch {
         if let Some(v) = self.enabled {
             base.enabled = v;
         }
-        if let Some(v) = self.opacity {
+        if let Some(v) = self.opacity
+            && !v.is_nan()
+        {
             base.opacity = v.clamp(0.0, 1.0);
         }
         if let Some(v) = self.color
@@ -65,7 +67,10 @@ impl InactivePaneConfigPatch {
 /// any other shape (missing `#`, wrong length, non-hex digits).
 fn parse_hex_rgb(s: &str) -> Option<(u8, u8, u8)> {
     let hex = s.strip_prefix('#')?;
-    if hex.len() != 6 {
+    // NOTE: `!hex.is_ascii()` is load-bearing — the byte-index slices below
+    // panic on a 6-BYTE non-ASCII string (e.g. "#中文") whose offsets 2/4
+    // fall on a non-char-boundary. Drop this and config loading crashes.
+    if hex.len() != 6 || !hex.is_ascii() {
         return None;
     }
     let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -161,5 +166,49 @@ mod tests {
         let patch = InactivePaneConfigPatch::default();
         let merged = patch.apply_to(InactivePaneConfig::default());
         assert_eq!(merged, InactivePaneConfig::default());
+    }
+
+    #[test]
+    fn non_ascii_six_byte_color_is_rejected_without_panic() {
+        // "中文" is 6 UTF-8 bytes; byte-slicing it would panic at a
+        // non-char-boundary if parse_hex_rgb did not guard on is_ascii.
+        let merged = InactivePaneConfigPatch {
+            color: Some("#中文".to_string()),
+            ..Default::default()
+        }
+        .apply_to(InactivePaneConfig::default());
+        assert_eq!(
+            merged.color, "#000000",
+            "non-ASCII color must fall back to base"
+        );
+
+        let cfg = InactivePaneConfig {
+            enabled: true,
+            opacity: 0.5,
+            color: "#中文".to_string(),
+        };
+        assert_eq!(
+            cfg.rgb(),
+            (0, 0, 0),
+            "rgb() must not panic on a non-ASCII color"
+        );
+    }
+
+    #[test]
+    fn nan_opacity_is_rejected_and_keeps_base() {
+        let patch: InactivePaneConfigPatch = toml::from_str("opacity = nan").unwrap();
+        let merged = patch.apply_to(InactivePaneConfig::default());
+        assert_eq!(merged.opacity, 0.45, "NaN opacity must fall back to base");
+        assert!(merged.opacity.is_finite(), "stored opacity must be finite");
+    }
+
+    #[test]
+    fn infinite_opacity_clamps_to_unit_range() {
+        let merged = InactivePaneConfigPatch {
+            opacity: Some(f32::INFINITY),
+            ..Default::default()
+        }
+        .apply_to(InactivePaneConfig::default());
+        assert_eq!(merged.opacity, 1.0, "+inf opacity clamps to 1.0");
     }
 }
