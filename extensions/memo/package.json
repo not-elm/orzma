@@ -5,7 +5,9 @@
   "description": "",
   "type": "module",
   "ozmux": {
-    "commands": ["@memo"]
+    "commands": [
+      "@memo"
+    ]
   },
   "scripts": {
     "check-types": "tsc --noEmit"
