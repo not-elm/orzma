@@ -1,11 +1,5 @@
 import * as net from 'node:net';
 
-/**
- * The host's reply to a successful split. Alias for the op-generic reply type
- * retained for backward compatibility.
- */
-export type SplitControlReply = { new_pane_id: string; new_activity_id: string };
-
 /** Parameters for a `split` control call. */
 export interface SplitControlParams {
   side: 'before' | 'after';

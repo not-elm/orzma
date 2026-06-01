@@ -1,4 +1,4 @@
-import { paths, postNoContent } from './daemon-client.ts';
+import { callControl } from './control-client.ts';
 
 export type ActivityId = string;
 
@@ -35,6 +35,6 @@ export class Activity {
   }
 
   async activate(): Promise<void> {
-    await postNoContent(paths.activityActivate(this.windowId, this.paneId, this.id), {});
+    await callControl('activate', this.paneId, { activity_id: this.id });
   }
 }
