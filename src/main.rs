@@ -14,6 +14,7 @@ mod theme;
 mod ui;
 
 use crate::extension_manager::ExtensionManagerPlugin;
+use crate::browser_render::OzmuxBrowserRenderPlugin;
 use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
@@ -57,6 +58,7 @@ fn main() {
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
             OzmuxExtensionRenderPlugin,
+            OzmuxBrowserRenderPlugin,
             CopyModePlugin,
             CopyModeIndicatorPlugin,
         ))

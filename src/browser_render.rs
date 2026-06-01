@@ -6,6 +6,7 @@
 
 use crate::clipboard::Clipboard;
 use crate::configs::OzmuxConfigsResource;
+use crate::system_set::OzmuxSystems;
 use crate::ui::{
     AddrBarText, AddressBarFocus, AddressEdit, BrowserActivityMarker, BrowserNavButton,
     BrowserPageWebview, BrowserToolbarState, HostActivityEntity, NavAction, PageWebviewOf,
@@ -19,6 +20,29 @@ use ozmux_configs::browser::resolve_omnibox_input;
 use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands, SessionMarker};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
+
+/// Wires the browser activity renderer: two-phase mount, toolbar render +
+/// navigation, address-bar editor + focus, and navigation-state observers.
+pub(crate) struct OzmuxBrowserRenderPlugin;
+
+impl Plugin for OzmuxBrowserRenderPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<crate::ui::AddressBarFocus>()
+            .add_observer(on_address_changed)
+            .add_observer(on_loading_state_changed)
+            .add_systems(
+                Update,
+                (
+                    build_browser_chrome.in_set(OzmuxSystems::SetupActivity),
+                    attach_browser_webview.in_set(OzmuxSystems::SetupActivity),
+                    render_address_text,
+                    drive_nav_buttons,
+                    focus_address_bar_on_cmd_l.before(crate::input::dispatch_focused_key),
+                    browser_address_editor.after(crate::input::dispatch_focused_key),
+                ),
+            );
+    }
+}
 
 /// Builds the toolbar + empty page-webview children for each laid-out browser
 /// host that has not been built yet (no `BrowserPageWebview` pointer).
@@ -255,6 +279,10 @@ fn browser_address_editor(
                     insert_str(&mut edit, &one_line);
                 }
             }
+            continue;
+        }
+        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+        if cmd || ctrl {
             continue;
         }
         match &ev.logical_key {
@@ -680,6 +708,36 @@ mod tests {
 
     #[derive(bevy::ecs::resource::Resource, Default)]
     struct Navigated(Vec<(Entity, String)>);
+
+    #[test]
+    fn editor_ignores_text_when_cmd_held() {
+        let mut app = make_test_app();
+        app.init_resource::<crate::ui::AddressBarFocus>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.add_message::<KeyboardInput>();
+        app.add_systems(Update, build_browser_chrome);
+        app.add_systems(Update, browser_address_editor.after(build_browser_chrome));
+        let window = app.world_mut().spawn_empty().id();
+        let host = app
+            .world_mut()
+            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .id();
+        app.update();
+        app.world_mut().resource_mut::<crate::ui::AddressBarFocus>().0 = Some(host);
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::SuperLeft);
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+            .write(key_press(window, Key::Character("l".into())));
+        app.update();
+
+        assert_eq!(
+            app.world().get::<AddressEdit>(host).unwrap().buffer, "",
+            "Cmd+<key> must not type into the address bar"
+        );
+    }
 
     #[test]
     fn enter_resolves_and_navigates_then_clears_focus() {
