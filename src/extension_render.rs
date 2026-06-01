@@ -15,14 +15,14 @@ use ozmux_extension_host::HandlersBridge;
 use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
-    AttachedSession, ExtensionActivityAid, MultiplexerCommands, OwningExtension, SessionMarker,
+    ActivityKind, AttachedSession, ExtensionActivityAid, MultiplexerCommands, OwningExtension,
+    SessionMarker,
 };
 
-/// Builds the `ozmux-ext://<name>/index.html` webview URL for an extension. The
-/// `<name>` host segment dispatches through the shared `EndpointRegistry` in the
-/// scheme handler; frames for unregistered names 404.
-fn webview_url(extension_name: &str) -> String {
-    format!("ozmux-ext://{extension_name}/index.html")
+/// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension activity,
+/// where `entry` is the client's HTML path relative to the extension dir.
+fn webview_url(extension_name: &str, entry: &str) -> String {
+    format!("ozmux-ext://{extension_name}/{entry}")
 }
 
 /// One handler/channel frame emitted by the page's `window.ozmux` (the JSON the
@@ -183,6 +183,7 @@ fn finish_extension_setup(
     mux: MultiplexerCommands,
     activity_hosts: Query<&HostActivityEntity>,
     owners: Query<&OwningExtension>,
+    kinds: Query<&ActivityKind>,
     hosts: Query<
         (Entity, &ComputedNode),
         (
@@ -210,8 +211,12 @@ fn finish_extension_setup(
             commands.entity(host).insert(WebviewMountUnresolved);
             continue;
         };
+        let Ok(ActivityKind::Extension { entry }) = kinds.get(activity) else {
+            continue;
+        };
+        let entry = entry.to_string_lossy();
         let name = owner.0.as_str();
-        let url = webview_url(name);
+        let url = webview_url(name, &entry);
         tracing::debug!(?host, ?logical, %url, "spawning extension webview");
         // NOTE: `window.ozmux` MUST be a PreloadScript, not a global CefExtension.
         // ozmux.js calls cef.listen() at top level; a global extension runs that
@@ -407,8 +412,11 @@ mod tests {
     /// Spawns a session/pane/extension-activity chain and an extension host
     /// entity carrying that activity via `HostActivityEntity`, returning the
     /// `(host, session, pane, activity)` handles. `finish_extension_setup`
-    /// needs the chain to resolve the per-webview context.
+    /// needs the chain to resolve the per-webview context. The activity is
+    /// stamped with `ActivityKind::Extension { entry: "ui/app.html" }` and
+    /// `OwningExtension("memo")`.
     fn spawn_extension_host(app: &mut App, extra: impl Bundle) -> (Entity, Entity, Entity, Entity) {
+        use std::path::PathBuf;
         let (session, pane, activity) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
@@ -416,9 +424,12 @@ mod tests {
                 (o.session, o.pane, o.activity)
             })
             .unwrap();
-        app.world_mut()
-            .entity_mut(activity)
-            .insert(OwningExtension("memo".into()));
+        app.world_mut().entity_mut(activity).insert((
+            OwningExtension("memo".into()),
+            ActivityKind::Extension {
+                entry: PathBuf::from("ui/app.html"),
+            },
+        ));
         app.world_mut().flush();
         let host = app
             .world_mut()
@@ -475,7 +486,7 @@ mod tests {
         let terminal_host = app.world_mut().spawn_empty().id();
         let ext_host = app
             .world_mut()
-            .spawn(WebviewSource::new(webview_url("memo")))
+            .spawn(WebviewSource::new(webview_url("memo", "ui/app.html")))
             .id();
         {
             let mut reg = app.world_mut().resource_mut::<ActivityEntityRegistry>();
@@ -543,7 +554,10 @@ mod tests {
             .get::<WebviewSource>(host)
             .expect("extension host must receive a WebviewSource");
         match source {
-            WebviewSource::Url(url) => assert_eq!(url, &webview_url("memo")),
+            WebviewSource::Url(url) => {
+                assert_eq!(url, &webview_url("memo", "ui/app.html"));
+                assert_eq!(url, "ozmux-ext://memo/ui/app.html");
+            }
             other => panic!("expected a Url source, got {other:?}"),
         }
         assert!(
