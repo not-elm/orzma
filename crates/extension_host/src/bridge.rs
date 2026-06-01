@@ -10,7 +10,7 @@ use crate::control::{
 use crate::path_prefix::extension_path_prefix;
 use bevy::prelude::*;
 use ozmux_multiplexer::{
-    ActivityKind, ExtensionActivityAid, MultiplexerCommands, OwningExtension, Side,
+    ActivityKind, BrowserProfile, ExtensionActivityAid, MultiplexerCommands, OwningExtension, Side,
     SplitOrientation,
 };
 use std::path::PathBuf;
@@ -140,13 +140,6 @@ fn resolve_and_split(
         })?;
     let ControlOp::Split(p) = req.op;
     let activity_id = p.activity.activity_id.clone();
-    let ActivityKindSpec::Extension {
-        entry,
-        extension_name,
-    } = p.activity.kind;
-    let kind = ActivityKind::Extension {
-        entry: PathBuf::from(entry),
-    };
     let side = match p.side {
         ControlSide::Before => Side::Before,
         ControlSide::After => Side::After,
@@ -155,15 +148,38 @@ fn resolve_and_split(
         ControlOrientation::Horizontal => SplitOrientation::Horizontal,
         ControlOrientation::Vertical => SplitOrientation::Vertical,
     };
+    let (kind, extension_name, is_extension): (ActivityKind, Option<String>, bool) =
+        match p.activity.kind {
+            ActivityKindSpec::Extension {
+                entry,
+                extension_name,
+            } => (
+                ActivityKind::Extension {
+                    entry: PathBuf::from(entry),
+                },
+                extension_name,
+                true,
+            ),
+            ActivityKindSpec::Browser { url } => (
+                ActivityKind::Browser {
+                    initial_url: Some(url),
+                    profile: BrowserProfile::default(),
+                },
+                None,
+                false,
+            ),
+        };
     let outcome = mux
         .split_pane_with_activity(pane, side, orientation, kind)
         .map_err(|e| ControlError {
             code: "internal".into(),
             message: e.to_string(),
         })?;
-    mux.insert_on(outcome.activity, ExtensionActivityAid(activity_id));
-    if let Some(name) = extension_name {
-        mux.insert_on(outcome.activity, OwningExtension(name));
+    if is_extension {
+        mux.insert_on(outcome.activity, ExtensionActivityAid(activity_id));
+        if let Some(name) = extension_name {
+            mux.insert_on(outcome.activity, OwningExtension(name));
+        }
     }
     Ok(SplitReply {
         new_pane_id: outcome.pane.to_bits(),
@@ -193,6 +209,66 @@ mod tests {
                     activity_id: "aid-xyz".into(),
                 },
             }),
+        }
+    }
+
+    fn browser_split_request(pane_bits: u64) -> ControlRequest {
+        ControlRequest {
+            pane_bits,
+            op: ControlOp::Split(crate::control::SplitParams {
+                side: ControlSide::After,
+                orientation: ControlOrientation::Vertical,
+                activity: crate::control::ActivitySpec {
+                    kind: ActivityKindSpec::Browser {
+                        url: "github.com".into(),
+                    },
+                    name: None,
+                    activity_id: "aid-b".into(),
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn handles_split_and_creates_browser_pane_without_extension_components() {
+        let mut world = World::new();
+        let created = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let pane_bits = created.pane.to_bits();
+
+        let (resp_tx, resp_rx) = bounded(1);
+        let mut resp_tx = Some(resp_tx);
+        world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                apply_control_request(
+                    &mut mux,
+                    browser_split_request(pane_bits),
+                    resp_tx.take().unwrap(),
+                );
+            })
+            .unwrap();
+        world.flush();
+
+        match resp_rx.try_recv().unwrap() {
+            ControlResponse::Ok(reply) => {
+                let new_act = Entity::try_from_bits(reply.new_activity_id).unwrap();
+                match world.get::<ActivityKind>(new_act) {
+                    Some(ActivityKind::Browser { initial_url, .. }) => {
+                        assert_eq!(initial_url.as_deref(), Some("github.com"));
+                    }
+                    other => panic!("expected Browser kind, got {other:?}"),
+                }
+                assert!(
+                    world.get::<ozmux_multiplexer::ExtensionActivityAid>(new_act).is_none(),
+                    "browser activity must not get an ExtensionActivityAid"
+                );
+                assert!(
+                    world.get::<ozmux_multiplexer::OwningExtension>(new_act).is_none(),
+                    "browser activity must not get an OwningExtension"
+                );
+            }
+            ControlResponse::Err(e) => panic!("expected Ok, got {}", e.code),
         }
     }
 
