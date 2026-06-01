@@ -1,27 +1,22 @@
 import * as path from 'node:path';
 import type { ActivitySpecInput, ChannelGenerator, CommandContext } from '@ozmux/sdk/server';
+import type { ContentEvent } from '../content-event.ts';
 import { parseMdArgs } from './args.ts';
 import { resolveTarget, statOrNull } from './target.ts';
 
 /** Host-supplied bits the command needs: the built client entry, and the channel factory. */
 export interface MdDeps {
   distIndexPath: string;
-  makeChannel: (filePath: string) => ChannelGenerator<Record<string, never>, unknown>;
+  makeChannel: (filePath: string) => ChannelGenerator<Record<string, never>, ContentEvent>;
 }
 
 /** Runs the `@md` command: parse → gate → build-guard → open the preview activity. */
 export async function mdCommand(ctx: CommandContext, deps: MdDeps): Promise<number> {
   const parsed = parseMdArgs(ctx.argv);
-  if (!parsed.ok) {
-    ctx.stderr.write(`${parsed.message}\n`);
-    return parsed.code;
-  }
+  if (!parsed.ok) return fail(ctx, parsed);
 
   const target = await resolveTarget(ctx.cwd, parsed.rawPath);
-  if (!target.ok) {
-    ctx.stderr.write(`${target.message}\n`);
-    return target.code;
-  }
+  if (!target.ok) return fail(ctx, target);
 
   if (!(await statOrNull(deps.distIndexPath))?.isFile()) {
     ctx.stderr.write('@md: client not built — run `pnpm build` (missing dist/index.html)\n');
@@ -42,4 +37,10 @@ export async function mdCommand(ctx: CommandContext, deps: MdDeps): Promise<numb
     await created.activate();
   }
   return 0;
+}
+
+/** Writes a gate failure's message to stderr and returns its exit code. */
+function fail(ctx: CommandContext, result: { message: string; code: number }): number {
+  ctx.stderr.write(`${result.message}\n`);
+  return result.code;
 }

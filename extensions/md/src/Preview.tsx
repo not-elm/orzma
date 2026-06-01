@@ -7,12 +7,16 @@ import { handleKey, type KeyState } from './navigation.ts';
 /** Renders Markdown and binds the vim-style scroll keys to its scroll container. */
 export function Preview({ markdown }: { markdown: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const keyState = useRef<KeyState>({ lastGAt: 0 });
+  const keyState = useRef<KeyState>({ lastGAt: Number.NEGATIVE_INFINITY });
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.focus();
+    // Focus for keyboard nav, but don't steal focus if the user already has
+    // something focused (e.g. on a remount while they're working elsewhere).
+    if (document.activeElement === null || document.activeElement === document.body) {
+      el.focus();
+    }
     const onKey = (e: KeyboardEvent) => {
       const target = handleKey(
         { key: e.key, ctrlKey: e.ctrlKey },

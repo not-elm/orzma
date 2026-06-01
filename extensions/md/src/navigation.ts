@@ -31,7 +31,12 @@ const GG_WINDOW_MS = 400;
 /**
  * Maps a keydown to a scroll target, or `null` when the key is unhandled. Pure:
  * the caller supplies geometry, `now`, and `maxTop` (= scrollHeight - clientHeight),
- * and owns applying the result. Mutates `state.lastGAt` to track `gg`.
+ * and owns applying the result. `gg` is detected by reading `state.lastGAt`; the
+ * state is reset up front and only a first lone `g` re-arms it.
+ *
+ * `state.lastGAt` should start at `Number.NEGATIVE_INFINITY` (no prior `g`) so a
+ * single `g` pressed soon after load — when `now` is small — does not satisfy the
+ * window and jump to the top.
  */
 export function handleKey(
   e: KeyLike,
@@ -40,8 +45,10 @@ export function handleKey(
   now: number,
   maxTop: number,
 ): ScrollTarget | null {
+  const recentG = now - state.lastGAt < GG_WINDOW_MS;
+  state.lastGAt = Number.NEGATIVE_INFINITY;
+
   if (e.ctrlKey && (e.key === 'd' || e.key === 'u')) {
-    state.lastGAt = 0;
     const half = Math.floor(m.clientHeight / 2);
     const top = e.key === 'd' ? m.scrollTop + half : m.scrollTop - half;
     return { top: clamp(top, 0, maxTop) };
@@ -49,29 +56,20 @@ export function handleKey(
 
   switch (e.key) {
     case 'j':
-      state.lastGAt = 0;
       return { top: clamp(m.scrollTop + LINE_STEP, 0, maxTop) };
     case 'k':
-      state.lastGAt = 0;
       return { top: clamp(m.scrollTop - LINE_STEP, 0, maxTop) };
     case 'h':
-      state.lastGAt = 0;
       return { left: m.scrollLeft - COL_STEP };
     case 'l':
-      state.lastGAt = 0;
       return { left: m.scrollLeft + COL_STEP };
     case 'G':
-      state.lastGAt = 0;
       return { top: maxTop };
     case 'g':
-      if (now - state.lastGAt < GG_WINDOW_MS) {
-        state.lastGAt = 0;
-        return { top: 0 };
-      }
+      if (recentG) return { top: 0 };
       state.lastGAt = now;
       return null;
     default:
-      state.lastGAt = 0;
       return null;
   }
 }

@@ -48,4 +48,10 @@ describe('parseMdArgs', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe(2);
   });
+
+  it('rejects --split with no value with code 2', () => {
+    const r = parseMdArgs(['--split']);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe(2);
+  });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { COL_STEP, handleKey, type KeyState, LINE_STEP, type ScrollMetrics } from './navigation.ts';
 
 const m: ScrollMetrics = { scrollTop: 100, scrollLeft: 50, clientHeight: 200 };
-const fresh = (): KeyState => ({ lastGAt: 0 });
+const fresh = (): KeyState => ({ lastGAt: Number.NEGATIVE_INFINITY });
 const k = (key: string, ctrlKey = false) => ({ key, ctrlKey });
 
 describe('handleKey', () => {
@@ -43,6 +43,11 @@ describe('handleKey', () => {
     expect(handleKey(k('g'), m, st, 1000, 1000)).toBeNull();
     handleKey(k('x'), m, st, 1050, 1000);
     expect(handleKey(k('g'), m, st, 1100, 1000)).toBeNull();
+  });
+
+  it('a single g shortly after load (small now, fresh state) does not jump to top', () => {
+    const st: KeyState = { lastGAt: Number.NEGATIVE_INFINITY };
+    expect(handleKey(k('g'), m, st, 100, 1000)).toBeNull();
   });
 
   it('returns null for unhandled keys', () => {
