@@ -219,6 +219,75 @@ fn spawn_nav_button(commands: &mut Commands, host: Entity, action: NavAction, la
         .id()
 }
 
+/// Returns the byte offset in `e.buffer` for the character at `idx`.
+fn char_byte(e: &AddressEdit, idx: usize) -> usize {
+    e.buffer
+        .char_indices()
+        .nth(idx)
+        .map(|(b, _)| b)
+        .unwrap_or(e.buffer.len())
+}
+
+/// Returns the number of Unicode scalar values in `e.buffer`.
+fn char_count(e: &AddressEdit) -> usize {
+    e.buffer.chars().count()
+}
+
+/// Inserts `c` at the caret position and advances the caret by one.
+fn insert_char(e: &mut AddressEdit, c: char) {
+    let at = char_byte(e, e.caret);
+    e.buffer.insert(at, c);
+    e.caret += 1;
+}
+
+/// Inserts `s` at the caret position and advances the caret by `s.chars().count()`.
+fn insert_str(e: &mut AddressEdit, s: &str) {
+    let at = char_byte(e, e.caret);
+    e.buffer.insert_str(at, s);
+    e.caret += s.chars().count();
+}
+
+/// Removes the character immediately before the caret and moves the caret left by one.
+fn backspace(e: &mut AddressEdit) {
+    if e.caret == 0 {
+        return;
+    }
+    let start = char_byte(e, e.caret - 1);
+    let end = char_byte(e, e.caret);
+    e.buffer.replace_range(start..end, "");
+    e.caret -= 1;
+}
+
+/// Removes the character immediately at (after) the caret; the caret does not move.
+fn delete(e: &mut AddressEdit) {
+    if e.caret >= char_count(e) {
+        return;
+    }
+    let start = char_byte(e, e.caret);
+    let end = char_byte(e, e.caret + 1);
+    e.buffer.replace_range(start..end, "");
+}
+
+/// Moves the caret one character to the left, clamped at 0.
+fn caret_left(e: &mut AddressEdit) {
+    e.caret = e.caret.saturating_sub(1);
+}
+
+/// Moves the caret one character to the right, clamped at `char_count`.
+fn caret_right(e: &mut AddressEdit) {
+    e.caret = (e.caret + 1).min(char_count(e));
+}
+
+/// Moves the caret to the start of the buffer.
+fn caret_home(e: &mut AddressEdit) {
+    e.caret = 0;
+}
+
+/// Moves the caret to the end of the buffer.
+fn caret_end(e: &mut AddressEdit) {
+    e.caret = char_count(e);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +505,58 @@ mod tests {
             app.world().get::<WebviewSource>(page).is_none(),
             "empty initial_url resolves to empty; no webview attached"
         );
+    }
+
+    use crate::ui::AddressEdit as AE;
+
+    fn edit(s: &str, caret: usize) -> AE {
+        AE { buffer: s.into(), caret }
+    }
+
+    #[test]
+    fn address_edit_insert_at_caret() {
+        let mut e = edit("ac", 1);
+        super::insert_char(&mut e, 'b');
+        assert_eq!(e.buffer, "abc");
+        assert_eq!(e.caret, 2);
+    }
+
+    #[test]
+    fn address_edit_backspace_and_delete() {
+        let mut e = edit("abc", 2);
+        super::backspace(&mut e);
+        assert_eq!((e.buffer.as_str(), e.caret), ("ac", 1));
+        super::delete(&mut e);
+        assert_eq!((e.buffer.as_str(), e.caret), ("a", 1));
+    }
+
+    #[test]
+    fn address_edit_caret_motion_clamps() {
+        let mut e = edit("abc", 0);
+        super::caret_left(&mut e);
+        assert_eq!(e.caret, 0);
+        super::caret_right(&mut e);
+        assert_eq!(e.caret, 1);
+        super::caret_end(&mut e);
+        assert_eq!(e.caret, 3);
+        super::caret_home(&mut e);
+        assert_eq!(e.caret, 0);
+    }
+
+    #[test]
+    fn address_edit_insert_str_paste() {
+        let mut e = edit("ab", 1);
+        super::insert_str(&mut e, "XY");
+        assert_eq!((e.buffer.as_str(), e.caret), ("aXYb", 3));
+    }
+
+    #[test]
+    fn address_edit_utf8_safe() {
+        let mut e = edit("aあc", 2); // caret between あ and c
+        super::insert_char(&mut e, 'b');
+        assert_eq!(e.buffer, "aあbc");
+        assert_eq!(e.caret, 3);
+        super::backspace(&mut e); // removes 'b'
+        assert_eq!(e.buffer, "aあc");
     }
 }
