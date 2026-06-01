@@ -816,12 +816,13 @@ mod tests {
 
     #[test]
     fn focused_webview_resolves_browser_child_and_respects_address_focus() {
-        use bevy::ecs::system::RunSystemOnce;
         use crate::ui::{AddressBarFocus, BrowserPageWebview};
+        use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).add_plugins(MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
         app.init_resource::<ActivityEntityRegistry>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<AddressBarFocus>();
@@ -837,7 +838,10 @@ mod tests {
         app.world_mut().flush();
         app.world_mut().entity_mut(session).insert(AttachedSession);
 
-        let child = app.world_mut().spawn(WebviewSource::new("https://example.com")).id();
+        let child = app
+            .world_mut()
+            .spawn(WebviewSource::new("https://example.com"))
+            .id();
         let host = app.world_mut().spawn(BrowserPageWebview(child)).id();
         {
             let mut reg = app.world_mut().resource_mut::<ActivityEntityRegistry>();

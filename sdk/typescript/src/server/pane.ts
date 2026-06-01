@@ -158,7 +158,13 @@ function controlActivity(
   activityId: ActivityId,
   spec: ActivitySpecInput,
 ):
-  | { kind: 'extension'; entry: string; name?: string; activity_id: string; extension_name?: string }
+  | {
+      kind: 'extension';
+      entry: string;
+      name?: string;
+      activity_id: string;
+      extension_name?: string;
+    }
   | { kind: 'browser'; url: string; name?: string; activity_id: string } {
   if (spec.kind === 'browser') {
     return { kind: 'browser', url: spec.url, name: spec.name, activity_id: activityId };

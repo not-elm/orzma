@@ -260,11 +260,15 @@ mod tests {
                     other => panic!("expected Browser kind, got {other:?}"),
                 }
                 assert!(
-                    world.get::<ozmux_multiplexer::ExtensionActivityAid>(new_act).is_none(),
+                    world
+                        .get::<ozmux_multiplexer::ExtensionActivityAid>(new_act)
+                        .is_none(),
                     "browser activity must not get an ExtensionActivityAid"
                 );
                 assert!(
-                    world.get::<ozmux_multiplexer::OwningExtension>(new_act).is_none(),
+                    world
+                        .get::<ozmux_multiplexer::OwningExtension>(new_act)
+                        .is_none(),
                     "browser activity must not get an OwningExtension"
                 );
             }

@@ -12,7 +12,7 @@ use crate::ui::{
     BrowserPageWebview, BrowserToolbarState, HostActivityEntity, NavAction, PageWebviewOf,
 };
 use bevy::input::ButtonState;
-use bevy::input::keyboard::{Key, KeyboardInput, KeyCode};
+use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
 use bevy_cef::prelude::*;
@@ -62,7 +62,14 @@ fn build_browser_chrome(
         let forward = spawn_nav_button(&mut commands, host, NavAction::Forward, ">");
         let reload = spawn_nav_button(&mut commands, host, NavAction::Reload, "R");
         let addr = commands
-            .spawn((Text::new(""), AddrBarText, Node { flex_grow: 1.0, ..default() }))
+            .spawn((
+                Text::new(""),
+                AddrBarText,
+                Node {
+                    flex_grow: 1.0,
+                    ..default()
+                },
+            ))
             .id();
 
         let toolbar = commands
@@ -78,11 +85,17 @@ fn build_browser_chrome(
                 ChildOf(host),
             ))
             .id();
-        commands.entity(toolbar).add_children(&[back, forward, reload, addr]);
+        commands
+            .entity(toolbar)
+            .add_children(&[back, forward, reload, addr]);
 
         let page = commands
             .spawn((
-                Node { flex_grow: 1.0, width: Val::Percent(100.0), ..default() },
+                Node {
+                    flex_grow: 1.0,
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
                 PageWebviewOf(host),
                 ChildOf(host),
             ))
@@ -180,10 +193,10 @@ fn render_address_text(
             state.url.clone()
         };
         for descendant in descendants(host, &children) {
-            if let Ok(mut text) = texts.get_mut(descendant) {
-                if text.0 != display {
-                    text.0 = display.clone();
-                }
+            if let Ok(mut text) = texts.get_mut(descendant)
+                && text.0 != display
+            {
+                text.0 = display.clone();
             }
         }
     }
@@ -227,7 +240,12 @@ fn descendants(root: Entity, children: &Query<&Children>) -> Vec<Entity> {
     out
 }
 
-fn spawn_nav_button(commands: &mut Commands, host: Entity, action: NavAction, label: &str) -> Entity {
+fn spawn_nav_button(
+    commands: &mut Commands,
+    host: Entity,
+    action: NavAction,
+    label: &str,
+) -> Entity {
     commands
         .spawn((
             Button,
@@ -273,11 +291,11 @@ fn browser_address_editor(
         }
         let cmd = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
         if cmd && matches!(&ev.logical_key, Key::Character(s) if s.eq_ignore_ascii_case("v")) {
-            if let Some(clip) = clipboard.as_mut() {
-                if let Some(text) = clip.read() {
-                    let one_line: String = text.split(['\n', '\r']).collect();
-                    insert_str(&mut edit, &one_line);
-                }
+            if let Some(clip) = clipboard.as_mut()
+                && let Some(text) = clip.read()
+            {
+                let one_line: String = text.split(['\n', '\r']).collect();
+                insert_str(&mut edit, &one_line);
             }
             continue;
         }
@@ -289,7 +307,10 @@ fn browser_address_editor(
             Key::Enter => {
                 let url = resolve_omnibox_input(&edit.buffer, &configs.browser.search_template);
                 if !url.is_empty() {
-                    commands.trigger(RequestNavigate { webview: page.0, url });
+                    commands.trigger(RequestNavigate {
+                        webview: page.0,
+                        url,
+                    });
                 }
                 focus.0 = None;
                 return;
@@ -437,24 +458,47 @@ mod tests {
             .add_plugins(ImagePlugin::default())
             .add_plugins(MultiplexerPlugin)
             .init_asset::<WebviewUiMaterial>()
-            .insert_resource(crate::configs::OzmuxConfigsResource(ozmux_configs::OzmuxConfigs::default()));
+            .insert_resource(crate::configs::OzmuxConfigsResource(
+                ozmux_configs::OzmuxConfigs::default(),
+            ));
         app
     }
 
     fn laid_out_node(size: Vec2) -> ComputedNode {
-        ComputedNode { size, inverse_scale_factor: 1.0, ..ComputedNode::DEFAULT }
+        ComputedNode {
+            size,
+            inverse_scale_factor: 1.0,
+            ..ComputedNode::DEFAULT
+        }
     }
 
     #[test]
     fn build_chrome_spawns_toolbar_and_empty_page_child() {
         let mut app = make_test_app();
         app.add_systems(Update, build_browser_chrome);
-        let host = app.world_mut().spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0)))).id();
+        let host = app
+            .world_mut()
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
         app.update();
 
-        let page = app.world().get::<BrowserPageWebview>(host).expect("host gets BrowserPageWebview").0;
-        assert!(app.world().get::<WebviewSource>(page).is_none(), "page child must be an empty Node (no webview yet)");
-        assert_eq!(app.world().get::<PageWebviewOf>(page).map(|p| p.0), Some(host), "page child points back to host");
+        let page = app
+            .world()
+            .get::<BrowserPageWebview>(host)
+            .expect("host gets BrowserPageWebview")
+            .0;
+        assert!(
+            app.world().get::<WebviewSource>(page).is_none(),
+            "page child must be an empty Node (no webview yet)"
+        );
+        assert_eq!(
+            app.world().get::<PageWebviewOf>(page).map(|p| p.0),
+            Some(host),
+            "page child points back to host"
+        );
         assert!(app.world().get::<BrowserToolbarState>(host).is_some());
         assert!(app.world().get::<AddressEdit>(host).is_some());
     }
@@ -463,7 +507,13 @@ mod tests {
     fn build_chrome_is_idempotent() {
         let mut app = make_test_app();
         app.add_systems(Update, build_browser_chrome);
-        let host = app.world_mut().spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0)))).id();
+        let host = app
+            .world_mut()
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
         app.update();
         let first = app.world().get::<BrowserPageWebview>(host).unwrap().0;
         app.update();
@@ -476,21 +526,33 @@ mod tests {
         use crate::ui::HostActivityEntity;
         use ozmux_multiplexer::ActivityKind;
         let mut app = make_test_app();
-        app.add_systems(Update, (build_browser_chrome, attach_browser_webview).chain());
+        app.add_systems(
+            Update,
+            (build_browser_chrome, attach_browser_webview).chain(),
+        );
 
         let activity = app
             .world_mut()
-            .spawn(ActivityKind::Browser { initial_url: Some("github.com".into()), profile: Default::default() })
+            .spawn(ActivityKind::Browser {
+                initial_url: Some("github.com".into()),
+                profile: Default::default(),
+            })
             .id();
         let host = app
             .world_mut()
-            .spawn((BrowserActivityMarker, HostActivityEntity(activity), laid_out_node(Vec2::new(800.0, 600.0))))
+            .spawn((
+                BrowserActivityMarker,
+                HostActivityEntity(activity),
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
             .id();
         // NOTE: first tick builds chrome; attach is a no-op until the page child is laid out.
         app.update();
 
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
-        app.world_mut().entity_mut(page).insert(laid_out_node(Vec2::new(800.0, 568.0)));
+        app.world_mut()
+            .entity_mut(page)
+            .insert(laid_out_node(Vec2::new(800.0, 568.0)));
         // NOTE: page child now has a ComputedNode, so attach fires this tick.
         app.update();
 
@@ -512,7 +574,10 @@ mod tests {
         app.add_observer(on_address_changed);
         let host = app
             .world_mut()
-            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
             .id();
         app.update();
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
@@ -538,7 +603,10 @@ mod tests {
         app.add_observer(on_loading_state_changed);
         let host = app
             .world_mut()
-            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
             .id();
         app.update();
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
@@ -571,7 +639,10 @@ mod tests {
 
         let host = app
             .world_mut()
-            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
             .id();
         app.update(); // build chrome
 
@@ -587,11 +658,17 @@ mod tests {
         };
 
         // Simulate a press by inserting Interaction::Pressed.
-        app.world_mut().entity_mut(back_btn).insert(Interaction::Pressed);
+        app.world_mut()
+            .entity_mut(back_btn)
+            .insert(Interaction::Pressed);
         app.update();
 
         let captured = app.world().resource::<Captured>();
-        assert_eq!(captured.0, vec![page], "RequestGoBack must fire with the page webview");
+        assert_eq!(
+            captured.0,
+            vec![page],
+            "RequestGoBack must fire with the page webview"
+        );
     }
 
     #[test]
@@ -601,11 +678,16 @@ mod tests {
         app.add_systems(Update, (build_browser_chrome, render_address_text).chain());
         let host = app
             .world_mut()
-            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
             .id();
         app.update(); // build chrome + render (empty url)
-        app.world_mut().get_mut::<BrowserToolbarState>(host).unwrap().url =
-            "https://example.com".into();
+        app.world_mut()
+            .get_mut::<BrowserToolbarState>(host)
+            .unwrap()
+            .url = "https://example.com".into();
         app.update(); // render picks up the new url
 
         let mut found: Option<String> = None;
@@ -623,18 +705,30 @@ mod tests {
         use crate::ui::HostActivityEntity;
         use ozmux_multiplexer::ActivityKind;
         let mut app = make_test_app();
-        app.add_systems(Update, (build_browser_chrome, attach_browser_webview).chain());
+        app.add_systems(
+            Update,
+            (build_browser_chrome, attach_browser_webview).chain(),
+        );
         let activity = app
             .world_mut()
-            .spawn(ActivityKind::Browser { initial_url: None, profile: Default::default() })
+            .spawn(ActivityKind::Browser {
+                initial_url: None,
+                profile: Default::default(),
+            })
             .id();
         let host = app
             .world_mut()
-            .spawn((BrowserActivityMarker, HostActivityEntity(activity), laid_out_node(Vec2::new(800.0, 600.0))))
+            .spawn((
+                BrowserActivityMarker,
+                HostActivityEntity(activity),
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
             .id();
         app.update();
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
-        app.world_mut().entity_mut(page).insert(laid_out_node(Vec2::new(800.0, 568.0)));
+        app.world_mut()
+            .entity_mut(page)
+            .insert(laid_out_node(Vec2::new(800.0, 568.0)));
         app.update();
         assert!(
             app.world().get::<WebviewSource>(page).is_none(),
@@ -645,7 +739,10 @@ mod tests {
     use crate::ui::AddressEdit as AE;
 
     fn edit(s: &str, caret: usize) -> AE {
-        AE { buffer: s.into(), caret }
+        AE {
+            buffer: s.into(),
+            caret,
+        }
     }
 
     #[test]
@@ -720,10 +817,15 @@ mod tests {
         let window = app.world_mut().spawn_empty().id();
         let host = app
             .world_mut()
-            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
             .id();
         app.update();
-        app.world_mut().resource_mut::<crate::ui::AddressBarFocus>().0 = Some(host);
+        app.world_mut()
+            .resource_mut::<crate::ui::AddressBarFocus>()
+            .0 = Some(host);
 
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -734,7 +836,8 @@ mod tests {
         app.update();
 
         assert_eq!(
-            app.world().get::<AddressEdit>(host).unwrap().buffer, "",
+            app.world().get::<AddressEdit>(host).unwrap().buffer,
+            "",
             "Cmd+<key> must not type into the address bar"
         );
     }
@@ -751,19 +854,27 @@ mod tests {
         let window = app.world_mut().spawn_empty().id();
         let host = app
             .world_mut()
-            .spawn((BrowserActivityMarker, laid_out_node(Vec2::new(800.0, 600.0))))
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
             .id();
         app.update();
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
 
-        app.world_mut().resource_mut::<crate::ui::AddressBarFocus>().0 = Some(host);
+        app.world_mut()
+            .resource_mut::<crate::ui::AddressBarFocus>()
+            .0 = Some(host);
         for c in "github.com".chars() {
             app.world_mut()
                 .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
                 .write(key_press(window, Key::Character(c.to_string().into())));
         }
         app.update();
-        assert_eq!(app.world().get::<AddressEdit>(host).unwrap().buffer, "github.com");
+        assert_eq!(
+            app.world().get::<AddressEdit>(host).unwrap().buffer,
+            "github.com"
+        );
 
         app.init_resource::<Navigated>();
         app.add_observer(|ev: On<RequestNavigate>, mut n: ResMut<Navigated>| {
