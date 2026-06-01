@@ -107,9 +107,10 @@ pub(crate) struct AddressEdit {
     pub(crate) caret: usize,
 }
 
-/// Marker on the address-bar `Text` node inside a browser toolbar.
+/// On the address-bar node inside a browser toolbar: marks it and points to
+/// its owning host. The node is a `Button` so it can be clicked to focus.
 #[derive(Component)]
-pub(crate) struct AddrBarText;
+pub(crate) struct AddrBarText(pub(crate) Entity);
 
 /// A toolbar navigation action a `BrowserNavButton` performs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,7 +128,7 @@ pub(crate) struct BrowserNavButton {
 }
 
 /// The browser activity host whose address bar currently owns the keyboard, or
-/// `None`. Read by the browser editor + `dispatch_focused_key` (later task).
+/// `None`. Read by the browser editor + `dispatch_focused_key`.
 #[derive(Resource, Default)]
 pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
 

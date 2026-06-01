@@ -37,6 +37,8 @@ impl Plugin for OzmuxBrowserRenderPlugin {
                     attach_browser_webview.in_set(OzmuxSystems::SetupActivity),
                     render_address_text,
                     drive_nav_buttons,
+                    sync_nav_button_enabled,
+                    focus_address_bar_on_click,
                     focus_address_bar_on_cmd_l.before(crate::input::dispatch_focused_key),
                     browser_address_editor.after(crate::input::dispatch_focused_key),
                 ),
@@ -63,8 +65,9 @@ fn build_browser_chrome(
         let reload = spawn_nav_button(&mut commands, host, NavAction::Reload, "R");
         let addr = commands
             .spawn((
+                Button,
                 Text::new(""),
-                AddrBarText,
+                AddrBarText(host),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -182,34 +185,59 @@ fn on_loading_state_changed(
 /// owns address-bar focus) or its toolbar-state URL (when unfocused).
 fn render_address_text(
     focus: Res<AddressBarFocus>,
-    hosts: Query<(Entity, &BrowserToolbarState, &AddressEdit), With<BrowserActivityMarker>>,
-    children: Query<&Children>,
-    mut texts: Query<&mut Text, With<AddrBarText>>,
+    hosts: Query<(&BrowserToolbarState, &AddressEdit)>,
+    mut texts: Query<(&AddrBarText, &mut Text)>,
 ) {
-    for (host, state, edit) in hosts.iter() {
+    for (addr, mut text) in texts.iter_mut() {
+        let host = addr.0;
+        let Ok((state, edit)) = hosts.get(host) else {
+            continue;
+        };
         let display = if focus.0 == Some(host) {
-            edit.buffer.clone()
+            render_with_caret(&edit.buffer, edit.caret)
         } else {
             state.url.clone()
         };
-        for descendant in descendants(host, &children) {
-            if let Ok(mut text) = texts.get_mut(descendant)
-                && text.0 != display
-            {
-                text.0 = display.clone();
-            }
+        if text.0 != display {
+            text.0 = display;
         }
     }
 }
 
-/// Routes toolbar button presses to `bevy_cef` navigation requests.
+/// Renders the edit buffer with a `|` caret inserted at the char index `caret`.
+fn render_with_caret(buffer: &str, caret: usize) -> String {
+    let chars: Vec<char> = buffer.chars().collect();
+    let at = caret.min(chars.len());
+    let mut s: String = chars[..at].iter().collect();
+    s.push('|');
+    s.extend(chars[at..].iter());
+    s
+}
+
+/// Routes toolbar button presses to `bevy_cef` navigation requests, skipping
+/// Back/Forward when the host state indicates they are unavailable.
 fn drive_nav_buttons(
     mut commands: Commands,
     buttons: Query<(&Interaction, &BrowserNavButton), Changed<Interaction>>,
     pages: Query<&BrowserPageWebview>,
+    states: Query<&BrowserToolbarState>,
 ) {
     for (interaction, button) in buttons.iter() {
         if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let enabled = match button.action {
+            NavAction::Back => states
+                .get(button.host)
+                .map(|s| s.can_go_back)
+                .unwrap_or(false),
+            NavAction::Forward => states
+                .get(button.host)
+                .map(|s| s.can_go_forward)
+                .unwrap_or(false),
+            NavAction::Reload => true,
+        };
+        if !enabled {
             continue;
         }
         let Ok(page) = pages.get(button.host) else {
@@ -224,20 +252,32 @@ fn drive_nav_buttons(
     }
 }
 
-/// Depth-first descendants of `root` (excluding `root`).
-fn descendants(root: Entity, children: &Query<&Children>) -> Vec<Entity> {
-    let mut out = Vec::new();
-    let mut stack: Vec<Entity> = children
-        .get(root)
-        .map(|c| c.iter().collect())
-        .unwrap_or_default();
-    while let Some(e) = stack.pop() {
-        out.push(e);
-        if let Ok(c) = children.get(e) {
-            stack.extend(c.iter());
+/// Dims the back/forward buttons when navigation in that direction is unavailable.
+fn sync_nav_button_enabled(
+    states: Query<&BrowserToolbarState>,
+    mut buttons: Query<(&BrowserNavButton, &mut BackgroundColor)>,
+) {
+    for (button, mut bg) in buttons.iter_mut() {
+        let enabled = match button.action {
+            NavAction::Back => states
+                .get(button.host)
+                .map(|s| s.can_go_back)
+                .unwrap_or(false),
+            NavAction::Forward => states
+                .get(button.host)
+                .map(|s| s.can_go_forward)
+                .unwrap_or(false),
+            NavAction::Reload => true,
+        };
+        let color = if enabled {
+            Color::srgb(0.3, 0.3, 0.3)
+        } else {
+            Color::srgb(0.15, 0.15, 0.15)
+        };
+        if bg.0 != color {
+            bg.0 = color;
         }
     }
-    out
 }
 
 fn spawn_nav_button(
@@ -256,6 +296,7 @@ fn spawn_nav_button(
                 justify_content: JustifyContent::Center,
                 ..default()
             },
+            BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
             BrowserNavButton { host, action },
         ))
         .with_children(|p| {
@@ -333,6 +374,26 @@ fn browser_address_editor(
             }
             _ => {}
         }
+    }
+}
+
+/// Clicking the address bar focuses it (seeding the buffer from the current URL).
+fn focus_address_bar_on_click(
+    mut focus: ResMut<AddressBarFocus>,
+    clicked: Query<(&Interaction, &AddrBarText), Changed<Interaction>>,
+    mut edits: Query<(&mut AddressEdit, &BrowserToolbarState)>,
+) {
+    for (interaction, addr) in clicked.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let host = addr.0;
+        let Ok((mut edit, state)) = edits.get_mut(host) else {
+            continue;
+        };
+        edit.buffer = state.url.clone();
+        edit.caret = edit.buffer.chars().count();
+        focus.0 = Some(host);
     }
 }
 
@@ -648,6 +709,12 @@ mod tests {
 
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
 
+        // Enable back navigation so drive_nav_buttons permits the press.
+        app.world_mut()
+            .get_mut::<BrowserToolbarState>(host)
+            .unwrap()
+            .can_go_back = true;
+
         // Find the Back button entity.
         let back_btn: Entity = {
             let mut q = app.world_mut().query::<(Entity, &BrowserNavButton)>();
@@ -893,6 +960,118 @@ mod tests {
             app.world().resource::<crate::ui::AddressBarFocus>().0,
             None,
             "Enter clears focus"
+        );
+    }
+
+    #[test]
+    fn render_with_caret_inserts_pipe_at_position() {
+        assert_eq!(super::render_with_caret("abc", 1), "a|bc");
+        assert_eq!(super::render_with_caret("abc", 3), "abc|");
+        assert_eq!(super::render_with_caret("", 0), "|");
+    }
+
+    #[test]
+    fn click_address_bar_focuses_and_seeds_buffer() {
+        let mut app = make_test_app();
+        app.init_resource::<crate::ui::AddressBarFocus>();
+        app.add_systems(
+            Update,
+            (build_browser_chrome, focus_address_bar_on_click).chain(),
+        );
+
+        let host = app
+            .world_mut()
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
+        app.update(); // build chrome
+
+        app.world_mut()
+            .get_mut::<BrowserToolbarState>(host)
+            .unwrap()
+            .url = "https://x.com".into();
+
+        let addr_btn: Entity = {
+            let mut q = app.world_mut().query::<(Entity, &AddrBarText)>();
+            q.iter(app.world())
+                .find(|(_, a)| a.0 == host)
+                .map(|(e, _)| e)
+                .expect("AddrBarText button must exist for host")
+        };
+
+        app.world_mut()
+            .entity_mut(addr_btn)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<crate::ui::AddressBarFocus>().0,
+            Some(host),
+            "clicking address bar must set focus to the host"
+        );
+        assert_eq!(
+            app.world().get::<AddressEdit>(host).unwrap().buffer,
+            "https://x.com",
+            "buffer must be seeded from toolbar state URL"
+        );
+    }
+
+    #[test]
+    fn back_button_disabled_when_cannot_go_back() {
+        let mut app = make_test_app();
+        app.init_resource::<Captured>();
+        app.add_systems(Update, (build_browser_chrome, drive_nav_buttons).chain());
+        app.add_observer(|ev: On<RequestGoBack>, mut r: ResMut<Captured>| {
+            r.0.push(ev.webview);
+        });
+
+        let host = app
+            .world_mut()
+            .spawn((
+                BrowserActivityMarker,
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
+        app.update(); // build chrome
+
+        // can_go_back is false by default; verify no event fires on press.
+        let back_btn: Entity = {
+            let mut q = app.world_mut().query::<(Entity, &BrowserNavButton)>();
+            q.iter(app.world())
+                .find(|(_, b)| b.action == NavAction::Back && b.host == host)
+                .map(|(e, _)| e)
+                .expect("back button must exist")
+        };
+
+        app.world_mut()
+            .entity_mut(back_btn)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Captured>().0,
+            vec![],
+            "RequestGoBack must NOT fire when can_go_back is false"
+        );
+
+        // Now enable back navigation and verify the event fires.
+        app.world_mut()
+            .get_mut::<BrowserToolbarState>(host)
+            .unwrap()
+            .can_go_back = true;
+
+        app.world_mut()
+            .entity_mut(back_btn)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
+        assert_eq!(
+            app.world().resource::<Captured>().0,
+            vec![page],
+            "RequestGoBack must fire when can_go_back is true"
         );
     }
 }
