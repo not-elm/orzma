@@ -1,7 +1,7 @@
-// Browser-only ambient type — `window.ozmux` is installed by the cef_host
-// render process for extension main frames. This SDK module is a thin wrapper
-// over that V8 binding: it adds type hints and a stable `createClient()`
-// surface that extensions program against.
+// Type-declaration module for the host-injected `window.ozmux` binding. The
+// runtime that backs these types lives in `ozmux-bridge.ts` / `ozmux.js` and is
+// installed on `window.ozmux` by the cef_host render process for extension main
+// frames; this file only declares the surface extensions program against.
 //
 // The SDK package's tsconfig deliberately excludes the DOM lib (server code
 // shares the same tsconfig). Declare the small browser surface we use.
@@ -37,45 +37,4 @@ export interface Client {
     opts?: SubscribeOptions,
   ): AsyncIterable<Event>;
   close(): void;
-}
-
-interface NativeOzmux {
-  readonly context: OzmuxContext;
-  call<Req, Resp>(name: string, payload: Req): Promise<Resp>;
-  subscribe<Params, Event>(
-    name: string,
-    params: Params,
-    opts?: SubscribeOptions,
-  ): AsyncIterable<Event>;
-}
-
-declare const window: { ozmux?: NativeOzmux };
-
-const MISSING =
-  'ozmux cef SDK: window.ozmux is missing. The page must be loaded via ozmux-ext:// inside an extension Browser Activity.';
-
-/**
- * Reads the activity context installed by the cef_host render process. Throws
- * if `window.ozmux` is not present (e.g. the page was loaded outside an
- * extension main frame).
- */
-export function getOzmuxContext(): OzmuxContext {
-  const m = window.ozmux;
-  if (!m) throw new Error(MISSING);
-  return m.context;
-}
-
-/**
- * Returns a thin client over `window.ozmux.call` / `subscribe`. `close()` is
- * a no-op because the underlying V8 binding has no transport-level handle to
- * release — pending operations are GC'd when their iterators / promises drop.
- */
-export function createClient(): Client {
-  const m = window.ozmux;
-  if (!m) throw new Error(MISSING);
-  return {
-    call: m.call.bind(m),
-    subscribe: m.subscribe.bind(m),
-    close: () => {},
-  };
 }
