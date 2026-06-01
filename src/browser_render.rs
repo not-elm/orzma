@@ -4,12 +4,16 @@
 //! page-webview node — and (in a later phase) a CEF webview attached to the
 //! laid-out page child after host-side omnibox resolution.
 
+use crate::configs::OzmuxConfigsResource;
 use crate::ui::{
     AddrBarText, AddressEdit, BrowserActivityMarker, BrowserNavButton, BrowserPageWebview,
-    BrowserToolbarState, NavAction, PageWebviewOf,
+    BrowserToolbarState, HostActivityEntity, NavAction, PageWebviewOf,
 };
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
+use bevy_cef::prelude::*;
+use ozmux_configs::browser::resolve_omnibox_input;
+use ozmux_multiplexer::ActivityKind;
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
 
@@ -65,6 +69,41 @@ fn build_browser_chrome(
     }
 }
 
+/// Attaches the CEF page webview to a laid-out page-webview child once its own
+/// `ComputedNode` is real, seeding `WebviewSize` from the child (not the host)
+/// so CEF is created at the final page size — no mid-load resize.
+fn attach_browser_webview(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<WebviewUiMaterial>>,
+    configs: Res<OzmuxConfigsResource>,
+    pages: Query<(Entity, &ComputedNode, &PageWebviewOf), Without<WebviewSource>>,
+    hosts: Query<&HostActivityEntity>,
+    kinds: Query<&ActivityKind>,
+) {
+    for (page, computed, owner) in pages.iter() {
+        let size = computed.size() * computed.inverse_scale_factor();
+        if size.x < 1.0 || size.y < 1.0 {
+            continue;
+        }
+        let Ok(host_activity) = hosts.get(owner.0) else {
+            continue;
+        };
+        let Ok(ActivityKind::Browser { initial_url, .. }) = kinds.get(host_activity.0) else {
+            continue;
+        };
+        let raw = initial_url.as_deref().unwrap_or("");
+        let resolved = resolve_omnibox_input(raw, &configs.browser.search_template);
+        if resolved.is_empty() {
+            continue;
+        }
+        commands.entity(page).insert((
+            WebviewSource::new(resolved),
+            WebviewSize(size),
+            MaterialNode(materials.add(WebviewUiMaterial::default())),
+        ));
+    }
+}
+
 fn spawn_nav_button(commands: &mut Commands, host: Entity, action: NavAction, label: &str) -> Entity {
     commands
         .spawn((
@@ -89,7 +128,6 @@ mod tests {
     use super::*;
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
-    use bevy_cef::prelude::*;
     use ozmux_multiplexer::MultiplexerPlugin;
 
     fn make_test_app() -> App {
@@ -98,7 +136,8 @@ mod tests {
             .add_plugins(AssetPlugin::default())
             .add_plugins(ImagePlugin::default())
             .add_plugins(MultiplexerPlugin)
-            .init_asset::<WebviewUiMaterial>();
+            .init_asset::<WebviewUiMaterial>()
+            .insert_resource(crate::configs::OzmuxConfigsResource(ozmux_configs::OzmuxConfigs::default()));
         app
     }
 
@@ -130,5 +169,63 @@ mod tests {
         app.update();
         let second = app.world().get::<BrowserPageWebview>(host).unwrap().0;
         assert_eq!(first, second, "chrome built exactly once");
+    }
+
+    #[test]
+    fn attach_resolves_omnibox_and_seeds_child_size() {
+        use crate::ui::HostActivityEntity;
+        use ozmux_multiplexer::ActivityKind;
+        let mut app = make_test_app();
+        app.add_systems(Update, (build_browser_chrome, attach_browser_webview).chain());
+
+        let activity = app
+            .world_mut()
+            .spawn(ActivityKind::Browser { initial_url: Some("github.com".into()), profile: Default::default() })
+            .id();
+        let host = app
+            .world_mut()
+            .spawn((BrowserActivityMarker, HostActivityEntity(activity), laid_out_node(Vec2::new(800.0, 600.0))))
+            .id();
+        // NOTE: first tick builds chrome; attach is a no-op until the page child is laid out.
+        app.update();
+
+        let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
+        app.world_mut().entity_mut(page).insert(laid_out_node(Vec2::new(800.0, 568.0)));
+        // NOTE: page child now has a ComputedNode, so attach fires this tick.
+        app.update();
+
+        match app.world().get::<WebviewSource>(page) {
+            Some(WebviewSource::Url(url)) => assert_eq!(url, "https://github.com"),
+            other => panic!("expected resolved Url, got {other:?}"),
+        }
+        assert_eq!(
+            app.world().get::<WebviewSize>(page).map(|s| s.0),
+            Some(Vec2::new(800.0, 568.0)),
+            "webview seeded at the CHILD's laid-out size, not the host's"
+        );
+    }
+
+    #[test]
+    fn attach_skips_empty_input() {
+        use crate::ui::HostActivityEntity;
+        use ozmux_multiplexer::ActivityKind;
+        let mut app = make_test_app();
+        app.add_systems(Update, (build_browser_chrome, attach_browser_webview).chain());
+        let activity = app
+            .world_mut()
+            .spawn(ActivityKind::Browser { initial_url: None, profile: Default::default() })
+            .id();
+        let host = app
+            .world_mut()
+            .spawn((BrowserActivityMarker, HostActivityEntity(activity), laid_out_node(Vec2::new(800.0, 600.0))))
+            .id();
+        app.update();
+        let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
+        app.world_mut().entity_mut(page).insert(laid_out_node(Vec2::new(800.0, 568.0)));
+        app.update();
+        assert!(
+            app.world().get::<WebviewSource>(page).is_none(),
+            "empty initial_url resolves to empty; no webview attached"
+        );
     }
 }
