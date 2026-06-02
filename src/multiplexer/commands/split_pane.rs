@@ -1,6 +1,9 @@
+//! Split-pane shortcut action: splits the active pane along an orientation
+//! when a `SplitPaneActionEvent` is triggered.
 use bevy::prelude::*;
 use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation};
 
+/// Registers the `apply_split` observer for `SplitPaneActionEvent`.
 pub struct SplitPaneActionPlugin;
 
 impl Plugin for SplitPaneActionPlugin {
@@ -9,15 +12,17 @@ impl Plugin for SplitPaneActionPlugin {
     }
 }
 
+/// Request to split the active pane along `orientation`. Triggered by
+/// `ShortcutAction::SplitPane`.
 #[derive(EntityEvent, Debug)]
-pub struct SplitPaneEvent {
+pub struct SplitPaneActionEvent {
     #[event_target]
     pub session: Entity,
     pub orientation: SplitOrientation,
 }
 
-fn apply_split(trigger: On<SplitPaneEvent>, mut mux: MultiplexerCommands) {
-    let SplitPaneEvent {
+fn apply_split(trigger: On<SplitPaneActionEvent>, mut mux: MultiplexerCommands) {
+    let SplitPaneActionEvent {
         session,
         orientation,
     } = trigger.event();

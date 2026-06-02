@@ -1,6 +1,9 @@
+//! Focus-activity shortcut action: cycles the active pane's focused
+//! activity when a `FocusActivityActionEvent` fires.
 use bevy::prelude::*;
 use ozmux_multiplexer::{CycleDirection, MultiplexerCommands};
 
+/// Registers the `apply_focus_activity` observer.
 pub struct FocusActivityActionPlugin;
 
 impl Plugin for FocusActivityActionPlugin {
@@ -9,15 +12,17 @@ impl Plugin for FocusActivityActionPlugin {
     }
 }
 
+/// Request to cycle the active pane's focused activity in `direction`.
+/// Triggered by `ShortcutAction::FocusActivity`.
 #[derive(EntityEvent, Debug)]
-pub struct FocusActivityEvent {
+pub struct FocusActivityActionEvent {
     #[event_target]
     pub session: Entity,
     pub direction: CycleDirection,
 }
 
-fn apply_focus_activity(trigger: On<FocusActivityEvent>, mut mux: MultiplexerCommands) {
-    let FocusActivityEvent { session, direction } = trigger.event();
+fn apply_focus_activity(trigger: On<FocusActivityActionEvent>, mut mux: MultiplexerCommands) {
+    let FocusActivityActionEvent { session, direction } = trigger.event();
     let Some(active_pane) = mux.sessions_active_pane(*session) else {
         tracing::warn!(target: "ozmux_gui::commands", ?session, "FocusActivity: session vanished");
         return;
@@ -107,7 +112,7 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
-        app.world_mut().trigger(FocusActivityEvent {
+        app.world_mut().trigger(FocusActivityActionEvent {
             session,
             direction: CycleDirection::Next,
         });
@@ -131,7 +136,7 @@ mod tests {
             .get::<ActiveActivity>(active_pane)
             .map(|a| a.0)
             .unwrap();
-        app.world_mut().trigger(FocusActivityEvent {
+        app.world_mut().trigger(FocusActivityActionEvent {
             session,
             direction: CycleDirection::Next,
         });

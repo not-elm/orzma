@@ -6,15 +6,15 @@
 //! short-circuited because they require entity-spawning, marker-moving,
 //! or clipboard side effects the Bevy dispatcher performs directly.
 
-use crate::multiplexer::commands::close_activity::{CloseActivityActionPlugin, CloseActivityEvent};
-use crate::multiplexer::commands::close_pane::{ClosePaneActionPlugin, ClosePaneEvent};
-use crate::multiplexer::commands::focus_activity::{FocusActivityActionPlugin, FocusActivityEvent};
-use crate::multiplexer::commands::focus_pane::{FocusPaneActionPlugin, FocusPaneEvent};
+use crate::multiplexer::commands::close_activity::{CloseActivityActionEvent, CloseActivityActionPlugin};
+use crate::multiplexer::commands::close_pane::{ClosePaneActionEvent, ClosePaneActionPlugin};
+use crate::multiplexer::commands::focus_activity::{FocusActivityActionEvent, FocusActivityActionPlugin};
+use crate::multiplexer::commands::focus_pane::{FocusPaneActionEvent, FocusPaneActionPlugin};
 use crate::multiplexer::commands::new_terminal_activity::{
-    NewTerminalActivityActionPlugin, NewTerminalActivityEvent,
+    NewTerminalActivityActionEvent, NewTerminalActivityActionPlugin,
 };
-use crate::multiplexer::commands::split_pane::{SplitPaneActionPlugin, SplitPaneEvent};
-use crate::multiplexer::commands::swap_pane::{SwapPaneActionPlugin, SwapPaneEvent};
+use crate::multiplexer::commands::split_pane::{SplitPaneActionEvent, SplitPaneActionPlugin};
+use crate::multiplexer::commands::swap_pane::{SwapPaneActionEvent, SwapPaneActionPlugin};
 use bevy::prelude::*;
 use ozmux_configs::shortcuts::{
     ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, ShortcutAction,
@@ -56,33 +56,33 @@ impl Plugin for OzmuxShortcutActionPlugin {
 pub fn dispatch(commands: &mut Commands, action: ShortcutAction, session: Entity) {
     match action {
         ShortcutAction::SplitPane { direction } => {
-            commands.trigger(SplitPaneEvent {
+            commands.trigger(SplitPaneActionEvent {
                 session,
                 orientation: split_orientation(direction),
             });
         }
         ShortcutAction::NewTerminalActivity => {
-            commands.trigger(NewTerminalActivityEvent { session });
+            commands.trigger(NewTerminalActivityActionEvent { session });
         }
         ShortcutAction::FocusPane { direction } => {
-            commands.trigger(FocusPaneEvent {
+            commands.trigger(FocusPaneActionEvent {
                 session,
                 direction: focus_direction(direction),
             });
         }
         ShortcutAction::FocusActivity { offset } => {
             if let Some(direction) = cycle_direction(offset) {
-                commands.trigger(FocusActivityEvent { session, direction });
+                commands.trigger(FocusActivityActionEvent { session, direction });
             }
         }
         ShortcutAction::SwapPane { offset } => {
-            commands.trigger(SwapPaneEvent {
+            commands.trigger(SwapPaneActionEvent {
                 session,
                 offset: swap_offset(offset),
             });
         }
-        ShortcutAction::ClosePane => commands.trigger(ClosePaneEvent { session }),
-        ShortcutAction::CloseActivity => commands.trigger(CloseActivityEvent { session }),
+        ShortcutAction::ClosePane => commands.trigger(ClosePaneActionEvent { session }),
+        ShortcutAction::CloseActivity => commands.trigger(CloseActivityActionEvent { session }),
         ShortcutAction::NewSession
         | ShortcutAction::FocusSession { .. }
         | ShortcutAction::FocusSessionNumber { .. } => {}
@@ -140,25 +140,25 @@ mod tests {
     #[derive(Debug, Default, Resource)]
     struct CapturedEvents(Vec<&'static str>);
 
-    fn capture_split(_: On<SplitPaneEvent>, mut cap: ResMut<CapturedEvents>) {
+    fn capture_split(_: On<SplitPaneActionEvent>, mut cap: ResMut<CapturedEvents>) {
         cap.0.push("SplitPane");
     }
-    fn capture_new_activity(_: On<NewTerminalActivityEvent>, mut cap: ResMut<CapturedEvents>) {
+    fn capture_new_activity(_: On<NewTerminalActivityActionEvent>, mut cap: ResMut<CapturedEvents>) {
         cap.0.push("NewTerminalActivity");
     }
-    fn capture_focus_pane(_: On<FocusPaneEvent>, mut cap: ResMut<CapturedEvents>) {
+    fn capture_focus_pane(_: On<FocusPaneActionEvent>, mut cap: ResMut<CapturedEvents>) {
         cap.0.push("FocusPane");
     }
-    fn capture_focus_activity(_: On<FocusActivityEvent>, mut cap: ResMut<CapturedEvents>) {
+    fn capture_focus_activity(_: On<FocusActivityActionEvent>, mut cap: ResMut<CapturedEvents>) {
         cap.0.push("FocusActivity");
     }
-    fn capture_swap(_: On<SwapPaneEvent>, mut cap: ResMut<CapturedEvents>) {
+    fn capture_swap(_: On<SwapPaneActionEvent>, mut cap: ResMut<CapturedEvents>) {
         cap.0.push("SwapPane");
     }
-    fn capture_close_pane(_: On<ClosePaneEvent>, mut cap: ResMut<CapturedEvents>) {
+    fn capture_close_pane(_: On<ClosePaneActionEvent>, mut cap: ResMut<CapturedEvents>) {
         cap.0.push("ClosePane");
     }
-    fn capture_close_activity(_: On<CloseActivityEvent>, mut cap: ResMut<CapturedEvents>) {
+    fn capture_close_activity(_: On<CloseActivityActionEvent>, mut cap: ResMut<CapturedEvents>) {
         cap.0.push("CloseActivity");
     }
 
