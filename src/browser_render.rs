@@ -391,9 +391,12 @@ fn browser_address_editor(
         let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
-        // NOTE: strict Cmd+v paste (lowercase, no other modifiers), matching the
-        // terminal's `is_paste_chord` — Shift+Cmd+V is not a paste shortcut, so
-        // the same chord must not diverge between the address bar and a terminal.
+        // NOTE: strict Cmd+V paste (lowercase, no other modifiers). The terminal
+        // path now resolves paste through the rebindable `paste` binding
+        // (Action::Paste, default Cmd+V); this omnibox check stays hardcoded to the
+        // default chord, so a user who rebinds `paste` will not see the new chord
+        // here. Accepted divergence — unifying the omnibox with the binding table is
+        // a tracked follow-up.
         if cmd
             && !ctrl
             && !shift
