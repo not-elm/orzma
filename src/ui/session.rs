@@ -814,8 +814,6 @@ mod tests {
         );
 
         app.world_mut()
-            .init_resource::<crate::multiplexer::SessionNameCounter>();
-        app.world_mut()
             .trigger(crate::action::session::NewSessionActionEvent {
                 session: bootstrap_session,
             });

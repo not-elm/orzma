@@ -21,11 +21,11 @@ pub use cells::{
     Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
     SplitOrientation,
 };
-pub use commands::{MultiplexerCommands, SessionCreated, SplitOutcome};
+pub use commands::{MultiplexerCommands, SessionCreated, SessionNameCounter, SplitOutcome};
 pub use components::{
     ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, BrowserProfile,
     CopyMode, ExtensionActivityAid, LayoutCells, OwningExtension, PaneDimensions, PaneMarker,
-    SessionDimensions, SessionMarker, SessionUiSubtree,
+    SessionCreatedAt, SessionDimensions, SessionMarker, SessionUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};

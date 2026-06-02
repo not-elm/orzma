@@ -7,35 +7,18 @@ use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_multiplexer::MultiplexerCommands;
 
-use crate::action::session::spawn_attached_session;
-use crate::multiplexer::SessionNameCounter;
-
 /// Bevy Plugin that registers the `bootstrap` system in the `Startup`
-/// schedule and initializes the `SessionNameCounter` resource that
-/// drives auto-generated session names.
+/// schedule.
 pub struct OzmuxBootstrapPlugin;
 
 impl Plugin for OzmuxBootstrapPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SessionNameCounter>()
-            .add_systems(Startup, (bootstrap, insert_initial_cursor_icon));
+        app.add_systems(Startup, (bootstrap, insert_initial_cursor_icon));
     }
 }
 
-// NOTE: `mux` must precede `commands` so its command buffer is applied first.
-// Both params have separate deferred queues; apply order follows parameter order.
-// If `commands` went first, `entity(outcome.session).insert(…)` would panic
-// because `outcome.session` is only spawned when `mux`'s queue is applied.
-pub(crate) fn bootstrap(
-    mut mux: MultiplexerCommands,
-    mut commands: Commands,
-    mut counter: ResMut<SessionNameCounter>,
-) {
-    // Mint the bootstrap session as "session1" via the shared counter
-    // (CMD+R-created sessions take "session2", "session3", …). The helper
-    // in src/action/session.rs does the spawn + UI subtree + AttachedSession
-    // dance identically — call it instead of duplicating.
-    let _ = spawn_attached_session(&mut commands, &mut mux, &mut counter);
+pub(crate) fn bootstrap(mut mux: MultiplexerCommands) {
+    let _ = mux.spawn_attached_session();
 }
 
 /// Inserts an initial `CursorIcon::System(SystemCursorIcon::Text)` on

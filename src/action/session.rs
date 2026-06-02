@@ -7,9 +7,8 @@
 //! triggers preserve the single-holder invariant (Bevy flushes each
 //! observer's commands before the next queued trigger runs).
 
-use crate::multiplexer::{SessionCreatedAt, SessionNameCounter};
 use bevy::prelude::*;
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionCreatedAt, SessionMarker};
 
 /// Bevy Plugin that registers the session-action observers.
 pub struct OzmuxSessionActionPlugin;
@@ -53,52 +52,10 @@ pub enum FocusSessionTarget {
     Number(u8),
 }
 
-/// Spawns a Session via `MultiplexerCommands` plus its UI subtree node,
-/// inserts `AttachedSession` + `SessionUiSubtree` + `SessionCreatedAt`
-/// on the session entity, and parents the subtree under the session.
-/// Returns the new session entity.
-///
-/// # Invariants
-///
-/// Inserts `AttachedSession` on the new session **without** removing it
-/// from any prior holder. A caller that must keep the "exactly one
-/// `AttachedSession`" invariant (the new-session path) is responsible for
-/// detaching the previous marker first; `bootstrap` calls it with no prior
-/// attached session, so it is safe there.
-pub(crate) fn spawn_attached_session(
-    commands: &mut Commands,
-    mux: &mut MultiplexerCommands,
-    counter: &mut SessionNameCounter,
-) -> Entity {
-    let n = counter.next();
-    let outcome = mux.create_session(Some(format!("session{n}")));
-    let subtree = commands
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            ..default()
-        })
-        .id();
-    commands.entity(outcome.session).insert((
-        AttachedSession,
-        SessionUiSubtree(subtree),
-        SessionCreatedAt(n),
-    ));
-    commands.entity(subtree).insert(ChildOf(outcome.session));
-    outcome.session
-}
-
-// NOTE: `mux` must precede `commands` in this observer's signature. Both
-// own separate deferred command queues; Bevy applies them in parameter
-// order. `spawn_attached_session` queues the new session-entity spawn into
-// `mux`, then inserts components on it via `commands`. If `commands`
-// applied first, those inserts would reference an entity that does not
-// exist yet and panic.
 fn apply_new_session(
     _trigger: On<NewSessionActionEvent>,
     mut mux: MultiplexerCommands,
     mut commands: Commands,
-    mut counter: ResMut<SessionNameCounter>,
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
 ) {
     match attached_session.single() {
@@ -120,7 +77,7 @@ fn apply_new_session(
             );
         }
     }
-    let new_session = spawn_attached_session(&mut commands, &mut mux, &mut counter);
+    let new_session = mux.spawn_attached_session();
     tracing::debug!(
         target: "ozmux_gui::action",
         ?new_session,
@@ -193,7 +150,6 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxSessionActionPlugin);
-        app.init_resource::<SessionNameCounter>();
         let session = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {

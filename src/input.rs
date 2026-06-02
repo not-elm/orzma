@@ -432,7 +432,6 @@ mod tests {
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
         app.init_resource::<crate::input::ime::ImeState>();
-        app.init_resource::<crate::multiplexer::SessionNameCounter>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_plugins(crate::clipboard::ClipboardActionPlugin);
         app.add_message::<KeyboardInput>();
@@ -772,7 +771,6 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
         app.init_resource::<crate::input::ime::ImeState>();
-        app.init_resource::<crate::multiplexer::SessionNameCounter>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
         app.update();
