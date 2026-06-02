@@ -72,7 +72,8 @@ mod tests {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
         let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
-        app.world_mut().trigger(CloseActivityActionEvent { session });
+        app.world_mut()
+            .trigger(CloseActivityActionEvent { session });
         app.world_mut().flush();
         // Single-activity pane is closed via close_pane; only one pane exists,
         // so the close-last-pane invariant inside ozmux_multiplexer prevents

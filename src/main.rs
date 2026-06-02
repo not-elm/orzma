@@ -22,7 +22,6 @@ use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
-use crate::multiplexer::commands::OzmuxShortcutActionPlugin;
 use bevy::prelude::*;
 use bevy_terminal::TerminalHandlePlugin;
 use bevy_terminal_renderer::TerminalRendererPlugin;
@@ -77,7 +76,6 @@ fn main() {
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
-            OzmuxShortcutActionPlugin,
             ExtensionManagerPlugin::new(endpoints),
             OzmuxActionPlugin,
         ))

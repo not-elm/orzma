@@ -104,7 +104,8 @@ mod tests {
         let bogus = app.world_mut().spawn(ozmux_multiplexer::SessionMarker).id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
-        app.world_mut().trigger(ClosePaneActionEvent { session: bogus });
+        app.world_mut()
+            .trigger(ClosePaneActionEvent { session: bogus });
         app.world_mut().flush();
     }
 }

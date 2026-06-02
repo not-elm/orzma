@@ -1,50 +1,19 @@
-//! Translates `configs::Action` into the matching multiplexer
+//! Translates `configs::ShortcutAction` into the matching action
 //! `EntityEvent`. Called by the shortcut dispatcher in `src/input.rs`.
-//!
-//! Actions handled outside `dispatch()` (`NewSession`, `FocusSession`,
-//! `FocusSessionNumber`, `EnterCopyMode`, `Copy`, `Paste`) are
-//! short-circuited because they require entity-spawning, marker-moving,
-//! or clipboard side effects the Bevy dispatcher performs directly.
 
-use crate::multiplexer::commands::close_activity::{CloseActivityActionEvent, CloseActivityActionPlugin};
-use crate::multiplexer::commands::close_pane::{ClosePaneActionEvent, ClosePaneActionPlugin};
-use crate::multiplexer::commands::focus_activity::{FocusActivityActionEvent, FocusActivityActionPlugin};
-use crate::multiplexer::commands::focus_pane::{FocusPaneActionEvent, FocusPaneActionPlugin};
-use crate::multiplexer::commands::new_terminal_activity::{
-    NewTerminalActivityActionEvent, NewTerminalActivityActionPlugin,
-};
-use crate::multiplexer::commands::split_pane::{SplitPaneActionEvent, SplitPaneActionPlugin};
-use crate::multiplexer::commands::swap_pane::{SwapPaneActionEvent, SwapPaneActionPlugin};
+use crate::action::close_activity::CloseActivityActionEvent;
+use crate::action::close_pane::ClosePaneActionEvent;
+use crate::action::focus_activity::FocusActivityActionEvent;
+use crate::action::focus_pane::FocusPaneActionEvent;
+use crate::action::new_terminal_activity::NewTerminalActivityActionEvent;
+use crate::action::split_pane::SplitPaneActionEvent;
+use crate::action::swap_pane::SwapPaneActionEvent;
 use bevy::prelude::*;
 use ozmux_configs::shortcuts::{
     ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, ShortcutAction,
     SplitDirection, SwapOffset as ConfigSwapOffset,
 };
 use ozmux_multiplexer::{CycleDirection, PaneDirection, SplitOrientation, SwapOffset};
-
-pub mod close_activity;
-pub mod close_pane;
-pub mod focus_activity;
-pub mod focus_pane;
-pub mod new_terminal_activity;
-pub mod split_pane;
-pub mod swap_pane;
-
-pub struct OzmuxShortcutActionPlugin;
-
-impl Plugin for OzmuxShortcutActionPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_plugins((
-            SplitPaneActionPlugin,
-            NewTerminalActivityActionPlugin,
-            FocusPaneActionPlugin,
-            FocusActivityActionPlugin,
-            SwapPaneActionPlugin,
-            ClosePaneActionPlugin,
-            CloseActivityActionPlugin,
-        ));
-    }
-}
 
 /// Translates a `configs::Action` into the matching multiplexer
 /// EntityEvent and triggers it on `session`.
@@ -143,7 +112,10 @@ mod tests {
     fn capture_split(_: On<SplitPaneActionEvent>, mut cap: ResMut<CapturedEvents>) {
         cap.0.push("SplitPane");
     }
-    fn capture_new_activity(_: On<NewTerminalActivityActionEvent>, mut cap: ResMut<CapturedEvents>) {
+    fn capture_new_activity(
+        _: On<NewTerminalActivityActionEvent>,
+        mut cap: ResMut<CapturedEvents>,
+    ) {
         cap.0.push("NewTerminalActivity");
     }
     fn capture_focus_pane(_: On<FocusPaneActionEvent>, mut cap: ResMut<CapturedEvents>) {
