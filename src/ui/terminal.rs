@@ -1,5 +1,5 @@
-//! Post-setup for Terminal Activity hosts. After the registry has prepared a
-//! stable entity carrying `ActivityHostNode` + `TerminalActivityMarker`, this
+//! Post-setup for Terminal Surface hosts. After the registry has prepared a
+//! stable entity carrying `SurfaceHostNode` + `TerminalSurfaceMarker`, this
 //! system spawns a `TerminalBundle` (PTY + VT bridge) and attaches a
 //! `TerminalRenderBundle` (renderer-side grid + MaterialNode) exactly once.
 //! Failures mark the entity with `TerminalSpawnFailed` so the system does
@@ -7,7 +7,7 @@
 
 use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
-use crate::ui::{HostActivityEntity, TerminalActivityMarker, TerminalSpawnFailed};
+use crate::ui::{HostSurfaceEntity, TerminalSurfaceMarker, TerminalSpawnFailed};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
@@ -22,7 +22,7 @@ impl Plugin for OzmuxTerminalUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            finish_terminal_setup.in_set(OzmuxSystems::SetupActivity),
+            finish_terminal_setup.in_set(OzmuxSystems::SetupSurface),
         )
         .add_systems(
             PostUpdate,
@@ -35,7 +35,7 @@ impl Plugin for OzmuxTerminalUiPlugin {
 }
 
 /// Spawns a `TerminalBundle` and attaches `TerminalRenderBundle` for each
-/// freshly-spawned Terminal Activity host. Runs every Update tick but only
+/// freshly-spawned Terminal Surface host. Runs every Update tick but only
 /// targets entities that lack `TerminalHandle` and `TerminalSpawnFailed`,
 /// so the per-entity work happens exactly once.
 ///
@@ -44,16 +44,16 @@ impl Plugin for OzmuxTerminalUiPlugin {
 /// extension's bin dir so any `@<cmd>` shim resolves and can reach the control
 /// bridge. The bridge keys on `OZMUX_PANE_ID` being the multiplexer Pane
 /// `Entity`, so the host's owning Pane / Session are resolved by walking
-/// `ChildOf` from the host's `HostActivityEntity`: activity → Pane → Session.
+/// `ChildOf` from the host's `HostSurfaceEntity`: surface → Pane → Session.
 /// If the chain cannot be resolved (or no extension launched) the env is
 /// empty — the terminal still works, just without `@<cmd>` support.
 fn finish_terminal_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     hosts: Query<
-        (Entity, &HostActivityEntity),
+        (Entity, &HostSurfaceEntity),
         (
-            With<TerminalActivityMarker>,
+            With<TerminalSurfaceMarker>,
             Without<TerminalHandle>,
             Without<TerminalSpawnFailed>,
         ),
@@ -61,9 +61,9 @@ fn finish_terminal_setup(
     child_of: Query<&ChildOf>,
     registry: Option<Res<ExtensionRegistry>>,
 ) {
-    for (host, host_activity) in hosts.iter() {
+    for (host, host_surface) in hosts.iter() {
         let env = match registry.as_ref() {
-            Some(registry) => match resolve_pane_session(host_activity.0, &child_of) {
+            Some(registry) => match resolve_pane_session(host_surface.0, &child_of) {
                 Some((pane, session)) => {
                     let exts: Vec<_> = registry.extensions.values().collect();
                     terminal_env(&exts, pane, session)
@@ -94,16 +94,16 @@ fn finish_terminal_setup(
     }
 }
 
-/// Resolves a multiplexer Activity entity to its `(pane, session)` pair by
-/// walking `ChildOf` up the multiplexer hierarchy (activity → Pane →
+/// Resolves a multiplexer Surface entity to its `(pane, session)` pair by
+/// walking `ChildOf` up the multiplexer hierarchy (surface → Pane →
 /// Session). Returns `None` when either link is missing — mirrors
-/// `MultiplexerCommands::pane_of_activity` + `session_of_pane` without
+/// `MultiplexerCommands::pane_of_surface` + `session_of_pane` without
 /// borrowing the full mutation SystemParam.
 pub(crate) fn resolve_pane_session(
-    activity: Entity,
+    surface: Entity,
     child_of: &Query<&ChildOf>,
 ) -> Option<(Entity, Entity)> {
-    let pane = child_of.get(activity).ok()?.parent();
+    let pane = child_of.get(surface).ok()?.parent();
     let session = child_of.get(pane).ok()?.parent();
     Some((pane, session))
 }
@@ -128,7 +128,7 @@ fn compute_grid_dims(
     (cols, rows)
 }
 
-/// Resizes each Terminal Activity's PTY / VT grid to match its host UI
+/// Resizes each Terminal Surface's PTY / VT grid to match its host UI
 /// node's pixel extents so the shader's `grid_size * cell_size_px` always
 /// fills the entire pane. Idempotent — no-op when cols/rows are unchanged.
 ///
@@ -235,7 +235,7 @@ mod tests {
         app.update();
         assert!(
             app.world().get::<TerminalHandle>(host).is_none(),
-            "entity without TerminalActivityMarker must not receive TerminalHandle"
+            "entity without TerminalSurfaceMarker must not receive TerminalHandle"
         );
     }
 
@@ -249,10 +249,10 @@ mod tests {
         }
         let mut app = make_test_app();
         app.add_systems(Update, finish_terminal_setup);
-        let activity = app.world_mut().spawn_empty().id();
+        let surface = app.world_mut().spawn_empty().id();
         let host = app
             .world_mut()
-            .spawn((TerminalActivityMarker, HostActivityEntity(activity)))
+            .spawn((TerminalSurfaceMarker, HostSurfaceEntity(surface)))
             .id();
         app.update();
         // SAFETY: env_guard is still held; restore SHELL state so concurrent

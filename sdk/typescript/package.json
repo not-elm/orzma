@@ -12,11 +12,11 @@
       "types": "./src/server/cmd-shim.ts",
       "default": "./src/server/cmd-shim.ts"
     },
-    "./cef": {
-      "types": "./src/cef/index.ts"
+    "./surface": {
+      "types": "./src/surface/index.ts"
     },
     "./ozmux-global": {
-      "types": "./src/cef/ozmux-global.d.ts"
+      "types": "./src/surface/ozmux-global.d.ts"
     }
   },
   "scripts": {

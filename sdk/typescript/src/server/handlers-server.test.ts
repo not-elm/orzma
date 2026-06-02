@@ -4,9 +4,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  __resetActivityHandlersForTests,
+  __resetSurfaceHandlersForTests,
   bindHandlersServer,
-  registerActivityHandlers,
+  registerSurfaceHandlers,
 } from './handlers-server.ts';
 
 let server: net.Server | undefined;
@@ -15,7 +15,7 @@ let sockPath = '';
 beforeEach(async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ozmux-test-'));
   sockPath = path.join(dir, 'memo.handlers.sock');
-  __resetActivityHandlersForTests();
+  __resetSurfaceHandlersForTests();
 });
 
 afterEach(async () => {
@@ -68,19 +68,19 @@ describe('bindHandlersServer', () => {
 
   it('dispatches call to registered handler and returns result frame', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityHandlers('aid-1', {
+    registerSurfaceHandlers('aid-1', {
       greet: async (req: { name: string }) => ({
         message: `Hello, ${req.name}!`,
       }),
     });
     const s = await connect();
     await sendLine(s, {
-      aid: 'aid-1',
+      surface_id: 'aid-1',
       frame: { kind: 'call', id: '1', name: 'greet', payload: { name: 'x' } },
     });
     const line = await readOneLine(s);
     const env = JSON.parse(line);
-    expect(env.aid).toBe('aid-1');
+    expect(env.surface_id).toBe('aid-1');
     expect(env.frame).toEqual({
       kind: 'result',
       id: '1',
@@ -91,10 +91,10 @@ describe('bindHandlersServer', () => {
 
   it('returns UNKNOWN_HANDLER error frame for unregistered handler', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityHandlers('aid-1', {});
+    registerSurfaceHandlers('aid-1', {});
     const s = await connect();
     await sendLine(s, {
-      aid: 'aid-1',
+      surface_id: 'aid-1',
       frame: { kind: 'call', id: '9', name: 'ghost', payload: {} },
     });
     const line = await readOneLine(s);
@@ -107,14 +107,14 @@ describe('bindHandlersServer', () => {
 
   it('returns HANDLER_ERROR frame when handler throws', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityHandlers('aid-1', {
+    registerSurfaceHandlers('aid-1', {
       boom: async () => {
         throw new Error('nope');
       },
     });
     const s = await connect();
     await sendLine(s, {
-      aid: 'aid-1',
+      surface_id: 'aid-1',
       frame: { kind: 'call', id: '2', name: 'boom', payload: {} },
     });
     const line = await readOneLine(s);
@@ -127,7 +127,7 @@ describe('bindHandlersServer', () => {
 
   it('handles multiple sequential calls on the same connection', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityHandlers('aid-1', {
+    registerSurfaceHandlers('aid-1', {
       echo: async (req: { v: number }) => ({ v: req.v }),
     });
     const s = await connect();
@@ -143,11 +143,11 @@ describe('bindHandlersServer', () => {
       }
     });
     await sendLine(s, {
-      aid: 'aid-1',
+      surface_id: 'aid-1',
       frame: { kind: 'call', id: '1', name: 'echo', payload: { v: 1 } },
     });
     await sendLine(s, {
-      aid: 'aid-1',
+      surface_id: 'aid-1',
       frame: { kind: 'call', id: '2', name: 'echo', payload: { v: 2 } },
     });
     await vi.waitFor(() => expect(lines.length).toBeGreaterThanOrEqual(2), {

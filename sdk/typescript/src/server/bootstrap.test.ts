@@ -166,7 +166,7 @@ describe('handleConnection', () => {
           OZMUX_SESSION_ID: 's',
           OZMUX_WINDOW_ID: 'w',
           OZMUX_PANE_ID: 'p',
-          OZMUX_ACTIVITY_ID: 'a',
+          OZMUX_SURFACE_ID: 'a',
         },
       }),
     );

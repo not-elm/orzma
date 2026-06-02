@@ -26,12 +26,12 @@ pub const MUTED: Color = Color::srgb(0.376, 0.408, 0.471);
 /// indicator on the active tab).
 pub const ACCENT: Color = Color::srgb(0.302, 0.561, 0.851);
 
-/// `ActivityKind::Terminal` placeholder background.
-pub const ACTIVITY_TERMINAL: Color = Color::srgb(0.094, 0.094, 0.110);
-/// `ActivityKind::Browser` placeholder background.
-pub const ACTIVITY_BROWSER: Color = Color::srgb(0.094, 0.149, 0.220);
-/// `ActivityKind::Extension` placeholder background.
-pub const ACTIVITY_EXTENSION: Color = Color::srgb(0.094, 0.180, 0.110);
+/// `SurfaceKind::Terminal` placeholder background.
+pub const SURFACE_TERMINAL: Color = Color::srgb(0.094, 0.094, 0.110);
+/// `SurfaceKind::Browser` placeholder background.
+pub const SURFACE_BROWSER: Color = Color::srgb(0.094, 0.149, 0.220);
+/// `SurfaceKind::Extension` placeholder background.
+pub const SURFACE_EXTENSION: Color = Color::srgb(0.094, 0.180, 0.110);
 
 /// Pane border thickness.
 pub const PANE_BORDER_PX: f32 = 1.0;

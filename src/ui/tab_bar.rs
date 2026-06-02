@@ -1,5 +1,5 @@
 //! Tab bar Bevy UI builder for a Pane. `build_pane_tab_bar` spawns one
-//! Row Node per Pane with one child per Activity. `tab_colors` computes
+//! Row Node per Pane with one child per Surface. `tab_colors` computes
 //! the (background, indicator, text) color triple for a single tab.
 
 use crate::theme;
@@ -45,16 +45,16 @@ fn tab_colors(is_active: bool, is_active_pane: bool) -> TabColors {
 
 /// A single tab's display data, derived from ECS components by the caller.
 pub(crate) struct TabEntry {
-    /// Activity entity this tab selects. Attached to the tab Node as
-    /// `TabButton.activity` so `drive_tab_clicks` can focus it.
+    /// Surface entity this tab selects. Attached to the tab Node as
+    /// `TabButton.surface` so `drive_tab_clicks` can focus it.
     pub entity: Entity,
-    /// Display name of the activity.
+    /// Display name of the surface.
     pub name: String,
-    /// Whether this activity is the pane's `ActiveActivity`.
+    /// Whether this surface is the pane's `ActiveSurface`.
     pub is_active: bool,
 }
 
-/// Spawn the per-pane tab bar (one tab per Activity) as a child of `parent`.
+/// Spawn the per-pane tab bar (one tab per Surface) as a child of `parent`.
 /// Every spawned Entity carries `StructuralNode`. `is_active_pane` drives
 /// the indicator accent (accent vs border).
 pub(crate) fn build_pane_tab_bar(
@@ -101,7 +101,7 @@ fn build_tab(
             Button,
             TabButton {
                 pane,
-                activity: tab.entity,
+                surface: tab.entity,
             },
             Node {
                 padding: UiRect::axes(Val::Px(theme::TAB_PADDING_X_PX), Val::Px(4.0)),

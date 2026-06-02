@@ -7,18 +7,18 @@ use crate::configs::OzmuxConfigsResource;
 use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
 use crate::ui::layout::build_cell_recursive;
-use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::terminal::resolve_pane_session;
 use crate::ui::{
-    ActivityHostNode, HostActivityEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot,
-    StructuralNode, TerminalActivityMarker,
+    SurfaceHostNode, HostSurfaceEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot,
+    StructuralNode, TerminalSurfaceMarker,
 };
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, Cell, LayoutCells,
+    ActiveSurface, ActivePane, SurfaceKind, SurfaceMarker, AttachedSession, Cell, LayoutCells,
     PaneMarker, SessionMarker, SessionUiSubtree,
 };
 
@@ -26,10 +26,10 @@ pub struct OzmuxSessionUiPlugin;
 
 impl Plugin for OzmuxSessionUiPlugin {
     fn build(&self, app: &mut App) {
-        order_activity_pipeline(app);
+        order_surface_pipeline(app);
         app.add_systems(
             Update,
-            flag_chrome_dirty_on_activity_change.in_set(OzmuxSystems::ChromeInvalidate),
+            flag_chrome_dirty_on_surface_change.in_set(OzmuxSystems::ChromeInvalidate),
         )
         .add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
         .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
@@ -39,29 +39,29 @@ impl Plugin for OzmuxSessionUiPlugin {
         )
         .add_systems(
             Update,
-            sync_terminal_dim_on_mount.after(OzmuxSystems::SetupActivity),
+            sync_terminal_dim_on_mount.after(OzmuxSystems::SetupSurface),
         )
         .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
     }
 }
 
-/// Orders the per-frame activity pipeline so each stage sees the previous
+/// Orders the per-frame surface pipeline so each stage sees the previous
 /// stage's committed `Commands` — Bevy inserts an `ApplyDeferred` sync point on
 /// each ordering edge: control-bridge drain ([`ExtensionControlSet::Drain`]) →
-/// session-UI rebuild ([`OzmuxSystems::SessionUi`]) → activity setup
-/// ([`OzmuxSystems::SetupActivity`], which attaches terminals/webviews).
+/// session-UI rebuild ([`OzmuxSystems::SessionUi`]) → surface setup
+/// ([`OzmuxSystems::SetupSurface`], which attaches terminals/webviews).
 ///
 /// Without this, unordered stages race nondeterministically:
-/// - the rebuild can run before the split's deferred pane/`ActiveActivity`/
-///   `ChildOf` commands flush → a pane with no activity tab, no host, no webview
+/// - the rebuild can run before the split's deferred pane/`ActiveSurface`/
+///   `ChildOf` commands flush → a pane with no surface tab, no host, no webview
 ///   (sticky: the one-shot `Changed<LayoutCells>` is already consumed);
-/// - activity setup can queue a bundle insert onto a host the rebuild/prune is
+/// - surface setup can queue a bundle insert onto a host the rebuild/prune is
 ///   about to despawn → an insert-after-despawn panic.
 ///
-/// `prune_registry_on_activity_removal` is ordered before `SessionUi` separately
+/// `prune_registry_on_surface_removal` is ordered before `SessionUi` separately
 /// (in `OzmuxUiPlugin`), so host despawns are committed before both the rebuild
-/// and activity setup observe them.
-fn order_activity_pipeline(app: &mut App) {
+/// and surface setup observe them.
+fn order_surface_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
         (
@@ -69,7 +69,7 @@ fn order_activity_pipeline(app: &mut App) {
                 .after(ExtensionControlSet::Drain)
                 .after(OzmuxSystems::Input),
             OzmuxSystems::SessionUi.after(OzmuxSystems::ChromeInvalidate),
-            OzmuxSystems::SetupActivity.after(OzmuxSystems::SessionUi),
+            OzmuxSystems::SetupSurface.after(OzmuxSystems::SessionUi),
         ),
     );
 }
@@ -104,13 +104,13 @@ fn sync_active_session(
 /// since the last run. Native Bevy `Changed<LayoutCells>` replaces the
 /// old epoch-comparison gate. The rebuild walks `layout.cells` and
 /// replaces every `StructuralNode` descendant of the session's
-/// `SessionUiSubtree` root — Activity hosts are preserved via
-/// `ActivityEntityRegistry` and re-parented. Pruning of stale registry
-/// entries is handled by `prune_registry_on_activity_removal` driven by
-/// `RemovedComponents<ActivityMarker>`.
+/// `SessionUiSubtree` root — Surface hosts are preserved via
+/// `SurfaceEntityRegistry` and re-parented. Pruning of stale registry
+/// entries is handled by `prune_registry_on_surface_removal` driven by
+/// `RemovedComponents<SurfaceMarker>`.
 fn rebuild_session_ui(
     mut commands: Commands,
-    mut registry: ResMut<ActivityEntityRegistry>,
+    mut registry: ResMut<SurfaceEntityRegistry>,
     sessions: Query<
         (
             Entity,
@@ -125,10 +125,10 @@ fn rebuild_session_ui(
         ),
     >,
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
-    activity_hosts: Query<(Entity, &ActivityHostNode)>,
+    surface_hosts: Query<(Entity, &SurfaceHostNode)>,
     children: Query<&Children>,
-    activities: Query<(&ActivityKind, &Name), With<ActivityMarker>>,
-    active_activities: Query<&ActiveActivity, With<PaneMarker>>,
+    surfaces: Query<(&SurfaceKind, &Name), With<SurfaceMarker>>,
+    active_surfaces: Query<&ActiveSurface, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
@@ -146,7 +146,7 @@ fn rebuild_session_ui(
         let active_pane = active_pane.map(|a| a.0);
         let session_veil = if active_pane.is_some() { veil } else { None };
         let active_pane = active_pane.unwrap_or(Entity::PLACEHOLDER);
-        descend_and_detach_hosts(&mut commands, subtree.0, &children, &activity_hosts);
+        descend_and_detach_hosts(&mut commands, subtree.0, &children, &surface_hosts);
         descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
 
         let root_cell_id = layout.root;
@@ -161,8 +161,8 @@ fn rebuild_session_ui(
                     session_entity,
                     &ui_font_handle,
                     &children,
-                    &activities,
-                    &active_activities,
+                    &surfaces,
+                    &active_surfaces,
                     active_pane,
                     session_veil,
                 );
@@ -177,23 +177,23 @@ fn rebuild_session_ui(
     }
 }
 
-/// Flags a session `SessionUiDirty` when one of its panes gains an activity
-/// (`Added<ActivityMarker>`) or switches its active activity
-/// (`Changed<ActiveActivity>`) — in-pane changes that do not mutate
+/// Flags a session `SessionUiDirty` when one of its panes gains a surface
+/// (`Added<SurfaceMarker>`) or switches its active surface
+/// (`Changed<ActiveSurface>`) — in-pane changes that do not mutate
 /// `LayoutCells` and so would otherwise not trigger `rebuild_session_ui`.
 /// Covers both the `@md` control-bridge path and the in-app shortcuts via a
 /// single UI-layer hook, keeping the multiplexer crate free of UI concerns.
 /// Ordered after the drain / input and before `SessionUi` so the marker is
 /// visible to the rebuild the same frame. The split case already changes
 /// `LayoutCells`; a redundant flag there is harmless.
-fn flag_chrome_dirty_on_activity_change(
+fn flag_chrome_dirty_on_surface_change(
     mut commands: Commands,
-    added_activities: Query<Entity, Added<ActivityMarker>>,
-    switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveActivity>)>,
+    added_surfaces: Query<Entity, Added<SurfaceMarker>>,
+    switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveSurface>)>,
     child_of: Query<&ChildOf>,
 ) {
-    for activity in added_activities.iter() {
-        if let Some((_pane, session)) = resolve_pane_session(activity, &child_of) {
+    for surface in added_surfaces.iter() {
+        if let Some((_pane, session)) = resolve_pane_session(surface, &child_of) {
             commands.entity(session).insert(SessionUiDirty);
         }
     }
@@ -208,11 +208,11 @@ fn descend_and_detach_hosts(
     commands: &mut Commands,
     root: Entity,
     children: &Query<&Children>,
-    activity_hosts: &Query<(Entity, &ActivityHostNode)>,
+    surface_hosts: &Query<(Entity, &SurfaceHostNode)>,
 ) {
     let mut stack = vec![root];
     while let Some(e) = stack.pop() {
-        if activity_hosts.get(e).is_ok() {
+        if surface_hosts.get(e).is_ok() {
             commands.entity(e).remove::<ChildOf>();
             continue;
         }
@@ -294,9 +294,9 @@ fn sync_terminal_dim_on_focus(
     mut commands: Commands,
     changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
     hosts: Query<
-        (Entity, &HostActivityEntity),
+        (Entity, &HostSurfaceEntity),
         (
-            With<TerminalActivityMarker>,
+            With<TerminalSurfaceMarker>,
             With<MaterialNode<TerminalUiMaterial>>,
         ),
     >,
@@ -305,8 +305,8 @@ fn sync_terminal_dim_on_focus(
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
     for (session, active) in changed_sessions.iter() {
-        for (host, host_activity) in hosts.iter() {
-            let Some((pane, host_session)) = resolve_pane_session(host_activity.0, &child_of)
+        for (host, host_surface) in hosts.iter() {
+            let Some((pane, host_session)) = resolve_pane_session(host_surface.0, &child_of)
             else {
                 continue;
             };
@@ -327,9 +327,9 @@ fn sync_terminal_dim_on_focus(
 fn sync_terminal_dim_on_mount(
     mut commands: Commands,
     newly_mounted: Query<
-        (Entity, &HostActivityEntity),
+        (Entity, &HostSurfaceEntity),
         (
-            With<TerminalActivityMarker>,
+            With<TerminalSurfaceMarker>,
             Added<MaterialNode<TerminalUiMaterial>>,
         ),
     >,
@@ -338,8 +338,8 @@ fn sync_terminal_dim_on_mount(
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
-    for (host, host_activity) in newly_mounted.iter() {
-        let Some((pane, session)) = resolve_pane_session(host_activity.0, &child_of) else {
+    for (host, host_surface) in newly_mounted.iter() {
+        let Some((pane, session)) = resolve_pane_session(host_surface.0, &child_of) else {
             continue;
         };
         let is_active = active_panes
@@ -388,7 +388,7 @@ mod tests {
     fn session_ui_runs_after_control_drain_so_deferred_commands_are_visible() {
         // Regression for the intermittent dark/empty extension pane: the `@memo`
         // split mutates `LayoutCells` immediately but wires the new pane's
-        // `ActiveActivity` / `ChildOf` through deferred `Commands`.
+        // `ActiveSurface` / `ChildOf` through deferred `Commands`.
         // `rebuild_session_ui` (in `OzmuxSystems::SessionUi`) must run after the
         // control-bridge drain (`ExtensionControlSet::Drain`) so the inserted
         // `ApplyDeferred` flushes those commands before the rebuild reads the
@@ -402,7 +402,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .init_resource::<ActivityEntityRegistry>()
+            .init_resource::<SurfaceEntityRegistry>()
             .init_resource::<RebuildSaw>()
             .add_plugins(OzmuxSessionUiPlugin);
         app.add_systems(
@@ -556,9 +556,9 @@ mod tests {
     }
 
     #[test]
-    fn in_pane_activity_add_triggers_rebuild_via_session_ui_dirty() {
+    fn in_pane_surface_add_triggers_rebuild_via_session_ui_dirty() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands};
+        use ozmux_multiplexer::{SurfaceKind, AttachedSession, MultiplexerCommands};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
@@ -576,13 +576,13 @@ mod tests {
             .unwrap()
             .expect("bootstrap session + active pane");
 
-        // Add an in-pane activity WITHOUT touching LayoutCells. The only path
-        // that can drive a rebuild here is flag_chrome_dirty_on_activity_change
-        // setting SessionUiDirty from Added<ActivityMarker>.
+        // Add an in-pane surface WITHOUT touching LayoutCells. The only path
+        // that can drive a rebuild here is flag_chrome_dirty_on_surface_change
+        // setting SessionUiDirty from Added<SurfaceMarker>.
         let added = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(pane, ActivityKind::Terminal)
+                mux.add_surface(pane, SurfaceKind::Terminal)
             })
             .unwrap();
         app.world_mut().flush();
@@ -591,55 +591,55 @@ mod tests {
 
         assert!(
             app.world()
-                .resource::<ActivityEntityRegistry>()
+                .resource::<SurfaceEntityRegistry>()
                 .get(added)
                 .is_some(),
-            "adding an in-pane activity (no LayoutCells change) must trigger a \
+            "adding an in-pane surface (no LayoutCells change) must trigger a \
              SessionUiDirty rebuild; build_pane proves it ran by spawning a host \
-             for the new activity"
+             for the new surface"
         );
     }
 
     #[test]
-    fn inactive_activity_within_active_session_parks_under_session_entity() {
+    fn inactive_surface_within_active_session_parks_under_session_entity() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands};
+        use ozmux_multiplexer::{SurfaceKind, AttachedSession, MultiplexerCommands};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
         app.update();
 
-        let (session, pane, first_activity) = app
+        let (session, pane, first_surface) = app
             .world_mut()
             .run_system_once(
                 |mux: MultiplexerCommands,
                  sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                     let session = sessions.iter().next()?;
                     let pane = mux.sessions_active_pane(session)?;
-                    let activity = mux.panes_active_activity(pane)?;
-                    Some((session, pane, activity))
+                    let surface = mux.panes_active_surface(pane)?;
+                    Some((session, pane, surface))
                 },
             )
             .unwrap()
-            .expect("bootstrap session + pane + first_activity");
+            .expect("bootstrap session + pane + first_surface");
 
         let first_host = app
             .world()
-            .resource::<crate::ui::registry::ActivityEntityRegistry>()
-            .get(first_activity)
-            .expect("first activity must have a host after initial rebuild");
+            .resource::<crate::ui::registry::SurfaceEntityRegistry>()
+            .get(first_surface)
+            .expect("first surface must have a host after initial rebuild");
 
-        let second_activity = app
+        let second_surface = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(pane, ActivityKind::Terminal)
+                mux.add_surface(pane, SurfaceKind::Terminal)
             })
             .unwrap();
         app.world_mut().flush();
 
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(pane, second_activity).unwrap();
+                mux.set_active_surface(pane, second_surface).unwrap();
             })
             .unwrap();
 
@@ -654,7 +654,7 @@ mod tests {
         assert_eq!(
             first_host_parent,
             Some(session),
-            "inactive activity host must be parked under the Session entity (non-Node, walker-skipped)"
+            "inactive surface host must be parked under the Session entity (non-Node, walker-skipped)"
         );
     }
 

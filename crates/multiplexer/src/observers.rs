@@ -6,7 +6,7 @@
 //! Observer registration happens in `MultiplexerPlugin::build`.
 
 use crate::components::{
-    ActiveActivity, ActivePane, ActivityMarker, LayoutCells, PaneMarker, SessionMarker,
+    ActiveSurface, ActivePane, SurfaceMarker, LayoutCells, PaneMarker, SessionMarker,
 };
 use bevy::prelude::*;
 
@@ -43,23 +43,23 @@ pub fn on_remove_pane_marker(
     }
 }
 
-/// When an Activity is despawned, any Pane whose `ActiveActivity(Entity)`
+/// When a Surface is despawned, any Pane whose `ActiveSurface(Entity)`
 /// pointed at it must be repointed. Mirror of `on_remove_pane_marker`.
-pub fn on_remove_activity_marker(
-    ev: On<Remove, ActivityMarker>,
-    activities: Query<&ChildOf, With<ActivityMarker>>,
+pub fn on_remove_surface_marker(
+    ev: On<Remove, SurfaceMarker>,
+    surfaces: Query<&ChildOf, With<SurfaceMarker>>,
     children: Query<&Children>,
-    mut panes: Query<&mut ActiveActivity, With<PaneMarker>>,
+    mut panes: Query<&mut ActiveSurface, With<PaneMarker>>,
 ) {
-    let activity = ev.entity;
-    let Ok(child_of) = activities.get(activity) else {
+    let surface = ev.entity;
+    let Ok(child_of) = surfaces.get(surface) else {
         return;
     };
     let pane = child_of.parent();
     let Ok(mut active) = panes.get_mut(pane) else {
         return;
     };
-    if active.0 != activity {
+    if active.0 != surface {
         return;
     }
     let Ok(sibs) = children.get(pane) else {
@@ -67,7 +67,7 @@ pub fn on_remove_activity_marker(
     };
     if let Some(survivor) = sibs
         .iter()
-        .find(|&e| e != activity && activities.get(e).is_ok())
+        .find(|&e| e != surface && surfaces.get(e).is_ok())
     {
         active.0 = survivor;
     }

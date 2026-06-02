@@ -6,7 +6,7 @@
 
 use crate::cells::{Side, SplitOrientation};
 use crate::components::{
-    ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, CopyMode,
+    ActiveSurface, ActivePane, SurfaceKind, SurfaceMarker, AttachedSession, CopyMode,
     LayoutCells, PaneMarker, SessionCreatedAt, SessionDimensions, SessionMarker, SessionUiSubtree,
 };
 use crate::direction::PaneDirection;
@@ -23,17 +23,17 @@ pub struct SessionCreated {
     pub session: Entity,
     /// The bootstrap Pane entity.
     pub pane: Entity,
-    /// The bootstrap Activity entity.
-    pub activity: Entity,
+    /// The bootstrap Surface entity.
+    pub surface: Entity,
 }
 
-/// Result of `split_pane_with_activity` — the new pane + its seeded activity.
+/// Result of `split_pane_with_surface` — the new pane + its seeded surface.
 #[derive(Debug, Clone, Copy)]
 pub struct SplitOutcome {
     /// The freshly-spawned pane.
     pub pane: Entity,
-    /// The activity seeded into the new pane.
-    pub activity: Entity,
+    /// The surface seeded into the new pane.
+    pub surface: Entity,
 }
 
 /// Monotonic counter for sessions created through `MultiplexerCommands`.
@@ -72,28 +72,28 @@ pub struct MultiplexerCommands<'w, 's> {
         'w,
         's,
         (
-            &'static mut ActiveActivity,
+            &'static mut ActiveSurface,
             &'static mut CopyMode,
             &'static ChildOf,
         ),
         With<PaneMarker>,
     >,
-    activities: Query<'w, 's, (&'static ActivityKind, &'static ChildOf), With<ActivityMarker>>,
+    surfaces: Query<'w, 's, (&'static SurfaceKind, &'static ChildOf), With<SurfaceMarker>>,
     children: Query<'w, 's, &'static Children>,
 }
 
 impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// Spawn a Session with one bootstrap Pane containing one bootstrap
-    /// Terminal Activity. Returns the three Entity handles.
+    /// Terminal Surface. Returns the three Entity handles.
     pub fn create_session(&mut self, name: Option<String>) -> SessionCreated {
         let name = name.unwrap_or_else(|| "default".to_string());
 
-        let activity = self
+        let surface = self
             .commands
             .spawn((
-                ActivityMarker,
-                ActivityKind::Terminal,
-                Name::new(format!("activity: {name}#0")),
+                SurfaceMarker,
+                SurfaceKind::Terminal,
+                Name::new(format!("surface: {name}#0")),
             ))
             .id();
 
@@ -101,7 +101,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .commands
             .spawn((
                 PaneMarker,
-                ActiveActivity(activity),
+                ActiveSurface(surface),
                 CopyMode::default(),
                 Name::new(format!("pane: {name}#0")),
             ))
@@ -118,12 +118,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .id();
 
         self.commands.entity(pane).insert(ChildOf(session));
-        self.commands.entity(activity).insert(ChildOf(pane));
+        self.commands.entity(surface).insert(ChildOf(pane));
 
         SessionCreated {
             session,
             pane,
-            activity,
+            surface,
         }
     }
 
@@ -187,50 +187,50 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(())
     }
 
-    /// Update the Pane's `ActiveActivity` pointer.
-    pub fn set_active_activity(&mut self, pane: Entity, activity: Entity) -> MultiplexerResult<()> {
-        let (mut active_activity, _, _) = self
+    /// Update the Pane's `ActiveSurface` pointer.
+    pub fn set_active_surface(&mut self, pane: Entity, surface: Entity) -> MultiplexerResult<()> {
+        let (mut active_surface, _, _) = self
             .panes
             .get_mut(pane)
             .map_err(|_| MultiplexerError::PaneNotFound(pane))?;
-        active_activity.set_if_neq(ActiveActivity(activity));
+        active_surface.set_if_neq(ActiveSurface(surface));
         Ok(())
     }
 
-    /// Split the target pane and seed the new pane with one activity of the
+    /// Split the target pane and seed the new pane with one surface of the
     /// caller-chosen `kind`. Delegates to `split_pane_inner` (which does the
-    /// layout mutation + active-pane promotion) and attaches the activity; on
-    /// error the freshly-spawned activity is despawned to leave no orphan.
-    pub fn split_pane_with_activity(
+    /// layout mutation + active-pane promotion) and attaches the surface; on
+    /// error the freshly-spawned surface is despawned to leave no orphan.
+    pub fn split_pane_with_surface(
         &mut self,
         target_pane: Entity,
         side: Side,
         orientation: SplitOrientation,
-        kind: ActivityKind,
+        kind: SurfaceKind,
     ) -> MultiplexerResult<SplitOutcome> {
-        let activity = self
+        let surface = self
             .commands
-            .spawn((ActivityMarker, kind, Name::new("activity: split")))
+            .spawn((SurfaceMarker, kind, Name::new("surface: split")))
             .id();
         match self.split_pane_inner(target_pane, side, orientation) {
             Ok((new_pane, _)) => {
                 self.commands
                     .entity(new_pane)
-                    .insert(ActiveActivity(activity));
-                self.commands.entity(activity).insert(ChildOf(new_pane));
+                    .insert(ActiveSurface(surface));
+                self.commands.entity(surface).insert(ChildOf(new_pane));
                 Ok(SplitOutcome {
                     pane: new_pane,
-                    activity,
+                    surface,
                 })
             }
             Err(e) => {
-                self.commands.entity(activity).despawn();
+                self.commands.entity(surface).despawn();
                 Err(e)
             }
         }
     }
 
-    /// Split the target pane in two, seeding a bootstrap Terminal activity.
+    /// Split the target pane in two, seeding a bootstrap Terminal surface.
     /// Mutates `LayoutCells` to insert the new pane at the requested
     /// side/orientation and promotes it to `ActivePane`. On error,
     /// freshly-spawned entities are despawned to leave no orphans.
@@ -240,12 +240,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         side: Side,
         orientation: SplitOrientation,
     ) -> MultiplexerResult<Entity> {
-        self.split_pane_with_activity(target_pane, side, orientation, ActivityKind::Terminal)
+        self.split_pane_with_surface(target_pane, side, orientation, SurfaceKind::Terminal)
             .map(|o| o.pane)
     }
 
     /// Close a pane. Despawns the pane entity (which cascades to its
-    /// Activity children via `ChildOf`), mutates `LayoutCells` to collapse
+    /// Surface children via `ChildOf`), mutates `LayoutCells` to collapse
     /// the split, and repoints `ActivePane` if the closed pane was active.
     pub fn close_pane(&mut self, pane: Entity) -> MultiplexerResult<()> {
         let session = self
@@ -300,46 +300,46 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(SwapOutcome::Swapped { other_pane })
     }
 
-    /// Spawn a new Activity as a child of `pane`. Does NOT change
-    /// `ActiveActivity` — call `set_active_activity` separately if needed.
-    pub fn add_activity(&mut self, pane: Entity, kind: ActivityKind) -> Entity {
-        let activity = self
+    /// Spawn a new Surface as a child of `pane`. Does NOT change
+    /// `ActiveSurface` — call `set_active_surface` separately if needed.
+    pub fn add_surface(&mut self, pane: Entity, kind: SurfaceKind) -> Entity {
+        let surface = self
             .commands
-            .spawn((ActivityMarker, kind, Name::new("activity")))
+            .spawn((SurfaceMarker, kind, Name::new("surface")))
             .id();
-        self.commands.entity(activity).insert(ChildOf(pane));
-        activity
+        self.commands.entity(surface).insert(ChildOf(pane));
+        surface
     }
 
-    /// Split the activity's owning Pane and move the activity into the
-    /// freshly-created Pane (where it becomes the only activity). The new
+    /// Split the surface's owning Pane and move the surface into the
+    /// freshly-created Pane (where it becomes the only surface). The new
     /// Pane becomes the session's `ActivePane`. Caller must ensure the
-    /// source Pane has at least 2 activities, else this returns
-    /// `CannotRemoveLastActivity`.
-    pub fn break_activity_to_pane(
+    /// source Pane has at least 2 surfaces, else this returns
+    /// `CannotRemoveLastSurface`.
+    pub fn break_surface_to_pane(
         &mut self,
-        activity: Entity,
+        surface: Entity,
         side: Side,
         orientation: SplitOrientation,
     ) -> MultiplexerResult<Entity> {
         let source_pane = self
-            .pane_of_activity(activity)
-            .ok_or(MultiplexerError::ActivityNotFound(activity))?;
+            .pane_of_surface(surface)
+            .ok_or(MultiplexerError::SurfaceNotFound(surface))?;
 
-        let activity_count = self.activities_of_pane(source_pane).count();
-        if activity_count < 2 {
-            return Err(MultiplexerError::CannotRemoveLastActivity(source_pane));
+        let surface_count = self.surfaces_of_pane(source_pane).count();
+        if surface_count < 2 {
+            return Err(MultiplexerError::CannotRemoveLastSurface(source_pane));
         }
 
-        // NOTE: split_pane_inner avoids spawning a bootstrap activity; otherwise
+        // NOTE: split_pane_inner avoids spawning a bootstrap surface; otherwise
         //       the deferred `ChildOf` insertion would race with the immediate
         //       reparent below, leaving the bootstrap entity orphaned.
         let (new_pane, _) = self.split_pane_inner(source_pane, side, orientation)?;
 
-        self.commands.entity(activity).insert(ChildOf(new_pane));
+        self.commands.entity(surface).insert(ChildOf(new_pane));
         self.commands
             .entity(new_pane)
-            .insert(ActiveActivity(activity));
+            .insert(ActiveSurface(surface));
 
         Ok(new_pane)
     }
@@ -351,7 +351,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     }
 
     /// Close a Session entirely. Cascading `ChildOf` despawn removes all
-    /// Pane and Activity descendants.
+    /// Pane and Surface descendants.
     pub fn close_session(&mut self, session: Entity) {
         self.commands.entity(session).despawn();
     }
@@ -395,10 +395,10 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .map(|(_, _, child_of)| child_of.parent())
     }
 
-    /// Walk up `ChildOf` from an Activity entity to find its owning Pane.
-    pub fn pane_of_activity(&self, activity: Entity) -> Option<Entity> {
-        self.activities
-            .get(activity)
+    /// Walk up `ChildOf` from a Surface entity to find its owning Pane.
+    pub fn pane_of_surface(&self, surface: Entity) -> Option<Entity> {
+        self.surfaces
+            .get(surface)
             .ok()
             .map(|(_, child_of)| child_of.parent())
     }
@@ -411,8 +411,8 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .map(|(_, active, _, _)| active.0)
     }
 
-    /// Read the Pane's `ActiveActivity` pointer.
-    pub fn panes_active_activity(&self, pane: Entity) -> Option<Entity> {
+    /// Read the Pane's `ActiveSurface` pointer.
+    pub fn panes_active_surface(&self, pane: Entity) -> Option<Entity> {
         self.panes.get(pane).ok().map(|(active, _, _)| active.0)
     }
 
@@ -425,18 +425,18 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .filter(move |child| self.panes.get(*child).is_ok())
     }
 
-    /// Iterate the Activity entities owned by the given Pane.
-    pub fn activities_of_pane(&self, pane: Entity) -> impl Iterator<Item = Entity> + '_ {
+    /// Iterate the Surface entities owned by the given Pane.
+    pub fn surfaces_of_pane(&self, pane: Entity) -> impl Iterator<Item = Entity> + '_ {
         self.children
             .get(pane)
             .into_iter()
             .flat_map(|c| c.iter())
-            .filter(move |child| self.activities.get(*child).is_ok())
+            .filter(move |child| self.surfaces.get(*child).is_ok())
     }
 
-    /// Split the target pane in two without spawning a bootstrap activity.
+    /// Split the target pane in two without spawning a bootstrap surface.
     /// Returns `(new_pane, session)`. Callers are responsible for attaching
-    /// an activity to the new pane.
+    /// a surface to the new pane.
     fn split_pane_inner(
         &mut self,
         target_pane: Entity,
@@ -483,9 +483,9 @@ mod tests {
     #[derive(Default, Resource)]
     struct PanesWithChangedChildren(Vec<Entity>);
 
-    /// Entities whose `Changed<ActiveActivity>` fired during the last `Update` tick.
+    /// Entities whose `Changed<ActiveSurface>` fired during the last `Update` tick.
     #[derive(Default, Resource)]
-    struct PanesWithChangedActiveActivity(Vec<Entity>);
+    struct PanesWithChangedActiveSurface(Vec<Entity>);
 
     fn collect_changed_children(
         mut res: ResMut<PanesWithChangedChildren>,
@@ -495,9 +495,9 @@ mod tests {
         res.0.extend(query.iter());
     }
 
-    fn collect_changed_active_activity(
-        mut res: ResMut<PanesWithChangedActiveActivity>,
-        query: Query<Entity, (With<PaneMarker>, Changed<ActiveActivity>)>,
+    fn collect_changed_active_surface(
+        mut res: ResMut<PanesWithChangedActiveSurface>,
+        query: Query<Entity, (With<PaneMarker>, Changed<ActiveSurface>)>,
     ) {
         res.0.clear();
         res.0.extend(query.iter());
@@ -509,10 +509,10 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(MultiplexerPlugin);
         app.init_resource::<PanesWithChangedChildren>();
-        app.init_resource::<PanesWithChangedActiveActivity>();
+        app.init_resource::<PanesWithChangedActiveSurface>();
         app.add_systems(
             Update,
-            (collect_changed_children, collect_changed_active_activity),
+            (collect_changed_children, collect_changed_active_surface),
         );
         app
     }
@@ -556,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn add_and_remove_activity_flag_changed_children_on_pane() {
+    fn add_and_remove_surface_flag_changed_children_on_pane() {
         let mut app = make_change_detection_app();
 
         let outcome = app
@@ -572,7 +572,7 @@ mod tests {
         let added = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(outcome.pane, ActivityKind::Terminal)
+                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
             })
             .unwrap();
         app.world_mut().flush();
@@ -583,7 +583,7 @@ mod tests {
                 .resource::<PanesWithChangedChildren>()
                 .0
                 .contains(&outcome.pane),
-            "adding an activity child must flag Changed<Children> on the pane",
+            "adding a surface child must flag Changed<Children> on the pane",
         );
 
         app.update();
@@ -597,12 +597,12 @@ mod tests {
                 .resource::<PanesWithChangedChildren>()
                 .0
                 .contains(&outcome.pane),
-            "despawning an activity child must flag Changed<Children> on the pane",
+            "despawning a surface child must flag Changed<Children> on the pane",
         );
     }
 
     #[test]
-    fn set_active_activity_flags_changed_only_on_real_change() {
+    fn set_active_surface_flags_changed_only_on_real_change() {
         let mut app = make_change_detection_app();
 
         let outcome = app
@@ -612,19 +612,19 @@ mod tests {
         let second = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(outcome.pane, ActivityKind::Terminal)
+                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
             })
             .unwrap();
         app.world_mut().flush();
         // NOTE: both settle ticks must run before the no-op mutation below, or
-        // the bootstrap `Changed<ActiveActivity>` leaks into the negative
+        // the bootstrap `Changed<ActiveSurface>` leaks into the negative
         // assertion and the test passes vacuously.
         app.update();
         app.update();
 
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(outcome.pane, outcome.activity)
+                mux.set_active_surface(outcome.pane, outcome.surface)
                     .unwrap();
             })
             .unwrap();
@@ -633,15 +633,15 @@ mod tests {
 
         assert!(
             app.world()
-                .resource::<PanesWithChangedActiveActivity>()
+                .resource::<PanesWithChangedActiveSurface>()
                 .0
                 .is_empty(),
-            "no-op set_active_activity must NOT flag Changed<ActiveActivity>",
+            "no-op set_active_surface must NOT flag Changed<ActiveSurface>",
         );
 
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(outcome.pane, second).unwrap();
+                mux.set_active_surface(outcome.pane, second).unwrap();
             })
             .unwrap();
         app.world_mut().flush();
@@ -649,15 +649,15 @@ mod tests {
 
         assert!(
             app.world()
-                .resource::<PanesWithChangedActiveActivity>()
+                .resource::<PanesWithChangedActiveSurface>()
                 .0
                 .contains(&outcome.pane),
-            "a real switch must flag Changed<ActiveActivity> on the pane",
+            "a real switch must flag Changed<ActiveSurface> on the pane",
         );
     }
 
     #[test]
-    fn create_session_spawns_session_pane_activity_with_correct_markers_and_childof() {
+    fn create_session_spawns_session_pane_surface_with_correct_markers_and_childof() {
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();
         let outcome = world
@@ -681,18 +681,18 @@ mod tests {
             Some(outcome.session)
         );
         assert_eq!(
-            world.get::<ActiveActivity>(outcome.pane).map(|a| a.0),
-            Some(outcome.activity)
+            world.get::<ActiveSurface>(outcome.pane).map(|a| a.0),
+            Some(outcome.surface)
         );
 
-        assert!(world.get::<ActivityMarker>(outcome.activity).is_some());
+        assert!(world.get::<SurfaceMarker>(outcome.surface).is_some());
         assert_eq!(
-            world.get::<ChildOf>(outcome.activity).map(|c| c.parent()),
+            world.get::<ChildOf>(outcome.surface).map(|c| c.parent()),
             Some(outcome.pane)
         );
         assert!(matches!(
-            world.get::<ActivityKind>(outcome.activity),
-            Some(ActivityKind::Terminal)
+            world.get::<SurfaceKind>(outcome.surface),
+            Some(SurfaceKind::Terminal)
         ));
     }
 
@@ -750,7 +750,7 @@ mod tests {
         let other_pane = world
             .spawn((
                 PaneMarker,
-                ActiveActivity(outcome.activity),
+                ActiveSurface(outcome.surface),
                 CopyMode::default(),
                 Name::new("other"),
                 ChildOf(outcome.session),
@@ -770,16 +770,16 @@ mod tests {
     }
 
     #[test]
-    fn set_active_activity_updates_active_activity_pointer() {
+    fn set_active_surface_updates_active_surface_pointer() {
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
-        let other_activity = world
+        let other_surface = world
             .spawn((
-                ActivityMarker,
-                ActivityKind::Terminal,
+                SurfaceMarker,
+                SurfaceKind::Terminal,
                 Name::new("other"),
                 ChildOf(outcome.pane),
             ))
@@ -787,19 +787,19 @@ mod tests {
 
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(outcome.pane, other_activity)
+                mux.set_active_surface(outcome.pane, other_surface)
                     .unwrap();
             })
             .unwrap();
 
         assert_eq!(
-            world.get::<ActiveActivity>(outcome.pane).map(|a| a.0),
-            Some(other_activity)
+            world.get::<ActiveSurface>(outcome.pane).map(|a| a.0),
+            Some(other_surface)
         );
     }
 
     #[test]
-    fn split_pane_spawns_pane_with_bootstrap_activity_and_updates_layout() {
+    fn split_pane_spawns_pane_with_bootstrap_surface_and_updates_layout() {
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();
         let outcome = world
@@ -883,22 +883,22 @@ mod tests {
     }
 
     #[test]
-    fn add_activity_spawns_activity_child_of_pane() {
+    fn add_surface_spawns_surface_child_of_pane() {
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
-        let new_activity = world
+        let new_surface = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(outcome.pane, ActivityKind::Terminal)
+                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
             })
             .unwrap();
         world.flush();
 
-        assert!(world.get::<ActivityMarker>(new_activity).is_some());
+        assert!(world.get::<SurfaceMarker>(new_surface).is_some());
         assert_eq!(
-            world.get::<ChildOf>(new_activity).map(|c| c.parent()),
+            world.get::<ChildOf>(new_surface).map(|c| c.parent()),
             Some(outcome.pane)
         );
     }
@@ -924,29 +924,29 @@ mod tests {
             "pane cascade-despawned"
         );
         assert!(
-            world.get_entity(outcome.activity).is_err(),
-            "activity cascade-despawned"
+            world.get_entity(outcome.surface).is_err(),
+            "surface cascade-despawned"
         );
     }
 
     #[test]
-    fn break_activity_to_pane_creates_new_pane_with_moved_activity() {
+    fn break_surface_to_pane_creates_new_pane_with_moved_surface() {
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
-        let second_activity = world
+        let second_surface = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(outcome.pane, ActivityKind::Terminal)
+                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
             })
             .unwrap();
         world.flush();
 
         let new_pane = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.break_activity_to_pane(
-                    second_activity,
+                mux.break_surface_to_pane(
+                    second_surface,
                     Side::After,
                     SplitOrientation::Horizontal,
                 )
@@ -956,18 +956,18 @@ mod tests {
         world.flush();
 
         assert_eq!(
-            world.get::<ChildOf>(second_activity).map(|c| c.parent()),
+            world.get::<ChildOf>(second_surface).map(|c| c.parent()),
             Some(new_pane)
         );
         assert_eq!(
-            world.get::<ActiveActivity>(new_pane).map(|a| a.0),
-            Some(second_activity)
+            world.get::<ActiveSurface>(new_pane).map(|a| a.0),
+            Some(second_surface)
         );
         assert!(world.get::<PaneMarker>(outcome.pane).is_some());
     }
 
     #[test]
-    fn break_activity_to_pane_returns_error_when_source_pane_has_only_one_activity() {
+    fn break_surface_to_pane_returns_error_when_source_pane_has_only_one_surface() {
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();
         let outcome = world
@@ -975,21 +975,21 @@ mod tests {
             .unwrap();
         let result = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.break_activity_to_pane(
-                    outcome.activity,
+                mux.break_surface_to_pane(
+                    outcome.surface,
                     Side::After,
                     SplitOrientation::Horizontal,
                 )
             })
             .unwrap();
         assert!(
-            matches!(result, Err(MultiplexerError::CannotRemoveLastActivity(_))),
-            "expected CannotRemoveLastActivity, got {result:?}",
+            matches!(result, Err(MultiplexerError::CannotRemoveLastSurface(_))),
+            "expected CannotRemoveLastSurface, got {result:?}",
         );
     }
 
     #[test]
-    fn split_pane_with_activity_seeds_extension_activity() {
+    fn split_pane_with_surface_seeds_extension_surface() {
         use std::path::PathBuf;
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();
@@ -999,11 +999,11 @@ mod tests {
 
         let split = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane_with_activity(
+                mux.split_pane_with_surface(
                     outcome.pane,
                     Side::After,
                     SplitOrientation::Vertical,
-                    ActivityKind::Extension {
+                    SurfaceKind::Extension {
                         entry: PathBuf::from("/x/memo"),
                     },
                 )
@@ -1022,16 +1022,16 @@ mod tests {
             Some(split.pane)
         );
         assert_eq!(
-            world.get::<ChildOf>(split.activity).map(|c| c.parent()),
+            world.get::<ChildOf>(split.surface).map(|c| c.parent()),
             Some(split.pane)
         );
         assert_eq!(
-            world.get::<ActiveActivity>(split.pane).map(|a| a.0),
-            Some(split.activity)
+            world.get::<ActiveSurface>(split.pane).map(|a| a.0),
+            Some(split.surface)
         );
         assert!(matches!(
-            world.get::<ActivityKind>(split.activity),
-            Some(ActivityKind::Extension { .. })
+            world.get::<SurfaceKind>(split.surface),
+            Some(SurfaceKind::Extension { .. })
         ));
     }
 
@@ -1051,7 +1051,7 @@ mod tests {
     }
 
     #[test]
-    fn panes_active_activity_returns_bootstrap_activity() {
+    fn panes_active_surface_returns_bootstrap_surface() {
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();
         let outcome = world
@@ -1059,10 +1059,10 @@ mod tests {
             .unwrap();
         let active = world
             .run_system_once(move |mux: MultiplexerCommands| {
-                mux.panes_active_activity(outcome.pane)
+                mux.panes_active_surface(outcome.pane)
             })
             .unwrap();
-        assert_eq!(active, Some(outcome.activity));
+        assert_eq!(active, Some(outcome.surface));
     }
 
     #[test]

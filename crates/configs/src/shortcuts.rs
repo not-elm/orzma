@@ -333,19 +333,19 @@ pub struct Bindings {
     /// Swap the active pane with the next sibling.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub swap_pane_next: Option<KeyChord>,
-    /// Close the active activity.
+    /// Close the active surface.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub close_activity: Option<KeyChord>,
-    /// Spawn a new terminal activity in the active pane.
+    pub close_surface: Option<KeyChord>,
+    /// Spawn a new terminal surface in the active pane.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub new_terminal_activity: Option<KeyChord>,
-    /// Cycle activity focus to the previous one.
+    pub new_terminal_surface: Option<KeyChord>,
+    /// Cycle surface focus to the previous one.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_activity_prev: Option<KeyChord>,
-    /// Cycle activity focus to the next one.
+    pub focus_surface_prev: Option<KeyChord>,
+    /// Cycle surface focus to the next one.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_activity_next: Option<KeyChord>,
-    /// Enter tmux-style copy mode on the active terminal activity.
+    pub focus_surface_next: Option<KeyChord>,
+    /// Enter tmux-style copy mode on the active terminal surface.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub enter_copy_mode: Option<KeyChord>,
     /// Create a new session.
@@ -381,10 +381,10 @@ impl Default for Bindings {
             split_pane_horizontal: Some(parse_default_chord("Cmd+O")),
             swap_pane_prev: Some(parse_default_chord("Cmd+B")),
             swap_pane_next: Some(parse_default_chord("Cmd+N")),
-            close_activity: Some(parse_default_chord("Cmd+Shift+F")),
-            new_terminal_activity: Some(parse_default_chord("Cmd+T")),
-            focus_activity_prev: Some(parse_default_chord("Cmd+[")),
-            focus_activity_next: Some(parse_default_chord("Cmd+]")),
+            close_surface: Some(parse_default_chord("Cmd+Shift+F")),
+            new_terminal_surface: Some(parse_default_chord("Cmd+T")),
+            focus_surface_prev: Some(parse_default_chord("Cmd+[")),
+            focus_surface_next: Some(parse_default_chord("Cmd+]")),
             enter_copy_mode: Some(parse_default_chord("Cmd+U")),
             new_session: Some(parse_default_chord("Cmd+R")),
             focus_session_prev: Some(parse_default_chord("Cmd+Shift+[")),
@@ -462,27 +462,27 @@ impl Bindings {
                 },
             ),
             (
-                "close-activity",
-                &self.close_activity,
-                ShortcutAction::CloseActivity,
+                "close-surface",
+                &self.close_surface,
+                ShortcutAction::CloseSurface,
             ),
             (
-                "new-terminal-activity",
-                &self.new_terminal_activity,
-                ShortcutAction::NewTerminalActivity,
+                "new-terminal-surface",
+                &self.new_terminal_surface,
+                ShortcutAction::NewTerminalSurface,
             ),
             (
-                "focus-activity-prev",
-                &self.focus_activity_prev,
-                ShortcutAction::FocusActivity {
-                    offset: ActivityOffset::Prev,
+                "focus-surface-prev",
+                &self.focus_surface_prev,
+                ShortcutAction::FocusSurface {
+                    offset: SurfaceOffset::Prev,
                 },
             ),
             (
-                "focus-activity-next",
-                &self.focus_activity_next,
-                ShortcutAction::FocusActivity {
-                    offset: ActivityOffset::Next,
+                "focus-surface-next",
+                &self.focus_surface_next,
+                ShortcutAction::FocusSurface {
+                    offset: SurfaceOffset::Next,
                 },
             ),
             (
@@ -565,37 +565,37 @@ pub enum ShortcutAction {
         /// Target session index (0–9 in practice).
         index: u8,
     },
-    /// Move activity focus by offset.
-    FocusActivity {
-        /// Activity offset to apply.
-        offset: ActivityOffset,
+    /// Move surface focus by offset.
+    FocusSurface {
+        /// Surface offset to apply.
+        offset: SurfaceOffset,
     },
     /// Split the active pane.
     SplitPane {
         /// Split direction.
         direction: SplitDirection,
     },
-    /// Split the active pane and move the active activity into the new pane.
-    BreakActivityToPane {
+    /// Split the active pane and move the active surface into the new pane.
+    BreakSurfaceToPane {
         /// Split direction.
         direction: SplitDirection,
     },
     /// Create a new session.
     NewSession,
-    /// Add a new terminal activity to the active pane.
-    NewTerminalActivity,
-    /// Add a new extension activity to the active pane.
-    NewExtensionActivity,
+    /// Add a new terminal surface to the active pane.
+    NewTerminalSurface,
+    /// Add a new extension surface to the active pane.
+    NewExtensionSurface,
     /// Rename the active session.
     RenameSession,
-    /// Rename the active activity.
-    RenameActivity,
-    /// Close the active activity.
-    CloseActivity,
+    /// Rename the active surface.
+    RenameSurface,
+    /// Close the active surface.
+    CloseSurface,
     /// Show the session list.
     ListSessions,
-    /// Show the activity list for the active pane.
-    ListActivities,
+    /// Show the surface list for the active pane.
+    ListSurfaces,
     /// Resize the active pane in a direction.
     ResizePane {
         /// Resize direction.
@@ -610,7 +610,7 @@ pub enum ShortcutAction {
     },
     /// Break the active pane into a new session.
     BreakPaneToSession,
-    /// Enter tmux-style copy mode on the active Terminal Activity.
+    /// Enter tmux-style copy mode on the active Terminal Surface.
     EnterCopyMode,
     /// Copy the active terminal's selection to the system clipboard.
     Copy,
@@ -654,15 +654,15 @@ pub enum SessionOffset {
     Last,
 }
 
-/// Activity offset selectors for `FocusActivity`.
+/// Surface offset selectors for `FocusSurface`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum ActivityOffset {
-    /// Next activity in the active pane.
+pub enum SurfaceOffset {
+    /// Next surface in the active pane.
     Next,
-    /// Previous activity in the active pane.
+    /// Previous surface in the active pane.
     Prev,
-    /// Last-active activity in the active pane.
+    /// Last-active surface in the active pane.
     Last,
 }
 
@@ -895,10 +895,10 @@ mod tests {
         assert!(b.split_pane_horizontal.is_some());
         assert!(b.swap_pane_prev.is_some());
         assert!(b.swap_pane_next.is_some());
-        assert!(b.close_activity.is_some());
-        assert!(b.new_terminal_activity.is_some());
-        assert!(b.focus_activity_prev.is_some());
-        assert!(b.focus_activity_next.is_some());
+        assert!(b.close_surface.is_some());
+        assert!(b.new_terminal_surface.is_some());
+        assert!(b.focus_surface_prev.is_some());
+        assert!(b.focus_surface_next.is_some());
         assert!(b.enter_copy_mode.is_some());
         assert!(b.new_session.is_some());
         assert!(b.focus_session_prev.is_some());
@@ -982,7 +982,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Any change to defaults updates this string.
-        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-activity":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-activity":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-session":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-session-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-session-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}}}}"#;
+        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-surface":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-surface":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-session":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-session-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-session-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}}}}"#;
         assert_eq!(json, expected);
     }
 

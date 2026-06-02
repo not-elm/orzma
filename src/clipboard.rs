@@ -173,7 +173,7 @@ pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
 /// system clipboard. Triggered by `Action::Copy`.
 #[derive(EntityEvent, Debug)]
 pub struct CopyToClipboardActionEvent {
-    /// Target Terminal Activity entity.
+    /// Target Terminal Surface entity.
     pub entity: Entity,
 }
 
@@ -181,7 +181,7 @@ pub struct CopyToClipboardActionEvent {
 /// PTY. Triggered by `Action::Paste`.
 #[derive(EntityEvent, Debug)]
 pub struct PasteFromClipboardActionEvent {
-    /// Target Terminal Activity entity.
+    /// Target Terminal Surface entity.
     pub entity: Entity,
 }
 
@@ -200,7 +200,7 @@ impl Plugin for ClipboardActionPlugin {
 
 /// Observer for `CopyToClipboardActionEvent`. Writes the target terminal's
 /// current selection to the system clipboard; no-ops on an empty
-/// selection or a missing `TerminalHandle` (e.g. a Browser Activity).
+/// selection or a missing `TerminalHandle` (e.g. a Browser Surface).
 fn on_copy_to_clipboard(
     ev: On<CopyToClipboardActionEvent>,
     mut clipboard: ResMut<Clipboard>,

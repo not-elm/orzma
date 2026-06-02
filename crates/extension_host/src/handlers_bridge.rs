@@ -1,6 +1,6 @@
 //! Proxies handler/channel frames between the rendered extension UI and the
-//! extension's `OZMUX_HANDLERS_SOCK_PATH`. Per activity (`aid`), one persistent
-//! UDS connection carrying `{aid, frame}\n` NDJSON in both directions. Pure
+//! extension's `OZMUX_HANDLERS_SOCK_PATH`. Per surface (`surface_id`), one persistent
+//! UDS connection carrying `{surface_id, frame}\n` NDJSON in both directions. Pure
 //! transport (std + crossbeam) — the ECS glue drains `outbound()` each frame.
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -10,14 +10,14 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// A frame addressed to an activity (`aid`) — the JSON `frame` object as a string.
-pub type AidFrame = (String, String);
+/// A frame addressed to a surface (`surface_id`) — the JSON `frame` object as a string.
+pub type SurfaceIdFrame = (String, String);
 
-/// Owns the per-activity handler connections and a shared outbound channel.
+/// Owns the per-surface handler connections and a shared outbound channel.
 pub struct HandlersBridge {
     conns: Mutex<HashMap<String, Conn>>,
-    out_tx: Sender<AidFrame>,
-    out_rx: Receiver<AidFrame>,
+    out_tx: Sender<SurfaceIdFrame>,
+    out_rx: Receiver<SurfaceIdFrame>,
 }
 
 struct Conn {
@@ -36,17 +36,17 @@ impl HandlersBridge {
         }
     }
 
-    /// The channel of `(aid, frame)` responses from extensions (drained by ECS).
-    pub fn outbound(&self) -> &Receiver<AidFrame> {
+    /// The channel of `(surface_id, frame)` responses from extensions (drained by ECS).
+    pub fn outbound(&self) -> &Receiver<SurfaceIdFrame> {
         &self.out_rx
     }
 
-    /// Opens (idempotently) a connection for `aid` to the handlers socket at
+    /// Opens (idempotently) a connection for `surface_id` to the handlers socket at
     /// `sock`, spawning a reader thread that forwards response envelopes to
     /// `outbound()`.
-    pub fn connect(&self, aid: String, sock: PathBuf) -> std::io::Result<()> {
+    pub fn connect(&self, surface_id: String, sock: PathBuf) -> std::io::Result<()> {
         let mut conns = self.conns.lock().unwrap();
-        if conns.contains_key(&aid) {
+        if conns.contains_key(&surface_id) {
             return Ok(());
         }
         let stream = UnixStream::connect(&sock)?;
@@ -66,7 +66,7 @@ impl HandlersBridge {
             }
         });
         conns.insert(
-            aid,
+            surface_id,
             Conn {
                 writer: stream,
                 reader_thread: Some(reader_thread),
@@ -75,20 +75,24 @@ impl HandlersBridge {
         Ok(())
     }
 
-    /// Writes a client `frame` (JSON object string) to `aid`'s connection,
-    /// wrapped as a `{aid, frame}` envelope. No-op if `aid` is not connected.
-    pub fn send(&self, aid: &str, frame: String) {
+    /// Writes a client `frame` (JSON object string) to `surface_id`'s connection,
+    /// wrapped as a `{surface_id, frame}` envelope. No-op if `surface_id` is not connected.
+    pub fn send(&self, surface_id: &str, frame: String) {
         let mut conns = self.conns.lock().unwrap();
-        if let Some(conn) = conns.get_mut(aid) {
-            let line = format!("{{\"aid\":{},\"frame\":{}}}\n", json_string(aid), frame);
+        if let Some(conn) = conns.get_mut(surface_id) {
+            let line = format!(
+                "{{\"surface_id\":{},\"frame\":{}}}\n",
+                json_string(surface_id),
+                frame
+            );
             let _ = conn.writer.write_all(line.as_bytes());
         }
     }
 
-    /// Closes `aid`'s connection (dropping it aborts the extension's subs).
-    pub fn disconnect(&self, aid: &str) {
+    /// Closes `surface_id`'s connection (dropping it aborts the extension's subs).
+    pub fn disconnect(&self, surface_id: &str) {
         let mut conns = self.conns.lock().unwrap();
-        if let Some(mut conn) = conns.remove(aid) {
+        if let Some(mut conn) = conns.remove(surface_id) {
             let _ = conn.writer.shutdown(std::net::Shutdown::Both);
             if let Some(t) = conn.reader_thread.take() {
                 let _ = t.join();
@@ -106,7 +110,7 @@ impl Default for HandlersBridge {
 impl Drop for HandlersBridge {
     fn drop(&mut self) {
         let mut conns = self.conns.lock().unwrap();
-        for (_aid, mut conn) in conns.drain() {
+        for (_surface_id, mut conn) in conns.drain() {
             let _ = conn.writer.shutdown(std::net::Shutdown::Both);
             if let Some(t) = conn.reader_thread.take() {
                 let _ = t.join();
@@ -115,11 +119,11 @@ impl Drop for HandlersBridge {
     }
 }
 
-fn split_envelope(line: &str) -> Option<AidFrame> {
+fn split_envelope(line: &str) -> Option<SurfaceIdFrame> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
-    let aid = v.get("aid")?.as_str()?.to_string();
+    let surface_id = v.get("surface_id")?.as_str()?.to_string();
     let frame = v.get("frame")?;
-    Some((aid, serde_json::to_string(frame).ok()?))
+    Some((surface_id, serde_json::to_string(frame).ok()?))
 }
 
 fn json_string(s: &str) -> String {
@@ -144,21 +148,20 @@ mod tests {
             let mut line = String::new();
             while reader.read_line(&mut line).unwrap() > 0 {
                 let env: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-                let aid = env["aid"].as_str().unwrap().to_string();
+                let surface_id = env["surface_id"].as_str().unwrap().to_string();
                 let frame = &env["frame"];
                 let id = frame["id"].as_str().unwrap().to_string();
                 match frame["kind"].as_str().unwrap() {
                     "call" => {
-                        let out = serde_json::json!({"aid":aid,"frame":{"kind":"result","id":id,"payload":{"ok":true}}});
+                        let out = serde_json::json!({"surface_id":surface_id,"frame":{"kind":"result","id":id,"payload":{"ok":true}}});
                         writeln!(writer, "{out}").unwrap();
                     }
                     "sub.open" => {
                         for n in 0..2 {
-                            let out = serde_json::json!({"aid":aid,"frame":{"kind":"sub.data","id":id,"payload":{"n":n}}});
+                            let out = serde_json::json!({"surface_id":surface_id,"frame":{"kind":"sub.data","id":id,"payload":{"n":n}}});
                             writeln!(writer, "{out}").unwrap();
                         }
-                        let done =
-                            serde_json::json!({"aid":aid,"frame":{"kind":"sub.complete","id":id}});
+                        let done = serde_json::json!({"surface_id":surface_id,"frame":{"kind":"sub.complete","id":id}});
                         writeln!(writer, "{done}").unwrap();
                     }
                     _ => {}
@@ -182,11 +185,11 @@ mod tests {
             r#"{"kind":"call","id":"c1","name":"greet","payload":{}}"#.into(),
         );
 
-        let (aid, frame) = bridge
+        let (surface_id, frame) = bridge
             .outbound()
             .recv_timeout(Duration::from_secs(2))
             .unwrap();
-        assert_eq!(aid, "aid-1");
+        assert_eq!(surface_id, "aid-1");
         let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
         assert_eq!(v["kind"], "result");
         assert_eq!(v["id"], "c1");
@@ -211,7 +214,7 @@ mod tests {
 
         let mut kinds = Vec::new();
         for _ in 0..3 {
-            let (_aid, frame) = bridge
+            let (_surface_id, frame) = bridge
                 .outbound()
                 .recv_timeout(Duration::from_secs(2))
                 .unwrap();

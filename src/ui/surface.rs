@@ -1,6 +1,6 @@
-//! Activity host Bevy UI builder. The host entity itself is owned by
-//! `ActivityEntityRegistry` and lives across structural rebuilds; this
-//! module's `build_activity_host_children` populates its children (the
+//! Surface host Bevy UI builder. The host entity itself is owned by
+//! `SurfaceEntityRegistry` and lives across structural rebuilds; this
+//! module's `build_surface_host_children` populates its children (the
 //! placeholder Row + name Text) on each rebuild.
 //!
 //! Phase 3+ replaces these placeholder children with a `MaterialNode<
@@ -11,38 +11,38 @@ use crate::ui::palette;
 use bevy::color::Color;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
-use ozmux_multiplexer::ActivityKind;
+use ozmux_multiplexer::SurfaceKind;
 
-/// Background color for the Activity placeholder host, chosen by kind.
-fn kind_color(kind: &ActivityKind) -> Color {
+/// Background color for the Surface placeholder host, chosen by kind.
+fn kind_color(kind: &SurfaceKind) -> Color {
     match kind {
-        ActivityKind::Terminal => palette::ACTIVITY_TERMINAL,
-        ActivityKind::Browser { .. } => palette::ACTIVITY_BROWSER,
-        ActivityKind::Extension { .. } => palette::ACTIVITY_EXTENSION,
+        SurfaceKind::Terminal => palette::SURFACE_TERMINAL,
+        SurfaceKind::Browser { .. } => palette::SURFACE_BROWSER,
+        SurfaceKind::Extension { .. } => palette::SURFACE_EXTENSION,
     }
 }
 
-/// Insert / refresh the `Node` bundle on the stable Activity host entity,
+/// Insert / refresh the `Node` bundle on the stable Surface host entity,
 /// then spawn its (structural, replaced each rebuild) placeholder children
-/// showing the activity name. The host's `Node` is set with
+/// showing the surface name. The host's `Node` is set with
 /// `commands.entity(host).insert(...)` so the existing entity remains;
 /// children are spawned fresh.
 ///
-/// For `ActivityKind::Terminal` and `ActivityKind::Extension` the
+/// For `SurfaceKind::Terminal` and `SurfaceKind::Extension` the
 /// placeholder children are skipped because a full-size `MaterialNode`
 /// (`TerminalUiMaterial` / `WebviewUiMaterial`) covers the host node
-/// entirely. For `ActivityKind::Browser` the host is a `FlexDirection::Column`
+/// entirely. For `SurfaceKind::Browser` the host is a `FlexDirection::Column`
 /// so the browser renderer can stack a toolbar above a page webview; the
 /// placeholder children are also skipped (the browser renderer spawns the
 /// real toolbar + webview children). The kind-colored `BackgroundColor` still
-/// shows briefly between activity creation and renderer readiness.
-pub(crate) fn build_activity_host_children(
+/// shows briefly between surface creation and renderer readiness.
+pub(crate) fn build_surface_host_children(
     commands: &mut Commands,
     host: Entity,
-    kind: &ActivityKind,
+    kind: &SurfaceKind,
     name: &Name,
 ) {
-    let is_browser = matches!(kind, ActivityKind::Browser { .. });
+    let is_browser = matches!(kind, SurfaceKind::Browser { .. });
     commands.entity(host).insert((
         Node {
             flex_grow: 1.0,
@@ -70,7 +70,7 @@ pub(crate) fn build_activity_host_children(
 
     if matches!(
         kind,
-        ActivityKind::Terminal | ActivityKind::Extension { .. } | ActivityKind::Browser { .. }
+        SurfaceKind::Terminal | SurfaceKind::Extension { .. } | SurfaceKind::Browser { .. }
     ) {
         return;
     }
@@ -101,20 +101,20 @@ mod tests {
     use ozmux_multiplexer::BrowserProfile;
 
     #[test]
-    fn kind_color_terminal_uses_activity_terminal_constant() {
+    fn kind_color_terminal_uses_surface_terminal_constant() {
         assert_eq!(
-            kind_color(&ActivityKind::Terminal),
-            palette::ACTIVITY_TERMINAL
+            kind_color(&SurfaceKind::Terminal),
+            palette::SURFACE_TERMINAL
         );
     }
 
     #[test]
-    fn kind_color_browser_uses_activity_browser_constant() {
-        let kind = ActivityKind::Browser {
+    fn kind_color_browser_uses_surface_browser_constant() {
+        let kind = SurfaceKind::Browser {
             initial_url: None,
             profile: BrowserProfile::default(),
         };
-        assert_eq!(kind_color(&kind), palette::ACTIVITY_BROWSER);
+        assert_eq!(kind_color(&kind), palette::SURFACE_BROWSER);
     }
 
     #[test]
@@ -125,10 +125,10 @@ mod tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            build_activity_host_children(
+            build_surface_host_children(
                 &mut commands,
                 host,
-                &ActivityKind::Browser {
+                &SurfaceKind::Browser {
                     initial_url: Some("https://example.com".into()),
                     profile: BrowserProfile::default(),
                 },
@@ -157,10 +157,10 @@ mod tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            build_activity_host_children(
+            build_surface_host_children(
                 &mut commands,
                 host,
-                &ActivityKind::Terminal,
+                &SurfaceKind::Terminal,
                 &Name::new("terminal"),
             );
         }

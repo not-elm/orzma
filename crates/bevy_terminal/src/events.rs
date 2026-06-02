@@ -90,7 +90,7 @@ pub struct TerminalModifiers {
 }
 
 /// Fired by the host UI to forward a key press to a specific Terminal
-/// Activity entity. The observer registered by `TerminalHandlePlugin`
+/// Surface entity. The observer registered by `TerminalHandlePlugin`
 /// encodes the key using the entity's `Term::mode()` and writes the
 /// resulting VT bytes to the PTY.
 #[derive(EntityEvent, Debug, Clone)]

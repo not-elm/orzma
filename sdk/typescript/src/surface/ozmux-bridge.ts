@@ -19,7 +19,7 @@ interface SubState {
   error?: Error;
 }
 
-/** The `window.ozmux` surface consumed by `cef/client.ts` and extension pages. */
+/** The `window.ozmux` surface consumed by `surface/client.ts` and extension pages. */
 export interface OzmuxApi {
   call(name: string, payload: unknown): Promise<unknown>;
   subscribe(name: string, params: unknown, opts?: { signal?: AbortSignal }): AsyncIterable<unknown>;

@@ -1,5 +1,5 @@
 //! tmux-style copy-mode indicator chip. A `Display::None` chip Node is
-//! attached as a child of each Activity host the first frame
+//! attached as a child of each Surface host the first frame
 //! `TerminalHandle` is observed there; it becomes visible while the
 //! host carries `CopyModeState` and shows `[offset/total]` over the
 //! pane's top-right corner.
@@ -24,9 +24,9 @@ impl Plugin for CopyModeIndicatorPlugin {
         app.add_systems(
             Update,
             (
-                attach_indicator_to_activity_host,
+                attach_indicator_to_surface_host,
                 refresh_indicator
-                    .after(attach_indicator_to_activity_host)
+                    .after(attach_indicator_to_surface_host)
                     .run_if(any_with_component::<CopyModeState>),
             ),
         )
@@ -34,7 +34,7 @@ impl Plugin for CopyModeIndicatorPlugin {
     }
 }
 
-/// Marker for the chip Node child of an Activity host. Exactly one
+/// Marker for the chip Node child of a Surface host. Exactly one
 /// per host; created on `Added<TerminalHandle>` and never despawned
 /// (visibility toggled via `Node.display`).
 #[derive(Component)]
@@ -53,16 +53,16 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
     format!("[{offset}/{total}]")
 }
 
-/// Spawns a `CopyModeIndicator` chip as a child of every Activity host
+/// Spawns a `CopyModeIndicator` chip as a child of every Surface host
 /// the first frame `TerminalHandle` is observed there. The
 /// `Added<TerminalHandle>` filter fires exactly once per host because
 /// `ui::terminal::finish_terminal_setup` is the only `TerminalHandle`
-/// inserter on Activity hosts.
+/// inserter on Surface hosts.
 // NOTE: A second reader of `Added<TerminalHandle>` would not violate
 // the "exactly one chip per host" property (Added fires per-system),
 // but introducing one is a smell — the constraint is documented as
 // this comment rather than enforced.
-fn attach_indicator_to_activity_host(
+fn attach_indicator_to_surface_host(
     mut commands: Commands,
     hosts: Query<Entity, Added<bevy_terminal::TerminalHandle>>,
     ui_font: Option<Res<TerminalUiFont>>,
@@ -440,7 +440,7 @@ mod tests {
         app.update();
         app.update();
 
-        // Find a terminal Activity host with a chip.
+        // Find a terminal Surface host with a chip.
         let (host, chip) = {
             let world = app.world_mut();
             let mut q = world.query_filtered::<(Entity, &ChildOf), With<CopyModeIndicator>>();
@@ -482,7 +482,7 @@ mod tests {
     fn inactive_host_parent_is_walker_skipped_session_entity() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{
-            ActivityKind, AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker,
+            SurfaceKind, AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker,
         };
 
         let (mut app, _guard) = make_ui_test_app();
@@ -490,37 +490,37 @@ mod tests {
         app.update();
         app.update();
 
-        let (session, pane, first_activity) = app
+        let (session, pane, first_surface) = app
             .world_mut()
             .run_system_once(
                 |mux: MultiplexerCommands,
                  sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
                     let session = sessions.iter().next()?;
                     let pane = mux.sessions_active_pane(session)?;
-                    let activity = mux.panes_active_activity(pane)?;
-                    Some((session, pane, activity))
+                    let surface = mux.panes_active_surface(pane)?;
+                    Some((session, pane, surface))
                 },
             )
             .unwrap()
-            .expect("bootstrap session + pane + activity");
+            .expect("bootstrap session + pane + surface");
 
         let first_host = app
             .world()
-            .resource::<crate::ui::registry::ActivityEntityRegistry>()
-            .get(first_activity)
-            .expect("first activity host registered");
+            .resource::<crate::ui::registry::SurfaceEntityRegistry>()
+            .get(first_surface)
+            .expect("first surface host registered");
 
-        let second_activity = app
+        let second_surface = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(pane, ActivityKind::Terminal)
+                mux.add_surface(pane, SurfaceKind::Terminal)
             })
             .unwrap();
         app.world_mut().flush();
 
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(pane, second_activity).unwrap();
+                mux.set_active_surface(pane, second_surface).unwrap();
             })
             .unwrap();
 
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(
             first_host_parent,
             Some(session),
-            "inactive activity host must be parked under the session entity (no Node, walker-skipped)"
+            "inactive surface host must be parked under the session entity (no Node, walker-skipped)"
         );
 
         assert!(

@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import type { ActivitySpecInput, CommandContext, SplitArgs } from '@ozmux/sdk/server';
+import type { CommandContext, SplitArgs, SurfaceSpecInput } from '@ozmux/sdk/server';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { type MdDeps, mdCommand } from './command.ts';
 
@@ -14,7 +14,7 @@ function fakeCtx(argv: string[]) {
   const errs: string[] = [];
   const activate = vi.fn(async () => {});
   const split = vi.fn((_args: SplitArgs) => Promise.resolve({}));
-  const addActivity = vi.fn((_spec: ActivitySpecInput) => Promise.resolve({ activate }));
+  const addSurface = vi.fn((_spec: SurfaceSpecInput) => Promise.resolve({ activate }));
   const ctx = {
     argv,
     cwd: dir,
@@ -24,9 +24,9 @@ function fakeCtx(argv: string[]) {
         return true;
       },
     },
-    pane: { split, addActivity },
+    pane: { split, addSurface },
   } as unknown as CommandContext;
-  return { ctx, errs, split, addActivity, activate };
+  return { ctx, errs, split, addSurface, activate };
 }
 
 async function deps(): Promise<MdDeps> {
@@ -64,30 +64,30 @@ describe('mdCommand', () => {
 
   it('splits the pane when -s is given', async () => {
     await writeFile(path.join(dir, 's.md'), '# x');
-    const { ctx, split, addActivity } = fakeCtx(['-s', 'vertical', 's.md']);
+    const { ctx, split, addSurface } = fakeCtx(['-s', 'vertical', 's.md']);
     expect(await mdCommand(ctx, await deps())).toBe(0);
-    expect(addActivity).not.toHaveBeenCalled();
+    expect(addSurface).not.toHaveBeenCalled();
     expect(split).toHaveBeenCalledTimes(1);
     // biome-ignore lint/style/noNonNullAssertion: guarded by the toHaveBeenCalledTimes(1) assertion above
     const arg = split.mock.calls[0]![0]!;
     expect(arg.orientation).toBe('vertical');
     expect(arg.side).toBe('after');
-    expect(arg.activity.kind).toBe('extension');
-    expect(arg.activity.name).toBe('s.md');
-    if (arg.activity.kind === 'extension') {
-      expect(typeof arg.activity.channels?.content).toBe('function');
+    expect(arg.surface.kind).toBe('extension');
+    expect(arg.surface.name).toBe('s.md');
+    if (arg.surface.kind === 'extension') {
+      expect(typeof arg.surface.channels?.content).toBe('function');
     }
   });
 
-  it('adds + activates an in-pane activity (with its content channel) when no flag is given', async () => {
+  it('adds + activates an in-pane surface (with its content channel) when no flag is given', async () => {
     await writeFile(path.join(dir, 'inpane.md'), '# x');
-    const { ctx, split, addActivity, activate } = fakeCtx(['inpane.md']);
+    const { ctx, split, addSurface, activate } = fakeCtx(['inpane.md']);
     expect(await mdCommand(ctx, await deps())).toBe(0);
     expect(split).not.toHaveBeenCalled();
-    expect(addActivity).toHaveBeenCalledTimes(1);
+    expect(addSurface).toHaveBeenCalledTimes(1);
     expect(activate).toHaveBeenCalledTimes(1);
     // biome-ignore lint/style/noNonNullAssertion: guarded by the toHaveBeenCalledTimes(1) assertion above
-    const spec = addActivity.mock.calls[0]![0]!;
+    const spec = addSurface.mock.calls[0]![0]!;
     expect(spec.kind).toBe('extension');
     if (spec.kind === 'extension') {
       expect(typeof spec.channels?.content).toBe('function');

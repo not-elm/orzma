@@ -1,5 +1,5 @@
-//! Browser activity rendering: a native back/forward/reload + address-bar
-//! toolbar over a `bevy_cef` page webview. The activity host (a column) gets
+//! Browser surface rendering: a native back/forward/reload + address-bar
+//! toolbar over a `bevy_cef` page webview. The surface host (a column) gets
 //! two persistent, non-`StructuralNode` children built once — a toolbar and a
 //! page-webview node — and (in a later phase) a CEF webview attached to the
 //! laid-out page child after host-side omnibox resolution.
@@ -9,8 +9,8 @@ use crate::configs::OzmuxConfigsResource;
 use crate::system_set::OzmuxSystems;
 use crate::ui::palette;
 use crate::ui::{
-    AddrBarText, AddressBarFocus, AddressEdit, BrowserActivityMarker, BrowserNavButton,
-    BrowserPageWebview, BrowserToolbarState, HostActivityEntity, NavAction, PageWebviewOf,
+    AddrBarText, AddressBarFocus, AddressEdit, BrowserSurfaceMarker, BrowserNavButton,
+    BrowserPageWebview, BrowserToolbarState, HostSurfaceEntity, NavAction, PageWebviewOf,
 };
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
@@ -19,11 +19,11 @@ use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
 use bevy::window::{CursorIcon, Ime, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
-use ozmux_multiplexer::{ActivityKind, AttachedSession, MultiplexerCommands, SessionMarker};
+use ozmux_multiplexer::{SurfaceKind, AttachedSession, MultiplexerCommands, SessionMarker};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
 
-/// Wires the browser activity renderer: two-phase mount, toolbar render +
+/// Wires the browser surface renderer: two-phase mount, toolbar render +
 /// navigation, address-bar editor + focus, and navigation-state observers.
 pub(crate) struct OzmuxBrowserRenderPlugin;
 
@@ -35,8 +35,8 @@ impl Plugin for OzmuxBrowserRenderPlugin {
             .add_systems(
                 Update,
                 (
-                    build_browser_chrome.in_set(OzmuxSystems::SetupActivity),
-                    attach_browser_webview.in_set(OzmuxSystems::SetupActivity),
+                    build_browser_chrome.in_set(OzmuxSystems::SetupSurface),
+                    attach_browser_webview.in_set(OzmuxSystems::SetupSurface),
                     render_address_text,
                     drive_nav_buttons,
                     sync_nav_button_enabled,
@@ -60,7 +60,7 @@ fn build_browser_chrome(
     mut commands: Commands,
     hosts: Query<
         (Entity, &ComputedNode),
-        (With<BrowserActivityMarker>, Without<BrowserPageWebview>),
+        (With<BrowserSurfaceMarker>, Without<BrowserPageWebview>),
     >,
 ) {
     for (host, computed) in hosts.iter() {
@@ -128,8 +128,8 @@ fn attach_browser_webview(
     mut materials: ResMut<Assets<WebviewUiMaterial>>,
     configs: Res<OzmuxConfigsResource>,
     pages: Query<(Entity, &ComputedNode, &PageWebviewOf), Without<WebviewSource>>,
-    hosts: Query<&HostActivityEntity>,
-    kinds: Query<&ActivityKind>,
+    hosts: Query<&HostSurfaceEntity>,
+    kinds: Query<&SurfaceKind>,
     mut states: Query<&mut BrowserToolbarState>,
 ) {
     for (page, computed, owner) in pages.iter() {
@@ -137,10 +137,10 @@ fn attach_browser_webview(
         if size.x < 1.0 || size.y < 1.0 {
             continue;
         }
-        let Ok(host_activity) = hosts.get(owner.0) else {
+        let Ok(host_surface) = hosts.get(owner.0) else {
             continue;
         };
-        let Ok(ActivityKind::Browser { initial_url, .. }) = kinds.get(host_activity.0) else {
+        let Ok(SurfaceKind::Browser { initial_url, .. }) = kinds.get(host_surface.0) else {
             continue;
         };
         let raw = initial_url.as_deref().unwrap_or("");
@@ -498,8 +498,8 @@ fn focus_address_bar_on_cmd_l(
     mut focus: ResMut<AddressBarFocus>,
     mux: MultiplexerCommands,
     attached: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
-    browser_hosts: Query<(), With<BrowserActivityMarker>>,
+    registry: Res<crate::ui::registry::SurfaceEntityRegistry>,
+    browser_hosts: Query<(), With<BrowserSurfaceMarker>>,
     mut edits: Query<(&mut AddressEdit, &BrowserToolbarState)>,
 ) {
     let cmd = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
@@ -512,10 +512,10 @@ fn focus_address_bar_on_cmd_l(
     let Some(pane) = mux.sessions_active_pane(session) else {
         return;
     };
-    let Some(activity) = mux.panes_active_activity(pane) else {
+    let Some(surface) = mux.panes_active_surface(pane) else {
         return;
     };
-    let Some(host) = registry.get(activity) else {
+    let Some(host) = registry.get(surface) else {
         return;
     };
     if !browser_hosts.contains(host) {
@@ -544,7 +544,7 @@ fn blur_address_bar_on_focus_leave(
     mut focus: ResMut<AddressBarFocus>,
     mux: MultiplexerCommands,
     attached: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    registry: Res<crate::ui::registry::ActivityEntityRegistry>,
+    registry: Res<crate::ui::registry::SurfaceEntityRegistry>,
     mouse: Res<ButtonInput<MouseButton>>,
     addr_bars: Query<&Interaction, With<AddrBarText>>,
 ) {
@@ -666,7 +666,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -697,7 +697,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -710,17 +710,17 @@ mod tests {
 
     #[test]
     fn attach_resolves_omnibox_and_seeds_child_size() {
-        use crate::ui::HostActivityEntity;
-        use ozmux_multiplexer::ActivityKind;
+        use crate::ui::HostSurfaceEntity;
+        use ozmux_multiplexer::SurfaceKind;
         let mut app = make_test_app();
         app.add_systems(
             Update,
             (build_browser_chrome, attach_browser_webview).chain(),
         );
 
-        let activity = app
+        let surface = app
             .world_mut()
-            .spawn(ActivityKind::Browser {
+            .spawn(SurfaceKind::Browser {
                 initial_url: Some("github.com".into()),
                 profile: Default::default(),
             })
@@ -728,8 +728,8 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
-                HostActivityEntity(activity),
+                BrowserSurfaceMarker,
+                HostSurfaceEntity(surface),
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -762,7 +762,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -791,7 +791,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -827,7 +827,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -874,7 +874,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -962,7 +962,7 @@ mod tests {
         );
     }
 
-    /// Builds an app with one attached session whose active activity maps (in the
+    /// Builds an app with one attached session whose active surface maps (in the
     /// registry) to `host`, and the address bar focused on that same `host` — so
     /// `blur_address_bar_on_focus_leave`'s pane-left condition is false by default.
     fn focused_app_on_active_host() -> (App, Entity) {
@@ -973,14 +973,14 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
         app.init_resource::<crate::ui::AddressBarFocus>();
-        app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<ButtonInput<MouseButton>>();
 
-        let (session, _pane, activity) = app
+        let (session, _pane, surface) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
                 let o = mux.create_session(Some("t".into()));
-                (o.session, o.pane, o.activity)
+                (o.session, o.pane, o.surface)
             })
             .unwrap();
         app.world_mut().flush();
@@ -988,8 +988,8 @@ mod tests {
 
         let host = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .resource_mut::<crate::ui::registry::ActivityEntityRegistry>()
-            .insert_for_test(activity, host);
+            .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>()
+            .insert_for_test(surface, host);
         app.world_mut()
             .resource_mut::<crate::ui::AddressBarFocus>()
             .0 = Some(host);
@@ -1110,7 +1110,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -1133,16 +1133,16 @@ mod tests {
 
     #[test]
     fn attach_skips_empty_input() {
-        use crate::ui::HostActivityEntity;
-        use ozmux_multiplexer::ActivityKind;
+        use crate::ui::HostSurfaceEntity;
+        use ozmux_multiplexer::SurfaceKind;
         let mut app = make_test_app();
         app.add_systems(
             Update,
             (build_browser_chrome, attach_browser_webview).chain(),
         );
-        let activity = app
+        let surface = app
             .world_mut()
-            .spawn(ActivityKind::Browser {
+            .spawn(SurfaceKind::Browser {
                 initial_url: None,
                 profile: Default::default(),
             })
@@ -1150,8 +1150,8 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
-                HostActivityEntity(activity),
+                BrowserSurfaceMarker,
+                HostSurfaceEntity(surface),
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -1250,7 +1250,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -1288,7 +1288,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -1348,7 +1348,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -1396,7 +1396,7 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
+                BrowserSurfaceMarker,
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();

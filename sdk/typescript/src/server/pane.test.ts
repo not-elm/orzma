@@ -2,13 +2,13 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Activity } from './activity.ts';
 import * as channelsServer from './channels-server.ts';
-import { __resetActivityChannelsForTests } from './channels-server.ts';
+import { __resetSurfaceChannelsForTests } from './channels-server.ts';
 import * as controlClient from './control-client.ts';
 import * as handlersServer from './handlers-server.ts';
-import { __resetActivityHandlersForTests } from './handlers-server.ts';
+import { __resetSurfaceHandlersForTests } from './handlers-server.ts';
 import { __resetExtensionNameCacheForTests, Pane } from './pane.ts';
+import { Surface } from './surface.ts';
 
 function tmpSock(): string {
   return path.join(
@@ -21,8 +21,8 @@ let savedExtensionName: string | undefined;
 let savedControlSock: string | undefined;
 
 beforeEach(() => {
-  __resetActivityHandlersForTests();
-  __resetActivityChannelsForTests();
+  __resetSurfaceHandlersForTests();
+  __resetSurfaceChannelsForTests();
   savedExtensionName = process.env.EXTENSION_NAME;
   process.env.EXTENSION_NAME = 'memo';
   __resetExtensionNameCacheForTests();
@@ -72,7 +72,7 @@ describe('Pane.split', () => {
     const sock = tmpSock();
     const { server, frames } = await startFakeControlServer(sock, {
       new_pane_id: 'p99',
-      new_activity_id: 'a99',
+      new_surface_id: 'a99',
     });
     process.env.OZMUX_CONTROL_SOCK_PATH = sock;
 
@@ -80,7 +80,7 @@ describe('Pane.split', () => {
     const next = await pane.split({
       side: 'after',
       orientation: 'horizontal',
-      activity: { kind: 'terminal' },
+      surface: { kind: 'terminal' },
     });
 
     expect(frames).toHaveLength(1);
@@ -99,12 +99,12 @@ describe('Pane.split', () => {
     const sock = tmpSock();
     const { server } = await startFakeControlServer(sock, {
       new_pane_id: 'p2',
-      new_activity_id: 'a2',
+      new_surface_id: 'a2',
     });
     process.env.OZMUX_CONTROL_SOCK_PATH = sock;
 
-    const registerHandlersSpy = vi.spyOn(handlersServer, 'registerActivityHandlers');
-    const registerChannelsSpy = vi.spyOn(channelsServer, 'registerActivityChannels');
+    const registerHandlersSpy = vi.spyOn(handlersServer, 'registerSurfaceHandlers');
+    const registerChannelsSpy = vi.spyOn(channelsServer, 'registerSurfaceChannels');
     const callOrder: string[] = [];
     registerHandlersSpy.mockImplementation(() => {
       callOrder.push('register-handlers');
@@ -117,7 +117,7 @@ describe('Pane.split', () => {
     await pane.split({
       side: 'after',
       orientation: 'horizontal',
-      activity: {
+      surface: {
         kind: 'extension',
         html: '/tmp/index.html',
         handlers: { greet: async () => ({}) },
@@ -139,15 +139,15 @@ describe('Pane.split', () => {
     const { server } = await startFakeControlServer(sock, 'error');
     process.env.OZMUX_CONTROL_SOCK_PATH = sock;
 
-    const unregisterHandlersSpy = vi.spyOn(handlersServer, 'unregisterActivityHandlers');
-    const unregisterChannelsSpy = vi.spyOn(channelsServer, 'unregisterActivityChannels');
+    const unregisterHandlersSpy = vi.spyOn(handlersServer, 'unregisterSurfaceHandlers');
+    const unregisterChannelsSpy = vi.spyOn(channelsServer, 'unregisterSurfaceChannels');
 
     const pane = new Pane({ id: 'p1', windowId: 'w1' });
     await expect(
       pane.split({
         side: 'after',
         orientation: 'horizontal',
-        activity: {
+        surface: {
           kind: 'extension',
           html: '/tmp/index.html',
           handlers: { greet: async () => ({}) },
@@ -170,7 +170,7 @@ describe('Pane.split', () => {
     const sock = tmpSock();
     const { server, frames } = await startFakeControlServer(sock, {
       new_pane_id: 'p3',
-      new_activity_id: 'a3',
+      new_surface_id: 'a3',
     });
     process.env.OZMUX_CONTROL_SOCK_PATH = sock;
 
@@ -179,22 +179,22 @@ describe('Pane.split', () => {
     await pane.split({
       side: 'before',
       orientation: 'vertical',
-      activity: {
+      surface: {
         kind: 'extension',
         html,
       },
     });
 
     const params = frames[0].params as {
-      activity: { kind: string; entry: string; extension_name: string };
+      surface: { kind: string; entry: string; extension_name: string };
     };
-    expect(params.activity.kind).toBe('extension');
-    expect(params.activity.entry).toBe('ui/app.html');
-    expect(params.activity.extension_name).toBe('memo');
+    expect(params.surface.kind).toBe('extension');
+    expect(params.surface.entry).toBe('ui/app.html');
+    expect(params.surface.extension_name).toBe('memo');
     server.close();
   });
 
-  it('split sends the client activity_id in the control frame', async () => {
+  it('split sends the client surface_id in the control frame', async () => {
     const sock = tmpSock();
     let seen: Record<string, unknown> | undefined;
     const server = net.createServer((conn) => {
@@ -204,7 +204,7 @@ describe('Pane.split', () => {
           `${JSON.stringify({
             kind: 'result',
             id: seen.id,
-            payload: { new_pane_id: 'p1', new_activity_id: 'a1' },
+            payload: { new_pane_id: 'p1', new_surface_id: 'a1' },
           })}\n`,
         );
       });
@@ -216,15 +216,15 @@ describe('Pane.split', () => {
     await pane.split({
       side: 'after',
       orientation: 'vertical',
-      activity: { kind: 'extension', html: '/x/memo/index.html' },
+      surface: { kind: 'extension', html: '/x/memo/index.html' },
     });
-    const params = seen?.params as { activity: { activity_id: string } } | undefined;
-    expect(typeof params?.activity?.activity_id).toBe('string');
-    expect((params?.activity?.activity_id ?? '').length).toBeGreaterThan(0);
+    const params = seen?.params as { surface: { surface_id: string } } | undefined;
+    expect(typeof params?.surface?.surface_id).toBe('string');
+    expect((params?.surface?.surface_id ?? '').length).toBeGreaterThan(0);
     server.close();
   });
 
-  it('does not require EXTENSION_NAME for terminal-kind activities (no-op fallback)', async () => {
+  it('does not require EXTENSION_NAME for terminal-kind surfaces (no-op fallback)', async () => {
     delete process.env.EXTENSION_NAME;
     delete process.env.OZMUX_CONTROL_SOCK_PATH;
     const pane = new Pane({ id: 'p1', windowId: 'w1' });
@@ -232,7 +232,7 @@ describe('Pane.split', () => {
       pane.split({
         side: 'after',
         orientation: 'horizontal',
-        activity: { kind: 'terminal' },
+        surface: { kind: 'terminal' },
       }),
     ).resolves.toBeDefined();
   });
@@ -241,7 +241,7 @@ describe('Pane.split', () => {
     const sock = tmpSock();
     const { server, frames } = await startFakeControlServer(sock, {
       new_pane_id: 'p7',
-      new_activity_id: 'a7',
+      new_surface_id: 'a7',
     });
     process.env.OZMUX_CONTROL_SOCK_PATH = sock;
 
@@ -249,74 +249,74 @@ describe('Pane.split', () => {
     await pane.split({
       side: 'after',
       orientation: 'vertical',
-      activity: { kind: 'browser', url: 'github.com' },
+      surface: { kind: 'browser', url: 'github.com' },
     });
 
     const params = frames[0].params as {
-      activity: { kind: string; url: string; activity_id: string; extension_name?: string };
+      surface: { kind: string; url: string; surface_id: string; extension_name?: string };
     };
-    expect(params.activity.kind).toBe('browser');
-    expect(params.activity.url).toBe('github.com');
-    expect(params.activity.extension_name).toBeUndefined();
-    expect(typeof params.activity.activity_id).toBe('string');
+    expect(params.surface.kind).toBe('browser');
+    expect(params.surface.url).toBe('github.com');
+    expect(params.surface.extension_name).toBeUndefined();
+    expect(typeof params.surface.surface_id).toBe('string');
     server.close();
   });
 });
 
-describe('Pane.addActivity', () => {
-  it('calls callControl(add_activity) and returns an Activity whose id equals the host reply', async () => {
+describe('Pane.addSurface', () => {
+  it('calls callControl(add_surface) and returns a Surface whose id equals the host reply', async () => {
     const callControlSpy = vi.spyOn(controlClient, 'callControl').mockResolvedValue({
-      new_activity_id: 'host-aid-42',
+      new_surface_id: 'host-aid-42',
     });
 
     const pane = new Pane({ id: 'p1', windowId: 'w1', sessionId: 's1' });
-    const activity = await pane.addActivity({ kind: 'terminal' });
+    const surface = await pane.addSurface({ kind: 'terminal' });
 
     expect(callControlSpy).toHaveBeenCalledTimes(1);
     const [op, paneId] = callControlSpy.mock.calls[0] as [string, string, unknown];
-    expect(op).toBe('add_activity');
+    expect(op).toBe('add_surface');
     expect(paneId).toBe('p1');
-    expect(activity.id).toBe('host-aid-42');
-    expect(activity.paneId).toBe('p1');
-    expect(activity.windowId).toBe('w1');
-    expect(activity.sessionId).toBe('s1');
-    expect(activity.kind).toEqual({ type: 'terminal' });
+    expect(surface.id).toBe('host-aid-42');
+    expect(surface.paneId).toBe('p1');
+    expect(surface.windowId).toBe('w1');
+    expect(surface.sessionId).toBe('s1');
+    expect(surface.kind).toEqual({ type: 'terminal' });
   });
 
-  it('sends extension entry/extension_name/activity_id in the control params', async () => {
+  it('sends extension entry/extension_name/surface_id in the control params', async () => {
     const callControlSpy = vi.spyOn(controlClient, 'callControl').mockResolvedValue({
-      new_activity_id: 'host-aid-7',
+      new_surface_id: 'host-aid-7',
     });
 
     const pane = new Pane({ id: 'p1', windowId: 'w1' });
     const html = path.join(process.cwd(), 'index.html');
-    await pane.addActivity({ kind: 'extension', html });
+    await pane.addSurface({ kind: 'extension', html });
 
     const [, , params] = callControlSpy.mock.calls[0] as [
       string,
       string,
-      { activity: { kind: string; entry: string; extension_name: string; activity_id: string } },
+      { surface: { kind: string; entry: string; extension_name: string; surface_id: string } },
     ];
-    expect(params.activity.kind).toBe('extension');
-    expect(params.activity.entry).toBe('index.html');
-    expect(params.activity.extension_name).toBe('memo');
-    expect(typeof params.activity.activity_id).toBe('string');
-    expect(params.activity.activity_id.length).toBeGreaterThan(0);
+    expect(params.surface.kind).toBe('extension');
+    expect(params.surface.entry).toBe('index.html');
+    expect(params.surface.extension_name).toBe('memo');
+    expect(typeof params.surface.surface_id).toBe('string');
+    expect(params.surface.surface_id.length).toBeGreaterThan(0);
   });
 
   it('registers channels BEFORE the callControl resolves (race-free)', async () => {
     const callOrder: string[] = [];
-    const registerChannelsSpy = vi.spyOn(channelsServer, 'registerActivityChannels');
+    const registerChannelsSpy = vi.spyOn(channelsServer, 'registerSurfaceChannels');
     registerChannelsSpy.mockImplementation(() => {
       callOrder.push('register-channels');
     });
     vi.spyOn(controlClient, 'callControl').mockImplementation(async () => {
       callOrder.push('control-call');
-      return { new_activity_id: 'h1' };
+      return { new_surface_id: 'h1' };
     });
 
     const pane = new Pane({ id: 'p1', windowId: 'w1' });
-    await pane.addActivity({
+    await pane.addSurface({
       kind: 'extension',
       html: '/tmp/index.html',
       channels: {
@@ -332,12 +332,12 @@ describe('Pane.addActivity', () => {
 
   it('rolls handler + channel registries back when callControl throws', async () => {
     vi.spyOn(controlClient, 'callControl').mockRejectedValue(new Error('boom'));
-    const unregisterHandlersSpy = vi.spyOn(handlersServer, 'unregisterActivityHandlers');
-    const unregisterChannelsSpy = vi.spyOn(channelsServer, 'unregisterActivityChannels');
+    const unregisterHandlersSpy = vi.spyOn(handlersServer, 'unregisterSurfaceHandlers');
+    const unregisterChannelsSpy = vi.spyOn(channelsServer, 'unregisterSurfaceChannels');
 
     const pane = new Pane({ id: 'p1', windowId: 'w1' });
     await expect(
-      pane.addActivity({
+      pane.addSurface({
         kind: 'extension',
         html: '/tmp/index.html',
         handlers: { greet: async () => ({}) },
@@ -355,26 +355,26 @@ describe('Pane.addActivity', () => {
   });
 });
 
-describe('Activity.activate', () => {
-  it('calls callControl(activate) with the activity paneId and id', async () => {
+describe('Surface.activate', () => {
+  it('calls callControl(activate) with the surface paneId and id', async () => {
     const callControlSpy = vi.spyOn(controlClient, 'callControl').mockResolvedValue({});
 
-    const activity = new Activity({
+    const surface = new Surface({
       id: 'act-9',
       paneId: 'p1',
       windowId: 'w1',
       kind: { type: 'terminal' },
     });
-    await activity.activate();
+    await surface.activate();
 
     expect(callControlSpy).toHaveBeenCalledTimes(1);
     const [op, paneId, params] = callControlSpy.mock.calls[0] as [
       string,
       string,
-      { activity_id: string },
+      { surface_id: string },
     ];
     expect(op).toBe('activate');
     expect(paneId).toBe('p1');
-    expect(params.activity_id).toBe('act-9');
+    expect(params.surface_id).toBe('act-9');
   });
 });

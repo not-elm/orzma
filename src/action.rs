@@ -1,21 +1,21 @@
 //! Aggregates the ozmux shortcut-action plugins that dispatch through
-//! `EntityEvent`s: session-lifecycle actions and pane/activity actions.
+//! `EntityEvent`s: session-lifecycle actions and pane/surface actions.
 
 use bevy::prelude::*;
-use close_activity::CloseActivityActionPlugin;
+use close_surface::CloseSurfaceActionPlugin;
 use close_pane::ClosePaneActionPlugin;
-use focus_activity::FocusActivityActionPlugin;
+use focus_surface::FocusSurfaceActionPlugin;
 use focus_pane::FocusPaneActionPlugin;
-use new_terminal_activity::NewTerminalActivityActionPlugin;
+use new_terminal_surface::NewTerminalSurfaceActionPlugin;
 use session::OzmuxSessionActionPlugin;
 use split_pane::SplitPaneActionPlugin;
 use swap_pane::SwapPaneActionPlugin;
 
-pub(crate) mod close_activity;
+pub(crate) mod close_surface;
 pub(crate) mod close_pane;
-pub(crate) mod focus_activity;
+pub(crate) mod focus_surface;
 pub(crate) mod focus_pane;
-pub(crate) mod new_terminal_activity;
+pub(crate) mod new_terminal_surface;
 pub(crate) mod session;
 pub(crate) mod split_pane;
 pub(crate) mod swap_pane;
@@ -29,12 +29,12 @@ impl Plugin for OzmuxActionPlugin {
         app.add_plugins((
             OzmuxSessionActionPlugin,
             SplitPaneActionPlugin,
-            NewTerminalActivityActionPlugin,
+            NewTerminalSurfaceActionPlugin,
             FocusPaneActionPlugin,
-            FocusActivityActionPlugin,
+            FocusSurfaceActionPlugin,
             SwapPaneActionPlugin,
             ClosePaneActionPlugin,
-            CloseActivityActionPlugin,
+            CloseSurfaceActionPlugin,
         ));
     }
 }

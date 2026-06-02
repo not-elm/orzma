@@ -4,14 +4,14 @@
 
 use crate::command::{CommandExtension, CommandExtensionConfig, Responder};
 use crate::control::{
-    ActivateParams, ActivityKindSpec, AddActivityParams, ControlError, ControlOp,
-    ControlOrientation, ControlReply, ControlRequest, ControlResponse, ControlSide, SplitParams,
+    ActivateParams, AddSurfaceParams, ControlError, ControlOp, ControlOrientation, ControlReply,
+    ControlRequest, ControlResponse, ControlSide, SplitParams, SurfaceKindSpec,
 };
 use crate::path_prefix::extension_path_prefix;
 use bevy::prelude::*;
 use ozmux_multiplexer::{
-    ActivityKind, BrowserProfile, ExtensionActivityAid, MultiplexerCommands, OwningExtension, Side,
-    SplitOrientation,
+    BrowserProfile, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, Side,
+    SplitOrientation, SurfaceKind,
 };
 use std::path::PathBuf;
 
@@ -27,10 +27,10 @@ pub enum ExtensionControlSet {
     /// `@memo` split) via `MultiplexerCommands`.
     ///
     /// The split mutates `LayoutCells` immediately but spawns the new pane and
-    /// inserts its `ActiveActivity` / `ChildOf` through the deferred `Commands`
+    /// inserts its `ActiveSurface` / `ChildOf` through the deferred `Commands`
     /// queue. A UI rebuild that reacts to `Changed<LayoutCells>` MUST run after
     /// this set so the inserted `ApplyDeferred` sync point flushes those
-    /// commands first — otherwise the rebuild sees a pane with no activity yet
+    /// commands first — otherwise the rebuild sees a pane with no surface yet
     /// (no tab, no extension host, no webview).
     Drain,
 }
@@ -123,7 +123,7 @@ pub fn apply_control_request(
 ) {
     let resp = match req.op {
         ControlOp::Split(p) => handle_split(mux, req.pane_bits, p),
-        ControlOp::AddActivity(p) => handle_add_activity(mux, req.pane_bits, p),
+        ControlOp::AddSurface(p) => handle_add_surface(mux, req.pane_bits, p),
         ControlOp::Activate(p) => handle_activate(mux, req.pane_bits, p),
     };
     let _ = responder.send(match resp {
@@ -141,36 +141,36 @@ fn resolve_pane(mux: &MultiplexerCommands, pane_bits: u64) -> Result<Entity, Con
         })
 }
 
-fn stamp_extension_activity(
+fn stamp_extension_surface(
     mux: &mut MultiplexerCommands,
-    activity: Entity,
-    activity_id: String,
+    surface: Entity,
+    surface_id: String,
     extension_name: Option<String>,
 ) {
-    mux.insert_on(activity, ExtensionActivityAid(activity_id));
+    mux.insert_on(surface, ExtensionSurfaceId(surface_id));
     if let Some(name) = extension_name {
-        mux.insert_on(activity, OwningExtension(name));
+        mux.insert_on(surface, OwningExtension(name));
     }
 }
 
-/// Maps a wire `ActivityKindSpec` to the multiplexer `ActivityKind`, returning
+/// Maps a wire `SurfaceKindSpec` to the multiplexer `SurfaceKind`, returning
 /// the optional owning-extension name and whether the kind is an extension
-/// (only extension activities are stamped with `ExtensionActivityAid` /
-/// `OwningExtension`). Shared by `handle_split` and `handle_add_activity`.
-fn activity_kind_from_spec(kind: ActivityKindSpec) -> (ActivityKind, Option<String>, bool) {
+/// (only extension surfaces are stamped with `ExtensionSurfaceId` /
+/// `OwningExtension`). Shared by `handle_split` and `handle_add_surface`.
+fn surface_kind_from_spec(kind: SurfaceKindSpec) -> (SurfaceKind, Option<String>, bool) {
     match kind {
-        ActivityKindSpec::Extension {
+        SurfaceKindSpec::Extension {
             entry,
             extension_name,
         } => (
-            ActivityKind::Extension {
+            SurfaceKind::Extension {
                 entry: PathBuf::from(entry),
             },
             extension_name,
             true,
         ),
-        ActivityKindSpec::Browser { url } => (
-            ActivityKind::Browser {
+        SurfaceKindSpec::Browser { url } => (
+            SurfaceKind::Browser {
                 initial_url: Some(url),
                 profile: BrowserProfile::default(),
             },
@@ -186,7 +186,7 @@ fn handle_split(
     p: SplitParams,
 ) -> Result<ControlReply, ControlError> {
     let pane = resolve_pane(mux, pane_bits)?;
-    let activity_id = p.activity.activity_id.clone();
+    let surface_id = p.surface.surface_id.clone();
     let side = match p.side {
         ControlSide::Before => Side::Before,
         ControlSide::After => Side::After,
@@ -195,36 +195,36 @@ fn handle_split(
         ControlOrientation::Horizontal => SplitOrientation::Horizontal,
         ControlOrientation::Vertical => SplitOrientation::Vertical,
     };
-    let (kind, extension_name, is_extension) = activity_kind_from_spec(p.activity.kind);
+    let (kind, extension_name, is_extension) = surface_kind_from_spec(p.surface.kind);
     let outcome = mux
-        .split_pane_with_activity(pane, side, orientation, kind)
+        .split_pane_with_surface(pane, side, orientation, kind)
         .map_err(|e| ControlError {
             code: "internal".into(),
             message: e.to_string(),
         })?;
     if is_extension {
-        stamp_extension_activity(mux, outcome.activity, activity_id, extension_name);
+        stamp_extension_surface(mux, outcome.surface, surface_id, extension_name);
     }
     Ok(ControlReply::Split {
         new_pane_id: outcome.pane.to_bits(),
-        new_activity_id: outcome.activity.to_bits(),
+        new_surface_id: outcome.surface.to_bits(),
     })
 }
 
-fn handle_add_activity(
+fn handle_add_surface(
     mux: &mut MultiplexerCommands,
     pane_bits: u64,
-    p: AddActivityParams,
+    p: AddSurfaceParams,
 ) -> Result<ControlReply, ControlError> {
     let pane = resolve_pane(mux, pane_bits)?;
-    let activity_id = p.activity.activity_id.clone();
-    let (kind, extension_name, is_extension) = activity_kind_from_spec(p.activity.kind);
-    let activity = mux.add_activity(pane, kind);
+    let surface_id = p.surface.surface_id.clone();
+    let (kind, extension_name, is_extension) = surface_kind_from_spec(p.surface.kind);
+    let surface = mux.add_surface(pane, kind);
     if is_extension {
-        stamp_extension_activity(mux, activity, activity_id, extension_name);
+        stamp_extension_surface(mux, surface, surface_id, extension_name);
     }
-    Ok(ControlReply::AddActivity {
-        new_activity_id: activity.to_bits(),
+    Ok(ControlReply::AddSurface {
+        new_surface_id: surface.to_bits(),
     })
 }
 
@@ -234,27 +234,27 @@ fn handle_activate(
     p: ActivateParams,
 ) -> Result<ControlReply, ControlError> {
     let pane = resolve_pane(mux, pane_bits)?;
-    let activity = p
-        .activity_id
+    let surface = p
+        .surface_id
         .parse::<u64>()
         .ok()
         .and_then(Entity::try_from_bits)
         .ok_or_else(|| ControlError {
             code: "bad_request".into(),
-            message: format!("bad activity_id: {}", p.activity_id),
+            message: format!("bad surface_id: {}", p.surface_id),
         })?;
-    // Reject an activity that is not a live child of the invoking pane:
-    // `set_active_activity` only validates the pane, so without this an
-    // extension could point a pane's `ActiveActivity` at a foreign, stale, or
-    // non-activity entity and corrupt its rendered state. `pane_of_activity`
-    // returns `None` for despawned / recycled / non-activity bits.
-    if mux.pane_of_activity(activity) != Some(pane) {
+    // Reject a surface that is not a live child of the invoking pane:
+    // `set_active_surface` only validates the pane, so without this an
+    // extension could point a pane's `ActiveSurface` at a foreign, stale, or
+    // non-surface entity and corrupt its rendered state. `pane_of_surface`
+    // returns `None` for despawned / recycled / non-surface bits.
+    if mux.pane_of_surface(surface) != Some(pane) {
         return Err(ControlError {
             code: "bad_request".into(),
-            message: format!("activity {} is not in the invoking pane", p.activity_id),
+            message: format!("surface {} is not in the invoking pane", p.surface_id),
         });
     }
-    mux.set_active_activity(pane, activity)
+    mux.set_active_surface(pane, surface)
         .map_err(|e| ControlError {
             code: "internal".into(),
             message: e.to_string(),
@@ -267,7 +267,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::bounded;
-    use ozmux_multiplexer::{ActivityKind, ActivityMarker, MultiplexerCommands};
+    use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, SurfaceMarker};
 
     fn split_request(pane_bits: u64) -> ControlRequest {
         ControlRequest {
@@ -275,29 +275,29 @@ mod tests {
             op: ControlOp::Split(crate::control::SplitParams {
                 side: ControlSide::After,
                 orientation: ControlOrientation::Vertical,
-                activity: crate::control::ActivitySpec {
-                    kind: ActivityKindSpec::Extension {
+                surface: crate::control::SurfaceSpec {
+                    kind: SurfaceKindSpec::Extension {
                         entry: "/x/memo".into(),
                         extension_name: Some("memo".into()),
                     },
                     name: None,
-                    activity_id: "aid-xyz".into(),
+                    surface_id: "aid-xyz".into(),
                 },
             }),
         }
     }
 
-    fn add_activity_request(pane_bits: u64) -> ControlRequest {
+    fn add_surface_request(pane_bits: u64) -> ControlRequest {
         ControlRequest {
             pane_bits,
-            op: ControlOp::AddActivity(crate::control::AddActivityParams {
-                activity: crate::control::ActivitySpec {
-                    kind: ActivityKindSpec::Extension {
+            op: ControlOp::AddSurface(crate::control::AddSurfaceParams {
+                surface: crate::control::SurfaceSpec {
+                    kind: SurfaceKindSpec::Extension {
                         entry: "index.html".into(),
                         extension_name: Some("md".into()),
                     },
                     name: Some("x.md".into()),
-                    activity_id: "aid-1".into(),
+                    surface_id: "aid-1".into(),
                 },
             }),
         }
@@ -309,12 +309,12 @@ mod tests {
             op: ControlOp::Split(crate::control::SplitParams {
                 side: ControlSide::After,
                 orientation: ControlOrientation::Vertical,
-                activity: crate::control::ActivitySpec {
-                    kind: ActivityKindSpec::Browser {
+                surface: crate::control::SurfaceSpec {
+                    kind: SurfaceKindSpec::Browser {
                         url: "github.com".into(),
                     },
                     name: None,
-                    activity_id: "aid-b".into(),
+                    surface_id: "aid-b".into(),
                 },
             }),
         }
@@ -342,27 +342,25 @@ mod tests {
         world.flush();
 
         match resp_rx.try_recv().unwrap() {
-            ControlResponse::Ok(ControlReply::Split {
-                new_activity_id, ..
-            }) => {
-                let new_act = Entity::try_from_bits(new_activity_id).unwrap();
-                match world.get::<ActivityKind>(new_act) {
-                    Some(ActivityKind::Browser { initial_url, .. }) => {
+            ControlResponse::Ok(ControlReply::Split { new_surface_id, .. }) => {
+                let new_act = Entity::try_from_bits(new_surface_id).unwrap();
+                match world.get::<SurfaceKind>(new_act) {
+                    Some(SurfaceKind::Browser { initial_url, .. }) => {
                         assert_eq!(initial_url.as_deref(), Some("github.com"));
                     }
                     other => panic!("expected Browser kind, got {other:?}"),
                 }
                 assert!(
                     world
-                        .get::<ozmux_multiplexer::ExtensionActivityAid>(new_act)
+                        .get::<ozmux_multiplexer::ExtensionSurfaceId>(new_act)
                         .is_none(),
-                    "browser activity must not get an ExtensionActivityAid"
+                    "browser surface must not get an ExtensionSurfaceId"
                 );
                 assert!(
                     world
                         .get::<ozmux_multiplexer::OwningExtension>(new_act)
                         .is_none(),
-                    "browser activity must not get an OwningExtension"
+                    "browser surface must not get an OwningExtension"
                 );
             }
             ControlResponse::Ok(_) => panic!("expected Split reply"),
@@ -392,7 +390,7 @@ mod tests {
         match resp_rx.try_recv().unwrap() {
             ControlResponse::Ok(ControlReply::Split {
                 new_pane_id,
-                new_activity_id,
+                new_surface_id,
             }) => {
                 let new_pane = Entity::try_from_bits(new_pane_id).unwrap();
                 assert!(
@@ -400,23 +398,23 @@ mod tests {
                         .get::<ozmux_multiplexer::PaneMarker>(new_pane)
                         .is_some()
                 );
-                let new_act = Entity::try_from_bits(new_activity_id).unwrap();
+                let new_act = Entity::try_from_bits(new_surface_id).unwrap();
                 assert!(matches!(
-                    world.get::<ActivityKind>(new_act),
-                    Some(ActivityKind::Extension { .. })
+                    world.get::<SurfaceKind>(new_act),
+                    Some(SurfaceKind::Extension { .. })
                 ));
-                let aid = world.get::<ozmux_multiplexer::ExtensionActivityAid>(new_act);
-                assert_eq!(aid.map(|a| a.0.as_str()), Some("aid-xyz"));
+                let surface_id = world.get::<ozmux_multiplexer::ExtensionSurfaceId>(new_act);
+                assert_eq!(surface_id.map(|a| a.0.as_str()), Some("aid-xyz"));
                 let owner = world.get::<ozmux_multiplexer::OwningExtension>(new_act);
                 assert_eq!(owner.map(|o| o.0.as_str()), Some("memo"));
             }
             ControlResponse::Ok(_) => panic!("expected Split reply"),
             ControlResponse::Err(e) => panic!("expected Ok, got {}", e.code),
         }
-        let mut q = world.query_filtered::<&ActivityKind, With<ActivityMarker>>();
+        let mut q = world.query_filtered::<&SurfaceKind, With<SurfaceMarker>>();
         assert!(
             q.iter(&world)
-                .any(|k| matches!(k, ActivityKind::Extension { .. }))
+                .any(|k| matches!(k, SurfaceKind::Extension { .. }))
         );
     }
 
@@ -445,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn handles_add_activity_on_existing_pane() {
+    fn handles_add_surface_on_existing_pane() {
         let mut world = World::new();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
@@ -455,24 +453,20 @@ mod tests {
         let mut tx = Some(tx);
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply_control_request(
-                    &mut mux,
-                    add_activity_request(pane_bits),
-                    tx.take().unwrap(),
-                );
+                apply_control_request(&mut mux, add_surface_request(pane_bits), tx.take().unwrap());
             })
             .unwrap();
         world.flush();
         match rx.try_recv().unwrap() {
-            ControlResponse::Ok(ControlReply::AddActivity { new_activity_id }) => {
-                let act = Entity::try_from_bits(new_activity_id).unwrap();
+            ControlResponse::Ok(ControlReply::AddSurface { new_surface_id }) => {
+                let act = Entity::try_from_bits(new_surface_id).unwrap();
                 assert!(matches!(
-                    world.get::<ActivityKind>(act),
-                    Some(ActivityKind::Extension { .. })
+                    world.get::<SurfaceKind>(act),
+                    Some(SurfaceKind::Extension { .. })
                 ));
                 assert_eq!(
                     world
-                        .get::<ozmux_multiplexer::ExtensionActivityAid>(act)
+                        .get::<ozmux_multiplexer::ExtensionSurfaceId>(act)
                         .map(|a| a.0.as_str()),
                     Some("aid-1")
                 );
@@ -481,12 +475,12 @@ mod tests {
                     Some(created.pane)
                 );
             }
-            _ => panic!("expected AddActivity ok"),
+            _ => panic!("expected AddSurface ok"),
         }
     }
 
     #[test]
-    fn handles_activate_repoints_active_activity() {
+    fn handles_activate_repoints_active_surface() {
         let mut world = World::new();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
@@ -494,7 +488,7 @@ mod tests {
         let pane = created.pane;
         let second = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(pane, ActivityKind::Terminal)
+                mux.add_surface(pane, SurfaceKind::Terminal)
             })
             .unwrap();
         world.flush();
@@ -503,7 +497,7 @@ mod tests {
         let mut req = Some(ControlRequest {
             pane_bits: pane.to_bits(),
             op: ControlOp::Activate(crate::control::ActivateParams {
-                activity_id: second.to_bits().to_string(),
+                surface_id: second.to_bits().to_string(),
             }),
         });
         world
@@ -518,14 +512,14 @@ mod tests {
         ));
         assert_eq!(
             world
-                .get::<ozmux_multiplexer::ActiveActivity>(pane)
+                .get::<ozmux_multiplexer::ActiveSurface>(pane)
                 .map(|a| a.0),
             Some(second)
         );
     }
 
     #[test]
-    fn activate_rejects_activity_not_in_pane() {
+    fn activate_rejects_surface_not_in_pane() {
         let mut world = World::new();
         let first = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
@@ -535,16 +529,16 @@ mod tests {
             .unwrap();
         world.flush();
         let active_before = world
-            .get::<ozmux_multiplexer::ActiveActivity>(first.pane)
+            .get::<ozmux_multiplexer::ActiveSurface>(first.pane)
             .map(|a| a.0);
 
         let (tx, rx) = bounded(1);
         let mut tx = Some(tx);
-        // Try to activate session 2's activity on session 1's pane.
+        // Try to activate session 2's surface on session 1's pane.
         let mut req = Some(ControlRequest {
             pane_bits: first.pane.to_bits(),
             op: ControlOp::Activate(crate::control::ActivateParams {
-                activity_id: second.activity.to_bits().to_string(),
+                surface_id: second.surface.to_bits().to_string(),
             }),
         });
         world
@@ -556,14 +550,14 @@ mod tests {
 
         match rx.try_recv().unwrap() {
             ControlResponse::Err(e) => assert_eq!(e.code, "bad_request"),
-            ControlResponse::Ok(_) => panic!("expected bad_request for a foreign activity"),
+            ControlResponse::Ok(_) => panic!("expected bad_request for a foreign surface"),
         }
         assert_eq!(
             world
-                .get::<ozmux_multiplexer::ActiveActivity>(first.pane)
+                .get::<ozmux_multiplexer::ActiveSurface>(first.pane)
                 .map(|a| a.0),
             active_before,
-            "the foreign activate must not mutate the pane's ActiveActivity"
+            "the foreign activate must not mutate the pane's ActiveSurface"
         );
     }
 }

@@ -36,7 +36,7 @@ export function encodeFrame(frame: ClientFrame | ServerFrame): Buffer {
 
 // Handler RPC frames (browser ↔ daemon ↔ extension)
 // Reserved frame kinds are flat union members; same shape on WS and inside the
-// daemon's `{aid, frame: <here>}` UDS envelope.
+// daemon's `{surface_id, frame: <here>}` UDS envelope.
 
 export interface HandlerCallFrame {
   kind: 'call';
@@ -93,7 +93,7 @@ export type HandlerServerFrame =
 
 /** NDJSON envelope written by the daemon onto the handlers UDS. */
 export interface HandlerUdsEnvelope {
-  aid: string;
+  surface_id: string;
   frame: HandlerClientFrame | HandlerServerFrame;
 }
 

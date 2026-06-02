@@ -1,31 +1,31 @@
 import { callControl } from './control-client.ts';
 
-export type ActivityId = string;
+export type SurfaceId = string;
 
-export type ActivityKind =
+export type SurfaceKind =
   | { type: 'terminal' }
   | { type: 'extension'; entry: string; extension_name?: string }
   | { type: 'browser'; initial_url?: string };
 
 /**
- * Lightweight client-side handle to an Activity. Carries the addressing tuple
- * needed to call hierarchical endpoints (`window → pane → activity`).
+ * Lightweight client-side handle to a Surface. Carries the addressing tuple
+ * needed to call hierarchical endpoints (`window → pane → surface`).
  * Construction is cheap — there is no server round-trip until a method is
  * invoked.
  */
-export class Activity {
-  readonly id: ActivityId;
+export class Surface {
+  readonly id: SurfaceId;
   readonly paneId: string;
   readonly windowId: string;
   readonly sessionId: string | null;
-  readonly kind: ActivityKind;
+  readonly kind: SurfaceKind;
 
   constructor(args: {
-    id: ActivityId;
+    id: SurfaceId;
     paneId: string;
     windowId: string;
     sessionId?: string | null;
-    kind: ActivityKind;
+    kind: SurfaceKind;
   }) {
     this.id = args.id;
     this.paneId = args.paneId;
@@ -35,6 +35,6 @@ export class Activity {
   }
 
   async activate(): Promise<void> {
-    await callControl('activate', this.paneId, { activity_id: this.id });
+    await callControl('activate', this.paneId, { surface_id: this.id });
   }
 }

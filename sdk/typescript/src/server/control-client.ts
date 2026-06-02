@@ -4,38 +4,38 @@ import * as net from 'node:net';
 export interface SplitControlParams {
   side: 'before' | 'after';
   orientation: 'horizontal' | 'vertical';
-  activity:
-    | { kind: 'extension'; entry: string; name?: string | null; activity_id: string }
-    | { kind: 'browser'; url: string; name?: string | null; activity_id: string };
+  surface:
+    | { kind: 'extension'; entry: string; name?: string | null; surface_id: string }
+    | { kind: 'browser'; url: string; name?: string | null; surface_id: string };
 }
 
-/** Parameters for an `add_activity` control call. */
-export interface AddActivityControlParams {
-  activity:
-    | { kind: 'extension'; entry: string; name?: string | null; activity_id: string }
-    | { kind: 'browser'; url: string; name?: string | null; activity_id: string };
+/** Parameters for an `add_surface` control call. */
+export interface AddSurfaceControlParams {
+  surface:
+    | { kind: 'extension'; entry: string; name?: string | null; surface_id: string }
+    | { kind: 'browser'; url: string; name?: string | null; surface_id: string };
 }
 
 /** Parameters for an `activate` control call. */
 export interface ActivateControlParams {
-  activity_id: string;
+  surface_id: string;
 }
 
 type ControlParamsByOp = {
   split: SplitControlParams;
-  add_activity: AddActivityControlParams;
+  add_surface: AddSurfaceControlParams;
   activate: ActivateControlParams;
 };
 
 type ControlReplyByOp = {
-  split: { new_pane_id: string; new_activity_id: string };
-  add_activity: { new_activity_id: string };
+  split: { new_pane_id: string; new_surface_id: string };
+  add_surface: { new_surface_id: string };
   activate: Record<string, never>;
 };
 
 const SYNTHETIC_REPLY: { [K in keyof ControlReplyByOp]: () => ControlReplyByOp[K] } = {
-  split: () => ({ new_pane_id: crypto.randomUUID(), new_activity_id: crypto.randomUUID() }),
-  add_activity: () => ({ new_activity_id: crypto.randomUUID() }),
+  split: () => ({ new_pane_id: crypto.randomUUID(), new_surface_id: crypto.randomUUID() }),
+  add_surface: () => ({ new_surface_id: crypto.randomUUID() }),
   activate: () => ({}) satisfies Record<string, never>,
 };
 

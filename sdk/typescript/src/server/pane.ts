@@ -1,17 +1,17 @@
 import * as path from 'node:path';
-import { Activity, type ActivityId, type ActivityKind } from './activity.ts';
 import {
   type ChannelMap,
-  registerActivityChannels,
-  unregisterActivityChannels,
+  registerSurfaceChannels,
+  unregisterSurfaceChannels,
 } from './channels-server.ts';
 import { callControl } from './control-client.ts';
 import { deleteNoContent, paths, postNoContent } from './daemon-client.ts';
 import {
   type HandlerMap,
-  registerActivityHandlers,
-  unregisterActivityHandlers,
+  registerSurfaceHandlers,
+  unregisterSurfaceHandlers,
 } from './handlers-server.ts';
+import { Surface, type SurfaceId, type SurfaceKind } from './surface.ts';
 
 /**
  * The HTML entry path the webview loads, relative to the extension dir (the
@@ -30,12 +30,12 @@ export type Side = 'before' | 'after';
 export type Orientation = 'horizontal' | 'vertical';
 
 /**
- * What the caller hands to `Pane.split()` / `Pane.addActivity()`. The
+ * What the caller hands to `Pane.split()` / `Pane.addSurface()`. The
  * terminal variant just creates a shell; the extension variant takes an HTML
  * entry path plus optional handlers/channels; the browser variant opens a URL
  * directly in the embedded webview without binding to any extension.
  */
-export type ActivitySpecInput =
+export type SurfaceSpecInput =
   | { kind: 'terminal'; name?: string }
   | {
       kind: 'extension';
@@ -49,7 +49,7 @@ export type ActivitySpecInput =
 export interface SplitArgs {
   side: Side;
   orientation: Orientation;
-  activity: ActivitySpecInput;
+  surface: SurfaceSpecInput;
 }
 
 /**
@@ -74,23 +74,23 @@ export class Pane {
 
   /**
    * Atomic split over the control socket. Primes local handler/channel
-   * registries (consumed by the rendered activity in a later sub-project),
-   * sends the split, and adopts the host-authoritative pane/activity ids for
+   * registries (consumed by the rendered surface in a later sub-project),
+   * sends the split, and adopts the host-authoritative pane/surface ids for
    * the returned handle. On failure the local registries roll back.
    */
   async split(args: SplitArgs): Promise<Pane> {
-    const activityId: ActivityId = crypto.randomUUID();
-    primeActivityRegistries(activityId, args.activity);
+    const surfaceId: SurfaceId = crypto.randomUUID();
+    primeSurfaceRegistries(surfaceId, args.surface);
 
-    let reply: { new_pane_id: string; new_activity_id: string };
+    let reply: { new_pane_id: string; new_surface_id: string };
     try {
       reply = await callControl('split', this.id, {
         side: args.side,
         orientation: args.orientation,
-        activity: controlActivity(activityId, args.activity),
+        surface: controlSurface(surfaceId, args.surface),
       });
     } catch (err) {
-      rollbackActivityRegistries(activityId, args.activity);
+      rollbackSurfaceRegistries(surfaceId, args.surface);
       throw err;
     }
 
@@ -102,30 +102,30 @@ export class Pane {
   }
 
   /**
-   * Adds a new Activity (tab) to this Pane without splitting. Primes local
+   * Adds a new Surface (tab) to this Pane without splitting. Primes local
    * handler/channel registries before the call and adopts the host-authoritative
-   * activity id for the returned handle. On failure the local registries roll back.
+   * surface id for the returned handle. On failure the local registries roll back.
    */
-  async addActivity(spec: ActivitySpecInput): Promise<Activity> {
-    const activityId: ActivityId = crypto.randomUUID();
-    primeActivityRegistries(activityId, spec);
+  async addSurface(spec: SurfaceSpecInput): Promise<Surface> {
+    const surfaceId: SurfaceId = crypto.randomUUID();
+    primeSurfaceRegistries(surfaceId, spec);
 
-    let reply: { new_activity_id: string };
+    let reply: { new_surface_id: string };
     try {
-      reply = await callControl('add_activity', this.id, {
-        activity: controlActivity(activityId, spec),
+      reply = await callControl('add_surface', this.id, {
+        surface: controlSurface(surfaceId, spec),
       });
     } catch (err) {
-      rollbackActivityRegistries(activityId, spec);
+      rollbackSurfaceRegistries(surfaceId, spec);
       throw err;
     }
 
-    return new Activity({
-      id: reply.new_activity_id,
+    return new Surface({
+      id: reply.new_surface_id,
       paneId: this.id,
       windowId: this.windowId,
       sessionId: this.sessionId,
-      kind: activityKindForSpec(spec),
+      kind: surfaceKindForSpec(spec),
     });
   }
 
@@ -138,55 +138,55 @@ export class Pane {
   }
 }
 
-function primeActivityRegistries(activityId: ActivityId, spec: ActivitySpecInput): void {
+function primeSurfaceRegistries(surfaceId: SurfaceId, spec: SurfaceSpecInput): void {
   if (spec.kind !== 'extension') return;
-  if (spec.handlers) registerActivityHandlers(activityId, spec.handlers);
-  if (spec.channels) registerActivityChannels(activityId, spec.channels);
+  if (spec.handlers) registerSurfaceHandlers(surfaceId, spec.handlers);
+  if (spec.channels) registerSurfaceChannels(surfaceId, spec.channels);
 }
 
-function rollbackActivityRegistries(activityId: ActivityId, spec: ActivitySpecInput): void {
+function rollbackSurfaceRegistries(surfaceId: SurfaceId, spec: SurfaceSpecInput): void {
   if (spec.kind !== 'extension') return;
-  if (spec.handlers) unregisterActivityHandlers(activityId);
-  if (spec.channels) unregisterActivityChannels(activityId);
+  if (spec.handlers) unregisterSurfaceHandlers(surfaceId);
+  if (spec.channels) unregisterSurfaceChannels(surfaceId);
 }
 
-function activityKindForSpec(spec: ActivitySpecInput): ActivityKind {
+function surfaceKindForSpec(spec: SurfaceSpecInput): SurfaceKind {
   if (spec.kind === 'terminal') return { type: 'terminal' };
   if (spec.kind === 'browser') return { type: 'browser', initial_url: spec.url };
   return { type: 'extension', entry: toEntry(spec.html) };
 }
 
-function controlActivity(
-  activityId: ActivityId,
-  spec: ActivitySpecInput,
+function controlSurface(
+  surfaceId: SurfaceId,
+  spec: SurfaceSpecInput,
 ):
   | {
       kind: 'extension';
       entry: string;
       name?: string;
-      activity_id: string;
+      surface_id: string;
       extension_name?: string;
     }
-  | { kind: 'browser'; url: string; name?: string; activity_id: string } {
+  | { kind: 'browser'; url: string; name?: string; surface_id: string } {
   if (spec.kind === 'browser') {
-    return { kind: 'browser', url: spec.url, name: spec.name, activity_id: activityId };
+    return { kind: 'browser', url: spec.url, name: spec.name, surface_id: surfaceId };
   }
   // TODO: terminal splits over the control socket are not supported in #2/#3; a future op should carry a terminal kind instead of this extension fallback.
   if (spec.kind !== 'extension') {
-    return { kind: 'extension', entry: '', name: spec.name, activity_id: activityId };
+    return { kind: 'extension', entry: '', name: spec.name, surface_id: surfaceId };
   }
   return {
     kind: 'extension',
     entry: toEntry(spec.html),
     name: spec.name,
-    activity_id: activityId,
+    surface_id: surfaceId,
     extension_name: requireExtensionName(),
   };
 }
 
 // `EXTENSION_NAME` is set once by the bootstrap before any user code runs
 // and never changes for the lifetime of the process. Cache the resolved value
-// so we don't reach for `process.env` on every split / addActivity — the env
+// so we don't reach for `process.env` on every split / addSurface — the env
 // object can be surprisingly slow under Node when accessed frequently.
 let extensionNameCache: string | null = null;
 
@@ -195,7 +195,7 @@ function requireExtensionName(): string {
   const name = process.env.EXTENSION_NAME;
   if (!name) {
     throw new Error(
-      'missing required env: EXTENSION_NAME (must be set by the SDK bootstrap before splitting / adding an extension activity)',
+      'missing required env: EXTENSION_NAME (must be set by the SDK bootstrap before splitting / adding an extension surface)',
     );
   }
   extensionNameCache = name;

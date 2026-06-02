@@ -5,14 +5,14 @@
 //! pair so that `lhs_weight == rhs_weight == 0` falls back to 0.5/0.5.
 
 use crate::theme;
-use crate::ui::activity::build_activity_host_children;
-use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::surface::build_surface_host_children;
+use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::tab_bar::{TabEntry, build_pane_tab_bar};
 use crate::ui::{PaneDimOverlay, PaneFrame, StructuralNode, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, PositionType, UiRect, Val};
 use ozmux_multiplexer::{
-    ActiveActivity, ActivityKind, ActivityMarker, Cell, CellId, LayoutCellState, PaneMarker,
+    ActiveSurface, SurfaceKind, SurfaceMarker, Cell, CellId, LayoutCellState, PaneMarker,
     SplitOrientation,
 };
 
@@ -27,13 +27,13 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 
 /// Recursively build the Bevy UI tree for one Cell subtree under `parent`.
 /// Walks `Cell::Split` → two children, lands on `Cell::Pane` to spawn the
-/// pane frame + tab bar + activity host slot.
+/// pane frame + tab bar + surface host slot.
 ///
 /// `Cell::Root` appearing mid-recursion is treated as an invariant
 /// violation (warn-and-skip); the entry point in `rebuild_session_ui`
 /// is expected to unwrap into `RootCell::child` first.
 ///
-/// `inactive_host_parent` — the Entity under which inactive Activity hosts
+/// `inactive_host_parent` — the Entity under which inactive Surface hosts
 /// (within this session) are parked. In production this is the owning
 /// Session entity itself, which lacks `Node`, so the host falls out of
 /// Bevy's UI walker (`UiChildren::iter_ui_children` filters `With<Node>`).
@@ -45,12 +45,12 @@ pub(crate) fn build_cell_recursive(
     parent: Entity,
     cells: &LayoutCellState,
     cell_id: &CellId,
-    registry: &mut ActivityEntityRegistry,
+    registry: &mut SurfaceEntityRegistry,
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
     pane_children: &Query<&Children>,
-    activities: &Query<(&ActivityKind, &Name), With<ActivityMarker>>,
-    active_activities: &Query<&ActiveActivity, With<PaneMarker>>,
+    surfaces: &Query<(&SurfaceKind, &Name), With<SurfaceMarker>>,
+    active_surfaces: &Query<&ActiveSurface, With<PaneMarker>>,
     active_pane: Entity,
     veil: Option<Color>,
 ) {
@@ -83,8 +83,8 @@ pub(crate) fn build_cell_recursive(
             inactive_host_parent,
             ui_font,
             pane_children,
-            activities,
-            active_activities,
+            surfaces,
+            active_surfaces,
             active_pane,
             veil,
         ),
@@ -128,8 +128,8 @@ pub(crate) fn build_cell_recursive(
                 inactive_host_parent,
                 ui_font,
                 pane_children,
-                activities,
-                active_activities,
+                surfaces,
+                active_surfaces,
                 active_pane,
                 veil,
             );
@@ -154,8 +154,8 @@ pub(crate) fn build_cell_recursive(
                 inactive_host_parent,
                 ui_font,
                 pane_children,
-                activities,
-                active_activities,
+                surfaces,
+                active_surfaces,
                 active_pane,
                 veil,
             );
@@ -168,16 +168,16 @@ fn build_pane(
     commands: &mut Commands,
     parent: Entity,
     pane_entity: Entity,
-    registry: &mut ActivityEntityRegistry,
+    registry: &mut SurfaceEntityRegistry,
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
     pane_children: &Query<&Children>,
-    activities: &Query<(&ActivityKind, &Name), With<ActivityMarker>>,
-    active_activities: &Query<&ActiveActivity, With<PaneMarker>>,
+    surfaces: &Query<(&SurfaceKind, &Name), With<SurfaceMarker>>,
+    active_surfaces: &Query<&ActiveSurface, With<PaneMarker>>,
     active_pane: Entity,
     veil: Option<Color>,
 ) {
-    let active_activity = active_activities
+    let active_surface = active_surfaces
         .get(pane_entity)
         .map(|a| a.0)
         .unwrap_or(Entity::PLACEHOLDER);
@@ -199,19 +199,19 @@ fn build_pane(
         ))
         .id();
 
-    let activity_entities: Vec<Entity> = pane_children
+    let surface_entities: Vec<Entity> = pane_children
         .get(pane_entity)
-        .map(|c| c.iter().filter(|e| activities.get(*e).is_ok()).collect())
+        .map(|c| c.iter().filter(|e| surfaces.get(*e).is_ok()).collect())
         .unwrap_or_default();
 
-    let tabs: Vec<TabEntry> = activity_entities
+    let tabs: Vec<TabEntry> = surface_entities
         .iter()
         .filter_map(|&ae| {
-            let (_, name) = activities.get(ae).ok()?;
+            let (_, name) = surfaces.get(ae).ok()?;
             Some(TabEntry {
                 entity: ae,
                 name: name.as_str().to_string(),
-                is_active: ae == active_activity,
+                is_active: ae == active_surface,
             })
         })
         .collect();
@@ -222,7 +222,7 @@ fn build_pane(
     // every pane as the active one (solid accent indicator).
     build_pane_tab_bar(commands, pane_frame, pane_entity, &tabs, true, ui_font);
 
-    let activity_slot = commands
+    let surface_slot = commands
         .spawn((
             Node {
                 flex_grow: 1.0,
@@ -236,14 +236,14 @@ fn build_pane(
         ))
         .id();
 
-    for &activity_entity in &activity_entities {
-        let Ok((kind, name)) = activities.get(activity_entity) else {
+    for &surface_entity in &surface_entities {
+        let Ok((kind, name)) = surfaces.get(surface_entity) else {
             continue;
         };
-        let host = registry.get_or_spawn(commands, activity_entity, kind);
-        build_activity_host_children(commands, host, kind, name);
-        if activity_entity == active_activity {
-            commands.entity(host).insert(ChildOf(activity_slot));
+        let host = registry.get_or_spawn(commands, surface_entity, kind);
+        build_surface_host_children(commands, host, kind, name);
+        if surface_entity == active_surface {
+            commands.entity(host).insert(ChildOf(surface_slot));
         } else {
             commands.entity(host).insert(ChildOf(inactive_host_parent));
         }
@@ -253,8 +253,8 @@ fn build_pane(
     // they must NOT also get the veil — double-dimming would over-darken their
     // content. The veil is for non-terminal (e.g. webview) panes only.
     let active_is_terminal = matches!(
-        activities.get(active_activity).map(|(kind, _)| kind),
-        Ok(ActivityKind::Terminal)
+        surfaces.get(active_surface).map(|(kind, _)| kind),
+        Ok(SurfaceKind::Terminal)
     );
     if let Some(veil_color) = veil
         && !active_is_terminal

@@ -7,11 +7,11 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
-use crate::action::close_activity::CloseActivityActionEvent;
+use crate::action::close_surface::CloseSurfaceActionEvent;
 use crate::action::close_pane::ClosePaneActionEvent;
-use crate::action::focus_activity::FocusActivityActionEvent;
+use crate::action::focus_surface::FocusSurfaceActionEvent;
 use crate::action::focus_pane::FocusPaneActionEvent;
-use crate::action::new_terminal_activity::NewTerminalActivityActionEvent;
+use crate::action::new_terminal_surface::NewTerminalSurfaceActionEvent;
 use crate::action::session::{FocusSessionActionEvent, FocusSessionTarget, NewSessionActionEvent};
 use crate::action::split_pane::SplitPaneActionEvent;
 use crate::action::swap_pane::SwapPaneActionEvent;
@@ -22,13 +22,13 @@ use crate::system_set::OzmuxSystems;
 use crate::ui::copy_mode::{
     CopyModeState, EnterCopyModeActionEvent, dispatch_key as dispatch_copy_mode_key,
 };
-use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::registry::SurfaceEntityRegistry;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
-    ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, KeyChord, Modifiers,
+    SurfaceOffset as ConfigSurfaceOffset, Direction as ConfigDirection, KeyChord, Modifiers,
     SessionOffset, ShortcutAction, SplitDirection, SwapOffset as ConfigSwapOffset,
 };
 use ozmux_multiplexer::{
@@ -37,15 +37,15 @@ use ozmux_multiplexer::{
 };
 use std::collections::HashSet;
 
-/// Resolves the focused activity's entity via the attached session →
+/// Resolves the focused surface's entity via the attached session →
 /// multiplexer → registry chain.
 pub(crate) fn resolve_focused_terminal(
     mux: &MultiplexerCommands,
     attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    registry: &ActivityEntityRegistry,
+    registry: &SurfaceEntityRegistry,
 ) -> Option<Entity> {
     let session = attached_session.iter().next()?;
-    resolve_active_activity_entity(mux, session, registry)
+    resolve_active_surface_entity(mux, session, registry)
 }
 
 /// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
@@ -98,7 +98,7 @@ pub(crate) fn dispatch_focused_key(
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
-    registry: Res<ActivityEntityRegistry>,
+    registry: Res<SurfaceEntityRegistry>,
     copy_modes: Query<(), With<CopyModeState>>,
 ) {
     // NOTE: when the browser address bar owns focus, the active pane is always a
@@ -143,8 +143,8 @@ pub(crate) fn dispatch_focused_key(
         };
 
         let active_pane = mux.sessions_active_pane(session);
-        let active_activity = active_pane.and_then(|p| mux.panes_active_activity(p));
-        let focused_entity = active_activity.and_then(|a| registry.get(a));
+        let active_surface = active_pane.and_then(|p| mux.panes_active_surface(p));
+        let focused_entity = active_surface.and_then(|a| registry.get(a));
 
         if matches!(ev.logical_key, Key::Escape)
             && let Some(entity) = focused_entity
@@ -288,7 +288,7 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 /// triggering the matching action `EntityEvent`.
 ///
 /// This is the single shortcut-dispatch point: copy-mode / clipboard
-/// actions target the active Terminal Activity; session and pane/activity
+/// actions target the active Terminal Surface; session and pane/surface
 /// actions target `session`; not-yet-implemented variants fall through to a
 /// `tracing::debug!` log.
 fn execute_action(
@@ -296,11 +296,11 @@ fn execute_action(
     mux: &MultiplexerCommands,
     action: ShortcutAction,
     session: Entity,
-    registry: &ActivityEntityRegistry,
+    registry: &SurfaceEntityRegistry,
 ) {
     match &action {
         ShortcutAction::EnterCopyMode => {
-            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, session, registry) {
                 commands.trigger(EnterCopyModeActionEvent { entity });
             }
         }
@@ -324,12 +324,12 @@ fn execute_action(
             });
         }
         ShortcutAction::Copy => {
-            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, session, registry) {
                 commands.trigger(CopyToClipboardActionEvent { entity });
             }
         }
         ShortcutAction::Paste => {
-            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, session, registry) {
                 commands.trigger(PasteFromClipboardActionEvent { entity });
             }
         }
@@ -339,8 +339,8 @@ fn execute_action(
                 orientation: split_orientation(direction.clone()),
             });
         }
-        ShortcutAction::NewTerminalActivity => {
-            commands.trigger(NewTerminalActivityActionEvent { session });
+        ShortcutAction::NewTerminalSurface => {
+            commands.trigger(NewTerminalSurfaceActionEvent { session });
         }
         ShortcutAction::FocusPane { direction } => {
             commands.trigger(FocusPaneActionEvent {
@@ -348,9 +348,9 @@ fn execute_action(
                 direction: focus_direction(direction.clone()),
             });
         }
-        ShortcutAction::FocusActivity { offset } => {
+        ShortcutAction::FocusSurface { offset } => {
             if let Some(direction) = cycle_direction(offset.clone()) {
-                commands.trigger(FocusActivityActionEvent { session, direction });
+                commands.trigger(FocusSurfaceActionEvent { session, direction });
             }
         }
         ShortcutAction::SwapPane { offset } => {
@@ -362,8 +362,8 @@ fn execute_action(
         ShortcutAction::ClosePane => {
             commands.trigger(ClosePaneActionEvent { session });
         }
-        ShortcutAction::CloseActivity => {
-            commands.trigger(CloseActivityActionEvent { session });
+        ShortcutAction::CloseSurface => {
+            commands.trigger(CloseSurfaceActionEvent { session });
         }
         other => tracing::debug!(
             target: "ozmux_gui::input",
@@ -373,18 +373,18 @@ fn execute_action(
     }
 }
 
-/// Resolves the active activity's entity for `session` via the
-/// session → pane → activity → registry chain. Returns `None` when the
-/// session has no active pane/activity, or the activity is not yet
-/// registered (e.g. a Browser Activity with no `TerminalHandle`).
-fn resolve_active_activity_entity(
+/// Resolves the active surface's entity for `session` via the
+/// session → pane → surface → registry chain. Returns `None` when the
+/// session has no active pane/surface, or the surface is not yet
+/// registered (e.g. a Browser Surface with no `TerminalHandle`).
+fn resolve_active_surface_entity(
     mux: &MultiplexerCommands,
     session: Entity,
-    registry: &ActivityEntityRegistry,
+    registry: &SurfaceEntityRegistry,
 ) -> Option<Entity> {
     let pane = mux.sessions_active_pane(session)?;
-    let activity = mux.panes_active_activity(pane)?;
-    registry.get(activity)
+    let surface = mux.panes_active_surface(pane)?;
+    registry.get(surface)
 }
 
 fn split_orientation(d: SplitDirection) -> SplitOrientation {
@@ -410,11 +410,11 @@ fn swap_offset(o: ConfigSwapOffset) -> SwapOffset {
     }
 }
 
-fn cycle_direction(o: ConfigActivityOffset) -> Option<CycleDirection> {
+fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
     match o {
-        ConfigActivityOffset::Next => Some(CycleDirection::Next),
-        ConfigActivityOffset::Prev => Some(CycleDirection::Prev),
-        ConfigActivityOffset::Last => None,
+        ConfigSurfaceOffset::Next => Some(CycleDirection::Next),
+        ConfigSurfaceOffset::Prev => Some(CycleDirection::Prev),
+        ConfigSurfaceOffset::Last => None,
     }
 }
 
@@ -455,15 +455,15 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
     }
 }
 
-/// Resolves the active activity entity for `session` and triggers a
+/// Resolves the active surface entity for `session` and triggers a
 /// `TerminalKeyInput` on it. Silently no-ops when the session has no
-/// active pane/activity yet, or when the target entity has no
-/// `TerminalHandle` (e.g. Browser Activity) — the `bevy_terminal`
+/// active pane/surface yet, or when the target entity has no
+/// `TerminalHandle` (e.g. Browser Surface) — the `bevy_terminal`
 /// observer handles that case by also no-op'ing.
 fn forward_to_active_terminal(
     commands: &mut Commands,
     mux: &MultiplexerCommands,
-    registry: &ActivityEntityRegistry,
+    registry: &SurfaceEntityRegistry,
     session: Entity,
     key: TerminalKey,
     mods: TerminalModifiers,
@@ -471,10 +471,10 @@ fn forward_to_active_terminal(
     let Some(pane) = mux.sessions_active_pane(session) else {
         return;
     };
-    let Some(activity) = mux.panes_active_activity(pane) else {
+    let Some(surface) = mux.panes_active_surface(pane) else {
         return;
     };
-    let Some(entity) = registry.get(activity) else {
+    let Some(entity) = registry.get(surface) else {
         return;
     };
     commands.trigger(TerminalKeyInput {
@@ -508,7 +508,7 @@ mod tests {
             .add_systems(Update, dispatch_focused_key);
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
-        app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_plugins(crate::clipboard::ClipboardActionPlugin);
@@ -579,14 +579,14 @@ mod tests {
         cap.0.lock().unwrap().push("paste");
     }
 
-    /// Spawns a registry-registered Terminal Activity entity inside the
+    /// Spawns a registry-registered Terminal Surface entity inside the
     /// active pane of the only window in the test app, returning its Entity id.
     /// The entity carries NO `TerminalHandle`, so the `bevy_terminal`
     /// observer no-ops on the missing component — the test capture
     /// observer still records the trigger regardless of observer order.
-    fn install_active_terminal_activity(app: &mut App) -> Entity {
-        let activity_entity = app.world_mut().spawn_empty().id();
-        let activity_id =
+    fn install_active_terminal_surface(app: &mut App) -> Entity {
+        let surface_entity = app.world_mut().spawn_empty().id();
+        let surface_id =
             app.world_mut()
                 .run_system_once(
                     |mux: MultiplexerCommands,
@@ -596,24 +596,24 @@ mod tests {
                     >| {
                         let session = attached_session.iter().next()?;
                         let pane = mux.sessions_active_pane(session)?;
-                        mux.panes_active_activity(pane)
+                        mux.panes_active_surface(pane)
                     },
                 )
                 .unwrap()
                 .unwrap();
         let mut registry = app
             .world_mut()
-            .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
-        registry.insert_for_test(activity_id, activity_entity);
-        activity_entity
+            .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>();
+        registry.insert_for_test(surface_id, surface_entity);
+        surface_entity
     }
 
-    /// Spawns a registry-registered Terminal Activity entity that carries
+    /// Spawns a registry-registered Terminal Surface entity that carries
     /// a real `TerminalHandle` / `PtyHandle` / `Coalescer` (via
     /// `TerminalBundle::spawn`). Used by the paste-gate integration tests
     /// that need to observe `pending_user_input` flipping after the gate
     /// runs.
-    fn install_active_terminal_activity_with_handle(app: &mut App) -> Entity {
+    fn install_active_terminal_surface_with_handle(app: &mut App) -> Entity {
         let opts = bevy_terminal::SpawnOptions {
             cols: 10,
             rows: 5,
@@ -623,7 +623,7 @@ mod tests {
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let entity = app.world_mut().spawn(bundle).id();
-        let activity_id =
+        let surface_id =
             app.world_mut()
                 .run_system_once(
                     |mux: MultiplexerCommands,
@@ -633,15 +633,15 @@ mod tests {
                     >| {
                         let session = attached_session.iter().next()?;
                         let pane = mux.sessions_active_pane(session)?;
-                        mux.panes_active_activity(pane)
+                        mux.panes_active_surface(pane)
                     },
                 )
                 .unwrap()
                 .unwrap();
         let mut registry = app
             .world_mut()
-            .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
-        registry.insert_for_test(activity_id, entity);
+            .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>();
+        registry.insert_for_test(surface_id, entity);
         entity
     }
 
@@ -738,7 +738,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedClipboardOps::default());
         app.add_observer(capture_copy_op);
-        install_active_terminal_activity(&mut app);
+        install_active_terminal_surface(&mut app);
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::SuperLeft);
@@ -763,9 +763,9 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedClipboardOps::default());
         app.add_observer(capture_copy_op);
-        let activity_entity = install_active_terminal_activity(&mut app);
+        let surface_entity = install_active_terminal_surface(&mut app);
         app.world_mut()
-            .entity_mut(activity_entity)
+            .entity_mut(surface_entity)
             .insert(crate::ui::copy_mode::CopyModeState);
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
@@ -791,7 +791,7 @@ mod tests {
         app.insert_resource(CapturedClipboardOps::default());
         app.add_observer(capture_copy_op);
         app.add_observer(capture_paste_op);
-        install_active_terminal_activity(&mut app);
+        install_active_terminal_surface(&mut app);
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::SuperLeft);
@@ -818,7 +818,7 @@ mod tests {
         app.insert_resource(CapturedClipboardOps::default());
         app.add_observer(capture_copy_op);
         app.add_observer(capture_paste_op);
-        install_active_terminal_activity(&mut app);
+        install_active_terminal_surface(&mut app);
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::SuperLeft);
@@ -847,7 +847,7 @@ mod tests {
             .add_plugins(crate::configs::OzmuxConfigsPlugin)
             .add_plugins(OzmuxShortcutPlugin);
         app.insert_resource(ButtonInput::<KeyCode>::default());
-        app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
@@ -859,7 +859,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        let _activity_entity = install_active_terminal_activity(&mut app);
+        let _surface_entity = install_active_terminal_surface(&mut app);
 
         press(&mut app, window_entity, Bk::Character("h".into()));
         app.update();
@@ -882,7 +882,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        install_active_terminal_activity(&mut app);
+        install_active_terminal_surface(&mut app);
 
         press(&mut app, window_entity, Bk::Enter);
         app.update();
@@ -910,9 +910,9 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        let activity_entity = install_active_terminal_activity(&mut app);
+        let surface_entity = install_active_terminal_surface(&mut app);
         app.world_mut()
-            .entity_mut(activity_entity)
+            .entity_mut(surface_entity)
             .insert(crate::ui::copy_mode::CopyModeState);
 
         press(&mut app, window_entity, Bk::Character("h".into()));
@@ -931,9 +931,9 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        let activity_entity = install_active_terminal_activity(&mut app);
+        let surface_entity = install_active_terminal_surface(&mut app);
         app.world_mut()
-            .entity_mut(activity_entity)
+            .entity_mut(surface_entity)
             .insert(crate::ui::copy_mode::CopyModeState);
 
         press(&mut app, window_entity, Bk::Character("y".into()));
@@ -959,7 +959,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        let _activity_entity = install_active_terminal_activity_with_handle(&mut app);
+        let _surface_entity = install_active_terminal_surface_with_handle(&mut app);
         {
             let mut clipboard = app
                 .world_mut()
@@ -985,7 +985,7 @@ mod tests {
     #[test]
     fn cmd_v_with_bracketed_paste_on_wraps_bytes_when_clipboard_has_text() {
         let (mut app, window_entity) = make_app(true);
-        let activity_entity = install_active_terminal_activity_with_handle(&mut app);
+        let surface_entity = install_active_terminal_surface_with_handle(&mut app);
         let clipboard_available = {
             let cb = app.world().resource::<crate::clipboard::Clipboard>();
             cb.is_available_for_test()
@@ -1003,13 +1003,13 @@ mod tests {
         {
             let mut handle = app
                 .world_mut()
-                .get_mut::<bevy_terminal::TerminalHandle>(activity_entity)
+                .get_mut::<bevy_terminal::TerminalHandle>(surface_entity)
                 .unwrap();
             handle.advance(b"\x1b[?2004h");
         }
         assert!(
             !app.world()
-                .get::<bevy_terminal::TerminalHandle>(activity_entity)
+                .get::<bevy_terminal::TerminalHandle>(surface_entity)
                 .unwrap()
                 .pending_user_input(),
             "precondition: no pending input before paste",
@@ -1024,7 +1024,7 @@ mod tests {
 
         assert!(
             app.world()
-                .get::<bevy_terminal::TerminalHandle>(activity_entity)
+                .get::<bevy_terminal::TerminalHandle>(surface_entity)
                 .unwrap()
                 .pending_user_input(),
             "after Cmd+V with bracketed paste on and seeded clipboard, handle.write must have been called (flipping pending_user_input to true)",
@@ -1036,13 +1036,13 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        let activity_entity = install_active_terminal_activity_with_handle(&mut app);
+        let surface_entity = install_active_terminal_surface_with_handle(&mut app);
         app.world_mut()
-            .entity_mut(activity_entity)
+            .entity_mut(surface_entity)
             .insert(crate::ui::copy_mode::CopyModeState);
         assert!(
             !app.world()
-                .get::<bevy_terminal::TerminalHandle>(activity_entity)
+                .get::<bevy_terminal::TerminalHandle>(surface_entity)
                 .unwrap()
                 .pending_user_input()
         );
@@ -1056,7 +1056,7 @@ mod tests {
 
         assert!(
             !app.world()
-                .get::<bevy_terminal::TerminalHandle>(activity_entity)
+                .get::<bevy_terminal::TerminalHandle>(surface_entity)
                 .unwrap()
                 .pending_user_input(),
             "copy-mode gate must consume Cmd+V before the paste gate; no write should occur",
@@ -1073,7 +1073,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        install_active_terminal_activity_with_handle(&mut app);
+        install_active_terminal_surface_with_handle(&mut app);
 
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
@@ -1120,7 +1120,7 @@ mod tests {
     #[test]
     fn key_repeat_event_is_ignored() {
         let (mut app, window_entity) = make_app(true);
-        install_active_terminal_activity(&mut app);
+        install_active_terminal_surface(&mut app);
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::SuperLeft);
@@ -1152,7 +1152,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        install_active_terminal_activity(&mut app);
+        install_active_terminal_surface(&mut app);
         press(&mut app, window_entity, Bk::Character("a".into()));
         app.update();
         let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
@@ -1171,7 +1171,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        install_active_terminal_activity(&mut app);
+        install_active_terminal_surface(&mut app);
         let ev = KeyboardInput {
             key_code: KeyCode::Unidentified(NativeKeyCode::Unidentified),
             logical_key: Bk::Character("j".into()),
@@ -1203,17 +1203,17 @@ mod tests {
     fn cap_split(_: On<SplitPaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
         c.0.push("SplitPane");
     }
-    fn cap_new_activity(
-        _: On<NewTerminalActivityActionEvent>,
+    fn cap_new_surface(
+        _: On<NewTerminalSurfaceActionEvent>,
         mut c: ResMut<CapturedActionEvents>,
     ) {
-        c.0.push("NewTerminalActivity");
+        c.0.push("NewTerminalSurface");
     }
     fn cap_focus_pane(_: On<FocusPaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
         c.0.push("FocusPane");
     }
-    fn cap_focus_activity(_: On<FocusActivityActionEvent>, mut c: ResMut<CapturedActionEvents>) {
-        c.0.push("FocusActivity");
+    fn cap_focus_surface(_: On<FocusSurfaceActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("FocusSurface");
     }
     fn cap_swap(_: On<SwapPaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
         c.0.push("SwapPane");
@@ -1221,8 +1221,8 @@ mod tests {
     fn cap_close_pane(_: On<ClosePaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
         c.0.push("ClosePane");
     }
-    fn cap_close_activity(_: On<CloseActivityActionEvent>, mut c: ResMut<CapturedActionEvents>) {
-        c.0.push("CloseActivity");
+    fn cap_close_surface(_: On<CloseSurfaceActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("CloseSurface");
     }
     fn cap_new_session(_: On<NewSessionActionEvent>, mut c: ResMut<CapturedActionEvents>) {
         c.0.push("NewSession");
@@ -1234,15 +1234,15 @@ mod tests {
     fn setup_exec_app() -> App {
         let mut app = App::new();
         app.add_plugins(MultiplexerPlugin);
-        app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<CapturedActionEvents>();
         app.add_observer(cap_split);
-        app.add_observer(cap_new_activity);
+        app.add_observer(cap_new_surface);
         app.add_observer(cap_focus_pane);
-        app.add_observer(cap_focus_activity);
+        app.add_observer(cap_focus_surface);
         app.add_observer(cap_swap);
         app.add_observer(cap_close_pane);
-        app.add_observer(cap_close_activity);
+        app.add_observer(cap_close_surface);
         app.add_observer(cap_new_session);
         app.add_observer(cap_focus_session);
         app
@@ -1261,7 +1261,7 @@ mod tests {
             .run_system_once(
                 move |mut commands: Commands,
                       mux: MultiplexerCommands,
-                      registry: Res<crate::ui::registry::ActivityEntityRegistry>| {
+                      registry: Res<crate::ui::registry::SurfaceEntityRegistry>| {
                     execute_action(&mut commands, &mux, action.clone(), session, &registry);
                 },
             )
@@ -1288,11 +1288,11 @@ mod tests {
     }
 
     #[test]
-    fn execute_action_new_terminal_activity_triggers_event() {
+    fn execute_action_new_terminal_surface_triggers_event() {
         let mut app = setup_exec_app();
         let session = exec_bootstrap_session(app.world_mut());
-        run_execute_action(&mut app, ShortcutAction::NewTerminalActivity, session);
-        assert_eq!(captured_actions(&app), vec!["NewTerminalActivity"]);
+        run_execute_action(&mut app, ShortcutAction::NewTerminalSurface, session);
+        assert_eq!(captured_actions(&app), vec!["NewTerminalSurface"]);
     }
 
     #[test]
@@ -1310,27 +1310,27 @@ mod tests {
     }
 
     #[test]
-    fn execute_action_focus_activity_next_triggers_event() {
+    fn execute_action_focus_surface_next_triggers_event() {
         let mut app = setup_exec_app();
         let session = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
-            ShortcutAction::FocusActivity {
-                offset: ozmux_configs::shortcuts::ActivityOffset::Next,
+            ShortcutAction::FocusSurface {
+                offset: ozmux_configs::shortcuts::SurfaceOffset::Next,
             },
             session,
         );
-        assert_eq!(captured_actions(&app), vec!["FocusActivity"]);
+        assert_eq!(captured_actions(&app), vec!["FocusSurface"]);
     }
 
     #[test]
-    fn execute_action_focus_activity_last_emits_no_event() {
+    fn execute_action_focus_surface_last_emits_no_event() {
         let mut app = setup_exec_app();
         let session = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
-            ShortcutAction::FocusActivity {
-                offset: ozmux_configs::shortcuts::ActivityOffset::Last,
+            ShortcutAction::FocusSurface {
+                offset: ozmux_configs::shortcuts::SurfaceOffset::Last,
             },
             session,
         );
@@ -1360,11 +1360,11 @@ mod tests {
     }
 
     #[test]
-    fn execute_action_close_activity_triggers_event() {
+    fn execute_action_close_surface_triggers_event() {
         let mut app = setup_exec_app();
         let session = exec_bootstrap_session(app.world_mut());
-        run_execute_action(&mut app, ShortcutAction::CloseActivity, session);
-        assert_eq!(captured_actions(&app), vec!["CloseActivity"]);
+        run_execute_action(&mut app, ShortcutAction::CloseSurface, session);
+        assert_eq!(captured_actions(&app), vec!["CloseSurface"]);
     }
 
     #[test]
@@ -1424,7 +1424,7 @@ mod tests {
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
-        install_active_terminal_activity(&mut app);
+        install_active_terminal_surface(&mut app);
 
         {
             let mut state = app

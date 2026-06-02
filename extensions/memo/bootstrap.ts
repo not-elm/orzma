@@ -9,7 +9,7 @@ bootstrap({
       await ctx.pane.split({
         orientation: 'vertical',
         side: 'after',
-        activity: {
+        surface: {
           kind: 'extension',
           html: fileURLToPath(new URL('./index.html', import.meta.url)),
           handlers: {
