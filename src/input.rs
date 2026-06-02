@@ -118,8 +118,8 @@ pub(crate) fn dispatch_focused_key(
             Err(err) => {
                 // NOTE: silently dropping keystrokes here would be invisible to
                 // the user. The invariant 'exactly one entity carries
-                // AttachedSession' is enforced by bootstrap + dispatch_new_session
-                // + dispatch_focus_session; if it's violated we want a loud
+                // AttachedSession' is enforced by bootstrap and the observers in
+                // `crate::action::session`; if it's violated we want a loud
                 // signal in the log so the failure mode is observable.
                 tracing::warn!(
                     target: "ozmux_gui::input",
