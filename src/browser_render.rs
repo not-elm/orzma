@@ -22,6 +22,9 @@ use ozmux_configs::browser::resolve_omnibox_input;
 use ozmux_multiplexer::{SurfaceKind, AttachedSession, MultiplexerCommands, SessionMarker};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
+/// Vimium-style scroll keybindings, injected into each browser page webview as
+/// a `PreloadScripts` entry. Self-contained IIFE; see `browser_render/vim_scroll.js`.
+const VIM_SCROLL_JS: &str = include_str!("browser_render/vim_scroll.js");
 
 /// Wires the browser surface renderer: two-phase mount, toolbar render +
 /// navigation, address-bar editor + focus, and navigation-state observers.
@@ -158,6 +161,7 @@ fn attach_browser_webview(
         commands.entity(page).insert((
             WebviewSource::new(resolved),
             WebviewSize(size),
+            PreloadScripts::from([VIM_SCROLL_JS.to_string()]),
             MaterialNode(materials.add(WebviewUiMaterial::default())),
         ));
     }
@@ -1129,6 +1133,54 @@ mod tests {
             found = Some(text.0.clone());
         }
         assert_eq!(found.as_deref(), Some("https://example.com"));
+    }
+
+    #[test]
+    fn attach_injects_vim_scroll_preload() {
+        use crate::ui::HostActivityEntity;
+        use ozmux_multiplexer::ActivityKind;
+        let mut app = make_test_app();
+        app.add_systems(
+            Update,
+            (build_browser_chrome, attach_browser_webview).chain(),
+        );
+
+        let activity = app
+            .world_mut()
+            .spawn(ActivityKind::Browser {
+                initial_url: Some("github.com".into()),
+                profile: Default::default(),
+            })
+            .id();
+        let host = app
+            .world_mut()
+            .spawn((
+                BrowserActivityMarker,
+                HostActivityEntity(activity),
+                laid_out_node(Vec2::new(800.0, 600.0)),
+            ))
+            .id();
+        // NOTE: first tick builds chrome; attach is a no-op until the page child is laid out.
+        app.update();
+
+        let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
+        app.world_mut()
+            .entity_mut(page)
+            .insert(laid_out_node(Vec2::new(800.0, 568.0)));
+        // NOTE: page child now has a ComputedNode, so attach fires this tick.
+        app.update();
+
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(page)
+            .expect("page webview must carry the vim-scroll PreloadScript");
+        assert!(
+            preload
+                .0
+                .iter()
+                .any(|s| s.contains("window.__ozmuxVimScroll")),
+            "the vim-scroll content script must be injected into the browser page webview"
+        );
     }
 
     #[test]
