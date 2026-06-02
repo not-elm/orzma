@@ -67,6 +67,7 @@ impl Plugin for OzmuxShortcutPlugin {
         .add_systems(
             Update,
             dispatch_focused_key
+                .run_if(not(is_ime_composing))
                 .in_set(InputPhase::FocusedKey)
                 .after(read_ime_events),
         );
@@ -97,7 +98,6 @@ pub(crate) fn dispatch_focused_key(
     configs: Res<OzmuxConfigsResource>,
     registry: Res<ActivityEntityRegistry>,
     copy_modes: Query<(), With<CopyModeState>>,
-    ime_state: Res<ImeState>,
 ) {
     // NOTE: when the browser address bar owns focus, the active pane is always a
     // browser host (no `TerminalHandle`), so every terminal action below
@@ -123,10 +123,6 @@ pub(crate) fn dispatch_focused_key(
 
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
-            continue;
-        }
-
-        if ime_state.is_composing() {
             continue;
         }
 
@@ -622,6 +618,10 @@ fn forward_to_active_terminal(
         key,
         modifiers: mods,
     });
+}
+
+fn is_ime_composing(ime_state: Res<ImeState>) -> bool {
+    ime_state.is_composing()
 }
 
 #[cfg(test)]
