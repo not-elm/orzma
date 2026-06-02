@@ -10,7 +10,7 @@ pub(crate) mod session;
 
 /// Bevy Plugin that registers every action-dispatch sub-plugin under the
 /// `action` module.
-pub struct OzmuxActionPlugin;
+pub(crate) struct OzmuxActionPlugin;
 
 impl Plugin for OzmuxActionPlugin {
     fn build(&self, app: &mut App) {

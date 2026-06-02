@@ -12,33 +12,33 @@ use bevy::prelude::*;
 use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
 
 /// Bevy Plugin that registers the session-action observers.
-pub struct OzmuxSessionActionPlugin;
+pub(crate) struct OzmuxSessionActionPlugin;
 
 impl Plugin for OzmuxSessionActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_new_session_action)
-            .add_observer(on_focus_session_action);
+        app.add_observer(apply_new_session)
+            .add_observer(apply_focus_session);
     }
 }
 
 /// Request to mint a new session and attach it. Triggered by
 /// `ShortcutAction::NewSession`.
 #[derive(EntityEvent, Debug)]
-pub struct NewSessionActionEvent {
+pub(crate) struct NewSessionActionEvent {
     /// The session attached at dispatch time (trigger target only; the
     /// observer re-queries the live marker).
     #[event_target]
-    pub session: Entity,
+    pub(crate) session: Entity,
 }
 
 /// Request to move session focus. Triggered by
 /// `ShortcutAction::FocusSession` and `ShortcutAction::FocusSessionNumber`.
 #[derive(EntityEvent, Debug)]
-pub struct FocusSessionActionEvent {
+pub(crate) struct FocusSessionActionEvent {
     /// The session attached at dispatch time (trigger target only; the
     /// observer re-queries the live marker).
     #[event_target]
-    pub session: Entity,
+    pub(crate) session: Entity,
     /// Which session to focus.
     pub(crate) target: FocusSessionTarget,
 }
@@ -95,42 +95,19 @@ pub(crate) fn spawn_attached_session(
 // `mux`, then inserts components on it via `commands`. If `commands`
 // applied first, those inserts would reference an entity that does not
 // exist yet and panic.
-fn on_new_session_action(
+fn apply_new_session(
     _trigger: On<NewSessionActionEvent>,
     mut mux: MultiplexerCommands,
     mut commands: Commands,
     mut counter: ResMut<SessionNameCounter>,
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
 ) {
-    dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_session);
-}
-
-fn on_focus_session_action(
-    trigger: On<FocusSessionActionEvent>,
-    mut commands: Commands,
-    sessions: Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
-    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-) {
-    dispatch_focus_session(
-        &mut commands,
-        &sessions,
-        &attached_session,
-        &trigger.event().target,
-    );
-}
-
-fn dispatch_new_session(
-    commands: &mut Commands,
-    mux: &mut MultiplexerCommands,
-    counter: &mut SessionNameCounter,
-    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-) {
     match attached_session.single() {
         Ok(previous_attached) => {
             tracing::debug!(
                 target: "ozmux_gui::action",
                 ?previous_attached,
-                "dispatch_new_session: queued AttachedSession remove from previous"
+                "apply_new_session: queued AttachedSession remove from previous"
             );
             commands
                 .entity(previous_attached)
@@ -140,23 +117,23 @@ fn dispatch_new_session(
             tracing::debug!(
                 target: "ozmux_gui::action",
                 ?err,
-                "dispatch_new_session: no single previously-attached session (skipping remove)"
+                "apply_new_session: no single previously-attached session (skipping remove)"
             );
         }
     }
-    let new_session = spawn_attached_session(commands, mux, counter);
+    let new_session = spawn_attached_session(&mut commands, &mut mux, &mut counter);
     tracing::debug!(
         target: "ozmux_gui::action",
         ?new_session,
-        "dispatch_new_session: queued spawn of new attached session"
+        "apply_new_session: queued spawn of new attached session"
     );
 }
 
-fn dispatch_focus_session(
-    commands: &mut Commands,
-    sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
-    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    target: &FocusSessionTarget,
+fn apply_focus_session(
+    trigger: On<FocusSessionActionEvent>,
+    mut commands: Commands,
+    sessions: Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
+    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
 ) {
     let mut pairs: Vec<(Entity, u32)> = sessions
         .iter()
@@ -175,7 +152,7 @@ fn dispatch_focus_session(
         return;
     };
 
-    let target_idx = match target {
+    let target_idx = match trigger.event().target {
         FocusSessionTarget::Next => (current_idx + 1) % entries.len(),
         FocusSessionTarget::Prev => current_idx.checked_sub(1).unwrap_or(entries.len() - 1),
         FocusSessionTarget::Last => {
@@ -186,7 +163,7 @@ fn dispatch_focus_session(
             return;
         }
         FocusSessionTarget::Number(index) => {
-            let i = *index as usize;
+            let i = index as usize;
             if i >= entries.len() {
                 return;
             }
