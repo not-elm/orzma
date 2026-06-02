@@ -208,6 +208,7 @@ impl Plugin for OzmuxUiPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::OzmuxActionPlugin;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
     use bevy::asset::AssetPlugin;
@@ -255,7 +256,7 @@ mod tests {
             .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
-            .add_plugins(crate::action::OzmuxActionPlugin)
+            .add_plugins(OzmuxActionPlugin)
             .add_plugins(OzmuxUiPlugin);
 
         app.world_mut().spawn((
