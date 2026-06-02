@@ -56,7 +56,7 @@ struct WebviewMountUnresolved;
 
 /// JS defining `window.ozmux` over `cef.emit` / `cef.listen`, injected per
 /// webview as a `PreloadScripts` entry (see `finish_extension_setup`). Mirrors
-/// `sdk/typescript/src/cef/ozmux-bridge.ts`.
+/// `sdk/typescript/src/surface/ozmux-bridge.ts`.
 pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 
 /// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared

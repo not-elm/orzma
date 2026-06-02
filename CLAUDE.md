@@ -29,7 +29,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 
 `packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest`, `zod` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace globs are `sdk/*` and `extensions/*`:
 
-- `sdk/typescript` (`@ozmux/sdk`) — server-side SDK for extensions, with `./server`, `./cmd-shim`, and `./cef` exports; tests via `vitest`.
+- `sdk/typescript` (`@ozmux/sdk`) — server-side SDK for extensions, with `./server`, `./cmd-shim`, and `./surface` exports; tests via `vitest`.
 - `extensions/memo` (`memo`) — the `@memo` Node extension, consuming `@ozmux/sdk` via `workspace:*`.
 
 ### How the pieces connect at runtime
