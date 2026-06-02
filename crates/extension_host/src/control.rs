@@ -15,11 +15,11 @@ pub struct ControlRequest {
 
 /// The operation a control request carries.
 pub enum ControlOp {
-    /// Split the invoking pane, seeding the new pane with `params.activity`.
+    /// Split the invoking pane, seeding the new pane with `params.surface`.
     Split(SplitParams),
-    /// Add an activity (tab) to the invoking pane without splitting.
-    AddActivity(AddActivityParams),
-    /// Make `activity_id` the invoking pane's active activity.
+    /// Add a surface (tab) to the invoking pane without splitting.
+    AddSurface(AddSurfaceParams),
+    /// Make `surface_id` the invoking pane's active surface.
     Activate(ActivateParams),
 }
 
@@ -30,22 +30,22 @@ pub struct SplitParams {
     pub side: ControlSide,
     /// Split orientation.
     pub orientation: ControlOrientation,
-    /// The activity to seed into the new pane.
-    pub activity: ActivitySpec,
+    /// The surface to seed into the new pane.
+    pub surface: SurfaceSpec,
 }
 
-/// Parameters of an `add_activity` control request.
+/// Parameters of an `add_surface` control request.
 #[derive(Deserialize)]
-pub struct AddActivityParams {
-    /// The activity to add to the invoking pane.
-    pub activity: ActivitySpec,
+pub struct AddSurfaceParams {
+    /// The surface to add to the invoking pane.
+    pub surface: SurfaceSpec,
 }
 
 /// Parameters of an `activate` control request.
 #[derive(Deserialize)]
 pub struct ActivateParams {
-    /// The SDK activity id (entity bits, decimal string) to activate.
-    pub activity_id: String,
+    /// The SDK surface id (entity bits, decimal string) to activate.
+    pub surface_id: String,
 }
 
 /// Protocol-side split side (mapped to `ozmux_multiplexer::Side` by the bridge).
@@ -68,26 +68,26 @@ pub enum ControlOrientation {
     Vertical,
 }
 
-/// The activity spec carried by a split or add_activity request.
+/// The surface spec carried by a split or add_surface request.
 #[derive(Deserialize)]
-pub struct ActivitySpec {
-    /// Activity kind discriminator (flattened so `kind` tag is at this level).
+pub struct SurfaceSpec {
+    /// Surface kind discriminator (flattened so `kind` tag is at this level).
     #[serde(flatten)]
-    pub kind: ActivityKindSpec,
+    pub kind: SurfaceKindSpec,
     /// Optional display name.
     #[serde(default)]
     pub name: Option<String>,
-    /// The SDK's client-generated activity id (the key its handlers/channels
-    /// are registered under). The bridge addresses `{aid, frame}` envelopes
+    /// The SDK's client-generated surface id (the key its handlers/channels
+    /// are registered under). The bridge addresses `{surface_id, frame}` envelopes
     /// with this.
-    pub activity_id: String,
+    pub surface_id: String,
 }
 
-/// Protocol-side activity kind.
+/// Protocol-side surface kind.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-pub enum ActivityKindSpec {
-    /// An extension activity whose webview loads `entry` (the client's HTML path
+pub enum SurfaceKindSpec {
+    /// An extension surface whose webview loads `entry` (the client's HTML path
     /// relative to the extension dir / asset root).
     Extension {
         /// HTML entry path relative to the extension dir (e.g. `index.html`,
@@ -98,7 +98,7 @@ pub enum ActivityKindSpec {
         #[serde(default)]
         extension_name: Option<String>,
     },
-    /// An embedded browser activity. `url` is the raw `@browser open` input
+    /// An embedded browser surface. `url` is the raw `@browser open` input
     /// (a URL or search words), passed through verbatim for the host to resolve.
     Browser {
         /// Raw user input (a URL or search words).
@@ -111,10 +111,10 @@ pub enum ControlReply {
     /// Split succeeded; carries the new entities' bits.
     Split {
         new_pane_id: u64,
-        new_activity_id: u64,
+        new_surface_id: u64,
     },
-    /// Add-activity succeeded; carries the new activity entity bits.
-    AddActivity { new_activity_id: u64 },
+    /// Add-surface succeeded; carries the new surface entity bits.
+    AddSurface { new_surface_id: u64 },
     /// Activate succeeded (no payload).
     Activate,
 }
@@ -157,10 +157,10 @@ pub fn parse_call(line: &str) -> Result<(String, ControlRequest), ControlParseEr
                 .map_err(|e| ControlParseError::BadRequest(e.to_string()))?;
             ControlOp::Split(params)
         }
-        "add_activity" => {
-            let params: AddActivityParams = serde_json::from_value(raw.params)
+        "add_surface" => {
+            let params: AddSurfaceParams = serde_json::from_value(raw.params)
                 .map_err(|e| ControlParseError::BadRequest(e.to_string()))?;
-            ControlOp::AddActivity(params)
+            ControlOp::AddSurface(params)
         }
         "activate" => {
             let params: ActivateParams = serde_json::from_value(raw.params)
@@ -183,10 +183,10 @@ pub fn encode_response(id: &str, resp: &ControlResponse) -> String {
     enum Payload {
         Split {
             new_pane_id: String,
-            new_activity_id: String,
+            new_surface_id: String,
         },
-        AddActivity {
-            new_activity_id: String,
+        AddSurface {
+            new_surface_id: String,
         },
         Empty {},
     }
@@ -205,18 +205,18 @@ pub fn encode_response(id: &str, resp: &ControlResponse) -> String {
     let wire = match resp {
         ControlResponse::Ok(ControlReply::Split {
             new_pane_id,
-            new_activity_id,
+            new_surface_id,
         }) => Wire::Result {
             id,
             payload: Payload::Split {
                 new_pane_id: new_pane_id.to_string(),
-                new_activity_id: new_activity_id.to_string(),
+                new_surface_id: new_surface_id.to_string(),
             },
         },
-        ControlResponse::Ok(ControlReply::AddActivity { new_activity_id }) => Wire::Result {
+        ControlResponse::Ok(ControlReply::AddSurface { new_surface_id }) => Wire::Result {
             id,
-            payload: Payload::AddActivity {
-                new_activity_id: new_activity_id.to_string(),
+            payload: Payload::AddSurface {
+                new_surface_id: new_surface_id.to_string(),
             },
         },
         ControlResponse::Ok(ControlReply::Activate) => Wire::Result {
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn parses_memo_style_split_call() {
-        let line = r#"{"kind":"call","id":"abc","op":"split","pane":"4294967297","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","entry":"index.html","extension_name":"memo","name":null,"activity_id":"aid-123"}}}"#;
+        let line = r#"{"kind":"call","id":"abc","op":"split","pane":"4294967297","params":{"side":"after","orientation":"vertical","surface":{"kind":"extension","entry":"index.html","extension_name":"memo","name":null,"surface_id":"aid-123"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "abc");
         assert_eq!(req.pane_bits, 4294967297);
@@ -257,11 +257,11 @@ mod tests {
         };
         assert!(matches!(p.side, ControlSide::After));
         assert!(matches!(p.orientation, ControlOrientation::Vertical));
-        assert_eq!(p.activity.activity_id, "aid-123");
-        let ActivityKindSpec::Extension {
+        assert_eq!(p.surface.surface_id, "aid-123");
+        let SurfaceKindSpec::Extension {
             entry,
             extension_name,
-        } = p.activity.kind
+        } = p.surface.kind
         else {
             panic!("expected Extension kind");
         };
@@ -271,16 +271,16 @@ mod tests {
 
     #[test]
     fn parses_split_without_extension_name() {
-        let line = r#"{"kind":"call","id":"xyz","op":"split","pane":"1","params":{"side":"before","orientation":"horizontal","activity":{"kind":"extension","entry":"index.html","name":null,"activity_id":"aid-456"}}}"#;
+        let line = r#"{"kind":"call","id":"xyz","op":"split","pane":"1","params":{"side":"before","orientation":"horizontal","surface":{"kind":"extension","entry":"index.html","name":null,"surface_id":"aid-456"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "xyz");
         let ControlOp::Split(p) = req.op else {
             panic!("expected Split")
         };
-        let ActivityKindSpec::Extension {
+        let SurfaceKindSpec::Extension {
             entry,
             extension_name,
-        } = p.activity.kind
+        } = p.surface.kind
         else {
             panic!("expected Extension kind");
         };
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn rejects_non_numeric_pane() {
-        let line = r#"{"kind":"call","id":"x","op":"split","pane":"not-a-number","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","entry":"index.html","name":null,"activity_id":"x"}}}"#;
+        let line = r#"{"kind":"call","id":"x","op":"split","pane":"not-a-number","params":{"side":"after","orientation":"vertical","surface":{"kind":"extension","entry":"index.html","name":null,"surface_id":"x"}}}"#;
         assert!(matches!(
             parse_call(line),
             Err(ControlParseError::BadRequest(_))
@@ -308,14 +308,14 @@ mod tests {
 
     #[test]
     fn parses_browser_split_call() {
-        let line = r#"{"kind":"call","id":"b1","op":"split","pane":"1","params":{"side":"after","orientation":"vertical","activity":{"kind":"browser","url":"github.com","name":null,"activity_id":"aid-b"}}}"#;
+        let line = r#"{"kind":"call","id":"b1","op":"split","pane":"1","params":{"side":"after","orientation":"vertical","surface":{"kind":"browser","url":"github.com","name":null,"surface_id":"aid-b"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "b1");
         let ControlOp::Split(p) = req.op else {
             panic!("expected Split");
         };
-        assert_eq!(p.activity.activity_id, "aid-b");
-        let ActivityKindSpec::Browser { url } = p.activity.kind else {
+        assert_eq!(p.surface.surface_id, "aid-b");
+        let SurfaceKindSpec::Browser { url } = p.surface.kind else {
             panic!("expected Browser kind");
         };
         assert_eq!(url, "github.com");
@@ -327,12 +327,12 @@ mod tests {
             "id1",
             &ControlResponse::Ok(ControlReply::Split {
                 new_pane_id: 7,
-                new_activity_id: 9,
+                new_surface_id: 9,
             }),
         );
         assert_eq!(
             ok,
-            "{\"kind\":\"result\",\"id\":\"id1\",\"payload\":{\"new_pane_id\":\"7\",\"new_activity_id\":\"9\"}}\n"
+            "{\"kind\":\"result\",\"id\":\"id1\",\"payload\":{\"new_pane_id\":\"7\",\"new_surface_id\":\"9\"}}\n"
         );
         let err = encode_response(
             "id2",
@@ -348,36 +348,36 @@ mod tests {
     }
 
     #[test]
-    fn parses_add_activity_call() {
-        let line = r#"{"kind":"call","id":"a1","op":"add_activity","pane":"4294967297","params":{"activity":{"kind":"extension","entry":"index.html","extension_name":"md","name":"x.md","activity_id":"aid-1"}}}"#;
+    fn parses_add_surface_call() {
+        let line = r#"{"kind":"call","id":"a1","op":"add_surface","pane":"4294967297","params":{"surface":{"kind":"extension","entry":"index.html","extension_name":"md","name":"x.md","surface_id":"aid-1"}}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "a1");
-        let ControlOp::AddActivity(p) = req.op else {
-            panic!("expected AddActivity")
+        let ControlOp::AddSurface(p) = req.op else {
+            panic!("expected AddSurface")
         };
-        assert_eq!(p.activity.activity_id, "aid-1");
+        assert_eq!(p.surface.surface_id, "aid-1");
     }
 
     #[test]
     fn parses_activate_call() {
-        let line = r#"{"kind":"call","id":"a2","op":"activate","pane":"1","params":{"activity_id":"aid-9"}}"#;
+        let line = r#"{"kind":"call","id":"a2","op":"activate","pane":"1","params":{"surface_id":"aid-9"}}"#;
         let (id, req) = parse_call(line).expect("parse");
         assert_eq!(id, "a2");
         let ControlOp::Activate(p) = req.op else {
             panic!("expected Activate")
         };
-        assert_eq!(p.activity_id, "aid-9");
+        assert_eq!(p.surface_id, "aid-9");
     }
 
     #[test]
-    fn encodes_add_activity_and_activate_replies() {
+    fn encodes_add_surface_and_activate_replies() {
         let add = encode_response(
             "i1",
-            &ControlResponse::Ok(ControlReply::AddActivity { new_activity_id: 7 }),
+            &ControlResponse::Ok(ControlReply::AddSurface { new_surface_id: 7 }),
         );
         assert_eq!(
             add,
-            "{\"kind\":\"result\",\"id\":\"i1\",\"payload\":{\"new_activity_id\":\"7\"}}\n"
+            "{\"kind\":\"result\",\"id\":\"i1\",\"payload\":{\"new_surface_id\":\"7\"}}\n"
         );
         let act = encode_response("i2", &ControlResponse::Ok(ControlReply::Activate));
         assert_eq!(act, "{\"kind\":\"result\",\"id\":\"i2\",\"payload\":{}}\n");

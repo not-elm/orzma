@@ -7,9 +7,9 @@
 //! `Window::ime_enabled` and `.ime_position`).
 
 use crate::ui::AddressBarFocus;
-use crate::ui::TerminalActivityMarker;
+use crate::ui::TerminalSurfaceMarker;
 use crate::ui::copy_mode::CopyModeState;
-use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::registry::SurfaceEntityRegistry;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
@@ -140,8 +140,8 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// `PrimaryWindow.ime_enabled` and `.ime_position`.
 ///
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
-/// IME through bevy_cef's `Ime` → CEF bridge), OR the attached activity
-/// carries `TerminalActivityMarker` and does NOT have `CopyModeState`.
+/// IME through bevy_cef's `Ime` → CEF bridge), OR the attached surface
+/// carries `TerminalSurfaceMarker` and does NOT have `CopyModeState`.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
 /// window — computed from the attached terminal's `UiGlobalTransform`
@@ -150,8 +150,8 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 pub(crate) fn ime_policy_system(
     mux: MultiplexerCommands,
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    registry: Res<ActivityEntityRegistry>,
-    terminals: Query<(), With<TerminalActivityMarker>>,
+    registry: Res<SurfaceEntityRegistry>,
+    terminals: Query<(), With<TerminalSurfaceMarker>>,
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -259,7 +259,7 @@ pub(crate) fn read_ime_events(
     mut commands: Commands,
     mux: MultiplexerCommands,
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    registry: Res<ActivityEntityRegistry>,
+    registry: Res<SurfaceEntityRegistry>,
 ) {
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
@@ -285,7 +285,7 @@ pub(crate) fn read_ime_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::registry::ActivityEntityRegistry;
+    use crate::ui::registry::SurfaceEntityRegistry;
     use bevy::app::{App, Update};
     use bevy::ecs::entity::Entity;
     use bevy::ecs::observer::On;
@@ -488,7 +488,7 @@ mod tests {
             .add_plugins(MultiplexerPlugin)
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
-        app.init_resource::<ActivityEntityRegistry>();
+        app.init_resource::<SurfaceEntityRegistry>();
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
         app.add_message::<Ime>();
@@ -508,8 +508,8 @@ mod tests {
         // resolve_focused_terminal / forward_to_active_terminal resolve to it.
         let term_entity = app.world_mut().spawn_empty().id();
         {
-            let mut registry = app.world_mut().resource_mut::<ActivityEntityRegistry>();
-            registry.insert_for_test(outcome.activity, term_entity);
+            let mut registry = app.world_mut().resource_mut::<SurfaceEntityRegistry>();
+            registry.insert_for_test(outcome.surface, term_entity);
         }
 
         app.world_mut().spawn(Window {
@@ -528,7 +528,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.init_resource::<ActivityEntityRegistry>();
+        app.init_resource::<SurfaceEntityRegistry>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<AddressBarFocus>();
         app.insert_resource(TerminalCellMetricsResource {
@@ -578,7 +578,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.init_resource::<ActivityEntityRegistry>();
+        app.init_resource::<SurfaceEntityRegistry>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<AddressBarFocus>();
         app.insert_resource(TerminalCellMetricsResource {

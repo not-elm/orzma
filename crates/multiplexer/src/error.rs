@@ -47,17 +47,17 @@ pub enum MultiplexerError {
     #[error("active pane {pane:?} must belong to session {session:?}")]
     ActivePaneMustBelongToSession { session: Entity, pane: Entity },
 
-    #[error("activity entity not found: {0:?}")]
-    ActivityNotFound(Entity),
+    #[error("surface entity not found: {0:?}")]
+    SurfaceNotFound(Entity),
 
     #[error("pane already placed in cell tree: {0:?}")]
     PaneAlreadyPlaced(Entity),
 
-    #[error("activity {activity:?} is not in pane {pane:?}")]
-    ActivityNotInPane { pane: Entity, activity: Entity },
+    #[error("surface {surface:?} is not in pane {pane:?}")]
+    SurfaceNotInPane { pane: Entity, surface: Entity },
 
-    #[error("cannot remove the only activity in pane {0:?}")]
-    CannotRemoveLastActivity(Entity),
+    #[error("cannot remove the only surface in pane {0:?}")]
+    CannotRemoveLastSurface(Entity),
 }
 
 /// Result alias used throughout the multiplexer crate.

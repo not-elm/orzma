@@ -1,7 +1,7 @@
 //! Standalone status-bar rebuild system. Rebuilds when the set of Session
 //! entities changes (Added/RemovedComponents on SessionMarker) or the
 //! AttachedSession marker moves. Does NOT depend on per-session epoch
-//! bumps — content changes (split / activity-add) do not redraw the
+//! bumps — content changes (split / surface-add) do not redraw the
 //! status bar.
 
 use crate::font::TerminalUiFont;

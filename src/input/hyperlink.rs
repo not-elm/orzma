@@ -5,7 +5,7 @@
 
 use crate::input::mouse_buttons::{cell_at_local, resolve_pane_at_phys};
 use crate::input::{InputPhase, current_modifiers};
-use crate::ui::ActivityHostNode;
+use crate::ui::SurfaceHostNode;
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -104,7 +104,7 @@ fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<ActivityHostNode>>,
+    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<SurfaceHostNode>>,
     grids: Query<&TerminalGrid>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,

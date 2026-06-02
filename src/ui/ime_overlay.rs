@@ -9,7 +9,7 @@
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
 use crate::input::resolve_focused_terminal;
-use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::registry::SurfaceEntityRegistry;
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -180,7 +180,7 @@ pub(crate) fn position_ime_overlay(
     state: Res<ImeState>,
     mux: MultiplexerCommands,
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    registry: Res<ActivityEntityRegistry>,
+    registry: Res<SurfaceEntityRegistry>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -320,7 +320,7 @@ fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
     mux: MultiplexerCommands,
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    registry: Res<ActivityEntityRegistry>,
+    registry: Res<SurfaceEntityRegistry>,
     mut grids: Query<(Entity, &mut TerminalGrid)>,
 ) {
     let focused = if state.is_composing() {

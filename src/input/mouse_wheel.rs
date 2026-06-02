@@ -36,7 +36,7 @@ use ozmux_configs::mouse::FineModifier;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::ui::copy_mode::CopyModeState;
-use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::registry::SurfaceEntityRegistry;
 
 /// Per-frame accumulator that carries fractional Pixel deltas across
 /// frames and tracks the entity the residual was earned on (so a focus
@@ -64,7 +64,7 @@ fn dispatch_mouse_wheel(
     mut handles: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
-    registry: Res<ActivityEntityRegistry>,
+    registry: Res<SurfaceEntityRegistry>,
     mux: ozmux_multiplexer::MultiplexerCommands,
     copy_modes: Query<(), With<CopyModeState>>,
     attached_session: Query<

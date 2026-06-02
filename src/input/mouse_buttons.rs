@@ -1,6 +1,6 @@
 //! Bevy plugin that drives mouse-button selection. Reads
 //! `MouseButtonInput` and `CursorMoved` events, hit-tests against
-//! activity hosts, builds `ButtonEvent`s, dispatches them through
+//! surface hosts, builds `ButtonEvent`s, dispatches them through
 //! `bevy_terminal::ButtonAction::route`, and applies the result.
 //!
 //! State is owned by the `MouseSelectionState` resource — see spec
@@ -9,9 +9,9 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::input::{InputPhase, current_modifiers};
-use crate::ui::ActivityHostNode;
+use crate::ui::SurfaceHostNode;
 use crate::ui::copy_mode::CopyModeState;
-use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::registry::SurfaceEntityRegistry;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -85,7 +85,7 @@ impl Plugin for MouseButtonsInputPlugin {
     }
 }
 
-/// Hit-tests `cursor_phys_px` against all `ActivityHostNode` entities
+/// Hit-tests `cursor_phys_px` against all `SurfaceHostNode` entities
 /// and returns `(entity, local_phys_px)` for the first pane that
 /// contains the cursor. `local_phys_px` is in pane-local pixels with
 /// origin at the top-left corner of the node (i.e., `(0, 0)` is the
@@ -95,7 +95,7 @@ impl Plugin for MouseButtonsInputPlugin {
 /// must convert from `Window::cursor_position()` (logical) by
 /// multiplying by `Window::scale_factor()` first.
 pub(crate) fn resolve_pane_at_phys(
-    hosts: &Query<(Entity, &ComputedNode, &UiGlobalTransform), With<ActivityHostNode>>,
+    hosts: &Query<(Entity, &ComputedNode, &UiGlobalTransform), With<SurfaceHostNode>>,
     cursor_phys_px: Vec2,
 ) -> Option<(Entity, Vec2)> {
     for (entity, node, transform) in hosts.iter() {
@@ -176,7 +176,7 @@ pub(crate) fn next_click_count(
 /// Pre-route helper. If `target_entity` belongs to a pane that is not
 /// the currently active pane in the attached session, updates
 /// `Session::ActivePane`. No-op when:
-///   - The entity isn't registered as the active activity of any pane
+///   - The entity isn't registered as the active surface of any pane
 ///     in the attached session.
 ///   - The pane is already active.
 ///   - The session isn't found.
@@ -189,7 +189,7 @@ pub(crate) fn next_click_count(
 /// session's panes; an unknown target falls through as a no-op.
 pub(crate) fn try_click_to_focus(
     mux: &mut ozmux_multiplexer::MultiplexerCommands,
-    registry: &ActivityEntityRegistry,
+    registry: &SurfaceEntityRegistry,
     attached_session: Entity,
     target_entity: Entity,
 ) -> bool {
@@ -199,8 +199,8 @@ pub(crate) fn try_click_to_focus(
     let target_pane: Option<Entity> = {
         let mut found = None;
         for pane in mux.panes_of_session(attached_session) {
-            for activity in mux.activities_of_pane(pane) {
-                if registry.get(activity) == Some(target_entity) {
+            for surface in mux.surfaces_of_pane(pane) {
+                if registry.get(surface) == Some(target_entity) {
                     found = Some(pane);
                     break;
                 }
@@ -371,7 +371,7 @@ fn synthesize_drag_cell(
 }
 
 /// Per-frame system entrypoint. Drains `MouseButtonInput`, hit-tests
-/// against activity hosts, tracks click count, dispatches every
+/// against surface hosts, tracks click count, dispatches every
 /// press/release through `ButtonAction::route`, and pre-routes
 /// click-to-focus per spec §6 step 4. Drag-state tracking + autoscroll
 /// (Tasks 19-20) are layered on later.
@@ -387,7 +387,7 @@ fn dispatch_mouse_buttons(
     )>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
-    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<ActivityHostNode>>,
+    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<SurfaceHostNode>>,
     grids: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
     copy_modes: Query<(), With<CopyModeState>>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -400,7 +400,7 @@ fn dispatch_mouse_buttons(
             With<ozmux_multiplexer::AttachedSession>,
         ),
     >,
-    registry: Res<ActivityEntityRegistry>,
+    registry: Res<SurfaceEntityRegistry>,
 ) {
     let Ok(window) = primary_window.single() else {
         buttons_msg.clear();
@@ -905,13 +905,13 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
         app.add_plugins(crate::action::split_pane::SplitPaneActionPlugin);
-        app.insert_resource(crate::ui::registry::ActivityEntityRegistry::default());
+        app.insert_resource(crate::ui::registry::SurfaceEntityRegistry::default());
 
-        let (session, original_pane, original_activity) = app
+        let (session, original_pane, original_surface) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
                 let o = mux.create_session(Some("test".into()));
-                (o.session, o.pane, o.activity)
+                (o.session, o.pane, o.surface)
             })
             .unwrap();
         app.world_mut().flush();
@@ -932,27 +932,27 @@ mod tests {
             .expect("active pane after split");
         assert_ne!(new_pane, original_pane, "split must promote fresh pane");
 
-        let new_activity = app
+        let new_surface = app
             .world()
-            .get::<ozmux_multiplexer::ActiveActivity>(new_pane)
+            .get::<ozmux_multiplexer::ActiveSurface>(new_pane)
             .map(|a| a.0)
-            .expect("new pane has active activity");
+            .expect("new pane has active surface");
 
         let original_entity = app.world_mut().spawn_empty().id();
         let new_entity = app.world_mut().spawn_empty().id();
         {
             let mut registry = app
                 .world_mut()
-                .resource_mut::<crate::ui::registry::ActivityEntityRegistry>();
-            registry.insert_for_test(original_activity, original_entity);
-            registry.insert_for_test(new_activity, new_entity);
+                .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>();
+            registry.insert_for_test(original_surface, original_entity);
+            registry.insert_for_test(new_surface, new_entity);
         }
 
         let mutated = app
             .world_mut()
             .run_system_once(
                 move |mut mux: MultiplexerCommands,
-                      registry: Res<crate::ui::registry::ActivityEntityRegistry>|
+                      registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
                       -> bool {
                     try_click_to_focus(&mut mux, &registry, session, original_entity)
                 },
@@ -972,7 +972,7 @@ mod tests {
             .world_mut()
             .run_system_once(
                 move |mut mux: MultiplexerCommands,
-                      registry: Res<crate::ui::registry::ActivityEntityRegistry>|
+                      registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
                       -> bool {
                     try_click_to_focus(&mut mux, &registry, session, original_entity)
                 },
@@ -988,7 +988,7 @@ mod tests {
             .world_mut()
             .run_system_once(
                 move |mut mux: MultiplexerCommands,
-                      registry: Res<crate::ui::registry::ActivityEntityRegistry>|
+                      registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
                       -> bool {
                     try_click_to_focus(&mut mux, &registry, session, stranger)
                 },
@@ -1452,7 +1452,7 @@ mod tests {
 
     #[test]
     fn click_focuses_pane_whose_host_has_no_terminal_handle() {
-        // Regression: clicking an extension/browser pane — an `ActivityHostNode`
+        // Regression: clicking an extension/browser pane — an `SurfaceHostNode`
         // whose host entity has NO `TerminalHandle` — must still move focus.
         // dispatch_mouse_buttons previously `continue`d at the terminal-handle
         // lookup *before* `try_click_to_focus` ran, so focus stayed on the
@@ -1470,7 +1470,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
         app.init_resource::<MouseSelectionState>();
-        app.init_resource::<ActivityEntityRegistry>();
+        app.init_resource::<SurfaceEntityRegistry>();
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(ozmux_configs::OzmuxConfigs::default()));
         app.insert_resource(bevy_terminal_renderer::TerminalCellMetricsResource {
@@ -1517,21 +1517,21 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
-        // The new pane's ActiveActivity is wired via deferred Commands, so read
+        // The new pane's ActiveSurface is wired via deferred Commands, so read
         // it only after the flush above.
-        let ext_activity = app
+        let ext_surface = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_activity(ext_pane))
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(ext_pane))
             .unwrap()
-            .expect("new pane has an active activity");
+            .expect("new pane has an active surface");
         app.world_mut().entity_mut(session).insert(AttachedSession);
 
-        // The clicked pane's host: ActivityHostNode + a laid-out node under the
+        // The clicked pane's host: SurfaceHostNode + a laid-out node under the
         // cursor, but NO TerminalHandle (a webview host).
         let ext_host = app
             .world_mut()
             .spawn((
-                ActivityHostNode,
+                SurfaceHostNode,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
                     ..ComputedNode::DEFAULT
@@ -1540,8 +1540,8 @@ mod tests {
             ))
             .id();
         app.world_mut()
-            .resource_mut::<ActivityEntityRegistry>()
-            .insert_for_test(ext_activity, ext_host);
+            .resource_mut::<SurfaceEntityRegistry>()
+            .insert_for_test(ext_surface, ext_host);
 
         let window = app
             .world_mut()

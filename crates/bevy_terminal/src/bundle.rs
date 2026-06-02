@@ -30,7 +30,7 @@ pub struct SpawnOptions {
     /// # Invariants
     ///
     /// The caller is responsible for OZMUX_* keys (`OZMUX_PANE_ID`,
-    /// `OZMUX_ACTIVITY_ID`, `OZMUX_SESSION_ID`) and for any PATH augmentation.
+    /// `OZMUX_SURFACE_ID`, `OZMUX_SESSION_ID`) and for any PATH augmentation.
     ///
     /// **PATH ordering is load-bearing**: if the caller prepends
     /// extension `bin/` directories to PATH, the ozmux `__builtin/`

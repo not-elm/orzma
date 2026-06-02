@@ -1,7 +1,7 @@
 //! Copy mode state. The vi cursor lives in alacritty
 //! (`Term::vi_mode_cursor`) and the active selection lives in
 //! `Term::selection`. This component is a pure marker — its presence
-//! on an Activity entity means "copy mode is active". The v / V
+//! on a Surface entity means "copy mode is active". The v / V
 //! toggle predicate reads `TerminalHandle::selection_type()` to
 //! decide between "start new selection of kind X" and "clear existing".
 
@@ -29,11 +29,11 @@ impl Plugin for CopyModePlugin {
     }
 }
 
-/// Marker: presence on an Activity entity means "copy mode is active".
+/// Marker: presence on a Surface entity means "copy mode is active".
 #[derive(Component, Debug, Default)]
 pub struct CopyModeState;
 
-/// Request to enter copy mode on a specific Activity entity. Fired by
+/// Request to enter copy mode on a specific Surface entity. Fired by
 /// `handle_chord` when it sees `Action::EnterCopyMode`. The observer
 /// inserts `CopyModeState` and calls `TerminalHandle::enter_vi_mode`.
 #[derive(EntityEvent, Debug)]
@@ -119,7 +119,7 @@ pub(crate) fn map_key_to_copy_op(key: &Key, mods: Modifiers) -> Option<CopyOp> {
 }
 
 /// Side-effecting helper called inline from
-/// `src/input.rs::dispatch_focused_key` whenever the active Activity
+/// `src/input.rs::dispatch_focused_key` whenever the active Surface
 /// entity carries `CopyModeState`. Looks up the entity's terminal
 /// handle, runs the `CopyOp` mapped from the key, and triggers
 /// `ExitCopyMode` when the op is exit/copy.

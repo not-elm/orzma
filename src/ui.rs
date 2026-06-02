@@ -4,20 +4,20 @@
 //! per-session epoch in `MultiplexerService` advances. The status bar
 //! rebuilds independently via
 //! `status_bar_sync::rebuild_status_bar_on_session_set_change` when the
-//! session list or `AttachedSession` marker changes. Activity host
-//! entities (managed by `ActivityEntityRegistry`) are kept stable across
+//! session list or `AttachedSession` marker changes. Surface host
+//! entities (managed by `SurfaceEntityRegistry`) are kept stable across
 //! rebuilds and re-parented via `ChildOf` — active hosts under the
 //! active session's pane slot, inactive hosts under the owning Session
 //! entity (a non-Node walker-skipped park).
 
 use crate::system_set::OzmuxSystems;
-use crate::ui::registry::ActivityEntityRegistry;
+use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::prelude::*;
 
-pub(crate) mod activity;
+pub(crate) mod surface;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
@@ -48,48 +48,48 @@ pub struct UiRoot;
 pub struct SessionUiRoot;
 
 /// Marker for every transient UI Node (status bar, tab bar, pane frame,
-/// split container, placeholder activity content). Rebuilds query this
-/// and despawn every match. Activity host entities must NOT carry this.
+/// split container, placeholder surface content). Rebuilds query this
+/// and despawn every match. Surface host entities must NOT carry this.
 #[derive(Component)]
 pub struct StructuralNode;
 
-/// Marker for the stable per-activity host entity. Survives structural
-/// rebuilds; re-parented via `ChildOf` each rebuild. The `ActivityId →
-/// Entity` mapping is owned by `ActivityEntityRegistry`; this marker
-/// exists only so queries can filter for activity hosts.
+/// Marker for the stable per-surface host entity. Survives structural
+/// rebuilds; re-parented via `ChildOf` each rebuild. The `SurfaceId →
+/// Entity` mapping is owned by `SurfaceEntityRegistry`; this marker
+/// exists only so queries can filter for surface hosts.
 #[derive(Component)]
-pub struct ActivityHostNode;
+pub struct SurfaceHostNode;
 
-/// Marks an Activity Host whose `kind` is `Terminal`. `finish_terminal_setup`
-/// queries for `With<TerminalActivityMarker>` to find hosts that need a
+/// Marks a Surface Host whose `kind` is `Terminal`. `finish_terminal_setup`
+/// queries for `With<TerminalSurfaceMarker>` to find hosts that need a
 /// `TerminalBundle` + `TerminalRenderBundle` attached.
 #[derive(Component)]
-pub struct TerminalActivityMarker;
+pub struct TerminalSurfaceMarker;
 
-/// Marks an Activity Host whose `kind` is `Extension`.
-/// `finish_extension_setup` queries for `With<ExtensionActivityMarker>` to
+/// Marks a Surface Host whose `kind` is `Extension`.
+/// `finish_extension_setup` queries for `With<ExtensionSurfaceMarker>` to
 /// find hosts that need a `bevy_cef` webview (`WebviewSource` +
 /// `MaterialNode<WebviewUiMaterial>`) attached.
 #[derive(Component)]
-pub(crate) struct ExtensionActivityMarker;
+pub(crate) struct ExtensionSurfaceMarker;
 
-/// Marks an Activity Host whose `kind` is `Browser`. The browser renderer
-/// (`crate::browser_render`) queries `With<BrowserActivityMarker>` to find hosts
+/// Marks a Surface Host whose `kind` is `Browser`. The browser renderer
+/// (`crate::browser_render`) queries `With<BrowserSurfaceMarker>` to find hosts
 /// that need a native toolbar + a `bevy_cef` page webview attached.
 #[derive(Component)]
-pub(crate) struct BrowserActivityMarker;
+pub(crate) struct BrowserSurfaceMarker;
 
-/// On a browser activity host: points to its page-webview child entity. Its
+/// On a browser surface host: points to its page-webview child entity. Its
 /// presence also marks the host's chrome as already built (mount-once gate).
 #[derive(Component)]
 pub(crate) struct BrowserPageWebview(pub(crate) Entity);
 
-/// On a browser page-webview child: points back to its owning activity host.
+/// On a browser page-webview child: points back to its owning surface host.
 /// Lets navigation observers (which fire on the webview entity) reach the host.
 #[derive(Component)]
 pub(crate) struct PageWebviewOf(pub(crate) Entity);
 
-/// On a browser activity host: the latest navigation state, written by the
+/// On a browser surface host: the latest navigation state, written by the
 /// `AddressChanged` / `LoadingStateChanged` observers and read by the toolbar
 /// render + button-enablement systems.
 #[derive(Component, Default, Clone)]
@@ -100,7 +100,7 @@ pub(crate) struct BrowserToolbarState {
     pub(crate) can_go_forward: bool,
 }
 
-/// On a browser activity host: the address-bar edit buffer + caret. Pure edit
+/// On a browser surface host: the address-bar edit buffer + caret. Pure edit
 /// logic lives in `crate::browser_render`.
 #[derive(Component, Default, Clone)]
 pub(crate) struct AddressEdit {
@@ -128,27 +128,27 @@ pub(crate) struct BrowserNavButton {
     pub(crate) action: NavAction,
 }
 
-/// On a tab-bar Node: marks it clickable and records which Activity (in which
+/// On a tab-bar Node: marks it clickable and records which Surface (in which
 /// Pane) selecting it activates. Read by `drive_tab_clicks` / `tab_hover_cursor`.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct TabButton {
     pub(crate) pane: Entity,
-    pub(crate) activity: Entity,
+    pub(crate) surface: Entity,
 }
 
-/// The browser activity host whose address bar currently owns the keyboard, or
+/// The browser surface host whose address bar currently owns the keyboard, or
 /// `None`. Read by the browser editor + `dispatch_focused_key`.
 #[derive(Resource, Default)]
 pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
 
-/// Back-pointer from a stable Activity host entity to its owning
-/// multiplexer Activity entity. Stamped by
-/// `ActivityEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
+/// Back-pointer from a stable Surface host entity to its owning
+/// multiplexer Surface entity. Stamped by
+/// `SurfaceEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
 /// this to resolve the host's multiplexer Pane / Session entities (via
 /// `ChildOf`) so the spawned terminal's env carries the correct
 /// `OZMUX_PANE_ID` for the `@memo` control bridge.
 #[derive(Component)]
-pub struct HostActivityEntity(pub Entity);
+pub struct HostSurfaceEntity(pub Entity);
 
 /// Records that `TerminalBundle::spawn` failed for this host, so
 /// `finish_terminal_setup` will not retry on subsequent frames.
@@ -171,9 +171,9 @@ pub(crate) struct PaneDimOverlay {
 }
 
 /// Marks a Session whose UI subtree must be rebuilt for a reason other than a
-/// layout-geometry change — i.e. an in-pane activity was added or the active
-/// activity switched (neither mutates `LayoutCells`). Set by
-/// `flag_chrome_dirty_on_activity_change` and consumed (removed) by
+/// layout-geometry change — i.e. an in-pane surface was added or the active
+/// surface switched (neither mutates `LayoutCells`). Set by
+/// `flag_chrome_dirty_on_surface_change` and consumed (removed) by
 /// `rebuild_session_ui`, which gates on `Or<(Changed<LayoutCells>,
 /// With<SessionUiDirty>)>`. Keeping the single full-rebuild path is deliberate:
 /// reparenting stable UI nodes across a rebuild does not survive Bevy's UI
@@ -186,7 +186,7 @@ pub struct OzmuxUiPlugin;
 
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ActivityEntityRegistry>()
+        app.init_resource::<SurfaceEntityRegistry>()
             .add_plugins((
                 OzmuxUiRootPlugin,
                 OzmuxSessionUiPlugin,
@@ -195,10 +195,10 @@ impl Plugin for OzmuxUiPlugin {
             .add_systems(
                 Update,
                 (
-                    // Host despawns must commit before the rebuild and activity
+                    // Host despawns must commit before the rebuild and surface
                     // setup observe them, else setup inserts a bundle onto a
                     // host this prune is despawning (insert-after-despawn panic).
-                    registry::prune_registry_on_activity_removal.before(OzmuxSystems::SessionUi),
+                    registry::prune_registry_on_surface_removal.before(OzmuxSystems::SessionUi),
                     status_bar_sync::rebuild_status_bar_on_session_set_change,
                 ),
             );
@@ -302,15 +302,15 @@ mod tests {
     }
 
     #[test]
-    fn activity_entity_persists_across_rebuild() {
-        use crate::ui::registry::ActivityEntityRegistry;
+    fn surface_entity_persists_across_rebuild() {
+        use crate::ui::registry::SurfaceEntityRegistry;
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
         let host_before = {
             let world = app.world_mut();
-            let mut q = world.query_filtered::<Entity, With<ActivityHostNode>>();
+            let mut q = world.query_filtered::<Entity, With<SurfaceHostNode>>();
             q.iter(world)
                 .next()
                 .expect("at least one host after first rebuild")
@@ -335,14 +335,14 @@ mod tests {
 
         let host_after = {
             let world = app.world_mut();
-            let registry = world.resource::<ActivityEntityRegistry>();
+            let registry = world.resource::<SurfaceEntityRegistry>();
             registry.iter_for_test().next().map(|(_, h)| h)
         };
 
         assert_eq!(
             Some(host_before),
             host_after,
-            "activity host entity must survive a rebuild"
+            "surface host entity must survive a rebuild"
         );
     }
 
@@ -380,8 +380,8 @@ mod tests {
     }
 
     #[test]
-    fn activity_registry_prunes_removed_activity() {
-        use crate::ui::registry::ActivityEntityRegistry;
+    fn surface_registry_prunes_removed_surface() {
+        use crate::ui::registry::SurfaceEntityRegistry;
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
 
@@ -407,9 +407,9 @@ mod tests {
 
         let registry_count_after_split = app
             .world()
-            .resource::<ActivityEntityRegistry>()
+            .resource::<SurfaceEntityRegistry>()
             .len_for_test();
-        assert_eq!(registry_count_after_split, 2, "two activities after split");
+        assert_eq!(registry_count_after_split, 2, "two surfaces after split");
 
         app.world_mut()
             .run_system_once(
@@ -428,16 +428,16 @@ mod tests {
 
         let registry_count_after_close = app
             .world()
-            .resource::<ActivityEntityRegistry>()
+            .resource::<SurfaceEntityRegistry>()
             .len_for_test();
         assert_eq!(
             registry_count_after_close, 1,
-            "prune system must remove the closed activity from the registry"
+            "prune system must remove the closed surface from the registry"
         );
     }
 
     #[test]
-    fn activity_host_not_caught_in_despawn_cascade() {
+    fn surface_host_not_caught_in_despawn_cascade() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
 
@@ -447,7 +447,7 @@ mod tests {
 
         let entity_before = {
             let world = app.world_mut();
-            let mut q = world.query_filtered::<Entity, With<ActivityHostNode>>();
+            let mut q = world.query_filtered::<Entity, With<SurfaceHostNode>>();
             q.iter(world).next().expect("at least one host")
         };
 
@@ -480,7 +480,7 @@ mod tests {
 
         let host_before = {
             let world = app.world_mut();
-            let mut q = world.query_filtered::<Entity, With<ActivityHostNode>>();
+            let mut q = world.query_filtered::<Entity, With<SurfaceHostNode>>();
             q.iter(world).next().expect("at least one host")
         };
 
@@ -508,20 +508,20 @@ mod tests {
 
         assert!(
             app.world().get_entity(host_before).is_ok(),
-            "session 1's activity host must survive when session 2 becomes active"
+            "session 1's surface host must survive when session 2 becomes active"
         );
     }
 
     #[test]
-    fn inactive_activity_host_persists_across_focus_switch() {
+    fn inactive_surface_host_persists_across_focus_switch() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{SurfaceKind, MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        let (session, pane, first_activity) = app
+        let (session, pane, first_surface) = app
             .world_mut()
             .run_system_once(
                 |mux: MultiplexerCommands,
@@ -531,32 +531,32 @@ mod tests {
                 >| {
                     let session = sessions.iter().next()?;
                     let pane = mux.sessions_active_pane(session)?;
-                    let activity = mux.panes_active_activity(pane)?;
-                    Some((session, pane, activity))
+                    let surface = mux.panes_active_surface(pane)?;
+                    Some((session, pane, surface))
                 },
             )
             .unwrap()
-            .expect("bootstrap session + pane + activity");
+            .expect("bootstrap session + pane + surface");
 
         let host_before = {
             let world = app.world_mut();
-            let registry = world.resource::<crate::ui::registry::ActivityEntityRegistry>();
+            let registry = world.resource::<crate::ui::registry::SurfaceEntityRegistry>();
             registry
-                .get(first_activity)
-                .expect("first activity has a host")
+                .get(first_surface)
+                .expect("first surface has a host")
         };
 
-        let second_activity = app
+        let second_surface = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_activity(pane, ActivityKind::Terminal)
+                mux.add_surface(pane, SurfaceKind::Terminal)
             })
             .unwrap();
         app.world_mut().flush();
 
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(pane, second_activity).unwrap();
+                mux.set_active_surface(pane, second_surface).unwrap();
             })
             .unwrap();
 
@@ -572,7 +572,7 @@ mod tests {
 
         assert!(
             app.world().get_entity(host_before).is_ok(),
-            "first activity host must survive when the second activity becomes active"
+            "first surface host must survive when the second surface becomes active"
         );
 
         let host_parent = app
@@ -620,14 +620,14 @@ mod tests {
     fn terminal_host_pane_dims(world: &mut World) -> Vec<(Entity, f32)> {
         use bevy_terminal_renderer::material::PaneDim;
         let hosts: Vec<(Entity, f32)> = world
-            .query_filtered::<(&HostActivityEntity, &PaneDim), With<TerminalActivityMarker>>()
+            .query_filtered::<(&HostSurfaceEntity, &PaneDim), With<TerminalSurfaceMarker>>()
             .iter(world)
             .map(|(h, d)| (h.0, d.0))
             .collect();
         hosts
             .into_iter()
-            .filter_map(|(activity, dim)| {
-                let pane = world.get::<ChildOf>(activity)?.parent();
+            .filter_map(|(surface, dim)| {
+                let pane = world.get::<ChildOf>(surface)?.parent();
                 Some((pane, dim))
             })
             .collect()
@@ -703,7 +703,7 @@ mod tests {
         );
 
         let dims: Vec<f32> = world
-            .query_filtered::<&PaneDim, With<TerminalActivityMarker>>()
+            .query_filtered::<&PaneDim, With<TerminalSurfaceMarker>>()
             .iter(world)
             .map(|d| d.0)
             .collect();
@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn extension_pane_keeps_pickable_ignore_veil() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{ActivityKind, LayoutCells, MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{SurfaceKind, LayoutCells, MultiplexerCommands, SessionMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
@@ -733,16 +733,16 @@ mod tests {
             .unwrap();
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                let ext = mux.add_activity(
+                let ext = mux.add_surface(
                     pane,
-                    ActivityKind::Extension {
+                    SurfaceKind::Extension {
                         entry: "/tmp".into(),
                     },
                 );
-                mux.set_active_activity(pane, ext).unwrap();
+                mux.set_active_surface(pane, ext).unwrap();
             })
             .unwrap();
-        // An activity switch reparents hosts via a rebuild; force it in the harness.
+        // A surface switch reparents hosts via a rebuild; force it in the harness.
         app.world_mut()
             .run_system_once(
                 |mut sessions: Query<&mut LayoutCells, With<SessionMarker>>| {
@@ -895,7 +895,7 @@ mod tests {
             .count();
         assert_eq!(
             tab_count, 1,
-            "the bootstrap pane has one activity, so its tab bar has one TabButton-tagged tab",
+            "the bootstrap pane has one surface, so its tab bar has one TabButton-tagged tab",
         );
     }
 

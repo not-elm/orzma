@@ -19,11 +19,11 @@ pub use bridge::{
 };
 pub use command::{CommandExtension, CommandExtensionConfig};
 pub use control::{
-    ActivateParams, ActivityKindSpec, ActivitySpec, AddActivityParams, ControlError, ControlOp,
-    ControlOrientation, ControlParseError, ControlReply, ControlRequest, ControlResponse,
-    ControlSide, SplitParams, encode_response, parse_call,
+    ActivateParams, AddSurfaceParams, ControlError, ControlOp, ControlOrientation,
+    ControlParseError, ControlReply, ControlRequest, ControlResponse, ControlSide, SplitParams,
+    SurfaceKindSpec, SurfaceSpec, encode_response, parse_call,
 };
-pub use handlers_bridge::{AidFrame, HandlersBridge};
+pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
 pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
 pub use protocol::{ProtocolError, Request, Response};

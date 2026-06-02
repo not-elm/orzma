@@ -1,56 +1,56 @@
-//! Focus-activity shortcut action: cycles the active pane's focused
-//! activity when a `FocusActivityActionEvent` fires.
+//! Focus-surface shortcut action: cycles the active pane's focused
+//! surface when a `FocusSurfaceActionEvent` fires.
 use bevy::prelude::*;
 use ozmux_multiplexer::{CycleDirection, MultiplexerCommands};
 
-/// Registers the `apply_focus_activity` observer.
-pub struct FocusActivityActionPlugin;
+/// Registers the `apply_focus_surface` observer.
+pub struct FocusSurfaceActionPlugin;
 
-impl Plugin for FocusActivityActionPlugin {
+impl Plugin for FocusSurfaceActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_focus_activity);
+        app.add_observer(apply_focus_surface);
     }
 }
 
-/// Request to cycle the active pane's focused activity in `direction`.
-/// Triggered by `ShortcutAction::FocusActivity`.
+/// Request to cycle the active pane's focused surface in `direction`.
+/// Triggered by `ShortcutAction::FocusSurface`.
 #[derive(EntityEvent, Debug)]
-pub struct FocusActivityActionEvent {
+pub struct FocusSurfaceActionEvent {
     #[event_target]
     pub session: Entity,
     pub direction: CycleDirection,
 }
 
-fn apply_focus_activity(trigger: On<FocusActivityActionEvent>, mut mux: MultiplexerCommands) {
-    let FocusActivityActionEvent { session, direction } = trigger.event();
+fn apply_focus_surface(trigger: On<FocusSurfaceActionEvent>, mut mux: MultiplexerCommands) {
+    let FocusSurfaceActionEvent { session, direction } = trigger.event();
     let Some(active_pane) = mux.sessions_active_pane(*session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "FocusActivity: session vanished");
+        tracing::warn!(target: "ozmux_gui::commands", ?session, "FocusSurface: session vanished");
         return;
     };
-    let Some(active_activity) = mux.panes_active_activity(active_pane) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?active_pane, "FocusActivity: pane vanished");
+    let Some(active_surface) = mux.panes_active_surface(active_pane) else {
+        tracing::warn!(target: "ozmux_gui::commands", ?active_pane, "FocusSurface: pane vanished");
         return;
     };
 
-    let activities: Vec<Entity> = mux.activities_of_pane(active_pane).collect();
-    if activities.len() < 2 {
+    let surfaces: Vec<Entity> = mux.surfaces_of_pane(active_pane).collect();
+    if surfaces.len() < 2 {
         return;
     }
 
-    let i = activities
+    let i = surfaces
         .iter()
-        .position(|a| *a == active_activity)
+        .position(|a| *a == active_surface)
         .unwrap_or(0);
-    let len = activities.len() as isize;
+    let len = surfaces.len() as isize;
     let delta: isize = match *direction {
         CycleDirection::Next => 1,
         CycleDirection::Prev => -1,
     };
     let j = ((i as isize + delta).rem_euclid(len)) as usize;
-    let target = activities[j];
+    let target = surfaces[j];
 
-    if let Err(err) = mux.set_active_activity(active_pane, target) {
-        tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusActivity failed");
+    if let Err(err) = mux.set_active_surface(active_pane, target) {
+        tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusSurface failed");
     }
 }
 
@@ -59,13 +59,13 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use ozmux_multiplexer::{
-        ActiveActivity, ActivePane, ActivityKind, MultiplexerCommands, MultiplexerPlugin,
+        ActiveSurface, ActivePane, SurfaceKind, MultiplexerCommands, MultiplexerPlugin,
     };
 
     fn setup_app() -> App {
         let mut app = App::new();
         app.add_plugins(MultiplexerPlugin);
-        app.add_plugins(FocusActivityActionPlugin);
+        app.add_plugins(FocusSurfaceActionPlugin);
         app
     }
 
@@ -78,41 +78,41 @@ mod tests {
     }
 
     #[test]
-    fn focus_activity_next_advances_active_activity() {
+    fn focus_surface_next_advances_active_surface() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
         let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
-        // Add a second activity so we have something to cycle to.
+        // Add a second surface so we have something to cycle to.
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                let a = mux.add_activity(active_pane, ActivityKind::Terminal);
-                mux.set_active_activity(active_pane, a).unwrap();
+                let a = mux.add_surface(active_pane, SurfaceKind::Terminal);
+                mux.set_active_surface(active_pane, a).unwrap();
             })
             .unwrap();
         app.world_mut().flush();
         let current_active = app
             .world()
-            .get::<ActiveActivity>(active_pane)
+            .get::<ActiveSurface>(active_pane)
             .map(|a| a.0)
             .unwrap();
-        // Reset to first activity so the Next test advances it.
-        let first_activity = app
+        // Reset to first surface so the Next test advances it.
+        let first_surface = app
             .world_mut()
             .run_system_once(move |mux: MultiplexerCommands| {
-                mux.activities_of_pane(active_pane)
+                mux.surfaces_of_pane(active_pane)
                     .find(|a| *a != current_active)
             })
             .unwrap()
-            .expect("second activity exists");
+            .expect("second surface exists");
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_activity(active_pane, first_activity)
+                mux.set_active_surface(active_pane, first_surface)
                     .unwrap();
             })
             .unwrap();
         app.world_mut().flush();
 
-        app.world_mut().trigger(FocusActivityActionEvent {
+        app.world_mut().trigger(FocusSurfaceActionEvent {
             session,
             direction: CycleDirection::Next,
         });
@@ -120,30 +120,30 @@ mod tests {
 
         let active_after = app
             .world()
-            .get::<ActiveActivity>(active_pane)
+            .get::<ActiveSurface>(active_pane)
             .map(|a| a.0)
             .unwrap();
-        assert_ne!(active_after, first_activity);
+        assert_ne!(active_after, first_surface);
     }
 
     #[test]
-    fn focus_activity_in_single_activity_pane_is_a_noop() {
+    fn focus_surface_in_single_surface_pane_is_a_noop() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
         let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
         let active_before = app
             .world()
-            .get::<ActiveActivity>(active_pane)
+            .get::<ActiveSurface>(active_pane)
             .map(|a| a.0)
             .unwrap();
-        app.world_mut().trigger(FocusActivityActionEvent {
+        app.world_mut().trigger(FocusSurfaceActionEvent {
             session,
             direction: CycleDirection::Next,
         });
         app.world_mut().flush();
         let active_after = app
             .world()
-            .get::<ActiveActivity>(active_pane)
+            .get::<ActiveSurface>(active_pane)
             .map(|a| a.0)
             .unwrap();
         assert_eq!(active_after, active_before);

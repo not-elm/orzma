@@ -1,9 +1,9 @@
-//! ECS-native multiplexer for ozmux. Session, Pane, and Activity are Bevy
+//! ECS-native multiplexer for ozmux. Session, Pane, and Surface are Bevy
 //! entities related by `ChildOf`. All mutations route through the
 //! `MultiplexerCommands` SystemParam; the only observers handle dangling
 //! `Entity` references when a child entity is despawned.
 //!
-//! No typed IDs (`SessionId` / `PaneId` / `ActivityId`) — every reference
+//! No typed IDs (`SessionId` / `PaneId` / `SurfaceId`) — every reference
 //! is a Bevy `Entity`. Each entity also carries `Name` (from
 //! `bevy::prelude::Name`) for tracing readability.
 
@@ -23,8 +23,8 @@ pub use cells::{
 };
 pub use commands::{MultiplexerCommands, SessionCreated, SessionNameCounter, SplitOutcome};
 pub use components::{
-    ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, BrowserProfile,
-    CopyMode, ExtensionActivityAid, LayoutCells, OwningExtension, PaneDimensions, PaneMarker,
+    ActiveSurface, ActivePane, SurfaceKind, SurfaceMarker, AttachedSession, BrowserProfile,
+    CopyMode, ExtensionSurfaceId, LayoutCells, OwningExtension, PaneDimensions, PaneMarker,
     SessionCreatedAt, SessionDimensions, SessionMarker, SessionUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};

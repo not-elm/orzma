@@ -291,7 +291,7 @@ mod tests {
             responder
                 .send(ControlResponse::Ok(ControlReply::Split {
                     new_pane_id: 42,
-                    new_activity_id: 43,
+                    new_surface_id: 43,
                 }))
                 .unwrap();
         });
@@ -310,7 +310,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         let mut stream = UnixStream::connect(&sock).unwrap();
-        let call = r#"{"kind":"call","id":"req1","op":"split","pane":"100","params":{"side":"after","orientation":"vertical","activity":{"kind":"extension","entry":"/x","name":null,"activity_id":"aid-test"}}}"#;
+        let call = r#"{"kind":"call","id":"req1","op":"split","pane":"100","params":{"side":"after","orientation":"vertical","surface":{"kind":"extension","entry":"/x","name":null,"surface_id":"aid-test"}}}"#;
         stream.write_all(format!("{call}\n").as_bytes()).unwrap();
         let mut buf = String::new();
         stream

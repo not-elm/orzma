@@ -2,7 +2,7 @@
 //! launches each as a `CommandExtension`, and owns the live per-extension
 //! registry (process handles + the shared `ozmux-ext://` asset
 //! `EndpointRegistry`). Replaces the old single hardcoded memo wiring: the
-//! renderer routes per extension off each activity's `OwningExtension`, and the
+//! renderer routes per extension off each surface's `OwningExtension`, and the
 //! control bridge drain runs across every launched extension.
 
 use bevy::platform::collections::HashMap;

@@ -31,7 +31,7 @@ pub struct OzmuxConfigs {
     pub theme: Theme,
     /// Font configuration.
     pub font: FontConfig,
-    /// Browser activity configuration.
+    /// Browser surface configuration.
     pub browser: BrowserConfig,
     /// Mouse-input configuration.
     pub mouse: mouse::MouseConfig,

@@ -1,4 +1,4 @@
-//! Browser activity configuration: the search-engine template for the address
+//! Browser surface configuration: the search-engine template for the address
 //! bar's Chrome-style omnibox behavior, plus the `resolve_omnibox_input`
 //! classifier the browser renderer uses for the initial load and toolbar
 //! navigations.

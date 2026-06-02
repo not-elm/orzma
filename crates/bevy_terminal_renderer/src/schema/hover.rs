@@ -13,7 +13,7 @@ use bevy::ecs::resource::Resource;
 /// component.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct HyperlinkHoverState {
-    /// Activity-host entity the cursor is currently over, or `None`
+    /// Surface-host entity the cursor is currently over, or `None`
     /// when the cursor is outside every pane.
     pub entity: Option<Entity>,
     /// Hovered wire id; meaningful only when `entity` is `Some`. `None`

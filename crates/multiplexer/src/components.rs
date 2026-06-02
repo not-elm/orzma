@@ -1,10 +1,10 @@
 //! Bevy `Component` definitions for the multiplexer. Every entity that
-//! plays a role in the Session / Pane / Activity hierarchy carries a
-//! marker component (`SessionMarker` / `PaneMarker` / `ActivityMarker`)
+//! plays a role in the Session / Pane / Surface hierarchy carries a
+//! marker component (`SessionMarker` / `PaneMarker` / `SurfaceMarker`)
 //! plus the state components relevant to its role.
 //!
 //! Display names use Bevy's built-in `Name` (`bevy::prelude::Name`); no
-//! `SessionName` / `PaneName` / `ActivityName` component exists. See the
+//! `SessionName` / `PaneName` / `SurfaceName` component exists. See the
 //! design doc §3 "Naming" for why and for the `With<SessionMarker>`
 //! filter discipline that follows.
 
@@ -22,9 +22,9 @@ pub struct SessionMarker;
 #[derive(Component, Default, Debug)]
 pub struct PaneMarker;
 
-/// Zero-sized marker on every Activity entity.
+/// Zero-sized marker on every Surface entity.
 #[derive(Component, Default, Debug)]
-pub struct ActivityMarker;
+pub struct SurfaceMarker;
 
 /// Layout cell state plus the session's `root` cell id, owned together
 /// because every consumer needs both. `Default` returns a freshly-empty
@@ -88,9 +88,9 @@ pub struct SessionUiSubtree(pub Entity);
 #[derive(Component, Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SessionCreatedAt(pub u32);
 
-/// The currently focused Activity entity within a Pane.
+/// The currently focused Surface entity within a Pane.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ActiveActivity(pub Entity);
+pub struct ActiveSurface(pub Entity);
 
 /// Per-Pane copy-mode state. `Off` means copy mode is inactive on this
 /// Pane. `Active` is a zero-variant marker: the vi cursor and active
@@ -114,30 +114,30 @@ pub struct PaneDimensions {
     pub rows: u16,
 }
 
-/// The SDK-side activity id (handler-registration key) for an extension
-/// activity. Stamped by the control bridge so the handlers bridge can address
-/// `{aid, frame}` envelopes to the right handler set.
+/// The SDK-side surface id (handler-registration key) for an extension
+/// surface. Stamped by the control bridge so the handlers bridge can address
+/// `{surface_id, frame}` envelopes to the right handler set.
 #[derive(Component, Debug, Clone)]
-pub struct ExtensionActivityAid(pub String);
+pub struct ExtensionSurfaceId(pub String);
 
-/// The name of the extension that owns an extension activity. Stamped by the
+/// The name of the extension that owns an extension surface. Stamped by the
 /// control bridge from the split request so the renderer can resolve the
 /// webview URL host and the handlers socket per extension.
 #[derive(Component, Debug, Clone)]
 pub struct OwningExtension(pub String);
 
-/// Activity kind discriminator. Ported from the old crate's
-/// `ActivityKind` enum; field types preserved.
+/// Surface kind discriminator. Ported from the old crate's
+/// `SurfaceKind` enum; field types preserved.
 #[derive(Component, Debug, Clone)]
-pub enum ActivityKind {
-    /// A PTY-backed terminal activity.
+pub enum SurfaceKind {
+    /// A PTY-backed terminal surface.
     Terminal,
-    /// An extension activity served from a Node process over a UDS.
+    /// An extension surface served from a Node process over a UDS.
     Extension {
         /// HTML entry path (relative to the extension dir) the webview loads.
         entry: PathBuf,
     },
-    /// An embedded Chromium browser activity.
+    /// An embedded Chromium browser surface.
     Browser {
         /// URL to navigate to on creation, or `None` to use the browser default.
         initial_url: Option<String>,
@@ -146,7 +146,7 @@ pub enum ActivityKind {
     },
 }
 
-/// Storage profile for a Browser Activity.
+/// Storage profile for a Browser Surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserProfile {
     /// A named persistent profile stored under the given name.
@@ -154,7 +154,7 @@ pub enum BrowserProfile {
         /// Profile directory name (relative to the browser data root).
         name: String,
     },
-    /// A temporary profile that is discarded when the activity closes.
+    /// A temporary profile that is discarded when the surface closes.
     Incognito,
 }
 
@@ -177,7 +177,7 @@ mod tests {
         let mut world = World::new();
         let session = world.spawn(SessionMarker).id();
         let pane = world.spawn(PaneMarker).id();
-        let activity = world.spawn(ActivityMarker).id();
+        let surface = world.spawn(SurfaceMarker).id();
 
         let mut q = world.query_filtered::<Entity, With<SessionMarker>>();
         let sessions: Vec<_> = q.iter(&world).collect();
@@ -187,9 +187,9 @@ mod tests {
         let panes: Vec<_> = q.iter(&world).collect();
         assert_eq!(panes, vec![pane]);
 
-        let mut q = world.query_filtered::<Entity, With<ActivityMarker>>();
-        let activities: Vec<_> = q.iter(&world).collect();
-        assert_eq!(activities, vec![activity]);
+        let mut q = world.query_filtered::<Entity, With<SurfaceMarker>>();
+        let surfaces: Vec<_> = q.iter(&world).collect();
+        assert_eq!(surfaces, vec![surface]);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Tier 2 stress test for the session-owned UI design. Spawns several
-//! sessions x panes x activities and runs a long swap loop, asserting no
+//! sessions x panes x surfaces and runs a long swap loop, asserting no
 //! taffy panic and no unbounded taffy-node growth. Gates the deletion of
 //! `hidden_stash` per the spec: if this test panics, the upstream taffy
 //! fixes (PRs #13990 / #16780 / #17596) do not cover our usage pattern.
