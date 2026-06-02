@@ -8,13 +8,13 @@ pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
 use crate::action::session::{FocusSessionActionEvent, FocusSessionTarget, NewSessionActionEvent};
-use crate::clipboard::{Clipboard, CopyToClipboardEvent, PasteFromClipboardEvent};
+use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::ime::{ImeState, read_ime_events};
 use crate::multiplexer::commands;
 use crate::system_set::OzmuxSystems;
 use crate::ui::copy_mode::{
-    CopyModeState, EnterCopyModeRequest, dispatch_key as dispatch_copy_mode_key,
+    CopyModeState, EnterCopyModeActionEvent, dispatch_key as dispatch_copy_mode_key,
 };
 use crate::ui::registry::ActivityEntityRegistry;
 use bevy::input::ButtonState;
@@ -290,7 +290,7 @@ fn execute_action(
     match &action {
         ShortcutAction::EnterCopyMode => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
-                commands.trigger(EnterCopyModeRequest { entity });
+                commands.trigger(EnterCopyModeActionEvent { entity });
             }
         }
         ShortcutAction::NewSession => {
@@ -314,12 +314,12 @@ fn execute_action(
         }
         ShortcutAction::Copy => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
-                commands.trigger(CopyToClipboardEvent { entity });
+                commands.trigger(CopyToClipboardActionEvent { entity });
             }
         }
         ShortcutAction::Paste => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
-                commands.trigger(PasteFromClipboardEvent { entity });
+                commands.trigger(PasteFromClipboardActionEvent { entity });
             }
         }
         _ => commands::dispatch(commands, action, session),
@@ -488,14 +488,14 @@ mod tests {
     struct CapturedClipboardOps(Arc<Mutex<Vec<&'static str>>>);
 
     fn capture_copy_op(
-        _ev: On<crate::clipboard::CopyToClipboardEvent>,
+        _ev: On<crate::clipboard::CopyToClipboardActionEvent>,
         cap: Res<CapturedClipboardOps>,
     ) {
         cap.0.lock().unwrap().push("copy");
     }
 
     fn capture_paste_op(
-        _ev: On<crate::clipboard::PasteFromClipboardEvent>,
+        _ev: On<crate::clipboard::PasteFromClipboardActionEvent>,
         cap: Res<CapturedClipboardOps>,
     ) {
         cap.0.lock().unwrap().push("paste");
@@ -676,7 +676,7 @@ mod tests {
         assert_eq!(
             *ops,
             vec!["copy"],
-            "Cmd+C must trigger exactly one CopyToClipboardEvent"
+            "Cmd+C must trigger exactly one CopyToClipboardActionEvent"
         );
     }
 

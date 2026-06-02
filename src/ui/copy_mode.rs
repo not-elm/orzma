@@ -37,7 +37,7 @@ pub struct CopyModeState;
 /// `handle_chord` when it sees `Action::EnterCopyMode`. The observer
 /// inserts `CopyModeState` and calls `TerminalHandle::enter_vi_mode`.
 #[derive(EntityEvent, Debug)]
-pub struct EnterCopyModeRequest {
+pub struct EnterCopyModeActionEvent {
     pub entity: Entity,
 }
 
@@ -172,10 +172,10 @@ pub(crate) fn dispatch_key(
     exits
 }
 
-/// Observer for `EnterCopyModeRequest`. Inserts `CopyModeState` on the
+/// Observer for `EnterCopyModeActionEvent`. Inserts `CopyModeState` on the
 /// target entity and calls `TerminalHandle::enter_vi_mode`.
 pub(crate) fn handle_enter_copy_mode_request(
-    ev: On<EnterCopyModeRequest>,
+    ev: On<EnterCopyModeActionEvent>,
     mut commands: Commands,
     mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,
 ) {
@@ -470,7 +470,7 @@ mod tests {
 
         let entity = spawn_terminal_entity(&mut app);
 
-        app.world_mut().trigger(EnterCopyModeRequest { entity });
+        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
         app.update();
 
         assert!(app.world().get::<CopyModeState>(entity).is_some());
@@ -489,7 +489,7 @@ mod tests {
         app.add_observer(handle_exit_copy_mode);
 
         let entity = spawn_terminal_entity(&mut app);
-        app.world_mut().trigger(EnterCopyModeRequest { entity });
+        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
         app.update();
         {
             let mut e = app.world_mut().entity_mut(entity);
