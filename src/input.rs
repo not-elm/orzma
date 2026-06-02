@@ -7,11 +7,11 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
+use crate::action::session::{FocusSessionActionEvent, FocusSessionTarget, NewSessionActionEvent};
 use crate::clipboard::{Clipboard, CopyToClipboardEvent, PasteFromClipboardEvent};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::ime::{ImeState, read_ime_events};
 use crate::multiplexer::commands;
-use crate::multiplexer::{SessionCreatedAt, SessionNameCounter};
 use crate::system_set::OzmuxSystems;
 use crate::ui::copy_mode::{
     CopyModeState, EnterCopyModeRequest, dispatch_key as dispatch_copy_mode_key,
@@ -22,7 +22,7 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{KeyChord, Modifiers, SessionOffset, ShortcutAction};
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
 use std::collections::HashSet;
 
 /// Resolves the focused activity's entity via the attached session →
@@ -72,25 +72,17 @@ impl Plugin for OzmuxShortcutPlugin {
     }
 }
 
-// NOTE: `mux` must precede `commands` in the parameter list. Both params
-// own separate deferred command queues; Bevy applies them in parameter
-// order. `spawn_attached_session` and `dispatch_new_session` queue
-// session-entity spawns into `mux.commands`, then insert components on
-// those entities via `commands`. If `commands` applied first, those
-// inserts would reference entities that don't exist yet and panic.
 pub(crate) fn dispatch_focused_key(
-    mut mux: MultiplexerCommands,
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
-    mut session_name_counter: ResMut<SessionNameCounter>,
     mut handles: Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
+    mux: MultiplexerCommands,
     windows: Query<&Window>,
-    sessions: Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
     attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
@@ -108,16 +100,6 @@ pub(crate) fn dispatch_focused_key(
     // sees the same modifier snapshot. Read once outside the loop.
     let mods = current_modifiers(&keys);
     let mut just_exited: HashSet<Entity> = HashSet::new();
-    // NOTE: Bevy command-flush race guard. dispatch_new_session and
-    // dispatch_focus_session queue Commands that mutate the AttachedSession
-    // marker; the deferred flush only runs after this system returns. If two
-    // marker-mutating actions fire in the same Update tick (e.g., user
-    // double-taps Cmd+R), both would read the same pre-flush attached entity,
-    // resulting in zero or multiple AttachedSession entities after flush —
-    // breaking the `exactly one attached` invariant relied on by
-    // attached_session.single() and downstream rebuild systems. Drop the
-    // second-and-onward marker mutations in this frame.
-    let mut marker_dirty_this_frame = false;
 
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
@@ -194,17 +176,7 @@ pub(crate) fn dispatch_focused_key(
                 if ev.repeat {
                     continue;
                 }
-                execute_action(
-                    &mut commands,
-                    &mut mux,
-                    &mut session_name_counter,
-                    &mut marker_dirty_this_frame,
-                    action,
-                    session,
-                    &sessions,
-                    &attached_session,
-                    &registry,
-                );
+                execute_action(&mut commands, &mux, action, session, &registry);
                 continue;
             }
         }
@@ -300,24 +272,19 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
     })
 }
 
-/// Executes a resolved `Action` against the multiplexer for the given
-/// session entity.
+/// Executes a resolved `ShortcutAction` for the given session entity by
+/// triggering the matching `EntityEvent`.
 ///
-/// `Action::EnterCopyMode`, `Action::Copy`, and `Action::Paste` trigger
-/// observers rather than mutating the multiplexer. `Action::NewSession`,
-/// `Action::FocusSession`, and
-/// `Action::FocusSessionNumber` are dispatched directly in Bevy-land
-/// because they require entity-level side effects beyond a pure
-/// `MultiplexerCommands` mutation.
+/// `EnterCopyMode`, `Copy`, and `Paste` trigger activity-targeted events;
+/// `NewSession`, `FocusSession`, and `FocusSessionNumber` trigger the
+/// session-targeted `NewSessionActionEvent` / `FocusSessionActionEvent`
+/// handled by observers in `crate::action::session`. Every other action is
+/// translated by `commands::dispatch`.
 fn execute_action(
     commands: &mut Commands,
-    mux: &mut MultiplexerCommands,
-    session_name_counter: &mut SessionNameCounter,
-    marker_dirty_this_frame: &mut bool,
+    mux: &MultiplexerCommands,
     action: ShortcutAction,
     session: Entity,
-    sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
-    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: &ActivityEntityRegistry,
 ) {
     match &action {
@@ -327,32 +294,23 @@ fn execute_action(
             }
         }
         ShortcutAction::NewSession => {
-            if *marker_dirty_this_frame {
-                tracing::warn!(
-                    target: "ozmux_gui::input",
-                    "skipping NewSession: AttachedSession marker already mutated this frame (would race the deferred Bevy command flush)"
-                );
-                return;
-            }
-            *marker_dirty_this_frame = true;
-            tracing::debug!(
-                target: "ozmux_gui::input",
-                ?session,
-                "NewSession action dispatched"
-            );
-            dispatch_new_session(commands, mux, session_name_counter, attached_session);
+            commands.trigger(NewSessionActionEvent { session });
         }
-        ShortcutAction::FocusSession { .. } | ShortcutAction::FocusSessionNumber { .. } => {
-            if *marker_dirty_this_frame {
-                tracing::warn!(
-                    target: "ozmux_gui::input",
-                    ?action,
-                    "skipping FocusSession*: AttachedSession marker already mutated this frame (would race the deferred Bevy command flush)"
-                );
-                return;
-            }
-            *marker_dirty_this_frame = true;
-            dispatch_focus_session(commands, sessions, attached_session, &action);
+        ShortcutAction::FocusSession { offset } => {
+            commands.trigger(FocusSessionActionEvent {
+                session,
+                target: match offset {
+                    SessionOffset::Next => FocusSessionTarget::Next,
+                    SessionOffset::Prev => FocusSessionTarget::Prev,
+                    SessionOffset::Last => FocusSessionTarget::Last,
+                },
+            });
+        }
+        ShortcutAction::FocusSessionNumber { index } => {
+            commands.trigger(FocusSessionActionEvent {
+                session,
+                target: FocusSessionTarget::Number(*index),
+            });
         }
         ShortcutAction::Copy => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
@@ -380,138 +338,6 @@ fn resolve_active_activity_entity(
     let pane = mux.sessions_active_pane(session)?;
     let activity = mux.panes_active_activity(pane)?;
     registry.get(activity)
-}
-
-/// Moves the `AttachedSession` marker between session entities for the
-/// `FocusSession{Next,Prev}` and `FocusSessionNumber{index}` actions.
-/// Sorts by `SessionCreatedAt` so cycle order matches the visual order
-/// in the status bar; `Entity` bit ordering is not creation order
-/// because deferred command queues do not guarantee monotonic indices.
-fn dispatch_focus_session(
-    commands: &mut Commands,
-    sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
-    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    action: &ShortcutAction,
-) {
-    let mut pairs: Vec<(Entity, u32)> = sessions
-        .iter()
-        .map(|(e, created)| (e, created.map(|c| c.0).unwrap_or(u32::MAX)))
-        .collect();
-    if pairs.len() < 2 {
-        return;
-    }
-    pairs.sort_by_key(|(_, c)| *c);
-    let entries: Vec<Entity> = pairs.into_iter().map(|(e, _)| e).collect();
-
-    let Ok(current_entity) = attached_session.single() else {
-        return;
-    };
-    let current_idx = entries
-        .iter()
-        .position(|e| *e == current_entity)
-        .unwrap_or(0);
-
-    let target_idx = match action {
-        ShortcutAction::FocusSession {
-            offset: SessionOffset::Next,
-        } => (current_idx + 1) % entries.len(),
-        ShortcutAction::FocusSession {
-            offset: SessionOffset::Prev,
-        } => current_idx.checked_sub(1).unwrap_or(entries.len() - 1),
-        ShortcutAction::FocusSession {
-            offset: SessionOffset::Last,
-        } => {
-            tracing::debug!(
-                target: "ozmux_gui::commands",
-                "FocusSession::Last not yet implemented"
-            );
-            return;
-        }
-        ShortcutAction::FocusSessionNumber { index } => {
-            let i = *index as usize;
-            if i >= entries.len() {
-                return;
-            }
-            i
-        }
-        _ => return,
-    };
-
-    let target_entity = entries[target_idx];
-    if target_entity == current_entity {
-        return;
-    }
-
-    commands.entity(current_entity).remove::<AttachedSession>();
-    commands.entity(target_entity).insert(AttachedSession);
-}
-
-/// Mints a new domain session via `MultiplexerCommands`, spawns its UI
-/// subtree node, attaches `AttachedSession` + `SessionUiSubtree` to the
-/// new session entity, and removes `AttachedSession` from the previously
-/// attached entity.
-pub(crate) fn dispatch_new_session(
-    commands: &mut Commands,
-    mux: &mut MultiplexerCommands,
-    counter: &mut SessionNameCounter,
-    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-) {
-    match attached_session.single() {
-        Ok(previous_attached) => {
-            tracing::debug!(
-                target: "ozmux_gui::input",
-                ?previous_attached,
-                "dispatch_new_session: queued AttachedSession remove from previous"
-            );
-            commands
-                .entity(previous_attached)
-                .remove::<AttachedSession>();
-        }
-        Err(err) => {
-            tracing::debug!(
-                target: "ozmux_gui::input",
-                ?err,
-                "dispatch_new_session: no single previously-attached session (skipping remove)"
-            );
-        }
-    }
-
-    let new_session = spawn_attached_session(commands, mux, counter);
-    tracing::debug!(
-        target: "ozmux_gui::input",
-        ?new_session,
-        "dispatch_new_session: queued spawn of new attached session"
-    );
-}
-
-/// Spawns a Session via `MultiplexerCommands` plus its UI subtree node,
-/// inserts `AttachedSession` + `SessionUiSubtree` + `SessionCreatedAt`
-/// on the session entity, and parents the subtree under the session.
-/// The session name is `"session{n}"` and the matching creation-order
-/// index is stored on `SessionCreatedAt(n)` so UIs (status bar, focus
-/// cycling) can sort sessions in stable creation order without relying
-/// on `Entity` index ordering. Returns the new session entity.
-pub(crate) fn spawn_attached_session(
-    commands: &mut Commands,
-    mux: &mut MultiplexerCommands,
-    counter: &mut SessionNameCounter,
-) -> Entity {
-    let n = counter.next();
-    let outcome = mux.create_session(Some(format!("session{n}")));
-    let subtree = commands
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            ..default()
-        })
-        .id();
-    commands.entity(outcome.session).insert((
-        AttachedSession,
-        SessionUiSubtree(subtree),
-        SessionCreatedAt(n),
-    ));
-    commands.entity(subtree).insert(ChildOf(outcome.session));
-    outcome.session
 }
 
 /// Translates a Bevy logical key into the `TerminalKey` variant the
@@ -594,12 +420,13 @@ mod tests {
     use bevy::window::{Window, WindowResolution};
     use ozmux_configs::OzmuxConfigs;
     use ozmux_configs::shortcuts::Key as CKey;
-    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
+    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker};
 
     fn make_app(window_focused: bool) -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
+            .add_plugins(crate::action::session::OzmuxSessionActionPlugin)
             .add_systems(Update, dispatch_focused_key);
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
@@ -1291,343 +1118,6 @@ mod tests {
             )),
             "repeat=true 'j' must still forward to the terminal; captured: {:?}",
             captured,
-        );
-    }
-
-    fn count_attached_session_entities(app: &mut App) -> usize {
-        app.world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
-            .iter(app.world())
-            .count()
-    }
-
-    fn count_session_entities(app: &mut App) -> usize {
-        app.world_mut()
-            .query_filtered::<Entity, With<SessionMarker>>()
-            .iter(app.world())
-            .count()
-    }
-
-    #[test]
-    #[ignore = "dispatch_focus_session now sorts by Entity bits instead of SessionId; test setup requires rework for new ECS model"]
-    fn focus_session_next_moves_attached_marker() {
-        let (mut app, _window_entity) = make_app(true);
-        let second_session = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("second".into()))
-            })
-            .unwrap()
-            .session;
-        app.world_mut().flush();
-        assert_eq!(count_attached_session_entities(&mut app), 1);
-
-        let id = app.world_mut().register_system(
-            |mut commands: Commands,
-             sessions: Query<
-                (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
-                With<SessionMarker>,
-            >,
-             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_focus_session(
-                    &mut commands,
-                    &sessions,
-                    &attached_session,
-                    &ozmux_configs::shortcuts::ShortcutAction::FocusSession {
-                        offset: ozmux_configs::shortcuts::SessionOffset::Next,
-                    },
-                );
-            },
-        );
-        let _ = app.world_mut().run_system(id);
-        app.update();
-
-        assert_eq!(count_attached_session_entities(&mut app), 1);
-        let attached_now = app
-            .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
-            .iter(app.world())
-            .next()
-            .unwrap();
-        assert_ne!(attached_now, second_session);
-    }
-
-    #[test]
-    fn focus_session_number_targets_index() {
-        let (mut app, _window_entity) = make_app(true);
-        let second_session = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("second".into()))
-            })
-            .unwrap()
-            .session;
-        app.world_mut().flush();
-
-        let id = app.world_mut().register_system(
-            |mut commands: Commands,
-             sessions: Query<
-                (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
-                With<SessionMarker>,
-            >,
-             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_focus_session(
-                    &mut commands,
-                    &sessions,
-                    &attached_session,
-                    &ozmux_configs::shortcuts::ShortcutAction::FocusSessionNumber { index: 1 },
-                );
-            },
-        );
-        let _ = app.world_mut().run_system(id);
-        app.update();
-
-        let attached = app
-            .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
-            .iter(app.world())
-            .next()
-            .unwrap();
-        let sessions_sorted: Vec<Entity> = {
-            let mut v: Vec<Entity> = app
-                .world_mut()
-                .query_filtered::<Entity, With<SessionMarker>>()
-                .iter(app.world())
-                .collect();
-            v.sort_by_key(|e| e.to_bits());
-            v
-        };
-        assert_eq!(
-            attached, sessions_sorted[1],
-            "index 1 should target the second sorted session"
-        );
-        let _ = second_session;
-    }
-
-    #[test]
-    fn dispatch_new_session_spawns_subtree_pointer() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let _guard = crate::configs::env_guard();
-        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
-        unsafe {
-            std::env::remove_var("OZMUX_CONFIG");
-        }
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin)
-            .add_plugins(crate::configs::OzmuxConfigsPlugin)
-            .add_plugins(crate::bootstrap::OzmuxBootstrapPlugin);
-        app.update();
-
-        let session_count_before = app
-            .world_mut()
-            .query_filtered::<Entity, With<SessionMarker>>()
-            .iter(app.world())
-            .count();
-
-        app.world_mut()
-            .init_resource::<crate::multiplexer::SessionNameCounter>();
-        app.world_mut()
-            .run_system_once(
-                |mut mux: MultiplexerCommands,
-                 mut commands: Commands,
-                 mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-                 attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    super::dispatch_new_session(
-                        &mut commands,
-                        &mut mux,
-                        &mut counter,
-                        &attached_session,
-                    );
-                },
-            )
-            .unwrap();
-        app.update();
-
-        let count = app
-            .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<SessionUiSubtree>)>()
-            .iter(app.world())
-            .count();
-        assert_eq!(
-            count,
-            session_count_before + 1,
-            "new session entity must carry SessionUiSubtree"
-        );
-    }
-
-    #[test]
-    fn spawn_attached_session_inserts_session_created_at_monotonically() {
-        let (mut app, _window_entity) = make_app(true);
-
-        // make_app's bootstrap-equivalent session predates the counter wiring
-        // in this fixture, so it has no SessionCreatedAt. Drive two CMD+R
-        // dispatches and verify each new session carries a strictly-increasing
-        // SessionCreatedAt(n) starting at 1.
-        let id = app.world_mut().register_system(
-            |mut mux: MultiplexerCommands,
-             mut commands: Commands,
-             mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_session);
-            },
-        );
-        let _ = app.world_mut().run_system(id);
-        app.update();
-        let _ = app.world_mut().run_system(id);
-        app.update();
-
-        let world = app.world_mut();
-        let mut q =
-            world.query_filtered::<&crate::multiplexer::SessionCreatedAt, With<SessionMarker>>();
-        let mut values: Vec<u32> = q.iter(world).map(|c| c.0).collect();
-        values.sort();
-        assert_eq!(
-            values,
-            vec![1u32, 2u32],
-            "two dispatch_new_session calls must produce SessionCreatedAt(1) and SessionCreatedAt(2)",
-        );
-    }
-
-    #[test]
-    fn dispatch_new_session_uses_monotonic_session_name() {
-        let (mut app, _window_entity) = make_app(true);
-        // make_app already called create_session once (bootstrap-equivalent),
-        // but with the counter freshly init'd here, the bootstrap session got
-        // no auto-name from the counter — its name was set by create_session
-        // pre-counter wiring. To exercise the monotonic counter end-to-end,
-        // we drive the counter through two dispatch_new_session invocations
-        // and verify the names progress as "session1", "session2".
-
-        let id = app.world_mut().register_system(
-            |mut mux: MultiplexerCommands,
-             mut commands: Commands,
-             mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_session);
-            },
-        );
-        let _ = app.world_mut().run_system(id);
-        app.update();
-        let _ = app.world_mut().run_system(id);
-        app.update();
-
-        let world = app.world_mut();
-        let mut q = world.query_filtered::<&Name, With<SessionMarker>>();
-        let mut names: Vec<&str> = q.iter(world).map(|n| n.as_str()).collect();
-        names.sort();
-        // make_app's bootstrap-equivalent session is "default" (pre-counter wiring
-        // in this fixture); the two dispatch_new_session calls mint "session1" and
-        // "session2" off the freshly-init'd counter.
-        assert_eq!(names, vec!["default", "session1", "session2"],);
-    }
-
-    #[test]
-    fn new_session_action_spawns_entity_and_moves_marker() {
-        let (mut app, _window_entity) = make_app(true);
-        app.world_mut()
-            .init_resource::<crate::multiplexer::SessionNameCounter>();
-
-        assert_eq!(count_session_entities(&mut app), 1);
-        assert_eq!(count_attached_session_entities(&mut app), 1);
-        let bootstrap_entity = app
-            .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
-            .iter(app.world())
-            .next()
-            .unwrap();
-
-        let id = app.world_mut().register_system(
-            |mut mux: MultiplexerCommands,
-             mut commands: Commands,
-             mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                super::dispatch_new_session(&mut commands, &mut mux, &mut counter, &attached_session);
-            },
-        );
-        let _ = app.world_mut().run_system(id);
-        app.update();
-
-        assert_eq!(count_session_entities(&mut app), 2);
-        assert_eq!(count_attached_session_entities(&mut app), 1);
-        let new_attached = app
-            .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
-            .iter(app.world())
-            .next()
-            .unwrap();
-        assert_ne!(new_attached, bootstrap_entity);
-    }
-
-    /// Two `NewSession` actions in a single Update tick must NOT both queue
-    /// `commands.spawn((..., AttachedSession))`. Without the
-    /// `marker_dirty_this_frame` guard, both invocations would observe the
-    /// same pre-flush attached entity, each queue a fresh spawn-with-marker,
-    /// and after the deferred command flush there would be two entities
-    /// carrying `AttachedSession` — breaking `single()` for every downstream
-    /// system and silently freezing keyboard input.
-    #[test]
-    fn two_new_session_actions_in_one_frame_keep_marker_invariant() {
-        let (mut app, _window_entity) = make_app(true);
-        app.world_mut()
-            .init_resource::<crate::multiplexer::SessionNameCounter>();
-
-        assert_eq!(count_session_entities(&mut app), 1);
-        assert_eq!(count_attached_session_entities(&mut app), 1);
-
-        let id = app.world_mut().register_system(
-            |mut mux: MultiplexerCommands,
-             mut commands: Commands,
-             mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-             sessions: Query<
-                (Entity, Option<&crate::multiplexer::SessionCreatedAt>),
-                With<SessionMarker>,
-            >,
-             attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-             registry: Res<crate::ui::registry::ActivityEntityRegistry>| {
-                let mut marker_dirty = false;
-                let bootstrap_session = attached_session
-                    .iter()
-                    .next()
-                    .unwrap_or(Entity::PLACEHOLDER);
-                super::execute_action(
-                    &mut commands,
-                    &mut mux,
-                    &mut counter,
-                    &mut marker_dirty,
-                    ozmux_configs::shortcuts::ShortcutAction::NewSession,
-                    bootstrap_session,
-                    &sessions,
-                    &attached_session,
-                    &registry,
-                );
-                super::execute_action(
-                    &mut commands,
-                    &mut mux,
-                    &mut counter,
-                    &mut marker_dirty,
-                    ozmux_configs::shortcuts::ShortcutAction::NewSession,
-                    bootstrap_session,
-                    &sessions,
-                    &attached_session,
-                    &registry,
-                );
-            },
-        );
-        let _ = app.world_mut().run_system(id);
-        app.update();
-
-        assert_eq!(
-            count_attached_session_entities(&mut app),
-            1,
-            "AttachedSession marker invariant preserved across same-frame double NewSession"
-        );
-        assert_eq!(
-            count_session_entities(&mut app),
-            2,
-            "second NewSession in same frame must NOT spawn a third entity"
         );
     }
 

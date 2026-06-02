@@ -255,6 +255,7 @@ mod tests {
             .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
+            .add_plugins(crate::action::OzmuxActionPlugin)
             .add_plugins(OzmuxUiPlugin);
 
         app.world_mut().spawn((
@@ -900,8 +901,6 @@ mod tests {
     #[test]
     fn status_bar_chips_appear_in_session_creation_order_after_cmd_r() {
         use crate::ui::status_bar_sync::StatusBarRoot;
-        use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::MultiplexerCommands;
 
         let (mut app, _guard) = make_test_app();
         // Two ticks for Startup + first Update so bootstrap settles and
@@ -909,28 +908,17 @@ mod tests {
         app.update();
         app.update();
 
-        // Drive a CMD+R-equivalent dispatch_new_session.
+        // Drive a CMD+R-equivalent NewSession action through its observer.
+        let attached = app
+            .world_mut()
+            .query_filtered::<Entity, (
+                With<ozmux_multiplexer::SessionMarker>,
+                With<AttachedSession>,
+            )>()
+            .single(app.world())
+            .expect("one attached session before CMD+R");
         app.world_mut()
-            .run_system_once(
-                |mut mux: MultiplexerCommands,
-                 mut commands: Commands,
-                 mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-                 attached_session: Query<
-                    Entity,
-                    (
-                        With<ozmux_multiplexer::SessionMarker>,
-                        With<AttachedSession>,
-                    ),
-                >| {
-                    crate::input::dispatch_new_session(
-                        &mut commands,
-                        &mut mux,
-                        &mut counter,
-                        &attached_session,
-                    );
-                },
-            )
-            .unwrap();
+            .trigger(crate::action::session::NewSessionActionEvent { session: attached });
         // One tick for commands to flush + status bar rebuild to enqueue,
         // one for rebuild's commands to flush.
         app.update();

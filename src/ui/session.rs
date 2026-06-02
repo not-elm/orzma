@@ -542,6 +542,7 @@ mod tests {
             .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
+            .add_plugins(crate::action::OzmuxActionPlugin)
             .add_plugins(OzmuxUiPlugin);
         app.world_mut().spawn((
             Window {
@@ -781,9 +782,6 @@ mod tests {
 
     #[test]
     fn new_session_action_reparents_new_subtree_to_session_ui_root() {
-        use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::MultiplexerCommands;
-
         let (mut app, _guard) = make_test_app_v2();
         // Two ticks for Startup + first Update so bootstrap settles and
         // sync_active_session runs at least once in PostUpdate.
@@ -817,20 +815,9 @@ mod tests {
         app.world_mut()
             .init_resource::<crate::multiplexer::SessionNameCounter>();
         app.world_mut()
-            .run_system_once(
-                |mut mux: MultiplexerCommands,
-                 mut commands: Commands,
-                 mut counter: ResMut<crate::multiplexer::SessionNameCounter>,
-                 attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    crate::input::dispatch_new_session(
-                        &mut commands,
-                        &mut mux,
-                        &mut counter,
-                        &attached_session,
-                    );
-                },
-            )
-            .unwrap();
+            .trigger(crate::action::session::NewSessionActionEvent {
+                session: bootstrap_session,
+            });
         // One tick for commands to flush + rebuild_session_ui to run, one for
         // PostUpdate sync_active_session to react.
         app.update();

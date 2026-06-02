@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_multiplexer::MultiplexerCommands;
 
-use crate::input::spawn_attached_session;
+use crate::action::session::spawn_attached_session;
 use crate::multiplexer::SessionNameCounter;
 
 /// Bevy Plugin that registers the `bootstrap` system in the `Startup`
@@ -32,8 +32,8 @@ pub(crate) fn bootstrap(
     mut counter: ResMut<SessionNameCounter>,
 ) {
     // Mint the bootstrap session as "session1" via the shared counter
-    // (CMD+R-created sessions take "session2", "session3", …). The
-    // helper in src/input.rs does the spawn + UI subtree + AttachedSession
+    // (CMD+R-created sessions take "session2", "session3", …). The helper
+    // in src/action/session.rs does the spawn + UI subtree + AttachedSession
     // dance identically — call it instead of duplicating.
     let _ = spawn_attached_session(&mut commands, &mut mux, &mut counter);
 }
