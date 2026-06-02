@@ -33,9 +33,7 @@ pub(crate) fn resolve_focused_terminal(
     registry: &ActivityEntityRegistry,
 ) -> Option<Entity> {
     let session = attached_session.iter().next()?;
-    let pane = mux.sessions_active_pane(session)?;
-    let activity = mux.panes_active_activity(pane)?;
-    registry.get(activity)
+    resolve_active_activity_entity(mux, session, registry)
 }
 
 /// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
@@ -324,10 +322,7 @@ fn execute_action(
 ) {
     match &action {
         Action::EnterCopyMode => {
-            if let Some(pane) = mux.sessions_active_pane(session)
-                && let Some(activity) = mux.panes_active_activity(pane)
-                && let Some(entity) = registry.get(activity)
-            {
+            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
                 commands.trigger(EnterCopyModeRequest { entity });
             }
         }
@@ -360,23 +355,31 @@ fn execute_action(
             dispatch_focus_session(commands, sessions, attached_session, &action);
         }
         Action::Copy => {
-            if let Some(pane) = mux.sessions_active_pane(session)
-                && let Some(activity) = mux.panes_active_activity(pane)
-                && let Some(entity) = registry.get(activity)
-            {
+            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
                 commands.trigger(CopyToClipboardEvent { entity });
             }
         }
         Action::Paste => {
-            if let Some(pane) = mux.sessions_active_pane(session)
-                && let Some(activity) = mux.panes_active_activity(pane)
-                && let Some(entity) = registry.get(activity)
-            {
+            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
                 commands.trigger(PasteFromClipboardEvent { entity });
             }
         }
         _ => commands::dispatch(action, commands, session),
     }
+}
+
+/// Resolves the active activity's entity for `session` via the
+/// session → pane → activity → registry chain. Returns `None` when the
+/// session has no active pane/activity, or the activity is not yet
+/// registered (e.g. a Browser Activity with no `TerminalHandle`).
+fn resolve_active_activity_entity(
+    mux: &MultiplexerCommands,
+    session: Entity,
+    registry: &ActivityEntityRegistry,
+) -> Option<Entity> {
+    let pane = mux.sessions_active_pane(session)?;
+    let activity = mux.panes_active_activity(pane)?;
+    registry.get(activity)
 }
 
 /// Moves the `AttachedSession` marker between session entities for the

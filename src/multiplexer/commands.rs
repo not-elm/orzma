@@ -2,9 +2,9 @@
 //! `EntityEvent`. Called by the shortcut dispatcher in `src/input.rs`.
 //!
 //! Actions handled outside `dispatch()` (`NewSession`, `FocusSession`,
-//! `FocusSessionNumber`, `EnterCopyMode`) are short-circuited because
-//! they require entity-spawning or marker-moving side effects the Bevy
-//! dispatcher performs directly.
+//! `FocusSessionNumber`, `EnterCopyMode`, `Copy`, `Paste`) are
+//! short-circuited because they require entity-spawning, marker-moving,
+//! or clipboard side effects the Bevy dispatcher performs directly.
 
 use crate::multiplexer::commands::close_activity::{CloseActivityActionPlugin, CloseActivityEvent};
 use crate::multiplexer::commands::close_pane::{ClosePaneActionPlugin, ClosePaneEvent};
@@ -50,9 +50,9 @@ impl Plugin for OzmuxShortcutActionPlugin {
 /// EntityEvent and triggers it on `session`.
 ///
 /// Actions handled outside `dispatch()` (`NewSession`, `FocusSession`,
-/// `FocusSessionNumber`, `EnterCopyMode`) are silently ignored — their
-/// entity-spawning side effects live in the Bevy dispatcher in
-/// `src/input.rs`.
+/// `FocusSessionNumber`, `EnterCopyMode`, `Copy`, `Paste`) are handled by
+/// explicit arms in the Bevy dispatcher (`src/input.rs`) and never reach
+/// this function.
 pub fn dispatch(action: Action, commands: &mut Commands, session: Entity) {
     match action {
         Action::SplitPane { direction } => {

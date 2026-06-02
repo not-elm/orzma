@@ -228,12 +228,9 @@ fn on_paste_from_clipboard(
     let Ok((mut handle, mut pty)) = handles.get_mut(ev.entity) else {
         return;
     };
-    let Some(text) = clipboard.read() else {
+    let Some(text) = clipboard.read().filter(|t| !t.is_empty()) else {
         return;
     };
-    if text.is_empty() {
-        return;
-    }
     let bracketed = handle.bracketed_paste_enabled();
     let bytes = build_paste_bytes(&text, bracketed);
     if let Err(err) = handle.write(&mut pty, &bytes) {
