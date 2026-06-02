@@ -33,7 +33,7 @@ describe('callControl', () => {
           `${JSON.stringify({
             kind: 'result',
             id: frame.id,
-            payload: { new_pane_id: '7', new_activity_id: '9' },
+            payload: { new_pane_id: '7', new_surface_id: '9' },
           })}\n`,
         );
       });
@@ -44,9 +44,9 @@ describe('callControl', () => {
     const out = await callControl('split', '100', {
       side: 'after',
       orientation: 'vertical',
-      activity: { kind: 'extension', entry: '/x', activity_id: 'test-id' },
+      surface: { kind: 'extension', entry: '/x', surface_id: 'test-id' },
     });
-    expect(out).toEqual({ new_pane_id: '7', new_activity_id: '9' });
+    expect(out).toEqual({ new_pane_id: '7', new_surface_id: '9' });
     server.close();
   });
 
@@ -68,7 +68,7 @@ describe('callControl', () => {
       callControl('split', '1', {
         side: 'after',
         orientation: 'vertical',
-        activity: { kind: 'extension', entry: '/x', activity_id: 'test-id' },
+        surface: { kind: 'extension', entry: '/x', surface_id: 'test-id' },
       }),
     ).rejects.toThrow(/pane_not_found/);
     server.close();
@@ -79,13 +79,13 @@ describe('callControl', () => {
     const out = await callControl('split', '1', {
       side: 'after',
       orientation: 'vertical',
-      activity: { kind: 'extension', entry: '/x', activity_id: 'test-id' },
+      surface: { kind: 'extension', entry: '/x', surface_id: 'test-id' },
     });
     expect(typeof out.new_pane_id).toBe('string');
-    expect(typeof out.new_activity_id).toBe('string');
+    expect(typeof out.new_surface_id).toBe('string');
   });
 
-  it('add_activity: sends the right frame and resolves with new_activity_id from reply', async () => {
+  it('add_surface: sends the right frame and resolves with new_surface_id from reply', async () => {
     const sock = tmpSock();
     const receivedFrames: Array<Record<string, unknown>> = [];
     const server = net.createServer((conn) => {
@@ -93,35 +93,35 @@ describe('callControl', () => {
         const frame = JSON.parse(chunk.toString('utf8').trim()) as Record<string, unknown>;
         receivedFrames.push(frame);
         conn.write(
-          `${JSON.stringify({ kind: 'result', id: frame.id, payload: { new_activity_id: '7' } })}\n`,
+          `${JSON.stringify({ kind: 'result', id: frame.id, payload: { new_surface_id: '7' } })}\n`,
         );
       });
     });
     await new Promise<void>((r) => server.listen(sock, r));
     process.env.OZMUX_CONTROL_SOCK_PATH = sock;
 
-    const activity = {
+    const surface = {
       kind: 'extension' as const,
       entry: 'dist/index.html',
       name: 'readme.md',
-      activity_id: 'aid-1',
+      surface_id: 'aid-1',
       extension_name: 'md',
     };
-    const out = await callControl('add_activity', '1', { activity });
+    const out = await callControl('add_surface', '1', { surface });
 
     expect(receivedFrames).toHaveLength(1);
     const frame = receivedFrames[0];
     expect(frame.kind).toBe('call');
-    expect(frame.op).toBe('add_activity');
+    expect(frame.op).toBe('add_surface');
     expect(frame.pane).toBe('1');
-    expect((frame.params as Record<string, unknown>).activity).toEqual(activity);
-    expect(out).toEqual({ new_activity_id: '7' });
+    expect((frame.params as Record<string, unknown>).surface).toEqual(surface);
+    expect(out).toEqual({ new_surface_id: '7' });
     server.close();
   });
 
   it('activate: resolves with an empty object when env unset (no throw)', async () => {
     delete process.env.OZMUX_CONTROL_SOCK_PATH;
-    const out = await callControl('activate', '1', { activity_id: '9' });
+    const out = await callControl('activate', '1', { surface_id: '9' });
     expect(out).toEqual({});
   });
 
@@ -136,7 +136,7 @@ describe('callControl', () => {
     await new Promise<void>((r) => server.listen(sock, r));
     process.env.OZMUX_CONTROL_SOCK_PATH = sock;
 
-    const out = await callControl('activate', '1', { activity_id: '9' });
+    const out = await callControl('activate', '1', { surface_id: '9' });
     expect(out).toEqual({});
     server.close();
   });

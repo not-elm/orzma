@@ -17,7 +17,7 @@ bootstrap({
       await ctx.pane.split({
         orientation: 'vertical',
         side: 'after',
-        activity: { kind: 'browser', url: input },
+        surface: { kind: 'browser', url: input },
       });
 
       return 0;

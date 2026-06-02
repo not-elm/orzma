@@ -103,9 +103,9 @@ export const paths = {
   pane: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}`,
   paneSplit: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/split`,
   paneActivate: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/activate`,
-  paneActivities: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/activities`,
-  activity: (wid: string, pid: string, aid: string) =>
-    `/windows/${wid}/panes/${pid}/activities/${aid}`,
-  activityActivate: (wid: string, pid: string, aid: string) =>
-    `/windows/${wid}/panes/${pid}/activities/${aid}/activate`,
+  paneSurfaces: (wid: string, pid: string) => `/windows/${wid}/panes/${pid}/surfaces`,
+  surface: (wid: string, pid: string, surfaceId: string) =>
+    `/windows/${wid}/panes/${pid}/surfaces/${surfaceId}`,
+  surfaceActivate: (wid: string, pid: string, surfaceId: string) =>
+    `/windows/${wid}/panes/${pid}/surfaces/${surfaceId}/activate`,
 };

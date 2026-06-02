@@ -11,12 +11,12 @@ interface MinimalAbortSignal {
   addEventListener(type: 'abort', listener: () => void, options?: { once?: boolean }): void;
 }
 
-/** Per-extension activity context populated by the daemon at browser create. */
+/** Per-extension surface context populated by the daemon at browser create. */
 export interface OzmuxContext {
   sessionId: string | null;
   windowId: string;
   paneId: string;
-  activityId: string;
+  surfaceId: string;
   /** Role of the surrounding browser — always `"extension"` for this binding. */
   role: 'extension';
   /** Owning extension name (empty/undefined for non-extension browsers). */

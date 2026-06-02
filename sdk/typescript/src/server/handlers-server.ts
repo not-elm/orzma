@@ -9,25 +9,25 @@ import {
 import type { HandlerServerFrame, HandlerUdsEnvelope } from './protocol.ts';
 
 export type HandlerMap = Record<string, (req: never) => Promise<unknown>>;
-type ActivityId = string;
+type SurfaceId = string;
 
-const activityHandlers = new Map<ActivityId, HandlerMap>();
+const surfaceHandlers = new Map<SurfaceId, HandlerMap>();
 
-export function registerActivityHandlers(aid: ActivityId, handlers: HandlerMap): void {
-  activityHandlers.set(aid, handlers);
+export function registerSurfaceHandlers(surfaceId: SurfaceId, handlers: HandlerMap): void {
+  surfaceHandlers.set(surfaceId, handlers);
 }
 
 /**
- * Remove handlers for an Activity. Used by `Pane.split()` to roll back when
+ * Remove handlers for a Surface. Used by `Pane.split()` to roll back when
  * the server POST fails after handlers were registered.
  */
-export function unregisterActivityHandlers(aid: ActivityId): void {
-  activityHandlers.delete(aid);
+export function unregisterSurfaceHandlers(surfaceId: SurfaceId): void {
+  surfaceHandlers.delete(surfaceId);
 }
 
 /** Test-only escape hatch; not exported from the package barrel. */
-export function __resetActivityHandlersForTests(): void {
-  activityHandlers.clear();
+export function __resetSurfaceHandlersForTests(): void {
+  surfaceHandlers.clear();
 }
 
 export function bindHandlersServer(sockPath: string): Promise<net.Server> {
@@ -62,22 +62,22 @@ async function handleLine(conn: net.Socket, line: string): Promise<void> {
   }
   const f = env.frame;
   if (f.kind === 'sub.open') {
-    handleSubOpen(conn, env.aid, f);
+    handleSubOpen(conn, env.surface_id, f);
     return;
   }
   if (f.kind === 'sub.cancel') {
-    handleSubCancel(conn, env.aid, f);
+    handleSubCancel(conn, env.surface_id, f);
     return;
   }
   if (f.kind !== 'call') {
     return;
   }
-  const handlers = activityHandlers.get(env.aid) ?? {};
+  const handlers = surfaceHandlers.get(env.surface_id) ?? {};
   const fn = handlers[f.name];
   const resp: HandlerServerFrame = !fn
     ? { kind: 'error', id: f.id, code: 'UNKNOWN_HANDLER', message: f.name }
     : await invokeHandler(fn, f.id, f.payload);
-  writeServerFrame(conn, env.aid, resp);
+  writeServerFrame(conn, env.surface_id, resp);
 }
 
 async function invokeHandler(

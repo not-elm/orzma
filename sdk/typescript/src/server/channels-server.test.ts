@@ -3,11 +3,11 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetActivityChannelsForTests, registerActivityChannels } from './channels-server.ts';
+import { __resetSurfaceChannelsForTests, registerSurfaceChannels } from './channels-server.ts';
 import {
-  __resetActivityHandlersForTests,
+  __resetSurfaceHandlersForTests,
   bindHandlersServer,
-  registerActivityHandlers,
+  registerSurfaceHandlers,
 } from './handlers-server.ts';
 
 let server: net.Server | undefined;
@@ -16,8 +16,8 @@ let sockPath = '';
 beforeEach(async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ozmux-test-'));
   sockPath = path.join(dir, 'chan.handlers.sock');
-  __resetActivityHandlersForTests();
-  __resetActivityChannelsForTests();
+  __resetSurfaceHandlersForTests();
+  __resetSurfaceChannelsForTests();
 });
 
 afterEach(async () => {
@@ -62,7 +62,7 @@ function lineReader(s: net.Socket): () => Promise<string> {
 describe('channels-server: happy path', () => {
   it('streams sub.data then sub.complete when the generator returns', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityChannels('aid-1', {
+    registerSurfaceChannels('aid-1', {
       counter: async function* ({ n }: { n: number }) {
         for (let i = 0; i < n; i++) yield { i };
       },
@@ -71,7 +71,7 @@ describe('channels-server: happy path', () => {
     const next = lineReader(s);
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: 's1', name: 'counter', params: { n: 2 } },
       })}\n`,
     );
@@ -86,12 +86,12 @@ describe('channels-server: happy path', () => {
 
   it('returns sub.error UNKNOWN_CHANNEL for an unregistered name', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityChannels('aid-1', {});
+    registerSurfaceChannels('aid-1', {});
     const s = await connect();
     const next = lineReader(s);
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: 's9', name: 'ghost', params: {} },
       })}\n`,
     );
@@ -107,7 +107,7 @@ describe('channels-server: happy path', () => {
 
   it('returns sub.error HANDLER_ERROR when the generator throws', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityChannels('aid-1', {
+    registerSurfaceChannels('aid-1', {
       boom: async function* () {
         yield { ok: 1 };
         throw new Error('nope');
@@ -117,7 +117,7 @@ describe('channels-server: happy path', () => {
     const next = lineReader(s);
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: 's2', name: 'boom', params: {} },
       })}\n`,
     );
@@ -132,10 +132,10 @@ describe('channels-server: happy path', () => {
 
   it('ignores call to a channel name and sub.open to a handler name (cross-namespace)', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityHandlers('aid-1', {
+    registerSurfaceHandlers('aid-1', {
       hi: async () => ({ ok: 1 }),
     });
-    registerActivityChannels('aid-1', {
+    registerSurfaceChannels('aid-1', {
       tick: async function* () {
         yield { t: 1 };
       },
@@ -145,7 +145,7 @@ describe('channels-server: happy path', () => {
     // sub.open with handler name -> UNKNOWN_CHANNEL
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: 'x', name: 'hi', params: {} },
       })}\n`,
     );
@@ -155,7 +155,7 @@ describe('channels-server: happy path', () => {
     // call with channel name -> UNKNOWN_HANDLER
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'call', id: 'y', name: 'tick', payload: {} },
       })}\n`,
     );
@@ -167,7 +167,7 @@ describe('channels-server: happy path', () => {
 
   it('supports two concurrent subscriptions on the same connection', async () => {
     server = await bindHandlersServer(sockPath);
-    registerActivityChannels('aid-1', {
+    registerSurfaceChannels('aid-1', {
       a: async function* () {
         yield { from: 'a', v: 1 };
         yield { from: 'a', v: 2 };
@@ -180,13 +180,13 @@ describe('channels-server: happy path', () => {
     const next = lineReader(s);
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: '1', name: 'a', params: {} },
       })}\n`,
     );
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: '2', name: 'b', params: {} },
       })}\n`,
     );
@@ -211,7 +211,7 @@ describe('channels-server: cancellation', () => {
     server = await bindHandlersServer(sockPath);
     let finallyRan = false;
     let signalSeen: AbortSignal | undefined;
-    registerActivityChannels('aid-1', {
+    registerSurfaceChannels('aid-1', {
       slow: async function* (_p: unknown, { signal }: { signal: AbortSignal }) {
         signalSeen = signal;
         try {
@@ -235,7 +235,7 @@ describe('channels-server: cancellation', () => {
     const next = lineReader(s);
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: 's1', name: 'slow', params: {} },
       })}\n`,
     );
@@ -244,7 +244,7 @@ describe('channels-server: cancellation', () => {
     expect(first.kind).toBe('sub.data');
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.cancel', id: 's1' },
       })}\n`,
     );
@@ -266,7 +266,7 @@ describe('channels-server: cancellation', () => {
   it('drops sub.data emitted after cancel', async () => {
     server = await bindHandlersServer(sockPath);
     let resumeYield: () => void = () => {};
-    registerActivityChannels('aid-1', {
+    registerSurfaceChannels('aid-1', {
       gated: async function* () {
         yield { first: true };
         await new Promise<void>((resolve) => {
@@ -279,7 +279,7 @@ describe('channels-server: cancellation', () => {
     const next = lineReader(s);
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: 's1', name: 'gated', params: {} },
       })}\n`,
     );
@@ -287,7 +287,7 @@ describe('channels-server: cancellation', () => {
     expect(first).toEqual({ kind: 'sub.data', id: 's1', payload: { first: true } });
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.cancel', id: 's1' },
       })}\n`,
     );
@@ -307,7 +307,7 @@ describe('channels-server: connection lifecycle', () => {
   it('aborts all subscriptions on the connection when the socket closes', async () => {
     server = await bindHandlersServer(sockPath);
     const aborted: string[] = [];
-    registerActivityChannels('aid-1', {
+    registerSurfaceChannels('aid-1', {
       hang: async function* (params: { tag: string }, { signal }: { signal: AbortSignal }) {
         try {
           yield { tag: params.tag };
@@ -325,13 +325,13 @@ describe('channels-server: connection lifecycle', () => {
     const next = lineReader(s);
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: '1', name: 'hang', params: { tag: 'A' } },
       })}\n`,
     );
     s.write(
       `${JSON.stringify({
-        aid: 'aid-1',
+        surface_id: 'aid-1',
         frame: { kind: 'sub.open', id: '2', name: 'hang', params: { tag: 'B' } },
       })}\n`,
     );

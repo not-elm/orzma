@@ -1,7 +1,7 @@
 import type * as net from 'node:net';
 import type { HandlerServerFrame, SubCancelFrame, SubOpenFrame } from './protocol.ts';
 
-type ActivityId = string;
+type SurfaceId = string;
 type SubId = string;
 
 export type ChannelCtx = { signal: AbortSignal };
@@ -11,24 +11,24 @@ export type ChannelGenerator<P = never, T = unknown> = (
 ) => AsyncGenerator<T, void, undefined>;
 export type ChannelMap = Record<string, ChannelGenerator<any, any>>;
 
-const activityChannels = new Map<ActivityId, ChannelMap>();
+const surfaceChannels = new Map<SurfaceId, ChannelMap>();
 
-export function registerActivityChannels(aid: ActivityId, channels: ChannelMap): void {
-  activityChannels.set(aid, channels);
+export function registerSurfaceChannels(surfaceId: SurfaceId, channels: ChannelMap): void {
+  surfaceChannels.set(surfaceId, channels);
 }
 
 /**
- * Remove channels for an Activity. Counterpart to `unregisterActivityHandlers`;
+ * Remove channels for a Surface. Counterpart to `unregisterSurfaceHandlers`;
  * used to roll back when an atomic `Pane.split()` POST fails after the local
  * registry was already primed.
  */
-export function unregisterActivityChannels(aid: ActivityId): void {
-  activityChannels.delete(aid);
+export function unregisterSurfaceChannels(surfaceId: SurfaceId): void {
+  surfaceChannels.delete(surfaceId);
 }
 
 /** Test-only escape hatch; not exported from the package barrel. */
-export function __resetActivityChannelsForTests(): void {
-  activityChannels.clear();
+export function __resetSurfaceChannelsForTests(): void {
+  surfaceChannels.clear();
   for (const map of perConnection.values()) {
     for (const ac of map.values()) ac.abort();
     map.clear();
@@ -49,21 +49,21 @@ function getSubs(conn: net.Socket): Map<SubId, AbortController> {
   return m;
 }
 
-/** Write a server frame wrapped in the {aid, frame} NDJSON envelope. */
+/** Write a server frame wrapped in the {surface_id, frame} NDJSON envelope. */
 export function writeServerFrame(
   conn: net.Socket,
-  aid: ActivityId,
+  surfaceId: SurfaceId,
   frame: HandlerServerFrame,
 ): void {
   if (conn.destroyed || !conn.writable) return;
-  conn.write(`${JSON.stringify({ aid, frame })}\n`);
+  conn.write(`${JSON.stringify({ surface_id: surfaceId, frame })}\n`);
 }
 
-export function handleSubOpen(conn: net.Socket, aid: ActivityId, open: SubOpenFrame): void {
-  const channels = activityChannels.get(aid) ?? {};
+export function handleSubOpen(conn: net.Socket, surfaceId: SurfaceId, open: SubOpenFrame): void {
+  const channels = surfaceChannels.get(surfaceId) ?? {};
   const gen = channels[open.name];
   if (!gen) {
-    writeServerFrame(conn, aid, {
+    writeServerFrame(conn, surfaceId, {
       kind: 'sub.error',
       id: open.id,
       code: 'UNKNOWN_CHANNEL',
@@ -80,20 +80,20 @@ export function handleSubOpen(conn: net.Socket, aid: ActivityId, open: SubOpenFr
       const iter = gen(open.params as never, { signal: ac.signal });
       for await (const value of iter) {
         if (ac.signal.aborted) break;
-        writeServerFrame(conn, aid, {
+        writeServerFrame(conn, surfaceId, {
           kind: 'sub.data',
           id: open.id,
           payload: value,
         });
       }
-      writeServerFrame(conn, aid, { kind: 'sub.complete', id: open.id });
+      writeServerFrame(conn, surfaceId, { kind: 'sub.complete', id: open.id });
     } catch (e) {
       // An abort-driven throw is a normal cancel; emit `sub.complete`. Other
       // throws are reported as `sub.error` so the extension client sees the failure.
       if (ac.signal.aborted && isAbortError(e)) {
-        writeServerFrame(conn, aid, { kind: 'sub.complete', id: open.id });
+        writeServerFrame(conn, surfaceId, { kind: 'sub.complete', id: open.id });
       } else {
-        writeServerFrame(conn, aid, {
+        writeServerFrame(conn, surfaceId, {
           kind: 'sub.error',
           id: open.id,
           code: 'HANDLER_ERROR',
@@ -115,7 +115,11 @@ function isAbortError(e: unknown): boolean {
   );
 }
 
-export function handleSubCancel(conn: net.Socket, _aid: ActivityId, cancel: SubCancelFrame): void {
+export function handleSubCancel(
+  conn: net.Socket,
+  _surfaceId: SurfaceId,
+  cancel: SubCancelFrame,
+): void {
   const subs = perConnection.get(conn);
   const ac = subs?.get(cancel.id);
   if (ac) ac.abort();

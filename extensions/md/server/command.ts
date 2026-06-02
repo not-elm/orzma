@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { ActivitySpecInput, ChannelGenerator, CommandContext } from '@ozmux/sdk/server';
+import type { ChannelGenerator, CommandContext, SurfaceSpecInput } from '@ozmux/sdk/server';
 import type { ContentEvent } from '../content-event.ts';
 import { parseMdArgs } from './args.ts';
 import { resolveTarget, statOrNull } from './target.ts';
@@ -10,7 +10,7 @@ export interface MdDeps {
   makeChannel: (filePath: string) => ChannelGenerator<Record<string, never>, ContentEvent>;
 }
 
-/** Runs the `@md` command: parse → gate → build-guard → open the preview activity. */
+/** Runs the `@md` command: parse → gate → build-guard → open the preview surface. */
 export async function mdCommand(ctx: CommandContext, deps: MdDeps): Promise<number> {
   const parsed = parseMdArgs(ctx.argv);
   if (!parsed.ok) return fail(ctx, parsed);
@@ -23,7 +23,7 @@ export async function mdCommand(ctx: CommandContext, deps: MdDeps): Promise<numb
     return 1;
   }
 
-  const activity: ActivitySpecInput = {
+  const surface: SurfaceSpecInput = {
     kind: 'extension',
     name: path.basename(target.filePath),
     html: deps.distIndexPath,
@@ -31,9 +31,9 @@ export async function mdCommand(ctx: CommandContext, deps: MdDeps): Promise<numb
   };
 
   if (parsed.split) {
-    await ctx.pane.split({ orientation: parsed.split, side: 'after', activity });
+    await ctx.pane.split({ orientation: parsed.split, side: 'after', surface });
   } else {
-    const created = await ctx.pane.addActivity(activity);
+    const created = await ctx.pane.addSurface(surface);
     await created.activate();
   }
   return 0;
