@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
 
 /// Bevy Plugin that registers the session-action observers.
-pub(crate) struct OzmuxSessionActionPlugin;
+pub struct OzmuxSessionActionPlugin;
 
 impl Plugin for OzmuxSessionActionPlugin {
     fn build(&self, app: &mut App) {
@@ -24,30 +24,29 @@ impl Plugin for OzmuxSessionActionPlugin {
 /// Request to mint a new session and attach it. Triggered by
 /// `ShortcutAction::NewSession`.
 #[derive(EntityEvent, Debug)]
-pub(crate) struct NewSessionActionEvent {
+pub struct NewSessionActionEvent {
     /// The session attached at dispatch time (trigger target only; the
     /// observer re-queries the live marker).
     #[event_target]
-    pub(crate) session: Entity,
+    pub session: Entity,
 }
 
 /// Request to move session focus. Triggered by
 /// `ShortcutAction::FocusSession` and `ShortcutAction::FocusSessionNumber`.
 #[derive(EntityEvent, Debug)]
-pub(crate) struct FocusSessionActionEvent {
+pub struct FocusSessionActionEvent {
     /// The session attached at dispatch time (trigger target only; the
     /// observer re-queries the live marker).
     #[event_target]
-    pub(crate) session: Entity,
+    pub session: Entity,
     /// Which session to focus.
-    pub(crate) target: FocusSessionTarget,
+    pub target: FocusSessionTarget,
 }
 
-/// Selector for `FocusSessionActionEvent`, unifying `FocusSession{offset}`
-/// and `FocusSessionNumber{index}`. `Debug` is required because
+/// Selector for `FocusSessionActionEvent`, unifying `FocusSession{offset}` and `FocusSessionNumber{index}`. `Debug` is required because
 /// `FocusSessionActionEvent` derives `Debug`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FocusSessionTarget {
+pub enum FocusSessionTarget {
     Next,
     Prev,
     Last,
