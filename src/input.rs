@@ -7,7 +7,7 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
-use crate::clipboard::{Clipboard, build_paste_bytes};
+use crate::clipboard::{Clipboard, CopyToClipboardEvent, PasteFromClipboardEvent};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::ime::{ImeState, read_ime_events};
 use crate::multiplexer::commands;
@@ -33,9 +33,7 @@ pub(crate) fn resolve_focused_terminal(
     registry: &ActivityEntityRegistry,
 ) -> Option<Entity> {
     let session = attached_session.iter().next()?;
-    let pane = mux.sessions_active_pane(session)?;
-    let activity = mux.panes_active_activity(pane)?;
-    registry.get(activity)
+    resolve_active_activity_entity(mux, session, registry)
 }
 
 /// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
@@ -67,6 +65,7 @@ impl Plugin for OzmuxShortcutPlugin {
         .add_systems(
             Update,
             dispatch_focused_key
+                .run_if(not(is_ime_composing))
                 .in_set(InputPhase::FocusedKey)
                 .after(read_ime_events),
         );
@@ -97,7 +96,6 @@ pub(crate) fn dispatch_focused_key(
     configs: Res<OzmuxConfigsResource>,
     registry: Res<ActivityEntityRegistry>,
     copy_modes: Query<(), With<CopyModeState>>,
-    ime_state: Res<ImeState>,
 ) {
     // NOTE: when the browser address bar owns focus, the active pane is always a
     // browser host (no `TerminalHandle`), so every terminal action below
@@ -123,10 +121,6 @@ pub(crate) fn dispatch_focused_key(
 
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
-            continue;
-        }
-
-        if ime_state.is_composing() {
             continue;
         }
 
@@ -168,16 +162,6 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        if is_copy_chord(&ev.logical_key, &mods)
-            && let Some(entity) = focused_entity
-            && let Ok((handle, _pty, _coalescer)) = handles.get_mut(entity)
-            && let Some(text) = handle.selection_to_string()
-            && !text.is_empty()
-        {
-            clipboard.write(text);
-            continue;
-        }
-
         if let Some(entity) = focused_entity
             && copy_modes.get(entity).is_ok()
             && !just_exited.contains(&entity)
@@ -192,25 +176,6 @@ pub(crate) fn dispatch_focused_key(
             );
             if exited {
                 just_exited.insert(entity);
-            }
-            continue;
-        }
-
-        if is_paste_chord(&ev.logical_key, &mods) {
-            if let Some(entity) = focused_entity
-                && let Ok((mut handle, mut pty, _coalescer)) = handles.get_mut(entity)
-                && let Some(text) = clipboard.read()
-                && !text.is_empty()
-            {
-                let bracketed = handle.bracketed_paste_enabled();
-                let bytes = build_paste_bytes(&text, bracketed);
-                if let Err(err) = handle.write(&mut pty, &bytes) {
-                    tracing::warn!(
-                        target: "ozmux_gui::input",
-                        ?err,
-                        "paste PTY write failed",
-                    );
-                }
             }
             continue;
         }
@@ -230,15 +195,15 @@ pub(crate) fn dispatch_focused_key(
                     continue;
                 }
                 execute_action(
-                    action,
                     &mut commands,
                     &mut mux,
                     &mut session_name_counter,
+                    &mut marker_dirty_this_frame,
+                    action,
                     session,
                     &sessions,
                     &attached_session,
                     &registry,
-                    &mut marker_dirty_this_frame,
                 );
                 continue;
             }
@@ -279,37 +244,6 @@ fn is_modifier_only_key(key: &Key) -> bool {
             | Key::Fn
             | Key::Symbol
     )
-}
-
-/// Returns `true` when the (key, mods) pair is the OS paste shortcut
-/// `Cmd+V`. The match is strict on modifiers — exactly `meta` is held,
-/// and `ctrl` / `shift` / `alt` are all absent. The `v` character match
-/// is case-sensitive (uppercase `V` does not bind, since Shift+Cmd+V
-/// is not a paste shortcut on macOS).
-fn is_paste_chord(key: &Key, mods: &Modifiers) -> bool {
-    let Key::Character(s) = key else { return false };
-    if s.as_str() != "v" {
-        return false;
-    }
-    mods.meta && !mods.ctrl && !mods.shift && !mods.alt
-}
-
-/// Returns `true` when the (key, mods) pair is the "copy active
-/// selection to clipboard" shortcut `Cmd+C`. The match is strict —
-/// exactly `meta` is held; `ctrl` / `shift` / `alt` are absent. The
-/// `c` character match is case-sensitive (uppercase `C` does not bind,
-/// since `Cmd+Shift+C` is not the copy shortcut on macOS).
-///
-/// Lives as a fast-path predicate rather than a `Bindings` action for
-/// the same reason `is_paste_chord` does — sit symmetric with paste,
-/// and avoid touching the binding-table schema for a non-rebindable
-/// chord. See spec §8.
-fn is_copy_chord(key: &Key, mods: &Modifiers) -> bool {
-    let Key::Character(s) = key else { return false };
-    if s.as_str() != "c" {
-        return false;
-    }
-    mods.meta && !mods.ctrl && !mods.shift && !mods.alt
 }
 
 fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
@@ -369,28 +303,26 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 /// Executes a resolved `Action` against the multiplexer for the given
 /// session entity.
 ///
-/// `Action::EnterCopyMode` triggers an observer rather than mutating the
-/// multiplexer. `Action::NewSession`, `Action::FocusSession`, and
+/// `Action::EnterCopyMode`, `Action::Copy`, and `Action::Paste` trigger
+/// observers rather than mutating the multiplexer. `Action::NewSession`,
+/// `Action::FocusSession`, and
 /// `Action::FocusSessionNumber` are dispatched directly in Bevy-land
 /// because they require entity-level side effects beyond a pure
 /// `MultiplexerCommands` mutation.
 fn execute_action(
-    action: Action,
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
     session_name_counter: &mut SessionNameCounter,
+    marker_dirty_this_frame: &mut bool,
+    action: Action,
     session: Entity,
     sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
     attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: &ActivityEntityRegistry,
-    marker_dirty_this_frame: &mut bool,
 ) {
     match &action {
         Action::EnterCopyMode => {
-            if let Some(pane) = mux.sessions_active_pane(session)
-                && let Some(activity) = mux.panes_active_activity(pane)
-                && let Some(entity) = registry.get(activity)
-            {
+            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
                 commands.trigger(EnterCopyModeRequest { entity });
             }
         }
@@ -422,8 +354,32 @@ fn execute_action(
             *marker_dirty_this_frame = true;
             dispatch_focus_session(commands, sessions, attached_session, &action);
         }
-        _ => commands::dispatch(action, commands, session),
+        Action::Copy => {
+            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
+                commands.trigger(CopyToClipboardEvent { entity });
+            }
+        }
+        Action::Paste => {
+            if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
+                commands.trigger(PasteFromClipboardEvent { entity });
+            }
+        }
+        _ => commands::dispatch(commands, action, session),
     }
+}
+
+/// Resolves the active activity's entity for `session` via the
+/// session → pane → activity → registry chain. Returns `None` when the
+/// session has no active pane/activity, or the activity is not yet
+/// registered (e.g. a Browser Activity with no `TerminalHandle`).
+fn resolve_active_activity_entity(
+    mux: &MultiplexerCommands,
+    session: Entity,
+    registry: &ActivityEntityRegistry,
+) -> Option<Entity> {
+    let pane = mux.sessions_active_pane(session)?;
+    let activity = mux.panes_active_activity(pane)?;
+    registry.get(activity)
 }
 
 /// Moves the `AttachedSession` marker between session entities for the
@@ -624,6 +580,10 @@ fn forward_to_active_terminal(
     });
 }
 
+fn is_ime_composing(ime_state: Res<ImeState>) -> bool {
+    ime_state.is_composing()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,7 +593,7 @@ mod tests {
     use bevy::input::keyboard::{Key as Bk, KeyboardInput, NativeKeyCode};
     use bevy::window::{Window, WindowResolution};
     use ozmux_configs::OzmuxConfigs;
-    use ozmux_configs::shortcuts::{Key as CKey, Modifiers};
+    use ozmux_configs::shortcuts::Key as CKey;
     use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
 
     fn make_app(window_focused: bool) -> (App, Entity) {
@@ -647,6 +607,7 @@ mod tests {
         app.init_resource::<crate::input::ime::ImeState>();
         app.init_resource::<crate::multiplexer::SessionNameCounter>();
         app.insert_resource(crate::clipboard::Clipboard::new());
+        app.add_plugins(crate::clipboard::ClipboardActionPlugin);
         app.add_message::<KeyboardInput>();
 
         let session = app
@@ -695,6 +656,23 @@ mod tests {
 
     fn capture_key_input(ev: On<TerminalKeyInput>, captured: Res<CapturedKeys>) {
         captured.0.lock().unwrap().push((*ev).clone());
+    }
+
+    #[derive(Resource, Default, Clone)]
+    struct CapturedClipboardOps(Arc<Mutex<Vec<&'static str>>>);
+
+    fn capture_copy_op(
+        _ev: On<crate::clipboard::CopyToClipboardEvent>,
+        cap: Res<CapturedClipboardOps>,
+    ) {
+        cap.0.lock().unwrap().push("copy");
+    }
+
+    fn capture_paste_op(
+        _ev: On<crate::clipboard::PasteFromClipboardEvent>,
+        cap: Res<CapturedClipboardOps>,
+    ) {
+        cap.0.lock().unwrap().push("paste");
     }
 
     /// Spawns a registry-registered Terminal Activity entity inside the
@@ -852,121 +830,109 @@ mod tests {
     }
 
     #[test]
-    fn is_paste_chord_matches_meta_v_only() {
-        assert!(super::is_paste_chord(
-            &Bk::Character("v".into()),
-            &Modifiers {
-                meta: true,
-                ..Default::default()
-            },
-        ));
+    fn cmd_c_triggers_copy_to_clipboard_event() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedClipboardOps::default());
+        app.add_observer(capture_copy_op);
+        install_active_terminal_activity(&mut app);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("c".into()));
+        app.update();
+        let ops = app
+            .world()
+            .resource::<CapturedClipboardOps>()
+            .0
+            .lock()
+            .unwrap();
+        assert_eq!(
+            *ops,
+            vec!["copy"],
+            "Cmd+C must trigger exactly one CopyToClipboardEvent"
+        );
     }
 
     #[test]
-    fn is_paste_chord_rejects_plain_v() {
-        assert!(!super::is_paste_chord(
-            &Bk::Character("v".into()),
-            &Modifiers::default(),
-        ));
+    fn cmd_c_in_copy_mode_does_not_trigger_copy_event() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedClipboardOps::default());
+        app.add_observer(capture_copy_op);
+        let activity_entity = install_active_terminal_activity(&mut app);
+        app.world_mut()
+            .entity_mut(activity_entity)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("c".into()));
+        app.update();
+        let ops = app
+            .world()
+            .resource::<CapturedClipboardOps>()
+            .0
+            .lock()
+            .unwrap();
+        assert!(
+            ops.is_empty(),
+            "Cmd+C in copy mode must be swallowed by the copy-mode gate, not trigger Copy",
+        );
     }
 
     #[test]
-    fn is_paste_chord_rejects_meta_plus_extra_modifier() {
-        assert!(!super::is_paste_chord(
-            &Bk::Character("v".into()),
-            &Modifiers {
-                meta: true,
-                ctrl: true,
-                ..Default::default()
-            },
-        ));
-        assert!(!super::is_paste_chord(
-            &Bk::Character("v".into()),
-            &Modifiers {
-                meta: true,
-                shift: true,
-                ..Default::default()
-            },
-        ));
-        assert!(!super::is_paste_chord(
-            &Bk::Character("v".into()),
-            &Modifiers {
-                meta: true,
-                alt: true,
-                ..Default::default()
-            },
-        ));
+    fn copy_then_paste_same_tick_fire_observers_in_order() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedClipboardOps::default());
+        app.add_observer(capture_copy_op);
+        app.add_observer(capture_paste_op);
+        install_active_terminal_activity(&mut app);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("c".into()));
+        press(&mut app, window_entity, Bk::Character("v".into()));
+        app.update();
+        let ops = app
+            .world()
+            .resource::<CapturedClipboardOps>()
+            .0
+            .lock()
+            .unwrap();
+        assert_eq!(
+            *ops,
+            vec!["copy", "paste"],
+            "same-tick Cmd+C then Cmd+V must fire Copy then Paste"
+        );
     }
 
     #[test]
-    fn is_paste_chord_rejects_uppercase_v() {
-        assert!(!super::is_paste_chord(
-            &Bk::Character("V".into()),
-            &Modifiers {
-                meta: true,
-                ..Default::default()
-            },
-        ));
-    }
-
-    #[test]
-    fn is_paste_chord_rejects_other_keys() {
-        assert!(!super::is_paste_chord(
-            &Bk::Character("c".into()),
-            &Modifiers {
-                meta: true,
-                ..Default::default()
-            },
-        ));
-        assert!(!super::is_paste_chord(
-            &Bk::Escape,
-            &Modifiers {
-                meta: true,
-                ..Default::default()
-            },
-        ));
-    }
-
-    #[test]
-    fn is_copy_chord_matches_meta_c_only() {
-        assert!(super::is_copy_chord(
-            &Bk::Character("c".into()),
-            &Modifiers {
-                meta: true,
-                ..Default::default()
-            },
-        ));
-    }
-
-    #[test]
-    fn is_copy_chord_rejects_meta_shift_c() {
-        assert!(!super::is_copy_chord(
-            &Bk::Character("c".into()),
-            &Modifiers {
-                meta: true,
-                shift: true,
-                ..Default::default()
-            },
-        ));
-    }
-
-    #[test]
-    fn is_copy_chord_rejects_plain_c() {
-        assert!(!super::is_copy_chord(
-            &Bk::Character("c".into()),
-            &Modifiers::default(),
-        ));
-    }
-
-    #[test]
-    fn is_copy_chord_rejects_ctrl_c() {
-        assert!(!super::is_copy_chord(
-            &Bk::Character("c".into()),
-            &Modifiers {
-                ctrl: true,
-                ..Default::default()
-            },
-        ));
+    fn paste_then_copy_same_tick_fire_observers_in_order() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedClipboardOps::default());
+        app.add_observer(capture_copy_op);
+        app.add_observer(capture_paste_op);
+        install_active_terminal_activity(&mut app);
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("v".into()));
+        press(&mut app, window_entity, Bk::Character("c".into()));
+        app.update();
+        let ops = app
+            .world()
+            .resource::<CapturedClipboardOps>()
+            .0
+            .lock()
+            .unwrap();
+        assert_eq!(
+            *ops,
+            vec!["paste", "copy"],
+            "same-tick Cmd+V then Cmd+C must fire Paste then Copy"
+        );
     }
 
     #[test]
@@ -1627,26 +1593,26 @@ mod tests {
                     .next()
                     .unwrap_or(Entity::PLACEHOLDER);
                 super::execute_action(
-                    ozmux_configs::shortcuts::Action::NewSession,
                     &mut commands,
                     &mut mux,
                     &mut counter,
+                    &mut marker_dirty,
+                    ozmux_configs::shortcuts::Action::NewSession,
                     bootstrap_session,
                     &sessions,
                     &attached_session,
                     &registry,
-                    &mut marker_dirty,
                 );
                 super::execute_action(
-                    ozmux_configs::shortcuts::Action::NewSession,
                     &mut commands,
                     &mut mux,
                     &mut counter,
+                    &mut marker_dirty,
+                    ozmux_configs::shortcuts::Action::NewSession,
                     bootstrap_session,
                     &sessions,
                     &attached_session,
                     &registry,
-                    &mut marker_dirty,
                 );
             },
         );

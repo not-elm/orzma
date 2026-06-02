@@ -918,10 +918,10 @@ mod tests {
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
                 crate::multiplexer::commands::dispatch(
+                    &mut commands,
                     Action::SplitPane {
                         direction: SplitDirection::Horizontal,
                     },
-                    &mut commands,
                     session,
                 );
             })
