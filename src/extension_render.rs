@@ -341,7 +341,7 @@ fn on_ozmux_frame(
     frame: On<Receive<OzmuxFrame>>,
     bridge: Res<ExtensionHandlersBridge>,
     registry: Res<ExtensionRegistry>,
-    mut aid_map: ResMut<WebviewSurfaceIdMap>,
+    mut surface_id_map: ResMut<WebviewSurfaceIdMap>,
     hosts: Query<&HostSurfaceEntity>,
     owners: Query<&OwningExtension>,
     surface_ids: Query<&ExtensionSurfaceId>,
@@ -361,7 +361,7 @@ fn on_ozmux_frame(
         tracing::warn!(%surface_id, error = %e, "extension handlers connect failed");
         return;
     }
-    aid_map.0.insert(surface_id.clone(), webview);
+    surface_id_map.0.insert(surface_id.clone(), webview);
     if let Ok(frame_json) = serde_json::to_string(&frame.payload.0) {
         bridge.0.send(&surface_id, frame_json);
     }
@@ -374,11 +374,11 @@ fn on_ozmux_frame(
 /// dropped.
 fn drain_handler_responses(
     bridge: Res<ExtensionHandlersBridge>,
-    aid_map: Res<WebviewSurfaceIdMap>,
+    surface_id_map: Res<WebviewSurfaceIdMap>,
     mut commands: Commands,
 ) {
     while let Ok((surface_id, frame)) = bridge.0.outbound().try_recv() {
-        let Some(&webview) = aid_map.0.get(&surface_id) else {
+        let Some(&webview) = surface_id_map.0.get(&surface_id) else {
             continue;
         };
         let value: serde_json::Value =
@@ -764,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn aid_for_webview_resolves_through_host_surface_entity() {
+    fn surface_id_for_webview_resolves_through_host_surface_entity() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut app = make_test_app();
@@ -792,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn aid_for_webview_is_none_when_surface_lacks_aid() {
+    fn surface_id_for_webview_is_none_when_surface_lacks_surface_id() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut app = make_test_app();
