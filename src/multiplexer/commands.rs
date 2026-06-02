@@ -53,7 +53,7 @@ impl Plugin for OzmuxShortcutActionPlugin {
 /// `FocusSessionNumber`, `EnterCopyMode`, `Copy`, `Paste`) are handled by
 /// explicit arms in the Bevy dispatcher (`src/input.rs`) and never reach
 /// this function.
-pub fn dispatch(action: Action, commands: &mut Commands, session: Entity) {
+pub fn dispatch(commands: &mut Commands, action: Action, session: Entity) {
     match action {
         Action::SplitPane { direction } => {
             commands.trigger(SplitPaneEvent {
@@ -185,7 +185,7 @@ mod tests {
     fn run_dispatch(app: &mut App, action: Action, session: Entity) {
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
-                dispatch(action.clone(), &mut commands, session);
+                dispatch(&mut commands, action.clone(), session);
             })
             .unwrap();
         app.world_mut().flush();

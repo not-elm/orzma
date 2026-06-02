@@ -223,6 +223,50 @@ Not constrained:
 - Struct field order — governed by layout / grouping concerns, not this
   rule.
 
+## Parameter ordering — mutable parameters first
+
+Within a function or method signature, declare **mutable** parameters
+before **immutable** ones. A parameter is mutable when its binding is
+`mut` or it carries mutable access — e.g. `mut s: String`,
+`buf: &mut Vec<u8>`, `mut commands: Commands`,
+`mut windows: Query<&mut Window>`, `mut config: ResMut<Config>`. A
+parameter is immutable when it is a non-`mut` by-value or shared-access
+binding — e.g. `name: &str`, `windows: Query<&Window>`,
+`config: Res<Config>`, `keys: Res<ButtonInput<KeyCode>>`.
+
+Rationale: grouping the parameters a function writes through ahead of
+the ones it only reads makes the call's effect surface visible at the
+signature — the same "surface first" reasoning behind item ordering.
+
+Required:
+
+| Pattern | Example |
+| --- | --- |
+| Mutable params grouped first, then immutable | `fn reflow(mut windows: Query<&mut Window>, settings: Res<Settings>)` |
+
+Forbidden:
+
+| Pattern | Example | Why |
+| --- | --- | --- |
+| An immutable param ahead of a mutable one | `fn reflow(settings: Res<Settings>, mut windows: Query<&mut Window>)` | Mutable params must come first |
+
+Exceptions — these override the style rule:
+
+- A **fixed structural leading position** is exempt and never reordered: a
+  method's `self` receiver (`&self` / `&mut self`), and a Bevy observer
+  system's `On<E>` trigger (the system *input*, which `bevy_ecs` requires to
+  be first). The mutable-first ordering governs only the parameters that
+  **follow** such a slot — e.g.
+  `fn on_paste(ev: On<E>, mut clipboard: ResMut<Clipboard>, q: Query<&T>)` is
+  compliant: `ev` is fixed first, and the params after it are mutable-first.
+- A **semantic ordering requirement** wins. When parameter order carries
+  meaning — e.g. Bevy `SystemParam`s with separate deferred command
+  queues that must apply in a specific order (a `mux` param before a
+  `commands` param so entity spawns flush before the components inserted
+  on them) — order for correctness and record why in a `// NOTE:`.
+- Trait-method `impl`s whose signature is dictated by the trait.
+- `#[cfg(test)] mod tests { ... }` contents are exempt.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:
@@ -255,6 +299,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Visibility minimization (MANDATORY axis) — any item (any current visibility) with no callers outside its defining module MUST be private. Manual grep-based check; the `unreachable_pub` lint does NOT catch this.
 - Visibility minimization (OPTIONAL axis) — `pub` items with no cross-crate caller may be demoted to `pub(crate)`; library crates may keep `pub` for intentional API surface. The "container already narrow" exception above still applies. `#![warn(unreachable_pub)]` can be enabled temporarily to audit this axis but is not on by default.
 - Item ordering — private (no-modifier) items declared after `pub` / exported ones (see "Item ordering — private items last")
+- Parameter ordering — mutable parameters declared before immutable ones in function signatures (see "Parameter ordering — mutable parameters first")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 

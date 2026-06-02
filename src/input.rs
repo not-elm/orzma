@@ -195,15 +195,15 @@ pub(crate) fn dispatch_focused_key(
                     continue;
                 }
                 execute_action(
-                    action,
                     &mut commands,
                     &mut mux,
                     &mut session_name_counter,
+                    &mut marker_dirty_this_frame,
+                    action,
                     session,
                     &sessions,
                     &attached_session,
                     &registry,
-                    &mut marker_dirty_this_frame,
                 );
                 continue;
             }
@@ -310,15 +310,15 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 /// because they require entity-level side effects beyond a pure
 /// `MultiplexerCommands` mutation.
 fn execute_action(
-    action: Action,
     commands: &mut Commands,
     mux: &mut MultiplexerCommands,
     session_name_counter: &mut SessionNameCounter,
+    marker_dirty_this_frame: &mut bool,
+    action: Action,
     session: Entity,
     sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
     attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: &ActivityEntityRegistry,
-    marker_dirty_this_frame: &mut bool,
 ) {
     match &action {
         Action::EnterCopyMode => {
@@ -364,7 +364,7 @@ fn execute_action(
                 commands.trigger(PasteFromClipboardEvent { entity });
             }
         }
-        _ => commands::dispatch(action, commands, session),
+        _ => commands::dispatch(commands, action, session),
     }
 }
 
@@ -1593,26 +1593,26 @@ mod tests {
                     .next()
                     .unwrap_or(Entity::PLACEHOLDER);
                 super::execute_action(
-                    ozmux_configs::shortcuts::Action::NewSession,
                     &mut commands,
                     &mut mux,
                     &mut counter,
+                    &mut marker_dirty,
+                    ozmux_configs::shortcuts::Action::NewSession,
                     bootstrap_session,
                     &sessions,
                     &attached_session,
                     &registry,
-                    &mut marker_dirty,
                 );
                 super::execute_action(
-                    ozmux_configs::shortcuts::Action::NewSession,
                     &mut commands,
                     &mut mux,
                     &mut counter,
+                    &mut marker_dirty,
+                    ozmux_configs::shortcuts::Action::NewSession,
                     bootstrap_session,
                     &sessions,
                     &attached_session,
                     &registry,
-                    &mut marker_dirty,
                 );
             },
         );
