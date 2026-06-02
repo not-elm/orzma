@@ -897,7 +897,7 @@ mod tests {
     #[test]
     fn try_click_to_focus_mutates_active_pane_and_returns_true() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_configs::shortcuts::{Action, SplitDirection};
+        use ozmux_configs::shortcuts::{ShortcutAction, SplitDirection};
         use ozmux_multiplexer::{ActivePane, MultiplexerCommands, MultiplexerPlugin};
 
         let mut app = App::new();
@@ -919,7 +919,7 @@ mod tests {
             .run_system_once(move |mut commands: Commands| {
                 crate::multiplexer::commands::dispatch(
                     &mut commands,
-                    Action::SplitPane {
+                    ShortcutAction::SplitPane {
                         direction: SplitDirection::Horizontal,
                     },
                     session,

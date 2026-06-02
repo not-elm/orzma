@@ -400,118 +400,120 @@ impl Bindings {
     /// implemented Action. Single source of truth for `lookup()`,
     /// `validate_no_conflicts()`, and external counters
     /// (e.g., daemon bootstrap binding count).
-    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &Option<KeyChord>, Action)> + '_ {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &Option<KeyChord>, ShortcutAction)> + '_ {
         [
-            ("close-pane", &self.close_pane, Action::ClosePane),
+            ("close-pane", &self.close_pane, ShortcutAction::ClosePane),
             (
                 "focus-pane-left",
                 &self.focus_pane_left,
-                Action::FocusPane {
+                ShortcutAction::FocusPane {
                     direction: Direction::Left,
                 },
             ),
             (
                 "focus-pane-down",
                 &self.focus_pane_down,
-                Action::FocusPane {
+                ShortcutAction::FocusPane {
                     direction: Direction::Down,
                 },
             ),
             (
                 "focus-pane-up",
                 &self.focus_pane_up,
-                Action::FocusPane {
+                ShortcutAction::FocusPane {
                     direction: Direction::Up,
                 },
             ),
             (
                 "focus-pane-right",
                 &self.focus_pane_right,
-                Action::FocusPane {
+                ShortcutAction::FocusPane {
                     direction: Direction::Right,
                 },
             ),
             (
                 "split-pane-vertical",
                 &self.split_pane_vertical,
-                Action::SplitPane {
+                ShortcutAction::SplitPane {
                     direction: SplitDirection::Vertical,
                 },
             ),
             (
                 "split-pane-horizontal",
                 &self.split_pane_horizontal,
-                Action::SplitPane {
+                ShortcutAction::SplitPane {
                     direction: SplitDirection::Horizontal,
                 },
             ),
             (
                 "swap-pane-prev",
                 &self.swap_pane_prev,
-                Action::SwapPane {
+                ShortcutAction::SwapPane {
                     offset: SwapOffset::Prev,
                 },
             ),
             (
                 "swap-pane-next",
                 &self.swap_pane_next,
-                Action::SwapPane {
+                ShortcutAction::SwapPane {
                     offset: SwapOffset::Next,
                 },
             ),
             (
                 "close-activity",
                 &self.close_activity,
-                Action::CloseActivity,
+                ShortcutAction::CloseActivity,
             ),
             (
                 "new-terminal-activity",
                 &self.new_terminal_activity,
-                Action::NewTerminalActivity,
+                ShortcutAction::NewTerminalActivity,
             ),
             (
                 "focus-activity-prev",
                 &self.focus_activity_prev,
-                Action::FocusActivity {
+                ShortcutAction::FocusActivity {
                     offset: ActivityOffset::Prev,
                 },
             ),
             (
                 "focus-activity-next",
                 &self.focus_activity_next,
-                Action::FocusActivity {
+                ShortcutAction::FocusActivity {
                     offset: ActivityOffset::Next,
                 },
             ),
             (
                 "enter-copy-mode",
                 &self.enter_copy_mode,
-                Action::EnterCopyMode,
+                ShortcutAction::EnterCopyMode,
             ),
-            ("new-session", &self.new_session, Action::NewSession),
+            ("new-session", &self.new_session, ShortcutAction::NewSession),
             (
                 "focus-session-prev",
                 &self.focus_session_prev,
-                Action::FocusSession {
+                ShortcutAction::FocusSession {
                     offset: SessionOffset::Prev,
                 },
             ),
             (
                 "focus-session-next",
                 &self.focus_session_next,
-                Action::FocusSession {
+                ShortcutAction::FocusSession {
                     offset: SessionOffset::Next,
                 },
             ),
-            ("copy", &self.copy, Action::Copy),
-            ("paste", &self.paste, Action::Paste),
+            ("copy", &self.copy, ShortcutAction::Copy),
+            ("paste", &self.paste, ShortcutAction::Paste),
         ]
         .into_iter()
     }
 
     /// KeyChord -> Action reverse lookup. Linear scan of 19 entries.
     /// Hot path; cheap given the fixed size. HashMap caching deferred per spec.
-    pub fn lookup(&self, chord: &KeyChord) -> Option<Action> {
+    pub fn lookup(&self, chord: &KeyChord) -> Option<ShortcutAction> {
         self.iter().find_map(|(_, bound, action)| {
             if bound.as_ref() == Some(chord) {
                 Some(action)
@@ -543,7 +545,7 @@ impl Bindings {
 /// All shortcut actions supported by ozmux v0.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
-pub enum Action {
+pub enum ShortcutAction {
     /// Close the active pane.
     ClosePane,
     /// Close the active session.
@@ -930,7 +932,7 @@ mod tests {
         let action = b.lookup(&chord).expect("Cmd+J must resolve");
         assert!(matches!(
             action,
-            Action::FocusPane {
+            ShortcutAction::FocusPane {
                 direction: Direction::Down
             }
         ));
@@ -1006,14 +1008,14 @@ mod tests {
     fn lookup_default_cmd_c_returns_copy() {
         let b = Bindings::default();
         let chord = parse_key_chord("Cmd+C").unwrap();
-        assert!(matches!(b.lookup(&chord), Some(Action::Copy)));
+        assert!(matches!(b.lookup(&chord), Some(ShortcutAction::Copy)));
     }
 
     #[test]
     fn lookup_default_cmd_v_returns_paste() {
         let b = Bindings::default();
         let chord = parse_key_chord("Cmd+V").unwrap();
-        assert!(matches!(b.lookup(&chord), Some(Action::Paste)));
+        assert!(matches!(b.lookup(&chord), Some(ShortcutAction::Paste)));
     }
 
     #[test]

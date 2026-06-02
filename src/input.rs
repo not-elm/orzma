@@ -21,7 +21,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
-use ozmux_configs::shortcuts::{Action, KeyChord, Modifiers, SessionOffset};
+use ozmux_configs::shortcuts::{KeyChord, Modifiers, SessionOffset, ShortcutAction};
 use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SessionUiSubtree};
 use std::collections::HashSet;
 
@@ -314,19 +314,19 @@ fn execute_action(
     mux: &mut MultiplexerCommands,
     session_name_counter: &mut SessionNameCounter,
     marker_dirty_this_frame: &mut bool,
-    action: Action,
+    action: ShortcutAction,
     session: Entity,
     sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
     attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
     registry: &ActivityEntityRegistry,
 ) {
     match &action {
-        Action::EnterCopyMode => {
+        ShortcutAction::EnterCopyMode => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
                 commands.trigger(EnterCopyModeRequest { entity });
             }
         }
-        Action::NewSession => {
+        ShortcutAction::NewSession => {
             if *marker_dirty_this_frame {
                 tracing::warn!(
                     target: "ozmux_gui::input",
@@ -342,7 +342,7 @@ fn execute_action(
             );
             dispatch_new_session(commands, mux, session_name_counter, attached_session);
         }
-        Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => {
+        ShortcutAction::FocusSession { .. } | ShortcutAction::FocusSessionNumber { .. } => {
             if *marker_dirty_this_frame {
                 tracing::warn!(
                     target: "ozmux_gui::input",
@@ -354,12 +354,12 @@ fn execute_action(
             *marker_dirty_this_frame = true;
             dispatch_focus_session(commands, sessions, attached_session, &action);
         }
-        Action::Copy => {
+        ShortcutAction::Copy => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
                 commands.trigger(CopyToClipboardEvent { entity });
             }
         }
-        Action::Paste => {
+        ShortcutAction::Paste => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
                 commands.trigger(PasteFromClipboardEvent { entity });
             }
@@ -391,7 +391,7 @@ fn dispatch_focus_session(
     commands: &mut Commands,
     sessions: &Query<(Entity, Option<&SessionCreatedAt>), With<SessionMarker>>,
     attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
-    action: &Action,
+    action: &ShortcutAction,
 ) {
     let mut pairs: Vec<(Entity, u32)> = sessions
         .iter()
@@ -412,13 +412,13 @@ fn dispatch_focus_session(
         .unwrap_or(0);
 
     let target_idx = match action {
-        Action::FocusSession {
+        ShortcutAction::FocusSession {
             offset: SessionOffset::Next,
         } => (current_idx + 1) % entries.len(),
-        Action::FocusSession {
+        ShortcutAction::FocusSession {
             offset: SessionOffset::Prev,
         } => current_idx.checked_sub(1).unwrap_or(entries.len() - 1),
-        Action::FocusSession {
+        ShortcutAction::FocusSession {
             offset: SessionOffset::Last,
         } => {
             tracing::debug!(
@@ -427,7 +427,7 @@ fn dispatch_focus_session(
             );
             return;
         }
-        Action::FocusSessionNumber { index } => {
+        ShortcutAction::FocusSessionNumber { index } => {
             let i = *index as usize;
             if i >= entries.len() {
                 return;
@@ -1333,7 +1333,7 @@ mod tests {
                     &mut commands,
                     &sessions,
                     &attached_session,
-                    &ozmux_configs::shortcuts::Action::FocusSession {
+                    &ozmux_configs::shortcuts::ShortcutAction::FocusSession {
                         offset: ozmux_configs::shortcuts::SessionOffset::Next,
                     },
                 );
@@ -1375,7 +1375,7 @@ mod tests {
                     &mut commands,
                     &sessions,
                     &attached_session,
-                    &ozmux_configs::shortcuts::Action::FocusSessionNumber { index: 1 },
+                    &ozmux_configs::shortcuts::ShortcutAction::FocusSessionNumber { index: 1 },
                 );
             },
         );
@@ -1597,7 +1597,7 @@ mod tests {
                     &mut mux,
                     &mut counter,
                     &mut marker_dirty,
-                    ozmux_configs::shortcuts::Action::NewSession,
+                    ozmux_configs::shortcuts::ShortcutAction::NewSession,
                     bootstrap_session,
                     &sessions,
                     &attached_session,
@@ -1608,7 +1608,7 @@ mod tests {
                     &mut mux,
                     &mut counter,
                     &mut marker_dirty,
-                    ozmux_configs::shortcuts::Action::NewSession,
+                    ozmux_configs::shortcuts::ShortcutAction::NewSession,
                     bootstrap_session,
                     &sessions,
                     &attached_session,

@@ -17,8 +17,8 @@ use crate::multiplexer::commands::split_pane::{SplitPaneActionPlugin, SplitPaneE
 use crate::multiplexer::commands::swap_pane::{SwapPaneActionPlugin, SwapPaneEvent};
 use bevy::prelude::*;
 use ozmux_configs::shortcuts::{
-    Action, ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, SplitDirection,
-    SwapOffset as ConfigSwapOffset,
+    ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, ShortcutAction,
+    SplitDirection, SwapOffset as ConfigSwapOffset,
 };
 use ozmux_multiplexer::{CycleDirection, PaneDirection, SplitOrientation, SwapOffset};
 
@@ -53,37 +53,39 @@ impl Plugin for OzmuxShortcutActionPlugin {
 /// `FocusSessionNumber`, `EnterCopyMode`, `Copy`, `Paste`) are handled by
 /// explicit arms in the Bevy dispatcher (`src/input.rs`) and never reach
 /// this function.
-pub fn dispatch(commands: &mut Commands, action: Action, session: Entity) {
+pub fn dispatch(commands: &mut Commands, action: ShortcutAction, session: Entity) {
     match action {
-        Action::SplitPane { direction } => {
+        ShortcutAction::SplitPane { direction } => {
             commands.trigger(SplitPaneEvent {
                 session,
                 orientation: split_orientation(direction),
             });
         }
-        Action::NewTerminalActivity => {
+        ShortcutAction::NewTerminalActivity => {
             commands.trigger(NewTerminalActivityEvent { session });
         }
-        Action::FocusPane { direction } => {
+        ShortcutAction::FocusPane { direction } => {
             commands.trigger(FocusPaneEvent {
                 session,
                 direction: focus_direction(direction),
             });
         }
-        Action::FocusActivity { offset } => {
+        ShortcutAction::FocusActivity { offset } => {
             if let Some(direction) = cycle_direction(offset) {
                 commands.trigger(FocusActivityEvent { session, direction });
             }
         }
-        Action::SwapPane { offset } => {
+        ShortcutAction::SwapPane { offset } => {
             commands.trigger(SwapPaneEvent {
                 session,
                 offset: swap_offset(offset),
             });
         }
-        Action::ClosePane => commands.trigger(ClosePaneEvent { session }),
-        Action::CloseActivity => commands.trigger(CloseActivityEvent { session }),
-        Action::NewSession | Action::FocusSession { .. } | Action::FocusSessionNumber { .. } => {}
+        ShortcutAction::ClosePane => commands.trigger(ClosePaneEvent { session }),
+        ShortcutAction::CloseActivity => commands.trigger(CloseActivityEvent { session }),
+        ShortcutAction::NewSession
+        | ShortcutAction::FocusSession { .. }
+        | ShortcutAction::FocusSessionNumber { .. } => {}
         other => tracing::debug!(
             target: "ozmux_gui::commands",
             ?other,
@@ -182,7 +184,7 @@ mod tests {
             .unwrap()
     }
 
-    fn run_dispatch(app: &mut App, action: Action, session: Entity) {
+    fn run_dispatch(app: &mut App, action: ShortcutAction, session: Entity) {
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
                 dispatch(&mut commands, action.clone(), session);
@@ -201,7 +203,7 @@ mod tests {
         let session = bootstrap_session(app.world_mut());
         run_dispatch(
             &mut app,
-            Action::SplitPane {
+            ShortcutAction::SplitPane {
                 direction: SplitDirection::Horizontal,
             },
             session,
@@ -213,7 +215,7 @@ mod tests {
     fn dispatch_new_terminal_activity_triggers_new_terminal_activity_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        run_dispatch(&mut app, Action::NewTerminalActivity, session);
+        run_dispatch(&mut app, ShortcutAction::NewTerminalActivity, session);
         assert_eq!(captured(&app), vec!["NewTerminalActivity"]);
     }
 
@@ -223,7 +225,7 @@ mod tests {
         let session = bootstrap_session(app.world_mut());
         run_dispatch(
             &mut app,
-            Action::FocusPane {
+            ShortcutAction::FocusPane {
                 direction: Direction::Right,
             },
             session,
@@ -237,7 +239,7 @@ mod tests {
         let session = bootstrap_session(app.world_mut());
         run_dispatch(
             &mut app,
-            Action::FocusActivity {
+            ShortcutAction::FocusActivity {
                 offset: ActivityOffset::Next,
             },
             session,
@@ -251,7 +253,7 @@ mod tests {
         let session = bootstrap_session(app.world_mut());
         run_dispatch(
             &mut app,
-            Action::FocusActivity {
+            ShortcutAction::FocusActivity {
                 offset: ActivityOffset::Last,
             },
             session,
@@ -265,7 +267,7 @@ mod tests {
         let session = bootstrap_session(app.world_mut());
         run_dispatch(
             &mut app,
-            Action::SwapPane {
+            ShortcutAction::SwapPane {
                 offset: CfgSwapOffset::Prev,
             },
             session,
@@ -277,7 +279,7 @@ mod tests {
     fn dispatch_close_pane_triggers_close_pane_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        run_dispatch(&mut app, Action::ClosePane, session);
+        run_dispatch(&mut app, ShortcutAction::ClosePane, session);
         assert_eq!(captured(&app), vec!["ClosePane"]);
     }
 
@@ -285,7 +287,7 @@ mod tests {
     fn dispatch_close_activity_triggers_close_activity_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        run_dispatch(&mut app, Action::CloseActivity, session);
+        run_dispatch(&mut app, ShortcutAction::CloseActivity, session);
         assert_eq!(captured(&app), vec!["CloseActivity"]);
     }
 
@@ -293,7 +295,7 @@ mod tests {
     fn dispatch_new_session_emits_no_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        run_dispatch(&mut app, Action::NewSession, session);
+        run_dispatch(&mut app, ShortcutAction::NewSession, session);
         assert!(captured(&app).is_empty());
     }
 
@@ -303,7 +305,7 @@ mod tests {
         let session = bootstrap_session(app.world_mut());
         run_dispatch(
             &mut app,
-            Action::FocusSession {
+            ShortcutAction::FocusSession {
                 offset: SessionOffset::Next,
             },
             session,
@@ -315,7 +317,11 @@ mod tests {
     fn dispatch_focus_session_number_emits_no_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        run_dispatch(&mut app, Action::FocusSessionNumber { index: 0 }, session);
+        run_dispatch(
+            &mut app,
+            ShortcutAction::FocusSessionNumber { index: 0 },
+            session,
+        );
         assert!(captured(&app).is_empty());
     }
 
@@ -323,7 +329,7 @@ mod tests {
     fn dispatch_unknown_action_emits_no_event() {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
-        run_dispatch(&mut app, Action::ZoomPane, session);
+        run_dispatch(&mut app, ShortcutAction::ZoomPane, session);
         assert!(captured(&app).is_empty());
     }
 
@@ -333,7 +339,7 @@ mod tests {
         let bogus = app.world_mut().spawn(SessionMarker).id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
-        run_dispatch(&mut app, Action::ClosePane, bogus);
+        run_dispatch(&mut app, ShortcutAction::ClosePane, bogus);
         assert_eq!(captured(&app), vec!["ClosePane"]);
     }
 }
