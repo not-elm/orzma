@@ -5,11 +5,10 @@
 //! status bar.
 
 use crate::font::TerminalUiFont;
-use crate::multiplexer::SessionCreatedAt;
 use crate::ui::UiRoot;
 use crate::ui::status_bar::build_status_bar;
 use bevy::prelude::*;
-use ozmux_multiplexer::{AttachedSession, SessionMarker};
+use ozmux_multiplexer::{AttachedSession, SessionCreatedAt, SessionMarker};
 
 /// Marker on the currently-active status bar root Node. `build_status_bar`
 /// inserts this on the bar entity it spawns; the standalone rebuild

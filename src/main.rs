@@ -1,5 +1,6 @@
 //! ozmux Bevy GUI entry point.
 
+mod action;
 mod bootstrap;
 mod browser_render;
 mod clipboard;
@@ -13,6 +14,7 @@ mod system_set;
 mod theme;
 mod ui;
 
+use crate::action::OzmuxActionPlugin;
 use crate::browser_render::OzmuxBrowserRenderPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::extension_manager::ExtensionManagerPlugin;
@@ -77,6 +79,7 @@ fn main() {
             ImeOverlayPlugin,
             OzmuxShortcutActionPlugin,
             ExtensionManagerPlugin::new(endpoints),
+            OzmuxActionPlugin,
         ))
         .run();
 }

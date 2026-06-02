@@ -75,11 +75,18 @@ pub struct AttachedSession;
 /// Per-Session pointer to the Entity that hosts the Session's UI subtree
 /// root. The subtree root is a `Node`; when the Session is attached, the
 /// subtree's `ChildOf` is `SessionUiRoot`. When parked, it is the Session
-/// entity itself (walker-skipped). The component is bundled with the
-/// other Session-side components, but the UI layer is responsible for
-/// spawning the subtree node and inserting the pointer.
+/// entity itself (walker-skipped). The subtree node is spawned and this
+/// pointer inserted by `MultiplexerCommands::spawn_attached_session`.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct SessionUiSubtree(pub Entity);
+
+/// Per-Session monotonic creation-order index, set at spawn time from
+/// `SessionNameCounter`. Stable sort key for UIs that list sessions in
+/// creation order (status bar, focus cycling); `Entity` ordering is
+/// unreliable because deferred command queues do not guarantee monotonic
+/// indices across multiple `Commands` instances.
+#[derive(Component, Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub struct SessionCreatedAt(pub u32);
 
 /// The currently focused Activity entity within a Pane.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

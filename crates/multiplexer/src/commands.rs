@@ -6,8 +6,8 @@
 
 use crate::cells::{Side, SplitOrientation};
 use crate::components::{
-    ActiveActivity, ActivePane, ActivityKind, ActivityMarker, CopyMode, LayoutCells, PaneMarker,
-    SessionDimensions, SessionMarker,
+    ActiveActivity, ActivePane, ActivityKind, ActivityMarker, AttachedSession, CopyMode,
+    LayoutCells, PaneMarker, SessionCreatedAt, SessionDimensions, SessionMarker, SessionUiSubtree,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
@@ -36,12 +36,27 @@ pub struct SplitOutcome {
     pub activity: Entity,
 }
 
+/// Monotonic counter for sessions created through `MultiplexerCommands`.
+/// Each `next()` returns the next 1-based creation-order index (never
+/// reused). Seeds the `"session{n}"` auto-name and the `SessionCreatedAt(n)`
+/// component minted by [`MultiplexerCommands::spawn_attached_session`].
+#[derive(Resource, Default, Debug)]
+pub struct SessionNameCounter(u32);
+
+impl SessionNameCounter {
+    fn next(&mut self) -> u32 {
+        self.0 = self.0.saturating_add(1);
+        self.0
+    }
+}
+
 /// SystemParam exposing every mutation on the multiplexer state. Read
 /// helpers (`session_of_pane`, `panes_of_session`, etc.) are non-mut and
 /// can be called by other systems through the same SystemParam.
 #[derive(SystemParam)]
 pub struct MultiplexerCommands<'w, 's> {
     commands: Commands<'w, 's>,
+    counter: ResMut<'w, SessionNameCounter>,
     sessions: Query<
         'w,
         's,
@@ -110,6 +125,31 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             pane,
             activity,
         }
+    }
+
+    /// Mints a session via `create_session`, spawns its UI subtree `Node`,
+    /// inserts `AttachedSession` + `SessionUiSubtree` + `SessionCreatedAt`,
+    /// parents the subtree under the session, and returns the session entity.
+    /// The session is auto-named `"session{n}"` from the internal
+    /// `SessionNameCounter`.
+    pub fn spawn_attached_session(&mut self) -> Entity {
+        let n = self.counter.next();
+        let session = self.create_session(Some(format!("session{n}"))).session;
+        let subtree = self
+            .commands
+            .spawn(Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            })
+            .id();
+        self.commands.entity(session).insert((
+            AttachedSession,
+            SessionUiSubtree(subtree),
+            SessionCreatedAt(n),
+        ));
+        self.commands.entity(subtree).insert(ChildOf(session));
+        session
     }
 
     /// Mutate the Session's `Name` component. Uses `set_if_neq` so a
@@ -478,6 +518,44 @@ mod tests {
     }
 
     #[test]
+    fn spawn_attached_session_attaches_marker_subtree_and_created_at() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MultiplexerPlugin);
+
+        let session = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| mux.spawn_attached_session())
+            .unwrap();
+        app.world_mut().flush();
+
+        let world = app.world();
+        assert!(
+            world.get::<AttachedSession>(session).is_some(),
+            "new session carries AttachedSession",
+        );
+        assert_eq!(
+            world.get::<SessionCreatedAt>(session).map(|c| c.0),
+            Some(1),
+            "first spawn_attached_session mints SessionCreatedAt(1)",
+        );
+        assert_eq!(
+            world.get::<Name>(session).map(|n| n.as_str().to_owned()),
+            Some("session1".to_owned()),
+            "session is auto-named session1 from the counter",
+        );
+        let subtree = world
+            .get::<SessionUiSubtree>(session)
+            .expect("new session carries a SessionUiSubtree pointer")
+            .0;
+        assert_eq!(
+            world.get::<ChildOf>(subtree).map(|c| c.parent()),
+            Some(session),
+            "the subtree node is parented under the session",
+        );
+    }
+
+    #[test]
     fn add_and_remove_activity_flag_changed_children_on_pane() {
         let mut app = make_change_detection_app();
 
@@ -581,6 +659,7 @@ mod tests {
     #[test]
     fn create_session_spawns_session_pane_activity_with_correct_markers_and_childof() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(Some("test".into())))
             .unwrap();
@@ -620,6 +699,7 @@ mod tests {
     #[test]
     fn rename_session_mutates_name_and_only_fires_changed_on_actual_change() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_session(Some("before".into()))
@@ -641,6 +721,7 @@ mod tests {
     #[test]
     fn set_session_dimensions_inserts_or_updates_component() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -662,6 +743,7 @@ mod tests {
     #[test]
     fn set_active_pane_updates_active_pane_pointer() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -690,6 +772,7 @@ mod tests {
     #[test]
     fn set_active_activity_updates_active_activity_pointer() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -718,6 +801,7 @@ mod tests {
     #[test]
     fn split_pane_spawns_pane_with_bootstrap_activity_and_updates_layout() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -747,6 +831,7 @@ mod tests {
     #[test]
     fn close_pane_despawns_pane_and_repoints_active_to_survivor() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -776,6 +861,7 @@ mod tests {
     #[test]
     fn swap_pane_returns_swap_outcome_and_updates_layout() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -799,6 +885,7 @@ mod tests {
     #[test]
     fn add_activity_spawns_activity_child_of_pane() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -819,6 +906,7 @@ mod tests {
     #[test]
     fn close_session_despawns_session_and_descendants() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -844,6 +932,7 @@ mod tests {
     #[test]
     fn break_activity_to_pane_creates_new_pane_with_moved_activity() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -880,6 +969,7 @@ mod tests {
     #[test]
     fn break_activity_to_pane_returns_error_when_source_pane_has_only_one_activity() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -902,6 +992,7 @@ mod tests {
     fn split_pane_with_activity_seeds_extension_activity() {
         use std::path::PathBuf;
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -947,6 +1038,7 @@ mod tests {
     #[test]
     fn sessions_active_pane_returns_bootstrap_pane() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -961,6 +1053,7 @@ mod tests {
     #[test]
     fn panes_active_activity_returns_bootstrap_activity() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -975,6 +1068,7 @@ mod tests {
     #[test]
     fn resize_pane_returns_noop_without_session_dimensions() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -989,6 +1083,7 @@ mod tests {
     #[test]
     fn resize_pane_returns_noop_for_single_pane_session() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
