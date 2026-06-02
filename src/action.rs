@@ -1,6 +1,5 @@
 //! Aggregates the ozmux shortcut-action plugins that dispatch through
-//! `EntityEvent`s: the session-lifecycle actions plus the pane/activity
-//! actions relocated from `multiplexer::commands`.
+//! `EntityEvent`s: session-lifecycle actions and pane/activity actions.
 
 use bevy::prelude::*;
 use close_activity::CloseActivityActionPlugin;
