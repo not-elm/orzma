@@ -6,8 +6,8 @@
 (function () {
   "use strict";
 
-  // A PreloadScript may be evaluated more than once in a single context;
-  // installing two listeners would double every scroll.
+  // NOTE: a PreloadScript may be evaluated more than once in a single context;
+  // a second listener would double every scroll, hence this idempotency guard.
   if (window.__ozmuxVimScroll) {
     return;
   }
@@ -26,8 +26,6 @@
     }
   }
 
-  // True when a key should reach the page instead of scrolling: a text input,
-  // textarea, select, or contenteditable element holds focus.
   function isEditableFocused() {
     var el = document.activeElement;
     if (!el) {
@@ -60,9 +58,6 @@
     return (ox === "auto" || ox === "scroll") && el.scrollWidth > el.clientWidth + 1;
   }
 
-  // The element to scroll on the given axis: the main document when it can
-  // scroll, otherwise the largest scrollable element on the page (covers
-  // app-shell sites whose document itself does not scroll).
   function scrollTarget(axis) {
     var doc = document.scrollingElement || document.documentElement;
     if (doc && docCanScroll(doc, axis)) {
@@ -109,12 +104,7 @@
     }
   }
 
-  // Pure key -> action decision. Returns an action string, or null when the
-  // key is not a scroll binding. `shift` is the only permitted modifier (for
-  // `G`); callers must already have excluded ctrl/alt/meta. Exposed on
-  // window.__ozmuxVimScroll for the injection test and potential future
-  // unit testing.
-  function decideAction(key, shift, hadPendingG) {
+  function decideAction(key, hadPendingG) {
     if (hadPendingG && key === "g") {
       return "top";
     }
@@ -134,7 +124,7 @@
       case "G":
         return "bottom";
       case "g":
-        return shift ? null : "pendingG";
+        return "pendingG";
       default:
         return null;
     }
@@ -151,9 +141,8 @@
     }
 
     var hadPendingG = pendingG;
-    var action = decideAction(event.key, event.shiftKey, hadPendingG);
+    var action = decideAction(event.key, hadPendingG);
 
-    // Any action other than starting a `gg` ends a pending leading `g`.
     if (action !== "pendingG") {
       clearPendingG();
     }
@@ -207,5 +196,7 @@
 
   window.addEventListener("keydown", onKeyDown, true);
 
+  // NOTE: window.__ozmuxVimScroll is asserted by the Rust injection test
+  // (attach_injects_vim_scroll_preload in browser_render.rs); keep the name.
   window.__ozmuxVimScroll = { decideAction: decideAction };
 })();
