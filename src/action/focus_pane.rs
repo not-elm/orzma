@@ -1,6 +1,9 @@
+//! Focus-pane shortcut action. Directional pane focus is deferred, so the
+//! observer is currently a no-op (see the TODO on `apply_focus_pane`).
 use bevy::prelude::*;
 use ozmux_multiplexer::PaneDirection;
 
+/// Registers the `apply_focus_pane` observer for `FocusPaneActionEvent`.
 pub struct FocusPaneActionPlugin;
 
 impl Plugin for FocusPaneActionPlugin {
@@ -9,13 +12,15 @@ impl Plugin for FocusPaneActionPlugin {
     }
 }
 
+/// Request to move pane focus in `direction`. Triggered by
+/// `ShortcutAction::FocusPane`.
 #[derive(EntityEvent, Debug)]
-pub struct FocusPaneEvent {
+pub struct FocusPaneActionEvent {
     #[event_target]
     pub session: Entity,
     #[expect(
         dead_code,
-        reason = "populated by dispatch() and consumed once layout-cell reads are exposed on MultiplexerCommands"
+        reason = "populated by the shortcut dispatcher and consumed once layout-cell reads are exposed on MultiplexerCommands"
     )]
     pub direction: PaneDirection,
 }
@@ -23,7 +28,7 @@ pub struct FocusPaneEvent {
 // TODO: implement direction-based focus once MultiplexerCommands exposes
 // layout-cell reads + ozmux_multiplexer::direction::pane_in_direction. Until
 // then the observer is a no-op to match today's apply_focus_pane behavior.
-fn apply_focus_pane(trigger: On<FocusPaneEvent>) {
+fn apply_focus_pane(trigger: On<FocusPaneActionEvent>) {
     let _ = trigger.event();
     tracing::debug!(target: "ozmux_gui::commands", "FocusPane: deferred to follow-up task");
 }
@@ -54,7 +59,7 @@ mod tests {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
         let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
-        app.world_mut().trigger(FocusPaneEvent {
+        app.world_mut().trigger(FocusPaneActionEvent {
             session,
             direction: PaneDirection::Right,
         });

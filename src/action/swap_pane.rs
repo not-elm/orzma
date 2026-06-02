@@ -1,6 +1,9 @@
+//! Swap-pane shortcut action: swaps the active pane with a sibling when a
+//! `SwapPaneActionEvent` fires.
 use bevy::prelude::*;
 use ozmux_multiplexer::{MultiplexerCommands, SwapOffset};
 
+/// Registers the `apply_swap_pane` observer.
 pub struct SwapPaneActionPlugin;
 
 impl Plugin for SwapPaneActionPlugin {
@@ -9,15 +12,17 @@ impl Plugin for SwapPaneActionPlugin {
     }
 }
 
+/// Request to swap the active pane with the sibling at `offset`. Triggered
+/// by `ShortcutAction::SwapPane`.
 #[derive(EntityEvent, Debug)]
-pub struct SwapPaneEvent {
+pub struct SwapPaneActionEvent {
     #[event_target]
     pub session: Entity,
     pub offset: SwapOffset,
 }
 
-fn apply_swap_pane(trigger: On<SwapPaneEvent>, mut mux: MultiplexerCommands) {
-    let SwapPaneEvent { session, offset } = trigger.event();
+fn apply_swap_pane(trigger: On<SwapPaneActionEvent>, mut mux: MultiplexerCommands) {
+    let SwapPaneActionEvent { session, offset } = trigger.event();
     let Some(active_pane) = mux.sessions_active_pane(*session) else {
         tracing::warn!(target: "ozmux_gui::commands", ?session, "SwapPane: session vanished");
         return;
@@ -53,7 +58,7 @@ mod tests {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
         let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
-        app.world_mut().trigger(SwapPaneEvent {
+        app.world_mut().trigger(SwapPaneActionEvent {
             session,
             offset: SwapOffset::Prev,
         });

@@ -2,8 +2,8 @@
 //! the GUI can read and write text without holding the cross-platform
 //! handle directly. `build_paste_bytes` is the pure helper that turns
 //! clipboard text into the byte stream forwarded to the PTY.
-//! `ClipboardActionPlugin` wires the `CopyToClipboardEvent` /
-//! `PasteFromClipboardEvent` observers that bridge `Action::Copy` /
+//! `ClipboardActionPlugin` wires the `CopyToClipboardActionEvent` /
+//! `PasteFromClipboardActionEvent` observers that bridge `Action::Copy` /
 //! `Action::Paste` to the focused terminal.
 
 use bevy::app::{App, Plugin};
@@ -172,7 +172,7 @@ pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
 /// Request to copy the focused terminal's current selection to the
 /// system clipboard. Triggered by `Action::Copy`.
 #[derive(EntityEvent, Debug)]
-pub struct CopyToClipboardEvent {
+pub struct CopyToClipboardActionEvent {
     /// Target Terminal Activity entity.
     pub entity: Entity,
 }
@@ -180,7 +180,7 @@ pub struct CopyToClipboardEvent {
 /// Request to paste the system clipboard into the focused terminal's
 /// PTY. Triggered by `Action::Paste`.
 #[derive(EntityEvent, Debug)]
-pub struct PasteFromClipboardEvent {
+pub struct PasteFromClipboardActionEvent {
     /// Target Terminal Activity entity.
     pub entity: Entity,
 }
@@ -198,11 +198,11 @@ impl Plugin for ClipboardActionPlugin {
     }
 }
 
-/// Observer for `CopyToClipboardEvent`. Writes the target terminal's
+/// Observer for `CopyToClipboardActionEvent`. Writes the target terminal's
 /// current selection to the system clipboard; no-ops on an empty
 /// selection or a missing `TerminalHandle` (e.g. a Browser Activity).
 fn on_copy_to_clipboard(
-    ev: On<CopyToClipboardEvent>,
+    ev: On<CopyToClipboardActionEvent>,
     mut clipboard: ResMut<Clipboard>,
     handles: Query<&TerminalHandle>,
 ) {
@@ -216,12 +216,12 @@ fn on_copy_to_clipboard(
     }
 }
 
-/// Observer for `PasteFromClipboardEvent`. Reads the system clipboard
+/// Observer for `PasteFromClipboardActionEvent`. Reads the system clipboard
 /// and writes it to the target terminal's PTY, wrapping in bracketed
 /// paste markers when the terminal has bracketed paste enabled. No-ops
 /// on an empty clipboard or a missing `TerminalHandle`.
 fn on_paste_from_clipboard(
-    ev: On<PasteFromClipboardEvent>,
+    ev: On<PasteFromClipboardActionEvent>,
     mut clipboard: ResMut<Clipboard>,
     mut handles: Query<(&mut TerminalHandle, &mut PtyHandle)>,
 ) {
@@ -264,7 +264,7 @@ mod tests {
         app.add_plugins(super::ClipboardActionPlugin);
         let e: Entity = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .trigger(super::CopyToClipboardEvent { entity: e });
+            .trigger(super::CopyToClipboardActionEvent { entity: e });
         app.update();
     }
 
@@ -277,7 +277,7 @@ mod tests {
         app.add_plugins(super::ClipboardActionPlugin);
         let e: Entity = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .trigger(super::PasteFromClipboardEvent { entity: e });
+            .trigger(super::PasteFromClipboardActionEvent { entity: e });
         app.update();
     }
 

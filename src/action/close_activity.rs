@@ -1,6 +1,9 @@
+//! Close-activity shortcut action: closes the active activity (or its pane
+//! when it is the last one) when a `CloseActivityActionEvent` fires.
 use bevy::prelude::*;
 use ozmux_multiplexer::MultiplexerCommands;
 
+/// Registers the `apply_close_activity` observer.
 pub struct CloseActivityActionPlugin;
 
 impl Plugin for CloseActivityActionPlugin {
@@ -9,14 +12,16 @@ impl Plugin for CloseActivityActionPlugin {
     }
 }
 
+/// Request to close the active activity. Triggered by
+/// `ShortcutAction::CloseActivity`.
 #[derive(EntityEvent, Debug)]
-pub struct CloseActivityEvent {
+pub struct CloseActivityActionEvent {
     #[event_target]
     pub session: Entity,
 }
 
-fn apply_close_activity(trigger: On<CloseActivityEvent>, mut mux: MultiplexerCommands) {
-    let CloseActivityEvent { session } = trigger.event();
+fn apply_close_activity(trigger: On<CloseActivityActionEvent>, mut mux: MultiplexerCommands) {
+    let CloseActivityActionEvent { session } = trigger.event();
     let Some(active_pane) = mux.sessions_active_pane(*session) else {
         tracing::warn!(target: "ozmux_gui::commands", ?session, "CloseActivity: session vanished");
         return;
@@ -67,7 +72,8 @@ mod tests {
         let mut app = setup_app();
         let session = bootstrap_session(app.world_mut());
         let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
-        app.world_mut().trigger(CloseActivityEvent { session });
+        app.world_mut()
+            .trigger(CloseActivityActionEvent { session });
         app.world_mut().flush();
         // Single-activity pane is closed via close_pane; only one pane exists,
         // so the close-last-pane invariant inside ozmux_multiplexer prevents

@@ -7,22 +7,34 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
+use crate::action::close_activity::CloseActivityActionEvent;
+use crate::action::close_pane::ClosePaneActionEvent;
+use crate::action::focus_activity::FocusActivityActionEvent;
+use crate::action::focus_pane::FocusPaneActionEvent;
+use crate::action::new_terminal_activity::NewTerminalActivityActionEvent;
 use crate::action::session::{FocusSessionActionEvent, FocusSessionTarget, NewSessionActionEvent};
-use crate::clipboard::{Clipboard, CopyToClipboardEvent, PasteFromClipboardEvent};
+use crate::action::split_pane::SplitPaneActionEvent;
+use crate::action::swap_pane::SwapPaneActionEvent;
+use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::ime::{ImeState, read_ime_events};
-use crate::multiplexer::commands;
 use crate::system_set::OzmuxSystems;
 use crate::ui::copy_mode::{
-    CopyModeState, EnterCopyModeRequest, dispatch_key as dispatch_copy_mode_key,
+    CopyModeState, EnterCopyModeActionEvent, dispatch_key as dispatch_copy_mode_key,
 };
 use crate::ui::registry::ActivityEntityRegistry;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
-use ozmux_configs::shortcuts::{KeyChord, Modifiers, SessionOffset, ShortcutAction};
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
+use ozmux_configs::shortcuts::{
+    ActivityOffset as ConfigActivityOffset, Direction as ConfigDirection, KeyChord, Modifiers,
+    SessionOffset, ShortcutAction, SplitDirection, SwapOffset as ConfigSwapOffset,
+};
+use ozmux_multiplexer::{
+    AttachedSession, CycleDirection, MultiplexerCommands, PaneDirection, SessionMarker,
+    SplitOrientation, SwapOffset,
+};
 use std::collections::HashSet;
 
 /// Resolves the focused activity's entity via the attached session →
@@ -273,13 +285,12 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 }
 
 /// Executes a resolved `ShortcutAction` for the given session entity by
-/// triggering the matching `EntityEvent`.
+/// triggering the matching action `EntityEvent`.
 ///
-/// `EnterCopyMode`, `Copy`, and `Paste` trigger activity-targeted events;
-/// `NewSession`, `FocusSession`, and `FocusSessionNumber` trigger the
-/// session-targeted `NewSessionActionEvent` / `FocusSessionActionEvent`
-/// handled by observers in `crate::action::session`. Every other action is
-/// translated by `commands::dispatch`.
+/// This is the single shortcut-dispatch point: copy-mode / clipboard
+/// actions target the active Terminal Activity; session and pane/activity
+/// actions target `session`; not-yet-implemented variants fall through to a
+/// `tracing::debug!` log.
 fn execute_action(
     commands: &mut Commands,
     mux: &MultiplexerCommands,
@@ -290,7 +301,7 @@ fn execute_action(
     match &action {
         ShortcutAction::EnterCopyMode => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
-                commands.trigger(EnterCopyModeRequest { entity });
+                commands.trigger(EnterCopyModeActionEvent { entity });
             }
         }
         ShortcutAction::NewSession => {
@@ -314,15 +325,51 @@ fn execute_action(
         }
         ShortcutAction::Copy => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
-                commands.trigger(CopyToClipboardEvent { entity });
+                commands.trigger(CopyToClipboardActionEvent { entity });
             }
         }
         ShortcutAction::Paste => {
             if let Some(entity) = resolve_active_activity_entity(mux, session, registry) {
-                commands.trigger(PasteFromClipboardEvent { entity });
+                commands.trigger(PasteFromClipboardActionEvent { entity });
             }
         }
-        _ => commands::dispatch(commands, action, session),
+        ShortcutAction::SplitPane { direction } => {
+            commands.trigger(SplitPaneActionEvent {
+                session,
+                orientation: split_orientation(direction.clone()),
+            });
+        }
+        ShortcutAction::NewTerminalActivity => {
+            commands.trigger(NewTerminalActivityActionEvent { session });
+        }
+        ShortcutAction::FocusPane { direction } => {
+            commands.trigger(FocusPaneActionEvent {
+                session,
+                direction: focus_direction(direction.clone()),
+            });
+        }
+        ShortcutAction::FocusActivity { offset } => {
+            if let Some(direction) = cycle_direction(offset.clone()) {
+                commands.trigger(FocusActivityActionEvent { session, direction });
+            }
+        }
+        ShortcutAction::SwapPane { offset } => {
+            commands.trigger(SwapPaneActionEvent {
+                session,
+                offset: swap_offset(offset.clone()),
+            });
+        }
+        ShortcutAction::ClosePane => {
+            commands.trigger(ClosePaneActionEvent { session });
+        }
+        ShortcutAction::CloseActivity => {
+            commands.trigger(CloseActivityActionEvent { session });
+        }
+        other => tracing::debug!(
+            target: "ozmux_gui::input",
+            ?other,
+            "shortcut action not yet implemented"
+        ),
     }
 }
 
@@ -338,6 +385,37 @@ fn resolve_active_activity_entity(
     let pane = mux.sessions_active_pane(session)?;
     let activity = mux.panes_active_activity(pane)?;
     registry.get(activity)
+}
+
+fn split_orientation(d: SplitDirection) -> SplitOrientation {
+    match d {
+        SplitDirection::Horizontal => SplitOrientation::Horizontal,
+        SplitDirection::Vertical => SplitOrientation::Vertical,
+    }
+}
+
+fn focus_direction(d: ConfigDirection) -> PaneDirection {
+    match d {
+        ConfigDirection::Up => PaneDirection::Up,
+        ConfigDirection::Down => PaneDirection::Down,
+        ConfigDirection::Left => PaneDirection::Left,
+        ConfigDirection::Right => PaneDirection::Right,
+    }
+}
+
+fn swap_offset(o: ConfigSwapOffset) -> SwapOffset {
+    match o {
+        ConfigSwapOffset::Prev => SwapOffset::Prev,
+        ConfigSwapOffset::Next => SwapOffset::Next,
+    }
+}
+
+fn cycle_direction(o: ConfigActivityOffset) -> Option<CycleDirection> {
+    match o {
+        ConfigActivityOffset::Next => Some(CycleDirection::Next),
+        ConfigActivityOffset::Prev => Some(CycleDirection::Prev),
+        ConfigActivityOffset::Last => None,
+    }
 }
 
 /// Translates a Bevy logical key into the `TerminalKey` variant the
@@ -488,14 +566,14 @@ mod tests {
     struct CapturedClipboardOps(Arc<Mutex<Vec<&'static str>>>);
 
     fn capture_copy_op(
-        _ev: On<crate::clipboard::CopyToClipboardEvent>,
+        _ev: On<crate::clipboard::CopyToClipboardActionEvent>,
         cap: Res<CapturedClipboardOps>,
     ) {
         cap.0.lock().unwrap().push("copy");
     }
 
     fn capture_paste_op(
-        _ev: On<crate::clipboard::PasteFromClipboardEvent>,
+        _ev: On<crate::clipboard::PasteFromClipboardActionEvent>,
         cap: Res<CapturedClipboardOps>,
     ) {
         cap.0.lock().unwrap().push("paste");
@@ -676,7 +754,7 @@ mod tests {
         assert_eq!(
             *ops,
             vec!["copy"],
-            "Cmd+C must trigger exactly one CopyToClipboardEvent"
+            "Cmd+C must trigger exactly one CopyToClipboardActionEvent"
         );
     }
 
@@ -1117,6 +1195,228 @@ mod tests {
             "repeat=true 'j' must still forward to the terminal; captured: {:?}",
             captured,
         );
+    }
+
+    #[derive(Debug, Default, Resource)]
+    struct CapturedActionEvents(Vec<&'static str>);
+
+    fn cap_split(_: On<SplitPaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("SplitPane");
+    }
+    fn cap_new_activity(
+        _: On<NewTerminalActivityActionEvent>,
+        mut c: ResMut<CapturedActionEvents>,
+    ) {
+        c.0.push("NewTerminalActivity");
+    }
+    fn cap_focus_pane(_: On<FocusPaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("FocusPane");
+    }
+    fn cap_focus_activity(_: On<FocusActivityActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("FocusActivity");
+    }
+    fn cap_swap(_: On<SwapPaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("SwapPane");
+    }
+    fn cap_close_pane(_: On<ClosePaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("ClosePane");
+    }
+    fn cap_close_activity(_: On<CloseActivityActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("CloseActivity");
+    }
+    fn cap_new_session(_: On<NewSessionActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("NewSession");
+    }
+    fn cap_focus_session(_: On<FocusSessionActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("FocusSession");
+    }
+
+    fn setup_exec_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MultiplexerPlugin);
+        app.init_resource::<crate::ui::registry::ActivityEntityRegistry>();
+        app.init_resource::<CapturedActionEvents>();
+        app.add_observer(cap_split);
+        app.add_observer(cap_new_activity);
+        app.add_observer(cap_focus_pane);
+        app.add_observer(cap_focus_activity);
+        app.add_observer(cap_swap);
+        app.add_observer(cap_close_pane);
+        app.add_observer(cap_close_activity);
+        app.add_observer(cap_new_session);
+        app.add_observer(cap_focus_session);
+        app
+    }
+
+    fn exec_bootstrap_session(world: &mut World) -> Entity {
+        world
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_session(Some("test".into())).session
+            })
+            .unwrap()
+    }
+
+    fn run_execute_action(app: &mut App, action: ShortcutAction, session: Entity) {
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands,
+                      mux: MultiplexerCommands,
+                      registry: Res<crate::ui::registry::ActivityEntityRegistry>| {
+                    execute_action(&mut commands, &mux, action.clone(), session, &registry);
+                },
+            )
+            .unwrap();
+        app.world_mut().flush();
+    }
+
+    fn captured_actions(app: &App) -> Vec<&'static str> {
+        app.world().resource::<CapturedActionEvents>().0.clone()
+    }
+
+    #[test]
+    fn execute_action_split_pane_triggers_split_pane_action_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(
+            &mut app,
+            ShortcutAction::SplitPane {
+                direction: ozmux_configs::shortcuts::SplitDirection::Horizontal,
+            },
+            session,
+        );
+        assert_eq!(captured_actions(&app), vec!["SplitPane"]);
+    }
+
+    #[test]
+    fn execute_action_new_terminal_activity_triggers_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::NewTerminalActivity, session);
+        assert_eq!(captured_actions(&app), vec!["NewTerminalActivity"]);
+    }
+
+    #[test]
+    fn execute_action_focus_pane_triggers_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(
+            &mut app,
+            ShortcutAction::FocusPane {
+                direction: ozmux_configs::shortcuts::Direction::Right,
+            },
+            session,
+        );
+        assert_eq!(captured_actions(&app), vec!["FocusPane"]);
+    }
+
+    #[test]
+    fn execute_action_focus_activity_next_triggers_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(
+            &mut app,
+            ShortcutAction::FocusActivity {
+                offset: ozmux_configs::shortcuts::ActivityOffset::Next,
+            },
+            session,
+        );
+        assert_eq!(captured_actions(&app), vec!["FocusActivity"]);
+    }
+
+    #[test]
+    fn execute_action_focus_activity_last_emits_no_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(
+            &mut app,
+            ShortcutAction::FocusActivity {
+                offset: ozmux_configs::shortcuts::ActivityOffset::Last,
+            },
+            session,
+        );
+        assert!(captured_actions(&app).is_empty());
+    }
+
+    #[test]
+    fn execute_action_swap_pane_triggers_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(
+            &mut app,
+            ShortcutAction::SwapPane {
+                offset: ozmux_configs::shortcuts::SwapOffset::Prev,
+            },
+            session,
+        );
+        assert_eq!(captured_actions(&app), vec!["SwapPane"]);
+    }
+
+    #[test]
+    fn execute_action_close_pane_triggers_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::ClosePane, session);
+        assert_eq!(captured_actions(&app), vec!["ClosePane"]);
+    }
+
+    #[test]
+    fn execute_action_close_activity_triggers_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::CloseActivity, session);
+        assert_eq!(captured_actions(&app), vec!["CloseActivity"]);
+    }
+
+    #[test]
+    fn execute_action_new_session_triggers_new_session_action_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::NewSession, session);
+        assert_eq!(captured_actions(&app), vec!["NewSession"]);
+    }
+
+    #[test]
+    fn execute_action_focus_session_triggers_focus_session_action_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(
+            &mut app,
+            ShortcutAction::FocusSession {
+                offset: SessionOffset::Next,
+            },
+            session,
+        );
+        assert_eq!(captured_actions(&app), vec!["FocusSession"]);
+    }
+
+    #[test]
+    fn execute_action_focus_session_number_triggers_focus_session_action_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(
+            &mut app,
+            ShortcutAction::FocusSessionNumber { index: 0 },
+            session,
+        );
+        assert_eq!(captured_actions(&app), vec!["FocusSession"]);
+    }
+
+    #[test]
+    fn execute_action_unimplemented_emits_no_event() {
+        let mut app = setup_exec_app();
+        let session = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::ZoomPane, session);
+        assert!(captured_actions(&app).is_empty());
+    }
+
+    #[test]
+    fn execute_action_on_vanished_session_triggers_without_panic() {
+        let mut app = setup_exec_app();
+        let bogus = app.world_mut().spawn(SessionMarker).id();
+        app.world_mut().despawn(bogus);
+        app.world_mut().flush();
+        run_execute_action(&mut app, ShortcutAction::ClosePane, bogus);
+        assert_eq!(captured_actions(&app), vec!["ClosePane"]);
     }
 
     #[test]

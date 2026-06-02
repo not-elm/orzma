@@ -1,6 +1,9 @@
+//! Close-pane shortcut action: closes the active pane when a
+//! `ClosePaneActionEvent` fires.
 use bevy::prelude::*;
 use ozmux_multiplexer::MultiplexerCommands;
 
+/// Registers the `apply_close_pane` observer.
 pub struct ClosePaneActionPlugin;
 
 impl Plugin for ClosePaneActionPlugin {
@@ -9,14 +12,15 @@ impl Plugin for ClosePaneActionPlugin {
     }
 }
 
+/// Request to close the active pane. Triggered by `ShortcutAction::ClosePane`.
 #[derive(EntityEvent, Debug)]
-pub struct ClosePaneEvent {
+pub struct ClosePaneActionEvent {
     #[event_target]
     pub session: Entity,
 }
 
-fn apply_close_pane(trigger: On<ClosePaneEvent>, mut mux: MultiplexerCommands) {
-    let ClosePaneEvent { session } = trigger.event();
+fn apply_close_pane(trigger: On<ClosePaneActionEvent>, mut mux: MultiplexerCommands) {
+    let ClosePaneActionEvent { session } = trigger.event();
     let Some(active_pane) = mux.sessions_active_pane(*session) else {
         tracing::warn!(target: "ozmux_gui::commands", ?session, "ClosePane: session vanished");
         return;
@@ -67,7 +71,7 @@ mod tests {
         let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
         assert_ne!(active_before, original_pane, "split must promote new pane");
 
-        app.world_mut().trigger(ClosePaneEvent { session });
+        app.world_mut().trigger(ClosePaneActionEvent { session });
         app.world_mut().flush();
 
         let active_after = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
@@ -85,7 +89,7 @@ mod tests {
             .world_mut()
             .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_session(session).count())
             .unwrap();
-        app.world_mut().trigger(ClosePaneEvent { session });
+        app.world_mut().trigger(ClosePaneActionEvent { session });
         app.world_mut().flush();
         let pane_count_after = app
             .world_mut()
@@ -100,7 +104,8 @@ mod tests {
         let bogus = app.world_mut().spawn(ozmux_multiplexer::SessionMarker).id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
-        app.world_mut().trigger(ClosePaneEvent { session: bogus });
+        app.world_mut()
+            .trigger(ClosePaneActionEvent { session: bogus });
         app.world_mut().flush();
     }
 }

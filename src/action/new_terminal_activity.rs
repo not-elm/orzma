@@ -1,6 +1,9 @@
+//! New-terminal-activity shortcut action: adds a Terminal Activity to the
+//! active pane and focuses it when a `NewTerminalActivityActionEvent` fires.
 use bevy::prelude::*;
 use ozmux_multiplexer::{ActivityKind, MultiplexerCommands};
 
+/// Registers the `apply_new_terminal_activity` observer.
 pub struct NewTerminalActivityActionPlugin;
 
 impl Plugin for NewTerminalActivityActionPlugin {
@@ -9,17 +12,19 @@ impl Plugin for NewTerminalActivityActionPlugin {
     }
 }
 
+/// Request to add a new Terminal Activity to the active pane and focus it.
+/// Triggered by `ShortcutAction::NewTerminalActivity`.
 #[derive(EntityEvent, Debug)]
-pub struct NewTerminalActivityEvent {
+pub struct NewTerminalActivityActionEvent {
     #[event_target]
     pub session: Entity,
 }
 
 fn apply_new_terminal_activity(
-    trigger: On<NewTerminalActivityEvent>,
+    trigger: On<NewTerminalActivityActionEvent>,
     mut mux: MultiplexerCommands,
 ) {
-    let NewTerminalActivityEvent { session } = trigger.event();
+    let NewTerminalActivityActionEvent { session } = trigger.event();
     let Some(active_pane) = mux.sessions_active_pane(*session) else {
         tracing::warn!(target: "ozmux_gui::commands", ?session, "NewActivity: session vanished");
         return;
@@ -57,7 +62,7 @@ mod tests {
         let session = bootstrap_session(app.world_mut());
         let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
         app.world_mut()
-            .trigger(NewTerminalActivityEvent { session });
+            .trigger(NewTerminalActivityActionEvent { session });
         app.world_mut().flush();
         let activity_count = app
             .world_mut()
@@ -76,7 +81,7 @@ mod tests {
         app.world_mut().flush();
         // Triggering on a despawned entity must not panic and must not mutate state.
         app.world_mut()
-            .trigger(NewTerminalActivityEvent { session: bogus });
+            .trigger(NewTerminalActivityActionEvent { session: bogus });
         app.world_mut().flush();
     }
 }

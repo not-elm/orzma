@@ -897,13 +897,14 @@ mod tests {
     #[test]
     fn try_click_to_focus_mutates_active_pane_and_returns_true() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_configs::shortcuts::{ShortcutAction, SplitDirection};
-        use ozmux_multiplexer::{ActivePane, MultiplexerCommands, MultiplexerPlugin};
+        use ozmux_multiplexer::{
+            ActivePane, MultiplexerCommands, MultiplexerPlugin, SplitOrientation,
+        };
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.add_plugins(crate::multiplexer::commands::split_pane::SplitPaneActionPlugin);
+        app.add_plugins(crate::action::split_pane::SplitPaneActionPlugin);
         app.insert_resource(crate::ui::registry::ActivityEntityRegistry::default());
 
         let (session, original_pane, original_activity) = app
@@ -917,13 +918,10 @@ mod tests {
 
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
-                crate::multiplexer::commands::dispatch(
-                    &mut commands,
-                    ShortcutAction::SplitPane {
-                        direction: SplitDirection::Horizontal,
-                    },
+                commands.trigger(crate::action::split_pane::SplitPaneActionEvent {
                     session,
-                );
+                    orientation: SplitOrientation::Horizontal,
+                });
             })
             .unwrap();
         app.world_mut().flush();
