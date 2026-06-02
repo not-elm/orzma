@@ -301,7 +301,7 @@ pub struct Shortcuts {
 /// TOML reads the `[shortcuts.bindings]` table; the `kebab-case` serde
 /// rename maps each `close-pane = "Cmd+Shift+D"` line to the matching
 /// field. `#[serde(default)]` at struct level seeds missing fields from
-/// `Bindings::default()` (the 17 defaults). `deny_unknown_fields` rejects
+/// `Bindings::default()` (the 19 defaults). `deny_unknown_fields` rejects
 /// typos and unimplemented-action keys at load time.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
@@ -357,6 +357,12 @@ pub struct Bindings {
     /// Cycle session focus to the next one.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub focus_session_next: Option<KeyChord>,
+    /// Copy the active terminal's selection to the system clipboard.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub copy: Option<KeyChord>,
+    /// Paste the system clipboard into the active terminal.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub paste: Option<KeyChord>,
 }
 
 fn parse_default_chord(s: &str) -> KeyChord {
@@ -383,6 +389,8 @@ impl Default for Bindings {
             new_session: Some(parse_default_chord("Cmd+R")),
             focus_session_prev: Some(parse_default_chord("Cmd+Shift+[")),
             focus_session_next: Some(parse_default_chord("Cmd+Shift+]")),
+            copy: Some(parse_default_chord("Cmd+C")),
+            paste: Some(parse_default_chord("Cmd+V")),
         }
     }
 }
@@ -495,11 +503,13 @@ impl Bindings {
                     offset: SessionOffset::Next,
                 },
             ),
+            ("copy", &self.copy, Action::Copy),
+            ("paste", &self.paste, Action::Paste),
         ]
         .into_iter()
     }
 
-    /// KeyChord -> Action reverse lookup. Linear scan of 17 entries.
+    /// KeyChord -> Action reverse lookup. Linear scan of 19 entries.
     /// Hot path; cheap given the fixed size. HashMap caching deferred per spec.
     pub fn lookup(&self, chord: &KeyChord) -> Option<Action> {
         self.iter().find_map(|(_, bound, action)| {
@@ -600,6 +610,10 @@ pub enum Action {
     BreakPaneToSession,
     /// Enter tmux-style copy mode on the active Terminal Activity.
     EnterCopyMode,
+    /// Copy the active terminal's selection to the system clipboard.
+    Copy,
+    /// Paste the system clipboard into the active terminal.
+    Paste,
 }
 
 /// Layout direction shared by `FocusPane` and `ResizePane`.
@@ -868,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn bindings_default_has_all_17_fields_some() {
+    fn bindings_default_has_all_19_fields_some() {
         let b = Bindings::default();
         assert!(b.close_pane.is_some());
         assert!(b.focus_pane_left.is_some());
@@ -887,6 +901,8 @@ mod tests {
         assert!(b.new_session.is_some());
         assert!(b.focus_session_prev.is_some());
         assert!(b.focus_session_next.is_some());
+        assert!(b.copy.is_some());
+        assert!(b.paste.is_some());
     }
 
     #[test]
@@ -954,9 +970,9 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_17_entries() {
+    fn iter_yields_19_entries() {
         let b = Bindings::default();
-        assert_eq!(b.iter().count(), 17);
+        assert_eq!(b.iter().count(), 19);
     }
 
     #[test]
@@ -964,7 +980,62 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Any change to defaults updates this string.
-        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-activity":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-activity":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-session":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-session-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-session-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}}}}"#;
+        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-activity":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-activity":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-activity-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-session":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-session-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-session-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}}}}"#;
         assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn bindings_default_copy_is_cmd_c() {
+        let b = Bindings::default();
+        let chord = b.copy.as_ref().unwrap();
+        assert_eq!(chord.key, Key::Char('c'));
+        assert!(chord.modifiers.meta);
+        assert!(!chord.modifiers.ctrl && !chord.modifiers.shift && !chord.modifiers.alt);
+    }
+
+    #[test]
+    fn bindings_default_paste_is_cmd_v() {
+        let b = Bindings::default();
+        let chord = b.paste.as_ref().unwrap();
+        assert_eq!(chord.key, Key::Char('v'));
+        assert!(chord.modifiers.meta);
+        assert!(!chord.modifiers.ctrl && !chord.modifiers.shift && !chord.modifiers.alt);
+    }
+
+    #[test]
+    fn lookup_default_cmd_c_returns_copy() {
+        let b = Bindings::default();
+        let chord = parse_key_chord("Cmd+C").unwrap();
+        assert!(matches!(b.lookup(&chord), Some(Action::Copy)));
+    }
+
+    #[test]
+    fn lookup_default_cmd_v_returns_paste() {
+        let b = Bindings::default();
+        let chord = parse_key_chord("Cmd+V").unwrap();
+        assert!(matches!(b.lookup(&chord), Some(Action::Paste)));
+    }
+
+    #[test]
+    fn copy_field_unbinds_on_empty_string() {
+        #[derive(serde::Deserialize)]
+        struct W {
+            #[serde(deserialize_with = "deser_chord_or_unbind")]
+            copy: Option<KeyChord>,
+        }
+        let parsed: W = serde_json::from_str(r#"{"copy":""}"#).unwrap();
+        assert!(parsed.copy.is_none());
+    }
+
+    #[test]
+    fn validate_no_conflicts_detects_copy_alias_onto_existing_chord() {
+        let b = Bindings {
+            copy: Some(parse_key_chord("Cmd+J").unwrap()),
+            ..Default::default()
+        };
+        let err = b.validate_no_conflicts().unwrap_err();
+        assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
+        assert!(err[0].actions.contains(&"copy"));
+        assert!(err[0].actions.contains(&"focus-pane-down"));
     }
 }
