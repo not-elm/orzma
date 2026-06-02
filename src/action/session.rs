@@ -40,7 +40,7 @@ pub struct FocusSessionActionEvent {
     #[event_target]
     pub session: Entity,
     /// Which session to focus.
-    pub target: FocusSessionTarget,
+    pub(crate) target: FocusSessionTarget,
 }
 
 /// Selector for `FocusSessionActionEvent`, unifying `FocusSession{offset}`
@@ -171,10 +171,9 @@ fn dispatch_focus_session(
     let Ok(current_entity) = attached_session.single() else {
         return;
     };
-    let current_idx = entries
-        .iter()
-        .position(|e| *e == current_entity)
-        .unwrap_or(0);
+    let Some(current_idx) = entries.iter().position(|e| *e == current_entity) else {
+        return;
+    };
 
     let target_idx = match target {
         FocusSessionTarget::Next => (current_idx + 1) % entries.len(),
@@ -342,10 +341,9 @@ mod tests {
 
     #[test]
     fn focus_session_number_targets_sorted_index() {
-        let (mut app, _bootstrap) = setup_app();
+        let (mut app, bootstrap) = setup_app();
         // Add a second session via the event; it gets SessionCreatedAt(1),
         // so sort order is [session1(1), default(u32::MAX)].
-        let bootstrap = _bootstrap;
         app.world_mut()
             .trigger(NewSessionActionEvent { session: bootstrap });
         app.update();
@@ -383,6 +381,50 @@ mod tests {
             attached_now(&mut app),
             session1,
             "Next must move the marker off the currently-attached session",
+        );
+    }
+
+    #[test]
+    fn focus_session_prev_moves_marker_to_other_session() {
+        let (mut app, bootstrap) = setup_app();
+        app.world_mut()
+            .trigger(NewSessionActionEvent { session: bootstrap });
+        app.update();
+        let session1 = attached_now(&mut app);
+
+        app.world_mut().trigger(FocusSessionActionEvent {
+            session: session1,
+            target: FocusSessionTarget::Prev,
+        });
+        app.update();
+
+        assert_eq!(count_attached_session_entities(&mut app), 1);
+        assert_ne!(
+            attached_now(&mut app),
+            session1,
+            "Prev must move the marker off the currently-attached session",
+        );
+    }
+
+    #[test]
+    fn focus_session_number_out_of_bounds_is_noop() {
+        let (mut app, bootstrap) = setup_app();
+        app.world_mut()
+            .trigger(NewSessionActionEvent { session: bootstrap });
+        app.update();
+        let session1 = attached_now(&mut app);
+
+        app.world_mut().trigger(FocusSessionActionEvent {
+            session: session1,
+            target: FocusSessionTarget::Number(99),
+        });
+        app.update();
+
+        assert_eq!(count_attached_session_entities(&mut app), 1);
+        assert_eq!(
+            attached_now(&mut app),
+            session1,
+            "out-of-bounds Number must leave the marker unchanged",
         );
     }
 }
