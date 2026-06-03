@@ -54,12 +54,12 @@ impl Perform for Osc7Capture {
         // NOTE: vte splits the OSC payload on every ';'; rejoin params[1..] so
         // a path containing ';' is not truncated.
         let payload: Vec<u8> = params[1..].join(&b';');
-        if let Some(path) = parse_osc7(&payload, &self.local_host) {
-            if self.last.as_deref() != Some(path.as_path()) {
-                self.last = Some(path.clone());
-                if let Err(e) = self.control_tx.send(ControlFrame::CurrentDir(path)) {
-                    tracing::warn!(?e, "control_tx send(CurrentDir) failed");
-                }
+        if let Some(path) = parse_osc7(&payload, &self.local_host)
+            && self.last.as_deref() != Some(path.as_path())
+        {
+            self.last = Some(path.clone());
+            if let Err(e) = self.control_tx.send(ControlFrame::CurrentDir(path)) {
+                tracing::warn!(?e, "control_tx send(CurrentDir) failed");
             }
         }
     }
