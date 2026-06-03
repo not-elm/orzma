@@ -32,5 +32,5 @@ pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use mouse_encode::ProtocolModifiers;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
-pub use title::TerminalTitle;
+pub use title::{TerminalTitle, sanitize_title};
 pub use wheel::{CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers};
