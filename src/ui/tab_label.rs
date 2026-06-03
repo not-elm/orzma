@@ -64,7 +64,11 @@ fn front_truncate(s: &str, max_chars: usize) -> String {
         return s.to_string();
     }
     let budget = max_chars.saturating_sub(2);
-    let segments: Vec<&str> = s.split('/').collect();
+    // NOTE: empty segments must be filtered — an OSC 7 trailing slash makes
+    // `split('/')` yield a 0-length segment whose `extra` is always 0, so it
+    // would slip into `kept` and leak a stray separator (or overflow a tiny
+    // budget).
+    let segments: Vec<&str> = s.split('/').filter(|seg| !seg.is_empty()).collect();
     let mut kept: Vec<&str> = Vec::new();
     let mut used = 0usize;
     for seg in segments.iter().rev() {
@@ -213,5 +217,19 @@ mod tests {
         let cwd = Cwd(PathBuf::from("/home/u/プロジェクト"));
         let out = tab_label(&term(), Some(&cwd), "x", Some(Path::new("/home/u")), MAX);
         assert_eq!(out, "~/プロジェクト");
+    }
+
+    #[test]
+    fn trailing_slash_does_not_leak_or_overflow() {
+        let cwd = Cwd(PathBuf::from("/home/u/workspace/ozmux/wt/tab-title/"));
+        let out = tab_label(&term(), Some(&cwd), "x", Some(Path::new("/home/u")), MAX);
+        assert!(
+            out.starts_with("…/") && out.ends_with("tab-title"),
+            "got {out}"
+        );
+        assert!(!out.ends_with('/'), "trailing slash leaked: {out}");
+        assert!(out.chars().count() <= MAX, "got {out}");
+        let tiny = tab_label(&term(), Some(&cwd), "x", None, 1);
+        assert_eq!(tiny.chars().count(), 1, "got {tiny:?}");
     }
 }

@@ -242,7 +242,7 @@ mod tests {
     use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin};
 
     /// Collects the rendered text of every tab (the `Text` child of each
-    /// `TabButton` node), in tab order.
+    /// `TabButton` node). Order is unspecified — fine for single-tab assertions.
     fn tab_texts(world: &mut World) -> Vec<String> {
         let tabs: Vec<Entity> = world
             .query_filtered::<Entity, With<TabButton>>()
@@ -1059,6 +1059,7 @@ mod tests {
         use bevy_terminal::TerminalCurrentDir;
 
         let (mut app, _guard) = make_test_app();
+        app.insert_resource(HomeDir(None));
         app.update();
         app.update();
 
@@ -1097,6 +1098,7 @@ mod tests {
         use ozmux_multiplexer::{Cwd, SurfaceMarker};
 
         let (mut app, _guard) = make_test_app();
+        app.insert_resource(HomeDir(None));
         app.update();
         app.update();
 
@@ -1119,6 +1121,7 @@ mod tests {
         use ozmux_multiplexer::{Cwd, LayoutCells, SessionMarker, SurfaceMarker};
 
         let (mut app, _guard) = make_test_app();
+        app.insert_resource(HomeDir(None));
         app.update();
         app.update();
 

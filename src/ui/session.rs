@@ -186,8 +186,9 @@ fn rebuild_session_ui(
 }
 
 /// Flags a session `SessionUiDirty` when one of its panes gains a surface
-/// (`Added<SurfaceMarker>`) or switches its active surface
-/// (`Changed<ActiveSurface>`) — in-pane changes that do not mutate
+/// (`Added<SurfaceMarker>`), switches its active surface
+/// (`Changed<ActiveSurface>`), or a surface reports a new working directory
+/// (`Changed<Cwd>`, via OSC 7) — in-pane changes that do not mutate
 /// `LayoutCells` and so would otherwise not trigger `rebuild_session_ui`.
 /// Covers both the `@md` control-bridge path and the in-app shortcuts via a
 /// single UI-layer hook, keeping the multiplexer crate free of UI concerns.
