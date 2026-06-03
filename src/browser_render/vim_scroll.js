@@ -35,7 +35,11 @@
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
       return true;
     }
-    return el.isContentEditable === true;
+    if (el.isContentEditable === true) {
+      return true;
+    }
+    var role = el.getAttribute && el.getAttribute("role");
+    return role === "textbox" || role === "searchbox";
   }
 
   function docCanScroll(doc, axis) {
@@ -104,8 +108,10 @@
     }
   }
 
-  function decideAction(key, hadPendingG) {
-    if (hadPendingG && key === "g") {
+  function decideAction(key, hadPendingG, repeat) {
+    // NOTE: a repeated `g` (OS key auto-repeat, with no intervening key-up) must
+    // not complete or re-arm `gg`, or merely holding `g` would jump to the top.
+    if (hadPendingG && key === "g" && !repeat) {
       return "top";
     }
     switch (key) {
@@ -124,7 +130,7 @@
       case "G":
         return "bottom";
       case "g":
-        return "pendingG";
+        return repeat ? null : "pendingG";
       default:
         return null;
     }
@@ -141,7 +147,7 @@
     }
 
     var hadPendingG = pendingG;
-    var action = decideAction(event.key, hadPendingG);
+    var action = decideAction(event.key, hadPendingG, event.repeat);
 
     if (action !== "pendingG") {
       clearPendingG();
