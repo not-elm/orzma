@@ -1,7 +1,7 @@
 //! New-terminal-surface shortcut action: adds a Terminal Surface to the
 //! active pane and focuses it when a `NewTerminalSurfaceActionEvent` fires.
 use bevy::prelude::*;
-use ozmux_multiplexer::{SurfaceKind, MultiplexerCommands};
+use ozmux_multiplexer::{Cwd, MultiplexerCommands, SurfaceKind};
 
 /// Registers the `apply_new_terminal_surface` observer.
 pub struct NewTerminalSurfaceActionPlugin;
@@ -20,16 +20,26 @@ pub struct NewTerminalSurfaceActionEvent {
     pub session: Entity,
 }
 
+// NOTE: `mut mux` precedes `mut commands` so the new surface spawns before
+// `commands` inserts its `Cwd` (sanctioned rust.md ordering exception).
 fn apply_new_terminal_surface(
     trigger: On<NewTerminalSurfaceActionEvent>,
     mut mux: MultiplexerCommands,
+    mut commands: Commands,
+    cwds: Query<&Cwd>,
 ) {
     let NewTerminalSurfaceActionEvent { session } = trigger.event();
     let Some(active_pane) = mux.sessions_active_pane(*session) else {
         tracing::warn!(target: "ozmux_gui::commands", ?session, "NewSurface: session vanished");
         return;
     };
+    let seed = mux
+        .panes_active_surface(active_pane)
+        .and_then(|s| cwds.get(s).ok().cloned());
     let new_surface = mux.add_surface(active_pane, SurfaceKind::Terminal);
+    if let Some(cwd) = seed {
+        commands.entity(new_surface).insert(cwd);
+    }
     if let Err(err) = mux.set_active_surface(active_pane, new_surface) {
         tracing::warn!(target: "ozmux_gui::commands", ?err, "NewSurface: set_active_surface failed");
     }
@@ -71,6 +81,26 @@ mod tests {
             })
             .unwrap();
         assert_eq!(surface_count, 2);
+    }
+
+    #[test]
+    fn new_surface_copies_active_surface_cwd() {
+        use ozmux_multiplexer::Cwd;
+        let mut app = setup_app();
+        let session = bootstrap_session(app.world_mut());
+        let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let src = app
+            .world_mut()
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(active_pane).unwrap())
+            .unwrap();
+        app.world_mut().entity_mut(src).insert(Cwd("/tmp/x".into()));
+        app.world_mut().trigger(NewTerminalSurfaceActionEvent { session });
+        app.world_mut().flush();
+        let new = app
+            .world_mut()
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(active_pane).unwrap())
+            .unwrap();
+        assert_eq!(app.world().get::<Cwd>(new), Some(&Cwd("/tmp/x".into())));
     }
 
     #[test]
