@@ -635,6 +635,12 @@ mod tests {
                     Some(&Cwd(std::path::PathBuf::from("/work"))),
                     "browser surface must also seed Cwd from the spec"
                 );
+                assert!(
+                    world
+                        .get::<ozmux_multiplexer::ExtensionSurfaceId>(surface)
+                        .is_none(),
+                    "browser surface must not get an ExtensionSurfaceId"
+                );
             }
             ControlResponse::Ok(_) => panic!("expected Split reply"),
             ControlResponse::Err(e) => panic!("expected Ok, got {}", e.code),

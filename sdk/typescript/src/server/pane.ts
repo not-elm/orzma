@@ -153,8 +153,8 @@ function rollbackSurfaceRegistries(surfaceId: SurfaceId, spec: SurfaceSpecInput)
 
 function surfaceKindForSpec(spec: SurfaceSpecInput): SurfaceKind {
   if (spec.kind === 'terminal') return { type: 'terminal', cwd: spec.cwd };
-  if (spec.kind === 'browser') return { type: 'browser', initial_url: spec.url };
-  return { type: 'extension', entry: toEntry(spec.html) };
+  if (spec.kind === 'browser') return { type: 'browser', initial_url: spec.url, cwd: spec.cwd };
+  return { type: 'extension', entry: toEntry(spec.html), cwd: spec.cwd };
 }
 
 function controlSurface(
