@@ -10,7 +10,7 @@ use crate::control::{
 use crate::path_prefix::extension_path_prefix;
 use bevy::prelude::*;
 use ozmux_multiplexer::{
-    BrowserProfile, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, Side,
+    BrowserProfile, Cwd, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, Side,
     SplitOrientation, SurfaceKind,
 };
 use std::path::PathBuf;
@@ -177,6 +177,7 @@ fn surface_kind_from_spec(kind: SurfaceKindSpec) -> (SurfaceKind, Option<String>
             None,
             false,
         ),
+        SurfaceKindSpec::Terminal => (SurfaceKind::Terminal, None, false),
     }
 }
 
@@ -205,6 +206,9 @@ fn handle_split(
     if is_extension {
         stamp_extension_surface(mux, outcome.surface, surface_id, extension_name);
     }
+    if let Some(cwd) = p.surface.cwd {
+        mux.insert_on(outcome.surface, Cwd(PathBuf::from(cwd)));
+    }
     Ok(ControlReply::Split {
         new_pane_id: outcome.pane.to_bits(),
         new_surface_id: outcome.surface.to_bits(),
@@ -222,6 +226,9 @@ fn handle_add_surface(
     let surface = mux.add_surface(pane, kind);
     if is_extension {
         stamp_extension_surface(mux, surface, surface_id, extension_name);
+    }
+    if let Some(cwd) = p.surface.cwd {
+        mux.insert_on(surface, Cwd(PathBuf::from(cwd)));
     }
     Ok(ControlReply::AddSurface {
         new_surface_id: surface.to_bits(),
@@ -267,7 +274,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::bounded;
-    use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, SurfaceMarker};
+    use ozmux_multiplexer::{MultiplexerCommands, SessionNameCounter, SurfaceKind, SurfaceMarker};
 
     fn split_request(pane_bits: u64) -> ControlRequest {
         ControlRequest {
@@ -282,6 +289,7 @@ mod tests {
                     },
                     name: None,
                     surface_id: "aid-xyz".into(),
+                    cwd: None,
                 },
             }),
         }
@@ -298,6 +306,7 @@ mod tests {
                     },
                     name: Some("x.md".into()),
                     surface_id: "aid-1".into(),
+                    cwd: None,
                 },
             }),
         }
@@ -315,6 +324,7 @@ mod tests {
                     },
                     name: None,
                     surface_id: "aid-b".into(),
+                    cwd: None,
                 },
             }),
         }
@@ -323,6 +333,7 @@ mod tests {
     #[test]
     fn handles_split_and_creates_browser_pane_without_extension_components() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -371,6 +382,7 @@ mod tests {
     #[test]
     fn handles_split_and_creates_extension_pane() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -421,6 +433,7 @@ mod tests {
     #[test]
     fn unknown_pane_bits_yield_pane_not_found() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -445,6 +458,7 @@ mod tests {
     #[test]
     fn handles_add_surface_on_existing_pane() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -482,6 +496,7 @@ mod tests {
     #[test]
     fn handles_activate_repoints_active_surface() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -519,8 +534,65 @@ mod tests {
     }
 
     #[test]
+    fn terminal_split_with_cwd_seeds_cwd_component() {
+        let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
+        let created = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let pane_bits = created.pane.to_bits();
+
+        let req = ControlRequest {
+            pane_bits,
+            op: ControlOp::Split(crate::control::SplitParams {
+                side: ControlSide::After,
+                orientation: ControlOrientation::Vertical,
+                surface: crate::control::SurfaceSpec {
+                    kind: SurfaceKindSpec::Terminal,
+                    name: Some("shell".into()),
+                    surface_id: "aid-term".into(),
+                    cwd: Some("/work".into()),
+                },
+            }),
+        };
+        let (tx, rx) = bounded(1);
+        let mut tx = Some(tx);
+        let mut req = Some(req);
+        world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                apply_control_request(&mut mux, req.take().unwrap(), tx.take().unwrap());
+            })
+            .unwrap();
+        world.flush();
+
+        match rx.try_recv().unwrap() {
+            ControlResponse::Ok(ControlReply::Split { new_surface_id, .. }) => {
+                let surface = Entity::try_from_bits(new_surface_id).unwrap();
+                assert!(
+                    matches!(world.get::<SurfaceKind>(surface), Some(SurfaceKind::Terminal)),
+                    "expected Terminal surface kind"
+                );
+                assert_eq!(
+                    world.get::<Cwd>(surface),
+                    Some(&Cwd(std::path::PathBuf::from("/work"))),
+                    "expected Cwd to be seeded from the spec"
+                );
+                assert!(
+                    world
+                        .get::<ozmux_multiplexer::ExtensionSurfaceId>(surface)
+                        .is_none(),
+                    "terminal surface must not get an ExtensionSurfaceId"
+                );
+            }
+            ControlResponse::Ok(_) => panic!("expected Split reply"),
+            ControlResponse::Err(e) => panic!("expected Ok, got {}", e.code),
+        }
+    }
+
+    #[test]
     fn activate_rejects_surface_not_in_pane() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let first = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
