@@ -15,6 +15,7 @@ use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 use ozmux_extension_host::terminal_env;
+use ozmux_multiplexer::Cwd;
 
 pub struct OzmuxTerminalUiPlugin;
 
@@ -60,9 +61,10 @@ fn finish_terminal_setup(
     >,
     child_of: Query<&ChildOf>,
     registry: Option<Res<ExtensionRegistry>>,
+    cwds: Query<&Cwd>,
 ) {
     for (host, host_surface) in hosts.iter() {
-        let env = match registry.as_ref() {
+        let mut env = match registry.as_ref() {
             Some(registry) => match resolve_pane_session(host_surface.0, &child_of) {
                 Some((pane, session)) => {
                     let exts: Vec<_> = registry.extensions.values().collect();
@@ -72,11 +74,13 @@ fn finish_terminal_setup(
             },
             None => Vec::new(),
         };
+        env.push(("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string()));
+        let seed = cwds.get(host_surface.0).ok().map(|c| c.0.clone());
         let opts = SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
-            cwd: std::env::var_os("HOME").map(std::path::PathBuf::from),
+            cwd: Some(resolve_spawn_cwd(seed)),
             env,
         };
         let bundle = match TerminalBundle::spawn(opts) {
@@ -92,6 +96,16 @@ fn finish_terminal_setup(
             .entity(host)
             .insert((bundle, TerminalRenderBundle::new(material_handle)));
     }
+}
+
+/// Resolves a surface's seed cwd to a concrete spawn directory: the path when
+/// it is an absolute, existing directory, else `$HOME` (else `/`). `is_absolute`
+/// is load-bearing — `Path::is_dir` resolves a relative path against ozmux's
+/// own process cwd.
+fn resolve_spawn_cwd(cwd: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    cwd.filter(|p| p.is_absolute() && p.is_dir())
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
 
 /// Resolves a multiplexer Surface entity to its `(pane, session)` pair by
@@ -268,5 +282,14 @@ mod tests {
             app.world().get::<TerminalHandle>(host).is_none(),
             "spawn failure must not leave a TerminalHandle on the host"
         );
+    }
+
+    #[test]
+    fn resolve_spawn_cwd_validates_absolute_dir_else_home() {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap();
+        assert_eq!(resolve_spawn_cwd(Some(home.clone())), home);
+        assert_eq!(resolve_spawn_cwd(None), home);
+        assert_eq!(resolve_spawn_cwd(Some(std::path::PathBuf::from("relative/x"))), home);
+        assert_eq!(resolve_spawn_cwd(Some(std::path::PathBuf::from("/no/such/dir/xyz"))), home);
     }
 }
