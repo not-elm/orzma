@@ -87,7 +87,9 @@ impl TerminalBundle {
             reply_tx,
             control_tx: control_tx.clone(),
         };
-        let handle = TerminalHandle::new(opts.cols, opts.rows, listener, reply_rx, control_rx, control_tx);
+        let handle = TerminalHandle::new(
+            opts.cols, opts.rows, listener, reply_rx, control_rx, control_tx,
+        );
 
         let pty = PtyHandle::new(pty_pair.master, writer, chunk_rx, exit_rx, child_killer);
 

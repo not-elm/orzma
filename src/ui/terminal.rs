@@ -7,10 +7,12 @@
 
 use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
-use crate::ui::{HostSurfaceEntity, TerminalSurfaceMarker, TerminalSpawnFailed};
+use crate::ui::{HostSurfaceEntity, TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle};
+use bevy_terminal::{
+    Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle,
+};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
@@ -302,19 +304,27 @@ mod tests {
 
     #[test]
     fn resolve_spawn_cwd_validates_absolute_dir_else_home() {
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap();
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap();
         assert_eq!(resolve_spawn_cwd(Some(home.clone())), home);
         assert_eq!(resolve_spawn_cwd(None), home);
-        assert_eq!(resolve_spawn_cwd(Some(std::path::PathBuf::from("relative/x"))), home);
-        assert_eq!(resolve_spawn_cwd(Some(std::path::PathBuf::from("/no/such/dir/xyz"))), home);
+        assert_eq!(
+            resolve_spawn_cwd(Some(std::path::PathBuf::from("relative/x"))),
+            home
+        );
+        assert_eq!(
+            resolve_spawn_cwd(Some(std::path::PathBuf::from("/no/such/dir/xyz"))),
+            home
+        );
     }
 
     #[test]
     fn current_dir_event_writes_cwd_on_mapped_surface() {
+        use crate::ui::HostSurfaceEntity;
         use bevy::prelude::*;
         use bevy_terminal::TerminalCurrentDir;
         use ozmux_multiplexer::Cwd;
-        use crate::ui::HostSurfaceEntity;
 
         let mut app = App::new();
         app.add_observer(on_terminal_current_dir);

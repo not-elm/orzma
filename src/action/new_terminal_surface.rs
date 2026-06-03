@@ -91,14 +91,19 @@ mod tests {
         let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
         let src = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(active_pane).unwrap())
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.panes_active_surface(active_pane).unwrap()
+            })
             .unwrap();
         app.world_mut().entity_mut(src).insert(Cwd("/tmp/x".into()));
-        app.world_mut().trigger(NewTerminalSurfaceActionEvent { session });
+        app.world_mut()
+            .trigger(NewTerminalSurfaceActionEvent { session });
         app.world_mut().flush();
         let new = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(active_pane).unwrap())
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.panes_active_surface(active_pane).unwrap()
+            })
             .unwrap();
         assert_eq!(app.world().get::<Cwd>(new), Some(&Cwd("/tmp/x".into())));
     }

@@ -41,7 +41,12 @@ fn apply_split(
     let seed = mux
         .panes_active_surface(active_pane)
         .and_then(|s| cwds.get(s).ok().cloned());
-    match mux.split_pane_with_surface(active_pane, Side::After, *orientation, SurfaceKind::Terminal) {
+    match mux.split_pane_with_surface(
+        active_pane,
+        Side::After,
+        *orientation,
+        SurfaceKind::Terminal,
+    ) {
         Ok(outcome) => {
             if let Some(cwd) = seed {
                 commands.entity(outcome.surface).insert(cwd);
@@ -64,14 +69,20 @@ mod tests {
         app.add_plugins(SplitPaneActionPlugin);
         let session = app
             .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(Some("t".into())).session)
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_session(Some("t".into())).session
+            })
             .unwrap();
         let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
         let src_surface = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(active_pane).unwrap())
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.panes_active_surface(active_pane).unwrap()
+            })
             .unwrap();
-        app.world_mut().entity_mut(src_surface).insert(Cwd("/tmp/proj".into()));
+        app.world_mut()
+            .entity_mut(src_surface)
+            .insert(Cwd("/tmp/proj".into()));
 
         app.world_mut().trigger(SplitPaneActionEvent {
             session,
@@ -86,6 +97,9 @@ mod tests {
                 mux.panes_active_surface(p).unwrap()
             })
             .unwrap();
-        assert_eq!(app.world().get::<Cwd>(new_surface), Some(&Cwd("/tmp/proj".into())));
+        assert_eq!(
+            app.world().get::<Cwd>(new_surface),
+            Some(&Cwd("/tmp/proj".into()))
+        );
     }
 }

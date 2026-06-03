@@ -1556,11 +1556,11 @@ mod tests {
 
     #[test]
     fn advance_osc7_then_drain_triggers_current_dir_event() {
-        use bevy::ecs::system::RunSystemOnce;
-        use bevy::prelude::*;
         use crate::events::TerminalCurrentDir;
         use crate::title::TerminalTitle;
         use crate::vt::listener::{ControlFrame, TermListener};
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::prelude::*;
         use crossbeam_channel::unbounded;
         use std::path::PathBuf;
 
@@ -1575,14 +1575,18 @@ mod tests {
 
         let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
         let (control_tx, control_rx) = unbounded::<ControlFrame>();
-        let listener = TermListener { reply_tx, control_tx: control_tx.clone() };
+        let listener = TermListener {
+            reply_tx,
+            control_tx: control_tx.clone(),
+        };
         let mut handle = TerminalHandle::new(80, 24, listener, reply_rx, control_rx, control_tx);
         handle.advance(b"\x1b]7;file://localhost/tmp\x07");
 
         app.world_mut().spawn((handle, TerminalTitle::default()));
         app.world_mut()
             .run_system_once(
-                |mut commands: Commands, q: Query<(Entity, &TerminalHandle, &mut TerminalTitle)>| {
+                |mut commands: Commands,
+                 q: Query<(Entity, &TerminalHandle, &mut TerminalTitle)>| {
                     for (entity, handle, mut title) in q {
                         handle.drain_control_events(&mut commands, entity, &mut title);
                     }
@@ -1591,7 +1595,10 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
-        assert_eq!(app.world().resource::<Seen>().0, vec![PathBuf::from("/tmp")]);
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            vec![PathBuf::from("/tmp")]
+        );
     }
 }
 

@@ -99,7 +99,7 @@ pub struct PaneCell {
 
 /// Two-child node oriented horizontally or vertically. `lhs_weight` and
 /// `rhs_weight` are the relative weights of each child; `split_ratio()`
-/// normalizes them to a [0,1] fraction.
+/// normalizes them to a `[0,1]` fraction.
 #[derive(Debug, Clone)]
 pub struct SplitCell {
     /// Parent cell id; `None` for orphaned splits during tree rewiring.

@@ -42,7 +42,11 @@ impl Osc7Capture {
     /// Builds a capture that sends `ControlFrame::CurrentDir` on `control_tx`,
     /// accepting OSC 7 paths whose host is empty / `localhost` / `local_host`.
     pub(crate) fn new(control_tx: Sender<ControlFrame>, local_host: String) -> Self {
-        Self { control_tx, local_host, last: None }
+        Self {
+            control_tx,
+            local_host,
+            last: None,
+        }
     }
 }
 
@@ -75,15 +79,30 @@ mod tests {
 
     #[test]
     fn accepts_localhost_and_empty_and_local_host() {
-        assert_eq!(parse_osc7(b"file://localhost/Users/me/p", "myhost"), Some(PathBuf::from("/Users/me/p")));
-        assert_eq!(parse_osc7(b"file:///Users/me/p", "myhost"), Some(PathBuf::from("/Users/me/p")));
-        assert_eq!(parse_osc7(b"file://myhost/tmp", "myhost"), Some(PathBuf::from("/tmp")));
+        assert_eq!(
+            parse_osc7(b"file://localhost/Users/me/p", "myhost"),
+            Some(PathBuf::from("/Users/me/p"))
+        );
+        assert_eq!(
+            parse_osc7(b"file:///Users/me/p", "myhost"),
+            Some(PathBuf::from("/Users/me/p"))
+        );
+        assert_eq!(
+            parse_osc7(b"file://myhost/tmp", "myhost"),
+            Some(PathBuf::from("/tmp"))
+        );
     }
 
     #[test]
     fn percent_decodes_uppercase_and_keeps_semicolons() {
-        assert_eq!(parse_osc7(b"file:///tmp/a%20b", "h"), Some(PathBuf::from("/tmp/a b")));
-        assert_eq!(parse_osc7(b"file:///tmp/a;b", "h"), Some(PathBuf::from("/tmp/a;b")));
+        assert_eq!(
+            parse_osc7(b"file:///tmp/a%20b", "h"),
+            Some(PathBuf::from("/tmp/a b"))
+        );
+        assert_eq!(
+            parse_osc7(b"file:///tmp/a;b", "h"),
+            Some(PathBuf::from("/tmp/a;b"))
+        );
     }
 
     #[test]
@@ -100,13 +119,19 @@ mod tests {
         let mut cap = Osc7Capture::new(tx, "myhost".into());
 
         cap.osc_dispatch(&[b"7", b"file://localhost/tmp"], true);
-        assert_eq!(rx.try_recv(), Ok(ControlFrame::CurrentDir(PathBuf::from("/tmp"))));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(ControlFrame::CurrentDir(PathBuf::from("/tmp")))
+        );
 
         cap.osc_dispatch(&[b"7", b"file://localhost/tmp"], true);
         assert!(rx.try_recv().is_err());
 
         cap.osc_dispatch(&[b"7", b"file://localhost/var"], true);
-        assert_eq!(rx.try_recv(), Ok(ControlFrame::CurrentDir(PathBuf::from("/var"))));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(ControlFrame::CurrentDir(PathBuf::from("/var")))
+        );
     }
 
     #[test]
@@ -114,7 +139,10 @@ mod tests {
         let (tx, rx) = unbounded::<ControlFrame>();
         let mut cap = Osc7Capture::new(tx, "h".into());
         cap.osc_dispatch(&[b"7", b"file://localhost/tmp/a", b"b"], true);
-        assert_eq!(rx.try_recv(), Ok(ControlFrame::CurrentDir(PathBuf::from("/tmp/a;b"))));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(ControlFrame::CurrentDir(PathBuf::from("/tmp/a;b")))
+        );
         cap.osc_dispatch(&[b"0", b"title"], true);
         assert!(rx.try_recv().is_err());
     }

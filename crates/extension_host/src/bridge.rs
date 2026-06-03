@@ -569,7 +569,10 @@ mod tests {
             ControlResponse::Ok(ControlReply::Split { new_surface_id, .. }) => {
                 let surface = Entity::try_from_bits(new_surface_id).unwrap();
                 assert!(
-                    matches!(world.get::<SurfaceKind>(surface), Some(SurfaceKind::Terminal)),
+                    matches!(
+                        world.get::<SurfaceKind>(surface),
+                        Some(SurfaceKind::Terminal)
+                    ),
                     "expected Terminal surface kind"
                 );
                 assert_eq!(
@@ -627,7 +630,10 @@ mod tests {
             ControlResponse::Ok(ControlReply::Split { new_surface_id, .. }) => {
                 let surface = Entity::try_from_bits(new_surface_id).unwrap();
                 assert!(
-                    matches!(world.get::<SurfaceKind>(surface), Some(SurfaceKind::Browser { .. })),
+                    matches!(
+                        world.get::<SurfaceKind>(surface),
+                        Some(SurfaceKind::Browser { .. })
+                    ),
                     "expected Browser surface kind"
                 );
                 assert_eq!(

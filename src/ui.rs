@@ -17,7 +17,6 @@ use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::prelude::*;
 
-pub(crate) mod surface;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
@@ -30,6 +29,7 @@ pub mod status_bar;
 pub mod status_bar_sync;
 #[cfg(test)]
 pub(crate) mod stress_test;
+pub(crate) mod surface;
 pub mod tab_bar;
 pub(crate) mod tab_input;
 pub mod terminal;
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn inactive_surface_host_persists_across_focus_switch() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{SurfaceKind, MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, SurfaceKind};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -646,6 +646,35 @@ mod tests {
             .collect()
     }
 
+    /// Headless-safe terminal mount. `finish_terminal_setup` spawns the shell
+    /// from `$SHELL` (default `/bin/zsh`), which fails on runners lacking it
+    /// (e.g. Linux CI), leaving the host with no `MaterialNode` — so
+    /// `sync_terminal_dim_on_mount` never assigns `PaneDim`. Stub the render
+    /// material on any terminal host that did not really mount, then tick so the
+    /// dim systems run; a host that mounted for real already carries a material.
+    fn mount_terminal_hosts(app: &mut App) {
+        let hosts: Vec<Entity> = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, (
+                    With<TerminalSurfaceMarker>,
+                    Without<MaterialNode<TerminalUiMaterial>>,
+                )>()
+                .iter(world)
+                .collect()
+        };
+        for host in hosts {
+            let handle = app
+                .world_mut()
+                .resource_mut::<Assets<TerminalUiMaterial>>()
+                .add(TerminalUiMaterial::default());
+            app.world_mut()
+                .entity_mut(host)
+                .insert(MaterialNode(handle));
+        }
+        app.update();
+    }
+
     #[test]
     fn split_dims_inactive_terminal_keeps_active_bright() {
         use bevy::ecs::system::RunSystemOnce;
@@ -670,6 +699,7 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
+        mount_terminal_hosts(&mut app);
 
         let active_pane = app
             .world_mut()
@@ -707,6 +737,7 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
+        mount_terminal_hosts(&mut app);
 
         let world = app.world_mut();
         let overlay_count = world.query::<&PaneDimOverlay>().iter(world).count();
@@ -727,7 +758,7 @@ mod tests {
     #[test]
     fn extension_pane_keeps_pickable_ignore_veil() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{SurfaceKind, LayoutCells, MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{LayoutCells, MultiplexerCommands, SessionMarker, SurfaceKind};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
@@ -818,6 +849,7 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
+        mount_terminal_hosts(&mut app);
 
         let world = app.world_mut();
         let overlay_count = world.query::<&PaneDimOverlay>().iter(world).count();
@@ -857,6 +889,7 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
+        mount_terminal_hosts(&mut app);
 
         let (session, target_pane) = app
             .world_mut()

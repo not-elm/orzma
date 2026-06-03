@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// OSC 8 hyperlink: server-assigned wire id → URI mapping.
 ///
 /// Wire id is a monotonic u32 assigned by `crate::vt::hyperlink::HyperlinkInterner`
-/// keyed by `(alacritty_id, uri)`. Cells reference these via [`Run::hyperlink_id`].
+/// keyed by `(alacritty_id, uri)`. Cells reference these via `Run::hyperlink_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hyperlink {
     /// Monotonic u32 wire id assigned server-side.

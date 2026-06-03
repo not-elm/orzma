@@ -4,7 +4,7 @@
 //! pointers will leak after Pane / Surface despawns.
 
 use crate::commands::SessionNameCounter;
-use crate::observers::{on_remove_surface_marker, on_remove_pane_marker};
+use crate::observers::{on_remove_pane_marker, on_remove_surface_marker};
 use bevy::prelude::*;
 
 /// Bevy plugin that registers the multiplexer's dangling-reference

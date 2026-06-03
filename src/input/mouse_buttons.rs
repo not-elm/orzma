@@ -9,9 +9,9 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::input::{InputPhase, current_modifiers};
-use crate::ui::{SurfaceHostNode, VisibleSurfaceHost};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::registry::SurfaceEntityRegistry;
+use crate::ui::{SurfaceHostNode, VisibleSurfaceHost};
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
