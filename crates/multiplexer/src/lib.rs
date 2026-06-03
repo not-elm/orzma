@@ -24,7 +24,7 @@ pub use cells::{
 pub use commands::{MultiplexerCommands, SessionCreated, SessionNameCounter, SplitOutcome};
 pub use components::{
     ActiveSurface, ActivePane, SurfaceKind, SurfaceMarker, AttachedSession, BrowserProfile,
-    CopyMode, ExtensionSurfaceId, LayoutCells, OwningExtension, PaneDimensions, PaneMarker,
+    CopyMode, Cwd, ExtensionSurfaceId, LayoutCells, OwningExtension, PaneDimensions, PaneMarker,
     SessionCreatedAt, SessionDimensions, SessionMarker, SessionUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};
