@@ -31,6 +31,7 @@ pub mod status_bar_sync;
 pub(crate) mod stress_test;
 pub(crate) mod surface;
 pub mod tab_bar;
+pub(crate) mod tab_label;
 pub(crate) mod tab_input;
 pub mod terminal;
 
