@@ -16,6 +16,7 @@ use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::prelude::*;
+use std::path::PathBuf;
 
 pub mod copy_mode;
 pub mod copy_mode_indicator;
@@ -32,6 +33,7 @@ pub(crate) mod stress_test;
 pub(crate) mod surface;
 pub mod tab_bar;
 pub(crate) mod tab_input;
+pub(crate) mod tab_label;
 pub mod terminal;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
@@ -194,12 +196,19 @@ pub(crate) struct PaneDimOverlay {
 #[derive(Component)]
 pub(crate) struct SessionUiDirty;
 
+/// Resolved `$HOME` at startup (`None` if unset). Read by `rebuild_session_ui`
+/// to home-abbreviate terminal tab paths; the value matches the terminal
+/// spawner's `$HOME` fallback so the tab agrees with where the shell started.
+#[derive(Resource)]
+pub(crate) struct HomeDir(pub(crate) Option<PathBuf>);
+
 /// Bevy Plugin wiring the native Bevy UI rebuild pipeline.
 pub struct OzmuxUiPlugin;
 
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SurfaceEntityRegistry>()
+            .insert_resource(HomeDir(std::env::var_os("HOME").map(PathBuf::from)))
             .add_plugins((
                 OzmuxUiRootPlugin,
                 OzmuxSessionUiPlugin,
@@ -231,6 +240,28 @@ mod tests {
     use bevy_terminal_renderer::material::TerminalUiMaterial;
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
     use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin};
+
+    /// Collects the rendered text of every tab (the `Text` child of each
+    /// `TabButton` node). Order is unspecified — fine for single-tab assertions.
+    fn tab_texts(world: &mut World) -> Vec<String> {
+        let tabs: Vec<Entity> = world
+            .query_filtered::<Entity, With<TabButton>>()
+            .iter(world)
+            .collect();
+        let mut out = Vec::new();
+        for tab in tabs {
+            let kids: Vec<Entity> = world
+                .get::<Children>(tab)
+                .map(|c| c.iter().collect())
+                .unwrap_or_default();
+            for k in kids {
+                if let Some(text) = world.get::<bevy::ui::widget::Text>(k) {
+                    out.push(text.0.clone());
+                }
+            }
+        }
+        out
+    }
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::configs::env_guard();
@@ -1002,5 +1033,115 @@ mod tests {
             vec!["session1".to_string(), "session2".to_string()],
             "status bar must show session1 leftmost, session2 to its right",
         );
+    }
+
+    #[test]
+    fn terminal_tab_node_is_width_capped() {
+        use bevy::ui::OverflowAxis;
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let tab = world
+            .query_filtered::<Entity, With<TabButton>>()
+            .iter(world)
+            .next()
+            .expect("one tab after bootstrap");
+        let node = world.get::<Node>(tab).expect("tab has a Node");
+        assert_eq!(node.max_width, Val::Px(crate::theme::TAB_MAX_WIDTH_PX));
+        assert_eq!(node.overflow.x, OverflowAxis::Clip);
+    }
+
+    #[test]
+    fn osc7_current_dir_updates_tab() {
+        use bevy_terminal::TerminalCurrentDir;
+
+        let (mut app, _guard) = make_test_app();
+        app.insert_resource(HomeDir(None));
+        app.update();
+        app.update();
+
+        let host = app
+            .world_mut()
+            .query_filtered::<Entity, With<HostSurfaceEntity>>()
+            .iter(app.world())
+            .next()
+            .expect("a surface host exists after rebuild");
+        app.world_mut().trigger(TerminalCurrentDir {
+            entity: host,
+            path: "/tmp/proj".into(),
+        });
+        for _ in 0..3 {
+            app.update();
+        }
+
+        assert_eq!(tab_texts(app.world_mut()), vec!["/tmp/proj".to_string()]);
+    }
+
+    #[test]
+    fn terminal_tab_without_cwd_shows_placeholder() {
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        assert_eq!(
+            tab_texts(app.world_mut()),
+            vec!["terminal".to_string()],
+            "bootstrap terminal surface has no Cwd yet → placeholder",
+        );
+    }
+
+    #[test]
+    fn cwd_change_refreshes_tab_without_layout_change() {
+        use ozmux_multiplexer::{Cwd, SurfaceMarker};
+
+        let (mut app, _guard) = make_test_app();
+        app.insert_resource(HomeDir(None));
+        app.update();
+        app.update();
+
+        let surface = app
+            .world_mut()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
+            .single(app.world())
+            .expect("one bootstrap surface");
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(Cwd("/tmp/proj".into()));
+        app.update();
+        app.update();
+
+        assert_eq!(tab_texts(app.world_mut()), vec!["/tmp/proj".to_string()]);
+    }
+
+    #[test]
+    fn terminal_tab_renders_cwd_after_rebuild() {
+        use ozmux_multiplexer::{Cwd, LayoutCells, SessionMarker, SurfaceMarker};
+
+        let (mut app, _guard) = make_test_app();
+        app.insert_resource(HomeDir(None));
+        app.update();
+        app.update();
+
+        let surface = app
+            .world_mut()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
+            .single(app.world())
+            .expect("one bootstrap surface");
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(Cwd("/tmp/proj".into()));
+        {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<&mut LayoutCells, With<SessionMarker>>();
+            for mut lc in q.iter_mut(world) {
+                lc.set_changed();
+            }
+        }
+        app.update();
+
+        assert_eq!(tab_texts(app.world_mut()), vec!["/tmp/proj".to_string()]);
     }
 }

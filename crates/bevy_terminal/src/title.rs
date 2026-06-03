@@ -16,7 +16,7 @@ pub struct TerminalTitle(pub Option<String>);
 const MAX_LEN: usize = 256;
 
 /// Returns a display-safe copy of an OSC terminal title.
-pub(crate) fn sanitize_title(raw: &str) -> String {
+pub fn sanitize_title(raw: &str) -> String {
     let cleaned: String = raw.chars().filter(|c| !is_disallowed(*c)).collect();
     if cleaned.chars().count() > MAX_LEN {
         cleaned

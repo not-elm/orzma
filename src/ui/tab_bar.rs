@@ -7,7 +7,8 @@ use crate::ui::palette;
 use crate::ui::{StructuralNode, TabButton};
 use bevy::color::Color;
 use bevy::prelude::*;
-use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, UiRect, Val};
+use bevy::text::{LineBreak, TextLayout};
+use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, Overflow, UiRect, Val};
 
 /// Color triple for one tab.
 struct TabColors {
@@ -119,6 +120,8 @@ fn build_tab(
                 },
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
+                max_width: Val::Px(theme::TAB_MAX_WIDTH_PX),
+                overflow: Overflow::clip_x(),
                 ..default()
             },
             BackgroundColor(colors.bg),
@@ -139,6 +142,10 @@ fn build_tab(
         TextFont {
             font: ui_font.clone(),
             font_size: 12.0,
+            ..default()
+        },
+        TextLayout {
+            linebreak: LineBreak::NoWrap,
             ..default()
         },
         StructuralNode,

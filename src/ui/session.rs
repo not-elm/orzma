@@ -6,11 +6,13 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
+use crate::theme;
 use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::SurfaceEntityRegistry;
+use crate::ui::tab_label::LabelCtx;
 use crate::ui::terminal::resolve_pane_session;
 use crate::ui::{
-    HostSurfaceEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot, StructuralNode,
+    HomeDir, HostSurfaceEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot, StructuralNode,
     SurfaceHostNode, TerminalSurfaceMarker,
 };
 use bevy::prelude::*;
@@ -18,7 +20,7 @@ use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, AttachedSession, Cell, LayoutCells, PaneMarker, SessionMarker,
+    ActivePane, ActiveSurface, AttachedSession, Cell, Cwd, LayoutCells, PaneMarker, SessionMarker,
     SessionUiSubtree, SurfaceKind, SurfaceMarker,
 };
 
@@ -127,10 +129,11 @@ fn rebuild_session_ui(
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     surface_hosts: Query<(Entity, &SurfaceHostNode)>,
     children: Query<&Children>,
-    surfaces: Query<(&SurfaceKind, &Name), With<SurfaceMarker>>,
+    surfaces: Query<(&SurfaceKind, &Name, Option<&Cwd>), With<SurfaceMarker>>,
     active_surfaces: Query<&ActiveSurface, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
     configs: Option<Res<OzmuxConfigsResource>>,
+    home_dir: Option<Res<HomeDir>>,
 ) {
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
 
@@ -140,6 +143,10 @@ fn rebuild_session_ui(
             Some(Color::srgb_u8(r, g, b).with_alpha(cfg.inactive_pane.opacity))
         }
         _ => None,
+    };
+    let label_ctx = LabelCtx {
+        home: home_dir.and_then(|h| h.0.clone()),
+        max_chars: theme::TAB_LABEL_MAX_CHARS,
     };
 
     for (session_entity, layout, subtree, active_pane, _is_attached) in sessions.iter() {
@@ -165,6 +172,7 @@ fn rebuild_session_ui(
                     &active_surfaces,
                     active_pane,
                     session_veil,
+                    &label_ctx,
                 );
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
@@ -178,8 +186,9 @@ fn rebuild_session_ui(
 }
 
 /// Flags a session `SessionUiDirty` when one of its panes gains a surface
-/// (`Added<SurfaceMarker>`) or switches its active surface
-/// (`Changed<ActiveSurface>`) — in-pane changes that do not mutate
+/// (`Added<SurfaceMarker>`), switches its active surface
+/// (`Changed<ActiveSurface>`), or a surface reports a new working directory
+/// (`Changed<Cwd>`, via OSC 7) — in-pane changes that do not mutate
 /// `LayoutCells` and so would otherwise not trigger `rebuild_session_ui`.
 /// Covers both the `@md` control-bridge path and the in-app shortcuts via a
 /// single UI-layer hook, keeping the multiplexer crate free of UI concerns.
@@ -190,6 +199,7 @@ fn flag_chrome_dirty_on_surface_change(
     mut commands: Commands,
     added_surfaces: Query<Entity, Added<SurfaceMarker>>,
     switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveSurface>)>,
+    changed_cwd: Query<Entity, (With<SurfaceMarker>, Changed<Cwd>)>,
     child_of: Query<&ChildOf>,
 ) {
     for surface in added_surfaces.iter() {
@@ -200,6 +210,11 @@ fn flag_chrome_dirty_on_surface_change(
     for pane in switched_panes.iter() {
         if let Ok(pane_parent) = child_of.get(pane) {
             commands.entity(pane_parent.parent()).insert(SessionUiDirty);
+        }
+    }
+    for surface in changed_cwd.iter() {
+        if let Some((_pane, session)) = resolve_pane_session(surface, &child_of) {
+            commands.entity(session).insert(SessionUiDirty);
         }
     }
 }

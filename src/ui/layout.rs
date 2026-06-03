@@ -8,11 +8,12 @@ use crate::theme;
 use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::surface::build_surface_host_children;
 use crate::ui::tab_bar::{TabEntry, build_pane_tab_bar};
+use crate::ui::tab_label::{LabelCtx, tab_label};
 use crate::ui::{PaneDimOverlay, PaneFrame, StructuralNode, VisibleSurfaceHost, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, PositionType, UiRect, Val};
 use ozmux_multiplexer::{
-    ActiveSurface, Cell, CellId, LayoutCellState, PaneMarker, SplitOrientation, SurfaceKind,
+    ActiveSurface, Cell, CellId, Cwd, LayoutCellState, PaneMarker, SplitOrientation, SurfaceKind,
     SurfaceMarker,
 };
 
@@ -49,10 +50,11 @@ pub(crate) fn build_cell_recursive(
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
     pane_children: &Query<&Children>,
-    surfaces: &Query<(&SurfaceKind, &Name), With<SurfaceMarker>>,
+    surfaces: &Query<(&SurfaceKind, &Name, Option<&Cwd>), With<SurfaceMarker>>,
     active_surfaces: &Query<&ActiveSurface, With<PaneMarker>>,
     active_pane: Entity,
     veil: Option<Color>,
+    label_ctx: &LabelCtx,
 ) {
     let cell = match cells.cell(cell_id) {
         Ok(c) => c,
@@ -87,6 +89,7 @@ pub(crate) fn build_cell_recursive(
             active_surfaces,
             active_pane,
             veil,
+            label_ctx,
         ),
         Cell::Split(s) => {
             let (lhs_grow, rhs_grow) = split_ratio_to_flex_grows(s.lhs_weight, s.rhs_weight);
@@ -132,6 +135,7 @@ pub(crate) fn build_cell_recursive(
                 active_surfaces,
                 active_pane,
                 veil,
+                label_ctx,
             );
 
             let rhs = commands
@@ -158,6 +162,7 @@ pub(crate) fn build_cell_recursive(
                 active_surfaces,
                 active_pane,
                 veil,
+                label_ctx,
             );
         }
     }
@@ -172,10 +177,11 @@ fn build_pane(
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
     pane_children: &Query<&Children>,
-    surfaces: &Query<(&SurfaceKind, &Name), With<SurfaceMarker>>,
+    surfaces: &Query<(&SurfaceKind, &Name, Option<&Cwd>), With<SurfaceMarker>>,
     active_surfaces: &Query<&ActiveSurface, With<PaneMarker>>,
     active_pane: Entity,
     veil: Option<Color>,
+    label_ctx: &LabelCtx,
 ) {
     let active_surface = active_surfaces
         .get(pane_entity)
@@ -207,10 +213,16 @@ fn build_pane(
     let tabs: Vec<TabEntry> = surface_entities
         .iter()
         .filter_map(|&ae| {
-            let (_, name) = surfaces.get(ae).ok()?;
+            let (kind, name, cwd) = surfaces.get(ae).ok()?;
             Some(TabEntry {
                 entity: ae,
-                name: name.as_str().to_string(),
+                name: tab_label(
+                    kind,
+                    cwd,
+                    name.as_str(),
+                    label_ctx.home.as_deref(),
+                    label_ctx.max_chars,
+                ),
                 is_active: ae == active_surface,
             })
         })
@@ -237,7 +249,7 @@ fn build_pane(
         .id();
 
     for &surface_entity in &surface_entities {
-        let Ok((kind, name)) = surfaces.get(surface_entity) else {
+        let Ok((kind, name, _cwd)) = surfaces.get(surface_entity) else {
             continue;
         };
         let host = registry.get_or_spawn(commands, surface_entity, kind);
@@ -258,7 +270,7 @@ fn build_pane(
     // they must NOT also get the veil — double-dimming would over-darken their
     // content. The veil is for non-terminal (e.g. webview) panes only.
     let active_is_terminal = matches!(
-        surfaces.get(active_surface).map(|(kind, _)| kind),
+        surfaces.get(active_surface).map(|(kind, _, _)| kind),
         Ok(SurfaceKind::Terminal)
     );
     if let Some(veil_color) = veil
