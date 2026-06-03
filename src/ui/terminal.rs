@@ -10,7 +10,7 @@ use crate::system_set::OzmuxSystems;
 use crate::ui::{HostSurfaceEntity, TerminalSurfaceMarker, TerminalSpawnFailed};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
+use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
@@ -32,6 +32,7 @@ impl Plugin for OzmuxTerminalUiPlugin {
                 .before(UiSystems::PostLayout)
                 .before(TerminalMaterialSystems::UpdateMaterial),
         );
+        app.add_observer(on_terminal_current_dir);
     }
 }
 
@@ -202,6 +203,21 @@ fn resize_terminals_to_node(
     }
 }
 
+/// Writes a terminal's OSC-7-reported directory onto its owning surface's
+/// `Cwd`. The event targets the host entity; `HostSurfaceEntity` maps it back
+/// to the multiplexer surface.
+fn on_terminal_current_dir(
+    ev: On<TerminalCurrentDir>,
+    mut commands: Commands,
+    hosts: Query<&HostSurfaceEntity>,
+) {
+    let host = ev.entity;
+    let path = &ev.path;
+    if let Ok(host_surface) = hosts.get(host) {
+        commands.entity(host_surface.0).insert(Cwd(path.clone()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +307,27 @@ mod tests {
         assert_eq!(resolve_spawn_cwd(None), home);
         assert_eq!(resolve_spawn_cwd(Some(std::path::PathBuf::from("relative/x"))), home);
         assert_eq!(resolve_spawn_cwd(Some(std::path::PathBuf::from("/no/such/dir/xyz"))), home);
+    }
+
+    #[test]
+    fn current_dir_event_writes_cwd_on_mapped_surface() {
+        use bevy::prelude::*;
+        use bevy_terminal::TerminalCurrentDir;
+        use ozmux_multiplexer::Cwd;
+        use crate::ui::HostSurfaceEntity;
+
+        let mut app = App::new();
+        app.add_observer(on_terminal_current_dir);
+        let surface = app.world_mut().spawn_empty().id();
+        let host = app.world_mut().spawn(HostSurfaceEntity(surface)).id();
+        app.world_mut().trigger(TerminalCurrentDir {
+            entity: host,
+            path: std::path::PathBuf::from("/tmp/proj"),
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world().get::<Cwd>(surface),
+            Some(&Cwd(std::path::PathBuf::from("/tmp/proj"))),
+        );
     }
 }
