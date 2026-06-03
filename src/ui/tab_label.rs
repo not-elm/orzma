@@ -7,7 +7,7 @@ use ozmux_multiplexer::{Cwd, SurfaceKind};
 use std::path::{Path, PathBuf};
 
 /// Placeholder shown for a terminal surface whose `Cwd` is not yet known.
-const TERMINAL_PLACEHOLDER: &str = "terminal";
+const TERMINAL_PLACEHOLDER: &str = "";
 
 /// Per-rebuild inputs for `tab_label`, built once in `rebuild_session_ui` and
 /// threaded through the cell-tree builder.
