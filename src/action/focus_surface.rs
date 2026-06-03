@@ -59,7 +59,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use ozmux_multiplexer::{
-        ActiveSurface, ActivePane, SurfaceKind, MultiplexerCommands, MultiplexerPlugin,
+        ActivePane, ActiveSurface, MultiplexerCommands, MultiplexerPlugin, SurfaceKind,
     };
 
     fn setup_app() -> App {
@@ -106,8 +106,7 @@ mod tests {
             .expect("second surface exists");
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_surface(active_pane, first_surface)
-                    .unwrap();
+                mux.set_active_surface(active_pane, first_surface).unwrap();
             })
             .unwrap();
         app.world_mut().flush();

@@ -6,8 +6,9 @@
 
 use crate::cells::{Side, SplitOrientation};
 use crate::components::{
-    ActiveSurface, ActivePane, SurfaceKind, SurfaceMarker, AttachedSession, CopyMode,
-    LayoutCells, PaneMarker, SessionCreatedAt, SessionDimensions, SessionMarker, SessionUiSubtree,
+    ActivePane, ActiveSurface, AttachedSession, CopyMode, LayoutCells, PaneMarker,
+    SessionCreatedAt, SessionDimensions, SessionMarker, SessionUiSubtree, SurfaceKind,
+    SurfaceMarker,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
@@ -787,8 +788,7 @@ mod tests {
 
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_surface(outcome.pane, other_surface)
-                    .unwrap();
+                mux.set_active_surface(outcome.pane, other_surface).unwrap();
             })
             .unwrap();
 
@@ -945,12 +945,8 @@ mod tests {
 
         let new_pane = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.break_surface_to_pane(
-                    second_surface,
-                    Side::After,
-                    SplitOrientation::Horizontal,
-                )
-                .unwrap()
+                mux.break_surface_to_pane(second_surface, Side::After, SplitOrientation::Horizontal)
+                    .unwrap()
             })
             .unwrap();
         world.flush();
@@ -1058,9 +1054,7 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
         let active = world
-            .run_system_once(move |mux: MultiplexerCommands| {
-                mux.panes_active_surface(outcome.pane)
-            })
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(outcome.pane))
             .unwrap();
         assert_eq!(active, Some(outcome.surface));
     }

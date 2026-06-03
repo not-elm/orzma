@@ -15,8 +15,8 @@ use ozmux_extension_host::HandlersBridge;
 use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
-    SurfaceKind, AttachedSession, ExtensionSurfaceId, MultiplexerCommands, OwningExtension,
-    SessionMarker,
+    AttachedSession, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SessionMarker,
+    SurfaceKind,
 };
 
 /// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension surface,

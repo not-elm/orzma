@@ -1,5 +1,5 @@
 //! `ozmux-ext://<name>/<path>` custom-scheme handler bridging a webview URL to
-//! the extension's bytes via [`crate::fetch`]. Behind the `cef` feature.
+//! the extension's bytes via `crate::fetch`. Behind the `cef` feature.
 
 #[cfg(feature = "cef")]
 use crate::host::{EndpointRegistry, ExtensionEndpoints, FetchError, fetch};

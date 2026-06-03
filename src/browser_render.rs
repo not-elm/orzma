@@ -9,8 +9,8 @@ use crate::configs::OzmuxConfigsResource;
 use crate::system_set::OzmuxSystems;
 use crate::ui::palette;
 use crate::ui::{
-    AddrBarText, AddressBarFocus, AddressEdit, BrowserSurfaceMarker, BrowserNavButton,
-    BrowserPageWebview, BrowserToolbarState, HostSurfaceEntity, NavAction, PageWebviewOf,
+    AddrBarText, AddressBarFocus, AddressEdit, BrowserNavButton, BrowserPageWebview,
+    BrowserSurfaceMarker, BrowserToolbarState, HostSurfaceEntity, NavAction, PageWebviewOf,
 };
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
@@ -19,7 +19,7 @@ use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
 use bevy::window::{CursorIcon, Ime, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
-use ozmux_multiplexer::{SurfaceKind, AttachedSession, MultiplexerCommands, SessionMarker};
+use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SurfaceKind};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
 /// Vimium-style scroll keybindings, injected into each browser page webview as
@@ -669,10 +669,7 @@ mod tests {
         app.add_systems(Update, build_browser_chrome);
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update();
 
@@ -700,10 +697,7 @@ mod tests {
         app.add_systems(Update, build_browser_chrome);
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update();
         let first = app.world().get::<BrowserPageWebview>(host).unwrap().0;
@@ -765,10 +759,7 @@ mod tests {
         app.add_observer(on_address_changed);
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update();
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
@@ -794,10 +785,7 @@ mod tests {
         app.add_observer(on_loading_state_changed);
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update();
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
@@ -830,10 +818,7 @@ mod tests {
 
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update(); // build chrome
 
@@ -877,10 +862,7 @@ mod tests {
         );
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update(); // build chrome
         {
@@ -1113,10 +1095,7 @@ mod tests {
         app.add_systems(Update, (build_browser_chrome, render_address_text).chain());
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update(); // build chrome + render (empty url)
         app.world_mut()
@@ -1301,10 +1280,7 @@ mod tests {
         let window = app.world_mut().spawn_empty().id();
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update();
         app.world_mut()
@@ -1339,10 +1315,7 @@ mod tests {
         let window = app.world_mut().spawn_empty().id();
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update();
         let page = app.world().get::<BrowserPageWebview>(host).unwrap().0;
@@ -1399,10 +1372,7 @@ mod tests {
 
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update(); // build chrome
 
@@ -1447,10 +1417,7 @@ mod tests {
 
         let host = app
             .world_mut()
-            .spawn((
-                BrowserSurfaceMarker,
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
+            .spawn((BrowserSurfaceMarker, laid_out_node(Vec2::new(800.0, 600.0))))
             .id();
         app.update(); // build chrome
 

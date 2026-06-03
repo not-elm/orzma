@@ -14,7 +14,7 @@ use std::sync::Mutex;
 /// `.get_mut().unwrap()` from a Bevy `Query<&mut PtyHandle>` is
 /// poisoning-safe (no panic-while-locked path exists).
 ///
-/// All fields are private; construct via [`PtyHandle::new`] and
+/// All fields are private; construct via `PtyHandle::new` and
 /// interact through the crate-internal API (`resize`, `write_all`,
 /// `try_recv_chunk`, `try_recv_exit`). External callers may include
 /// `&mut PtyHandle` in a `Query` for scheduling-order coordination,

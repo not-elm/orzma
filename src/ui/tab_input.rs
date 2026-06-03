@@ -87,8 +87,8 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use ozmux_multiplexer::{
-        ActiveSurface, ActivePane, SurfaceKind, AttachedSession, MultiplexerCommands,
-        MultiplexerPlugin, Side, SplitOrientation,
+        ActivePane, ActiveSurface, AttachedSession, MultiplexerCommands, MultiplexerPlugin, Side,
+        SplitOrientation, SurfaceKind,
     };
 
     /// Builds an app running `drive_tab_clicks`, with one attached session whose
