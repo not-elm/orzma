@@ -571,6 +571,8 @@ impl TerminalHandle {
                 ControlFrame::Clipboard { content, .. } => {
                     commands.trigger(TerminalClipboardStore { entity, content });
                 }
+                // TODO: wire CurrentDir into a TerminalCwdChanged trigger in a later task.
+                ControlFrame::CurrentDir(_) => {}
             }
         }
     }
