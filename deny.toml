@@ -30,6 +30,11 @@ allow = [
     "Unicode-DFS-2016",
     "Zlib",
     "0BSD",
+    # Permissive / public-domain licenses from transitive CEF / download-cef deps.
+    "MIT-0",
+    "BSL-1.0",
+    "CC0-1.0",
+    "bzip2-1.0.6",
     "MPL-2.0",
     "CDLA-Permissive-2.0",
 ]
