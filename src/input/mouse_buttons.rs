@@ -9,7 +9,7 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::input::{InputPhase, current_modifiers};
-use crate::ui::SurfaceHostNode;
+use crate::ui::{SurfaceHostNode, VisibleSurfaceHost};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::registry::SurfaceEntityRegistry;
 use bevy::input::ButtonState;
@@ -85,17 +85,25 @@ impl Plugin for MouseButtonsInputPlugin {
     }
 }
 
-/// Hit-tests `cursor_phys_px` against all `SurfaceHostNode` entities
-/// and returns `(entity, local_phys_px)` for the first pane that
+/// Hit-tests `cursor_phys_px` against the **visible** (`VisibleSurfaceHost`)
+/// surface hosts and returns `(entity, local_phys_px)` for the first pane that
 /// contains the cursor. `local_phys_px` is in pane-local pixels with
 /// origin at the top-left corner of the node (i.e., `(0, 0)` is the
 /// top-left, `(size.x, size.y)` is the bottom-right).
+///
+/// Only the active surface's host is hit-tested. Inactive hosts are parked
+/// outside layout and keep stale, often window-sized `ComputedNode` geometry;
+/// including them lets a click resolve to a parked host of an already-active
+/// pane, so focus never moves (see `VisibleSurfaceHost`).
 ///
 /// `cursor_phys_px` is in physical (DPR-scaled) pixels — the caller
 /// must convert from `Window::cursor_position()` (logical) by
 /// multiplying by `Window::scale_factor()` first.
 pub(crate) fn resolve_pane_at_phys(
-    hosts: &Query<(Entity, &ComputedNode, &UiGlobalTransform), With<SurfaceHostNode>>,
+    hosts: &Query<
+        (Entity, &ComputedNode, &UiGlobalTransform),
+        (With<SurfaceHostNode>, With<VisibleSurfaceHost>),
+    >,
     cursor_phys_px: Vec2,
 ) -> Option<(Entity, Vec2)> {
     for (entity, node, transform) in hosts.iter() {
@@ -387,7 +395,10 @@ fn dispatch_mouse_buttons(
     )>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
-    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<SurfaceHostNode>>,
+    hosts: Query<
+        (Entity, &ComputedNode, &UiGlobalTransform),
+        (With<SurfaceHostNode>, With<VisibleSurfaceHost>),
+    >,
     grids: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
     copy_modes: Query<(), With<CopyModeState>>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -771,6 +782,57 @@ fn apply_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_pane_at_phys_ignores_parked_hosts() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        // Both hosts' geometry covers (400, 300), but only one is the active
+        // (slotted) `VisibleSurfaceHost`. The parked host retains stale,
+        // oversized `ComputedNode` geometry after being unslotted; the hit-test
+        // must ignore it and return the visible host. Regression: a
+        // terminal-surface click resolving to a parked host of an
+        // already-active pane left keyboard focus stuck on a webview.
+        let mut app = App::new();
+        app.world_mut().spawn((
+            SurfaceHostNode,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+        ));
+        let visible = app
+            .world_mut()
+            .spawn((
+                SurfaceHostNode,
+                VisibleSurfaceHost,
+                ComputedNode {
+                    size: Vec2::new(800.0, 600.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(400.0, 300.0),
+            ))
+            .id();
+
+        let resolved = app
+            .world_mut()
+            .run_system_once(
+                |hosts: Query<
+                    (Entity, &ComputedNode, &UiGlobalTransform),
+                    (With<SurfaceHostNode>, With<VisibleSurfaceHost>),
+                >| {
+                    resolve_pane_at_phys(&hosts, Vec2::new(400.0, 300.0)).map(|(e, _)| e)
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            resolved,
+            Some(visible),
+            "the hit-test must ignore parked (non-VisibleSurfaceHost) hosts",
+        );
+    }
 
     #[test]
     fn plugin_registers_state_resource() {
@@ -1527,11 +1589,13 @@ mod tests {
         app.world_mut().entity_mut(session).insert(AttachedSession);
 
         // The clicked pane's host: SurfaceHostNode + a laid-out node under the
-        // cursor, but NO TerminalHandle (a webview host).
+        // cursor, but NO TerminalHandle (a webview host). `VisibleSurfaceHost`
+        // marks it as the active (slotted) host so the hit-test considers it.
         let ext_host = app
             .world_mut()
             .spawn((
                 SurfaceHostNode,
+                VisibleSurfaceHost,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
                     ..ComputedNode::DEFAULT
