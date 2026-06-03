@@ -505,7 +505,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
             .add_plugins(crate::action::session::OzmuxSessionActionPlugin)
-            .add_systems(Update, dispatch_focused_key);
+            .add_systems(Update, dispatch_focused_key.run_if(not(is_ime_composing)));
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
         app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
