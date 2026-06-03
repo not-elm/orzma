@@ -38,7 +38,7 @@ pub(crate) fn tab_label(
 }
 
 /// Replaces a leading `home` prefix with `~` (component-aware), else returns
-/// the lossy absolute path.
+/// the lossy path string.
 fn abbreviate_home(path: &Path, home: Option<&Path>) -> String {
     if let Some(home) = home
         && let Ok(rest) = path.strip_prefix(home)
@@ -57,6 +57,9 @@ fn abbreviate_home(path: &Path, home: Option<&Path>) -> String {
 /// segments and prepending `…/`. A single over-long trailing segment is
 /// hard-cut with a leading `…`.
 fn front_truncate(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
     if s.chars().count() <= max_chars {
         return s.to_string();
     }
@@ -172,5 +175,21 @@ mod tests {
         let cwd = Cwd(PathBuf::from("/tmp/a\u{7}b"));
         let out = tab_label(&term(), Some(&cwd), "x", None, MAX);
         assert_eq!(out, "/tmp/ab");
+    }
+
+    #[test]
+    fn tiny_max_chars_never_exceeds_budget() {
+        let cwd = Cwd(PathBuf::from("/home/u/workspace"));
+        let out0 = tab_label(&term(), Some(&cwd), "x", Some(Path::new("/home/u")), 0);
+        assert_eq!(out0.chars().count(), 0, "got {out0:?}");
+        let out1 = tab_label(&term(), Some(&cwd), "x", Some(Path::new("/home/u")), 1);
+        assert_eq!(out1.chars().count(), 1, "got {out1:?}");
+    }
+
+    #[test]
+    fn multibyte_path_abbreviates() {
+        let cwd = Cwd(PathBuf::from("/home/u/プロジェクト"));
+        let out = tab_label(&term(), Some(&cwd), "x", Some(Path::new("/home/u")), MAX);
+        assert_eq!(out, "~/プロジェクト");
     }
 }
