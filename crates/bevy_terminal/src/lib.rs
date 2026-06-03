@@ -9,6 +9,7 @@ mod events;
 mod handle;
 mod input_codec;
 mod mouse_encode;
+mod osc7;
 mod palette;
 mod plugin;
 mod pty;
