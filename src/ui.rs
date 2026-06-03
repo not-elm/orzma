@@ -241,6 +241,28 @@ mod tests {
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
     use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin};
 
+    /// Collects the rendered text of every tab (the `Text` child of each
+    /// `TabButton` node), in tab order.
+    fn tab_texts(world: &mut World) -> Vec<String> {
+        let tabs: Vec<Entity> = world
+            .query_filtered::<Entity, With<TabButton>>()
+            .iter(world)
+            .collect();
+        let mut out = Vec::new();
+        for tab in tabs {
+            let kids: Vec<Entity> = world
+                .get::<Children>(tab)
+                .map(|c| c.iter().collect())
+                .unwrap_or_default();
+            for k in kids {
+                if let Some(text) = world.get::<bevy::ui::widget::Text>(k) {
+                    out.push(text.0.clone());
+                }
+            }
+        }
+        out
+    }
+
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {
         let guard = crate::configs::env_guard();
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
@@ -1011,5 +1033,46 @@ mod tests {
             vec!["session1".to_string(), "session2".to_string()],
             "status bar must show session1 leftmost, session2 to its right",
         );
+    }
+
+    #[test]
+    fn terminal_tab_without_cwd_shows_placeholder() {
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        assert_eq!(
+            tab_texts(app.world_mut()),
+            vec!["terminal".to_string()],
+            "bootstrap terminal surface has no Cwd yet → placeholder",
+        );
+    }
+
+    #[test]
+    fn terminal_tab_renders_cwd_after_rebuild() {
+        use ozmux_multiplexer::{Cwd, LayoutCells, SessionMarker, SurfaceMarker};
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let surface = app
+            .world_mut()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
+            .single(app.world())
+            .expect("one bootstrap surface");
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(Cwd("/tmp/proj".into()));
+        {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<&mut LayoutCells, With<SessionMarker>>();
+            for mut lc in q.iter_mut(world) {
+                lc.set_changed();
+            }
+        }
+        app.update();
+
+        assert_eq!(tab_texts(app.world_mut()), vec!["/tmp/proj".to_string()]);
     }
 }
