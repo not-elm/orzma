@@ -1036,6 +1036,25 @@ mod tests {
     }
 
     #[test]
+    fn terminal_tab_node_is_width_capped() {
+        use bevy::ui::OverflowAxis;
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let tab = world
+            .query_filtered::<Entity, With<TabButton>>()
+            .iter(world)
+            .next()
+            .expect("one tab after bootstrap");
+        let node = world.get::<Node>(tab).expect("tab has a Node");
+        assert_eq!(node.max_width, Val::Px(crate::theme::TAB_MAX_WIDTH_PX));
+        assert_eq!(node.overflow.x, OverflowAxis::Clip);
+    }
+
+    #[test]
     fn osc7_current_dir_updates_tab() {
         use bevy_terminal::TerminalCurrentDir;
 
