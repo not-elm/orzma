@@ -5,6 +5,7 @@ export interface SplitControlParams {
   side: 'before' | 'after';
   orientation: 'horizontal' | 'vertical';
   surface:
+    | { kind: 'terminal'; cwd?: string; name?: string | null; surface_id: string }
     | { kind: 'extension'; entry: string; name?: string | null; surface_id: string }
     | { kind: 'browser'; url: string; name?: string | null; surface_id: string };
 }
@@ -12,6 +13,7 @@ export interface SplitControlParams {
 /** Parameters for an `add_surface` control call. */
 export interface AddSurfaceControlParams {
   surface:
+    | { kind: 'terminal'; cwd?: string; name?: string | null; surface_id: string }
     | { kind: 'extension'; entry: string; name?: string | null; surface_id: string }
     | { kind: 'browser'; url: string; name?: string | null; surface_id: string };
 }

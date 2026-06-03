@@ -3,7 +3,7 @@ import { callControl } from './control-client.ts';
 export type SurfaceId = string;
 
 export type SurfaceKind =
-  | { type: 'terminal' }
+  | { type: 'terminal'; cwd?: string }
   | { type: 'extension'; entry: string; extension_name?: string }
   | { type: 'browser'; initial_url?: string };
 

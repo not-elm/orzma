@@ -7,7 +7,11 @@ import { __resetSurfaceChannelsForTests } from './channels-server.ts';
 import * as controlClient from './control-client.ts';
 import * as handlersServer from './handlers-server.ts';
 import { __resetSurfaceHandlersForTests } from './handlers-server.ts';
-import { __resetExtensionNameCacheForTests, Pane } from './pane.ts';
+import {
+  __resetExtensionNameCacheForTests,
+  __test_controlSurface as controlSurface,
+  Pane,
+} from './pane.ts';
 import { Surface } from './surface.ts';
 
 function tmpSock(): string {
@@ -376,5 +380,12 @@ describe('Surface.activate', () => {
     expect(op).toBe('activate');
     expect(paneId).toBe('p1');
     expect(params.surface_id).toBe('act-9');
+  });
+});
+
+describe('controlSurface terminal', () => {
+  it('encodes a terminal surface carrying cwd (not the extension stub)', () => {
+    const out = controlSurface('sid-1', { kind: 'terminal', cwd: '/work' });
+    expect(out).toEqual({ kind: 'terminal', cwd: '/work', name: undefined, surface_id: 'sid-1' });
   });
 });
