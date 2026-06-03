@@ -15,6 +15,7 @@ use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
+use std::path::PathBuf;
 use bevy::prelude::*;
 
 pub mod copy_mode;
@@ -195,12 +196,19 @@ pub(crate) struct PaneDimOverlay {
 #[derive(Component)]
 pub(crate) struct SessionUiDirty;
 
+/// Resolved `$HOME` at startup (`None` if unset). Read by `rebuild_session_ui`
+/// to home-abbreviate terminal tab paths; the value matches the terminal
+/// spawner's `$HOME` fallback so the tab agrees with where the shell started.
+#[derive(Resource)]
+pub(crate) struct HomeDir(pub(crate) Option<PathBuf>);
+
 /// Bevy Plugin wiring the native Bevy UI rebuild pipeline.
 pub struct OzmuxUiPlugin;
 
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SurfaceEntityRegistry>()
+            .insert_resource(HomeDir(std::env::var_os("HOME").map(PathBuf::from)))
             .add_plugins((
                 OzmuxUiRootPlugin,
                 OzmuxSessionUiPlugin,
