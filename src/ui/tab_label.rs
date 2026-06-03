@@ -69,7 +69,11 @@ fn front_truncate(s: &str, max_chars: usize) -> String {
     let mut used = 0usize;
     for seg in segments.iter().rev() {
         let seg_len = seg.chars().count();
-        let extra = if kept.is_empty() { seg_len } else { seg_len + 1 };
+        let extra = if kept.is_empty() {
+            seg_len
+        } else {
+            seg_len + 1
+        };
         if used + extra > budget {
             break;
         }

@@ -15,8 +15,8 @@ use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
-use std::path::PathBuf;
 use bevy::prelude::*;
+use std::path::PathBuf;
 
 pub mod copy_mode;
 pub mod copy_mode_indicator;
@@ -32,8 +32,8 @@ pub mod status_bar_sync;
 pub(crate) mod stress_test;
 pub(crate) mod surface;
 pub mod tab_bar;
-pub(crate) mod tab_label;
 pub(crate) mod tab_input;
+pub(crate) mod tab_label;
 pub mod terminal;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,

@@ -6,11 +6,11 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
+use crate::theme;
 use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::SurfaceEntityRegistry;
-use crate::ui::terminal::resolve_pane_session;
-use crate::theme;
 use crate::ui::tab_label::LabelCtx;
+use crate::ui::terminal::resolve_pane_session;
 use crate::ui::{
     HomeDir, HostSurfaceEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot, StructuralNode,
     SurfaceHostNode, TerminalSurfaceMarker,

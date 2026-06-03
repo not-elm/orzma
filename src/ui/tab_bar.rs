@@ -7,8 +7,8 @@ use crate::ui::palette;
 use crate::ui::{StructuralNode, TabButton};
 use bevy::color::Color;
 use bevy::prelude::*;
-use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, Overflow, UiRect, Val};
 use bevy::text::{LineBreak, TextLayout};
+use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, Overflow, UiRect, Val};
 
 /// Color triple for one tab.
 struct TabColors {
