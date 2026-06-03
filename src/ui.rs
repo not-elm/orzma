@@ -60,6 +60,19 @@ pub struct StructuralNode;
 #[derive(Component)]
 pub struct SurfaceHostNode;
 
+/// Marks the surface host currently slotted into its pane's visible
+/// `surface_slot` (i.e. the active surface). Inactive hosts are parked under a
+/// non-`Node` parent and keep this marker removed.
+///
+/// # Invariants
+///
+/// Geometric hit-tests (`resolve_pane_at_phys`) MUST filter on this marker:
+/// a parked host is excluded from layout, so its `ComputedNode` retains stale,
+/// often window-sized geometry. Without this filter a click resolves to a
+/// parked host of an already-active pane and focus never moves.
+#[derive(Component)]
+pub struct VisibleSurfaceHost;
+
 /// Marks a Surface Host whose `kind` is `Terminal`. `finish_terminal_setup`
 /// queries for `With<TerminalSurfaceMarker>` to find hosts that need a
 /// `TerminalBundle` + `TerminalRenderBundle` attached.

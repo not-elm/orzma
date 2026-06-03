@@ -8,7 +8,7 @@ use crate::theme;
 use crate::ui::surface::build_surface_host_children;
 use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::tab_bar::{TabEntry, build_pane_tab_bar};
-use crate::ui::{PaneDimOverlay, PaneFrame, StructuralNode, palette};
+use crate::ui::{PaneDimOverlay, PaneFrame, StructuralNode, VisibleSurfaceHost, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, PositionType, UiRect, Val};
 use ozmux_multiplexer::{
@@ -243,9 +243,14 @@ fn build_pane(
         let host = registry.get_or_spawn(commands, surface_entity, kind);
         build_surface_host_children(commands, host, kind, name);
         if surface_entity == active_surface {
-            commands.entity(host).insert(ChildOf(surface_slot));
+            commands
+                .entity(host)
+                .insert((ChildOf(surface_slot), VisibleSurfaceHost));
         } else {
-            commands.entity(host).insert(ChildOf(inactive_host_parent));
+            commands
+                .entity(host)
+                .insert(ChildOf(inactive_host_parent))
+                .remove::<VisibleSurfaceHost>();
         }
     }
 
