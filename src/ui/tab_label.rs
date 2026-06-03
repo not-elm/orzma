@@ -7,7 +7,7 @@ use ozmux_multiplexer::{Cwd, SurfaceKind};
 use std::path::{Path, PathBuf};
 
 /// Placeholder shown for a terminal surface whose `Cwd` is not yet known.
-pub(crate) const TERMINAL_PLACEHOLDER: &str = "terminal";
+const TERMINAL_PLACEHOLDER: &str = "terminal";
 
 /// Per-rebuild inputs for `tab_label`, built once in `rebuild_session_ui` and
 /// threaded through the cell-tree builder.
@@ -172,6 +172,24 @@ mod tests {
         };
         let out = tab_label(&kind, None, "memo", None, MAX);
         assert_eq!(out, "memo");
+    }
+
+    #[test]
+    fn browser_returns_name() {
+        use ozmux_multiplexer::BrowserProfile;
+        let kind = SurfaceKind::Browser {
+            initial_url: None,
+            profile: BrowserProfile::default(),
+        };
+        let cwd = Cwd(PathBuf::from("/home/u/proj"));
+        let out = tab_label(
+            &kind,
+            Some(&cwd),
+            "my-browser",
+            Some(Path::new("/home/u")),
+            MAX,
+        );
+        assert_eq!(out, "my-browser");
     }
 
     #[test]
