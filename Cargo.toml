@@ -22,7 +22,7 @@ debug = []
 ab_glyph = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
-bevy_cef = { path = "/Users/watanabe/workspace/bevy_cef", features = ["debug"] }
+bevy_cef = { version = "0.10", features = ["debug"] }
 bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
@@ -75,6 +75,7 @@ toml = "0.8"
 dirs = "5"
 unicode-width = "0.2"
 open = "5"
+bevy_cef_core = "0.10.0"
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"
