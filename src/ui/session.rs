@@ -198,6 +198,7 @@ fn flag_chrome_dirty_on_surface_change(
     mut commands: Commands,
     added_surfaces: Query<Entity, Added<SurfaceMarker>>,
     switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveSurface>)>,
+    changed_cwd: Query<Entity, (With<SurfaceMarker>, Changed<Cwd>)>,
     child_of: Query<&ChildOf>,
 ) {
     for surface in added_surfaces.iter() {
@@ -208,6 +209,11 @@ fn flag_chrome_dirty_on_surface_change(
     for pane in switched_panes.iter() {
         if let Ok(pane_parent) = child_of.get(pane) {
             commands.entity(pane_parent.parent()).insert(SessionUiDirty);
+        }
+    }
+    for surface in changed_cwd.iter() {
+        if let Some((_pane, session)) = resolve_pane_session(surface, &child_of) {
+            commands.entity(session).insert(SessionUiDirty);
         }
     }
 }

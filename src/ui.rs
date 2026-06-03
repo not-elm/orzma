@@ -1036,6 +1036,31 @@ mod tests {
     }
 
     #[test]
+    fn osc7_current_dir_updates_tab() {
+        use bevy_terminal::TerminalCurrentDir;
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let host = app
+            .world_mut()
+            .query_filtered::<Entity, With<HostSurfaceEntity>>()
+            .iter(app.world())
+            .next()
+            .expect("a surface host exists after rebuild");
+        app.world_mut().trigger(TerminalCurrentDir {
+            entity: host,
+            path: "/tmp/proj".into(),
+        });
+        for _ in 0..3 {
+            app.update();
+        }
+
+        assert_eq!(tab_texts(app.world_mut()), vec!["/tmp/proj".to_string()]);
+    }
+
+    #[test]
     fn terminal_tab_without_cwd_shows_placeholder() {
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -1046,6 +1071,28 @@ mod tests {
             vec!["terminal".to_string()],
             "bootstrap terminal surface has no Cwd yet → placeholder",
         );
+    }
+
+    #[test]
+    fn cwd_change_refreshes_tab_without_layout_change() {
+        use ozmux_multiplexer::{Cwd, SurfaceMarker};
+
+        let (mut app, _guard) = make_test_app();
+        app.update();
+        app.update();
+
+        let surface = app
+            .world_mut()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
+            .single(app.world())
+            .expect("one bootstrap surface");
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(Cwd("/tmp/proj".into()));
+        app.update();
+        app.update();
+
+        assert_eq!(tab_texts(app.world_mut()), vec!["/tmp/proj".to_string()]);
     }
 
     #[test]
