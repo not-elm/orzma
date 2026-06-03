@@ -1,7 +1,7 @@
 //! New-terminal-surface shortcut action: adds a Terminal Surface to the
 //! active pane and focuses it when a `NewTerminalSurfaceActionEvent` fires.
 use bevy::prelude::*;
-use ozmux_multiplexer::{SurfaceKind, MultiplexerCommands};
+use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind};
 
 /// Registers the `apply_new_terminal_surface` observer.
 pub struct NewTerminalSurfaceActionPlugin;

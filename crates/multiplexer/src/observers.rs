@@ -6,7 +6,7 @@
 //! Observer registration happens in `MultiplexerPlugin::build`.
 
 use crate::components::{
-    ActiveSurface, ActivePane, SurfaceMarker, LayoutCells, PaneMarker, SessionMarker,
+    ActivePane, ActiveSurface, LayoutCells, PaneMarker, SessionMarker, SurfaceMarker,
 };
 use bevy::prelude::*;
 

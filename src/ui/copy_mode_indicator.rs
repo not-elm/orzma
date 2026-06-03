@@ -482,7 +482,7 @@ mod tests {
     fn inactive_host_parent_is_walker_skipped_session_entity() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{
-            SurfaceKind, AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker,
+            AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker, SurfaceKind,
         };
 
         let (mut app, _guard) = make_ui_test_app();

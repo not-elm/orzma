@@ -267,7 +267,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::bounded;
-    use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, SurfaceMarker};
+    use ozmux_multiplexer::{MultiplexerCommands, SessionNameCounter, SurfaceKind, SurfaceMarker};
 
     fn split_request(pane_bits: u64) -> ControlRequest {
         ControlRequest {
@@ -323,6 +323,7 @@ mod tests {
     #[test]
     fn handles_split_and_creates_browser_pane_without_extension_components() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -371,6 +372,7 @@ mod tests {
     #[test]
     fn handles_split_and_creates_extension_pane() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -421,6 +423,7 @@ mod tests {
     #[test]
     fn unknown_pane_bits_yield_pane_not_found() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -445,6 +448,7 @@ mod tests {
     #[test]
     fn handles_add_surface_on_existing_pane() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -482,6 +486,7 @@ mod tests {
     #[test]
     fn handles_activate_repoints_active_surface() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
@@ -521,6 +526,7 @@ mod tests {
     #[test]
     fn activate_rejects_surface_not_in_pane() {
         let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
         let first = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
             .unwrap();
