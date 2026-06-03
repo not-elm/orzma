@@ -25,8 +25,8 @@ pub use bundle::{SpawnOptions, TerminalBundle};
 pub use buttons::{ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind};
 pub use coalescer::Coalescer;
 pub use events::{
-    TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalKey, TerminalKeyInput,
-    TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
+    TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir, TerminalKey,
+    TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
 pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use mouse_encode::ProtocolModifiers;
