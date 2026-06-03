@@ -85,7 +85,7 @@ impl UiMaterial for TerminalUiMaterial {
 
 /// Per-pane brightness multiplier for the terminal renderer. The consumer
 /// (e.g. ozmux-gui) sets this on a terminal host from its active-pane state;
-/// [`update_terminal_material`] bakes it into the material's `dim` uniform
+/// `update_terminal_material` bakes it into the material's `dim` uniform
 /// each frame. An absent component is treated as `1.0` (full-bright / active).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PaneDim(pub f32);
