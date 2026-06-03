@@ -11,6 +11,7 @@ bootstrap({
         side: 'after',
         surface: {
           kind: 'extension',
+          cwd: ctx.cwd,
           html: fileURLToPath(new URL('./index.html', import.meta.url)),
           handlers: {
             greet: async ({ name }: { name: string }) => ({

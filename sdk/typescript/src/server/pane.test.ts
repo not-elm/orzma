@@ -389,3 +389,30 @@ describe('controlSurface terminal', () => {
     expect(out).toEqual({ kind: 'terminal', cwd: '/work', name: undefined, surface_id: 'sid-1' });
   });
 });
+
+describe('controlSurface non-terminal cwd', () => {
+  it('encodes a browser surface carrying cwd', () => {
+    const out = controlSurface('sid-b', { kind: 'browser', url: 'github.com', cwd: '/work' });
+    expect(out).toEqual({
+      kind: 'browser',
+      url: 'github.com',
+      cwd: '/work',
+      name: undefined,
+      surface_id: 'sid-b',
+    });
+  });
+
+  it('encodes an extension surface carrying cwd', () => {
+    const out = controlSurface('sid-e', {
+      kind: 'extension',
+      html: '/x/memo/index.html',
+      cwd: '/work',
+    });
+    expect(out).toMatchObject({
+      kind: 'extension',
+      cwd: '/work',
+      extension_name: 'memo',
+      surface_id: 'sid-e',
+    });
+  });
+});

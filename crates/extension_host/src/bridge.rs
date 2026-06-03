@@ -590,6 +590,58 @@ mod tests {
     }
 
     #[test]
+    fn browser_split_with_cwd_seeds_cwd_component() {
+        let mut world = World::new();
+        world.init_resource::<SessionNameCounter>();
+        let created = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .unwrap();
+        let pane_bits = created.pane.to_bits();
+
+        let req = ControlRequest {
+            pane_bits,
+            op: ControlOp::Split(crate::control::SplitParams {
+                side: ControlSide::After,
+                orientation: ControlOrientation::Vertical,
+                surface: crate::control::SurfaceSpec {
+                    kind: SurfaceKindSpec::Browser {
+                        url: "github.com".into(),
+                    },
+                    name: None,
+                    surface_id: "aid-b".into(),
+                    cwd: Some("/work".into()),
+                },
+            }),
+        };
+        let (tx, rx) = bounded(1);
+        let mut tx = Some(tx);
+        let mut req = Some(req);
+        world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                apply_control_request(&mut mux, req.take().unwrap(), tx.take().unwrap());
+            })
+            .unwrap();
+        world.flush();
+
+        match rx.try_recv().unwrap() {
+            ControlResponse::Ok(ControlReply::Split { new_surface_id, .. }) => {
+                let surface = Entity::try_from_bits(new_surface_id).unwrap();
+                assert!(
+                    matches!(world.get::<SurfaceKind>(surface), Some(SurfaceKind::Browser { .. })),
+                    "expected Browser surface kind"
+                );
+                assert_eq!(
+                    world.get::<Cwd>(surface),
+                    Some(&Cwd(std::path::PathBuf::from("/work"))),
+                    "browser surface must also seed Cwd from the spec"
+                );
+            }
+            ControlResponse::Ok(_) => panic!("expected Split reply"),
+            ControlResponse::Err(e) => panic!("expected Ok, got {}", e.code),
+        }
+    }
+
+    #[test]
     fn activate_rejects_surface_not_in_pane() {
         let mut world = World::new();
         world.init_resource::<SessionNameCounter>();

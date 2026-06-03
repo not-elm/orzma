@@ -26,6 +26,7 @@ export async function mdCommand(ctx: CommandContext, deps: MdDeps): Promise<numb
   const surface: SurfaceSpecInput = {
     kind: 'extension',
     name: path.basename(target.filePath),
+    cwd: ctx.cwd,
     html: deps.distIndexPath,
     channels: { content: deps.makeChannel(target.filePath) },
   };

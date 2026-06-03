@@ -41,10 +41,11 @@ export type SurfaceSpecInput =
       kind: 'extension';
       html: string;
       name?: string;
+      cwd?: string;
       handlers?: HandlerMap;
       channels?: ChannelMap;
     }
-  | { kind: 'browser'; url: string; name?: string };
+  | { kind: 'browser'; url: string; name?: string; cwd?: string };
 
 export interface SplitArgs {
   side: Side;
@@ -164,20 +165,28 @@ function controlSurface(
   | {
       kind: 'extension';
       entry: string;
+      cwd?: string;
       name?: string;
       surface_id: string;
       extension_name?: string;
     }
-  | { kind: 'browser'; url: string; name?: string; surface_id: string } {
+  | { kind: 'browser'; url: string; cwd?: string; name?: string; surface_id: string } {
   if (spec.kind === 'terminal') {
     return { kind: 'terminal', cwd: spec.cwd, name: spec.name, surface_id: surfaceId };
   }
   if (spec.kind === 'browser') {
-    return { kind: 'browser', url: spec.url, name: spec.name, surface_id: surfaceId };
+    return {
+      kind: 'browser',
+      url: spec.url,
+      cwd: spec.cwd,
+      name: spec.name,
+      surface_id: surfaceId,
+    };
   }
   return {
     kind: 'extension',
     entry: toEntry(spec.html),
+    cwd: spec.cwd,
     name: spec.name,
     surface_id: surfaceId,
     extension_name: requireExtensionName(),
