@@ -146,6 +146,12 @@ pub enum SurfaceKind {
     },
 }
 
+/// The current working directory of a surface. For terminal surfaces this is
+/// kept live by OSC 7; other kinds carry their creation-time value. Absence
+/// means "unknown" — the terminal spawner falls back to `$HOME`.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct Cwd(pub PathBuf);
+
 /// Storage profile for a Browser Surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserProfile {
@@ -203,5 +209,12 @@ mod tests {
             BrowserProfile::default(),
             BrowserProfile::Named { name } if name == "default",
         ));
+    }
+
+    #[test]
+    fn cwd_holds_a_pathbuf() {
+        let c = Cwd(PathBuf::from("/tmp/x"));
+        assert_eq!(c.0, PathBuf::from("/tmp/x"));
+        assert_eq!(c.clone().0, PathBuf::from("/tmp/x"));
     }
 }

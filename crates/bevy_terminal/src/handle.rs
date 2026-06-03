@@ -2,8 +2,10 @@
 
 use crate::coalescer::Coalescer;
 use crate::events::{
-    TerminalBell, TerminalClipboardStore, TerminalModeChanged, TerminalTitleChanged,
+    TerminalBell, TerminalClipboardStore, TerminalCurrentDir, TerminalModeChanged,
+    TerminalTitleChanged,
 };
+use crate::osc7::Osc7Capture;
 use crate::pty::PtyHandle;
 use crate::title::{TerminalTitle, sanitize_title};
 use crate::vt::damage::{DamageVerdict, DirtyRows};
@@ -26,10 +28,11 @@ use bevy::ecs::system::Commands;
 use bevy_terminal_renderer::prelude::{
     Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor,
 };
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use vte::Parser;
 
 /// Inner `Dimensions` impl exposed to `Term::new` / `Term::resize`.
 ///
@@ -96,6 +99,8 @@ pub struct TerminalHandle {
     frame_seq: u32,
     reply_rx: Receiver<Vec<u8>>,
     control_rx: Receiver<ControlFrame>,
+    osc7_parser: Parser,
+    osc7: Osc7Capture,
 }
 
 impl TerminalHandle {
@@ -107,6 +112,7 @@ impl TerminalHandle {
         listener: TermListener,
         reply_rx: Receiver<Vec<u8>>,
         control_rx: Receiver<ControlFrame>,
+        control_tx: Sender<ControlFrame>,
     ) -> Self {
         let size = LocalDim::new(cols, rows);
         let term = Term::new(Config::default(), &size, listener);
@@ -127,6 +133,11 @@ impl TerminalHandle {
             frame_seq: 0,
             reply_rx,
             control_rx,
+            osc7_parser: Parser::new(),
+            osc7: Osc7Capture::new(
+                control_tx,
+                gethostname::gethostname().to_string_lossy().into_owned(),
+            ),
         }
     }
 
@@ -136,6 +147,7 @@ impl TerminalHandle {
             return;
         }
         self.parser.advance(&mut self.term, chunk);
+        self.osc7_parser.advance(&mut self.osc7, chunk);
     }
 
     /// Returns true if the current `Term` cursor differs from the most
@@ -571,6 +583,9 @@ impl TerminalHandle {
                 ControlFrame::Clipboard { content, .. } => {
                     commands.trigger(TerminalClipboardStore { entity, content });
                 }
+                ControlFrame::CurrentDir(path) => {
+                    commands.trigger(TerminalCurrentDir { entity, path });
+                }
             }
         }
     }
@@ -930,9 +945,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         h.first_emit = false;
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_selection = None;
@@ -961,9 +976,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         h.first_emit = false;
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_vi_cursor = None;
@@ -987,9 +1002,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         assert!(!h.term.mode().contains(TermMode::VI));
         h.enter_vi_mode(&mut coalescer);
@@ -1003,9 +1018,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         let was_vi = h.term.mode().contains(TermMode::VI);
@@ -1024,9 +1039,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         let before = h.term.vi_mode_cursor.point.line.0;
@@ -1042,9 +1057,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
@@ -1068,9 +1083,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
@@ -1097,9 +1112,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         // Put "X" at the cursor cell so selection_to_string yields a non-empty string.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
@@ -1128,9 +1143,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         h.selection_start(
@@ -1149,9 +1164,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         assert!(h.selection_to_string().is_none());
     }
 
@@ -1162,9 +1177,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         assert!(h.selection_type().is_none());
@@ -1186,9 +1201,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         // Push some content so selection_to_string is meaningful.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
@@ -1398,9 +1413,9 @@ mod tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         assert!(
@@ -1538,6 +1553,53 @@ mod tests {
                 .contains(alacritty_terminal::term::TermMode::VI)
         );
     }
+
+    #[test]
+    fn advance_osc7_then_drain_triggers_current_dir_event() {
+        use crate::events::TerminalCurrentDir;
+        use crate::title::TerminalTitle;
+        use crate::vt::listener::{ControlFrame, TermListener};
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::prelude::*;
+        use crossbeam_channel::unbounded;
+        use std::path::PathBuf;
+
+        #[derive(Resource, Default)]
+        struct Seen(Vec<PathBuf>);
+
+        let mut app = App::new();
+        app.init_resource::<Seen>();
+        app.add_observer(|ev: On<TerminalCurrentDir>, mut seen: ResMut<Seen>| {
+            seen.0.push(ev.event().path.clone());
+        });
+
+        let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
+        let (control_tx, control_rx) = unbounded::<ControlFrame>();
+        let listener = TermListener {
+            reply_tx,
+            control_tx: control_tx.clone(),
+        };
+        let mut handle = TerminalHandle::new(80, 24, listener, reply_rx, control_rx, control_tx);
+        handle.advance(b"\x1b]7;file://localhost/tmp\x07");
+
+        app.world_mut().spawn((handle, TerminalTitle::default()));
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands,
+                 q: Query<(Entity, &TerminalHandle, &mut TerminalTitle)>| {
+                    for (entity, handle, mut title) in q {
+                        handle.drain_control_events(&mut commands, entity, &mut title);
+                    }
+                },
+            )
+            .unwrap();
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            vec![PathBuf::from("/tmp")]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1550,9 +1612,9 @@ mod accessor_tests {
             crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
         let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: ctrl_tx,
+            control_tx: ctrl_tx.clone(),
         };
-        TerminalHandle::new(80, 24, listener, reply_rx, ctrl_rx)
+        TerminalHandle::new(80, 24, listener, reply_rx, ctrl_rx, ctrl_tx)
     }
 
     #[test]

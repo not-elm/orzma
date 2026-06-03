@@ -10,11 +10,14 @@ use crate::system_set::OzmuxSystems;
 use crate::ui::{HostSurfaceEntity, TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};
+use bevy_terminal::{
+    Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle,
+};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 use ozmux_extension_host::terminal_env;
+use ozmux_multiplexer::Cwd;
 
 pub struct OzmuxTerminalUiPlugin;
 
@@ -31,6 +34,7 @@ impl Plugin for OzmuxTerminalUiPlugin {
                 .before(UiSystems::PostLayout)
                 .before(TerminalMaterialSystems::UpdateMaterial),
         );
+        app.add_observer(on_terminal_current_dir);
     }
 }
 
@@ -60,9 +64,10 @@ fn finish_terminal_setup(
     >,
     child_of: Query<&ChildOf>,
     registry: Option<Res<ExtensionRegistry>>,
+    cwds: Query<&Cwd>,
 ) {
     for (host, host_surface) in hosts.iter() {
-        let env = match registry.as_ref() {
+        let mut env = match registry.as_ref() {
             Some(registry) => match resolve_pane_session(host_surface.0, &child_of) {
                 Some((pane, session)) => {
                     let exts: Vec<_> = registry.extensions.values().collect();
@@ -72,11 +77,13 @@ fn finish_terminal_setup(
             },
             None => Vec::new(),
         };
+        env.push(("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string()));
+        let seed = cwds.get(host_surface.0).ok().map(|c| c.0.clone());
         let opts = SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
-            cwd: std::env::var_os("HOME").map(std::path::PathBuf::from),
+            cwd: Some(resolve_spawn_cwd(seed)),
             env,
         };
         let bundle = match TerminalBundle::spawn(opts) {
@@ -92,6 +99,16 @@ fn finish_terminal_setup(
             .entity(host)
             .insert((bundle, TerminalRenderBundle::new(material_handle)));
     }
+}
+
+/// Resolves a surface's seed cwd to a concrete spawn directory: the path when
+/// it is an absolute, existing directory, else `$HOME` (else `/`). `is_absolute`
+/// is load-bearing — `Path::is_dir` resolves a relative path against ozmux's
+/// own process cwd.
+fn resolve_spawn_cwd(cwd: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    cwd.filter(|p| p.is_absolute() && p.is_dir())
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
 
 /// Resolves a multiplexer Surface entity to its `(pane, session)` pair by
@@ -188,6 +205,21 @@ fn resize_terminals_to_node(
     }
 }
 
+/// Writes a terminal's OSC-7-reported directory onto its owning surface's
+/// `Cwd`. The event targets the host entity; `HostSurfaceEntity` maps it back
+/// to the multiplexer surface.
+fn on_terminal_current_dir(
+    ev: On<TerminalCurrentDir>,
+    mut commands: Commands,
+    hosts: Query<&HostSurfaceEntity>,
+) {
+    let host = ev.entity;
+    let path = &ev.path;
+    if let Ok(host_surface) = hosts.get(host) {
+        commands.entity(host_surface.0).insert(Cwd(path.clone()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +299,45 @@ mod tests {
         assert!(
             app.world().get::<TerminalHandle>(host).is_none(),
             "spawn failure must not leave a TerminalHandle on the host"
+        );
+    }
+
+    #[test]
+    fn resolve_spawn_cwd_validates_absolute_dir_else_home() {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap();
+        assert_eq!(resolve_spawn_cwd(Some(home.clone())), home);
+        assert_eq!(resolve_spawn_cwd(None), home);
+        assert_eq!(
+            resolve_spawn_cwd(Some(std::path::PathBuf::from("relative/x"))),
+            home
+        );
+        assert_eq!(
+            resolve_spawn_cwd(Some(std::path::PathBuf::from("/no/such/dir/xyz"))),
+            home
+        );
+    }
+
+    #[test]
+    fn current_dir_event_writes_cwd_on_mapped_surface() {
+        use crate::ui::HostSurfaceEntity;
+        use bevy::prelude::*;
+        use bevy_terminal::TerminalCurrentDir;
+        use ozmux_multiplexer::Cwd;
+
+        let mut app = App::new();
+        app.add_observer(on_terminal_current_dir);
+        let surface = app.world_mut().spawn_empty().id();
+        let host = app.world_mut().spawn(HostSurfaceEntity(surface)).id();
+        app.world_mut().trigger(TerminalCurrentDir {
+            entity: host,
+            path: std::path::PathBuf::from("/tmp/proj"),
+        });
+        app.world_mut().flush();
+        assert_eq!(
+            app.world().get::<Cwd>(surface),
+            Some(&Cwd(std::path::PathBuf::from("/tmp/proj"))),
         );
     }
 }

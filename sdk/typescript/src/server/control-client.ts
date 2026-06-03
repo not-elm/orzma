@@ -5,15 +5,17 @@ export interface SplitControlParams {
   side: 'before' | 'after';
   orientation: 'horizontal' | 'vertical';
   surface:
-    | { kind: 'extension'; entry: string; name?: string | null; surface_id: string }
-    | { kind: 'browser'; url: string; name?: string | null; surface_id: string };
+    | { kind: 'terminal'; cwd?: string; name?: string | null; surface_id: string }
+    | { kind: 'extension'; entry: string; cwd?: string; name?: string | null; surface_id: string }
+    | { kind: 'browser'; url: string; cwd?: string; name?: string | null; surface_id: string };
 }
 
 /** Parameters for an `add_surface` control call. */
 export interface AddSurfaceControlParams {
   surface:
-    | { kind: 'extension'; entry: string; name?: string | null; surface_id: string }
-    | { kind: 'browser'; url: string; name?: string | null; surface_id: string };
+    | { kind: 'terminal'; cwd?: string; name?: string | null; surface_id: string }
+    | { kind: 'extension'; entry: string; cwd?: string; name?: string | null; surface_id: string }
+    | { kind: 'browser'; url: string; cwd?: string; name?: string | null; surface_id: string };
 }
 
 /** Parameters for an `activate` control call. */

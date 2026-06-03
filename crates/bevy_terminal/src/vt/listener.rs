@@ -8,6 +8,7 @@
 //! variant is reviewed.
 
 use crossbeam_channel::Sender;
+use std::path::PathBuf;
 
 /// Best-effort control frames forwarded from `TermListener`. The
 /// channel is currently unbounded; see spec § Risks > "control_tx is
@@ -22,6 +23,8 @@ pub(crate) enum ControlFrame {
         #[allow(dead_code)] // reserved for future correlation tracking
         correlation_seq: Option<u32>,
     },
+    /// A new current working directory reported via OSC 7.
+    CurrentDir(PathBuf),
 }
 
 /// Reply-required reply bytes (currently just `PtyWrite`). The

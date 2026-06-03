@@ -17,6 +17,8 @@ crossbeam-channel = "0.5"
 unicode-width = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+percent-encoding = "2"
+gethostname = "1"
 
 [lints]
 workspace = true

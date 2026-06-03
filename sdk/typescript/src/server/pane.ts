@@ -36,15 +36,16 @@ export type Orientation = 'horizontal' | 'vertical';
  * directly in the embedded webview without binding to any extension.
  */
 export type SurfaceSpecInput =
-  | { kind: 'terminal'; name?: string }
+  | { kind: 'terminal'; name?: string; cwd?: string }
   | {
       kind: 'extension';
       html: string;
       name?: string;
+      cwd?: string;
       handlers?: HandlerMap;
       channels?: ChannelMap;
     }
-  | { kind: 'browser'; url: string; name?: string };
+  | { kind: 'browser'; url: string; name?: string; cwd?: string };
 
 export interface SplitArgs {
   side: Side;
@@ -151,38 +152,49 @@ function rollbackSurfaceRegistries(surfaceId: SurfaceId, spec: SurfaceSpecInput)
 }
 
 function surfaceKindForSpec(spec: SurfaceSpecInput): SurfaceKind {
-  if (spec.kind === 'terminal') return { type: 'terminal' };
-  if (spec.kind === 'browser') return { type: 'browser', initial_url: spec.url };
-  return { type: 'extension', entry: toEntry(spec.html) };
+  if (spec.kind === 'terminal') return { type: 'terminal', cwd: spec.cwd };
+  if (spec.kind === 'browser') return { type: 'browser', initial_url: spec.url, cwd: spec.cwd };
+  return { type: 'extension', entry: toEntry(spec.html), cwd: spec.cwd };
 }
 
 function controlSurface(
   surfaceId: SurfaceId,
   spec: SurfaceSpecInput,
 ):
+  | { kind: 'terminal'; cwd?: string; name?: string; surface_id: string }
   | {
       kind: 'extension';
       entry: string;
+      cwd?: string;
       name?: string;
       surface_id: string;
       extension_name?: string;
     }
-  | { kind: 'browser'; url: string; name?: string; surface_id: string } {
-  if (spec.kind === 'browser') {
-    return { kind: 'browser', url: spec.url, name: spec.name, surface_id: surfaceId };
+  | { kind: 'browser'; url: string; cwd?: string; name?: string; surface_id: string } {
+  if (spec.kind === 'terminal') {
+    return { kind: 'terminal', cwd: spec.cwd, name: spec.name, surface_id: surfaceId };
   }
-  // TODO: terminal splits over the control socket are not supported in #2/#3; a future op should carry a terminal kind instead of this extension fallback.
-  if (spec.kind !== 'extension') {
-    return { kind: 'extension', entry: '', name: spec.name, surface_id: surfaceId };
+  if (spec.kind === 'browser') {
+    return {
+      kind: 'browser',
+      url: spec.url,
+      cwd: spec.cwd,
+      name: spec.name,
+      surface_id: surfaceId,
+    };
   }
   return {
     kind: 'extension',
     entry: toEntry(spec.html),
+    cwd: spec.cwd,
     name: spec.name,
     surface_id: surfaceId,
     extension_name: requireExtensionName(),
   };
 }
+
+/** @internal Test-only export of {@link controlSurface}. */
+export const __test_controlSurface = controlSurface;
 
 // `EXTENSION_NAME` is set once by the bootstrap before any user code runs
 // and never changes for the lifetime of the process. Cache the resolved value

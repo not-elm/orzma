@@ -3,9 +3,9 @@ import { callControl } from './control-client.ts';
 export type SurfaceId = string;
 
 export type SurfaceKind =
-  | { type: 'terminal' }
-  | { type: 'extension'; entry: string; extension_name?: string }
-  | { type: 'browser'; initial_url?: string };
+  | { type: 'terminal'; cwd?: string }
+  | { type: 'extension'; entry: string; extension_name?: string; cwd?: string }
+  | { type: 'browser'; initial_url?: string; cwd?: string };
 
 /**
  * Lightweight client-side handle to a Surface. Carries the addressing tuple

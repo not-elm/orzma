@@ -1597,6 +1597,8 @@ dependencies = [
  "bevy",
  "bevy_terminal_renderer",
  "crossbeam-channel",
+ "gethostname",
+ "percent-encoding",
  "portable-pty",
  "tracing",
  "unicode-width",

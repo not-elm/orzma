@@ -7,7 +7,11 @@ import { __resetSurfaceChannelsForTests } from './channels-server.ts';
 import * as controlClient from './control-client.ts';
 import * as handlersServer from './handlers-server.ts';
 import { __resetSurfaceHandlersForTests } from './handlers-server.ts';
-import { __resetExtensionNameCacheForTests, Pane } from './pane.ts';
+import {
+  __resetExtensionNameCacheForTests,
+  __test_controlSurface as controlSurface,
+  Pane,
+} from './pane.ts';
 import { Surface } from './surface.ts';
 
 function tmpSock(): string {
@@ -376,5 +380,39 @@ describe('Surface.activate', () => {
     expect(op).toBe('activate');
     expect(paneId).toBe('p1');
     expect(params.surface_id).toBe('act-9');
+  });
+});
+
+describe('controlSurface terminal', () => {
+  it('encodes a terminal surface carrying cwd (not the extension stub)', () => {
+    const out = controlSurface('sid-1', { kind: 'terminal', cwd: '/work' });
+    expect(out).toEqual({ kind: 'terminal', cwd: '/work', name: undefined, surface_id: 'sid-1' });
+  });
+});
+
+describe('controlSurface non-terminal cwd', () => {
+  it('encodes a browser surface carrying cwd', () => {
+    const out = controlSurface('sid-b', { kind: 'browser', url: 'github.com', cwd: '/work' });
+    expect(out).toEqual({
+      kind: 'browser',
+      url: 'github.com',
+      cwd: '/work',
+      name: undefined,
+      surface_id: 'sid-b',
+    });
+  });
+
+  it('encodes an extension surface carrying cwd', () => {
+    const out = controlSurface('sid-e', {
+      kind: 'extension',
+      html: '/x/memo/index.html',
+      cwd: '/work',
+    });
+    expect(out).toMatchObject({
+      kind: 'extension',
+      cwd: '/work',
+      extension_name: 'memo',
+      surface_id: 'sid-e',
+    });
   });
 });

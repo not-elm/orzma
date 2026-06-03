@@ -1,8 +1,8 @@
 //! `EntityEvent` types for terminal entities — both outbound events
 //! triggered by this crate (`TerminalBell`, `TerminalTitleChanged`,
-//! `TerminalModeChanged`, `TerminalClipboardStore`, `TerminalChildExit`)
-//! and inbound commands triggered by the host UI and observed by
-//! `TerminalHandlePlugin` (`TerminalKeyInput`).
+//! `TerminalModeChanged`, `TerminalClipboardStore`, `TerminalChildExit`,
+//! `TerminalCurrentDir`) and inbound commands triggered by the host UI
+//! and observed by `TerminalHandlePlugin` (`TerminalKeyInput`).
 //!
 //! Frame events (`FrameSnapshot`, `FrameDelta`) come from
 //! `bevy_terminal_renderer::schema` and are emitted via
@@ -12,6 +12,7 @@
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
+use std::path::PathBuf;
 
 /// Fired when alacritty raises `Event::Bell`. Best-effort — no
 /// back-pressure observability (control channel is unbounded).
@@ -55,6 +56,15 @@ pub struct TerminalChildExit {
     #[event_target]
     pub entity: Entity,
     pub code: Option<i32>,
+}
+
+/// Fired when a terminal reports a new current working directory via OSC 7.
+/// Targets the terminal host entity; carries the validated absolute path.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct TerminalCurrentDir {
+    #[event_target]
+    pub entity: Entity,
+    pub path: PathBuf,
 }
 
 /// Subset of keys the terminal input codec understands. Keeps the public

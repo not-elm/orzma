@@ -81,6 +81,10 @@ pub struct SurfaceSpec {
     /// are registered under). The bridge addresses `{surface_id, frame}` envelopes
     /// with this.
     pub surface_id: String,
+    /// Initial working directory for the surface (any kind). Seeds a terminal
+    /// surface's `Cwd`.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// Protocol-side surface kind.
@@ -104,6 +108,8 @@ pub enum SurfaceKindSpec {
         /// Raw user input (a URL or search words).
         url: String,
     },
+    /// A PTY-backed terminal surface.
+    Terminal,
 }
 
 /// Successful reply payload per op.
@@ -367,6 +373,23 @@ mod tests {
             panic!("expected Activate")
         };
         assert_eq!(p.surface_id, "aid-9");
+    }
+
+    #[test]
+    fn deserializes_terminal_surface_with_cwd() {
+        let json = r#"{"kind":"terminal","cwd":"/work","surface_id":"abc"}"#;
+        let spec: SurfaceSpec = serde_json::from_str(json).unwrap();
+        assert!(matches!(spec.kind, SurfaceKindSpec::Terminal));
+        assert_eq!(spec.cwd.as_deref(), Some("/work"));
+        assert_eq!(spec.surface_id, "abc");
+    }
+
+    #[test]
+    fn deserializes_terminal_surface_without_cwd() {
+        let json = r#"{"kind":"terminal","surface_id":"abc"}"#;
+        let spec: SurfaceSpec = serde_json::from_str(json).unwrap();
+        assert!(matches!(spec.kind, SurfaceKindSpec::Terminal));
+        assert_eq!(spec.cwd, None);
     }
 
     #[test]
