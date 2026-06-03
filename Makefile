@@ -6,7 +6,7 @@ CARGO_BIN_DIR := $(if $(CARGO_HOME),$(CARGO_HOME)/bin,$(HOME)/.cargo/bin)
 # bevy_cef (ozmux-gui) CEF integration. The version is pinned by bevy_cef's
 # `cef` workspace dep; keep these in sync with /Users/watanabe/workspace/bevy_cef.
 CEF_VERSION := 145.6.1+145.0.28
-CEF_FRAMEWORK_LIB := $(HOME)/.local/share/Chromium Embedded Framework.framework/Libraries
+CEF_FRAMEWORK_LIB := $(HOME)/.local/share/cef/Chromium Embedded Framework.framework/Libraries
 CEF_DEBUG_RENDER_PROCESS := bevy_cef_debug_render_process
 
 help:
@@ -25,7 +25,7 @@ build:
 
 setup-cef:
 	cargo install export-cef-dir@$(CEF_VERSION) --force
-	export-cef-dir --force "$(HOME)/.local/share"
+	export-cef-dir --force "$(HOME)/.local/share/cef"
 	cargo install $(CEF_DEBUG_RENDER_PROCESS)
 	cp "$(CARGO_BIN_DIR)/$(CEF_DEBUG_RENDER_PROCESS)" "$(CEF_FRAMEWORK_LIB)/$(CEF_DEBUG_RENDER_PROCESS)"
 
