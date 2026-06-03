@@ -44,6 +44,11 @@ pub const TAB_BORDER_RADIUS_PX: f32 = 4.0;
 /// Top indicator thickness on the active pane tab.
 pub const TAB_INDICATOR_PX: f32 = 2.0;
 pub const BORDER_PX: f32 = 1.0;
+/// Maximum width of a single pane tab. Long CWD paths are front-ellipsized
+/// to fit and hard-clipped at this width so a tab never spans the bar.
+pub const TAB_MAX_WIDTH_PX: f32 = 220.0;
+/// Character budget for a terminal tab's CWD label before front-ellipsis.
+pub const TAB_LABEL_MAX_CHARS: usize = 28;
 
 /// Background color of the copy-mode indicator chip. tmux-style bright
 /// yellow so the chip reads as a deliberate HUD element on top of the
