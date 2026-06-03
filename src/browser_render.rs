@@ -1137,17 +1137,17 @@ mod tests {
 
     #[test]
     fn attach_injects_vim_scroll_preload() {
-        use crate::ui::HostActivityEntity;
-        use ozmux_multiplexer::ActivityKind;
+        use crate::ui::HostSurfaceEntity;
+        use ozmux_multiplexer::SurfaceKind;
         let mut app = make_test_app();
         app.add_systems(
             Update,
             (build_browser_chrome, attach_browser_webview).chain(),
         );
 
-        let activity = app
+        let surface = app
             .world_mut()
-            .spawn(ActivityKind::Browser {
+            .spawn(SurfaceKind::Browser {
                 initial_url: Some("github.com".into()),
                 profile: Default::default(),
             })
@@ -1155,8 +1155,8 @@ mod tests {
         let host = app
             .world_mut()
             .spawn((
-                BrowserActivityMarker,
-                HostActivityEntity(activity),
+                BrowserSurfaceMarker,
+                HostSurfaceEntity(surface),
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
