@@ -10,16 +10,16 @@ use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::terminal::resolve_pane_session;
 use crate::ui::{
-    SurfaceHostNode, HostSurfaceEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot,
-    StructuralNode, TerminalSurfaceMarker,
+    HostSurfaceEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot, StructuralNode,
+    SurfaceHostNode, TerminalSurfaceMarker,
 };
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActiveSurface, ActivePane, SurfaceKind, SurfaceMarker, AttachedSession, Cell, LayoutCells,
-    PaneMarker, SessionMarker, SessionUiSubtree,
+    ActivePane, ActiveSurface, AttachedSession, Cell, LayoutCells, PaneMarker, SessionMarker,
+    SessionUiSubtree, SurfaceKind, SurfaceMarker,
 };
 
 pub struct OzmuxSessionUiPlugin;
@@ -306,8 +306,7 @@ fn sync_terminal_dim_on_focus(
     let dim_factor = inactive_dim_factor(configs.as_deref());
     for (session, active) in changed_sessions.iter() {
         for (host, host_surface) in hosts.iter() {
-            let Some((pane, host_session)) = resolve_pane_session(host_surface.0, &child_of)
-            else {
+            let Some((pane, host_session)) = resolve_pane_session(host_surface.0, &child_of) else {
                 continue;
             };
             if host_session != session {
@@ -558,7 +557,7 @@ mod tests {
     #[test]
     fn in_pane_surface_add_triggers_rebuild_via_session_ui_dirty() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{SurfaceKind, AttachedSession, MultiplexerCommands};
+        use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SurfaceKind};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
@@ -603,7 +602,7 @@ mod tests {
     #[test]
     fn inactive_surface_within_active_session_parks_under_session_entity() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{SurfaceKind, AttachedSession, MultiplexerCommands};
+        use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SurfaceKind};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();

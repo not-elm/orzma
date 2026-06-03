@@ -7,7 +7,7 @@
 
 use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
-use crate::ui::{HostSurfaceEntity, TerminalSurfaceMarker, TerminalSpawnFailed};
+use crate::ui::{HostSurfaceEntity, TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal::{Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalHandle};

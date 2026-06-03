@@ -6,7 +6,7 @@
 //! split/focus changes.
 
 use crate::ui::{
-    SurfaceHostNode, BrowserSurfaceMarker, ExtensionSurfaceMarker, HostSurfaceEntity,
+    BrowserSurfaceMarker, ExtensionSurfaceMarker, HostSurfaceEntity, SurfaceHostNode,
     TerminalSurfaceMarker,
 };
 use bevy::prelude::*;

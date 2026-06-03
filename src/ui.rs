@@ -17,7 +17,6 @@ use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use bevy::prelude::*;
 
-pub(crate) mod surface;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
@@ -30,6 +29,7 @@ pub mod status_bar;
 pub mod status_bar_sync;
 #[cfg(test)]
 pub(crate) mod stress_test;
+pub(crate) mod surface;
 pub mod tab_bar;
 pub(crate) mod tab_input;
 pub mod terminal;
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn inactive_surface_host_persists_across_focus_switch() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{SurfaceKind, MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, SurfaceKind};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -727,7 +727,7 @@ mod tests {
     #[test]
     fn extension_pane_keeps_pickable_ignore_veil() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{SurfaceKind, LayoutCells, MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{LayoutCells, MultiplexerCommands, SessionMarker, SurfaceKind};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {

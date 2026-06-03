@@ -5,15 +5,15 @@
 //! pair so that `lhs_weight == rhs_weight == 0` falls back to 0.5/0.5.
 
 use crate::theme;
-use crate::ui::surface::build_surface_host_children;
 use crate::ui::registry::SurfaceEntityRegistry;
+use crate::ui::surface::build_surface_host_children;
 use crate::ui::tab_bar::{TabEntry, build_pane_tab_bar};
 use crate::ui::{PaneDimOverlay, PaneFrame, StructuralNode, VisibleSurfaceHost, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, PositionType, UiRect, Val};
 use ozmux_multiplexer::{
-    ActiveSurface, SurfaceKind, SurfaceMarker, Cell, CellId, LayoutCellState, PaneMarker,
-    SplitOrientation,
+    ActiveSurface, Cell, CellId, LayoutCellState, PaneMarker, SplitOrientation, SurfaceKind,
+    SurfaceMarker,
 };
 
 /// Convert `(lhs_weight, rhs_weight)` into the `flex_grow` pair to set on

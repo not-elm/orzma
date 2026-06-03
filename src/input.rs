@@ -7,10 +7,10 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
-use crate::action::close_surface::CloseSurfaceActionEvent;
 use crate::action::close_pane::ClosePaneActionEvent;
-use crate::action::focus_surface::FocusSurfaceActionEvent;
+use crate::action::close_surface::CloseSurfaceActionEvent;
 use crate::action::focus_pane::FocusPaneActionEvent;
+use crate::action::focus_surface::FocusSurfaceActionEvent;
 use crate::action::new_terminal_surface::NewTerminalSurfaceActionEvent;
 use crate::action::session::{FocusSessionActionEvent, FocusSessionTarget, NewSessionActionEvent};
 use crate::action::split_pane::SplitPaneActionEvent;
@@ -28,8 +28,8 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
-    SurfaceOffset as ConfigSurfaceOffset, Direction as ConfigDirection, KeyChord, Modifiers,
-    SessionOffset, ShortcutAction, SplitDirection, SwapOffset as ConfigSwapOffset,
+    Direction as ConfigDirection, KeyChord, Modifiers, SessionOffset, ShortcutAction,
+    SplitDirection, SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset,
 };
 use ozmux_multiplexer::{
     AttachedSession, CycleDirection, MultiplexerCommands, PaneDirection, SessionMarker,
@@ -1203,10 +1203,7 @@ mod tests {
     fn cap_split(_: On<SplitPaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
         c.0.push("SplitPane");
     }
-    fn cap_new_surface(
-        _: On<NewTerminalSurfaceActionEvent>,
-        mut c: ResMut<CapturedActionEvents>,
-    ) {
+    fn cap_new_surface(_: On<NewTerminalSurfaceActionEvent>, mut c: ResMut<CapturedActionEvents>) {
         c.0.push("NewTerminalSurface");
     }
     fn cap_focus_pane(_: On<FocusPaneActionEvent>, mut c: ResMut<CapturedActionEvents>) {
