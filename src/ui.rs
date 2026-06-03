@@ -646,6 +646,35 @@ mod tests {
             .collect()
     }
 
+    /// Headless-safe terminal mount. `finish_terminal_setup` spawns the shell
+    /// from `$SHELL` (default `/bin/zsh`), which fails on runners lacking it
+    /// (e.g. Linux CI), leaving the host with no `MaterialNode` — so
+    /// `sync_terminal_dim_on_mount` never assigns `PaneDim`. Stub the render
+    /// material on any terminal host that did not really mount, then tick so the
+    /// dim systems run; a host that mounted for real already carries a material.
+    fn mount_terminal_hosts(app: &mut App) {
+        let hosts: Vec<Entity> = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, (
+                    With<TerminalSurfaceMarker>,
+                    Without<MaterialNode<TerminalUiMaterial>>,
+                )>()
+                .iter(world)
+                .collect()
+        };
+        for host in hosts {
+            let handle = app
+                .world_mut()
+                .resource_mut::<Assets<TerminalUiMaterial>>()
+                .add(TerminalUiMaterial::default());
+            app.world_mut()
+                .entity_mut(host)
+                .insert(MaterialNode(handle));
+        }
+        app.update();
+    }
+
     #[test]
     fn split_dims_inactive_terminal_keeps_active_bright() {
         use bevy::ecs::system::RunSystemOnce;
@@ -670,6 +699,7 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
+        mount_terminal_hosts(&mut app);
 
         let active_pane = app
             .world_mut()
@@ -707,6 +737,7 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
+        mount_terminal_hosts(&mut app);
 
         let world = app.world_mut();
         let overlay_count = world.query::<&PaneDimOverlay>().iter(world).count();
@@ -818,6 +849,7 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
+        mount_terminal_hosts(&mut app);
 
         let world = app.world_mut();
         let overlay_count = world.query::<&PaneDimOverlay>().iter(world).count();
@@ -857,6 +889,7 @@ mod tests {
         for _ in 0..4 {
             app.update();
         }
+        mount_terminal_hosts(&mut app);
 
         let (session, target_pane) = app
             .world_mut()
