@@ -85,7 +85,7 @@ impl Plugin for ExtensionControlPlugin {
 pub fn terminal_env(
     extensions: &[&CommandExtension],
     pane: Entity,
-    session: Entity,
+    workspace: Entity,
 ) -> Vec<(String, String)> {
     let current = std::env::var("PATH").unwrap_or_default();
     let bins: Vec<PathBuf> = extensions
@@ -95,7 +95,7 @@ pub fn terminal_env(
     let mut env = vec![
         ("PATH".into(), extension_path_prefix(&bins, &current)),
         ("OZMUX_PANE_ID".into(), pane.to_bits().to_string()),
-        ("OZMUX_SESSION_ID".into(), session.to_bits().to_string()),
+        ("OZMUX_SESSION_ID".into(), workspace.to_bits().to_string()),
     ];
     if let Some(first) = extensions.first() {
         env.push((
@@ -134,7 +134,7 @@ pub fn apply_control_request(
 
 fn resolve_pane(mux: &MultiplexerCommands, pane_bits: u64) -> Result<Entity, ControlError> {
     Entity::try_from_bits(pane_bits)
-        .filter(|e| mux.session_of_pane(*e).is_some())
+        .filter(|e| mux.workspace_of_pane(*e).is_some())
         .ok_or_else(|| ControlError {
             code: "pane_not_found".into(),
             message: format!("no live pane for bits {pane_bits}"),
@@ -274,7 +274,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::bounded;
-    use ozmux_multiplexer::{MultiplexerCommands, SessionNameCounter, SurfaceKind, SurfaceMarker};
+    use ozmux_multiplexer::{MultiplexerCommands, WorkspaceNameCounter, SurfaceKind, SurfaceMarker};
 
     fn split_request(pane_bits: u64) -> ControlRequest {
         ControlRequest {
@@ -333,9 +333,9 @@ mod tests {
     #[test]
     fn handles_split_and_creates_browser_pane_without_extension_components() {
         let mut world = World::new();
-        world.init_resource::<SessionNameCounter>();
+        world.init_resource::<WorkspaceNameCounter>();
         let created = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let pane_bits = created.pane.to_bits();
 
@@ -382,9 +382,9 @@ mod tests {
     #[test]
     fn handles_split_and_creates_extension_pane() {
         let mut world = World::new();
-        world.init_resource::<SessionNameCounter>();
+        world.init_resource::<WorkspaceNameCounter>();
         let created = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let pane_bits = created.pane.to_bits();
 
@@ -433,9 +433,9 @@ mod tests {
     #[test]
     fn unknown_pane_bits_yield_pane_not_found() {
         let mut world = World::new();
-        world.init_resource::<SessionNameCounter>();
+        world.init_resource::<WorkspaceNameCounter>();
         world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let (resp_tx, resp_rx) = bounded(1);
         // NOTE: wrap in Option so the closure is FnMut; consumed on first call.
@@ -458,9 +458,9 @@ mod tests {
     #[test]
     fn handles_add_surface_on_existing_pane() {
         let mut world = World::new();
-        world.init_resource::<SessionNameCounter>();
+        world.init_resource::<WorkspaceNameCounter>();
         let created = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let pane_bits = created.pane.to_bits();
         let (tx, rx) = bounded(1);
@@ -496,9 +496,9 @@ mod tests {
     #[test]
     fn handles_activate_repoints_active_surface() {
         let mut world = World::new();
-        world.init_resource::<SessionNameCounter>();
+        world.init_resource::<WorkspaceNameCounter>();
         let created = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let pane = created.pane;
         let second = world
@@ -536,9 +536,9 @@ mod tests {
     #[test]
     fn terminal_split_with_cwd_seeds_cwd_component() {
         let mut world = World::new();
-        world.init_resource::<SessionNameCounter>();
+        world.init_resource::<WorkspaceNameCounter>();
         let created = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let pane_bits = created.pane.to_bits();
 
@@ -595,9 +595,9 @@ mod tests {
     #[test]
     fn browser_split_with_cwd_seeds_cwd_component() {
         let mut world = World::new();
-        world.init_resource::<SessionNameCounter>();
+        world.init_resource::<WorkspaceNameCounter>();
         let created = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let pane_bits = created.pane.to_bits();
 
@@ -656,12 +656,12 @@ mod tests {
     #[test]
     fn activate_rejects_surface_not_in_pane() {
         let mut world = World::new();
-        world.init_resource::<SessionNameCounter>();
+        world.init_resource::<WorkspaceNameCounter>();
         let first = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let second = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         world.flush();
         let active_before = world
@@ -670,7 +670,7 @@ mod tests {
 
         let (tx, rx) = bounded(1);
         let mut tx = Some(tx);
-        // Try to activate session 2's surface on session 1's pane.
+        // Try to activate workspace 2's surface on workspace 1's pane.
         let mut req = Some(ControlRequest {
             pane_bits: first.pane.to_bits(),
             op: ControlOp::Activate(crate::control::ActivateParams {
