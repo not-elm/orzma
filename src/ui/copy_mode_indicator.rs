@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn chip_survives_structural_rebuild() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
 
         let (mut app, _guard) = make_ui_test_app();
         app.update();
@@ -451,12 +451,12 @@ mod tests {
             (child_of.parent(), chip)
         };
 
-        // Rebuild structure by renaming the attached session via ECS-native API.
+        // Rebuild structure by renaming the attached workspace via ECS-native API.
         app.world_mut()
             .run_system_once(
-                |mut mux: MultiplexerCommands, sessions: Query<Entity, With<SessionMarker>>| {
-                    let session = sessions.iter().next().expect("session");
-                    mux.rename_session(session, "renamed".into()).unwrap();
+                |mut mux: MultiplexerCommands, workspaces: Query<Entity, With<WorkspaceMarker>>| {
+                    let workspace = workspaces.iter().next().expect("workspace");
+                    mux.rename_workspace(workspace, "renamed".into()).unwrap();
                 },
             )
             .unwrap();
@@ -482,7 +482,7 @@ mod tests {
     fn inactive_host_parent_is_walker_skipped_session_entity() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{
-            AttachedSession, LayoutCells, MultiplexerCommands, SessionMarker, SurfaceKind,
+            AttachedWorkspace, LayoutCells, MultiplexerCommands, WorkspaceMarker, SurfaceKind,
         };
 
         let (mut app, _guard) = make_ui_test_app();
@@ -490,19 +490,19 @@ mod tests {
         app.update();
         app.update();
 
-        let (session, pane, first_surface) = app
+        let (workspace, pane, first_surface) = app
             .world_mut()
             .run_system_once(
                 |mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next()?;
-                    let pane = mux.sessions_active_pane(session)?;
+                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
+                    let workspace = workspaces.iter().next()?;
+                    let pane = mux.workspaces_active_pane(workspace)?;
                     let surface = mux.panes_active_surface(pane)?;
-                    Some((session, pane, surface))
+                    Some((workspace, pane, surface))
                 },
             )
             .unwrap()
-            .expect("bootstrap session + pane + surface");
+            .expect("bootstrap workspace + pane + surface");
 
         let first_host = app
             .world()
@@ -525,7 +525,7 @@ mod tests {
             .unwrap();
 
         app.world_mut()
-            .entity_mut(session)
+            .entity_mut(workspace)
             .get_mut::<LayoutCells>()
             .expect("LayoutCells")
             .set_changed();
@@ -534,13 +534,13 @@ mod tests {
         let first_host_parent = app.world().get::<ChildOf>(first_host).map(|c| c.parent());
         assert_eq!(
             first_host_parent,
-            Some(session),
-            "inactive surface host must be parked under the session entity (no Node, walker-skipped)"
+            Some(workspace),
+            "inactive surface host must be parked under the workspace entity (no Node, walker-skipped)"
         );
 
         assert!(
-            app.world().get::<Node>(session).is_none(),
-            "session entity must not carry a Node component (UI walker skip requires it)"
+            app.world().get::<Node>(workspace).is_none(),
+            "workspace entity must not carry a Node component (UI walker skip requires it)"
         );
     }
 }

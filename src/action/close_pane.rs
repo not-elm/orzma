@@ -16,13 +16,13 @@ impl Plugin for ClosePaneActionPlugin {
 #[derive(EntityEvent, Debug)]
 pub struct ClosePaneActionEvent {
     #[event_target]
-    pub session: Entity,
+    pub workspace: Entity,
 }
 
 fn apply_close_pane(trigger: On<ClosePaneActionEvent>, mut mux: MultiplexerCommands) {
-    let ClosePaneActionEvent { session } = trigger.event();
-    let Some(active_pane) = mux.sessions_active_pane(*session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "ClosePane: session vanished");
+    let ClosePaneActionEvent { workspace } = trigger.event();
+    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "ClosePane: workspace vanished");
         return;
     };
     if let Err(err) = mux.close_pane(active_pane) {
@@ -48,7 +48,7 @@ mod tests {
     fn bootstrap_session(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("test".into())).session
+                mux.create_workspace(Some("test".into())).workspace
             })
             .unwrap()
     }
@@ -56,25 +56,25 @@ mod tests {
     #[test]
     fn close_pane_event_removes_pane_and_promotes_survivor() {
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_session(app.world_mut());
         // Split so there are 2 panes.
         let original_pane = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                let original = mux.sessions_active_pane(session).unwrap();
+                let original = mux.workspaces_active_pane(workspace).unwrap();
                 mux.split_pane(original, Side::After, SplitOrientation::Horizontal)
                     .unwrap();
                 original
             })
             .unwrap();
         app.world_mut().flush();
-        let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let active_before = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         assert_ne!(active_before, original_pane, "split must promote new pane");
 
-        app.world_mut().trigger(ClosePaneActionEvent { session });
+        app.world_mut().trigger(ClosePaneActionEvent { workspace });
         app.world_mut().flush();
 
-        let active_after = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let active_after = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         assert_ne!(
             active_after, active_before,
             "active pane should change after close"
@@ -84,16 +84,16 @@ mod tests {
     #[test]
     fn close_pane_event_in_single_pane_session_is_a_noop() {
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_session(app.world_mut());
         let pane_count_before = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_session(session).count())
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_workspace(workspace).count())
             .unwrap();
-        app.world_mut().trigger(ClosePaneActionEvent { session });
+        app.world_mut().trigger(ClosePaneActionEvent { workspace });
         app.world_mut().flush();
         let pane_count_after = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_session(session).count())
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_workspace(workspace).count())
             .unwrap();
         assert_eq!(pane_count_after, pane_count_before);
     }
@@ -101,11 +101,11 @@ mod tests {
     #[test]
     fn close_pane_event_on_vanished_session_is_a_noop() {
         let mut app = setup_app();
-        let bogus = app.world_mut().spawn(ozmux_multiplexer::SessionMarker).id();
+        let bogus = app.world_mut().spawn(ozmux_multiplexer::WorkspaceMarker).id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
         app.world_mut()
-            .trigger(ClosePaneActionEvent { session: bogus });
+            .trigger(ClosePaneActionEvent { workspace: bogus });
         app.world_mut().flush();
     }
 }

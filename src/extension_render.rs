@@ -15,7 +15,7 @@ use ozmux_extension_host::HandlersBridge;
 use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
-    AttachedSession, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SessionMarker,
+    AttachedWorkspace, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, WorkspaceMarker,
     SurfaceKind,
 };
 
@@ -138,7 +138,7 @@ impl Plugin for OzmuxExtensionRenderPlugin {
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     mux: MultiplexerCommands,
-    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: Res<SurfaceEntityRegistry>,
     webviews: Query<(), With<WebviewSource>>,
     browser_hosts: Query<&BrowserPageWebview>,
@@ -147,7 +147,7 @@ fn sync_focused_webview(
     let bar_focused_host = address_focus.as_ref().and_then(|f| f.0);
     let active = active_webview(
         &mux,
-        &attached_session,
+        &attached_workspace,
         &registry,
         &webviews,
         &browser_hosts,
@@ -166,14 +166,14 @@ fn sync_focused_webview(
 /// when `bar_focused_host` matches the host, returns `None` to release CEF focus.
 fn active_webview(
     mux: &MultiplexerCommands,
-    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: &SurfaceEntityRegistry,
     webviews: &Query<(), With<WebviewSource>>,
     browser_hosts: &Query<&BrowserPageWebview>,
     bar_focused_host: Option<Entity>,
 ) -> Option<Entity> {
-    let session = attached_session.iter().next()?;
-    let pane = mux.sessions_active_pane(session)?;
+    let workspace = attached_workspace.iter().next()?;
+    let pane = mux.workspaces_active_pane(workspace)?;
     let surface = mux.panes_active_surface(pane)?;
     let host = registry.get(surface)?;
     if webviews.contains(host) {
@@ -228,7 +228,7 @@ fn finish_extension_setup(
         else {
             continue;
         };
-        let Some((session, pane, surface)) = host_multiplexer_chain(host, &surface_hosts, &mux)
+        let Some((workspace, pane, surface)) = host_multiplexer_chain(host, &surface_hosts, &mux)
         else {
             continue;
         };
@@ -255,7 +255,7 @@ fn finish_extension_setup(
         // render process. PreloadScripts are eval'd at on_context_created inside an
         // entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
-        let ctx_js = context_preload_js(session, pane, surface, name);
+        let ctx_js = context_preload_js(workspace, pane, surface, name);
         commands.entity(host).insert((
             WebviewSource::new(url),
             WebviewSize(logical),
@@ -265,9 +265,9 @@ fn finish_extension_setup(
     }
 }
 
-/// Resolves the `(session, pane, surface)` multiplexer entities backing an
+/// Resolves the `(workspace, pane, surface)` multiplexer entities backing an
 /// extension webview host: host → surface via `HostSurfaceEntity`, surface →
-/// pane via `pane_of_surface`, pane → session via `session_of_pane`. Returns
+/// pane via `pane_of_surface`, pane → workspace via `workspace_of_pane`. Returns
 /// `None` until every link exists (e.g. before the surface is laid out into a
 /// pane).
 fn host_multiplexer_chain(
@@ -277,8 +277,8 @@ fn host_multiplexer_chain(
 ) -> Option<(Entity, Entity, Entity)> {
     let surface = surface_hosts.get(host).ok()?.0;
     let pane = mux.pane_of_surface(surface)?;
-    let session = mux.session_of_pane(pane)?;
-    Some((session, pane, surface))
+    let workspace = mux.workspace_of_pane(pane)?;
+    Some((workspace, pane, surface))
 }
 
 /// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`.
@@ -286,12 +286,12 @@ fn host_multiplexer_chain(
 /// NOTE: PreloadScripts are joined with `;` and eval'd as one unit, so this MUST
 /// be a complete statement; a syntax error here would break the bridge eval too.
 fn context_preload_js(
-    session: Entity,
+    workspace: Entity,
     pane: Entity,
     surface: Entity,
     extension_name: &str,
 ) -> String {
-    let session_id = session.to_bits().to_string();
+    let session_id = workspace.to_bits().to_string();
     format!(
         "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:\"extension\",extensionName:{n:?}}};",
         s = session_id,
@@ -439,19 +439,19 @@ mod tests {
         app
     }
 
-    /// Spawns a session/pane/extension-surface chain and an extension host
+    /// Spawns a workspace/pane/extension-surface chain and an extension host
     /// entity carrying that surface via `HostSurfaceEntity`, returning the
-    /// `(host, session, pane, surface)` handles. `finish_extension_setup`
+    /// `(host, workspace, pane, surface)` handles. `finish_extension_setup`
     /// needs the chain to resolve the per-webview context. The surface is
     /// stamped with `SurfaceKind::Extension { entry: "ui/app.html" }` and
     /// `OwningExtension("memo")`.
     fn spawn_extension_host(app: &mut App, extra: impl Bundle) -> (Entity, Entity, Entity, Entity) {
         use std::path::PathBuf;
-        let (session, pane, surface) = app
+        let (workspace, pane, surface) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("t".into()));
-                (o.session, o.pane, o.surface)
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane, o.surface)
             })
             .unwrap();
         app.world_mut().entity_mut(surface).insert((
@@ -465,7 +465,7 @@ mod tests {
             .world_mut()
             .spawn((ExtensionSurfaceMarker, HostSurfaceEntity(surface), extra))
             .id();
-        (host, session, pane, surface)
+        (host, workspace, pane, surface)
     }
 
     #[test]
@@ -484,11 +484,11 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        let (session, terminal_pane) = app
+        let (workspace, terminal_pane) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("t".into()));
-                (o.session, o.pane)
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane)
             })
             .unwrap();
         app.world_mut().flush();
@@ -510,7 +510,7 @@ mod tests {
                 )
             })
             .unwrap();
-        app.world_mut().entity_mut(session).insert(AttachedSession);
+        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
 
         // Terminal host: no WebviewSource. Extension host: carries WebviewSource.
         let terminal_host = app.world_mut().spawn_empty().id();
@@ -527,7 +527,7 @@ mod tests {
         let set_active = move |app: &mut App, pane: Entity| {
             app.world_mut()
                 .run_system_once(move |mut mux: MultiplexerCommands| {
-                    mux.set_active_pane(session, pane).expect("set_active_pane");
+                    mux.set_active_pane(workspace, pane).expect("set_active_pane");
                 })
                 .unwrap();
             app.world_mut().flush();
@@ -631,7 +631,7 @@ mod tests {
         let surface = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("t".into())).surface
+                mux.create_workspace(Some("t".into())).surface
             })
             .unwrap();
         app.world_mut().flush();
@@ -717,17 +717,17 @@ mod tests {
         world
             .add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        let (session, pane, surface) = world
+        let (workspace, pane, surface) = world
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("t".into()));
-                (o.session, o.pane, o.surface)
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane, o.surface)
             })
             .unwrap();
         world.world_mut().flush();
 
-        let js = context_preload_js(session, pane, surface, "memo");
-        let s = session.to_bits().to_string();
+        let js = context_preload_js(workspace, pane, surface, "memo");
+        let s = workspace.to_bits().to_string();
         assert!(js.starts_with("window.__ozmuxContext="));
         assert!(js.ends_with("};"));
         assert!(js.contains(&format!("sessionId:\"{s}\"")));
@@ -828,15 +828,15 @@ mod tests {
         app.init_resource::<AddressBarFocus>();
         app.add_systems(Update, sync_focused_webview);
 
-        let (session, _pane, surface) = app
+        let (workspace, _pane, surface) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("t".into()));
-                (o.session, o.pane, o.surface)
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane, o.surface)
             })
             .unwrap();
         app.world_mut().flush();
-        app.world_mut().entity_mut(session).insert(AttachedSession);
+        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
 
         let child = app
             .world_mut()

@@ -1,8 +1,8 @@
 //! Spawns the singleton UiRoot Node and a 2D Camera under PrimaryWindow.
-//! Runs after bootstrap, but no longer depends on AttachedSession (which
-//! now lives on session entities, not on the OS window).
+//! Runs after bootstrap, but no longer depends on AttachedWorkspace (which
+//! now lives on workspace entities, not on the OS window).
 
-use crate::ui::{SessionUiRoot, UiRoot};
+use crate::ui::{WorkspaceUiRoot, UiRoot};
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, IsDefaultUiCamera, Val};
@@ -52,14 +52,14 @@ fn spawn_root_ui(mut commands: Commands) {
         .id();
 
     commands.spawn((
-        Name::new("Session UI Root"),
+        Name::new("Workspace UI Root"),
         Node {
             flex_grow: 1.0,
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
             ..default()
         },
-        SessionUiRoot,
+        WorkspaceUiRoot,
         ChildOf(ui_root_entity),
     ));
 }
@@ -67,7 +67,7 @@ fn spawn_root_ui(mut commands: Commands) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::SessionUiRoot;
+    use crate::ui::WorkspaceUiRoot;
     use bevy::window::{PrimaryWindow, WindowResolution};
 
     fn build_app() -> App {
@@ -86,21 +86,21 @@ mod tests {
     }
 
     #[test]
-    fn setup_spawns_session_ui_root_under_ui_root() {
+    fn setup_spawns_workspace_ui_root_under_ui_root() {
         let mut app = build_app();
         let world = app.world_mut();
         let ui_root = world
             .query_filtered::<Entity, With<crate::ui::UiRoot>>()
             .single(world)
             .expect("UiRoot present");
-        let session_ui_root = world
-            .query_filtered::<Entity, With<SessionUiRoot>>()
+        let workspace_ui_root = world
+            .query_filtered::<Entity, With<WorkspaceUiRoot>>()
             .single(world)
-            .expect("SessionUiRoot present");
+            .expect("WorkspaceUiRoot present");
         let parent = world
-            .get::<ChildOf>(session_ui_root)
-            .expect("SessionUiRoot has ChildOf")
+            .get::<ChildOf>(workspace_ui_root)
+            .expect("WorkspaceUiRoot has ChildOf")
             .parent();
-        assert_eq!(parent, ui_root, "SessionUiRoot must be a child of UiRoot");
+        assert_eq!(parent, ui_root, "WorkspaceUiRoot must be a child of UiRoot");
     }
 }

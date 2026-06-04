@@ -1,7 +1,7 @@
 //! Status bar Bevy UI builder. Spawns one Row Node containing one chip
-//! per Session, in the order provided by the caller (status_bar_sync
-//! sorts by `SessionCreatedAt` so chips appear in creation order with
-//! the oldest leftmost). The attached session's chip gets the accent
+//! per Workspace, in the order provided by the caller (status_bar_sync
+//! sorts by `WorkspaceCreatedAt` so chips appear in creation order with
+//! the oldest leftmost). The attached workspace's chip gets the accent
 //! color.
 
 use crate::theme;
@@ -12,14 +12,14 @@ use crate::ui::status_bar_sync::StatusBarRoot;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, AlignSelf, FlexDirection, UiRect, Val};
 
-/// Spawn the status bar as a child of `parent`. `sessions` is a slice of
-/// `(entity, name, is_attached)` tuples, one per Session entity, sorted
-/// by the caller. `attached_entity` is the Entity with `AttachedSession`,
+/// Spawn the status bar as a child of `parent`. `workspaces` is a slice of
+/// `(entity, name, is_attached)` tuples, one per Workspace entity, sorted
+/// by the caller. `attached_entity` is the Entity with `AttachedWorkspace`,
 /// used to accent the matching chip.
 pub(crate) fn build_status_bar(
     commands: &mut Commands,
     parent: Entity,
-    sessions: &[(Entity, String, bool)],
+    workspaces: &[(Entity, String, bool)],
     ui_font: &Handle<Font>,
 ) {
     let bar = commands
@@ -65,13 +65,13 @@ pub(crate) fn build_status_bar(
         ChildOf(bar),
     ));
 
-    build_session_chips(commands, bar, sessions, ui_font);
+    build_workspace_chips(commands, bar, workspaces, ui_font);
 }
 
-fn build_session_chips(
+fn build_workspace_chips(
     commands: &mut Commands,
     bar: Entity,
-    sessions: &[(Entity, String, bool)],
+    workspaces: &[(Entity, String, bool)],
     ui_font: &Handle<Font>,
 ) {
     let container = commands
@@ -90,7 +90,7 @@ fn build_session_chips(
         ))
         .id();
 
-    for (_entity, name, is_attached) in sessions {
+    for (_entity, name, is_attached) in workspaces {
         let font_color = if *is_attached {
             palette::COPY_MODE_INDICATOR_BG
         } else {

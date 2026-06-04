@@ -19,7 +19,7 @@ use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
 use bevy::window::{CursorIcon, Ime, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker, SurfaceKind};
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker, SurfaceKind};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
 /// Vimium-style scroll keybindings, injected into each browser page webview as
@@ -501,7 +501,7 @@ fn focus_address_bar_on_cmd_l(
     keys: Res<ButtonInput<KeyCode>>,
     mut focus: ResMut<AddressBarFocus>,
     mux: MultiplexerCommands,
-    attached: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: Res<crate::ui::registry::SurfaceEntityRegistry>,
     browser_hosts: Query<(), With<BrowserSurfaceMarker>>,
     mut edits: Query<(&mut AddressEdit, &BrowserToolbarState)>,
@@ -510,10 +510,10 @@ fn focus_address_bar_on_cmd_l(
     if !(cmd && keys.just_pressed(KeyCode::KeyL)) {
         return;
     }
-    let Some(session) = attached.iter().next() else {
+    let Some(workspace) = attached.iter().next() else {
         return;
     };
-    let Some(pane) = mux.sessions_active_pane(session) else {
+    let Some(pane) = mux.workspaces_active_pane(workspace) else {
         return;
     };
     let Some(surface) = mux.panes_active_surface(pane) else {
@@ -547,7 +547,7 @@ fn address_bar_is_focused(focus: Res<AddressBarFocus>) -> bool {
 fn blur_address_bar_on_focus_leave(
     mut focus: ResMut<AddressBarFocus>,
     mux: MultiplexerCommands,
-    attached: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: Res<crate::ui::registry::SurfaceEntityRegistry>,
     mouse: Res<ButtonInput<MouseButton>>,
     addr_bars: Query<&Interaction, With<AddrBarText>>,
@@ -948,7 +948,7 @@ mod tests {
         );
     }
 
-    /// Builds an app with one attached session whose active surface maps (in the
+    /// Builds an app with one attached workspace whose active surface maps (in the
     /// registry) to `host`, and the address bar focused on that same `host` — so
     /// `blur_address_bar_on_focus_leave`'s pane-left condition is false by default.
     fn focused_app_on_active_host() -> (App, Entity) {
@@ -962,15 +962,15 @@ mod tests {
         app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<ButtonInput<MouseButton>>();
 
-        let (session, _pane, surface) = app
+        let (workspace, _pane, surface) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("t".into()));
-                (o.session, o.pane, o.surface)
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane, o.surface)
             })
             .unwrap();
         app.world_mut().flush();
-        app.world_mut().entity_mut(session).insert(AttachedSession);
+        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
 
         let host = app.world_mut().spawn_empty().id();
         app.world_mut()

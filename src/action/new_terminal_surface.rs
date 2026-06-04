@@ -17,7 +17,7 @@ impl Plugin for NewTerminalSurfaceActionPlugin {
 #[derive(EntityEvent, Debug)]
 pub struct NewTerminalSurfaceActionEvent {
     #[event_target]
-    pub session: Entity,
+    pub workspace: Entity,
 }
 
 // NOTE: `mut mux` precedes `mut commands` so the new surface spawns before
@@ -28,9 +28,9 @@ fn apply_new_terminal_surface(
     mut commands: Commands,
     cwds: Query<&Cwd>,
 ) {
-    let NewTerminalSurfaceActionEvent { session } = trigger.event();
-    let Some(active_pane) = mux.sessions_active_pane(*session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "NewSurface: session vanished");
+    let NewTerminalSurfaceActionEvent { workspace } = trigger.event();
+    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "NewSurface: workspace vanished");
         return;
     };
     let seed = mux
@@ -61,7 +61,7 @@ mod tests {
     fn bootstrap_session(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("test".into())).session
+                mux.create_workspace(Some("test".into())).workspace
             })
             .unwrap()
     }
@@ -69,10 +69,10 @@ mod tests {
     #[test]
     fn new_terminal_surface_event_adds_and_activates_surface_on_active_pane() {
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let workspace = bootstrap_session(app.world_mut());
+        let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         app.world_mut()
-            .trigger(NewTerminalSurfaceActionEvent { session });
+            .trigger(NewTerminalSurfaceActionEvent { workspace });
         app.world_mut().flush();
         let surface_count = app
             .world_mut()
@@ -87,8 +87,8 @@ mod tests {
     fn new_surface_copies_active_surface_cwd() {
         use ozmux_multiplexer::Cwd;
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let workspace = bootstrap_session(app.world_mut());
+        let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         let src = app
             .world_mut()
             .run_system_once(move |mux: MultiplexerCommands| {
@@ -97,7 +97,7 @@ mod tests {
             .unwrap();
         app.world_mut().entity_mut(src).insert(Cwd("/tmp/x".into()));
         app.world_mut()
-            .trigger(NewTerminalSurfaceActionEvent { session });
+            .trigger(NewTerminalSurfaceActionEvent { workspace });
         app.world_mut().flush();
         let new = app
             .world_mut()
@@ -111,12 +111,12 @@ mod tests {
     #[test]
     fn new_terminal_surface_event_on_vanished_session_is_a_noop() {
         let mut app = setup_app();
-        let bogus = app.world_mut().spawn(ozmux_multiplexer::SessionMarker).id();
+        let bogus = app.world_mut().spawn(ozmux_multiplexer::WorkspaceMarker).id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
         // Triggering on a despawned entity must not panic and must not mutate state.
         app.world_mut()
-            .trigger(NewTerminalSurfaceActionEvent { session: bogus });
+            .trigger(NewTerminalSurfaceActionEvent { workspace: bogus });
         app.world_mut().flush();
     }
 }

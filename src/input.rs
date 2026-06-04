@@ -12,7 +12,7 @@ use crate::action::close_surface::CloseSurfaceActionEvent;
 use crate::action::focus_pane::FocusPaneActionEvent;
 use crate::action::focus_surface::FocusSurfaceActionEvent;
 use crate::action::new_terminal_surface::NewTerminalSurfaceActionEvent;
-use crate::action::session::{FocusSessionActionEvent, FocusSessionTarget, NewSessionActionEvent};
+use crate::action::workspace::{FocusWorkspaceActionEvent, FocusWorkspaceTarget, NewWorkspaceActionEvent};
 use crate::action::split_pane::SplitPaneActionEvent;
 use crate::action::swap_pane::SwapPaneActionEvent;
 use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
@@ -28,24 +28,24 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
-    Direction as ConfigDirection, KeyChord, Modifiers, SessionOffset, ShortcutAction,
+    Direction as ConfigDirection, KeyChord, Modifiers, WorkspaceOffset, ShortcutAction,
     SplitDirection, SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset,
 };
 use ozmux_multiplexer::{
-    AttachedSession, CycleDirection, MultiplexerCommands, PaneDirection, SessionMarker,
+    AttachedWorkspace, CycleDirection, MultiplexerCommands, PaneDirection, WorkspaceMarker,
     SplitOrientation, SwapOffset,
 };
 use std::collections::HashSet;
 
-/// Resolves the focused surface's entity via the attached session →
+/// Resolves the focused surface's entity via the attached workspace →
 /// multiplexer → registry chain.
 pub(crate) fn resolve_focused_terminal(
     mux: &MultiplexerCommands,
-    attached_session: &Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: &SurfaceEntityRegistry,
 ) -> Option<Entity> {
-    let session = attached_session.iter().next()?;
-    resolve_active_surface_entity(mux, session, registry)
+    let workspace = attached_workspace.iter().next()?;
+    resolve_active_surface_entity(mux, workspace, registry)
 }
 
 /// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
@@ -95,7 +95,7 @@ pub(crate) fn dispatch_focused_key(
     )>,
     mux: MultiplexerCommands,
     windows: Query<&Window>,
-    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
     registry: Res<SurfaceEntityRegistry>,
@@ -125,24 +125,24 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        let session = match attached_session.single() {
+        let workspace = match attached_workspace.single() {
             Ok(e) => e,
             Err(err) => {
                 // NOTE: silently dropping keystrokes here would be invisible to
                 // the user. The invariant 'exactly one entity carries
-                // AttachedSession' is enforced by bootstrap and the observers in
-                // `crate::action::session`; if it's violated we want a loud
+                // AttachedWorkspace' is enforced by bootstrap and the observers in
+                // `crate::action::workspace`; if it's violated we want a loud
                 // signal in the log so the failure mode is observable.
                 tracing::warn!(
                     target: "ozmux_gui::input",
                     ?err,
-                    "attached_session.single() failed; dropping keystroke (AttachedSession invariant violated)"
+                    "attached_workspace.single() failed; dropping keystroke (AttachedWorkspace invariant violated)"
                 );
                 continue;
             }
         };
 
-        let active_pane = mux.sessions_active_pane(session);
+        let active_pane = mux.workspaces_active_pane(workspace);
         let active_surface = active_pane.and_then(|p| mux.panes_active_surface(p));
         let focused_entity = active_surface.and_then(|a| registry.get(a));
 
@@ -188,7 +188,7 @@ pub(crate) fn dispatch_focused_key(
                 if ev.repeat {
                     continue;
                 }
-                execute_action(&mut commands, &mux, action, session, &registry);
+                execute_action(&mut commands, &mux, action, workspace, &registry);
                 continue;
             }
         }
@@ -198,7 +198,7 @@ pub(crate) fn dispatch_focused_key(
                 &mut commands,
                 &mux,
                 &registry,
-                session,
+                workspace,
                 tk,
                 shortcut_mods_to_terminal_mods(&mods),
             );
@@ -284,86 +284,86 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
     })
 }
 
-/// Executes a resolved `ShortcutAction` for the given session entity by
+/// Executes a resolved `ShortcutAction` for the given workspace entity by
 /// triggering the matching action `EntityEvent`.
 ///
 /// This is the single shortcut-dispatch point: copy-mode / clipboard
-/// actions target the active Terminal Surface; session and pane/surface
-/// actions target `session`; not-yet-implemented variants fall through to a
+/// actions target the active Terminal Surface; workspace and pane/surface
+/// actions target `workspace`; not-yet-implemented variants fall through to a
 /// `tracing::debug!` log.
 fn execute_action(
     commands: &mut Commands,
     mux: &MultiplexerCommands,
     action: ShortcutAction,
-    session: Entity,
+    workspace: Entity,
     registry: &SurfaceEntityRegistry,
 ) {
     match &action {
         ShortcutAction::EnterCopyMode => {
-            if let Some(entity) = resolve_active_surface_entity(mux, session, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, workspace, registry) {
                 commands.trigger(EnterCopyModeActionEvent { entity });
             }
         }
-        ShortcutAction::NewSession => {
-            commands.trigger(NewSessionActionEvent { session });
+        ShortcutAction::NewWorkspace => {
+            commands.trigger(NewWorkspaceActionEvent { workspace });
         }
-        ShortcutAction::FocusSession { offset } => {
-            commands.trigger(FocusSessionActionEvent {
-                session,
+        ShortcutAction::FocusWorkspace { offset } => {
+            commands.trigger(FocusWorkspaceActionEvent {
+                workspace,
                 target: match offset {
-                    SessionOffset::Next => FocusSessionTarget::Next,
-                    SessionOffset::Prev => FocusSessionTarget::Prev,
-                    SessionOffset::Last => FocusSessionTarget::Last,
+                    WorkspaceOffset::Next => FocusWorkspaceTarget::Next,
+                    WorkspaceOffset::Prev => FocusWorkspaceTarget::Prev,
+                    WorkspaceOffset::Last => FocusWorkspaceTarget::Last,
                 },
             });
         }
-        ShortcutAction::FocusSessionNumber { index } => {
-            commands.trigger(FocusSessionActionEvent {
-                session,
-                target: FocusSessionTarget::Number(*index),
+        ShortcutAction::FocusWorkspaceNumber { index } => {
+            commands.trigger(FocusWorkspaceActionEvent {
+                workspace,
+                target: FocusWorkspaceTarget::Number(*index),
             });
         }
         ShortcutAction::Copy => {
-            if let Some(entity) = resolve_active_surface_entity(mux, session, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, workspace, registry) {
                 commands.trigger(CopyToClipboardActionEvent { entity });
             }
         }
         ShortcutAction::Paste => {
-            if let Some(entity) = resolve_active_surface_entity(mux, session, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, workspace, registry) {
                 commands.trigger(PasteFromClipboardActionEvent { entity });
             }
         }
         ShortcutAction::SplitPane { direction } => {
             commands.trigger(SplitPaneActionEvent {
-                session,
+                workspace,
                 orientation: split_orientation(direction.clone()),
             });
         }
         ShortcutAction::NewTerminalSurface => {
-            commands.trigger(NewTerminalSurfaceActionEvent { session });
+            commands.trigger(NewTerminalSurfaceActionEvent { workspace: workspace });
         }
         ShortcutAction::FocusPane { direction } => {
             commands.trigger(FocusPaneActionEvent {
-                session,
+                workspace,
                 direction: focus_direction(direction.clone()),
             });
         }
         ShortcutAction::FocusSurface { offset } => {
             if let Some(direction) = cycle_direction(offset.clone()) {
-                commands.trigger(FocusSurfaceActionEvent { session, direction });
+                commands.trigger(FocusSurfaceActionEvent { workspace: workspace, direction });
             }
         }
         ShortcutAction::SwapPane { offset } => {
             commands.trigger(SwapPaneActionEvent {
-                session,
+                workspace,
                 offset: swap_offset(offset.clone()),
             });
         }
         ShortcutAction::ClosePane => {
-            commands.trigger(ClosePaneActionEvent { session });
+            commands.trigger(ClosePaneActionEvent { workspace: workspace });
         }
         ShortcutAction::CloseSurface => {
-            commands.trigger(CloseSurfaceActionEvent { session });
+            commands.trigger(CloseSurfaceActionEvent { workspace: workspace });
         }
         other => tracing::debug!(
             target: "ozmux_gui::input",
@@ -373,16 +373,16 @@ fn execute_action(
     }
 }
 
-/// Resolves the active surface's entity for `session` via the
-/// session → pane → surface → registry chain. Returns `None` when the
-/// session has no active pane/surface, or the surface is not yet
+/// Resolves the active surface's entity for `workspace` via the
+/// workspace → pane → surface → registry chain. Returns `None` when the
+/// workspace has no active pane/surface, or the surface is not yet
 /// registered (e.g. a Browser Surface with no `TerminalHandle`).
 fn resolve_active_surface_entity(
     mux: &MultiplexerCommands,
-    session: Entity,
+    workspace: Entity,
     registry: &SurfaceEntityRegistry,
 ) -> Option<Entity> {
-    let pane = mux.sessions_active_pane(session)?;
+    let pane = mux.workspaces_active_pane(workspace)?;
     let surface = mux.panes_active_surface(pane)?;
     registry.get(surface)
 }
@@ -455,8 +455,8 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
     }
 }
 
-/// Resolves the active surface entity for `session` and triggers a
-/// `TerminalKeyInput` on it. Silently no-ops when the session has no
+/// Resolves the active surface entity for `workspace` and triggers a
+/// `TerminalKeyInput` on it. Silently no-ops when the workspace has no
 /// active pane/surface yet, or when the target entity has no
 /// `TerminalHandle` (e.g. Browser Surface) — the `bevy_terminal`
 /// observer handles that case by also no-op'ing.
@@ -464,11 +464,11 @@ fn forward_to_active_terminal(
     commands: &mut Commands,
     mux: &MultiplexerCommands,
     registry: &SurfaceEntityRegistry,
-    session: Entity,
+    workspace: Entity,
     key: TerminalKey,
     mods: TerminalModifiers,
 ) {
-    let Some(pane) = mux.sessions_active_pane(session) else {
+    let Some(pane) = mux.workspaces_active_pane(workspace) else {
         return;
     };
     let Some(surface) = mux.panes_active_surface(pane) else {
@@ -498,13 +498,13 @@ mod tests {
     use bevy::window::{Window, WindowResolution};
     use ozmux_configs::OzmuxConfigs;
     use ozmux_configs::shortcuts::Key as CKey;
-    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker};
+    use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker};
 
     fn make_app(window_focused: bool) -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
-            .add_plugins(crate::action::session::OzmuxSessionActionPlugin)
+            .add_plugins(crate::action::workspace::OzmuxWorkspaceActionPlugin)
             .add_systems(Update, dispatch_focused_key.run_if(not(is_ime_composing)));
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
@@ -514,16 +514,16 @@ mod tests {
         app.add_plugins(crate::clipboard::ClipboardActionPlugin);
         app.add_message::<KeyboardInput>();
 
-        let session = app
+        let workspace = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("default".into()))
+                mux.create_workspace(Some("default".into()))
             })
             .unwrap()
-            .session;
+            .workspace;
         app.world_mut().flush();
-        // Mark the session entity with AttachedSession (mirrors bootstrap).
-        app.world_mut().entity_mut(session).insert(AttachedSession);
+        // Mark the workspace entity with AttachedWorkspace (mirrors bootstrap).
+        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
 
         let window_entity = app
             .world_mut()
@@ -590,12 +590,12 @@ mod tests {
             app.world_mut()
                 .run_system_once(
                     |mux: MultiplexerCommands,
-                     attached_session: Query<
+                     attached_workspace: Query<
                         Entity,
-                        (With<SessionMarker>, With<AttachedSession>),
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
                     >| {
-                        let session = attached_session.iter().next()?;
-                        let pane = mux.sessions_active_pane(session)?;
+                        let workspace = attached_workspace.iter().next()?;
+                        let pane = mux.workspaces_active_pane(workspace)?;
                         mux.panes_active_surface(pane)
                     },
                 )
@@ -627,12 +627,12 @@ mod tests {
             app.world_mut()
                 .run_system_once(
                     |mux: MultiplexerCommands,
-                     attached_session: Query<
+                     attached_workspace: Query<
                         Entity,
-                        (With<SessionMarker>, With<AttachedSession>),
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
                     >| {
-                        let session = attached_session.iter().next()?;
-                        let pane = mux.sessions_active_pane(session)?;
+                        let workspace = attached_workspace.iter().next()?;
+                        let pane = mux.workspaces_active_pane(workspace)?;
                         mux.panes_active_surface(pane)
                     },
                 )
@@ -1111,7 +1111,7 @@ mod tests {
         app.update();
         let count = app
             .world_mut()
-            .query_filtered::<Entity, With<SessionMarker>>()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
             .iter(app.world())
             .count();
         assert!(count > 0);
@@ -1141,7 +1141,7 @@ mod tests {
         app.update();
         let count = app
             .world_mut()
-            .query_filtered::<Entity, With<SessionMarker>>()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
             .iter(app.world())
             .count();
         assert!(count > 0);
@@ -1221,11 +1221,11 @@ mod tests {
     fn cap_close_surface(_: On<CloseSurfaceActionEvent>, mut c: ResMut<CapturedActionEvents>) {
         c.0.push("CloseSurface");
     }
-    fn cap_new_session(_: On<NewSessionActionEvent>, mut c: ResMut<CapturedActionEvents>) {
-        c.0.push("NewSession");
+    fn cap_new_workspace(_: On<NewWorkspaceActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("NewWorkspace");
     }
-    fn cap_focus_session(_: On<FocusSessionActionEvent>, mut c: ResMut<CapturedActionEvents>) {
-        c.0.push("FocusSession");
+    fn cap_focus_workspace(_: On<FocusWorkspaceActionEvent>, mut c: ResMut<CapturedActionEvents>) {
+        c.0.push("FocusWorkspace");
     }
 
     fn setup_exec_app() -> App {
@@ -1240,26 +1240,26 @@ mod tests {
         app.add_observer(cap_swap);
         app.add_observer(cap_close_pane);
         app.add_observer(cap_close_surface);
-        app.add_observer(cap_new_session);
-        app.add_observer(cap_focus_session);
+        app.add_observer(cap_new_workspace);
+        app.add_observer(cap_focus_workspace);
         app
     }
 
     fn exec_bootstrap_session(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("test".into())).session
+                mux.create_workspace(Some("test".into())).workspace
             })
             .unwrap()
     }
 
-    fn run_execute_action(app: &mut App, action: ShortcutAction, session: Entity) {
+    fn run_execute_action(app: &mut App, action: ShortcutAction, workspace: Entity) {
         app.world_mut()
             .run_system_once(
                 move |mut commands: Commands,
                       mux: MultiplexerCommands,
                       registry: Res<crate::ui::registry::SurfaceEntityRegistry>| {
-                    execute_action(&mut commands, &mux, action.clone(), session, &registry);
+                    execute_action(&mut commands, &mux, action.clone(), workspace, &registry);
                 },
             )
             .unwrap();
@@ -1273,13 +1273,13 @@ mod tests {
     #[test]
     fn execute_action_split_pane_triggers_split_pane_action_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::SplitPane {
                 direction: ozmux_configs::shortcuts::SplitDirection::Horizontal,
             },
-            session,
+            workspace,
         );
         assert_eq!(captured_actions(&app), vec!["SplitPane"]);
     }
@@ -1287,21 +1287,21 @@ mod tests {
     #[test]
     fn execute_action_new_terminal_surface_triggers_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
-        run_execute_action(&mut app, ShortcutAction::NewTerminalSurface, session);
+        let workspace = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::NewTerminalSurface, workspace);
         assert_eq!(captured_actions(&app), vec!["NewTerminalSurface"]);
     }
 
     #[test]
     fn execute_action_focus_pane_triggers_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::FocusPane {
                 direction: ozmux_configs::shortcuts::Direction::Right,
             },
-            session,
+            workspace,
         );
         assert_eq!(captured_actions(&app), vec!["FocusPane"]);
     }
@@ -1309,13 +1309,13 @@ mod tests {
     #[test]
     fn execute_action_focus_surface_next_triggers_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::FocusSurface {
                 offset: ozmux_configs::shortcuts::SurfaceOffset::Next,
             },
-            session,
+            workspace,
         );
         assert_eq!(captured_actions(&app), vec!["FocusSurface"]);
     }
@@ -1323,13 +1323,13 @@ mod tests {
     #[test]
     fn execute_action_focus_surface_last_emits_no_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::FocusSurface {
                 offset: ozmux_configs::shortcuts::SurfaceOffset::Last,
             },
-            session,
+            workspace,
         );
         assert!(captured_actions(&app).is_empty());
     }
@@ -1337,13 +1337,13 @@ mod tests {
     #[test]
     fn execute_action_swap_pane_triggers_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::SwapPane {
                 offset: ozmux_configs::shortcuts::SwapOffset::Prev,
             },
-            session,
+            workspace,
         );
         assert_eq!(captured_actions(&app), vec!["SwapPane"]);
     }
@@ -1351,65 +1351,65 @@ mod tests {
     #[test]
     fn execute_action_close_pane_triggers_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
-        run_execute_action(&mut app, ShortcutAction::ClosePane, session);
+        let workspace = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::ClosePane, workspace);
         assert_eq!(captured_actions(&app), vec!["ClosePane"]);
     }
 
     #[test]
     fn execute_action_close_surface_triggers_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
-        run_execute_action(&mut app, ShortcutAction::CloseSurface, session);
+        let workspace = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::CloseSurface, workspace);
         assert_eq!(captured_actions(&app), vec!["CloseSurface"]);
     }
 
     #[test]
-    fn execute_action_new_session_triggers_new_session_action_event() {
+    fn execute_action_new_workspace_triggers_new_workspace_action_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
-        run_execute_action(&mut app, ShortcutAction::NewSession, session);
-        assert_eq!(captured_actions(&app), vec!["NewSession"]);
+        let workspace = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::NewWorkspace, workspace);
+        assert_eq!(captured_actions(&app), vec!["NewWorkspace"]);
     }
 
     #[test]
-    fn execute_action_focus_session_triggers_focus_session_action_event() {
+    fn execute_action_focus_workspace_triggers_focus_workspace_action_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
-            ShortcutAction::FocusSession {
-                offset: SessionOffset::Next,
+            ShortcutAction::FocusWorkspace {
+                offset: WorkspaceOffset::Next,
             },
-            session,
+            workspace,
         );
-        assert_eq!(captured_actions(&app), vec!["FocusSession"]);
+        assert_eq!(captured_actions(&app), vec!["FocusWorkspace"]);
     }
 
     #[test]
-    fn execute_action_focus_session_number_triggers_focus_session_action_event() {
+    fn execute_action_focus_workspace_number_triggers_focus_workspace_action_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_session(app.world_mut());
         run_execute_action(
             &mut app,
-            ShortcutAction::FocusSessionNumber { index: 0 },
-            session,
+            ShortcutAction::FocusWorkspaceNumber { index: 0 },
+            workspace,
         );
-        assert_eq!(captured_actions(&app), vec!["FocusSession"]);
+        assert_eq!(captured_actions(&app), vec!["FocusWorkspace"]);
     }
 
     #[test]
     fn execute_action_unimplemented_emits_no_event() {
         let mut app = setup_exec_app();
-        let session = exec_bootstrap_session(app.world_mut());
-        run_execute_action(&mut app, ShortcutAction::ZoomPane, session);
+        let workspace = exec_bootstrap_session(app.world_mut());
+        run_execute_action(&mut app, ShortcutAction::ZoomPane, workspace);
         assert!(captured_actions(&app).is_empty());
     }
 
     #[test]
     fn execute_action_on_vanished_session_triggers_without_panic() {
         let mut app = setup_exec_app();
-        let bogus = app.world_mut().spawn(SessionMarker).id();
+        let bogus = app.world_mut().spawn(WorkspaceMarker).id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
         run_execute_action(&mut app, ShortcutAction::ClosePane, bogus);

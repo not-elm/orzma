@@ -1,5 +1,5 @@
-//! Tier 2 stress test for the session-owned UI design. Spawns several
-//! sessions x panes x surfaces and runs a long swap loop, asserting no
+//! Tier 2 stress test for the workspace-owned UI design. Spawns several
+//! workspaces x panes x surfaces and runs a long swap loop, asserting no
 //! taffy panic and no unbounded taffy-node growth. Gates the deletion of
 //! `hidden_stash` per the spec: if this test panics, the upstream taffy
 //! fixes (PRs #13990 / #16780 / #17596) do not cover our usage pattern.
@@ -16,7 +16,7 @@ use bevy::render::storage::ShaderStorageBuffer;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker, WorkspaceUiSubtree};
 use std::sync::MutexGuard;
 
 fn make_app() -> (App, MutexGuard<'static, ()>) {
@@ -65,17 +65,17 @@ fn taffy_handles_repeated_park_unpark_under_load() {
 
     let all_sessions: Vec<Entity> = {
         let world = app.world_mut();
-        let mut q = world.query_filtered::<Entity, With<SessionMarker>>();
+        let mut q = world.query_filtered::<Entity, With<WorkspaceMarker>>();
         q.iter(world).collect()
     };
     assert!(
         !all_sessions.is_empty(),
-        "at least one session after bootstrap"
+        "at least one workspace after bootstrap"
     );
 
     let mut current_attached = {
         let world = app.world_mut();
-        let mut q = world.query_filtered::<Entity, With<AttachedSession>>();
+        let mut q = world.query_filtered::<Entity, With<AttachedWorkspace>>();
         q.single(world).expect("exactly one attached at start")
     };
     for i in 0..5 {
@@ -85,14 +85,14 @@ fn taffy_handles_repeated_park_unpark_under_load() {
         }
         app.world_mut()
             .entity_mut(current_attached)
-            .remove::<AttachedSession>();
-        app.world_mut().entity_mut(next).insert(AttachedSession);
+            .remove::<AttachedWorkspace>();
+        app.world_mut().entity_mut(next).insert(AttachedWorkspace);
         app.update();
         current_attached = next;
     }
 
     let world = app.world_mut();
-    let mut q = world.query::<&SessionUiSubtree>();
+    let mut q = world.query::<&WorkspaceUiSubtree>();
     for sub in q.iter(world) {
         assert!(
             world.get_entity(sub.0).is_ok(),

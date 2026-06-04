@@ -31,7 +31,7 @@ use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::TerminalFontInitSet;
 use bevy_terminal_renderer::material::TerminalMaterialSystems;
 use bevy_terminal_renderer::prelude::TerminalGrid;
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -179,7 +179,7 @@ fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
 pub(crate) fn position_ime_overlay(
     state: Res<ImeState>,
     mux: MultiplexerCommands,
-    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: Res<SurfaceEntityRegistry>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -223,7 +223,7 @@ pub(crate) fn position_ime_overlay(
     let Some(comp) = state.composition() else {
         return;
     };
-    let Some(entity) = resolve_focused_terminal(&mux, &attached_session, &registry) else {
+    let Some(entity) = resolve_focused_terminal(&mux, &attached_workspace, &registry) else {
         return;
     };
     let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
@@ -319,12 +319,12 @@ pub(crate) fn position_ime_overlay(
 fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
     mux: MultiplexerCommands,
-    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: Res<SurfaceEntityRegistry>,
     mut grids: Query<(Entity, &mut TerminalGrid)>,
 ) {
     let focused = if state.is_composing() {
-        resolve_focused_terminal(&mux, &attached_session, &registry)
+        resolve_focused_terminal(&mux, &attached_workspace, &registry)
     } else {
         None
     };

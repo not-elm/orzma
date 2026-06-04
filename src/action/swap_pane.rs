@@ -17,14 +17,14 @@ impl Plugin for SwapPaneActionPlugin {
 #[derive(EntityEvent, Debug)]
 pub struct SwapPaneActionEvent {
     #[event_target]
-    pub session: Entity,
+    pub workspace: Entity,
     pub offset: SwapOffset,
 }
 
 fn apply_swap_pane(trigger: On<SwapPaneActionEvent>, mut mux: MultiplexerCommands) {
-    let SwapPaneActionEvent { session, offset } = trigger.event();
-    let Some(active_pane) = mux.sessions_active_pane(*session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "SwapPane: session vanished");
+    let SwapPaneActionEvent { workspace, offset } = trigger.event();
+    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "SwapPane: workspace vanished");
         return;
     };
     if let Err(err) = mux.swap_pane(active_pane, *offset) {
@@ -48,7 +48,7 @@ mod tests {
     fn bootstrap_session(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("test".into())).session
+                mux.create_workspace(Some("test".into())).workspace
             })
             .unwrap()
     }
@@ -56,14 +56,14 @@ mod tests {
     #[test]
     fn swap_pane_event_in_single_pane_session_is_a_noop() {
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let workspace = bootstrap_session(app.world_mut());
+        let active_before = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         app.world_mut().trigger(SwapPaneActionEvent {
-            session,
+            workspace,
             offset: SwapOffset::Prev,
         });
         app.world_mut().flush();
-        let active_after = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let active_after = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         assert_eq!(active_after, active_before);
     }
 }
