@@ -8,13 +8,13 @@ use bevy::ecs::entity::Entity;
 /// Cardinal direction for pane-focus movement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneDirection {
-    /// Move focus toward the top of the session.
+    /// Move focus toward the top of the workspace.
     Up,
-    /// Move focus toward the bottom of the session.
+    /// Move focus toward the bottom of the workspace.
     Down,
-    /// Move focus toward the left of the session.
+    /// Move focus toward the left of the workspace.
     Left,
-    /// Move focus toward the right of the session.
+    /// Move focus toward the right of the workspace.
     Right,
 }
 
@@ -121,7 +121,7 @@ fn find_in_direction(
 
 /// Resolve the pane that should receive focus when moving `direction` from `from`.
 ///
-/// Returns `Ok(None)` when no candidate exists (single-pane session or
+/// Returns `Ok(None)` when no candidate exists (single-pane workspace or
 /// pathological layout); never picks `from` itself.
 ///
 /// `score` assigns a tiebreaking weight to each candidate entity; the
@@ -155,7 +155,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
-        let (root, cell_a) = state.new_session_layout(pa);
+        let (root, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         state
             .split_cell(cell_a, cell_b, Side::After, orientation)
@@ -201,7 +201,7 @@ mod tests {
     fn single_pane_returns_none_in_all_directions() {
         let mut state = LayoutCellState::default();
         let p = pane(1);
-        let (root, _) = state.new_session_layout(p);
+        let (root, _) = state.new_workspace_layout(p);
         for d in [
             PaneDirection::Up,
             PaneDirection::Down,
@@ -219,7 +219,7 @@ mod tests {
         let tr = pane(2);
         let bl = pane(3);
         let br = pane(4);
-        let (root, cell_tl) = state.new_session_layout(tl);
+        let (root, cell_tl) = state.new_workspace_layout(tl);
         let cell_tr = state.new_pane(tr, None);
         let cell_bl = state.new_pane(bl, None);
         let cell_br = state.new_pane(br, None);
@@ -255,7 +255,7 @@ mod tests {
     fn deep_horizontal_split_keeps_immediate_neighbor() {
         let mut state = LayoutCellState::default();
         let first = pane(1);
-        let (root, mut current_cell) = state.new_session_layout(first);
+        let (root, mut current_cell) = state.new_workspace_layout(first);
         let mut current_pane = first;
         let mut second_last_pane = first;
         for n in 2..=21_u32 {
@@ -285,7 +285,7 @@ mod tests {
         let tl = pane(1);
         let r = pane(2);
         let bl = pane(3);
-        let (root, cell_tl) = state.new_session_layout(tl);
+        let (root, cell_tl) = state.new_workspace_layout(tl);
         let cell_r = state.new_pane(r, None);
         let cell_bl = state.new_pane(bl, None);
         state

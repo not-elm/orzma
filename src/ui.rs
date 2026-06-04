@@ -1,20 +1,20 @@
-//! Bevy UI Plugin and rebuild systems. Per-session UI subtrees are owned
-//! by their Session entity and rebuilt via
-//! `rebuild_session::rebuild_session_ui_on_data_change` whenever the
-//! per-session epoch in `MultiplexerService` advances. The status bar
+//! Bevy UI Plugin and rebuild systems. Per-workspace UI subtrees are owned
+//! by their Workspace entity and rebuilt via
+//! `rebuild_workspace::rebuild_workspace_ui_on_data_change` whenever the
+//! per-workspace epoch in `MultiplexerService` advances. The status bar
 //! rebuilds independently via
-//! `status_bar_sync::rebuild_status_bar_on_session_set_change` when the
-//! session list or `AttachedSession` marker changes. Surface host
+//! `status_bar_sync::rebuild_status_bar_on_workspace_set_change` when the
+//! workspace list or `AttachedWorkspace` marker changes. Surface host
 //! entities (managed by `SurfaceEntityRegistry`) are kept stable across
 //! rebuilds and re-parented via `ChildOf` — active hosts under the
-//! active session's pane slot, inactive hosts under the owning Session
+//! active workspace's pane slot, inactive hosts under the owning Workspace
 //! entity (a non-Node walker-skipped park).
 
 use crate::system_set::OzmuxSystems;
 use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::root::OzmuxUiRootPlugin;
-use crate::ui::session::OzmuxSessionUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
+use crate::ui::workspace::OzmuxWorkspaceUiPlugin;
 use bevy::prelude::*;
 use std::path::PathBuf;
 
@@ -25,7 +25,6 @@ pub mod layout;
 pub mod palette;
 pub mod registry;
 pub mod root;
-pub mod session;
 pub mod status_bar;
 pub mod status_bar_sync;
 #[cfg(test)]
@@ -35,19 +34,20 @@ pub mod tab_bar;
 pub(crate) mod tab_input;
 pub(crate) mod tab_label;
 pub mod terminal;
+pub mod workspace;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
-/// never despawned. Hosts `SessionUiRoot` (the attachment point for the
-/// active session) and `StatusBarRoot` as direct children.
+/// never despawned. Hosts `WorkspaceUiRoot` (the attachment point for the
+/// active workspace) and `StatusBarRoot` as direct children.
 #[derive(Component)]
 pub struct UiRoot;
 
 /// Marker for the single attachment-point `Node` child of `UiRoot` that
-/// receives whichever Session's `SessionUiSubtree` is currently attached.
-/// `sync_active_session` reparents subtrees between this and their owning
-/// Session entity. Spawned once in Startup; never despawned.
+/// receives whichever Workspace's `WorkspaceUiSubtree` is currently attached.
+/// `sync_active_workspace` reparents subtrees between this and their owning
+/// Workspace entity. Spawned once in Startup; never despawned.
 #[derive(Component)]
-pub struct SessionUiRoot;
+pub struct WorkspaceUiRoot;
 
 /// Marker for every transient UI Node (status bar, tab bar, pane frame,
 /// split container, placeholder surface content). Rebuilds query this
@@ -159,7 +159,7 @@ pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
 /// Back-pointer from a stable Surface host entity to its owning
 /// multiplexer Surface entity. Stamped by
 /// `SurfaceEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
-/// this to resolve the host's multiplexer Pane / Session entities (via
+/// this to resolve the host's multiplexer Pane / Workspace entities (via
 /// `ChildOf`) so the spawned terminal's env carries the correct
 /// `OZMUX_PANE_ID` for the `@memo` control bridge.
 #[derive(Component)]
@@ -177,7 +177,7 @@ pub struct PaneFrame;
 
 /// Marks the per-pane dim veil — a translucent overlay node, last child of
 /// the pane frame, drawn over both terminal and webview content when the
-/// pane is NOT its session's active pane. `pane` is the multiplexer Pane
+/// pane is NOT its workspace's active pane. `pane` is the multiplexer Pane
 /// entity this veil belongs to; `sync_pane_dim` reads it to toggle
 /// `Visibility` on focus changes.
 #[derive(Component)]
@@ -185,18 +185,18 @@ pub(crate) struct PaneDimOverlay {
     pub(crate) pane: Entity,
 }
 
-/// Marks a Session whose UI subtree must be rebuilt for a reason other than a
+/// Marks a Workspace whose UI subtree must be rebuilt for a reason other than a
 /// layout-geometry change — i.e. an in-pane surface was added or the active
 /// surface switched (neither mutates `LayoutCells`). Set by
 /// `flag_chrome_dirty_on_surface_change` and consumed (removed) by
-/// `rebuild_session_ui`, which gates on `Or<(Changed<LayoutCells>,
-/// With<SessionUiDirty>)>`. Keeping the single full-rebuild path is deliberate:
+/// `rebuild_workspace_ui`, which gates on `Or<(Changed<LayoutCells>,
+/// With<WorkspaceUiDirty>)>`. Keeping the single full-rebuild path is deliberate:
 /// reparenting stable UI nodes across a rebuild does not survive Bevy's UI
 /// layout, so every rebuild despawns + respawns chrome as fresh nodes.
 #[derive(Component)]
-pub(crate) struct SessionUiDirty;
+pub(crate) struct WorkspaceUiDirty;
 
-/// Resolved `$HOME` at startup (`None` if unset). Read by `rebuild_session_ui`
+/// Resolved `$HOME` at startup (`None` if unset). Read by `rebuild_workspace_ui`
 /// to home-abbreviate terminal tab paths; the value matches the terminal
 /// spawner's `$HOME` fallback so the tab agrees with where the shell started.
 #[derive(Resource)]
@@ -211,7 +211,7 @@ impl Plugin for OzmuxUiPlugin {
             .insert_resource(HomeDir(std::env::var_os("HOME").map(PathBuf::from)))
             .add_plugins((
                 OzmuxUiRootPlugin,
-                OzmuxSessionUiPlugin,
+                OzmuxWorkspaceUiPlugin,
                 OzmuxTerminalUiPlugin,
             ))
             .add_systems(
@@ -220,8 +220,8 @@ impl Plugin for OzmuxUiPlugin {
                     // Host despawns must commit before the rebuild and surface
                     // setup observe them, else setup inserts a bundle onto a
                     // host this prune is despawning (insert-after-despawn panic).
-                    registry::prune_registry_on_surface_removal.before(OzmuxSystems::SessionUi),
-                    status_bar_sync::rebuild_status_bar_on_session_set_change,
+                    registry::prune_registry_on_surface_removal.before(OzmuxSystems::WorkspaceUi),
+                    status_bar_sync::rebuild_status_bar_on_workspace_set_change,
                 ),
             );
     }
@@ -239,7 +239,7 @@ mod tests {
     use bevy::window::{PrimaryWindow, WindowResolution};
     use bevy_terminal_renderer::material::TerminalUiMaterial;
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin};
+    use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin};
 
     /// Collects the rendered text of every tab (the `Text` child of each
     /// `TabButton` node). Order is unspecified — fine for single-tab assertions.
@@ -320,7 +320,7 @@ mod tests {
         // NOTE: two `app.update()` calls are required here (and in every test that
         // needs a visible rebuild): the first tick runs Startup systems (bootstrap +
         // setup_root_camera_and_ui_root); the second tick runs the first Update pass
-        // where `rebuild_session_ui` fires because the bootstrap session's
+        // where `rebuild_workspace_ui` fires because the bootstrap workspace's
         // LayoutCells was just changed.
         app.update();
         app.update();
@@ -362,15 +362,15 @@ mod tests {
 
         {
             let world = app.world_mut();
-            let session = world
+            let workspace = world
                 .query_filtered::<Entity, (
-                    With<ozmux_multiplexer::SessionMarker>,
-                    With<AttachedSession>,
+                    With<ozmux_multiplexer::WorkspaceMarker>,
+                    With<AttachedWorkspace>,
                 )>()
                 .single(world)
-                .expect("one attached session");
+                .expect("one attached workspace");
             world
-                .entity_mut(session)
+                .entity_mut(workspace)
                 .get_mut::<ozmux_multiplexer::LayoutCells>()
                 .expect("LayoutCells")
                 .set_changed();
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn split_pane_produces_two_pane_frames() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -402,12 +402,12 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
-                 sessions: bevy::prelude::Query<
+                 workspaces: bevy::prelude::Query<
                     bevy::prelude::Entity,
-                    (With<SessionMarker>, With<AttachedSession>),
+                    (With<WorkspaceMarker>, With<AttachedWorkspace>),
                 >| {
-                    let session = sessions.iter().next().expect("session");
-                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                    let workspace = workspaces.iter().next().expect("workspace");
+                    let pane = mux.workspaces_active_pane(workspace).expect("active pane");
                     mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
                         .expect("split_pane");
                 },
@@ -427,7 +427,7 @@ mod tests {
     fn surface_registry_prunes_removed_surface() {
         use crate::ui::registry::SurfaceEntityRegistry;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -436,12 +436,12 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
-                 sessions: bevy::prelude::Query<
+                 workspaces: bevy::prelude::Query<
                     bevy::prelude::Entity,
-                    (With<SessionMarker>, With<AttachedSession>),
+                    (With<WorkspaceMarker>, With<AttachedWorkspace>),
                 >| {
-                    let session = sessions.iter().next().expect("session");
-                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                    let workspace = workspaces.iter().next().expect("workspace");
+                    let pane = mux.workspaces_active_pane(workspace).expect("active pane");
                     mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
                         .expect("split_pane");
                 },
@@ -458,12 +458,12 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
-                 sessions: bevy::prelude::Query<
+                 workspaces: bevy::prelude::Query<
                     bevy::prelude::Entity,
-                    (With<SessionMarker>, With<AttachedSession>),
+                    (With<WorkspaceMarker>, With<AttachedWorkspace>),
                 >| {
-                    let session = sessions.iter().next().expect("session");
-                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                    let workspace = workspaces.iter().next().expect("workspace");
+                    let pane = mux.workspaces_active_pane(workspace).expect("active pane");
                     mux.close_pane(pane).expect("close_pane");
                 },
             )
@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn surface_host_not_caught_in_despawn_cascade() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -495,13 +495,14 @@ mod tests {
             q.iter(world).next().expect("at least one host")
         };
 
-        // Rename via MultiplexerCommands — triggers Changed<Name> on the Session
+        // Rename via MultiplexerCommands — triggers Changed<Name> on the Workspace
         // which causes a rebuild in the next update.
         app.world_mut()
             .run_system_once(
-                |mut mux: MultiplexerCommands, sessions: Query<Entity, With<SessionMarker>>| {
-                    let session = sessions.iter().next().expect("session");
-                    mux.rename_session(session, "second-rename".into()).unwrap();
+                |mut mux: MultiplexerCommands, workspaces: Query<Entity, With<WorkspaceMarker>>| {
+                    let workspace = workspaces.iter().next().expect("workspace");
+                    mux.rename_workspace(workspace, "second-rename".into())
+                        .unwrap();
                 },
             )
             .unwrap();
@@ -514,9 +515,9 @@ mod tests {
     }
 
     #[test]
-    fn focus_session_switch_does_not_orphan_inactive_session_hosts() {
+    fn focus_workspace_switch_does_not_orphan_inactive_workspace_hosts() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -528,59 +529,59 @@ mod tests {
             q.iter(world).next().expect("at least one host")
         };
 
-        let session_2 = app
+        let workspace_2 = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("session-2".into())).session
+                mux.create_workspace(Some("workspace-2".into())).workspace
             })
             .unwrap();
         app.world_mut().flush();
 
-        let session_1 = app
+        let workspace_1 = app
             .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>()
             .single(app.world())
-            .expect("session 1 still attached");
+            .expect("workspace 1 still attached");
 
         app.world_mut()
-            .entity_mut(session_1)
-            .remove::<AttachedSession>();
+            .entity_mut(workspace_1)
+            .remove::<AttachedWorkspace>();
         app.world_mut()
-            .entity_mut(session_2)
-            .insert(AttachedSession);
+            .entity_mut(workspace_2)
+            .insert(AttachedWorkspace);
         app.update();
 
         assert!(
             app.world().get_entity(host_before).is_ok(),
-            "session 1's surface host must survive when session 2 becomes active"
+            "workspace 1's surface host must survive when workspace 2 becomes active"
         );
     }
 
     #[test]
     fn inactive_surface_host_persists_across_focus_switch() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, SurfaceKind};
+        use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        let (session, pane, first_surface) = app
+        let (workspace, pane, first_surface) = app
             .world_mut()
             .run_system_once(
                 |mux: MultiplexerCommands,
-                 sessions: bevy::prelude::Query<
+                 workspaces: bevy::prelude::Query<
                     bevy::prelude::Entity,
-                    (With<SessionMarker>, With<AttachedSession>),
+                    (With<WorkspaceMarker>, With<AttachedWorkspace>),
                 >| {
-                    let session = sessions.iter().next()?;
-                    let pane = mux.sessions_active_pane(session)?;
+                    let workspace = workspaces.iter().next()?;
+                    let pane = mux.workspaces_active_pane(workspace)?;
                     let surface = mux.panes_active_surface(pane)?;
-                    Some((session, pane, surface))
+                    Some((workspace, pane, surface))
                 },
             )
             .unwrap()
-            .expect("bootstrap session + pane + surface");
+            .expect("bootstrap workspace + pane + surface");
 
         let host_before = {
             let world = app.world_mut();
@@ -607,7 +608,7 @@ mod tests {
         {
             let world = app.world_mut();
             world
-                .entity_mut(session)
+                .entity_mut(workspace)
                 .get_mut::<ozmux_multiplexer::LayoutCells>()
                 .expect("LayoutCells")
                 .set_changed();
@@ -625,8 +626,8 @@ mod tests {
             .map(|c| c.parent());
         assert_eq!(
             host_parent,
-            Some(session),
-            "inactive host must be parked under the session entity (no Node, walker-skipped)"
+            Some(workspace),
+            "inactive host must be parked under the workspace entity (no Node, walker-skipped)"
         );
     }
 
@@ -646,17 +647,17 @@ mod tests {
     }
 
     #[test]
-    fn attached_session_marker_present_after_bootstrap() {
+    fn attached_workspace_marker_present_after_bootstrap() {
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
         let count = app
             .world_mut()
-            .query_filtered::<Entity, With<AttachedSession>>()
+            .query_filtered::<Entity, With<AttachedWorkspace>>()
             .iter(app.world())
             .count();
-        assert_eq!(count, 1, "exactly one AttachedSession after bootstrap");
+        assert_eq!(count, 1, "exactly one AttachedWorkspace after bootstrap");
     }
 
     /// Collects `(pane, PaneDim.0)` for every terminal host that
@@ -709,7 +710,7 @@ mod tests {
     #[test]
     fn split_dims_inactive_terminal_keeps_active_bright() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
@@ -719,9 +720,9 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next().expect("session");
-                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
+                    let workspace = workspaces.iter().next().expect("workspace");
+                    let pane = mux.workspaces_active_pane(workspace).expect("active pane");
                     mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
                         .expect("split_pane");
                 },
@@ -732,16 +733,19 @@ mod tests {
         }
         mount_terminal_hosts(&mut app);
 
-        let active_pane = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next().unwrap();
-                    mux.sessions_active_pane(session).unwrap()
-                },
-            )
-            .unwrap();
+        let active_pane =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next().unwrap();
+                        mux.workspaces_active_pane(workspace).unwrap()
+                    },
+                )
+                .unwrap();
 
         {
             let world = app.world_mut();
@@ -789,23 +793,26 @@ mod tests {
     #[test]
     fn extension_pane_keeps_pickable_ignore_veil() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{LayoutCells, MultiplexerCommands, SessionMarker, SurfaceKind};
+        use ozmux_multiplexer::{LayoutCells, MultiplexerCommands, SurfaceKind, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
             app.update();
         }
 
-        let pane = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next().unwrap();
-                    mux.sessions_active_pane(session).unwrap()
-                },
-            )
-            .unwrap();
+        let pane =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next().unwrap();
+                        mux.workspaces_active_pane(workspace).unwrap()
+                    },
+                )
+                .unwrap();
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
                 let ext = mux.add_surface(
@@ -820,8 +827,8 @@ mod tests {
         // A surface switch reparents hosts via a rebuild; force it in the harness.
         app.world_mut()
             .run_system_once(
-                |mut sessions: Query<&mut LayoutCells, With<SessionMarker>>| {
-                    for mut lc in sessions.iter_mut() {
+                |mut workspaces: Query<&mut LayoutCells, With<WorkspaceMarker>>| {
+                    for mut lc in workspaces.iter_mut() {
                         lc.set_changed();
                     }
                 },
@@ -847,7 +854,7 @@ mod tests {
     #[test]
     fn disabled_config_dims_nothing() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         // Override to disabled BEFORE hosts mount, so the first PaneDim
@@ -869,9 +876,9 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next().expect("session");
-                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
+                    let workspace = workspaces.iter().next().expect("workspace");
+                    let pane = mux.workspaces_active_pane(workspace).expect("active pane");
                     mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
                         .expect("split_pane");
                 },
@@ -899,7 +906,7 @@ mod tests {
     #[test]
     fn focus_change_moves_terminal_dim() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SessionMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
@@ -909,9 +916,9 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next().expect("session");
-                    let pane = mux.sessions_active_pane(session).expect("active pane");
+                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
+                    let workspace = workspaces.iter().next().expect("workspace");
+                    let pane = mux.workspaces_active_pane(workspace).expect("active pane");
                     mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
                         .expect("split_pane");
                 },
@@ -922,25 +929,28 @@ mod tests {
         }
         mount_terminal_hosts(&mut app);
 
-        let (session, target_pane) = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next().unwrap();
-                    let active = mux.sessions_active_pane(session).unwrap();
-                    let target = mux
-                        .panes_of_session(session)
-                        .find(|p| *p != active)
-                        .expect("a non-active pane exists after split");
-                    (session, target)
-                },
-            )
-            .unwrap();
+        let (workspace, target_pane) =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next().unwrap();
+                        let active = mux.workspaces_active_pane(workspace).unwrap();
+                        let target = mux
+                            .panes_of_workspace(workspace)
+                            .find(|p| *p != active)
+                            .expect("a non-active pane exists after split");
+                        (workspace, target)
+                    },
+                )
+                .unwrap();
 
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_pane(session, target_pane)
+                mux.set_active_pane(workspace, target_pane)
                     .expect("set_active_pane");
             })
             .unwrap();
@@ -977,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_chips_appear_in_session_creation_order_after_cmd_r() {
+    fn status_bar_chips_appear_in_workspace_creation_order_after_cmd_r() {
         use crate::ui::status_bar_sync::StatusBarRoot;
 
         let (mut app, _guard) = make_test_app();
@@ -986,17 +996,19 @@ mod tests {
         app.update();
         app.update();
 
-        // Drive a CMD+R-equivalent NewSession action through its observer.
+        // Drive a CMD+R-equivalent NewWorkspace action through its observer.
         let attached = app
             .world_mut()
             .query_filtered::<Entity, (
-                With<ozmux_multiplexer::SessionMarker>,
-                With<AttachedSession>,
+                With<ozmux_multiplexer::WorkspaceMarker>,
+                With<AttachedWorkspace>,
             )>()
             .single(app.world())
-            .expect("one attached session before CMD+R");
+            .expect("one attached workspace before CMD+R");
         app.world_mut()
-            .trigger(crate::action::session::NewSessionActionEvent { session: attached });
+            .trigger(crate::action::workspace::NewWorkspaceActionEvent {
+                workspace: attached,
+            });
         // One tick for commands to flush + status bar rebuild to enqueue,
         // one for rebuild's commands to flush.
         app.update();
@@ -1023,15 +1035,15 @@ mod tests {
                 stack.extend(kids);
             }
         }
-        // Filter to just session chips ("session1", "session2", ...).
-        let session_chips: Vec<String> = chip_names
+        // Filter to just workspace chips ("workspace1", "workspace2", ...).
+        let workspace_chips: Vec<String> = chip_names
             .into_iter()
-            .filter(|n| n.starts_with("session"))
+            .filter(|n| n.starts_with("workspace"))
             .collect();
         assert_eq!(
-            session_chips,
-            vec!["session1".to_string(), "session2".to_string()],
-            "status bar must show session1 leftmost, session2 to its right",
+            workspace_chips,
+            vec!["workspace1".to_string(), "workspace2".to_string()],
+            "status bar must show workspace1 leftmost, workspace2 to its right",
         );
     }
 
@@ -1105,7 +1117,7 @@ mod tests {
 
     #[test]
     fn terminal_tab_renders_cwd_after_rebuild() {
-        use ozmux_multiplexer::{Cwd, LayoutCells, SessionMarker, SurfaceMarker};
+        use ozmux_multiplexer::{Cwd, LayoutCells, SurfaceMarker, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.insert_resource(HomeDir(None));
@@ -1122,7 +1134,7 @@ mod tests {
             .insert(Cwd("/tmp/proj".into()));
         {
             let world = app.world_mut();
-            let mut q = world.query_filtered::<&mut LayoutCells, With<SessionMarker>>();
+            let mut q = world.query_filtered::<&mut LayoutCells, With<WorkspaceMarker>>();
             for mut lc in q.iter_mut(world) {
                 lc.set_changed();
             }

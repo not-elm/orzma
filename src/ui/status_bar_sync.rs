@@ -1,6 +1,6 @@
-//! Standalone status-bar rebuild system. Rebuilds when the set of Session
-//! entities changes (Added/RemovedComponents on SessionMarker) or the
-//! AttachedSession marker moves. Does NOT depend on per-session epoch
+//! Standalone status-bar rebuild system. Rebuilds when the set of Workspace
+//! entities changes (Added/RemovedComponents on WorkspaceMarker) or the
+//! AttachedWorkspace marker moves. Does NOT depend on per-workspace epoch
 //! bumps — content changes (split / surface-add) do not redraw the
 //! status bar.
 
@@ -8,7 +8,7 @@ use crate::font::TerminalUiFont;
 use crate::ui::UiRoot;
 use crate::ui::status_bar::build_status_bar;
 use bevy::prelude::*;
-use ozmux_multiplexer::{AttachedSession, SessionCreatedAt, SessionMarker};
+use ozmux_multiplexer::{AttachedWorkspace, WorkspaceCreatedAt, WorkspaceMarker};
 
 /// Marker on the currently-active status bar root Node. `build_status_bar`
 /// inserts this on the bar entity it spawns; the standalone rebuild
@@ -19,33 +19,34 @@ pub struct StatusBarRoot;
 
 /// Despawns the existing `StatusBarRoot` and rebuilds via
 /// `crate::ui::status_bar::build_status_bar` when:
-/// - any `SessionMarker` was added or removed this frame, OR
-/// - any `AttachedSession` marker was added or removed this frame.
-pub fn rebuild_status_bar_on_session_set_change(
+/// - any `WorkspaceMarker` was added or removed this frame, OR
+/// - any `AttachedWorkspace` marker was added or removed this frame.
+pub fn rebuild_status_bar_on_workspace_set_change(
     mut commands: Commands,
-    mut attached_removed: RemovedComponents<AttachedSession>,
-    mut sessions_removed: RemovedComponents<SessionMarker>,
-    sessions: Query<
+    mut attached_removed: RemovedComponents<AttachedWorkspace>,
+    mut workspaces_removed: RemovedComponents<WorkspaceMarker>,
+    workspaces: Query<
         (
             Entity,
             &Name,
-            Has<AttachedSession>,
-            Option<&SessionCreatedAt>,
+            Has<AttachedWorkspace>,
+            Option<&WorkspaceCreatedAt>,
         ),
-        With<SessionMarker>,
+        With<WorkspaceMarker>,
     >,
     ui_root: Query<Entity, With<UiRoot>>,
     status_bar: Query<Entity, With<StatusBarRoot>>,
-    sessions_added: Query<(), Added<SessionMarker>>,
-    attached_added: Query<(), Added<AttachedSession>>,
+    workspaces_added: Query<(), Added<WorkspaceMarker>>,
+    attached_added: Query<(), Added<AttachedWorkspace>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
-    let any_session_added = sessions_added.iter().count() > 0;
-    let any_session_removed = sessions_removed.read().count() > 0;
+    let any_workspace_added = workspaces_added.iter().count() > 0;
+    let any_workspace_removed = workspaces_removed.read().count() > 0;
     let any_attached_added = attached_added.iter().count() > 0;
     let any_attached_removed = attached_removed.read().count() > 0;
 
-    if !(any_session_added || any_session_removed || any_attached_added || any_attached_removed) {
+    if !(any_workspace_added || any_workspace_removed || any_attached_added || any_attached_removed)
+    {
         return;
     }
 
@@ -57,13 +58,13 @@ pub fn rebuild_status_bar_on_session_set_change(
         commands.entity(e).try_despawn();
     }
 
-    // Sort by `SessionCreatedAt` (monotonic from `SessionNameCounter`)
+    // Sort by `WorkspaceCreatedAt` (monotonic from `WorkspaceNameCounter`)
     // rather than by `Entity`: Bevy's entity allocator does not guarantee
     // strictly monotonic indices across multiple deferred command queues,
-    // so an Entity-based sort would not match session creation order.
-    // Externally-spawned sessions without `SessionCreatedAt` sort last via
+    // so an Entity-based sort would not match workspace creation order.
+    // Externally-spawned workspaces without `WorkspaceCreatedAt` sort last via
     // the `u32::MAX` fallback.
-    let mut sessions: Vec<(Entity, String, bool, u32)> = sessions
+    let mut workspaces: Vec<(Entity, String, bool, u32)> = workspaces
         .iter()
         .map(|(e, name, attached, created)| {
             (
@@ -74,12 +75,12 @@ pub fn rebuild_status_bar_on_session_set_change(
             )
         })
         .collect();
-    sessions.sort_by_key(|(_, _, _, created_at)| *created_at);
-    let sessions: Vec<(Entity, String, bool)> = sessions
+    workspaces.sort_by_key(|(_, _, _, created_at)| *created_at);
+    let workspaces: Vec<(Entity, String, bool)> = workspaces
         .into_iter()
         .map(|(e, name, attached, _)| (e, name, attached))
         .collect();
 
     let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
-    build_status_bar(&mut commands, ui_root, &sessions, &ui_font_handle);
+    build_status_bar(&mut commands, ui_root, &workspaces, &ui_font_handle);
 }

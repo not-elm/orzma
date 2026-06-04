@@ -17,14 +17,17 @@ impl Plugin for FocusSurfaceActionPlugin {
 #[derive(EntityEvent, Debug)]
 pub struct FocusSurfaceActionEvent {
     #[event_target]
-    pub session: Entity,
+    pub workspace: Entity,
     pub direction: CycleDirection,
 }
 
 fn apply_focus_surface(trigger: On<FocusSurfaceActionEvent>, mut mux: MultiplexerCommands) {
-    let FocusSurfaceActionEvent { session, direction } = trigger.event();
-    let Some(active_pane) = mux.sessions_active_pane(*session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "FocusSurface: session vanished");
+    let FocusSurfaceActionEvent {
+        workspace,
+        direction,
+    } = trigger.event();
+    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "FocusSurface: workspace vanished");
         return;
     };
     let Some(active_surface) = mux.panes_active_surface(active_pane) else {
@@ -69,10 +72,10 @@ mod tests {
         app
     }
 
-    fn bootstrap_session(world: &mut World) -> Entity {
+    fn bootstrap_workspace(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("test".into())).session
+                mux.create_workspace(Some("test".into())).workspace
             })
             .unwrap()
     }
@@ -80,8 +83,12 @@ mod tests {
     #[test]
     fn focus_surface_next_advances_active_surface() {
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let workspace = bootstrap_workspace(app.world_mut());
+        let active_pane = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         // Add a second surface so we have something to cycle to.
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -112,7 +119,7 @@ mod tests {
         app.world_mut().flush();
 
         app.world_mut().trigger(FocusSurfaceActionEvent {
-            session,
+            workspace,
             direction: CycleDirection::Next,
         });
         app.world_mut().flush();
@@ -128,15 +135,19 @@ mod tests {
     #[test]
     fn focus_surface_in_single_surface_pane_is_a_noop() {
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let workspace = bootstrap_workspace(app.world_mut());
+        let active_pane = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         let active_before = app
             .world()
             .get::<ActiveSurface>(active_pane)
             .map(|a| a.0)
             .unwrap();
         app.world_mut().trigger(FocusSurfaceActionEvent {
-            session,
+            workspace,
             direction: CycleDirection::Next,
         });
         app.world_mut().flush();

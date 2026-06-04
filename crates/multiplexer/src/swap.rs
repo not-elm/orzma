@@ -12,7 +12,7 @@ pub enum SwapOffset {
     Next,
 }
 
-/// Result of `swap_pane`. `NoOp` is returned for single-pane sessions;
+/// Result of `swap_pane`. `NoOp` is returned for single-pane workspaces;
 /// `Swapped` carries the entity of the pane on the other side of the swap.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SwapOutcome {
@@ -22,7 +22,7 @@ pub enum SwapOutcome {
         /// The other pane entity that traded places.
         other_pane: Entity,
     },
-    /// Single-pane session — no swap target exists. Callers should treat as
+    /// Single-pane workspace — no swap target exists. Callers should treat as
     /// a soft no-op.
     NoOp,
 }

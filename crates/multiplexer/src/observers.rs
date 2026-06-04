@@ -6,29 +6,29 @@
 //! Observer registration happens in `MultiplexerPlugin::build`.
 
 use crate::components::{
-    ActivePane, ActiveSurface, LayoutCells, PaneMarker, SessionMarker, SurfaceMarker,
+    ActivePane, ActiveSurface, LayoutCells, PaneMarker, SurfaceMarker, WorkspaceMarker,
 };
 use bevy::prelude::*;
 
-/// When a Pane is despawned, any Session whose `ActivePane(Entity)`
+/// When a Pane is despawned, any Workspace whose `ActivePane(Entity)`
 /// pointed at it must be repointed. Otherwise the field would dangle
 /// and downstream systems would dereference a freed entity.
 ///
-/// The observer reads the removed Pane's parent Session via `ChildOf`
+/// The observer reads the removed Pane's parent Workspace via `ChildOf`
 /// (still valid in the pre-removal observer window), then uses
 /// `LayoutCells::ordered_pane_cells` to pick a survivor from the remaining
 /// pane cells.
 pub fn on_remove_pane_marker(
     ev: On<Remove, PaneMarker>,
     panes: Query<&ChildOf, With<PaneMarker>>,
-    mut sessions: Query<(&LayoutCells, &mut ActivePane), With<SessionMarker>>,
+    mut workspaces: Query<(&LayoutCells, &mut ActivePane), With<WorkspaceMarker>>,
 ) {
     let pane = ev.entity;
     let Ok(child_of) = panes.get(pane) else {
         return;
     };
-    let session = child_of.parent();
-    let Ok((cells, mut active)) = sessions.get_mut(session) else {
+    let workspace = child_of.parent();
+    let Ok((cells, mut active)) = workspaces.get_mut(workspace) else {
         return;
     };
     if active.0 != pane {
@@ -88,7 +88,7 @@ mod tests {
 
         let outcome = app
             .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_session(None))
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let new_pane = app
             .world_mut()
@@ -99,13 +99,15 @@ mod tests {
             .unwrap();
 
         app.world_mut()
-            .entity_mut(outcome.session)
+            .entity_mut(outcome.workspace)
             .insert(ActivePane(new_pane));
         app.world_mut().entity_mut(new_pane).despawn();
         app.update();
 
         assert_eq!(
-            app.world().get::<ActivePane>(outcome.session).map(|a| a.0),
+            app.world()
+                .get::<ActivePane>(outcome.workspace)
+                .map(|a| a.0),
             Some(outcome.pane),
             "observer must repoint ActivePane to the surviving sibling",
         );

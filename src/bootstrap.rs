@@ -1,6 +1,6 @@
 //! `OzmuxBootstrapPlugin` registers the Startup `bootstrap` system which
-//! seeds the initial Session via `MultiplexerCommands` and attaches the
-//! UI subtree pointer + `AttachedSession` marker to the spawned Session
+//! seeds the initial Workspace via `MultiplexerCommands` and attaches the
+//! UI subtree pointer + `AttachedWorkspace` marker to the spawned Workspace
 //! entity.
 
 use bevy::prelude::*;
@@ -18,7 +18,7 @@ impl Plugin for OzmuxBootstrapPlugin {
 }
 
 pub(crate) fn bootstrap(mut mux: MultiplexerCommands) {
-    let _ = mux.spawn_attached_session();
+    let _ = mux.spawn_attached_workspace();
 }
 
 /// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
@@ -40,10 +40,12 @@ fn insert_initial_cursor_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker, SessionUiSubtree};
+    use ozmux_multiplexer::{
+        AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker, WorkspaceUiSubtree,
+    };
 
     #[test]
-    fn bootstrap_spawns_session_entity_with_attached_marker() {
+    fn bootstrap_spawns_workspace_entity_with_attached_marker() {
         let _guard = crate::configs::env_guard();
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
         unsafe {
@@ -57,16 +59,17 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        let mut q = world.query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>();
+        let mut q =
+            world.query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>();
         assert_eq!(
             q.iter(world).count(),
             1,
-            "exactly one attached session entity"
+            "exactly one attached workspace entity"
         );
     }
 
     #[test]
-    fn bootstrap_names_the_initial_session_session1() {
+    fn bootstrap_names_the_initial_workspace_workspace1() {
         let _guard = crate::configs::env_guard();
         // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
         unsafe {
@@ -80,12 +83,12 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        let mut q = world.query_filtered::<&Name, With<SessionMarker>>();
+        let mut q = world.query_filtered::<&Name, With<WorkspaceMarker>>();
         let names: Vec<&str> = q.iter(world).map(|n| n.as_str()).collect();
         assert_eq!(
             names,
-            vec!["session1"],
-            "bootstrap session must be auto-named 'session1' (the first counter value)",
+            vec!["workspace1"],
+            "bootstrap workspace must be auto-named 'workspace1' (the first counter value)",
         );
     }
 
@@ -104,8 +107,8 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        let mut q = world.query::<(&SessionMarker, &SessionUiSubtree)>();
-        let row = q.iter(world).next().expect("session has subtree pointer");
+        let mut q = world.query::<(&WorkspaceMarker, &WorkspaceUiSubtree)>();
+        let row = q.iter(world).next().expect("workspace has subtree pointer");
         assert!(world.get_entity(row.1.0).is_ok());
     }
 }

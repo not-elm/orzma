@@ -1,9 +1,9 @@
 //! Layout-change logging system. Watches `Changed<LayoutCells>` on
-//! Session entities and logs a human-readable summary of the cell tree.
+//! Workspace entities and logs a human-readable summary of the cell tree.
 //! `OzmuxLayoutLogPlugin` registers the system in `Update`.
 
 use bevy::prelude::*;
-use ozmux_multiplexer::{Cell, LayoutCells, PaneMarker, SessionMarker};
+use ozmux_multiplexer::{Cell, LayoutCells, PaneMarker, WorkspaceMarker};
 
 /// Bevy Plugin that registers `log_layout_changes` in the `Update`
 /// schedule behind `Changed<LayoutCells>` so it fires only on layout
@@ -17,16 +17,16 @@ impl Plugin for OzmuxLayoutLogPlugin {
 }
 
 fn log_layout_changes(
-    sessions: Query<(Entity, &Name, &LayoutCells), (With<SessionMarker>, Changed<LayoutCells>)>,
+    workspaces: Query<(Entity, &Name, &LayoutCells), (With<WorkspaceMarker>, Changed<LayoutCells>)>,
     panes: Query<&Name, With<PaneMarker>>,
 ) {
-    for (entity, name, layout) in sessions.iter() {
+    for (entity, name, layout) in workspaces.iter() {
         let pane_count = count_panes(layout);
         let pane_names: Vec<&str> = collect_pane_names(layout, &panes);
         tracing::info!(
             target: "ozmux_gui::layout",
             ?entity,
-            session = %name,
+            workspace = %name,
             pane_count,
             panes = ?pane_names,
             "layout changed",

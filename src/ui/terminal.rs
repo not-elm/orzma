@@ -47,8 +47,8 @@ impl Plugin for OzmuxTerminalUiPlugin {
 /// spawned terminal's env is seeded via `terminal_env` with every launched
 /// extension's bin dir so any `@<cmd>` shim resolves and can reach the control
 /// bridge. The bridge keys on `OZMUX_PANE_ID` being the multiplexer Pane
-/// `Entity`, so the host's owning Pane / Session are resolved by walking
-/// `ChildOf` from the host's `HostSurfaceEntity`: surface → Pane → Session.
+/// `Entity`, so the host's owning Pane / Workspace are resolved by walking
+/// `ChildOf` from the host's `HostSurfaceEntity`: surface → Pane → Workspace.
 /// If the chain cannot be resolved (or no extension launched) the env is
 /// empty — the terminal still works, just without `@<cmd>` support.
 fn finish_terminal_setup(
@@ -68,10 +68,10 @@ fn finish_terminal_setup(
 ) {
     for (host, host_surface) in hosts.iter() {
         let mut env = match registry.as_ref() {
-            Some(registry) => match resolve_pane_session(host_surface.0, &child_of) {
-                Some((pane, session)) => {
+            Some(registry) => match resolve_pane_workspace(host_surface.0, &child_of) {
+                Some((pane, workspace)) => {
                     let exts: Vec<_> = registry.extensions.values().collect();
-                    terminal_env(&exts, pane, session)
+                    terminal_env(&exts, pane, workspace)
                 }
                 None => Vec::new(),
             },
@@ -111,18 +111,18 @@ fn resolve_spawn_cwd(cwd: Option<std::path::PathBuf>) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
 
-/// Resolves a multiplexer Surface entity to its `(pane, session)` pair by
+/// Resolves a multiplexer Surface entity to its `(pane, workspace)` pair by
 /// walking `ChildOf` up the multiplexer hierarchy (surface → Pane →
-/// Session). Returns `None` when either link is missing — mirrors
-/// `MultiplexerCommands::pane_of_surface` + `session_of_pane` without
+/// Workspace). Returns `None` when either link is missing — mirrors
+/// `MultiplexerCommands::pane_of_surface` + `workspace_of_pane` without
 /// borrowing the full mutation SystemParam.
-pub(crate) fn resolve_pane_session(
+pub(crate) fn resolve_pane_workspace(
     surface: Entity,
     child_of: &Query<&ChildOf>,
 ) -> Option<(Entity, Entity)> {
     let pane = child_of.get(surface).ok()?.parent();
-    let session = child_of.get(pane).ok()?.parent();
-    Some((pane, session))
+    let workspace = child_of.get(pane).ok()?.parent();
+    Some((pane, workspace))
 }
 
 /// Computes grid dimensions for a host node, reserving `max_overflow_phys`

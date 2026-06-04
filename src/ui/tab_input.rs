@@ -6,7 +6,7 @@ use crate::input::InputPhase;
 use crate::ui::TabButton;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 
 /// Wires tab intersurface: `drive_tab_clicks` (click → focus pane + switch
 /// surface) and `tab_hover_cursor` (pointer cursor on hover, after the hover
@@ -18,7 +18,7 @@ impl Plugin for TabInteractionPlugin {
         app.add_systems(
             Update,
             (
-                // NOTE: drive_tab_clicks mutates `Session::active_pane`, which
+                // NOTE: drive_tab_clicks mutates `Workspace::active_pane`, which
                 // dispatch_focused_key (InputPhase::FocusedKey) reads to route
                 // keystrokes, and which the chrome-rebuild / dim systems (run
                 // after OzmuxSystems::Input) react to. It MUST live in
@@ -38,22 +38,22 @@ impl Plugin for TabInteractionPlugin {
 fn drive_tab_clicks(
     mut mux: MultiplexerCommands,
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
-    attached: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
 ) {
-    let attached_session = attached.single().ok();
+    let attached_workspace = attached.single().ok();
     for (interaction, tab) in tabs.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        if let Some(session) = attached_session
-            && let Err(e) = mux.set_active_pane(session, tab.pane)
+        if let Some(workspace) = attached_workspace
+            && let Err(e) = mux.set_active_pane(workspace, tab.pane)
         {
             tracing::warn!(target: "ozmux_gui::ui", ?e, "tab click: set_active_pane failed");
         }
         // NOTE: the surface switch is intentionally unconditional — a tab click
-        // still selects its surface even if no session is attached (the pane
+        // still selects its surface even if no workspace is attached (the pane
         // entity fully targets the switch); only the pane-focus step needs a
-        // session. Do not gate this on `attached`.
+        // workspace. Do not gate this on `attached`.
         if let Err(e) = mux.set_active_surface(tab.pane, tab.surface) {
             tracing::warn!(target: "ozmux_gui::ui", ?e, "tab click: set_active_surface failed");
         }
@@ -88,13 +88,13 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use ozmux_multiplexer::{
-        ActivePane, ActiveSurface, AttachedSession, MultiplexerCommands, MultiplexerPlugin, Side,
+        ActivePane, ActiveSurface, AttachedWorkspace, MultiplexerCommands, MultiplexerPlugin, Side,
         SplitOrientation, SurfaceKind,
     };
 
-    /// Builds an app running `drive_tab_clicks`, with one attached session whose
+    /// Builds an app running `drive_tab_clicks`, with one attached workspace whose
     /// single pane has two surfaces — the first active, the second added but
-    /// not activated. Returns `(app, session, pane, first_surface,
+    /// not activated. Returns `(app, workspace, pane, first_surface,
     /// second_surface)`.
     fn app_with_two_surfaces() -> (App, Entity, Entity, Entity, Entity) {
         let mut app = App::new();
@@ -102,11 +102,11 @@ mod tests {
             .add_plugins(MultiplexerPlugin);
         app.add_systems(Update, drive_tab_clicks);
 
-        let (session, pane, first) = app
+        let (workspace, pane, first) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("test".into()));
-                (o.session, o.pane, o.surface)
+                let o = mux.create_workspace(Some("test".into()));
+                (o.workspace, o.pane, o.surface)
             })
             .unwrap();
         app.world_mut().flush();
@@ -121,13 +121,15 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
-        app.world_mut().entity_mut(session).insert(AttachedSession);
-        (app, session, pane, first, second)
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
+        (app, workspace, pane, first, second)
     }
 
     #[test]
     fn tab_press_focuses_pane_and_switches_surface() {
-        let (mut app, session, pane, first, second) = app_with_two_surfaces();
+        let (mut app, workspace, pane, first, second) = app_with_two_surfaces();
         assert_eq!(
             app.world().get::<ActiveSurface>(pane).map(|a| a.0),
             Some(first),
@@ -151,7 +153,7 @@ mod tests {
             "pressing a tab switches the pane's active surface",
         );
         assert_eq!(
-            app.world().get::<ActivePane>(session).map(|a| a.0),
+            app.world().get::<ActivePane>(workspace).map(|a| a.0),
             Some(pane),
             "pressing a tab focuses its pane",
         );
@@ -159,7 +161,7 @@ mod tests {
 
     #[test]
     fn tab_hovered_not_pressed_does_not_switch() {
-        let (mut app, session, pane, first, second) = app_with_two_surfaces();
+        let (mut app, workspace, pane, first, second) = app_with_two_surfaces();
 
         app.world_mut().spawn((
             TabButton {
@@ -176,7 +178,7 @@ mod tests {
             "a hovered (not pressed) tab must not switch the active surface",
         );
         assert_eq!(
-            app.world().get::<ActivePane>(session).map(|a| a.0),
+            app.world().get::<ActivePane>(workspace).map(|a| a.0),
             Some(pane),
             "a hovered (not pressed) tab must not change the active pane",
         );
@@ -189,11 +191,11 @@ mod tests {
             .add_plugins(MultiplexerPlugin);
         app.add_systems(Update, drive_tab_clicks);
 
-        let (session, original_pane) = app
+        let (workspace, original_pane) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("test".into()));
-                (o.session, o.pane)
+                let o = mux.create_workspace(Some("test".into()));
+                (o.workspace, o.pane)
             })
             .unwrap();
         app.world_mut().flush();
@@ -206,13 +208,15 @@ mod tests {
                 let p = mux
                     .split_pane(original_pane, Side::After, SplitOrientation::Horizontal)
                     .expect("split");
-                mux.set_active_pane(session, original_pane)
+                mux.set_active_pane(workspace, original_pane)
                     .expect("refocus original");
                 p
             })
             .unwrap();
         app.world_mut().flush();
-        app.world_mut().entity_mut(session).insert(AttachedSession);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
 
         let other_surface = app
             .world_mut()
@@ -221,7 +225,7 @@ mod tests {
             .expect("the split pane has an active surface");
 
         assert_eq!(
-            app.world().get::<ActivePane>(session).map(|a| a.0),
+            app.world().get::<ActivePane>(workspace).map(|a| a.0),
             Some(original_pane),
             "precondition: the original pane is focused, the split pane is not",
         );
@@ -238,7 +242,7 @@ mod tests {
         app.update();
 
         assert_eq!(
-            app.world().get::<ActivePane>(session).map(|a| a.0),
+            app.world().get::<ActivePane>(workspace).map(|a| a.0),
             Some(other_pane),
             "clicking a tab in an unfocused pane focuses that pane",
         );

@@ -17,13 +17,13 @@ impl Plugin for CloseSurfaceActionPlugin {
 #[derive(EntityEvent, Debug)]
 pub struct CloseSurfaceActionEvent {
     #[event_target]
-    pub session: Entity,
+    pub workspace: Entity,
 }
 
 fn apply_close_surface(trigger: On<CloseSurfaceActionEvent>, mut mux: MultiplexerCommands) {
-    let CloseSurfaceActionEvent { session } = trigger.event();
-    let Some(active_pane) = mux.sessions_active_pane(*session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "CloseSurface: session vanished");
+    let CloseSurfaceActionEvent { workspace } = trigger.event();
+    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "CloseSurface: workspace vanished");
         return;
     };
     let Some(active_surface) = mux.panes_active_surface(active_pane) else {
@@ -59,10 +59,10 @@ mod tests {
         app
     }
 
-    fn bootstrap_session(world: &mut World) -> Entity {
+    fn bootstrap_workspace(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("test".into())).session
+                mux.create_workspace(Some("test".into())).workspace
             })
             .unwrap()
     }
@@ -70,14 +70,23 @@ mod tests {
     #[test]
     fn close_surface_event_in_single_surface_pane_is_a_noop() {
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
-        app.world_mut().trigger(CloseSurfaceActionEvent { session });
+        let workspace = bootstrap_workspace(app.world_mut());
+        let active_before = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
+        app.world_mut()
+            .trigger(CloseSurfaceActionEvent { workspace });
         app.world_mut().flush();
         // Single-surface pane is closed via close_pane; only one pane exists,
         // so the close-last-pane invariant inside ozmux_multiplexer prevents
         // the pane from going away. Active pane identity stays put.
-        let active_after = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let active_after = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         assert_eq!(active_after, active_before);
     }
 }

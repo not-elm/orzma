@@ -1,6 +1,6 @@
-//! System that reparents the attached Session's UI subtree between
-//! `SessionUiRoot` (active) and its owning Session entity (parked). The
-//! Session entity is non-`Node`, so a parked subtree is skipped by Bevy's
+//! System that reparents the attached Workspace's UI subtree between
+//! `WorkspaceUiRoot` (active) and its owning Workspace entity (parked). The
+//! Workspace entity is non-`Node`, so a parked subtree is skipped by Bevy's
 //! UI walker — no layout, no `ComputedNode` updates, no resize-pass work.
 
 use crate::configs::OzmuxConfigsResource;
@@ -10,30 +10,33 @@ use crate::theme;
 use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::tab_label::LabelCtx;
-use crate::ui::terminal::resolve_pane_session;
+use crate::ui::terminal::resolve_pane_workspace;
 use crate::ui::{
-    HomeDir, HostSurfaceEntity, PaneDimOverlay, SessionUiDirty, SessionUiRoot, StructuralNode,
-    SurfaceHostNode, TerminalSurfaceMarker,
+    HomeDir, HostSurfaceEntity, PaneDimOverlay, StructuralNode, SurfaceHostNode,
+    TerminalSurfaceMarker, WorkspaceUiDirty, WorkspaceUiRoot,
 };
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, AttachedSession, Cell, Cwd, LayoutCells, PaneMarker, SessionMarker,
-    SessionUiSubtree, SurfaceKind, SurfaceMarker,
+    ActivePane, ActiveSurface, AttachedWorkspace, Cell, Cwd, LayoutCells, PaneMarker, SurfaceKind,
+    SurfaceMarker, WorkspaceMarker, WorkspaceUiSubtree,
 };
 
-pub struct OzmuxSessionUiPlugin;
+pub struct OzmuxWorkspaceUiPlugin;
 
-impl Plugin for OzmuxSessionUiPlugin {
+impl Plugin for OzmuxWorkspaceUiPlugin {
     fn build(&self, app: &mut App) {
         order_surface_pipeline(app);
         app.add_systems(
             Update,
             flag_chrome_dirty_on_surface_change.in_set(OzmuxSystems::ChromeInvalidate),
         )
-        .add_systems(Update, rebuild_session_ui.in_set(OzmuxSystems::SessionUi))
+        .add_systems(
+            Update,
+            rebuild_workspace_ui.in_set(OzmuxSystems::WorkspaceUi),
+        )
         .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
         .add_systems(
             Update,
@@ -43,14 +46,14 @@ impl Plugin for OzmuxSessionUiPlugin {
             Update,
             sync_terminal_dim_on_mount.after(OzmuxSystems::SetupSurface),
         )
-        .add_systems(PostUpdate, sync_active_session.before(UiSystems::Prepare));
+        .add_systems(PostUpdate, sync_active_workspace.before(UiSystems::Prepare));
     }
 }
 
 /// Orders the per-frame surface pipeline so each stage sees the previous
 /// stage's committed `Commands` — Bevy inserts an `ApplyDeferred` sync point on
 /// each ordering edge: control-bridge drain ([`ExtensionControlSet::Drain`]) →
-/// session-UI rebuild ([`OzmuxSystems::SessionUi`]) → surface setup
+/// workspace-UI rebuild ([`OzmuxSystems::WorkspaceUi`]) → surface setup
 /// ([`OzmuxSystems::SetupSurface`], which attaches terminals/webviews).
 ///
 /// Without this, unordered stages race nondeterministically:
@@ -60,7 +63,7 @@ impl Plugin for OzmuxSessionUiPlugin {
 /// - surface setup can queue a bundle insert onto a host the rebuild/prune is
 ///   about to despawn → an insert-after-despawn panic.
 ///
-/// `prune_registry_on_surface_removal` is ordered before `SessionUi` separately
+/// `prune_registry_on_surface_removal` is ordered before `WorkspaceUi` separately
 /// (in `OzmuxUiPlugin`), so host despawns are committed before both the rebuild
 /// and surface setup observe them.
 fn order_surface_pipeline(app: &mut App) {
@@ -70,60 +73,60 @@ fn order_surface_pipeline(app: &mut App) {
             OzmuxSystems::ChromeInvalidate
                 .after(ExtensionControlSet::Drain)
                 .after(OzmuxSystems::Input),
-            OzmuxSystems::SessionUi.after(OzmuxSystems::ChromeInvalidate),
-            OzmuxSystems::SetupSurface.after(OzmuxSystems::SessionUi),
+            OzmuxSystems::WorkspaceUi.after(OzmuxSystems::ChromeInvalidate),
+            OzmuxSystems::SetupSurface.after(OzmuxSystems::WorkspaceUi),
         ),
     );
 }
 
-/// Runs every Update; only does work when the set of `AttachedSession`
-/// markers changes. Tracks the previously-attached session's Entity in a
-/// `Local<Option<Entity>>` so we can look up its `SessionUiSubtree` and
-/// park it back under the Session entity.
-fn sync_active_session(
+/// Runs every Update; only does work when the set of `AttachedWorkspace`
+/// markers changes. Tracks the previously-attached workspace's Entity in a
+/// `Local<Option<Entity>>` so we can look up its `WorkspaceUiSubtree` and
+/// park it back under the Workspace entity.
+fn sync_active_workspace(
     mut commands: Commands,
-    attached_session: Query<&SessionUiSubtree, Added<AttachedSession>>,
-    sessions: Query<(Entity, &SessionUiSubtree), Without<AttachedSession>>,
-    session_ui_root: Query<Entity, With<SessionUiRoot>>,
+    attached_workspace: Query<&WorkspaceUiSubtree, Added<AttachedWorkspace>>,
+    workspaces: Query<(Entity, &WorkspaceUiSubtree), Without<AttachedWorkspace>>,
+    workspace_ui_root: Query<Entity, With<WorkspaceUiRoot>>,
 ) {
-    let Ok(newly_attached_subtree) = attached_session.single() else {
+    let Ok(newly_attached_subtree) = attached_workspace.single() else {
         return;
     };
-    let Ok(session_ui_root) = session_ui_root.single() else {
+    let Ok(workspace_ui_root) = workspace_ui_root.single() else {
         return;
     };
 
     commands
         .entity(newly_attached_subtree.0)
-        .insert(ChildOf(session_ui_root));
+        .insert(ChildOf(workspace_ui_root));
 
-    for (session_entity, tree) in sessions.iter() {
-        commands.entity(tree.0).insert(ChildOf(session_entity));
+    for (workspace_entity, tree) in workspaces.iter() {
+        commands.entity(tree.0).insert(ChildOf(workspace_entity));
     }
 }
 
-/// Rebuilds the UI subtree of every Session whose `LayoutCells` changed
+/// Rebuilds the UI subtree of every Workspace whose `LayoutCells` changed
 /// since the last run. Native Bevy `Changed<LayoutCells>` replaces the
 /// old epoch-comparison gate. The rebuild walks `layout.cells` and
-/// replaces every `StructuralNode` descendant of the session's
-/// `SessionUiSubtree` root — Surface hosts are preserved via
+/// replaces every `StructuralNode` descendant of the workspace's
+/// `WorkspaceUiSubtree` root — Surface hosts are preserved via
 /// `SurfaceEntityRegistry` and re-parented. Pruning of stale registry
 /// entries is handled by `prune_registry_on_surface_removal` driven by
 /// `RemovedComponents<SurfaceMarker>`.
-fn rebuild_session_ui(
+fn rebuild_workspace_ui(
     mut commands: Commands,
     mut registry: ResMut<SurfaceEntityRegistry>,
-    sessions: Query<
+    workspaces: Query<
         (
             Entity,
             &LayoutCells,
-            &SessionUiSubtree,
+            &WorkspaceUiSubtree,
             Option<&ActivePane>,
-            Has<AttachedSession>,
+            Has<AttachedWorkspace>,
         ),
         (
-            With<SessionMarker>,
-            Or<(Changed<LayoutCells>, With<SessionUiDirty>)>,
+            With<WorkspaceMarker>,
+            Or<(Changed<LayoutCells>, With<WorkspaceUiDirty>)>,
         ),
     >,
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
@@ -149,9 +152,9 @@ fn rebuild_session_ui(
         max_chars: theme::TAB_LABEL_MAX_CHARS,
     };
 
-    for (session_entity, layout, subtree, active_pane, _is_attached) in sessions.iter() {
+    for (workspace_entity, layout, subtree, active_pane, _is_attached) in workspaces.iter() {
         let active_pane = active_pane.map(|a| a.0);
-        let session_veil = if active_pane.is_some() { veil } else { None };
+        let workspace_veil = if active_pane.is_some() { veil } else { None };
         let active_pane = active_pane.unwrap_or(Entity::PLACEHOLDER);
         descend_and_detach_hosts(&mut commands, subtree.0, &children, &surface_hosts);
         descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
@@ -165,34 +168,36 @@ fn rebuild_session_ui(
                     &layout.cells,
                     &root.child,
                     &mut registry,
-                    session_entity,
+                    workspace_entity,
                     &ui_font_handle,
                     &children,
                     &surfaces,
                     &active_surfaces,
                     active_pane,
-                    session_veil,
+                    workspace_veil,
                     &label_ctx,
                 );
             }
             Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
             Err(err) => tracing::warn!(target: "ozmux_gui::ui", ?err, "root_cell missing"),
         }
-        // NOTE: must remove the marker after rebuilding, or `With<SessionUiDirty>`
-        // keeps matching and the session rebuilds every frame. No-op when the
+        // NOTE: must remove the marker after rebuilding, or `With<WorkspaceUiDirty>`
+        // keeps matching and the workspace rebuilds every frame. No-op when the
         // rebuild was triggered by `Changed<LayoutCells>` (marker absent).
-        commands.entity(session_entity).remove::<SessionUiDirty>();
+        commands
+            .entity(workspace_entity)
+            .remove::<WorkspaceUiDirty>();
     }
 }
 
-/// Flags a session `SessionUiDirty` when one of its panes gains a surface
+/// Flags a workspace `WorkspaceUiDirty` when one of its panes gains a surface
 /// (`Added<SurfaceMarker>`), switches its active surface
 /// (`Changed<ActiveSurface>`), or a surface reports a new working directory
 /// (`Changed<Cwd>`, via OSC 7) — in-pane changes that do not mutate
-/// `LayoutCells` and so would otherwise not trigger `rebuild_session_ui`.
+/// `LayoutCells` and so would otherwise not trigger `rebuild_workspace_ui`.
 /// Covers both the `@md` control-bridge path and the in-app shortcuts via a
 /// single UI-layer hook, keeping the multiplexer crate free of UI concerns.
-/// Ordered after the drain / input and before `SessionUi` so the marker is
+/// Ordered after the drain / input and before `WorkspaceUi` so the marker is
 /// visible to the rebuild the same frame. The split case already changes
 /// `LayoutCells`; a redundant flag there is harmless.
 fn flag_chrome_dirty_on_surface_change(
@@ -203,18 +208,20 @@ fn flag_chrome_dirty_on_surface_change(
     child_of: Query<&ChildOf>,
 ) {
     for surface in added_surfaces.iter() {
-        if let Some((_pane, session)) = resolve_pane_session(surface, &child_of) {
-            commands.entity(session).insert(SessionUiDirty);
+        if let Some((_pane, workspace)) = resolve_pane_workspace(surface, &child_of) {
+            commands.entity(workspace).insert(WorkspaceUiDirty);
         }
     }
     for pane in switched_panes.iter() {
         if let Ok(pane_parent) = child_of.get(pane) {
-            commands.entity(pane_parent.parent()).insert(SessionUiDirty);
+            commands
+                .entity(pane_parent.parent())
+                .insert(WorkspaceUiDirty);
         }
     }
     for surface in changed_cwd.iter() {
-        if let Some((_pane, session)) = resolve_pane_session(surface, &child_of) {
-            commands.entity(session).insert(SessionUiDirty);
+        if let Some((_pane, workspace)) = resolve_pane_workspace(surface, &child_of) {
+            commands.entity(workspace).insert(WorkspaceUiDirty);
         }
     }
 }
@@ -262,23 +269,23 @@ fn descend_and_despawn_structural(
     }
 }
 
-/// Flips each pane's dim veil when its session's `ActivePane` changes
-/// (focus moves between panes without a layout rebuild). For every session
+/// Flips each pane's dim veil when its workspace's `ActivePane` changes
+/// (focus moves between panes without a layout rebuild). For every workspace
 /// whose `ActivePane` changed, sets each `PaneDimOverlay` belonging to that
-/// session to `Hidden` iff its pane is the new active pane, else `Visible`.
-/// Pane→session is resolved via `ChildOf`; using `MultiplexerCommands` here
+/// workspace to `Hidden` iff its pane is the new active pane, else `Visible`.
+/// Pane→workspace is resolved via `ChildOf`; using `MultiplexerCommands` here
 /// would conflict on its `&mut ActivePane`.
 fn sync_pane_dim(
     mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
-    changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
+    changed_workspaces: Query<(Entity, &ActivePane), Changed<ActivePane>>,
     panes: Query<&ChildOf, With<PaneMarker>>,
 ) {
-    for (session, active) in changed_sessions.iter() {
+    for (workspace, active) in changed_workspaces.iter() {
         for (overlay, mut visibility) in overlays.iter_mut() {
             let Ok(child_of) = panes.get(overlay.pane) else {
                 continue;
             };
-            if child_of.parent() != session {
+            if child_of.parent() != workspace {
                 continue;
             }
             let want = if overlay.pane == active.0 {
@@ -301,13 +308,13 @@ fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
 }
 
 /// On focus change, sets each terminal host's [`PaneDim`] in the changed
-/// session: `1.0` for the active pane's terminal, the configured dim factor
+/// workspace: `1.0` for the active pane's terminal, the configured dim factor
 /// otherwise. A darkening veil is invisible on a black terminal, so terminals
-/// are dimmed at the renderer instead. Pane→session is resolved via `ChildOf`;
+/// are dimmed at the renderer instead. Pane→workspace is resolved via `ChildOf`;
 /// `MultiplexerCommands` can't be used here (it holds `&mut ActivePane`).
 fn sync_terminal_dim_on_focus(
     mut commands: Commands,
-    changed_sessions: Query<(Entity, &ActivePane), Changed<ActivePane>>,
+    changed_workspaces: Query<(Entity, &ActivePane), Changed<ActivePane>>,
     hosts: Query<
         (Entity, &HostSurfaceEntity),
         (
@@ -319,12 +326,13 @@ fn sync_terminal_dim_on_focus(
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
-    for (session, active) in changed_sessions.iter() {
+    for (workspace, active) in changed_workspaces.iter() {
         for (host, host_surface) in hosts.iter() {
-            let Some((pane, host_session)) = resolve_pane_session(host_surface.0, &child_of) else {
+            let Some((pane, host_workspace)) = resolve_pane_workspace(host_surface.0, &child_of)
+            else {
                 continue;
             };
-            if host_session != session {
+            if host_workspace != workspace {
                 continue;
             }
             let want = if pane == active.0 { 1.0 } else { dim_factor };
@@ -336,7 +344,7 @@ fn sync_terminal_dim_on_focus(
 /// Sets the initial [`PaneDim`] on a terminal host the frame its material is
 /// mounted. Hosts attach lazily after a rebuild — possibly a frame after the
 /// focus change `sync_terminal_dim_on_focus` reacts to — so this reads the
-/// host's session `ActivePane` directly, dimming a freshly-split inactive
+/// host's workspace `ActivePane` directly, dimming a freshly-split inactive
 /// terminal without waiting for the next focus change.
 fn sync_terminal_dim_on_mount(
     mut commands: Commands,
@@ -353,11 +361,11 @@ fn sync_terminal_dim_on_mount(
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
     for (host, host_surface) in newly_mounted.iter() {
-        let Some((pane, session)) = resolve_pane_session(host_surface.0, &child_of) else {
+        let Some((pane, workspace)) = resolve_pane_workspace(host_surface.0, &child_of) else {
             continue;
         };
         let is_active = active_panes
-            .get(session)
+            .get(workspace)
             .map(|a| a.0 == pane)
             .unwrap_or(true);
         let want = if is_active { 1.0 } else { dim_factor };
@@ -372,14 +380,14 @@ mod tests {
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
     use crate::ui::OzmuxUiPlugin;
-    use crate::ui::SessionUiRoot;
+    use crate::ui::WorkspaceUiRoot;
     use bevy::asset::AssetPlugin;
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
     use bevy_terminal_renderer::material::TerminalUiMaterial;
     use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-    use ozmux_multiplexer::{MultiplexerPlugin, SessionMarker};
+    use ozmux_multiplexer::{MultiplexerPlugin, WorkspaceMarker};
 
     fn build_app() -> App {
         let mut app = App::new();
@@ -393,21 +401,21 @@ mod tests {
         ));
         let ui_root = app.world_mut().spawn(Node::default()).id();
         app.world_mut()
-            .spawn((Node::default(), SessionUiRoot, ChildOf(ui_root)));
-        app.add_systems(Update, sync_active_session);
+            .spawn((Node::default(), WorkspaceUiRoot, ChildOf(ui_root)));
+        app.add_systems(Update, sync_active_workspace);
         app
     }
 
     #[test]
-    fn session_ui_runs_after_control_drain_so_deferred_commands_are_visible() {
+    fn workspace_ui_runs_after_control_drain_so_deferred_commands_are_visible() {
         // Regression for the intermittent dark/empty extension pane: the `@memo`
         // split mutates `LayoutCells` immediately but wires the new pane's
         // `ActiveSurface` / `ChildOf` through deferred `Commands`.
-        // `rebuild_session_ui` (in `OzmuxSystems::SessionUi`) must run after the
+        // `rebuild_workspace_ui` (in `OzmuxSystems::WorkspaceUi`) must run after the
         // control-bridge drain (`ExtensionControlSet::Drain`) so the inserted
         // `ApplyDeferred` flushes those commands before the rebuild reads the
-        // layout. This adds the real `OzmuxSessionUiPlugin` (which wires the
-        // ordering) and proves a SessionUi-set system observes a Drain-set
+        // layout. This adds the real `OzmuxWorkspaceUiPlugin` (which wires the
+        // ordering) and proves a WorkspaceUi-set system observes a Drain-set
         // system's deferred spawn within the same frame.
         #[derive(Resource, Default)]
         struct RebuildSaw(Option<bool>);
@@ -418,7 +426,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<SurfaceEntityRegistry>()
             .init_resource::<RebuildSaw>()
-            .add_plugins(OzmuxSessionUiPlugin);
+            .add_plugins(OzmuxWorkspaceUiPlugin);
         app.add_systems(
             Update,
             (
@@ -429,7 +437,7 @@ mod tests {
                 (|q: Query<(), With<DrainSpawned>>, mut saw: ResMut<RebuildSaw>| {
                     saw.0 = Some(!q.is_empty());
                 })
-                .in_set(OzmuxSystems::SessionUi),
+                .in_set(OzmuxSystems::WorkspaceUi),
             ),
         );
 
@@ -438,78 +446,88 @@ mod tests {
         assert_eq!(
             app.world().resource::<RebuildSaw>().0,
             Some(true),
-            "a SessionUi-set system must observe the control drain's deferred \
-             spawn within the same frame; SessionUi must be ordered after \
+            "a WorkspaceUi-set system must observe the control drain's deferred \
+             spawn within the same frame; WorkspaceUi must be ordered after \
              ExtensionControlSet::Drain (inserting an ApplyDeferred sync point)"
         );
     }
 
     #[test]
-    fn attaches_initial_session_subtree_to_session_ui_root() {
+    fn attaches_initial_workspace_subtree_to_workspace_ui_root() {
         let mut app = build_app();
 
         let subtree = app.world_mut().spawn(Node::default()).id();
-        let session = app
+        let workspace = app
             .world_mut()
-            .spawn((SessionMarker, AttachedSession, SessionUiSubtree(subtree)))
+            .spawn((
+                WorkspaceMarker,
+                AttachedWorkspace,
+                WorkspaceUiSubtree(subtree),
+            ))
             .id();
-        app.world_mut().entity_mut(subtree).insert(ChildOf(session));
+        app.world_mut()
+            .entity_mut(subtree)
+            .insert(ChildOf(workspace));
 
         app.update();
 
-        let session_ui_root = app
+        let workspace_ui_root = app
             .world_mut()
-            .query_filtered::<Entity, With<SessionUiRoot>>()
+            .query_filtered::<Entity, With<WorkspaceUiRoot>>()
             .single(app.world())
-            .expect("SessionUiRoot");
+            .expect("WorkspaceUiRoot");
         let parent = app
             .world()
             .get::<ChildOf>(subtree)
             .expect("subtree has parent")
             .parent();
         assert_eq!(
-            parent, session_ui_root,
-            "active session's subtree must be under SessionUiRoot"
+            parent, workspace_ui_root,
+            "active workspace's subtree must be under WorkspaceUiRoot"
         );
     }
 
     #[test]
-    fn switching_active_session_parks_previous_subtree_under_its_session_entity() {
+    fn switching_active_workspace_parks_previous_subtree_under_its_workspace_entity() {
         let mut app = build_app();
 
         let subtree_a = app.world_mut().spawn(Node::default()).id();
-        let session_a = app
+        let workspace_a = app
             .world_mut()
-            .spawn((SessionMarker, AttachedSession, SessionUiSubtree(subtree_a)))
+            .spawn((
+                WorkspaceMarker,
+                AttachedWorkspace,
+                WorkspaceUiSubtree(subtree_a),
+            ))
             .id();
         app.world_mut()
             .entity_mut(subtree_a)
-            .insert(ChildOf(session_a));
+            .insert(ChildOf(workspace_a));
 
         let subtree_b = app.world_mut().spawn(Node::default()).id();
-        let session_b = app
+        let workspace_b = app
             .world_mut()
-            .spawn((SessionMarker, SessionUiSubtree(subtree_b)))
+            .spawn((WorkspaceMarker, WorkspaceUiSubtree(subtree_b)))
             .id();
         app.world_mut()
             .entity_mut(subtree_b)
-            .insert(ChildOf(session_b));
+            .insert(ChildOf(workspace_b));
 
         app.update();
 
         app.world_mut()
-            .entity_mut(session_a)
-            .remove::<AttachedSession>();
+            .entity_mut(workspace_a)
+            .remove::<AttachedWorkspace>();
         app.world_mut()
-            .entity_mut(session_b)
-            .insert(AttachedSession);
+            .entity_mut(workspace_b)
+            .insert(AttachedWorkspace);
         app.update();
 
-        let session_ui_root = app
+        let workspace_ui_root = app
             .world_mut()
-            .query_filtered::<Entity, With<SessionUiRoot>>()
+            .query_filtered::<Entity, With<WorkspaceUiRoot>>()
             .single(app.world())
-            .expect("SessionUiRoot");
+            .expect("WorkspaceUiRoot");
         let parent_a = app
             .world()
             .get::<ChildOf>(subtree_a)
@@ -521,12 +539,12 @@ mod tests {
             .expect("b subtree has parent")
             .parent();
         assert_eq!(
-            parent_a, session_a,
-            "previous subtree must park under its Session entity"
+            parent_a, workspace_a,
+            "previous subtree must park under its Workspace entity"
         );
         assert_eq!(
-            parent_b, session_ui_root,
-            "new subtree must attach to SessionUiRoot"
+            parent_b, workspace_ui_root,
+            "new subtree must attach to WorkspaceUiRoot"
         );
     }
 
@@ -570,29 +588,32 @@ mod tests {
     }
 
     #[test]
-    fn in_pane_surface_add_triggers_rebuild_via_session_ui_dirty() {
+    fn in_pane_surface_add_triggers_rebuild_via_workspace_ui_dirty() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SurfaceKind};
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
         app.update();
 
-        let pane = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next()?;
-                    mux.sessions_active_pane(session)
-                },
-            )
-            .unwrap()
-            .expect("bootstrap session + active pane");
+        let pane =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next()?;
+                        mux.workspaces_active_pane(workspace)
+                    },
+                )
+                .unwrap()
+                .expect("bootstrap workspace + active pane");
 
         // Add an in-pane surface WITHOUT touching LayoutCells. The only path
         // that can drive a rebuild here is flag_chrome_dirty_on_surface_change
-        // setting SessionUiDirty from Added<SurfaceMarker>.
+        // setting WorkspaceUiDirty from Added<SurfaceMarker>.
         let added = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -609,33 +630,36 @@ mod tests {
                 .get(added)
                 .is_some(),
             "adding an in-pane surface (no LayoutCells change) must trigger a \
-             SessionUiDirty rebuild; build_pane proves it ran by spawning a host \
+             WorkspaceUiDirty rebuild; build_pane proves it ran by spawning a host \
              for the new surface"
         );
     }
 
     #[test]
-    fn inactive_surface_within_active_session_parks_under_session_entity() {
+    fn inactive_surface_within_active_workspace_parks_under_workspace_entity() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SurfaceKind};
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
         app.update();
 
-        let (session, pane, first_surface) = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 sessions: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>| {
-                    let session = sessions.iter().next()?;
-                    let pane = mux.sessions_active_pane(session)?;
-                    let surface = mux.panes_active_surface(pane)?;
-                    Some((session, pane, surface))
-                },
-            )
-            .unwrap()
-            .expect("bootstrap session + pane + first_surface");
+        let (workspace, pane, first_surface) =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next()?;
+                        let pane = mux.workspaces_active_pane(workspace)?;
+                        let surface = mux.panes_active_surface(pane)?;
+                        Some((workspace, pane, surface))
+                    },
+                )
+                .unwrap()
+                .expect("bootstrap workspace + pane + first_surface");
 
         let first_host = app
             .world()
@@ -658,7 +682,7 @@ mod tests {
             .unwrap();
 
         app.world_mut()
-            .entity_mut(session)
+            .entity_mut(workspace)
             .get_mut::<LayoutCells>()
             .expect("LayoutCells")
             .set_changed();
@@ -667,8 +691,8 @@ mod tests {
         let first_host_parent = app.world().get::<ChildOf>(first_host).map(|c| c.parent());
         assert_eq!(
             first_host_parent,
-            Some(session),
-            "inactive surface host must be parked under the Session entity (non-Node, walker-skipped)"
+            Some(workspace),
+            "inactive surface host must be parked under the Workspace entity (non-Node, walker-skipped)"
         );
     }
 
@@ -678,18 +702,18 @@ mod tests {
         app.update();
         app.update();
 
-        // Create a second session entity with a SessionUiSubtree but no AttachedSession.
-        let inactive_session = {
+        // Create a second workspace entity with a WorkspaceUiSubtree but no AttachedWorkspace.
+        let inactive_workspace = {
             let world = app.world_mut();
             let subtree = world.spawn(Node::default()).id();
-            let session_entity = world
+            let workspace_entity = world
                 .spawn((
-                    SessionMarker,
-                    SessionUiSubtree(subtree),
+                    WorkspaceMarker,
+                    WorkspaceUiSubtree(subtree),
                     Name::new("inactive"),
                 ))
                 .id();
-            world.entity_mut(subtree).insert(ChildOf(session_entity));
+            world.entity_mut(subtree).insert(ChildOf(workspace_entity));
             subtree
         };
         app.update();
@@ -698,7 +722,9 @@ mod tests {
         for _ in 0..5 {
             app.update();
         }
-        let computed = app.world().get::<bevy::ui::ComputedNode>(inactive_session);
+        let computed = app
+            .world()
+            .get::<bevy::ui::ComputedNode>(inactive_workspace);
         match computed {
             None => {
                 // Walker skipped — ideal.
@@ -714,18 +740,18 @@ mod tests {
     }
 
     #[test]
-    fn per_session_rebuild_only_touches_changed_session() {
+    fn per_workspace_rebuild_only_touches_changed_workspace() {
         let (mut app, _guard) = make_test_app_v2();
         app.update();
         app.update();
 
-        // Spawn a second session (session B) with a subtree, not attached.
-        // Session B has no LayoutCells, so Changed<LayoutCells> never fires for it.
-        let (_session_b, subtree_b) = {
+        // Spawn a second workspace (workspace B) with a subtree, not attached.
+        // Workspace B has no LayoutCells, so Changed<LayoutCells> never fires for it.
+        let (_workspace_b, subtree_b) = {
             let world = app.world_mut();
             let subtree = world.spawn(Node::default()).id();
             let entity = world
-                .spawn((SessionMarker, SessionUiSubtree(subtree), Name::new("b")))
+                .spawn((WorkspaceMarker, WorkspaceUiSubtree(subtree), Name::new("b")))
                 .id();
             world.entity_mut(subtree).insert(ChildOf(entity));
             (entity, subtree)
@@ -739,19 +765,19 @@ mod tests {
             .map(|c| c.iter().collect())
             .unwrap_or_default();
 
-        // Mark session A's LayoutCells as changed to trigger a rebuild on A only.
-        // Session B has no LayoutCells, so the Changed<LayoutCells> filter
+        // Mark workspace A's LayoutCells as changed to trigger a rebuild on A only.
+        // Workspace B has no LayoutCells, so the Changed<LayoutCells> filter
         // will not include it.
         {
             let world = app.world_mut();
-            let session_a = world
-                .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            let workspace_a = world
+                .query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>()
                 .single(world)
-                .expect("attached session A");
+                .expect("attached workspace A");
             world
-                .entity_mut(session_a)
+                .entity_mut(workspace_a)
                 .get_mut::<LayoutCells>()
-                .expect("LayoutCells on session A")
+                .expect("LayoutCells on workspace A")
                 .set_changed();
         }
         app.update();
@@ -763,115 +789,115 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(
             children_before, children_after,
-            "Session B's subtree children must not change when only Session A's LayoutCells changed",
+            "Workspace B's subtree children must not change when only Workspace A's LayoutCells changed",
         );
     }
 
     #[test]
-    fn session_subtree_root_has_explicit_sizing() {
+    fn workspace_subtree_root_has_explicit_sizing() {
         let (mut app, _guard) = make_test_app_v2();
         app.update();
         app.update();
 
         let active_subtree = {
             let world = app.world_mut();
-            let mut q = world.query_filtered::<&SessionUiSubtree, With<AttachedSession>>();
+            let mut q = world.query_filtered::<&WorkspaceUiSubtree, With<AttachedWorkspace>>();
             q.single(world).expect("one attached subtree").0
         };
 
         let node = app
             .world()
             .get::<bevy::ui::Node>(active_subtree)
-            .expect("SessionUiSubtree root must have a Node component");
+            .expect("WorkspaceUiSubtree root must have a Node component");
         assert_eq!(
             node.width,
             bevy::ui::Val::Percent(100.0),
-            "subtree root must set width: Percent(100) so it fills SessionUiRoot",
+            "subtree root must set width: Percent(100) so it fills WorkspaceUiRoot",
         );
         assert_eq!(
             node.height,
             bevy::ui::Val::Percent(100.0),
-            "subtree root must set height: Percent(100) so it fills SessionUiRoot",
+            "subtree root must set height: Percent(100) so it fills WorkspaceUiRoot",
         );
     }
 
     #[test]
-    fn new_session_action_reparents_new_subtree_to_session_ui_root() {
+    fn new_workspace_action_reparents_new_subtree_to_workspace_ui_root() {
         let (mut app, _guard) = make_test_app_v2();
         // Two ticks for Startup + first Update so bootstrap settles and
-        // sync_active_session runs at least once in PostUpdate.
+        // sync_active_workspace runs at least once in PostUpdate.
         app.update();
         app.update();
 
-        let session_ui_root = app
+        let workspace_ui_root = app
             .world_mut()
-            .query_filtered::<Entity, With<SessionUiRoot>>()
+            .query_filtered::<Entity, With<WorkspaceUiRoot>>()
             .single(app.world())
-            .expect("SessionUiRoot");
-        let bootstrap_session = app
+            .expect("WorkspaceUiRoot");
+        let bootstrap_workspace = app
             .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>()
             .single(app.world())
-            .expect("exactly one bootstrap session");
+            .expect("exactly one bootstrap workspace");
         let bootstrap_subtree = app
             .world()
-            .get::<SessionUiSubtree>(bootstrap_session)
-            .expect("bootstrap session has SessionUiSubtree pointer")
+            .get::<WorkspaceUiSubtree>(bootstrap_workspace)
+            .expect("bootstrap workspace has WorkspaceUiSubtree pointer")
             .0;
         assert_eq!(
             app.world()
                 .get::<ChildOf>(bootstrap_subtree)
                 .expect("bootstrap subtree has ChildOf")
                 .parent(),
-            session_ui_root,
-            "bootstrap subtree must start under SessionUiRoot",
+            workspace_ui_root,
+            "bootstrap subtree must start under WorkspaceUiRoot",
         );
 
         app.world_mut()
-            .trigger(crate::action::session::NewSessionActionEvent {
-                session: bootstrap_session,
+            .trigger(crate::action::workspace::NewWorkspaceActionEvent {
+                workspace: bootstrap_workspace,
             });
-        // One tick for commands to flush + rebuild_session_ui to run, one for
-        // PostUpdate sync_active_session to react.
+        // One tick for commands to flush + rebuild_workspace_ui to run, one for
+        // PostUpdate sync_active_workspace to react.
         app.update();
         app.update();
 
-        let new_session = app
+        let new_workspace = app
             .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>()
             .single(app.world())
-            .expect("exactly one attached session after CMD+R");
+            .expect("exactly one attached workspace after CMD+R");
         assert_ne!(
-            new_session, bootstrap_session,
-            "new session entity must differ from bootstrap",
+            new_workspace, bootstrap_workspace,
+            "new workspace entity must differ from bootstrap",
         );
 
         let new_subtree = app
             .world()
-            .get::<SessionUiSubtree>(new_session)
-            .expect("new session has SessionUiSubtree pointer")
+            .get::<WorkspaceUiSubtree>(new_workspace)
+            .expect("new workspace has WorkspaceUiSubtree pointer")
             .0;
         assert_eq!(
             app.world()
                 .get::<ChildOf>(new_subtree)
                 .expect("new subtree has ChildOf")
                 .parent(),
-            session_ui_root,
-            "new session's subtree must be reparented to SessionUiRoot",
+            workspace_ui_root,
+            "new workspace's subtree must be reparented to WorkspaceUiRoot",
         );
 
         let old_subtree = app
             .world()
-            .get::<SessionUiSubtree>(bootstrap_session)
-            .expect("old session retains SessionUiSubtree pointer")
+            .get::<WorkspaceUiSubtree>(bootstrap_workspace)
+            .expect("old workspace retains WorkspaceUiSubtree pointer")
             .0;
         assert_eq!(
             app.world()
                 .get::<ChildOf>(old_subtree)
                 .expect("old subtree has ChildOf")
                 .parent(),
-            bootstrap_session,
-            "old session's subtree must be parked under its session entity",
+            bootstrap_workspace,
+            "old workspace's subtree must be parked under its workspace entity",
         );
     }
 }

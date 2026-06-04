@@ -24,7 +24,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_terminal::{TerminalKey, TerminalModifiers};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::prelude::TerminalGrid;
-use ozmux_multiplexer::{AttachedSession, MultiplexerCommands, SessionMarker};
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before
@@ -149,7 +149,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// the window scale factor.
 pub(crate) fn ime_policy_system(
     mux: MultiplexerCommands,
-    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: Res<SurfaceEntityRegistry>,
     terminals: Query<(), With<TerminalSurfaceMarker>>,
     copy_modes: Query<(), With<CopyModeState>>,
@@ -186,7 +186,7 @@ pub(crate) fn ime_policy_system(
         return;
     }
 
-    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_session, &registry) else {
+    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_workspace, &registry) else {
         if window.ime_enabled {
             window.ime_enabled = false;
         }
@@ -258,12 +258,12 @@ pub(crate) fn read_ime_events(
     mut state: ResMut<ImeState>,
     mut commands: Commands,
     mux: MultiplexerCommands,
-    attached_session: Query<Entity, (With<SessionMarker>, With<AttachedSession>)>,
+    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     registry: Res<SurfaceEntityRegistry>,
 ) {
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
-            let Some(session) = attached_session.iter().next() else {
+            let Some(workspace) = attached_workspace.iter().next() else {
                 tracing::warn!(
                     target: "ozmux_gui::input::ime",
                     "commit dropped: no attached terminal",
@@ -274,7 +274,7 @@ pub(crate) fn read_ime_events(
                 &mut commands,
                 &mux,
                 &registry,
-                session,
+                workspace,
                 TerminalKey::Text(commit_text),
                 TerminalModifiers::default(),
             );
@@ -295,7 +295,7 @@ mod tests {
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
     use ozmux_multiplexer::MultiplexerCommands;
-    use ozmux_multiplexer::{AttachedSession, MultiplexerPlugin, SessionMarker};
+    use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker};
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -496,13 +496,13 @@ mod tests {
         let outcome = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("default".into()))
+                mux.create_workspace(Some("default".into()))
             })
             .unwrap();
         app.world_mut().flush();
         app.world_mut()
-            .entity_mut(outcome.session)
-            .insert(AttachedSession);
+            .entity_mut(outcome.workspace)
+            .insert(AttachedWorkspace);
 
         // Spawn a host UI entity and register it in the entity-keyed map so
         // resolve_focused_terminal / forward_to_active_terminal resolve to it.
@@ -659,7 +659,7 @@ mod tests {
         let (mut app, _term_entity) = build_app_with_attached_entity();
         let attached: Vec<Entity> = app
             .world_mut()
-            .query_filtered::<Entity, (With<SessionMarker>, With<AttachedSession>)>()
+            .query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>()
             .iter(app.world())
             .collect();
         for e in attached {
@@ -684,7 +684,7 @@ mod tests {
             .clone();
         assert!(
             captured.is_empty(),
-            "commit should be dropped when no AttachedSession"
+            "commit should be dropped when no AttachedWorkspace"
         );
     }
 }

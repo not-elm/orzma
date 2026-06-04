@@ -1,9 +1,9 @@
-//! ECS-native multiplexer for ozmux. Session, Pane, and Surface are Bevy
+//! ECS-native multiplexer for ozmux. Workspace, Pane, and Surface are Bevy
 //! entities related by `ChildOf`. All mutations route through the
 //! `MultiplexerCommands` SystemParam; the only observers handle dangling
 //! `Entity` references when a child entity is despawned.
 //!
-//! No typed IDs (`SessionId` / `PaneId` / `SurfaceId`) — every reference
+//! No typed IDs (`WorkspaceId` / `PaneId` / `SurfaceId`) — every reference
 //! is a Bevy `Entity`. Each entity also carries `Name` (from
 //! `bevy::prelude::Name`) for tracing readability.
 
@@ -21,11 +21,11 @@ pub use cells::{
     Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
     SplitOrientation,
 };
-pub use commands::{MultiplexerCommands, SessionCreated, SessionNameCounter, SplitOutcome};
+pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter};
 pub use components::{
-    ActivePane, ActiveSurface, AttachedSession, BrowserProfile, CopyMode, Cwd, ExtensionSurfaceId,
-    LayoutCells, OwningExtension, PaneDimensions, PaneMarker, SessionCreatedAt, SessionDimensions,
-    SessionMarker, SessionUiSubtree, SurfaceKind, SurfaceMarker,
+    ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd,
+    ExtensionSurfaceId, LayoutCells, OwningExtension, PaneDimensions, PaneMarker, SurfaceKind,
+    SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker, WorkspaceUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};

@@ -17,7 +17,7 @@ impl Plugin for SplitPaneActionPlugin {
 #[derive(EntityEvent, Debug)]
 pub struct SplitPaneActionEvent {
     #[event_target]
-    pub session: Entity,
+    pub workspace: Entity,
     pub orientation: SplitOrientation,
 }
 
@@ -31,11 +31,11 @@ fn apply_split(
     cwds: Query<&Cwd>,
 ) {
     let SplitPaneActionEvent {
-        session,
+        workspace,
         orientation,
     } = trigger.event();
-    let Some(active_pane) = mux.sessions_active_pane(*session) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?session, "Split: session vanished");
+    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "Split: workspace vanished");
         return;
     };
     let seed = mux
@@ -67,13 +67,17 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MultiplexerPlugin);
         app.add_plugins(SplitPaneActionPlugin);
-        let session = app
+        let workspace = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("t".into())).session
+                mux.create_workspace(Some("t".into())).workspace
             })
             .unwrap();
-        let active_pane = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let active_pane = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         let src_surface = app
             .world_mut()
             .run_system_once(move |mux: MultiplexerCommands| {
@@ -85,7 +89,7 @@ mod tests {
             .insert(Cwd("/tmp/proj".into()));
 
         app.world_mut().trigger(SplitPaneActionEvent {
-            session,
+            workspace,
             orientation: SplitOrientation::Vertical,
         });
         app.world_mut().flush();
@@ -93,7 +97,7 @@ mod tests {
         let new_surface = app
             .world_mut()
             .run_system_once(move |mux: MultiplexerCommands| {
-                let p = mux.sessions_active_pane(session).unwrap();
+                let p = mux.workspaces_active_pane(workspace).unwrap();
                 mux.panes_active_surface(p).unwrap()
             })
             .unwrap();

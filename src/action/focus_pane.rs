@@ -17,7 +17,7 @@ impl Plugin for FocusPaneActionPlugin {
 #[derive(EntityEvent, Debug)]
 pub struct FocusPaneActionEvent {
     #[event_target]
-    pub session: Entity,
+    pub workspace: Entity,
     #[expect(
         dead_code,
         reason = "populated by the shortcut dispatcher and consumed once layout-cell reads are exposed on MultiplexerCommands"
@@ -46,25 +46,33 @@ mod tests {
         app
     }
 
-    fn bootstrap_session(world: &mut World) -> Entity {
+    fn bootstrap_workspace(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_session(Some("test".into())).session
+                mux.create_workspace(Some("test".into())).workspace
             })
             .unwrap()
     }
 
     #[test]
-    fn focus_pane_event_in_single_pane_session_is_a_noop() {
+    fn focus_pane_event_in_single_pane_workspace_is_a_noop() {
         let mut app = setup_app();
-        let session = bootstrap_session(app.world_mut());
-        let active_before = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let workspace = bootstrap_workspace(app.world_mut());
+        let active_before = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         app.world_mut().trigger(FocusPaneActionEvent {
-            session,
+            workspace,
             direction: PaneDirection::Right,
         });
         app.world_mut().flush();
-        let active_after = app.world().get::<ActivePane>(session).map(|a| a.0).unwrap();
+        let active_after = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         assert_eq!(active_after, active_before);
     }
 }

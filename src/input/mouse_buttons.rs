@@ -182,31 +182,31 @@ pub(crate) fn next_click_count(
 }
 
 /// Pre-route helper. If `target_entity` belongs to a pane that is not
-/// the currently active pane in the attached session, updates
-/// `Session::ActivePane`. No-op when:
+/// the currently active pane in the attached workspace, updates
+/// `Workspace::ActivePane`. No-op when:
 ///   - The entity isn't registered as the active surface of any pane
-///     in the attached session.
+///     in the attached workspace.
 ///   - The pane is already active.
-///   - The session isn't found.
+///   - The workspace isn't found.
 ///
 /// Returns `true` when a focus change actually happened.
 ///
-/// Cross-session clicks (where `target_entity` belongs to a pane in a
-/// different session) are NOT handled here — they're rejected per the
+/// Cross-workspace clicks (where `target_entity` belongs to a pane in a
+/// different workspace) are NOT handled here — they're rejected per the
 /// spec §10 edge cases. The reverse-lookup only scans the attached
-/// session's panes; an unknown target falls through as a no-op.
+/// workspace's panes; an unknown target falls through as a no-op.
 pub(crate) fn try_click_to_focus(
     mux: &mut ozmux_multiplexer::MultiplexerCommands,
     registry: &SurfaceEntityRegistry,
-    attached_session: Entity,
+    attached_workspace: Entity,
     target_entity: Entity,
 ) -> bool {
-    let current_active_pane = mux.sessions_active_pane(attached_session);
+    let current_active_pane = mux.workspaces_active_pane(attached_workspace);
 
-    // Walk the session's panes to find which pane owns target_entity.
+    // Walk the workspace's panes to find which pane owns target_entity.
     let target_pane: Option<Entity> = {
         let mut found = None;
-        for pane in mux.panes_of_session(attached_session) {
+        for pane in mux.panes_of_workspace(attached_workspace) {
             for surface in mux.surfaces_of_pane(pane) {
                 if registry.get(surface) == Some(target_entity) {
                     found = Some(pane);
@@ -228,7 +228,7 @@ pub(crate) fn try_click_to_focus(
         return false;
     }
 
-    if let Err(err) = mux.set_active_pane(attached_session, target_pane) {
+    if let Err(err) = mux.set_active_pane(attached_workspace, target_pane) {
         tracing::warn!(target: "ozmux_gui::input", ?err, "try_click_to_focus: set_active_pane failed");
         return false;
     }
@@ -404,11 +404,11 @@ fn dispatch_mouse_buttons(
     primary_window: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
     time: Res<Time<Real>>,
-    attached_session: Query<
+    attached_workspace: Query<
         Entity,
         (
-            With<ozmux_multiplexer::SessionMarker>,
-            With<ozmux_multiplexer::AttachedSession>,
+            With<ozmux_multiplexer::WorkspaceMarker>,
+            With<ozmux_multiplexer::AttachedWorkspace>,
         ),
     >,
     registry: Res<SurfaceEntityRegistry>,
@@ -461,9 +461,9 @@ fn dispatch_mouse_buttons(
         // webviews), so focusing only afterwards would never switch to a webview
         // pane — keystrokes would keep routing to the previously-active terminal.
         if matches!(ev.state, ButtonState::Pressed)
-            && let Ok(attached_session) = attached_session.single()
+            && let Ok(attached_workspace) = attached_workspace.single()
         {
-            try_click_to_focus(&mut mux, &registry, attached_session, entity);
+            try_click_to_focus(&mut mux, &registry, attached_workspace, entity);
         }
 
         let (cols, rows) = match handles.get(entity) {
@@ -969,11 +969,11 @@ mod tests {
         app.add_plugins(crate::action::split_pane::SplitPaneActionPlugin);
         app.insert_resource(crate::ui::registry::SurfaceEntityRegistry::default());
 
-        let (session, original_pane, original_surface) = app
+        let (workspace, original_pane, original_surface) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("test".into()));
-                (o.session, o.pane, o.surface)
+                let o = mux.create_workspace(Some("test".into()));
+                (o.workspace, o.pane, o.surface)
             })
             .unwrap();
         app.world_mut().flush();
@@ -981,7 +981,7 @@ mod tests {
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
                 commands.trigger(crate::action::split_pane::SplitPaneActionEvent {
-                    session,
+                    workspace,
                     orientation: SplitOrientation::Horizontal,
                 });
             })
@@ -989,7 +989,7 @@ mod tests {
         app.world_mut().flush();
         let new_pane = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.sessions_active_pane(session))
+            .run_system_once(move |mux: MultiplexerCommands| mux.workspaces_active_pane(workspace))
             .unwrap()
             .expect("active pane after split");
         assert_ne!(new_pane, original_pane, "split must promote fresh pane");
@@ -1016,7 +1016,7 @@ mod tests {
                 move |mut mux: MultiplexerCommands,
                       registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
                       -> bool {
-                    try_click_to_focus(&mut mux, &registry, session, original_entity)
+                    try_click_to_focus(&mut mux, &registry, workspace, original_entity)
                 },
             )
             .unwrap();
@@ -1025,7 +1025,7 @@ mod tests {
             "click-to-focus must mutate when targeting a non-active pane"
         );
         assert_eq!(
-            app.world().get::<ActivePane>(session).map(|a| a.0),
+            app.world().get::<ActivePane>(workspace).map(|a| a.0),
             Some(original_pane),
             "active pane must now be the click target"
         );
@@ -1036,7 +1036,7 @@ mod tests {
                 move |mut mux: MultiplexerCommands,
                       registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
                       -> bool {
-                    try_click_to_focus(&mut mux, &registry, session, original_entity)
+                    try_click_to_focus(&mut mux, &registry, workspace, original_entity)
                 },
             )
             .unwrap();
@@ -1052,7 +1052,7 @@ mod tests {
                 move |mut mux: MultiplexerCommands,
                       registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
                       -> bool {
-                    try_click_to_focus(&mut mux, &registry, session, stranger)
+                    try_click_to_focus(&mut mux, &registry, workspace, stranger)
                 },
             )
             .unwrap();
@@ -1524,7 +1524,7 @@ mod tests {
         use bevy::math::DVec2;
         use bevy::window::WindowResolution;
         use ozmux_multiplexer::{
-            ActivePane, AttachedSession, MultiplexerCommands, MultiplexerPlugin, Side,
+            ActivePane, AttachedWorkspace, MultiplexerCommands, MultiplexerPlugin, Side,
             SplitOrientation,
         };
 
@@ -1551,16 +1551,16 @@ mod tests {
         app.add_message::<CursorMoved>();
         app.add_systems(Update, dispatch_mouse_buttons);
 
-        // Two-pane session: original (terminal) is re-focused after the split,
+        // Two-pane workspace: original (terminal) is re-focused after the split,
         // so the test starts with the terminal pane active.
-        // create_session / split / focus-reset each queue deferred Commands, so
+        // create_workspace / split / focus-reset each queue deferred Commands, so
         // flush between steps — split_pane reads the pane via a query and would
         // PaneNotFound it before the create flush.
-        let (session, original_pane) = app
+        let (workspace, original_pane) = app
             .world_mut()
             .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_session(Some("t".into()));
-                (o.session, o.pane)
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane)
             })
             .unwrap();
         app.world_mut().flush();
@@ -1572,7 +1572,7 @@ mod tests {
                     .split_pane(original_pane, Side::After, SplitOrientation::Horizontal)
                     .expect("split_pane");
                 // Re-focus the original (terminal) pane so the test starts there.
-                mux.set_active_pane(session, original_pane)
+                mux.set_active_pane(workspace, original_pane)
                     .expect("set_active_pane");
                 ext_pane
             })
@@ -1586,7 +1586,9 @@ mod tests {
             .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(ext_pane))
             .unwrap()
             .expect("new pane has an active surface");
-        app.world_mut().entity_mut(session).insert(AttachedSession);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
 
         // The clicked pane's host: SurfaceHostNode + a laid-out node under the
         // cursor, but NO TerminalHandle (a webview host). `VisibleSurfaceHost`
@@ -1623,7 +1625,7 @@ mod tests {
             .set_physical_cursor_position(Some(DVec2::new(400.0, 300.0)));
 
         assert_eq!(
-            app.world().get::<ActivePane>(session).map(|a| a.0),
+            app.world().get::<ActivePane>(workspace).map(|a| a.0),
             Some(original_pane),
             "precondition: the terminal pane is focused before the click",
         );
@@ -1638,7 +1640,7 @@ mod tests {
         app.update();
 
         assert_eq!(
-            app.world().get::<ActivePane>(session).map(|a| a.0),
+            app.world().get::<ActivePane>(workspace).map(|a| a.0),
             Some(ext_pane),
             "clicking a pane whose host has no TerminalHandle must still move focus to it",
         );

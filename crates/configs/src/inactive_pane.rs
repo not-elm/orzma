@@ -1,5 +1,5 @@
 //! Inactive-pane dimming configuration: the translucent veil drawn over
-//! every pane that is not its session's active pane.
+//! every pane that is not its workspace's active pane.
 
 use serde::{Deserialize, Serialize};
 

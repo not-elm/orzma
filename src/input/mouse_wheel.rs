@@ -12,7 +12,7 @@
 //!    stale.
 //! 3. Truncate the residual to an integer `notches` count; the
 //!    fractional remainder carries to the next frame.
-//! 4. Resolve the active session's focused pane → entity (mirrors
+//! 4. Resolve the active workspace's focused pane → entity (mirrors
 //!    `dispatch_focused_key`). If copy mode is active, skip — the copy
 //!    mode handler owns input semantics there.
 //! 5. Resolve the cursor cell within the focused pane (or fall back
@@ -67,11 +67,11 @@ fn dispatch_mouse_wheel(
     registry: Res<SurfaceEntityRegistry>,
     mux: ozmux_multiplexer::MultiplexerCommands,
     copy_modes: Query<(), With<CopyModeState>>,
-    attached_session: Query<
+    attached_workspace: Query<
         Entity,
         (
-            With<ozmux_multiplexer::SessionMarker>,
-            With<ozmux_multiplexer::AttachedSession>,
+            With<ozmux_multiplexer::WorkspaceMarker>,
+            With<ozmux_multiplexer::AttachedWorkspace>,
         ),
     >,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -92,7 +92,7 @@ fn dispatch_mouse_wheel(
     let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
         return;
     };
-    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_session, &registry) else {
+    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_workspace, &registry) else {
         return;
     };
     if copy_modes.get(entity).is_ok() {
