@@ -342,9 +342,7 @@ fn execute_action(
             });
         }
         ShortcutAction::NewTerminalSurface => {
-            commands.trigger(NewTerminalSurfaceActionEvent {
-                workspace,
-            });
+            commands.trigger(NewTerminalSurfaceActionEvent { workspace });
         }
         ShortcutAction::FocusPane { direction } => {
             commands.trigger(FocusPaneActionEvent {
@@ -367,14 +365,10 @@ fn execute_action(
             });
         }
         ShortcutAction::ClosePane => {
-            commands.trigger(ClosePaneActionEvent {
-                workspace,
-            });
+            commands.trigger(ClosePaneActionEvent { workspace });
         }
         ShortcutAction::CloseSurface => {
-            commands.trigger(CloseSurfaceActionEvent {
-                workspace,
-            });
+            commands.trigger(CloseSurfaceActionEvent { workspace });
         }
         other => tracing::debug!(
             target: "ozmux_gui::input",

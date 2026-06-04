@@ -292,7 +292,8 @@ fn context_preload_js(
     extension_name: &str,
 ) -> String {
     let workspace_id = workspace.to_bits().to_string();
-    // NOTE: JS keys "sessionId"/"windowId" are the browser-side wire contract read by the SDK surface client; keep the legacy names. Both carry the workspace entity bits.
+    // NOTE: the JS keys "sessionId"/"windowId" keep their legacy names on purpose — a
+    // browser-side wire contract the SDK surface client reads; renaming them breaks extensions.
     format!(
         "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:\"extension\",extensionName:{n:?}}};",
         s = workspace_id,
