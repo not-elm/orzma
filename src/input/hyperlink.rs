@@ -134,12 +134,10 @@ fn hyperlink_hover_and_cursor(
     let mods = current_modifiers(&keys);
     hover.modifier_held = link_modifier_held(&mods);
 
+    hover.entity = None;
+    hover.hyperlink_id = None;
     let target = match resolve_pane_at_phys(&hosts, cursor_phys) {
-        None => {
-            hover.entity = None;
-            hover.hyperlink_id = None;
-            HoverTarget::Default
-        }
+        None => HoverTarget::Default,
         Some((entity, local)) => {
             if let Ok(grid) = grids.get(entity) {
                 let (col, row, _side) =
@@ -153,15 +151,16 @@ fn hyperlink_hover_and_cursor(
                     has_link: id.is_some(),
                     modifier_held: hover.modifier_held,
                 }
+            } else if cursor_over_cef_area(
+                entity,
+                cursor_phys,
+                &webview_hosts,
+                &browser_hosts,
+                &nodes,
+            ) {
+                HoverTarget::Webview
             } else {
-                hover.entity = None;
-                hover.hyperlink_id = None;
-                if cursor_over_cef_area(entity, cursor_phys, &webview_hosts, &browser_hosts, &nodes)
-                {
-                    HoverTarget::Webview
-                } else {
-                    HoverTarget::Default
-                }
+                HoverTarget::Default
             }
         }
     };
