@@ -6,40 +6,43 @@
 //! Observer registration happens in `MultiplexerPlugin::build`.
 
 use crate::components::{
-    ActivePane, ActiveSurface, LayoutCells, PaneMarker, SurfaceMarker, WorkspaceMarker,
+    ActivePane, ActiveSurface, OwningWorkspace, PaneMarker, SurfaceMarker, WorkspaceMarker,
+    WorkspaceUiSubtree,
 };
 use bevy::prelude::*;
 
-/// When a Pane is despawned, any Workspace whose `ActivePane(Entity)`
-/// pointed at it must be repointed. Otherwise the field would dangle
-/// and downstream systems would dereference a freed entity.
-///
-/// The observer reads the removed Pane's parent Workspace via `ChildOf`
-/// (still valid in the pre-removal observer window), then uses
-/// `LayoutCells::ordered_pane_cells` to pick a survivor from the remaining
-/// pane cells.
+/// When a Pane is despawned, repoint any Workspace `ActivePane` that pointed at
+/// it to a surviving pane. Walks the workspace's layout tree (via the
+/// `OwningWorkspace` back-pointer + `WorkspaceUiSubtree` root) and picks the
+/// first pane that is NOT the dying one. The dying pane is still in the tree
+/// during this pre-removal observer window, so it must be filtered explicitly.
 pub fn on_remove_pane_marker(
     ev: On<Remove, PaneMarker>,
-    panes: Query<&ChildOf, With<PaneMarker>>,
-    mut workspaces: Query<(&LayoutCells, &mut ActivePane), With<WorkspaceMarker>>,
+    owners: Query<&OwningWorkspace, With<PaneMarker>>,
+    subtrees: Query<&WorkspaceUiSubtree>,
+    children: Query<&Children>,
+    panes: Query<(), With<PaneMarker>>,
+    mut workspaces: Query<&mut ActivePane, With<WorkspaceMarker>>,
 ) {
-    let pane = ev.entity;
-    let Ok(child_of) = panes.get(pane) else {
+    let dying = ev.entity;
+    let Ok(owner) = owners.get(dying) else {
         return;
     };
-    let workspace = child_of.parent();
-    let Ok((cells, mut active)) = workspaces.get_mut(workspace) else {
+    let workspace = owner.0;
+    let Ok(mut active) = workspaces.get_mut(workspace) else {
         return;
     };
-    if active.0 != pane {
+    if active.0 != dying {
         return;
     }
-    let panes_in_layout = cells
-        .cells
-        .ordered_pane_cells(&cells.root)
-        .unwrap_or_default();
-    if let Some((_, survivor)) = panes_in_layout.into_iter().find(|(_, p)| *p != pane) {
-        active.0 = survivor;
+    let Ok(root) = subtrees.get(workspace) else {
+        return;
+    };
+    let survivor = crate::layout::ordered_panes(root.0, &children, &panes)
+        .into_iter()
+        .find(|&p| p != dying);
+    if let Some(s) = survivor {
+        active.0 = s;
     }
 }
 
@@ -110,6 +113,39 @@ mod tests {
                 .map(|a| a.0),
             Some(outcome.pane),
             "observer must repoint ActivePane to the surviving sibling",
+        );
+    }
+
+    #[test]
+    fn removing_pane_repoints_active_to_remaining_tree_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(crate::plugin::MultiplexerPlugin);
+
+        let outcome = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        let new_pane = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal)
+                    .unwrap()
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        app.world_mut()
+            .entity_mut(outcome.workspace)
+            .insert(ActivePane(new_pane));
+        app.world_mut().entity_mut(new_pane).despawn();
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<ActivePane>(outcome.workspace)
+                .map(|a| a.0),
+            Some(outcome.pane),
         );
     }
 }

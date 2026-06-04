@@ -4,14 +4,14 @@
 //! native change detection (`Changed<T>`) carries the signal to downstream
 //! rebuild systems.
 
-use crate::cells::{Side, SplitOrientation};
 use crate::components::{
     ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, LayoutCells, OwningWorkspace,
-    PaneMarker, SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions,
+    PaneMarker, SplitNode, SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions,
     WorkspaceMarker, WorkspaceUiSubtree,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
+use crate::layout::{Side, SplitOrientation};
 use crate::resize::{ResizePaneOutcome, resize_split_for_pane};
 use crate::swap::{SwapOffset, SwapOutcome};
 use bevy::ecs::system::SystemParam;
@@ -83,6 +83,11 @@ pub struct MultiplexerCommands<'w, 's> {
     panes_owned: Query<'w, 's, (Entity, &'static OwningWorkspace), With<PaneMarker>>,
     surfaces: Query<'w, 's, (&'static SurfaceKind, &'static ChildOf), With<SurfaceMarker>>,
     children: Query<'w, 's, &'static Children>,
+    child_of: Query<'w, 's, &'static ChildOf>,
+    layout_nodes: Query<'w, 's, &'static Node>,
+    splits: Query<'w, 's, &'static SplitNode>,
+    panes_only: Query<'w, 's, (), With<PaneMarker>>,
+    subtrees: Query<'w, 's, &'static WorkspaceUiSubtree>,
 }
 
 impl<'w, 's> MultiplexerCommands<'w, 's> {
@@ -197,9 +202,11 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     }
 
     /// Split the target pane and seed the new pane with one surface of the
-    /// caller-chosen `kind`. Delegates to `split_pane_inner` (which does the
-    /// layout mutation + active-pane promotion) and attaches the surface; on
-    /// error the freshly-spawned surface is despawned to leave no orphan.
+    /// caller-chosen `kind`. Delegates to `split_pane_inner` (which inserts a
+    /// `Split` node into the target's layout slot, reparents the target and the
+    /// new pane under it, and promotes the new pane to `ActivePane`) and
+    /// attaches the surface; on error the freshly-spawned surface is despawned
+    /// to leave no orphan.
     pub fn split_pane_with_surface(
         &mut self,
         target_pane: Entity,
@@ -230,9 +237,10 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     }
 
     /// Split the target pane in two, seeding a bootstrap Terminal surface.
-    /// Mutates `LayoutCells` to insert the new pane at the requested
-    /// side/orientation and promotes it to `ActivePane`. On error,
-    /// freshly-spawned entities are despawned to leave no orphans.
+    /// Inserts a `Split` node into the target's layout slot, reparents the
+    /// target and the new pane under it, and promotes the new pane to
+    /// `ActivePane`. On error, freshly-spawned entities are despawned to leave
+    /// no orphans.
     pub fn split_pane(
         &mut self,
         target_pane: Entity,
@@ -243,24 +251,29 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .map(|o| o.pane)
     }
 
-    /// Close a pane. Despawns the pane entity (which cascades to its
-    /// Surface children via `ChildOf`), mutates `LayoutCells` to collapse
-    /// the split, and repoints `ActivePane` if the closed pane was active.
+    /// Close a pane. Promotes the closed pane's sibling into the grandparent
+    /// slot, despawns the pane and its parent `Split`, and repoints `ActivePane`
+    /// to the survivor if the closed pane was active. Surface children cascade-
+    /// despawn via `ChildOf`.
     pub fn close_pane(&mut self, pane: Entity) -> MultiplexerResult<()> {
         let workspace = self
             .workspace_of_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
-        let (mut layout, mut active_pane, _, _) = self
-            .workspaces
-            .get_mut(workspace)
-            .map_err(|_| MultiplexerError::WorkspaceNotFound(workspace))?;
-        let cell_id = layout.cells.lookup_cell_for_pane(pane)?;
-        let outcome = layout.cells.close_cell(&cell_id)?;
-        let survivor = layout.cells.leftmost_pane(outcome.survivor())?;
-        if active_pane.0 == pane {
-            active_pane.0 = survivor;
+        let result = crate::layout::close_in_tree(
+            &mut self.commands,
+            workspace,
+            pane,
+            &self.child_of,
+            &self.children,
+            &self.layout_nodes,
+            &self.splits,
+            &self.panes_only,
+        )?;
+        if let Ok((_, mut active_pane, _, _)) = self.workspaces.get_mut(workspace)
+            && active_pane.0 == pane
+        {
+            active_pane.0 = result.survivor_pane;
         }
-        self.commands.entity(pane).despawn();
         Ok(())
     }
 
@@ -274,18 +287,18 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         let workspace = self
             .workspace_of_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
-        let (mut layout, _, _, _) = self
-            .workspaces
-            .get_mut(workspace)
+        let root = self
+            .subtrees
+            .get(workspace)
+            .map(|s| s.0)
             .map_err(|_| MultiplexerError::WorkspaceNotFound(workspace))?;
-        let root = layout.root;
-        let ordered = layout.cells.ordered_pane_cells(&root)?;
+        let ordered = crate::layout::ordered_panes(root, &self.children, &self.panes_only);
         if ordered.len() < 2 {
             return Ok(SwapOutcome::NoOp);
         }
         let i = ordered
             .iter()
-            .position(|(_, p)| *p == pane)
+            .position(|p| *p == pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
         let len = ordered.len() as isize;
         let delta = match offset {
@@ -293,9 +306,15 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             SwapOffset::Next => 1,
         };
         let j = ((i as isize + delta).rem_euclid(len)) as usize;
-        let (cell_i, _) = ordered[i];
-        let (cell_j, other_pane) = ordered[j];
-        layout.cells.swap_panes(&cell_i, &cell_j)?;
+        let other_pane = ordered[j];
+        crate::layout::swap_in_tree(
+            &mut self.commands,
+            pane,
+            other_pane,
+            &self.child_of,
+            &self.children,
+            &self.layout_nodes,
+        );
         Ok(SwapOutcome::Swapped { other_pane })
     }
 
@@ -429,9 +448,10 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .filter(move |child| self.surfaces.get(*child).is_ok())
     }
 
-    /// Split the target pane in two without spawning a bootstrap surface.
-    /// Returns `(new_pane, workspace)`. Callers are responsible for attaching
-    /// a surface to the new pane.
+    /// Inserts a `Split` node into the target's layout slot, reparents the
+    /// target and `new_pane` under it, and promotes `new_pane` to `ActivePane`.
+    /// Does not spawn a bootstrap surface; callers are responsible for attaching
+    /// one. Returns `(new_pane, workspace)`.
     fn split_pane_inner(
         &mut self,
         target_pane: Entity,
@@ -442,32 +462,32 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .workspace_of_pane(target_pane)
             .ok_or(MultiplexerError::PaneNotFound(target_pane))?;
 
+        let pane_node = crate::layout::pane_frame_node();
         let new_pane = self
             .commands
-            .spawn((PaneMarker, OwningWorkspace(workspace), CopyMode::default(), Name::new("pane: split")))
+            .spawn((
+                PaneMarker,
+                OwningWorkspace(workspace),
+                CopyMode::default(),
+                pane_node,
+                Name::new("pane: split"),
+            ))
             .id();
-        // TODO: transitional — split panes are parented directly to the workspace
-        // (matching the legacy cell-based body), inconsistent with the bootstrap
-        // pane's ChildOf(root). The entity-tree split rewrite reparents this into
-        // the layout tree (insert a Split node, reparent target + new pane).
-        self.commands.entity(new_pane).insert(ChildOf(workspace));
 
-        let (mut layout, mut active_pane, _, _) = self
-            .workspaces
-            .get_mut(workspace)
-            .map_err(|_| MultiplexerError::WorkspaceNotFound(workspace))?;
-        let target_cell = layout.cells.lookup_cell_for_pane(target_pane)?;
-        let new_cell = layout.cells.new_pane(new_pane, None);
-        if let Err(e) = layout
-            .cells
-            .split_cell(target_cell, new_cell, side, orientation)
-        {
-            let _ = layout.cells.remove_subtree(&new_cell);
-            self.commands.entity(new_pane).despawn();
-            return Err(e);
+        crate::layout::split_in_tree(
+            &mut self.commands,
+            target_pane,
+            new_pane,
+            side,
+            orientation,
+            &self.child_of,
+            &self.children,
+            &self.layout_nodes,
+        );
+
+        if let Ok((_, mut active_pane, _, _)) = self.workspaces.get_mut(workspace) {
+            active_pane.0 = new_pane;
         }
-        active_pane.0 = new_pane;
-
         Ok((new_pane, workspace))
     }
 }
@@ -806,12 +826,14 @@ mod tests {
     }
 
     #[test]
-    fn split_pane_spawns_pane_with_bootstrap_surface_and_updates_layout() {
+    fn split_pane_inserts_split_reparents_target_and_sets_grows() {
         let mut world = World::new();
         world.init_resource::<WorkspaceNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
+        world.flush();
+        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
 
         let new_pane = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -821,27 +843,61 @@ mod tests {
             .unwrap();
         world.flush();
 
+        let split = world.get::<Children>(root).unwrap().iter().next().unwrap();
+        assert!(world.get::<SplitNode>(split).is_some());
         assert_eq!(
-            world.get::<ChildOf>(new_pane).map(|c| c.parent()),
-            Some(outcome.workspace),
+            world.get::<SplitNode>(split).unwrap().orientation,
+            SplitOrientation::Horizontal
         );
-        assert!(world.get::<PaneMarker>(new_pane).is_some());
+        assert_eq!(world.get::<Node>(split).map(|n| n.flex_grow), Some(1.0));
+        let kids: Vec<Entity> = world.get::<Children>(split).unwrap().iter().collect();
+        assert_eq!(kids, vec![outcome.pane, new_pane]);
+        assert_eq!(world.get::<Node>(outcome.pane).map(|n| n.flex_grow), Some(1.0));
+        assert_eq!(world.get::<Node>(new_pane).map(|n| n.flex_grow), Some(1.0));
+        assert_eq!(
+            world.get::<OwningWorkspace>(new_pane).map(|o| o.0),
+            Some(outcome.workspace)
+        );
         assert_eq!(
             world.get::<ActivePane>(outcome.workspace).map(|a| a.0),
             Some(new_pane)
         );
-        let cells = world.get::<LayoutCells>(outcome.workspace).unwrap();
-        assert!(cells.cells.lookup_cell_for_pane(outcome.pane).is_ok());
-        assert!(cells.cells.lookup_cell_for_pane(new_pane).is_ok());
+        assert_eq!(
+            world.get::<ChildOf>(outcome.surface).map(|c| c.parent()),
+            Some(outcome.pane)
+        );
     }
 
     #[test]
-    fn close_pane_despawns_pane_and_repoints_active_to_survivor() {
+    fn split_pane_before_orders_new_then_target() {
         let mut world = World::new();
         world.init_resource::<WorkspaceNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
+        world.flush();
+        let new_pane = world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(outcome.pane, Side::Before, SplitOrientation::Vertical)
+                    .unwrap()
+            })
+            .unwrap();
+        world.flush();
+        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
+        let split = world.get::<Children>(root).unwrap().iter().next().unwrap();
+        let kids: Vec<Entity> = world.get::<Children>(split).unwrap().iter().collect();
+        assert_eq!(kids, vec![new_pane, outcome.pane], "Side::Before puts new pane first");
+    }
+
+    #[test]
+    fn close_pane_promotes_sibling_into_slot_and_despawns_split() {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        world.flush();
+        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
         let new_pane = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
                 mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal)
@@ -849,44 +905,95 @@ mod tests {
             })
             .unwrap();
         world.flush();
+        let split = world.get::<Children>(root).unwrap().iter().next().unwrap();
 
         world
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.close_pane(new_pane).unwrap();
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.close_pane(new_pane).unwrap())
             .unwrap();
         world.flush();
 
-        assert!(world.get_entity(new_pane).is_err(), "pane entity despawned");
+        assert!(world.get_entity(new_pane).is_err(), "closed pane despawned");
+        assert!(world.get_entity(split).is_err(), "parent split despawned");
+        let root_kids: Vec<Entity> = world.get::<Children>(root).unwrap().iter().collect();
+        assert_eq!(root_kids, vec![outcome.pane]);
+        assert_eq!(world.get::<Node>(outcome.pane).map(|n| n.flex_grow), Some(1.0));
+        assert!(world.get_entity(outcome.surface).is_ok());
         assert_eq!(
             world.get::<ActivePane>(outcome.workspace).map(|a| a.0),
-            Some(outcome.pane),
-            "active falls back to surviving pane",
+            Some(outcome.pane)
         );
     }
 
     #[test]
-    fn swap_pane_returns_swap_outcome_and_updates_layout() {
+    fn close_last_pane_errors() {
         let mut world = World::new();
         world.init_resource::<WorkspaceNameCounter>();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
+        world.flush();
+        let result = world
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.close_pane(outcome.pane))
+            .unwrap();
+        assert!(matches!(
+            result,
+            Err(MultiplexerError::CannotCloseLastPaneInWorkspace(_))
+        ));
+    }
+
+    #[test]
+    fn swap_pane_swaps_positions_and_slot_grows() {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        world.flush();
         let other = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal)
-                    .unwrap()
+                mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal).unwrap()
             })
             .unwrap();
         world.flush();
+
+        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
+        let split = world.get::<Children>(root).unwrap().iter().next().unwrap();
+        // Slot A (index 0) holds outcome.pane; slot B (index 1) holds `other`.
+        // Give the two slots DISTINCT grows so slot-pinning is observable.
+        world.get_mut::<Node>(outcome.pane).unwrap().flex_grow = 3.0;
+        world.get_mut::<Node>(other).unwrap().flex_grow = 1.0;
 
         let result = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
                 mux.swap_pane(outcome.pane, SwapOffset::Next).unwrap()
             })
             .unwrap();
+        world.flush();
 
         assert_eq!(result, SwapOutcome::Swapped { other_pane: other });
+        // Positions swapped: split children are now [other, outcome.pane].
+        let kids: Vec<Entity> = world.get::<Children>(split).unwrap().iter().collect();
+        assert_eq!(kids, vec![other, outcome.pane]);
+        // Slot-pinning: slot A (index 0) keeps grow 3.0 (now holding `other`),
+        // slot B (index 1) keeps grow 1.0 (now holding outcome.pane).
+        assert_eq!(world.get::<Node>(other).unwrap().flex_grow, 3.0, "slot A keeps its grow; pane moved in");
+        assert_eq!(world.get::<Node>(outcome.pane).unwrap().flex_grow, 1.0, "slot B keeps its grow");
+    }
+
+    #[test]
+    fn swap_pane_single_pane_is_noop() {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        world.flush();
+        let result = world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.swap_pane(outcome.pane, SwapOffset::Next).unwrap()
+            })
+            .unwrap();
+        assert_eq!(result, SwapOutcome::NoOp);
     }
 
     #[test]
@@ -1016,9 +1123,16 @@ mod tests {
         world.flush();
 
         assert!(world.get::<PaneMarker>(split.pane).is_some());
-        assert_eq!(
-            world.get::<ChildOf>(split.pane).map(|c| c.parent()),
-            Some(outcome.workspace)
+        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
+        let split_node = world.get::<Children>(root).unwrap().iter().next().unwrap();
+        assert!(
+            world.get::<SplitNode>(split_node).is_some(),
+            "root's single child is a Split"
+        );
+        let split_kids: Vec<Entity> = world.get::<Children>(split_node).unwrap().iter().collect();
+        assert!(
+            split_kids.contains(&split.pane),
+            "new pane is under the Split in the entity tree"
         );
         assert_eq!(
             world.get::<ActivePane>(outcome.workspace).map(|a| a.0),
