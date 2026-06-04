@@ -8,7 +8,6 @@
 //! design doc §3 "Naming" for why and for the `With<WorkspaceMarker>`
 //! filter discipline that follows.
 
-use crate::cells::{CellId, LayoutCellState};
 use crate::layout::SplitOrientation;
 use bevy::prelude::*;
 use std::path::PathBuf;
@@ -44,29 +43,6 @@ pub struct OwningWorkspace(pub Entity);
 /// Zero-sized marker on every Surface entity.
 #[derive(Component, Default, Debug)]
 pub struct SurfaceMarker;
-
-/// Layout cell state plus the workspace's `root` cell id, owned together
-/// because every consumer needs both. `Default` returns a freshly-empty
-/// `LayoutCellState` and a `CellId(0)` placeholder root that must be
-/// overwritten by the spawn site (`MultiplexerCommands::create_workspace`).
-#[derive(Component, Debug, Default, Clone)]
-pub struct LayoutCells {
-    /// The BSP cell tree for this workspace.
-    pub cells: LayoutCellState,
-    /// The root `CellId` of the cell tree.
-    pub root: CellId,
-}
-
-impl LayoutCells {
-    /// Construct a `LayoutCells` from a freshly-spawned bootstrap pane:
-    /// builds a `LayoutCellState`, mints the root, and stashes the root
-    /// id together so callers do not need to track it separately.
-    pub fn new_workspace_layout(pane: Entity) -> Self {
-        let mut cells = LayoutCellState::default();
-        let (root, _pane_cell) = cells.new_workspace_layout(pane);
-        Self { cells, root }
-    }
-}
 
 /// The currently focused Pane entity within a Workspace. `Changed<ActivePane>`
 /// is the signal for the terminal-focus and IME-target-switch systems.

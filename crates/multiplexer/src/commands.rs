@@ -5,9 +5,9 @@
 //! rebuild systems.
 
 use crate::components::{
-    ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, LayoutCells, OwningWorkspace,
-    PaneMarker, SplitNode, SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions,
-    WorkspaceMarker, WorkspaceUiSubtree,
+    ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, OwningWorkspace, PaneMarker, SplitNode,
+    SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
+    WorkspaceUiSubtree,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
@@ -62,7 +62,6 @@ pub struct MultiplexerCommands<'w, 's> {
         'w,
         's,
         (
-            &'static mut LayoutCells,
             &'static mut ActivePane,
             &'static mut Name,
             Option<&'static mut WorkspaceDimensions>,
@@ -93,9 +92,7 @@ pub struct MultiplexerCommands<'w, 's> {
 
 impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// Spawn a Workspace with a layout-root node holding one bootstrap Pane
-    /// (one bootstrap Terminal Surface as its child). The `LayoutCells`
-    /// component is still inserted (vestigial) so the legacy cell-based methods
-    /// keep working until they are ported; it is removed in a later task.
+    /// (one bootstrap Terminal Surface as its child).
     pub fn create_workspace(&mut self, name: Option<String>) -> WorkspaceCreated {
         let name = name.unwrap_or_else(|| "default".to_string());
 
@@ -141,11 +138,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             ))
             .id();
 
-        self.commands.entity(workspace).insert((
-            LayoutCells::new_workspace_layout(pane),
-            ActivePane(pane),
-            WorkspaceUiSubtree(root),
-        ));
+        self.commands
+            .entity(workspace)
+            .insert((ActivePane(pane), WorkspaceUiSubtree(root)));
         self.commands.entity(root).insert(ChildOf(workspace));
         self.commands.entity(pane).insert(ChildOf(root));
         self.commands.entity(surface).insert(ChildOf(pane));
@@ -175,7 +170,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// Mutate the Workspace's `Name` component. Uses `set_if_neq` so a
     /// no-op rename does not flag `Changed<Name>`.
     pub fn rename_workspace(&mut self, workspace: Entity, name: String) -> MultiplexerResult<()> {
-        let (_, _, mut current_name, _) = self
+        let (_, mut current_name, _) = self
             .workspaces
             .get_mut(workspace)
             .map_err(|_| MultiplexerError::WorkspaceNotFound(workspace))?;
@@ -187,7 +182,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// first call; subsequent calls update in place via `set_if_neq`.
     pub fn set_workspace_dimensions(&mut self, workspace: Entity, cols: u16, rows: u16) {
         let new = WorkspaceDimensions { cols, rows };
-        if let Ok((_, _, _, dims)) = self.workspaces.get_mut(workspace)
+        if let Ok((_, _, dims)) = self.workspaces.get_mut(workspace)
             && let Some(mut dims) = dims
         {
             dims.set_if_neq(new);
@@ -199,7 +194,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// Update the Workspace's `ActivePane` pointer to `pane`. The pane MUST
     /// belong to the workspace (caller's invariant; not validated here).
     pub fn set_active_pane(&mut self, workspace: Entity, pane: Entity) -> MultiplexerResult<()> {
-        let (_, mut active_pane, _, _) = self
+        let (mut active_pane, _, _) = self
             .workspaces
             .get_mut(workspace)
             .map_err(|_| MultiplexerError::WorkspaceNotFound(workspace))?;
@@ -285,7 +280,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             &self.splits,
             &self.panes_only,
         )?;
-        if let Ok((_, mut active_pane, _, _)) = self.workspaces.get_mut(workspace)
+        if let Ok((mut active_pane, _, _)) = self.workspaces.get_mut(workspace)
             && active_pane.0 == pane
         {
             active_pane.0 = result.survivor_pane;
@@ -407,7 +402,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .workspaces
             .get(workspace)
             .ok()
-            .and_then(|(_, _, _, dims)| dims.map(|d| (d.cols, d.rows)))
+            .and_then(|(_, _, dims)| dims.map(|d| (d.cols, d.rows)))
             .unwrap_or((0, 0));
         if cols == 0 || rows == 0 {
             return Ok(ResizePaneOutcome::NoOp);
@@ -441,7 +436,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         self.workspaces
             .get(workspace)
             .ok()
-            .map(|(_, active, _, _)| active.0)
+            .map(|(active, _, _)| active.0)
     }
 
     /// Read the Pane's `ActiveSurface` pointer.
@@ -503,7 +498,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             &self.layout_nodes,
         );
 
-        if let Ok((_, mut active_pane, _, _)) = self.workspaces.get_mut(workspace) {
+        if let Ok((mut active_pane, _, _)) = self.workspaces.get_mut(workspace) {
             active_pane.0 = new_pane;
         }
         Ok((new_pane, workspace))
@@ -713,8 +708,6 @@ mod tests {
             world.get::<ActivePane>(outcome.workspace).map(|a| a.0),
             Some(outcome.pane)
         );
-        // LayoutCells is still present (vestigial; removed in a later task).
-        assert!(world.get::<LayoutCells>(outcome.workspace).is_some());
         let root = world
             .get::<WorkspaceUiSubtree>(outcome.workspace)
             .expect("subtree")

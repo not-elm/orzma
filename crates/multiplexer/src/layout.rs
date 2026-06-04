@@ -55,8 +55,7 @@ pub(crate) fn normalized_grows(lhs: f32, rhs: f32) -> (f32, f32) {
 }
 
 /// Normalize a `(lhs_weight, rhs_weight)` pair to a `[0, 1]` ratio (the lhs
-/// fraction). Returns `0.5` when both are zero. Mirrors the old
-/// `LayoutCellState::split_ratio` so the resize math ports unchanged.
+/// fraction). Returns `0.5` when both are zero.
 pub fn split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
     let total = lhs_weight + rhs_weight;
     if total == 0.0 {

@@ -7,7 +7,6 @@
 //! is a Bevy `Entity`. Each entity also carries `Name` (from
 //! `bevy::prelude::Name`) for tracing readability.
 
-pub mod cells;
 pub mod commands;
 pub mod components;
 pub mod direction;
@@ -18,12 +17,11 @@ pub mod plugin;
 pub mod resize;
 pub mod swap;
 
-pub use cells::{Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, RootCell, SplitCell};
 pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter};
 pub use components::{
     ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd,
-    ExtensionSurfaceId, LayoutCells, OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker,
-    SplitNode, SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
+    ExtensionSurfaceId, OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker, SplitNode,
+    SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
     WorkspaceUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};
