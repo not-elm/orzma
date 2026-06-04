@@ -8,7 +8,7 @@
 
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
-use crate::input::resolve_focused_terminal;
+use crate::input::{resolve_focused_terminal, resolve_focused_terminal_readonly};
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -30,7 +30,9 @@ use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::TerminalFontInitSet;
 use bevy_terminal_renderer::material::TerminalMaterialSystems;
 use bevy_terminal_renderer::prelude::TerminalGrid;
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
+use ozmux_multiplexer::{
+    ActivePane, ActiveSurface, AttachedWorkspace, MultiplexerCommands, WorkspaceMarker,
+};
 use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -177,8 +179,9 @@ fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
 /// `ImeState`.
 pub(crate) fn position_ime_overlay(
     state: Res<ImeState>,
-    mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    active_panes: Query<&ActivePane>,
+    active_surfaces: Query<&ActiveSurface>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -221,7 +224,9 @@ pub(crate) fn position_ime_overlay(
     let Some(comp) = state.composition() else {
         return;
     };
-    let Some(entity) = resolve_focused_terminal(&mux, &attached_workspace) else {
+    let Some(entity) =
+        resolve_focused_terminal_readonly(&attached_workspace, &active_panes, &active_surfaces)
+    else {
         return;
     };
     let Ok((node, ui_xform, grid)) = anchors.get(entity) else {

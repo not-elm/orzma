@@ -33,8 +33,8 @@ use ozmux_configs::shortcuts::{
     SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset, WorkspaceOffset,
 };
 use ozmux_multiplexer::{
-    AttachedWorkspace, CycleDirection, MultiplexerCommands, PaneDirection, SplitOrientation,
-    SwapOffset, WorkspaceMarker,
+    ActivePane, ActiveSurface, AttachedWorkspace, CycleDirection, MultiplexerCommands,
+    PaneDirection, SplitOrientation, SwapOffset, WorkspaceMarker,
 };
 use std::collections::HashSet;
 
@@ -47,6 +47,21 @@ pub(crate) fn resolve_focused_terminal(
 ) -> Option<Entity> {
     let workspace = attached_workspace.iter().next()?;
     resolve_active_surface_entity(mux, workspace)
+}
+
+/// Resolves the focused surface's entity using plain read-only `ActivePane` /
+/// `ActiveSurface` queries instead of the full `MultiplexerCommands` SystemParam.
+/// Systems that mutate `Node`/`Children` cannot also hold `MultiplexerCommands`
+/// (its broad `&Node`/`&Children` layout queries alias the mutation — Bevy
+/// B0001), so they resolve the focused terminal through this narrow path.
+pub(crate) fn resolve_focused_terminal_readonly(
+    attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    active_panes: &Query<&ActivePane>,
+    active_surfaces: &Query<&ActiveSurface>,
+) -> Option<Entity> {
+    let workspace = attached_workspace.iter().next()?;
+    let pane = active_panes.get(workspace).ok()?.0;
+    active_surfaces.get(pane).ok().map(|s| s.0)
 }
 
 /// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
