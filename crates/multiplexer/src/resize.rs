@@ -24,15 +24,15 @@ pub enum ResizePaneOutcome {
 /// Resolve direction → axis/sign → matching ancestor → availability → apply.
 ///
 /// The `pane_to_cell` index is owned by `state`; callers pass the pane
-/// entity directly. `session_cols` and `session_rows` are the current
-/// terminal dimensions of the owning session.
+/// entity directly. `workspace_cols` and `workspace_rows` are the current
+/// terminal dimensions of the owning workspace.
 pub fn resize_split_for_pane(
     state: &mut LayoutCellState,
     pane: Entity,
     direction: PaneDirection,
     amount: u16,
-    session_cols: u16,
-    session_rows: u16,
+    workspace_cols: u16,
+    workspace_rows: u16,
 ) -> ResizePaneOutcome {
     let Ok(leaf_id) = state.lookup_cell_for_pane(pane) else {
         return ResizePaneOutcome::NoOp;
@@ -42,15 +42,15 @@ pub fn resize_split_for_pane(
         return ResizePaneOutcome::NoOp;
     };
 
-    let session_p = match axis {
-        SplitOrientation::Horizontal => session_cols,
-        SplitOrientation::Vertical => session_rows,
+    let workspace_p = match axis {
+        SplitOrientation::Horizontal => workspace_cols,
+        SplitOrientation::Vertical => workspace_rows,
     };
     let min_cells = match axis {
         SplitOrientation::Horizontal => MIN_PANE_COLS,
         SplitOrientation::Vertical => MIN_PANE_ROWS,
     };
-    let p_ancestor = compute_p_at(state, &ancestor_id, axis, session_p);
+    let p_ancestor = compute_p_at(state, &ancestor_id, axis, workspace_p);
 
     let (current_lhs, current_rhs, lhs_cell, rhs_cell) = match state.cell(&ancestor_id) {
         Ok(Cell::Split(s)) => {
@@ -126,7 +126,7 @@ fn compute_p_at(
     state: &LayoutCellState,
     target: &CellId,
     axis: SplitOrientation,
-    session_cells_on_axis: u16,
+    workspace_cells_on_axis: u16,
 ) -> u16 {
     let mut path: Vec<CellId> = Vec::new();
     let mut cursor = Some(*target);
@@ -136,7 +136,7 @@ fn compute_p_at(
     }
     path.reverse();
 
-    let mut p = session_cells_on_axis;
+    let mut p = workspace_cells_on_axis;
     for window in path.windows(2) {
         let parent_id = &window[0];
         let child_id = &window[1];
@@ -213,7 +213,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
-        let (root, cell_a) = state.new_session_layout(pa);
+        let (root, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         state
             .split_cell(cell_a, cell_b, Side::After, orientation)
@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn compute_p_at_root_returns_session_axis_length() {
+    fn compute_p_at_root_returns_workspace_axis_length() {
         let (state, root, _, _) = setup_two_panes(SplitOrientation::Horizontal);
         let p = compute_p_at(&state, &root, SplitOrientation::Horizontal, 120);
         assert_eq!(p, 120);
@@ -319,7 +319,7 @@ mod tests {
         let pa = pane(1);
         let pb = pane(2);
         let pc = pane(3);
-        let (_, cell_a) = state.new_session_layout(pa);
+        let (_, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         let cell_c = state.new_pane(pc, None);
         state
@@ -384,7 +384,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
-        let (_, cell_a) = state.new_session_layout(pa);
+        let (_, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         state
             .split_cell(cell_a, cell_b, Side::After, SplitOrientation::Horizontal)

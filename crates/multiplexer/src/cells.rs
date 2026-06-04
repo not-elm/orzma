@@ -1,4 +1,4 @@
-//! Layout cell tree. Owns the BSP-style split layout for one Session.
+//! Layout cell tree. Owns the BSP-style split layout for one Workspace.
 //! Pane references inside the tree are Bevy `Entity` values; the
 //! internal `pane_to_cell` index maps each Pane entity back to its
 //! `CellId` so split / close / swap operations are O(1) lookups.
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 /// Counter-newtype identifier for a Cell inside `LayoutCellState`. Cells
 /// are minted by mutator methods; the counter restarts at 0 for each new
-/// `LayoutCellState` instance (only Session-local uniqueness matters).
+/// `LayoutCellState` instance (only Workspace-local uniqueness matters).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct CellId(u64);
 
@@ -178,8 +178,8 @@ pub enum CloseOutcome {
         /// The grandparent split that now directly owns the survivor.
         new_parent: CellId,
     },
-    /// Target's grandparent was the session's `Cell::Root`; survivor was
-    /// promoted to be `RootCell::child`. `Session.root_cell` itself is unchanged.
+    /// Target's grandparent was the workspace's `Cell::Root`; survivor was
+    /// promoted to be `RootCell::child`. `Workspace.root_cell` itself is unchanged.
     PromotedToRootChild {
         /// The cell that took the closed target's place in the tree.
         survivor: CellId,
@@ -200,7 +200,7 @@ impl CloseOutcome {
     }
 }
 
-/// Axis-aligned rectangle in normalized session coordinates (`x, y, w, h` ∈ [0, 1]).
+/// Axis-aligned rectangle in normalized workspace coordinates (`x, y, w, h` ∈ [0, 1]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     /// Left edge in [0, 1].
@@ -224,7 +224,7 @@ struct CollapsePlan {
 }
 
 /// Layout cell store plus pane-to-cell index. Owned as a component on
-/// each Session entity. Mutator methods keep the index in sync
+/// each Workspace entity. Mutator methods keep the index in sync
 /// transactionally.
 #[derive(Debug, Default, Clone)]
 pub struct LayoutCellState {
@@ -234,10 +234,10 @@ pub struct LayoutCellState {
 }
 
 impl LayoutCellState {
-    /// Initialize a new Session's layout: a `Cell::Root` and its single
+    /// Initialize a new Workspace's layout: a `Cell::Root` and its single
     /// initial `Cell::Pane`, registered atomically so `RootCell::child`
     /// is always valid. Returns `(root_cell_id, initial_pane_cell_id)`.
-    pub fn new_session_layout(&mut self, pane: Entity) -> (CellId, CellId) {
+    pub fn new_workspace_layout(&mut self, pane: Entity) -> (CellId, CellId) {
         let root_id = self.mint_cell_id();
         let pane_cell_id = self.mint_cell_id();
         self.cells.insert(
@@ -424,7 +424,7 @@ impl LayoutCellState {
     }
 
     /// Drop every cell in `start`'s subtree (including `start` itself).
-    /// Used during session close to vacate the cell store atomically.
+    /// Used during workspace close to vacate the cell store atomically.
     pub fn remove_subtree(&mut self, start: &CellId) -> MultiplexerResult<()> {
         let panes = self.pane_entities_in_subtree(start)?;
         for pane in panes {
@@ -468,7 +468,7 @@ impl LayoutCellState {
         let parent_split = match self.cell(&parent_id)? {
             Cell::Split(s) => s,
             // NOTE: Pane is the only child of Root — closing it would empty the
-            // session's layout, which the model forbids.
+            // workspace's layout, which the model forbids.
             Cell::Root(_) => {
                 return Err(MultiplexerError::CannotCloseLastPane(*target_id));
             }
@@ -643,10 +643,10 @@ mod tests {
     }
 
     #[test]
-    fn new_session_layout_creates_root_with_child() {
+    fn new_workspace_layout_creates_root_with_child() {
         let mut state = LayoutCellState::default();
         let pane_id = pane(1);
-        let (root_id, pane_cell_id) = state.new_session_layout(pane_id);
+        let (root_id, pane_cell_id) = state.new_workspace_layout(pane_id);
 
         let Cell::Root(root) = state.cell(&root_id).unwrap() else {
             panic!("expected Root");
@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn split_cell_under_root_updates_root_child() {
         let mut state = LayoutCellState::default();
-        let (root_id, pane_a) = state.new_session_layout(pane(1));
+        let (root_id, pane_a) = state.new_workspace_layout(pane(1));
         let pane_b = state.new_pane(pane(2), None);
 
         let split_id = state
@@ -684,7 +684,7 @@ mod tests {
     #[test]
     fn split_cell_under_split_updates_parent_split_slot() {
         let mut state = LayoutCellState::default();
-        let (_, pane_a) = state.new_session_layout(pane(1));
+        let (_, pane_a) = state.new_workspace_layout(pane(1));
         let pane_b = state.new_pane(pane(2), None);
         let outer = state
             .split_cell(pane_a, pane_b, Side::After, SplitOrientation::Horizontal)
@@ -711,7 +711,7 @@ mod tests {
     #[test]
     fn close_cell_rejects_last_pane_under_root() {
         let mut state = LayoutCellState::default();
-        let (_, pane_cell) = state.new_session_layout(pane(1));
+        let (_, pane_cell) = state.new_workspace_layout(pane(1));
 
         let result = state.close_cell(&pane_cell);
         assert!(matches!(
@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn close_cell_under_root_split_promotes_sibling_to_root_child() {
         let mut state = LayoutCellState::default();
-        let (root_id, pane_a) = state.new_session_layout(pane(1));
+        let (root_id, pane_a) = state.new_workspace_layout(pane(1));
         let pane_b = state.new_pane(pane(2), None);
         let split_id = state
             .split_cell(pane_a, pane_b, Side::After, SplitOrientation::Horizontal)
@@ -752,7 +752,7 @@ mod tests {
     #[test]
     fn close_cell_under_nested_split_promotes_sibling_in_grandparent_slot() {
         let mut state = LayoutCellState::default();
-        let (_, pane_a) = state.new_session_layout(pane(1));
+        let (_, pane_a) = state.new_workspace_layout(pane(1));
         let pane_b = state.new_pane(pane(2), None);
         let outer = state
             .split_cell(pane_a, pane_b, Side::After, SplitOrientation::Horizontal)
@@ -789,7 +789,7 @@ mod tests {
         let pa = pane(1);
         let pb = pane(2);
         let pc = pane(3);
-        let (root_id, pane_a) = state.new_session_layout(pa);
+        let (root_id, pane_a) = state.new_workspace_layout(pa);
         let pane_b = state.new_pane(pb, None);
         let outer = state
             .split_cell(pane_a, pane_b, Side::After, SplitOrientation::Horizontal)
@@ -811,7 +811,7 @@ mod tests {
     fn pane_bounds_single_pane_fills_unit_rect() {
         let mut state = LayoutCellState::default();
         let p = pane(1);
-        let (root_id, _) = state.new_session_layout(p);
+        let (root_id, _) = state.new_workspace_layout(p);
 
         let bounds = state.pane_bounds(&root_id).unwrap();
         assert_eq!(bounds.len(), 1);
@@ -832,7 +832,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let lhs_pane = pane(1);
         let rhs_pane = pane(2);
-        let (root_id, lhs) = state.new_session_layout(lhs_pane);
+        let (root_id, lhs) = state.new_workspace_layout(lhs_pane);
         let rhs = state.new_pane(rhs_pane, None);
         state
             .split_cell(lhs, rhs, Side::After, SplitOrientation::Horizontal)
@@ -871,7 +871,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let top_pane = pane(1);
         let bottom_pane = pane(2);
-        let (root_id, top) = state.new_session_layout(top_pane);
+        let (root_id, top) = state.new_workspace_layout(top_pane);
         let bottom = state.new_pane(bottom_pane, None);
         state
             .split_cell(top, bottom, Side::After, SplitOrientation::Vertical)
@@ -916,7 +916,7 @@ mod tests {
         let pa = pane(1);
         let pb = pane(2);
         let pc = pane(3);
-        let (root, cell_a) = state.new_session_layout(pa);
+        let (root, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         let split_ab = state
             .split_cell(cell_a, cell_b, Side::After, SplitOrientation::Horizontal)
@@ -933,7 +933,7 @@ mod tests {
     #[test]
     fn remove_subtree_drops_every_cell_below_root() {
         let mut state = LayoutCellState::default();
-        let (root_id, pane_a) = state.new_session_layout(pane(1));
+        let (root_id, pane_a) = state.new_workspace_layout(pane(1));
         let pane_b_entity = pane(2);
         let pane_b = state.new_pane(pane_b_entity, None);
         let split_id = state
@@ -961,7 +961,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
-        let (_root, cell_a) = state.new_session_layout(pa);
+        let (_root, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         let _split = state
             .split_cell(cell_a, cell_b, Side::After, SplitOrientation::Horizontal)
@@ -984,7 +984,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
-        let (root, cell_a) = state.new_session_layout(pa);
+        let (root, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         let split = state
             .split_cell(cell_a, cell_b, Side::After, SplitOrientation::Horizontal)
@@ -1002,7 +1002,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
-        let (_, cell_a) = state.new_session_layout(pa);
+        let (_, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         state
             .split_cell(cell_a, cell_b, Side::After, SplitOrientation::Horizontal)
@@ -1017,7 +1017,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
-        let (_, cell_a) = state.new_session_layout(pa);
+        let (_, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         state
             .split_cell(cell_a, cell_b, Side::After, SplitOrientation::Horizontal)
@@ -1033,7 +1033,7 @@ mod tests {
     fn swap_panes_with_same_cell_id_is_noop() {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
-        let (_, cell_a) = state.new_session_layout(pa);
+        let (_, cell_a) = state.new_workspace_layout(pa);
 
         assert!(state.swap_panes(&cell_a, &cell_a).is_ok());
 
@@ -1050,7 +1050,7 @@ mod tests {
         let mut state = LayoutCellState::default();
         let pa = pane(1);
         let pb = pane(2);
-        let (_, pane_a) = state.new_session_layout(pa);
+        let (_, pane_a) = state.new_workspace_layout(pa);
         let pane_b = state.new_pane(pb, None);
         state
             .split_cell(pane_a, pane_b, Side::After, SplitOrientation::Horizontal)
@@ -1068,7 +1068,7 @@ mod tests {
         let pa = pane(1);
         let pb = pane(2);
         let pc = pane(3);
-        let (root, cell_a) = state.new_session_layout(pa);
+        let (root, cell_a) = state.new_workspace_layout(pa);
         let cell_b = state.new_pane(pb, None);
         let split_ab = state
             .split_cell(cell_a, cell_b, Side::After, SplitOrientation::Horizontal)

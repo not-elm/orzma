@@ -9,16 +9,16 @@ use crate::cells::CellId;
 /// Domain errors returned by multiplexer operations.
 #[derive(Error, Debug, Clone)]
 pub enum MultiplexerError {
-    #[error("session entity not found: {0:?}")]
-    SessionNotFound(Entity),
+    #[error("workspace entity not found: {0:?}")]
+    WorkspaceNotFound(Entity),
 
     #[error(
-        "session {0:?} has no cached dimensions; the renderer must set dimensions before resize-pane"
+        "workspace {0:?} has no cached dimensions; the renderer must set dimensions before resize-pane"
     )]
-    SessionNotMeasured(Entity),
+    WorkspaceNotMeasured(Entity),
 
-    #[error("pane {pane:?} does not belong to session {session:?}")]
-    PaneNotInSession { session: Entity, pane: Entity },
+    #[error("pane {pane:?} does not belong to workspace {workspace:?}")]
+    PaneNotInWorkspace { workspace: Entity, pane: Entity },
 
     #[error("missing parent cell")]
     MissingParentCell,
@@ -41,11 +41,11 @@ pub enum MultiplexerError {
     #[error("split target equals new_cell: {0}")]
     SplitTargetEqualsNewCell(CellId),
 
-    #[error("cannot close the last pane in session {0:?}")]
-    CannotCloseLastPaneInSession(Entity),
+    #[error("cannot close the last pane in workspace {0:?}")]
+    CannotCloseLastPaneInWorkspace(Entity),
 
-    #[error("active pane {pane:?} must belong to session {session:?}")]
-    ActivePaneMustBelongToSession { session: Entity, pane: Entity },
+    #[error("active pane {pane:?} must belong to workspace {workspace:?}")]
+    ActivePaneMustBelongToWorkspace { workspace: Entity, pane: Entity },
 
     #[error("surface entity not found: {0:?}")]
     SurfaceNotFound(Entity),

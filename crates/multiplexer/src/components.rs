@@ -1,22 +1,22 @@
 //! Bevy `Component` definitions for the multiplexer. Every entity that
-//! plays a role in the Session / Pane / Surface hierarchy carries a
-//! marker component (`SessionMarker` / `PaneMarker` / `SurfaceMarker`)
+//! plays a role in the Workspace / Pane / Surface hierarchy carries a
+//! marker component (`WorkspaceMarker` / `PaneMarker` / `SurfaceMarker`)
 //! plus the state components relevant to its role.
 //!
 //! Display names use Bevy's built-in `Name` (`bevy::prelude::Name`); no
-//! `SessionName` / `PaneName` / `SurfaceName` component exists. See the
-//! design doc §3 "Naming" for why and for the `With<SessionMarker>`
+//! `WorkspaceName` / `PaneName` / `SurfaceName` component exists. See the
+//! design doc §3 "Naming" for why and for the `With<WorkspaceMarker>`
 //! filter discipline that follows.
 
 use crate::cells::{CellId, LayoutCellState};
 use bevy::prelude::*;
 use std::path::PathBuf;
 
-/// Zero-sized marker on every Session entity. Used as the `With<>` filter
-/// in queries that want to scope to Sessions, and as the trigger target
-/// for the `On<Remove, SessionMarker>` lifecycle hook.
+/// Zero-sized marker on every Workspace entity. Used as the `With<>` filter
+/// in queries that want to scope to Workspaces, and as the trigger target
+/// for the `On<Remove, WorkspaceMarker>` lifecycle hook.
 #[derive(Component, Default, Debug)]
-pub struct SessionMarker;
+pub struct WorkspaceMarker;
 
 /// Zero-sized marker on every Pane entity.
 #[derive(Component, Default, Debug)]
@@ -26,13 +26,13 @@ pub struct PaneMarker;
 #[derive(Component, Default, Debug)]
 pub struct SurfaceMarker;
 
-/// Layout cell state plus the session's `root` cell id, owned together
+/// Layout cell state plus the workspace's `root` cell id, owned together
 /// because every consumer needs both. `Default` returns a freshly-empty
 /// `LayoutCellState` and a `CellId(0)` placeholder root that must be
-/// overwritten by the spawn site (`MultiplexerCommands::create_session`).
+/// overwritten by the spawn site (`MultiplexerCommands::create_workspace`).
 #[derive(Component, Debug, Default, Clone)]
 pub struct LayoutCells {
-    /// The BSP cell tree for this session.
+    /// The BSP cell tree for this workspace.
     pub cells: LayoutCellState,
     /// The root `CellId` of the cell tree.
     pub root: CellId,
@@ -42,51 +42,51 @@ impl LayoutCells {
     /// Construct a `LayoutCells` from a freshly-spawned bootstrap pane:
     /// builds a `LayoutCellState`, mints the root, and stashes the root
     /// id together so callers do not need to track it separately.
-    pub fn new_session_layout(pane: Entity) -> Self {
+    pub fn new_workspace_layout(pane: Entity) -> Self {
         let mut cells = LayoutCellState::default();
-        let (root, _pane_cell) = cells.new_session_layout(pane);
+        let (root, _pane_cell) = cells.new_workspace_layout(pane);
         Self { cells, root }
     }
 }
 
-/// The currently focused Pane entity within a Session. `Changed<ActivePane>`
+/// The currently focused Pane entity within a Workspace. `Changed<ActivePane>`
 /// is the signal for the terminal-focus and IME-target-switch systems.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActivePane(pub Entity);
 
-/// Cached cell-grid dimensions for a Session, set by the renderer.
+/// Cached cell-grid dimensions for a Workspace, set by the renderer.
 /// Absent until the first measurement (represented as the component
 /// being absent, not as `Option`-inside-component).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SessionDimensions {
-    /// Number of columns in the session grid.
+pub struct WorkspaceDimensions {
+    /// Number of columns in the workspace grid.
     pub cols: u16,
-    /// Number of rows in the session grid.
+    /// Number of rows in the workspace grid.
     pub rows: u16,
 }
 
-/// Marker that exactly one Session entity carries: the one currently
+/// Marker that exactly one Workspace entity carries: the one currently
 /// rendered in the primary OS window. Moving the marker swaps which
-/// Session is shown. Identical semantics to the old GUI component of
-/// the same name (moved here from `src/session_entity.rs`).
+/// Workspace is shown. Identical semantics to the old GUI component of
+/// the same name (moved here from `src/workspace_entity.rs`).
 #[derive(Component, Default, Debug)]
-pub struct AttachedSession;
+pub struct AttachedWorkspace;
 
-/// Per-Session pointer to the Entity that hosts the Session's UI subtree
-/// root. The subtree root is a `Node`; when the Session is attached, the
-/// subtree's `ChildOf` is `SessionUiRoot`. When parked, it is the Session
+/// Per-Workspace pointer to the Entity that hosts the Workspace's UI subtree
+/// root. The subtree root is a `Node`; when the Workspace is attached, the
+/// subtree's `ChildOf` is `WorkspaceUiRoot`. When parked, it is the Workspace
 /// entity itself (walker-skipped). The subtree node is spawned and this
-/// pointer inserted by `MultiplexerCommands::spawn_attached_session`.
+/// pointer inserted by `MultiplexerCommands::spawn_attached_workspace`.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct SessionUiSubtree(pub Entity);
+pub struct WorkspaceUiSubtree(pub Entity);
 
-/// Per-Session monotonic creation-order index, set at spawn time from
-/// `SessionNameCounter`. Stable sort key for UIs that list sessions in
+/// Per-Workspace monotonic creation-order index, set at spawn time from
+/// `WorkspaceNameCounter`. Stable sort key for UIs that list workspaces in
 /// creation order (status bar, focus cycling); `Entity` ordering is
 /// unreliable because deferred command queues do not guarantee monotonic
 /// indices across multiple `Commands` instances.
 #[derive(Component, Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
-pub struct SessionCreatedAt(pub u32);
+pub struct WorkspaceCreatedAt(pub u32);
 
 /// The currently focused Surface entity within a Pane.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,13 +181,13 @@ mod tests {
     #[test]
     fn markers_are_components_and_query_filterable() {
         let mut world = World::new();
-        let session = world.spawn(SessionMarker).id();
+        let workspace = world.spawn(WorkspaceMarker).id();
         let pane = world.spawn(PaneMarker).id();
         let surface = world.spawn(SurfaceMarker).id();
 
-        let mut q = world.query_filtered::<Entity, With<SessionMarker>>();
-        let sessions: Vec<_> = q.iter(&world).collect();
-        assert_eq!(sessions, vec![session]);
+        let mut q = world.query_filtered::<Entity, With<WorkspaceMarker>>();
+        let workspaces: Vec<_> = q.iter(&world).collect();
+        assert_eq!(workspaces, vec![workspace]);
 
         let mut q = world.query_filtered::<Entity, With<PaneMarker>>();
         let panes: Vec<_> = q.iter(&world).collect();
