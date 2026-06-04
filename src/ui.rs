@@ -34,6 +34,7 @@ pub mod tab_bar;
 pub(crate) mod tab_input;
 pub(crate) mod tab_label;
 pub mod terminal;
+pub(crate) mod web_title;
 pub mod workspace;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
@@ -213,6 +214,7 @@ impl Plugin for OzmuxUiPlugin {
                 OzmuxUiRootPlugin,
                 OzmuxWorkspaceUiPlugin,
                 OzmuxTerminalUiPlugin,
+                web_title::WebTitlePlugin,
             ))
             .add_systems(
                 Update,

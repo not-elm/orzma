@@ -9,6 +9,7 @@ use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::surface::build_surface_host_children;
 use crate::ui::tab_bar::{TabEntry, build_pane_tab_bar};
 use crate::ui::tab_label::{LabelCtx, tab_label};
+use crate::ui::web_title::WebTitle;
 use crate::ui::{PaneDimOverlay, PaneFrame, StructuralNode, VisibleSurfaceHost, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, PositionType, UiRect, Val};
@@ -50,7 +51,7 @@ pub(crate) fn build_cell_recursive(
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
     pane_children: &Query<&Children>,
-    surfaces: &Query<(&SurfaceKind, &Name, Option<&Cwd>), With<SurfaceMarker>>,
+    surfaces: &Query<(&SurfaceKind, &Name, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
     active_surfaces: &Query<&ActiveSurface, With<PaneMarker>>,
     active_pane: Entity,
     veil: Option<Color>,
@@ -177,7 +178,7 @@ fn build_pane(
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
     pane_children: &Query<&Children>,
-    surfaces: &Query<(&SurfaceKind, &Name, Option<&Cwd>), With<SurfaceMarker>>,
+    surfaces: &Query<(&SurfaceKind, &Name, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
     active_surfaces: &Query<&ActiveSurface, With<PaneMarker>>,
     active_pane: Entity,
     veil: Option<Color>,
@@ -213,13 +214,13 @@ fn build_pane(
     let tabs: Vec<TabEntry> = surface_entities
         .iter()
         .filter_map(|&ae| {
-            let (kind, name, cwd) = surfaces.get(ae).ok()?;
+            let (kind, _name, cwd, web_title) = surfaces.get(ae).ok()?;
             Some(TabEntry {
                 entity: ae,
                 name: tab_label(
                     kind,
                     cwd,
-                    name.as_str(),
+                    web_title,
                     label_ctx.home.as_deref(),
                     label_ctx.max_chars,
                 ),
@@ -249,7 +250,7 @@ fn build_pane(
         .id();
 
     for &surface_entity in &surface_entities {
-        let Ok((kind, name, _cwd)) = surfaces.get(surface_entity) else {
+        let Ok((kind, name, _cwd, _web_title)) = surfaces.get(surface_entity) else {
             continue;
         };
         let host = registry.get_or_spawn(commands, surface_entity, kind);
@@ -270,7 +271,7 @@ fn build_pane(
     // they must NOT also get the veil — double-dimming would over-darken their
     // content. The veil is for non-terminal (e.g. webview) panes only.
     let active_is_terminal = matches!(
-        surfaces.get(active_surface).map(|(kind, _, _)| kind),
+        surfaces.get(active_surface).map(|(kind, _, _, _)| kind),
         Ok(SurfaceKind::Terminal)
     );
     if let Some(veil_color) = veil

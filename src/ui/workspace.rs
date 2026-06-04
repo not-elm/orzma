@@ -11,6 +11,7 @@ use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::tab_label::LabelCtx;
 use crate::ui::terminal::resolve_pane_workspace;
+use crate::ui::web_title::WebTitle;
 use crate::ui::{
     HomeDir, HostSurfaceEntity, PaneDimOverlay, StructuralNode, SurfaceHostNode,
     TerminalSurfaceMarker, WorkspaceUiDirty, WorkspaceUiRoot,
@@ -132,7 +133,7 @@ fn rebuild_workspace_ui(
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     surface_hosts: Query<(Entity, &SurfaceHostNode)>,
     children: Query<&Children>,
-    surfaces: Query<(&SurfaceKind, &Name, Option<&Cwd>), With<SurfaceMarker>>,
+    surfaces: Query<(&SurfaceKind, &Name, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
     active_surfaces: Query<&ActiveSurface, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
     configs: Option<Res<OzmuxConfigsResource>>,
@@ -192,8 +193,9 @@ fn rebuild_workspace_ui(
 
 /// Flags a workspace `WorkspaceUiDirty` when one of its panes gains a surface
 /// (`Added<SurfaceMarker>`), switches its active surface
-/// (`Changed<ActiveSurface>`), or a surface reports a new working directory
-/// (`Changed<Cwd>`, via OSC 7) — in-pane changes that do not mutate
+/// (`Changed<ActiveSurface>`), a surface reports a new working directory
+/// (`Changed<Cwd>`, via OSC 7), or a browser/extension surface reports a new
+/// page title (`Changed<WebTitle>`) — in-pane changes that do not mutate
 /// `LayoutCells` and so would otherwise not trigger `rebuild_workspace_ui`.
 /// Covers both the `@md` control-bridge path and the in-app shortcuts via a
 /// single UI-layer hook, keeping the multiplexer crate free of UI concerns.
@@ -205,9 +207,14 @@ fn flag_chrome_dirty_on_surface_change(
     added_surfaces: Query<Entity, Added<SurfaceMarker>>,
     switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveSurface>)>,
     changed_cwd: Query<Entity, (With<SurfaceMarker>, Changed<Cwd>)>,
+    changed_web_title: Query<Entity, (With<SurfaceMarker>, Changed<WebTitle>)>,
     child_of: Query<&ChildOf>,
 ) {
-    for surface in added_surfaces.iter() {
+    for surface in added_surfaces
+        .iter()
+        .chain(changed_cwd.iter())
+        .chain(changed_web_title.iter())
+    {
         if let Some((_pane, workspace)) = resolve_pane_workspace(surface, &child_of) {
             commands.entity(workspace).insert(WorkspaceUiDirty);
         }
@@ -217,11 +224,6 @@ fn flag_chrome_dirty_on_surface_change(
             commands
                 .entity(pane_parent.parent())
                 .insert(WorkspaceUiDirty);
-        }
-    }
-    for surface in changed_cwd.iter() {
-        if let Some((_pane, workspace)) = resolve_pane_workspace(surface, &child_of) {
-            commands.entity(workspace).insert(WorkspaceUiDirty);
         }
     }
 }
@@ -898,6 +900,41 @@ mod tests {
                 .parent(),
             bootstrap_workspace,
             "old workspace's subtree must be parked under its workspace entity",
+        );
+    }
+
+    #[test]
+    fn web_title_change_flags_workspace_dirty() {
+        use super::*;
+        let mut world = World::new();
+        let workspace = world.spawn_empty().id();
+        let pane = world.spawn(ChildOf(workspace)).id();
+        let surface = world.spawn((SurfaceMarker, ChildOf(pane))).id();
+
+        let mut sched = Schedule::default();
+        sched.add_systems(flag_chrome_dirty_on_surface_change);
+
+        // Run 1: Added<SurfaceMarker> sets the flag; clear it to isolate WebTitle.
+        sched.run(&mut world);
+        world.entity_mut(workspace).remove::<WorkspaceUiDirty>();
+
+        // Run 2: the only newly-changed input is WebTitle.
+        world.entity_mut(surface).insert(WebTitle("x".into()));
+        sched.run(&mut world);
+
+        assert!(
+            world.get::<WorkspaceUiDirty>(workspace).is_some(),
+            "Changed<WebTitle> must flag the owning workspace dirty"
+        );
+
+        // Run 3: a subsequent (changed, not added) title must re-flag, proving
+        // the arm reacts to updates — not just the first insert (Added).
+        world.entity_mut(workspace).remove::<WorkspaceUiDirty>();
+        world.entity_mut(surface).insert(WebTitle("y".into()));
+        sched.run(&mut world);
+        assert!(
+            world.get::<WorkspaceUiDirty>(workspace).is_some(),
+            "a later WebTitle change (page navigation) must re-flag the workspace"
         );
     }
 }
