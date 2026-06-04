@@ -214,6 +214,7 @@ impl Plugin for OzmuxUiPlugin {
                 OzmuxUiRootPlugin,
                 OzmuxWorkspaceUiPlugin,
                 OzmuxTerminalUiPlugin,
+                web_title::WebTitlePlugin,
             ))
             .add_systems(
                 Update,
