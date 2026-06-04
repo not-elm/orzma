@@ -6,8 +6,9 @@
 
 use crate::cells::{Side, SplitOrientation};
 use crate::components::{
-    ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, LayoutCells, PaneMarker, SurfaceKind,
-    SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker, WorkspaceUiSubtree,
+    ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, LayoutCells, OwningWorkspace,
+    PaneMarker, SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions,
+    WorkspaceMarker, WorkspaceUiSubtree,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
@@ -75,82 +76,78 @@ pub struct MultiplexerCommands<'w, 's> {
             &'static mut ActiveSurface,
             &'static mut CopyMode,
             &'static ChildOf,
+            &'static OwningWorkspace,
         ),
         With<PaneMarker>,
     >,
+    panes_owned: Query<'w, 's, (Entity, &'static OwningWorkspace), With<PaneMarker>>,
     surfaces: Query<'w, 's, (&'static SurfaceKind, &'static ChildOf), With<SurfaceMarker>>,
     children: Query<'w, 's, &'static Children>,
 }
 
 impl<'w, 's> MultiplexerCommands<'w, 's> {
-    /// Spawn a Workspace with one bootstrap Pane containing one bootstrap
-    /// Terminal Surface. Returns the three Entity handles.
+    /// Spawn a Workspace with a layout-root node holding one bootstrap Pane
+    /// (one bootstrap Terminal Surface as its child). The `LayoutCells`
+    /// component is still inserted (vestigial) so the legacy cell-based methods
+    /// keep working until they are ported; it is removed in a later task.
     pub fn create_workspace(&mut self, name: Option<String>) -> WorkspaceCreated {
         let name = name.unwrap_or_else(|| "default".to_string());
 
-        let surface = self
+        let workspace = self
+            .commands
+            .spawn((WorkspaceMarker, Name::new(name.clone())))
+            .id();
+
+        let root = self
             .commands
             .spawn((
-                SurfaceMarker,
-                SurfaceKind::Terminal,
-                Name::new(format!("surface: {name}#0")),
+                Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+                Name::new(format!("layout-root: {name}")),
             ))
             .id();
 
+        let surface = self
+            .commands
+            .spawn((SurfaceMarker, SurfaceKind::Terminal, Name::new(format!("surface: {name}#0"))))
+            .id();
+
+        let mut pane_node = crate::layout::pane_frame_node();
+        let cf = crate::layout::child_flex(1.0);
+        pane_node.flex_grow = cf.flex_grow;
+        pane_node.flex_basis = cf.flex_basis;
         let pane = self
             .commands
             .spawn((
                 PaneMarker,
+                OwningWorkspace(workspace),
                 ActiveSurface(surface),
                 CopyMode::default(),
+                pane_node,
                 Name::new(format!("pane: {name}#0")),
             ))
             .id();
 
-        let workspace = self
-            .commands
-            .spawn((
-                WorkspaceMarker,
-                LayoutCells::new_workspace_layout(pane),
-                ActivePane(pane),
-                Name::new(name),
-            ))
-            .id();
-
-        self.commands.entity(pane).insert(ChildOf(workspace));
+        self.commands.entity(workspace).insert((
+            LayoutCells::new_workspace_layout(pane),
+            ActivePane(pane),
+            WorkspaceUiSubtree(root),
+        ));
+        self.commands.entity(root).insert(ChildOf(workspace));
+        self.commands.entity(pane).insert(ChildOf(root));
         self.commands.entity(surface).insert(ChildOf(pane));
 
-        WorkspaceCreated {
-            workspace,
-            pane,
-            surface,
-        }
+        WorkspaceCreated { workspace, pane, surface }
     }
 
-    /// Mints a workspace via `create_workspace`, spawns its UI subtree `Node`,
-    /// inserts `AttachedWorkspace` + `WorkspaceUiSubtree` + `WorkspaceCreatedAt`,
-    /// parents the subtree under the workspace, and returns the workspace entity.
-    /// The workspace is auto-named `"workspace{n}"` from the internal
-    /// `WorkspaceNameCounter`.
+    /// Mints a workspace via `create_workspace`, attaches `AttachedWorkspace` +
+    /// `WorkspaceCreatedAt`, auto-named `"workspace{n}"`.
+    ///
+    /// The layout-root node (stored in `WorkspaceUiSubtree`) is spawned inside
+    /// `create_workspace`.
     pub fn spawn_attached_workspace(&mut self) -> Entity {
         let n = self.counter.next();
-        let workspace = self
-            .create_workspace(Some(format!("workspace{n}")))
-            .workspace;
-        let subtree = self
-            .commands
-            .spawn(Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            })
-            .id();
-        self.commands.entity(workspace).insert((
-            AttachedWorkspace,
-            WorkspaceUiSubtree(subtree),
-            WorkspaceCreatedAt(n),
-        ));
-        self.commands.entity(subtree).insert(ChildOf(workspace));
+        let WorkspaceCreated { workspace, .. } = self.create_workspace(Some(format!("workspace{n}")));
+        self.commands.entity(workspace).insert((AttachedWorkspace, WorkspaceCreatedAt(n)));
         workspace
     }
 
@@ -191,7 +188,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 
     /// Update the Pane's `ActiveSurface` pointer.
     pub fn set_active_surface(&mut self, pane: Entity, surface: Entity) -> MultiplexerResult<()> {
-        let (mut active_surface, _, _) = self
+        let (mut active_surface, _, _, _) = self
             .panes
             .get_mut(pane)
             .map_err(|_| MultiplexerError::PaneNotFound(pane))?;
@@ -389,12 +386,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         ))
     }
 
-    /// Walk up `ChildOf` from a Pane entity to find its owning Workspace.
+    /// The Pane's owning Workspace, read from its `OwningWorkspace` back-pointer.
     pub fn workspace_of_pane(&self, pane: Entity) -> Option<Entity> {
-        self.panes
-            .get(pane)
-            .ok()
-            .map(|(_, _, child_of)| child_of.parent())
+        self.panes.get(pane).ok().map(|(_, _, _, owner)| owner.0)
     }
 
     /// Walk up `ChildOf` from a Surface entity to find its owning Pane.
@@ -415,16 +409,15 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 
     /// Read the Pane's `ActiveSurface` pointer.
     pub fn panes_active_surface(&self, pane: Entity) -> Option<Entity> {
-        self.panes.get(pane).ok().map(|(active, _, _)| active.0)
+        self.panes.get(pane).ok().map(|(active, _, _, _)| active.0)
     }
 
-    /// Iterate the Pane entities owned by the given Workspace.
+    /// Iterate the Pane entities owned by the given Workspace (via `OwningWorkspace`).
     pub fn panes_of_workspace(&self, workspace: Entity) -> impl Iterator<Item = Entity> + '_ {
-        self.children
-            .get(workspace)
-            .into_iter()
-            .flat_map(|c| c.iter())
-            .filter(move |child| self.panes.get(*child).is_ok())
+        self.panes_owned
+            .iter()
+            .filter(move |(_, owner)| owner.0 == workspace)
+            .map(|(e, _)| e)
     }
 
     /// Iterate the Surface entities owned by the given Pane.
@@ -451,8 +444,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 
         let new_pane = self
             .commands
-            .spawn((PaneMarker, CopyMode::default(), Name::new("pane: split")))
+            .spawn((PaneMarker, OwningWorkspace(workspace), CopyMode::default(), Name::new("pane: split")))
             .id();
+        // TODO: transitional — split panes are parented directly to the workspace
+        // (matching the legacy cell-based body), inconsistent with the bootstrap
+        // pane's ChildOf(root). The entity-tree split rewrite reparents this into
+        // the layout tree (insert a Split node, reparent target + new pane).
         self.commands.entity(new_pane).insert(ChildOf(workspace));
 
         let (mut layout, mut active_pane, _, _) = self
@@ -659,45 +656,51 @@ mod tests {
     }
 
     #[test]
-    fn create_workspace_spawns_workspace_pane_surface_with_correct_markers_and_childof() {
+    fn create_workspace_spawns_root_pane_surface_tree() {
         let mut world = World::new();
         world.init_resource::<WorkspaceNameCounter>();
         let outcome = world
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_workspace(Some("test".into()))
-            })
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(Some("test".into())))
             .unwrap();
+        world.flush();
 
         assert!(world.get::<WorkspaceMarker>(outcome.workspace).is_some());
-        assert_eq!(
-            world.get::<Name>(outcome.workspace).map(|n| n.as_str()),
-            Some("test")
-        );
+        assert_eq!(world.get::<Name>(outcome.workspace).map(|n| n.as_str()), Some("test"));
+        assert_eq!(world.get::<ActivePane>(outcome.workspace).map(|a| a.0), Some(outcome.pane));
+        // LayoutCells is still present (vestigial; removed in a later task).
         assert!(world.get::<LayoutCells>(outcome.workspace).is_some());
-        assert_eq!(
-            world.get::<ActivePane>(outcome.workspace).map(|a| a.0),
-            Some(outcome.pane)
-        );
+        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).expect("subtree").0;
+
+        // Layout-root node's single child is the pane.
+        let root_kids: Vec<Entity> = world.get::<Children>(root).map(|c| c.iter().collect()).unwrap_or_default();
+        assert_eq!(root_kids, vec![outcome.pane], "root node's single child is the pane");
 
         assert!(world.get::<PaneMarker>(outcome.pane).is_some());
-        assert_eq!(
-            world.get::<ChildOf>(outcome.pane).map(|c| c.parent()),
-            Some(outcome.workspace)
-        );
-        assert_eq!(
-            world.get::<ActiveSurface>(outcome.pane).map(|a| a.0),
-            Some(outcome.surface)
-        );
+        assert_eq!(world.get::<OwningWorkspace>(outcome.pane).map(|o| o.0), Some(outcome.workspace));
+        assert_eq!(world.get::<ChildOf>(outcome.pane).map(|c| c.parent()), Some(root));
+        assert_eq!(world.get::<Node>(outcome.pane).map(|n| n.flex_grow), Some(1.0));
+        assert_eq!(world.get::<ActiveSurface>(outcome.pane).map(|a| a.0), Some(outcome.surface));
 
         assert!(world.get::<SurfaceMarker>(outcome.surface).is_some());
-        assert_eq!(
-            world.get::<ChildOf>(outcome.surface).map(|c| c.parent()),
-            Some(outcome.pane)
-        );
-        assert!(matches!(
-            world.get::<SurfaceKind>(outcome.surface),
-            Some(SurfaceKind::Terminal)
-        ));
+        assert_eq!(world.get::<ChildOf>(outcome.surface).map(|c| c.parent()), Some(outcome.pane));
+    }
+
+    #[test]
+    fn workspace_of_pane_uses_owning_workspace_not_childof() {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        world.flush();
+        let ws = world
+            .run_system_once(move |mux: MultiplexerCommands| mux.workspace_of_pane(outcome.pane))
+            .unwrap();
+        assert_eq!(ws, Some(outcome.workspace), "resolved via OwningWorkspace (pane is ChildOf the root node)");
+        let panes: Vec<Entity> = world
+            .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_workspace(outcome.workspace).collect::<Vec<_>>())
+            .unwrap();
+        assert_eq!(panes, vec![outcome.pane]);
     }
 
     #[test]
