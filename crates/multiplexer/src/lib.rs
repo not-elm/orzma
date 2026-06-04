@@ -12,23 +12,23 @@ pub mod commands;
 pub mod components;
 pub mod direction;
 pub mod error;
+pub mod layout;
 pub mod observers;
 pub mod plugin;
 pub mod resize;
 pub mod swap;
 
-pub use cells::{
-    Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
-    SplitOrientation,
-};
+pub use cells::{Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, RootCell, SplitCell};
 pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter};
 pub use components::{
     ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd,
-    ExtensionSurfaceId, LayoutCells, OwningExtension, PaneDimensions, PaneMarker, SurfaceKind,
-    SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker, WorkspaceUiSubtree,
+    ExtensionSurfaceId, LayoutCells, OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker,
+    SplitNode, SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
+    WorkspaceUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};
+pub use layout::{Rect, Side, SplitOrientation, split_ratio};
 pub use plugin::MultiplexerPlugin;
 pub use resize::ResizePaneOutcome;
 pub use swap::{SwapOffset, SwapOutcome};

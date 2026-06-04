@@ -9,6 +9,7 @@
 //! filter discipline that follows.
 
 use crate::cells::{CellId, LayoutCellState};
+use crate::layout::SplitOrientation;
 use bevy::prelude::*;
 use std::path::PathBuf;
 
@@ -21,6 +22,24 @@ pub struct WorkspaceMarker;
 /// Zero-sized marker on every Pane entity.
 #[derive(Component, Default, Debug)]
 pub struct PaneMarker;
+
+/// Zero-payload-plus-orientation marker on every Split entity. The split's
+/// two children carry the relative weights as `flex_grow`; this only records
+/// the axis. The split entity also carries a flex-container `Node` whose
+/// `flex_direction` matches `orientation`.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitNode {
+    /// Axis of this split.
+    pub orientation: SplitOrientation,
+}
+
+/// Back-pointer from a Pane to its owning Workspace. Required because a Pane
+/// is `ChildOf` its `Split` (or the layout-root node) — never the Workspace
+/// directly — and the layout-root node reparents between the Workspace
+/// (parked) and `WorkspaceUiRoot` (attached), so an ancestor walk cannot
+/// reliably reach the Workspace.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwningWorkspace(pub Entity);
 
 /// Zero-sized marker on every Surface entity.
 #[derive(Component, Default, Debug)]

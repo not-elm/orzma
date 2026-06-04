@@ -3,6 +3,7 @@
 //! internal `pane_to_cell` index maps each Pane entity back to its
 //! `CellId` so split / close / swap operations are O(1) lookups.
 
+pub use crate::layout::{Rect, Side, SplitOrientation};
 use crate::error::{MultiplexerError, MultiplexerResult};
 use bevy::ecs::entity::Entity;
 use std::collections::HashMap;
@@ -144,25 +145,6 @@ impl SplitCell {
     }
 }
 
-/// Split axis.
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
-pub enum SplitOrientation {
-    /// Left and right children share horizontal space.
-    Horizontal,
-    /// Top and bottom children share vertical space.
-    Vertical,
-}
-
-/// Which side of an existing cell a newly-inserted sibling lands on.
-#[derive(Debug, Default, Clone, Copy, Hash, Eq, PartialEq)]
-pub enum Side {
-    /// Place new_cell before target (left or top, depending on orientation).
-    Before,
-    /// Place new_cell after target (right or bottom, depending on orientation).
-    #[default]
-    After,
-}
-
 /// Structural outcome of `LayoutCellState::close_cell`.
 ///
 /// Callers must handle every variant. `#[must_use]` nudges the caller to
@@ -198,19 +180,6 @@ impl CloseOutcome {
             }
         }
     }
-}
-
-/// Axis-aligned rectangle in normalized workspace coordinates (`x, y, w, h` ∈ [0, 1]).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rect {
-    /// Left edge in [0, 1].
-    pub x: f32,
-    /// Top edge in [0, 1].
-    pub y: f32,
-    /// Width in [0, 1].
-    pub w: f32,
-    /// Height in [0, 1].
-    pub h: f32,
 }
 
 /// Internal record gathered by `plan_collapse` and consumed by `apply_collapse`.
