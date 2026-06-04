@@ -5,17 +5,16 @@
 //! pair so that `lhs_weight == rhs_weight == 0` falls back to 0.5/0.5.
 
 use crate::theme;
-use crate::ui::registry::SurfaceEntityRegistry;
-use crate::ui::surface::build_surface_host_children;
+use crate::ui::surface::decorate_surface;
 use crate::ui::tab_bar::{TabEntry, build_pane_tab_bar};
 use crate::ui::tab_label::{LabelCtx, tab_label};
 use crate::ui::web_title::WebTitle;
-use crate::ui::{PaneDimOverlay, PaneFrame, StructuralNode, VisibleSurfaceHost, palette};
+use crate::ui::{PaneDimOverlay, PaneFrame, Slotted, StructuralNode, palette};
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, PositionType, UiRect, Val};
 use ozmux_multiplexer::{
     ActiveSurface, Cell, CellId, Cwd, LayoutCellState, PaneMarker, SplitOrientation, SurfaceKind,
-    SurfaceMarker,
+    SurfaceMarker, Surfaces,
 };
 
 /// Convert `(lhs_weight, rhs_weight)` into the `flex_grow` pair to set on
@@ -35,9 +34,9 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 /// violation (warn-and-skip); the entry point in `rebuild_workspace_ui`
 /// is expected to unwrap into `RootCell::child` first.
 ///
-/// `inactive_host_parent` — the Entity under which inactive Surface hosts
+/// `inactive_host_parent` — the Entity under which inactive Surface entities
 /// (within this workspace) are parked. In production this is the owning
-/// Workspace entity itself, which lacks `Node`, so the host falls out of
+/// Workspace entity itself, which lacks `Node`, so the surface falls out of
 /// Bevy's UI walker (`UiChildren::iter_ui_children` filters `With<Node>`).
 /// This is the mechanism that replaces the previous `hidden_stash`
 /// `Display::None` workaround.
@@ -47,10 +46,9 @@ pub(crate) fn build_cell_recursive(
     parent: Entity,
     cells: &LayoutCellState,
     cell_id: &CellId,
-    registry: &mut SurfaceEntityRegistry,
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
-    pane_children: &Query<&Children>,
+    pane_children: &Query<&Surfaces, With<PaneMarker>>,
     surfaces: &Query<(&SurfaceKind, &Name, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
     active_surfaces: &Query<&ActiveSurface, With<PaneMarker>>,
     active_pane: Entity,
@@ -82,7 +80,6 @@ pub(crate) fn build_cell_recursive(
             commands,
             parent,
             p.pane,
-            registry,
             inactive_host_parent,
             ui_font,
             pane_children,
@@ -128,7 +125,6 @@ pub(crate) fn build_cell_recursive(
                 lhs,
                 cells,
                 &s.lhs_cell,
-                registry,
                 inactive_host_parent,
                 ui_font,
                 pane_children,
@@ -155,7 +151,6 @@ pub(crate) fn build_cell_recursive(
                 rhs,
                 cells,
                 &s.rhs_cell,
-                registry,
                 inactive_host_parent,
                 ui_font,
                 pane_children,
@@ -174,10 +169,9 @@ fn build_pane(
     commands: &mut Commands,
     parent: Entity,
     pane_entity: Entity,
-    registry: &mut SurfaceEntityRegistry,
     inactive_host_parent: Entity,
     ui_font: &Handle<Font>,
-    pane_children: &Query<&Children>,
+    pane_children: &Query<&Surfaces, With<PaneMarker>>,
     surfaces: &Query<(&SurfaceKind, &Name, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
     active_surfaces: &Query<&ActiveSurface, With<PaneMarker>>,
     active_pane: Entity,
@@ -208,7 +202,7 @@ fn build_pane(
 
     let surface_entities: Vec<Entity> = pane_children
         .get(pane_entity)
-        .map(|c| c.iter().filter(|e| surfaces.get(*e).is_ok()).collect())
+        .map(|s| s.iter().filter(|e| surfaces.get(*e).is_ok()).collect())
         .unwrap_or_default();
 
     let tabs: Vec<TabEntry> = surface_entities
@@ -250,20 +244,19 @@ fn build_pane(
         .id();
 
     for &surface_entity in &surface_entities {
-        let Ok((kind, name, _cwd, _web_title)) = surfaces.get(surface_entity) else {
+        let Ok((kind, _name, _cwd, _web_title)) = surfaces.get(surface_entity) else {
             continue;
         };
-        let host = registry.get_or_spawn(commands, surface_entity, kind);
-        build_surface_host_children(commands, host, kind, name);
+        decorate_surface(commands, surface_entity, kind);
         if surface_entity == active_surface {
             commands
-                .entity(host)
-                .insert((ChildOf(surface_slot), VisibleSurfaceHost));
+                .entity(surface_entity)
+                .insert((ChildOf(surface_slot), Slotted));
         } else {
             commands
-                .entity(host)
+                .entity(surface_entity)
                 .insert(ChildOf(inactive_host_parent))
-                .remove::<VisibleSurfaceHost>();
+                .remove::<Slotted>();
         }
     }
 

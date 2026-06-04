@@ -9,9 +9,8 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::input::{InputPhase, current_modifiers};
+use crate::ui::Slotted;
 use crate::ui::copy_mode::CopyModeState;
-use crate::ui::registry::SurfaceEntityRegistry;
-use crate::ui::{SurfaceHostNode, VisibleSurfaceHost};
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -85,16 +84,16 @@ impl Plugin for MouseButtonsInputPlugin {
     }
 }
 
-/// Hit-tests `cursor_phys_px` against the **visible** (`VisibleSurfaceHost`)
-/// surface hosts and returns `(entity, local_phys_px)` for the first pane that
+/// Hit-tests `cursor_phys_px` against the **slotted** (`Slotted`) Surface
+/// entities and returns `(entity, local_phys_px)` for the first pane that
 /// contains the cursor. `local_phys_px` is in pane-local pixels with
 /// origin at the top-left corner of the node (i.e., `(0, 0)` is the
 /// top-left, `(size.x, size.y)` is the bottom-right).
 ///
-/// Only the active surface's host is hit-tested. Inactive hosts are parked
+/// Only the active (slotted) surface is hit-tested. Parked surfaces sit
 /// outside layout and keep stale, often window-sized `ComputedNode` geometry;
-/// including them lets a click resolve to a parked host of an already-active
-/// pane, so focus never moves (see `VisibleSurfaceHost`).
+/// including them lets a click resolve to a parked surface of an
+/// already-active pane, so focus never moves (see `Slotted`).
 ///
 /// `cursor_phys_px` is in physical (DPR-scaled) pixels — the caller
 /// must convert from `Window::cursor_position()` (logical) by
@@ -102,7 +101,7 @@ impl Plugin for MouseButtonsInputPlugin {
 pub(crate) fn resolve_pane_at_phys(
     hosts: &Query<
         (Entity, &ComputedNode, &UiGlobalTransform),
-        (With<SurfaceHostNode>, With<VisibleSurfaceHost>),
+        (With<ozmux_multiplexer::SurfaceMarker>, With<Slotted>),
     >,
     cursor_phys_px: Vec2,
 ) -> Option<(Entity, Vec2)> {
@@ -181,50 +180,33 @@ pub(crate) fn next_click_count(
     count
 }
 
-/// Pre-route helper. If `target_entity` belongs to a pane that is not
-/// the currently active pane in the attached workspace, updates
+/// Pre-route helper. The hit entity *is* the Surface, so its owning Pane is
+/// one `SurfaceOf` read (`pane_of_surface`). If that pane is not the
+/// currently active pane in the attached workspace, updates
 /// `Workspace::ActivePane`. No-op when:
-///   - The entity isn't registered as the active surface of any pane
-///     in the attached workspace.
+///   - The surface has no owning pane.
+///   - The pane belongs to a different (non-attached) workspace.
 ///   - The pane is already active.
 ///   - The workspace isn't found.
 ///
 /// Returns `true` when a focus change actually happened.
 ///
-/// Cross-workspace clicks (where `target_entity` belongs to a pane in a
-/// different workspace) are NOT handled here — they're rejected per the
-/// spec §10 edge cases. The reverse-lookup only scans the attached
-/// workspace's panes; an unknown target falls through as a no-op.
+/// Cross-workspace clicks (where the surface belongs to a pane in a
+/// different workspace) are rejected per the spec §10 edge cases.
 pub(crate) fn try_click_to_focus(
     mux: &mut ozmux_multiplexer::MultiplexerCommands,
-    registry: &SurfaceEntityRegistry,
     attached_workspace: Entity,
-    target_entity: Entity,
+    target_surface: Entity,
 ) -> bool {
-    let current_active_pane = mux.workspaces_active_pane(attached_workspace);
-
-    // Walk the workspace's panes to find which pane owns target_entity.
-    let target_pane: Option<Entity> = {
-        let mut found = None;
-        for pane in mux.panes_of_workspace(attached_workspace) {
-            for surface in mux.surfaces_of_pane(pane) {
-                if registry.get(surface) == Some(target_entity) {
-                    found = Some(pane);
-                    break;
-                }
-            }
-            if found.is_some() {
-                break;
-            }
-        }
-        found
-    };
-
-    let Some(target_pane) = target_pane else {
+    let Some(target_pane) = mux.pane_of_surface(target_surface) else {
         return false;
     };
 
-    if current_active_pane == Some(target_pane) {
+    if mux.workspace_of_pane(target_pane) != Some(attached_workspace) {
+        return false;
+    }
+
+    if mux.workspaces_active_pane(attached_workspace) == Some(target_pane) {
         return false;
     }
 
@@ -397,7 +379,7 @@ fn dispatch_mouse_buttons(
     configs: Res<OzmuxConfigsResource>,
     hosts: Query<
         (Entity, &ComputedNode, &UiGlobalTransform),
-        (With<SurfaceHostNode>, With<VisibleSurfaceHost>),
+        (With<ozmux_multiplexer::SurfaceMarker>, With<Slotted>),
     >,
     grids: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
     copy_modes: Query<(), With<CopyModeState>>,
@@ -411,7 +393,6 @@ fn dispatch_mouse_buttons(
             With<ozmux_multiplexer::AttachedWorkspace>,
         ),
     >,
-    registry: Res<SurfaceEntityRegistry>,
 ) {
     let Ok(window) = primary_window.single() else {
         buttons_msg.clear();
@@ -463,7 +444,7 @@ fn dispatch_mouse_buttons(
         if matches!(ev.state, ButtonState::Pressed)
             && let Ok(attached_workspace) = attached_workspace.single()
         {
-            try_click_to_focus(&mut mux, &registry, attached_workspace, entity);
+            try_click_to_focus(&mut mux, attached_workspace, entity);
         }
 
         let (cols, rows) = match handles.get(entity) {
@@ -784,18 +765,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_pane_at_phys_ignores_parked_hosts() {
+    fn resolve_pane_at_phys_ignores_parked_surfaces() {
         use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::SurfaceMarker;
 
-        // Both hosts' geometry covers (400, 300), but only one is the active
-        // (slotted) `VisibleSurfaceHost`. The parked host retains stale,
-        // oversized `ComputedNode` geometry after being unslotted; the hit-test
-        // must ignore it and return the visible host. Regression: a
-        // terminal-surface click resolving to a parked host of an
+        // Both surfaces' geometry covers (400, 300), but only one is the active
+        // (`Slotted`) surface. The parked surface retains stale, oversized
+        // `ComputedNode` geometry after being unslotted; the hit-test must
+        // ignore it and return the slotted surface. Regression: a
+        // terminal-surface click resolving to a parked surface of an
         // already-active pane left keyboard focus stuck on a webview.
         let mut app = App::new();
         app.world_mut().spawn((
-            SurfaceHostNode,
+            SurfaceMarker,
             ComputedNode {
                 size: Vec2::new(800.0, 600.0),
                 ..ComputedNode::DEFAULT
@@ -805,8 +787,8 @@ mod tests {
         let visible = app
             .world_mut()
             .spawn((
-                SurfaceHostNode,
-                VisibleSurfaceHost,
+                SurfaceMarker,
+                Slotted,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
                     ..ComputedNode::DEFAULT
@@ -820,7 +802,7 @@ mod tests {
             .run_system_once(
                 |hosts: Query<
                     (Entity, &ComputedNode, &UiGlobalTransform),
-                    (With<SurfaceHostNode>, With<VisibleSurfaceHost>),
+                    (With<SurfaceMarker>, With<Slotted>),
                 >| {
                     resolve_pane_at_phys(&hosts, Vec2::new(400.0, 300.0)).map(|(e, _)| e)
                 },
@@ -830,7 +812,7 @@ mod tests {
         assert_eq!(
             resolved,
             Some(visible),
-            "the hit-test must ignore parked (non-VisibleSurfaceHost) hosts",
+            "the hit-test must ignore parked (non-Slotted) surfaces",
         );
     }
 
@@ -967,7 +949,6 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
         app.add_plugins(crate::action::split_pane::SplitPaneActionPlugin);
-        app.insert_resource(crate::ui::registry::SurfaceEntityRegistry::default());
 
         let (workspace, original_pane, original_surface) = app
             .world_mut()
@@ -994,31 +975,13 @@ mod tests {
             .expect("active pane after split");
         assert_ne!(new_pane, original_pane, "split must promote fresh pane");
 
-        let new_surface = app
-            .world()
-            .get::<ozmux_multiplexer::ActiveSurface>(new_pane)
-            .map(|a| a.0)
-            .expect("new pane has active surface");
-
-        let original_entity = app.world_mut().spawn_empty().id();
-        let new_entity = app.world_mut().spawn_empty().id();
-        {
-            let mut registry = app
-                .world_mut()
-                .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>();
-            registry.insert_for_test(original_surface, original_entity);
-            registry.insert_for_test(new_surface, new_entity);
-        }
-
+        // The Surface entity IS its own host: the click target is the surface
+        // itself; `try_click_to_focus` resolves its owning pane via `SurfaceOf`.
         let mutated = app
             .world_mut()
-            .run_system_once(
-                move |mut mux: MultiplexerCommands,
-                      registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
-                      -> bool {
-                    try_click_to_focus(&mut mux, &registry, workspace, original_entity)
-                },
-            )
+            .run_system_once(move |mut mux: MultiplexerCommands| -> bool {
+                try_click_to_focus(&mut mux, workspace, original_surface)
+            })
             .unwrap();
         assert!(
             mutated,
@@ -1032,13 +995,9 @@ mod tests {
 
         let mutated_again = app
             .world_mut()
-            .run_system_once(
-                move |mut mux: MultiplexerCommands,
-                      registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
-                      -> bool {
-                    try_click_to_focus(&mut mux, &registry, workspace, original_entity)
-                },
-            )
+            .run_system_once(move |mut mux: MultiplexerCommands| -> bool {
+                try_click_to_focus(&mut mux, workspace, original_surface)
+            })
             .unwrap();
         assert!(
             !mutated_again,
@@ -1048,13 +1007,9 @@ mod tests {
         let stranger = app.world_mut().spawn_empty().id();
         let mutated_unknown = app
             .world_mut()
-            .run_system_once(
-                move |mut mux: MultiplexerCommands,
-                      registry: Res<crate::ui::registry::SurfaceEntityRegistry>|
-                      -> bool {
-                    try_click_to_focus(&mut mux, &registry, workspace, stranger)
-                },
-            )
+            .run_system_once(move |mut mux: MultiplexerCommands| -> bool {
+                try_click_to_focus(&mut mux, workspace, stranger)
+            })
             .unwrap();
         assert!(!mutated_unknown, "unknown entity must not mutate focus");
     }
@@ -1514,8 +1469,8 @@ mod tests {
 
     #[test]
     fn click_focuses_pane_whose_host_has_no_terminal_handle() {
-        // Regression: clicking an extension/browser pane — an `SurfaceHostNode`
-        // whose host entity has NO `TerminalHandle` — must still move focus.
+        // Regression: clicking an extension/browser pane — a Surface entity
+        // with NO `TerminalHandle` — must still move focus.
         // dispatch_mouse_buttons previously `continue`d at the terminal-handle
         // lookup *before* `try_click_to_focus` ran, so focus stayed on the
         // terminal and keystrokes kept routing to it.
@@ -1532,7 +1487,6 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
         app.init_resource::<MouseSelectionState>();
-        app.init_resource::<SurfaceEntityRegistry>();
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(ozmux_configs::OzmuxConfigs::default()));
         app.insert_resource(bevy_terminal_renderer::TerminalCellMetricsResource {
@@ -1590,24 +1544,18 @@ mod tests {
             .entity_mut(workspace)
             .insert(AttachedWorkspace);
 
-        // The clicked pane's host: SurfaceHostNode + a laid-out node under the
-        // cursor, but NO TerminalHandle (a webview host). `VisibleSurfaceHost`
-        // marks it as the active (slotted) host so the hit-test considers it.
-        let ext_host = app
-            .world_mut()
-            .spawn((
-                SurfaceHostNode,
-                VisibleSurfaceHost,
-                ComputedNode {
-                    size: Vec2::new(800.0, 600.0),
-                    ..ComputedNode::DEFAULT
-                },
-                UiGlobalTransform::from_xy(400.0, 300.0),
-            ))
-            .id();
-        app.world_mut()
-            .resource_mut::<SurfaceEntityRegistry>()
-            .insert_for_test(ext_surface, ext_host);
+        // The clicked surface IS its own host: decorate the ext pane's active
+        // Surface with a laid-out node under the cursor, but NO TerminalHandle
+        // (a webview surface). `Slotted` marks it as the active (slotted)
+        // surface so the hit-test considers it.
+        app.world_mut().entity_mut(ext_surface).insert((
+            Slotted,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+        ));
 
         let window = app
             .world_mut()

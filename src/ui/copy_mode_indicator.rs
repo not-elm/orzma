@@ -507,11 +507,8 @@ mod tests {
                 .unwrap()
                 .expect("bootstrap workspace + pane + surface");
 
-        let first_host = app
-            .world()
-            .resource::<crate::ui::registry::SurfaceEntityRegistry>()
-            .get(first_surface)
-            .expect("first surface host registered");
+        // The Surface entity IS its own host.
+        let first_host = first_surface;
 
         let second_surface = app
             .world_mut()

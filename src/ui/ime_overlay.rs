@@ -9,7 +9,6 @@
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
 use crate::input::resolve_focused_terminal;
-use crate::ui::registry::SurfaceEntityRegistry;
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -180,7 +179,6 @@ pub(crate) fn position_ime_overlay(
     state: Res<ImeState>,
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: Res<SurfaceEntityRegistry>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -223,7 +221,7 @@ pub(crate) fn position_ime_overlay(
     let Some(comp) = state.composition() else {
         return;
     };
-    let Some(entity) = resolve_focused_terminal(&mux, &attached_workspace, &registry) else {
+    let Some(entity) = resolve_focused_terminal(&mux, &attached_workspace) else {
         return;
     };
     let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
@@ -320,11 +318,10 @@ fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: Res<SurfaceEntityRegistry>,
     mut grids: Query<(Entity, &mut TerminalGrid)>,
 ) {
     let focused = if state.is_composing() {
-        resolve_focused_terminal(&mux, &attached_workspace, &registry)
+        resolve_focused_terminal(&mux, &attached_workspace)
     } else {
         None
     };

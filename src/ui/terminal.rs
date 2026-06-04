@@ -1,13 +1,13 @@
-//! Post-setup for Terminal Surface hosts. After the registry has prepared a
-//! stable entity carrying `SurfaceHostNode` + `TerminalSurfaceMarker`, this
-//! system spawns a `TerminalBundle` (PTY + VT bridge) and attaches a
-//! `TerminalRenderBundle` (renderer-side grid + MaterialNode) exactly once.
-//! Failures mark the entity with `TerminalSpawnFailed` so the system does
-//! not retry on subsequent frames.
+//! Post-setup for Terminal Surface entities. Once the rebuild has decorated a
+//! Surface entity with a `Node` + `TerminalSurfaceMarker`, this system spawns
+//! a `TerminalBundle` (PTY + VT bridge) and attaches a `TerminalRenderBundle`
+//! (renderer-side grid + MaterialNode) directly onto the Surface entity
+//! exactly once. Failures mark the entity with `TerminalSpawnFailed` so the
+//! system does not retry on subsequent frames.
 
 use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
-use crate::ui::{HostSurfaceEntity, TerminalSpawnFailed, TerminalSurfaceMarker};
+use crate::ui::{TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal::{
@@ -17,7 +17,7 @@ use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 use ozmux_extension_host::terminal_env;
-use ozmux_multiplexer::Cwd;
+use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneMarker, SurfaceOf};
 
 pub struct OzmuxTerminalUiPlugin;
 
@@ -47,28 +47,29 @@ impl Plugin for OzmuxTerminalUiPlugin {
 /// spawned terminal's env is seeded via `terminal_env` with every launched
 /// extension's bin dir so any `@<cmd>` shim resolves and can reach the control
 /// bridge. The bridge keys on `OZMUX_PANE_ID` being the multiplexer Pane
-/// `Entity`, so the host's owning Pane / Workspace are resolved by walking
-/// `ChildOf` from the host's `HostSurfaceEntity`: surface → Pane → Workspace.
+/// `Entity`, so the surface's owning Pane / Workspace are resolved via the
+/// `SurfaceOf` / `OwningWorkspace` relationships: surface → Pane → Workspace.
 /// If the chain cannot be resolved (or no extension launched) the env is
 /// empty — the terminal still works, just without `@<cmd>` support.
 fn finish_terminal_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
-    hosts: Query<
-        (Entity, &HostSurfaceEntity),
+    surfaces: Query<
+        Entity,
         (
             With<TerminalSurfaceMarker>,
             Without<TerminalHandle>,
             Without<TerminalSpawnFailed>,
         ),
     >,
-    child_of: Query<&ChildOf>,
+    owners: Query<&SurfaceOf>,
+    pane_workspaces: Query<&OwningWorkspace, With<PaneMarker>>,
     registry: Option<Res<ExtensionRegistry>>,
     cwds: Query<&Cwd>,
 ) {
-    for (host, host_surface) in hosts.iter() {
+    for surface in surfaces.iter() {
         let mut env = match registry.as_ref() {
-            Some(registry) => match resolve_pane_workspace(host_surface.0, &child_of) {
+            Some(registry) => match resolve_pane_workspace(surface, &owners, &pane_workspaces) {
                 Some((pane, workspace)) => {
                     let exts: Vec<_> = registry.extensions.values().collect();
                     terminal_env(&exts, pane, workspace)
@@ -78,7 +79,7 @@ fn finish_terminal_setup(
             None => Vec::new(),
         };
         env.push(("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string()));
-        let seed = cwds.get(host_surface.0).ok().map(|c| c.0.clone());
+        let seed = cwds.get(surface).ok().map(|c| c.0.clone());
         let opts = SpawnOptions {
             cols: 80,
             rows: 24,
@@ -89,14 +90,14 @@ fn finish_terminal_setup(
         let bundle = match TerminalBundle::spawn(opts) {
             Ok(b) => b,
             Err(e) => {
-                tracing::error!(?e, ?host, "TerminalBundle::spawn failed");
-                commands.entity(host).insert(TerminalSpawnFailed);
+                tracing::error!(?e, ?surface, "TerminalBundle::spawn failed");
+                commands.entity(surface).insert(TerminalSpawnFailed);
                 continue;
             }
         };
         let material_handle = materials.add(TerminalUiMaterial::default());
         commands
-            .entity(host)
+            .entity(surface)
             .insert((bundle, TerminalRenderBundle::new(material_handle)));
     }
 }
@@ -111,17 +112,21 @@ fn resolve_spawn_cwd(cwd: Option<std::path::PathBuf>) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
 
-/// Resolves a multiplexer Surface entity to its `(pane, workspace)` pair by
-/// walking `ChildOf` up the multiplexer hierarchy (surface → Pane →
-/// Workspace). Returns `None` when either link is missing — mirrors
+/// Resolves a multiplexer Surface entity to its `(pane, workspace)` pair via
+/// the ownership relationships (surface `SurfaceOf` → Pane `OwningWorkspace` →
+/// Workspace), NOT via the layout `ChildOf` tree. This is load-bearing: a
+/// parked (inactive) surface is `ChildOf(workspace)`, so walking `ChildOf`
+/// would skip its Pane entirely and resolve the wrong owner. Returns `None`
+/// when either link is missing — mirrors
 /// `MultiplexerCommands::pane_of_surface` + `workspace_of_pane` without
 /// borrowing the full mutation SystemParam.
 pub(crate) fn resolve_pane_workspace(
     surface: Entity,
-    child_of: &Query<&ChildOf>,
+    owners: &Query<&SurfaceOf>,
+    pane_workspaces: &Query<&OwningWorkspace, With<PaneMarker>>,
 ) -> Option<(Entity, Entity)> {
-    let pane = child_of.get(surface).ok()?.parent();
-    let workspace = child_of.get(pane).ok()?.parent();
+    let pane = owners.get(surface).ok()?.0;
+    let workspace = pane_workspaces.get(pane).ok()?.0;
     Some((pane, workspace))
 }
 
@@ -205,18 +210,17 @@ fn resize_terminals_to_node(
     }
 }
 
-/// Writes a terminal's OSC-7-reported directory onto its owning surface's
-/// `Cwd`. The event targets the host entity; `HostSurfaceEntity` maps it back
-/// to the multiplexer surface.
+/// Writes a terminal's OSC-7-reported directory onto its `Cwd`. The Surface
+/// entity *is* the terminal host, so the event targets it directly.
 fn on_terminal_current_dir(
     ev: On<TerminalCurrentDir>,
     mut commands: Commands,
-    hosts: Query<&HostSurfaceEntity>,
+    surfaces: Query<(), With<TerminalSurfaceMarker>>,
 ) {
-    let host = ev.entity;
+    let surface = ev.entity;
     let path = &ev.path;
-    if let Ok(host_surface) = hosts.get(host) {
-        commands.entity(host_surface.0).insert(Cwd(path.clone()));
+    if surfaces.get(surface).is_ok() {
+        commands.entity(surface).try_insert(Cwd(path.clone()));
     }
 }
 
@@ -281,11 +285,7 @@ mod tests {
         }
         let mut app = make_test_app();
         app.add_systems(Update, finish_terminal_setup);
-        let surface = app.world_mut().spawn_empty().id();
-        let host = app
-            .world_mut()
-            .spawn((TerminalSurfaceMarker, HostSurfaceEntity(surface)))
-            .id();
+        let surface = app.world_mut().spawn(TerminalSurfaceMarker).id();
         app.update();
         // SAFETY: env_guard is still held; restore SHELL state so concurrent
         // tests don't see a dirty env.
@@ -293,12 +293,12 @@ mod tests {
             std::env::remove_var("SHELL");
         }
         assert!(
-            app.world().get::<TerminalSpawnFailed>(host).is_some(),
-            "spawn failure must mark the host with TerminalSpawnFailed"
+            app.world().get::<TerminalSpawnFailed>(surface).is_some(),
+            "spawn failure must mark the surface with TerminalSpawnFailed"
         );
         assert!(
-            app.world().get::<TerminalHandle>(host).is_none(),
-            "spawn failure must not leave a TerminalHandle on the host"
+            app.world().get::<TerminalHandle>(surface).is_none(),
+            "spawn failure must not leave a TerminalHandle on the surface"
         );
     }
 
@@ -320,18 +320,16 @@ mod tests {
     }
 
     #[test]
-    fn current_dir_event_writes_cwd_on_mapped_surface() {
-        use crate::ui::HostSurfaceEntity;
+    fn current_dir_event_writes_cwd_on_surface() {
         use bevy::prelude::*;
         use bevy_terminal::TerminalCurrentDir;
         use ozmux_multiplexer::Cwd;
 
         let mut app = App::new();
         app.add_observer(on_terminal_current_dir);
-        let surface = app.world_mut().spawn_empty().id();
-        let host = app.world_mut().spawn(HostSurfaceEntity(surface)).id();
+        let surface = app.world_mut().spawn(TerminalSurfaceMarker).id();
         app.world_mut().trigger(TerminalCurrentDir {
-            entity: host,
+            entity: surface,
             path: std::path::PathBuf::from("/tmp/proj"),
         });
         app.world_mut().flush();

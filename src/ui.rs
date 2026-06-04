@@ -1,17 +1,14 @@
 //! Bevy UI Plugin and rebuild systems. Per-workspace UI subtrees are owned
-//! by their Workspace entity and rebuilt via
-//! `rebuild_workspace::rebuild_workspace_ui_on_data_change` whenever the
-//! per-workspace epoch in `MultiplexerService` advances. The status bar
-//! rebuilds independently via
+//! by their Workspace entity and rebuilt via `rebuild_workspace_ui` whenever
+//! the per-workspace `LayoutCells` changes. The status bar rebuilds
+//! independently via
 //! `status_bar_sync::rebuild_status_bar_on_workspace_set_change` when the
-//! workspace list or `AttachedWorkspace` marker changes. Surface host
-//! entities (managed by `SurfaceEntityRegistry`) are kept stable across
-//! rebuilds and re-parented via `ChildOf` — active hosts under the
-//! active workspace's pane slot, inactive hosts under the owning Workspace
-//! entity (a non-Node walker-skipped park).
+//! workspace list or `AttachedWorkspace` marker changes. The multiplexer
+//! Surface entity *is* its render host: the rebuild stamps a `Node` + a
+//! kind-marker on it and re-parents it via `ChildOf` — the active surface
+//! (`Slotted`) under the active workspace's pane slot, inactive surfaces
+//! under the owning Workspace entity (a non-Node walker-skipped park).
 
-use crate::system_set::OzmuxSystems;
-use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use crate::ui::workspace::OzmuxWorkspaceUiPlugin;
@@ -23,7 +20,6 @@ pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
 pub mod layout;
 pub mod palette;
-pub mod registry;
 pub mod root;
 pub mod status_bar;
 pub mod status_bar_sync;
@@ -52,56 +48,50 @@ pub struct WorkspaceUiRoot;
 
 /// Marker for every transient UI Node (status bar, tab bar, pane frame,
 /// split container, placeholder surface content). Rebuilds query this
-/// and despawn every match. Surface host entities must NOT carry this.
+/// and despawn every match. Surface entities must NOT carry this.
 #[derive(Component)]
 pub struct StructuralNode;
 
-/// Marker for the stable per-surface host entity. Survives structural
-/// rebuilds; re-parented via `ChildOf` each rebuild. The `SurfaceId →
-/// Entity` mapping is owned by `SurfaceEntityRegistry`; this marker
-/// exists only so queries can filter for surface hosts.
-#[derive(Component)]
-pub struct SurfaceHostNode;
-
-/// Marks the surface host currently slotted into its pane's visible
-/// `surface_slot` (i.e. the active surface). Inactive hosts are parked under a
-/// non-`Node` parent and keep this marker removed.
+/// Marks the Surface entity currently slotted into its pane's visible
+/// `surface_slot` (i.e. the active surface). Inactive surfaces are parked
+/// under a non-`Node` parent and keep this marker removed.
 ///
 /// # Invariants
 ///
 /// Geometric hit-tests (`resolve_pane_at_phys`) MUST filter on this marker:
-/// a parked host is excluded from layout, so its `ComputedNode` retains stale,
-/// often window-sized geometry. Without this filter a click resolves to a
-/// parked host of an already-active pane and focus never moves.
+/// a parked surface is excluded from layout, so its `ComputedNode` retains
+/// stale, often window-sized geometry. Without this filter a click resolves
+/// to a parked surface of an already-active pane and focus never moves.
 #[derive(Component)]
-pub struct VisibleSurfaceHost;
+pub struct Slotted;
 
-/// Marks a Surface Host whose `kind` is `Terminal`. `finish_terminal_setup`
-/// queries for `With<TerminalSurfaceMarker>` to find hosts that need a
+/// Marks a Surface entity whose `kind` is `Terminal`. `finish_terminal_setup`
+/// queries for `With<TerminalSurfaceMarker>` to find surfaces that need a
 /// `TerminalBundle` + `TerminalRenderBundle` attached.
 #[derive(Component)]
 pub struct TerminalSurfaceMarker;
 
-/// Marks a Surface Host whose `kind` is `Extension`.
+/// Marks a Surface entity whose `kind` is `Extension`.
 /// `finish_extension_setup` queries for `With<ExtensionSurfaceMarker>` to
-/// find hosts that need a `bevy_cef` webview (`WebviewSource` +
+/// find surfaces that need a `bevy_cef` webview (`WebviewSource` +
 /// `MaterialNode<WebviewUiMaterial>`) attached.
 #[derive(Component)]
 pub(crate) struct ExtensionSurfaceMarker;
 
-/// Marks a Surface Host whose `kind` is `Browser`. The browser renderer
-/// (`crate::browser_render`) queries `With<BrowserSurfaceMarker>` to find hosts
-/// that need a native toolbar + a `bevy_cef` page webview attached.
+/// Marks a Surface entity whose `kind` is `Browser`. The browser renderer
+/// (`crate::browser_render`) queries `With<BrowserSurfaceMarker>` to find
+/// surfaces that need a native toolbar + a `bevy_cef` page webview attached.
 #[derive(Component)]
 pub(crate) struct BrowserSurfaceMarker;
 
-/// On a browser surface host: points to its page-webview child entity. Its
-/// presence also marks the host's chrome as already built (mount-once gate).
+/// On a browser Surface entity: points to its page-webview child entity. Its
+/// presence also marks the surface's chrome as already built (mount-once gate).
 #[derive(Component)]
 pub(crate) struct BrowserPageWebview(pub(crate) Entity);
 
-/// On a browser page-webview child: points back to its owning surface host.
-/// Lets navigation observers (which fire on the webview entity) reach the host.
+/// On a browser page-webview child: points back to its owning Surface entity.
+/// Lets navigation observers (which fire on the webview entity) reach the
+/// surface.
 #[derive(Component)]
 pub(crate) struct PageWebviewOf(pub(crate) Entity);
 
@@ -152,19 +142,10 @@ pub(crate) struct TabButton {
     pub(crate) surface: Entity,
 }
 
-/// The browser surface host whose address bar currently owns the keyboard, or
-/// `None`. Read by the browser editor + `dispatch_focused_key`.
+/// The browser Surface entity whose address bar currently owns the keyboard,
+/// or `None`. Read by the browser editor + `dispatch_focused_key`.
 #[derive(Resource, Default)]
 pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
-
-/// Back-pointer from a stable Surface host entity to its owning
-/// multiplexer Surface entity. Stamped by
-/// `SurfaceEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
-/// this to resolve the host's multiplexer Pane / Workspace entities (via
-/// `ChildOf`) so the spawned terminal's env carries the correct
-/// `OZMUX_PANE_ID` for the `@memo` control bridge.
-#[derive(Component)]
-pub struct HostSurfaceEntity(pub Entity);
 
 /// Records that `TerminalBundle::spawn` failed for this host, so
 /// `finish_terminal_setup` will not retry on subsequent frames.
@@ -208,8 +189,7 @@ pub struct OzmuxUiPlugin;
 
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SurfaceEntityRegistry>()
-            .insert_resource(HomeDir(std::env::var_os("HOME").map(PathBuf::from)))
+        app.insert_resource(HomeDir(std::env::var_os("HOME").map(PathBuf::from)))
             .add_plugins((
                 OzmuxUiRootPlugin,
                 OzmuxWorkspaceUiPlugin,
@@ -218,13 +198,7 @@ impl Plugin for OzmuxUiPlugin {
             ))
             .add_systems(
                 Update,
-                (
-                    // Host despawns must commit before the rebuild and surface
-                    // setup observe them, else setup inserts a bundle onto a
-                    // host this prune is despawning (insert-after-despawn panic).
-                    registry::prune_registry_on_surface_removal.before(OzmuxSystems::WorkspaceUi),
-                    status_bar_sync::rebuild_status_bar_on_workspace_set_change,
-                ),
+                status_bar_sync::rebuild_status_bar_on_workspace_set_change,
             );
     }
 }
@@ -349,17 +323,17 @@ mod tests {
 
     #[test]
     fn surface_entity_persists_across_rebuild() {
-        use crate::ui::registry::SurfaceEntityRegistry;
+        use ozmux_multiplexer::SurfaceMarker;
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        let host_before = {
+        let surface_before = {
             let world = app.world_mut();
-            let mut q = world.query_filtered::<Entity, With<SurfaceHostNode>>();
+            let mut q = world.query_filtered::<Entity, (With<SurfaceMarker>, With<Node>)>();
             q.iter(world)
                 .next()
-                .expect("at least one host after first rebuild")
+                .expect("at least one slotted surface after first rebuild")
         };
 
         {
@@ -379,16 +353,13 @@ mod tests {
         }
         app.update();
 
-        let host_after = {
-            let world = app.world_mut();
-            let registry = world.resource::<SurfaceEntityRegistry>();
-            registry.iter_for_test().next().map(|(_, h)| h)
-        };
-
-        assert_eq!(
-            Some(host_before),
-            host_after,
-            "surface host entity must survive a rebuild"
+        assert!(
+            app.world().get_entity(surface_before).is_ok(),
+            "the Surface entity (= its own host) must survive a rebuild"
+        );
+        assert!(
+            app.world().get::<Node>(surface_before).is_some(),
+            "the surviving surface must keep its Node across the rebuild"
         );
     }
 
@@ -426,10 +397,11 @@ mod tests {
     }
 
     #[test]
-    fn surface_registry_prunes_removed_surface() {
-        use crate::ui::registry::SurfaceEntityRegistry;
+    fn closing_pane_despawns_its_surface_via_linked_spawn() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
+        use ozmux_multiplexer::{
+            MultiplexerCommands, Side, SplitOrientation, SurfaceMarker, WorkspaceMarker,
+        };
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -451,11 +423,12 @@ mod tests {
             .unwrap();
         app.update();
 
-        let registry_count_after_split = app
-            .world()
-            .resource::<SurfaceEntityRegistry>()
-            .len_for_test();
-        assert_eq!(registry_count_after_split, 2, "two surfaces after split");
+        let surfaces_after_split = app
+            .world_mut()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(surfaces_after_split, 2, "two surfaces after split");
 
         app.world_mut()
             .run_system_once(
@@ -472,20 +445,21 @@ mod tests {
             .unwrap();
         app.update();
 
-        let registry_count_after_close = app
-            .world()
-            .resource::<SurfaceEntityRegistry>()
-            .len_for_test();
+        let surfaces_after_close = app
+            .world_mut()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
+            .iter(app.world())
+            .count();
         assert_eq!(
-            registry_count_after_close, 1,
-            "prune system must remove the closed surface from the registry"
+            surfaces_after_close, 1,
+            "closing a pane must cascade-despawn its surface (Surfaces linked_spawn)"
         );
     }
 
     #[test]
-    fn surface_host_not_caught_in_despawn_cascade() {
+    fn surface_entity_not_caught_in_despawn_cascade() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, SurfaceMarker, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -493,8 +467,8 @@ mod tests {
 
         let entity_before = {
             let world = app.world_mut();
-            let mut q = world.query_filtered::<Entity, With<SurfaceHostNode>>();
-            q.iter(world).next().expect("at least one host")
+            let mut q = world.query_filtered::<Entity, (With<SurfaceMarker>, With<Node>)>();
+            q.iter(world).next().expect("at least one slotted surface")
         };
 
         // Rename via MultiplexerCommands — triggers Changed<Name> on the Workspace
@@ -512,23 +486,23 @@ mod tests {
 
         assert!(
             app.world().get_entity(entity_before).is_ok(),
-            "host entity must still exist after rebuild — load-bearing for stable handles"
+            "surface entity must still exist after rebuild — load-bearing for stable handles"
         );
     }
 
     #[test]
-    fn focus_workspace_switch_does_not_orphan_inactive_workspace_hosts() {
+    fn focus_workspace_switch_does_not_orphan_inactive_workspace_surfaces() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, SurfaceMarker, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
 
-        let host_before = {
+        let surface_before = {
             let world = app.world_mut();
-            let mut q = world.query_filtered::<Entity, With<SurfaceHostNode>>();
-            q.iter(world).next().expect("at least one host")
+            let mut q = world.query_filtered::<Entity, (With<SurfaceMarker>, With<Node>)>();
+            q.iter(world).next().expect("at least one slotted surface")
         };
 
         let workspace_2 = app
@@ -554,13 +528,13 @@ mod tests {
         app.update();
 
         assert!(
-            app.world().get_entity(host_before).is_ok(),
-            "workspace 1's surface host must survive when workspace 2 becomes active"
+            app.world().get_entity(surface_before).is_ok(),
+            "workspace 1's surface must survive when workspace 2 becomes active"
         );
     }
 
     #[test]
-    fn inactive_surface_host_persists_across_focus_switch() {
+    fn inactive_surface_persists_across_focus_switch() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, WorkspaceMarker};
 
@@ -584,14 +558,6 @@ mod tests {
             )
             .unwrap()
             .expect("bootstrap workspace + pane + surface");
-
-        let host_before = {
-            let world = app.world_mut();
-            let registry = world.resource::<crate::ui::registry::SurfaceEntityRegistry>();
-            registry
-                .get(first_surface)
-                .expect("first surface has a host")
-        };
 
         let second_surface = app
             .world_mut()
@@ -618,18 +584,18 @@ mod tests {
         app.update();
 
         assert!(
-            app.world().get_entity(host_before).is_ok(),
-            "first surface host must survive when the second surface becomes active"
+            app.world().get_entity(first_surface).is_ok(),
+            "first surface must survive when the second surface becomes active"
         );
 
-        let host_parent = app
+        let first_parent = app
             .world()
-            .get::<bevy::prelude::ChildOf>(host_before)
+            .get::<bevy::prelude::ChildOf>(first_surface)
             .map(|c| c.parent());
         assert_eq!(
-            host_parent,
+            first_parent,
             Some(workspace),
-            "inactive host must be parked under the workspace entity (no Node, walker-skipped)"
+            "inactive surface must be parked under the workspace entity (no Node, walker-skipped)"
         );
     }
 
@@ -662,32 +628,28 @@ mod tests {
         assert_eq!(count, 1, "exactly one AttachedWorkspace after bootstrap");
     }
 
-    /// Collects `(pane, PaneDim.0)` for every terminal host that
-    /// `sync_terminal_dim` has assigned a `PaneDim`.
+    /// Collects `(pane, PaneDim.0)` for every terminal surface that
+    /// `sync_terminal_dim` has assigned a `PaneDim`. The surface *is* its own
+    /// host, so the owning pane is resolved via `SurfaceOf`.
     fn terminal_host_pane_dims(world: &mut World) -> Vec<(Entity, f32)> {
         use bevy_terminal_renderer::material::PaneDim;
-        let hosts: Vec<(Entity, f32)> = world
-            .query_filtered::<(&HostSurfaceEntity, &PaneDim), With<TerminalSurfaceMarker>>()
+        use ozmux_multiplexer::SurfaceOf;
+        world
+            .query_filtered::<(&SurfaceOf, &PaneDim), With<TerminalSurfaceMarker>>()
             .iter(world)
-            .map(|(h, d)| (h.0, d.0))
-            .collect();
-        hosts
-            .into_iter()
-            .filter_map(|(surface, dim)| {
-                let pane = world.get::<ChildOf>(surface)?.parent();
-                Some((pane, dim))
-            })
+            .map(|(o, d)| (o.0, d.0))
             .collect()
     }
 
     /// Headless-safe terminal mount. `finish_terminal_setup` spawns the shell
     /// from `$SHELL` (default `/bin/zsh`), which fails on runners lacking it
-    /// (e.g. Linux CI), leaving the host with no `MaterialNode` — so
+    /// (e.g. Linux CI), leaving the surface with no `MaterialNode` — so
     /// `sync_terminal_dim_on_mount` never assigns `PaneDim`. Stub the render
-    /// material on any terminal host that did not really mount, then tick so the
-    /// dim systems run; a host that mounted for real already carries a material.
+    /// material on any terminal surface that did not really mount, then tick so
+    /// the dim systems run; a surface that mounted for real already carries a
+    /// material.
     fn mount_terminal_hosts(app: &mut App) {
-        let hosts: Vec<Entity> = {
+        let surfaces: Vec<Entity> = {
             let world = app.world_mut();
             world
                 .query_filtered::<Entity, (
@@ -697,13 +659,13 @@ mod tests {
                 .iter(world)
                 .collect()
         };
-        for host in hosts {
+        for surface in surfaces {
             let handle = app
                 .world_mut()
                 .resource_mut::<Assets<TerminalUiMaterial>>()
                 .add(TerminalUiMaterial::default());
             app.world_mut()
-                .entity_mut(host)
+                .entity_mut(surface)
                 .insert(MaterialNode(handle));
         }
         app.update();
@@ -1071,20 +1033,21 @@ mod tests {
     #[test]
     fn osc7_current_dir_updates_tab() {
         use bevy_terminal::TerminalCurrentDir;
+        use ozmux_multiplexer::SurfaceMarker;
 
         let (mut app, _guard) = make_test_app();
         app.insert_resource(HomeDir(None));
         app.update();
         app.update();
 
-        let host = app
+        let surface = app
             .world_mut()
-            .query_filtered::<Entity, With<HostSurfaceEntity>>()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
             .iter(app.world())
             .next()
-            .expect("a surface host exists after rebuild");
+            .expect("a surface exists after rebuild");
         app.world_mut().trigger(TerminalCurrentDir {
-            entity: host,
+            entity: surface,
             path: "/tmp/proj".into(),
         });
         for _ in 0..3 {

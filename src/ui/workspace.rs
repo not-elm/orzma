@@ -8,21 +8,20 @@ use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
 use crate::theme;
 use crate::ui::layout::build_cell_recursive;
-use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::tab_label::LabelCtx;
 use crate::ui::terminal::resolve_pane_workspace;
 use crate::ui::web_title::WebTitle;
 use crate::ui::{
-    HomeDir, HostSurfaceEntity, PaneDimOverlay, StructuralNode, SurfaceHostNode,
-    TerminalSurfaceMarker, WorkspaceUiDirty, WorkspaceUiRoot,
+    HomeDir, PaneDimOverlay, StructuralNode, TerminalSurfaceMarker, WorkspaceUiDirty,
+    WorkspaceUiRoot,
 };
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, AttachedWorkspace, Cell, Cwd, LayoutCells, PaneMarker, SurfaceKind,
-    SurfaceMarker, WorkspaceMarker, WorkspaceUiSubtree,
+    ActivePane, ActiveSurface, AttachedWorkspace, Cell, Cwd, LayoutCells, OwningWorkspace,
+    PaneMarker, SurfaceKind, SurfaceMarker, SurfaceOf, Surfaces, WorkspaceMarker, WorkspaceUiSubtree,
 };
 
 pub struct OzmuxWorkspaceUiPlugin;
@@ -110,13 +109,15 @@ fn sync_active_workspace(
 /// since the last run. Native Bevy `Changed<LayoutCells>` replaces the
 /// old epoch-comparison gate. The rebuild walks `layout.cells` and
 /// replaces every `StructuralNode` descendant of the workspace's
-/// `WorkspaceUiSubtree` root — Surface hosts are preserved via
-/// `SurfaceEntityRegistry` and re-parented. Pruning of stale registry
-/// entries is handled by `prune_registry_on_surface_removal` driven by
-/// `RemovedComponents<SurfaceMarker>`.
+/// `WorkspaceUiSubtree` root. The multiplexer Surface entity *is* its own
+/// host: it carries its own `Node` + material, survives the structural
+/// despawn (it is detached first), and is re-parented — the active surface
+/// (`Slotted`) under its pane's surface-slot, inactive surfaces parked under
+/// the owning Workspace entity (a non-Node walker-skipped park). Closed
+/// surfaces are cascade-despawned by `Surfaces(linked_spawn)`, so no separate
+/// prune is needed.
 fn rebuild_workspace_ui(
     mut commands: Commands,
-    mut registry: ResMut<SurfaceEntityRegistry>,
     workspaces: Query<
         (
             Entity,
@@ -131,8 +132,9 @@ fn rebuild_workspace_ui(
         ),
     >,
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
-    surface_hosts: Query<(Entity, &SurfaceHostNode)>,
+    surface_entities: Query<Entity, With<SurfaceMarker>>,
     children: Query<&Children>,
+    pane_surfaces: Query<&Surfaces, With<PaneMarker>>,
     surfaces: Query<(&SurfaceKind, &Name, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
     active_surfaces: Query<&ActiveSurface, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
@@ -157,7 +159,7 @@ fn rebuild_workspace_ui(
         let active_pane = active_pane.map(|a| a.0);
         let workspace_veil = if active_pane.is_some() { veil } else { None };
         let active_pane = active_pane.unwrap_or(Entity::PLACEHOLDER);
-        descend_and_detach_hosts(&mut commands, subtree.0, &children, &surface_hosts);
+        descend_and_detach_surfaces(&mut commands, subtree.0, &children, &surface_entities);
         descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
 
         let root_cell_id = layout.root;
@@ -168,10 +170,9 @@ fn rebuild_workspace_ui(
                     subtree.0,
                     &layout.cells,
                     &root.child,
-                    &mut registry,
                     workspace_entity,
                     &ui_font_handle,
-                    &children,
+                    &pane_surfaces,
                     &surfaces,
                     &active_surfaces,
                     active_pane,
@@ -208,35 +209,35 @@ fn flag_chrome_dirty_on_surface_change(
     switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveSurface>)>,
     changed_cwd: Query<Entity, (With<SurfaceMarker>, Changed<Cwd>)>,
     changed_web_title: Query<Entity, (With<SurfaceMarker>, Changed<WebTitle>)>,
-    child_of: Query<&ChildOf>,
+    owners: Query<&SurfaceOf>,
+    pane_workspaces: Query<&OwningWorkspace, With<PaneMarker>>,
 ) {
     for surface in added_surfaces
         .iter()
         .chain(changed_cwd.iter())
         .chain(changed_web_title.iter())
     {
-        if let Some((_pane, workspace)) = resolve_pane_workspace(surface, &child_of) {
+        if let Some((_pane, workspace)) = resolve_pane_workspace(surface, &owners, &pane_workspaces)
+        {
             commands.entity(workspace).insert(WorkspaceUiDirty);
         }
     }
     for pane in switched_panes.iter() {
-        if let Ok(pane_parent) = child_of.get(pane) {
-            commands
-                .entity(pane_parent.parent())
-                .insert(WorkspaceUiDirty);
+        if let Ok(owning) = pane_workspaces.get(pane) {
+            commands.entity(owning.0).insert(WorkspaceUiDirty);
         }
     }
 }
 
-fn descend_and_detach_hosts(
+fn descend_and_detach_surfaces(
     commands: &mut Commands,
     root: Entity,
     children: &Query<&Children>,
-    surface_hosts: &Query<(Entity, &SurfaceHostNode)>,
+    surface_entities: &Query<Entity, With<SurfaceMarker>>,
 ) {
     let mut stack = vec![root];
     while let Some(e) = stack.pop() {
-        if surface_hosts.get(e).is_ok() {
+        if surface_entities.get(e).is_ok() {
             commands.entity(e).remove::<ChildOf>();
             continue;
         }
@@ -317,20 +318,22 @@ fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
 fn sync_terminal_dim_on_focus(
     mut commands: Commands,
     changed_workspaces: Query<(Entity, &ActivePane), Changed<ActivePane>>,
-    hosts: Query<
-        (Entity, &HostSurfaceEntity),
+    surfaces: Query<
+        Entity,
         (
             With<TerminalSurfaceMarker>,
             With<MaterialNode<TerminalUiMaterial>>,
         ),
     >,
-    child_of: Query<&ChildOf>,
+    owners: Query<&SurfaceOf>,
+    pane_workspaces: Query<&OwningWorkspace, With<PaneMarker>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
     for (workspace, active) in changed_workspaces.iter() {
-        for (host, host_surface) in hosts.iter() {
-            let Some((pane, host_workspace)) = resolve_pane_workspace(host_surface.0, &child_of)
+        for surface in surfaces.iter() {
+            let Some((pane, host_workspace)) =
+                resolve_pane_workspace(surface, &owners, &pane_workspaces)
             else {
                 continue;
             };
@@ -338,7 +341,7 @@ fn sync_terminal_dim_on_focus(
                 continue;
             }
             let want = if pane == active.0 { 1.0 } else { dim_factor };
-            commands.entity(host).insert(PaneDim(want));
+            commands.entity(surface).insert(PaneDim(want));
         }
     }
 }
@@ -351,19 +354,21 @@ fn sync_terminal_dim_on_focus(
 fn sync_terminal_dim_on_mount(
     mut commands: Commands,
     newly_mounted: Query<
-        (Entity, &HostSurfaceEntity),
+        Entity,
         (
             With<TerminalSurfaceMarker>,
             Added<MaterialNode<TerminalUiMaterial>>,
         ),
     >,
     active_panes: Query<&ActivePane>,
-    child_of: Query<&ChildOf>,
+    owners: Query<&SurfaceOf>,
+    pane_workspaces: Query<&OwningWorkspace, With<PaneMarker>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
-    for (host, host_surface) in newly_mounted.iter() {
-        let Some((pane, workspace)) = resolve_pane_workspace(host_surface.0, &child_of) else {
+    for surface in newly_mounted.iter() {
+        let Some((pane, workspace)) = resolve_pane_workspace(surface, &owners, &pane_workspaces)
+        else {
             continue;
         };
         let is_active = active_panes
@@ -371,7 +376,7 @@ fn sync_terminal_dim_on_mount(
             .map(|a| a.0 == pane)
             .unwrap_or(true);
         let want = if is_active { 1.0 } else { dim_factor };
-        commands.entity(host).insert(PaneDim(want));
+        commands.entity(surface).insert(PaneDim(want));
     }
 }
 
