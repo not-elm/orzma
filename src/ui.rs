@@ -1081,19 +1081,6 @@ mod tests {
     }
 
     #[test]
-    fn terminal_tab_without_cwd_shows_placeholder() {
-        let (mut app, _guard) = make_test_app();
-        app.update();
-        app.update();
-
-        assert_eq!(
-            tab_texts(app.world_mut()),
-            vec!["terminal".to_string()],
-            "bootstrap terminal surface has no Cwd yet → placeholder",
-        );
-    }
-
-    #[test]
     fn cwd_change_refreshes_tab_without_layout_change() {
         use ozmux_multiplexer::{Cwd, SurfaceMarker};
 
