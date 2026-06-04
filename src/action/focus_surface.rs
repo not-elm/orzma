@@ -69,7 +69,7 @@ mod tests {
         app
     }
 
-    fn bootstrap_session(world: &mut World) -> Entity {
+    fn bootstrap_workspace(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_workspace(Some("test".into())).workspace
@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn focus_surface_next_advances_active_surface() {
         let mut app = setup_app();
-        let workspace = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_workspace(app.world_mut());
         let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         // Add a second surface so we have something to cycle to.
         app.world_mut()
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn focus_surface_in_single_surface_pane_is_a_noop() {
         let mut app = setup_app();
-        let workspace = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_workspace(app.world_mut());
         let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         let active_before = app
             .world()

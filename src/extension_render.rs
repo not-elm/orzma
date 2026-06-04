@@ -291,10 +291,10 @@ fn context_preload_js(
     surface: Entity,
     extension_name: &str,
 ) -> String {
-    let session_id = workspace.to_bits().to_string();
+    let workspace_id = workspace.to_bits().to_string();
     format!(
         "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:\"extension\",extensionName:{n:?}}};",
-        s = session_id,
+        s = workspace_id,
         p = pane.to_bits().to_string(),
         a = surface.to_bits().to_string(),
         n = extension_name,
@@ -712,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn context_preload_js_assigns_window_context_with_session_bits_as_window_id() {
+    fn context_preload_js_assigns_window_context_with_workspace_bits_as_window_id() {
         let world = &mut App::new();
         world
             .add_plugins(MinimalPlugins)

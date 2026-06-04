@@ -514,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_session_switch_does_not_orphan_inactive_session_hosts() {
+    fn focus_workspace_switch_does_not_orphan_inactive_workspace_hosts() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
 
@@ -646,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn attached_session_marker_present_after_bootstrap() {
+    fn attached_workspace_marker_present_after_bootstrap() {
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
@@ -977,7 +977,7 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_chips_appear_in_session_creation_order_after_cmd_r() {
+    fn status_bar_chips_appear_in_workspace_creation_order_after_cmd_r() {
         use crate::ui::status_bar_sync::StatusBarRoot;
 
         let (mut app, _guard) = make_test_app();

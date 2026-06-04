@@ -31,7 +31,7 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 /// pane frame + tab bar + surface host slot.
 ///
 /// `Cell::Root` appearing mid-recursion is treated as an invariant
-/// violation (warn-and-skip); the entry point in `rebuild_session_ui`
+/// violation (warn-and-skip); the entry point in `rebuild_workspace_ui`
 /// is expected to unwrap into `RootCell::child` first.
 ///
 /// `inactive_host_parent` — the Entity under which inactive Surface hosts

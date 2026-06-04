@@ -58,7 +58,7 @@ mod tests {
         app
     }
 
-    fn bootstrap_session(world: &mut World) -> Entity {
+    fn bootstrap_workspace(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_workspace(Some("test".into())).workspace
@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn new_terminal_surface_event_adds_and_activates_surface_on_active_pane() {
         let mut app = setup_app();
-        let workspace = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_workspace(app.world_mut());
         let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         app.world_mut()
             .trigger(NewTerminalSurfaceActionEvent { workspace });
@@ -87,7 +87,7 @@ mod tests {
     fn new_surface_copies_active_surface_cwd() {
         use ozmux_multiplexer::Cwd;
         let mut app = setup_app();
-        let workspace = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_workspace(app.world_mut());
         let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         let src = app
             .world_mut()
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn new_terminal_surface_event_on_vanished_session_is_a_noop() {
+    fn new_terminal_surface_event_on_vanished_workspace_is_a_noop() {
         let mut app = setup_app();
         let bogus = app.world_mut().spawn(ozmux_multiplexer::WorkspaceMarker).id();
         app.world_mut().despawn(bogus);

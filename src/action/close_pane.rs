@@ -45,7 +45,7 @@ mod tests {
         app
     }
 
-    fn bootstrap_session(world: &mut World) -> Entity {
+    fn bootstrap_workspace(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_workspace(Some("test".into())).workspace
@@ -56,7 +56,7 @@ mod tests {
     #[test]
     fn close_pane_event_removes_pane_and_promotes_survivor() {
         let mut app = setup_app();
-        let workspace = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_workspace(app.world_mut());
         // Split so there are 2 panes.
         let original_pane = app
             .world_mut()
@@ -82,9 +82,9 @@ mod tests {
     }
 
     #[test]
-    fn close_pane_event_in_single_pane_session_is_a_noop() {
+    fn close_pane_event_in_single_pane_workspace_is_a_noop() {
         let mut app = setup_app();
-        let workspace = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_workspace(app.world_mut());
         let pane_count_before = app
             .world_mut()
             .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_workspace(workspace).count())
@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn close_pane_event_on_vanished_session_is_a_noop() {
+    fn close_pane_event_on_vanished_workspace_is_a_noop() {
         let mut app = setup_app();
         let bogus = app.world_mut().spawn(ozmux_multiplexer::WorkspaceMarker).id();
         app.world_mut().despawn(bogus);

@@ -479,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn inactive_host_parent_is_walker_skipped_session_entity() {
+    fn inactive_host_parent_is_walker_skipped_workspace_entity() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{
             AttachedWorkspace, LayoutCells, MultiplexerCommands, WorkspaceMarker, SurfaceKind,

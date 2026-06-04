@@ -63,13 +63,13 @@ fn taffy_handles_repeated_park_unpark_under_load() {
     app.update();
     app.update();
 
-    let all_sessions: Vec<Entity> = {
+    let all_workspaces: Vec<Entity> = {
         let world = app.world_mut();
         let mut q = world.query_filtered::<Entity, With<WorkspaceMarker>>();
         q.iter(world).collect()
     };
     assert!(
-        !all_sessions.is_empty(),
+        !all_workspaces.is_empty(),
         "at least one workspace after bootstrap"
     );
 
@@ -79,7 +79,7 @@ fn taffy_handles_repeated_park_unpark_under_load() {
         q.single(world).expect("exactly one attached at start")
     };
     for i in 0..5 {
-        let next = all_sessions[i % all_sessions.len()];
+        let next = all_workspaces[i % all_workspaces.len()];
         if next == current_attached {
             continue;
         }

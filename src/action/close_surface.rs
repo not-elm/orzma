@@ -59,7 +59,7 @@ mod tests {
         app
     }
 
-    fn bootstrap_session(world: &mut World) -> Entity {
+    fn bootstrap_workspace(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_workspace(Some("test".into())).workspace
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn close_surface_event_in_single_surface_pane_is_a_noop() {
         let mut app = setup_app();
-        let workspace = bootstrap_session(app.world_mut());
+        let workspace = bootstrap_workspace(app.world_mut());
         let active_before = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
         app.world_mut().trigger(CloseSurfaceActionEvent { workspace });
         app.world_mut().flush();

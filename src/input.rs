@@ -1245,7 +1245,7 @@ mod tests {
         app
     }
 
-    fn exec_bootstrap_session(world: &mut World) -> Entity {
+    fn exec_bootstrap_workspace(world: &mut World) -> Entity {
         world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_workspace(Some("test".into())).workspace
@@ -1273,7 +1273,7 @@ mod tests {
     #[test]
     fn execute_action_split_pane_triggers_split_pane_action_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::SplitPane {
@@ -1287,7 +1287,7 @@ mod tests {
     #[test]
     fn execute_action_new_terminal_surface_triggers_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(&mut app, ShortcutAction::NewTerminalSurface, workspace);
         assert_eq!(captured_actions(&app), vec!["NewTerminalSurface"]);
     }
@@ -1295,7 +1295,7 @@ mod tests {
     #[test]
     fn execute_action_focus_pane_triggers_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::FocusPane {
@@ -1309,7 +1309,7 @@ mod tests {
     #[test]
     fn execute_action_focus_surface_next_triggers_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::FocusSurface {
@@ -1323,7 +1323,7 @@ mod tests {
     #[test]
     fn execute_action_focus_surface_last_emits_no_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::FocusSurface {
@@ -1337,7 +1337,7 @@ mod tests {
     #[test]
     fn execute_action_swap_pane_triggers_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::SwapPane {
@@ -1351,7 +1351,7 @@ mod tests {
     #[test]
     fn execute_action_close_pane_triggers_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(&mut app, ShortcutAction::ClosePane, workspace);
         assert_eq!(captured_actions(&app), vec!["ClosePane"]);
     }
@@ -1359,7 +1359,7 @@ mod tests {
     #[test]
     fn execute_action_close_surface_triggers_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(&mut app, ShortcutAction::CloseSurface, workspace);
         assert_eq!(captured_actions(&app), vec!["CloseSurface"]);
     }
@@ -1367,7 +1367,7 @@ mod tests {
     #[test]
     fn execute_action_new_workspace_triggers_new_workspace_action_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(&mut app, ShortcutAction::NewWorkspace, workspace);
         assert_eq!(captured_actions(&app), vec!["NewWorkspace"]);
     }
@@ -1375,7 +1375,7 @@ mod tests {
     #[test]
     fn execute_action_focus_workspace_triggers_focus_workspace_action_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::FocusWorkspace {
@@ -1389,7 +1389,7 @@ mod tests {
     #[test]
     fn execute_action_focus_workspace_number_triggers_focus_workspace_action_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(
             &mut app,
             ShortcutAction::FocusWorkspaceNumber { index: 0 },
@@ -1401,13 +1401,13 @@ mod tests {
     #[test]
     fn execute_action_unimplemented_emits_no_event() {
         let mut app = setup_exec_app();
-        let workspace = exec_bootstrap_session(app.world_mut());
+        let workspace = exec_bootstrap_workspace(app.world_mut());
         run_execute_action(&mut app, ShortcutAction::ZoomPane, workspace);
         assert!(captured_actions(&app).is_empty());
     }
 
     #[test]
-    fn execute_action_on_vanished_session_triggers_without_panic() {
+    fn execute_action_on_vanished_workspace_triggers_without_panic() {
         let mut app = setup_exec_app();
         let bogus = app.world_mut().spawn(WorkspaceMarker).id();
         app.world_mut().despawn(bogus);
