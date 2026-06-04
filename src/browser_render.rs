@@ -313,8 +313,10 @@ fn sync_nav_button_enabled(
 
 /// Shows a pointer cursor while the mouse hovers any nav button, so the
 /// back/forward/reload buttons read as clickable. Runs after `InputPhase::Hover`
-/// so it wins over the hyperlink system's per-frame `Text` write over the
-/// browser pane; leaving a button reverts to `Text` when that system re-asserts.
+/// so it wins over the hyperlink system's baseline cursor write. Leaving a
+/// button onto the native toolbar reverts to the arrow when the hyperlink
+/// system re-asserts; moving onto the CEF page hands the cursor to `bevy_cef`,
+/// which re-asserts the page cursor on the next pointer event.
 fn nav_button_hover_cursor(
     buttons: Query<&Interaction, With<BrowserNavButton>>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,

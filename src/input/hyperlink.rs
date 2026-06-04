@@ -5,7 +5,7 @@
 
 use crate::input::mouse_buttons::{cell_at_local, resolve_pane_at_phys};
 use crate::input::{InputPhase, current_modifiers};
-use crate::ui::{SurfaceHostNode, VisibleSurfaceHost};
+use crate::ui::{BrowserPageWebview, SurfaceHostNode, VisibleSurfaceHost};
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -13,6 +13,7 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, Window};
+use bevy_cef::prelude::WebviewSource;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;
@@ -109,16 +110,21 @@ fn hyperlink_hover_and_cursor(
         (With<SurfaceHostNode>, With<VisibleSurfaceHost>),
     >,
     grids: Query<&TerminalGrid>,
+    webview_hosts: Query<&WebviewSource>,
+    browser_hosts: Query<&BrowserPageWebview>,
+    nodes: Query<(&ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let Ok(window) = windows.single() else {
-        clear_hover(&mut hover, &mut cursor_icons);
+        reset_hover_state(&mut hover);
+        apply_cursor(&mut cursor_icons, cursor_decision(HoverTarget::Default));
         return;
     };
     let scale = window.scale_factor();
     let Some(cursor_logical) = window.cursor_position() else {
-        clear_hover(&mut hover, &mut cursor_icons);
+        reset_hover_state(&mut hover);
+        apply_cursor(&mut cursor_icons, cursor_decision(HoverTarget::Default));
         return;
     };
     let cursor_phys = cursor_logical * scale;
@@ -128,53 +134,82 @@ fn hyperlink_hover_and_cursor(
     let mods = current_modifiers(&keys);
     hover.modifier_held = link_modifier_held(&mods);
 
-    let Some((entity, local)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
-        clear_target(&mut hover, &mut cursor_icons);
-        return;
+    hover.entity = None;
+    hover.hyperlink_id = None;
+    let target = match resolve_pane_at_phys(&hosts, cursor_phys) {
+        None => HoverTarget::Default,
+        Some((entity, local)) => {
+            if let Ok(grid) = grids.get(entity) {
+                let (col, row, _side) =
+                    cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows);
+                let id = grid
+                    .hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
+                    .map(|(id, _uri)| id);
+                hover.entity = Some(entity);
+                hover.hyperlink_id = id;
+                HoverTarget::Terminal {
+                    has_link: id.is_some(),
+                    modifier_held: hover.modifier_held,
+                }
+            } else if cursor_over_cef_area(
+                entity,
+                cursor_phys,
+                &webview_hosts,
+                &browser_hosts,
+                &nodes,
+            ) {
+                HoverTarget::Webview
+            } else {
+                HoverTarget::Default
+            }
+        }
     };
-    let Ok(grid) = grids.get(entity) else {
-        clear_target(&mut hover, &mut cursor_icons);
-        return;
-    };
-    let (col, row, _side) = cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows);
-    let id = grid
-        .hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
-        .map(|(id, _uri)| id);
-    hover.entity = Some(entity);
-    hover.hyperlink_id = id;
 
-    let desired = if id.is_some() && hover.modifier_held {
-        SystemCursorIcon::Pointer
-    } else {
-        SystemCursorIcon::Text
-    };
-    write_cursor_icon(&mut cursor_icons, desired);
+    apply_cursor(&mut cursor_icons, cursor_decision(target));
 }
 
-/// Resets every field of the hover state and forces the I-beam cursor.
-/// Used when the window or cursor is unobservable — modifier state
-/// cannot be trusted because the system bailed before reading keys.
-fn clear_hover(
-    hover: &mut HyperlinkHoverState,
-    cursor_icons: &mut Query<&mut CursorIcon, With<PrimaryWindow>>,
-) {
+/// Clears every per-cursor field of the hover state, including
+/// `modifier_held`. Used on the early-return paths where the keyboard
+/// was not read, so the modifier state cannot be trusted.
+fn reset_hover_state(hover: &mut HyperlinkHoverState) {
     hover.entity = None;
     hover.hyperlink_id = None;
     hover.modifier_held = false;
-    write_cursor_icon(cursor_icons, SystemCursorIcon::Text);
 }
 
-/// Resets only the per-cursor fields (entity + hyperlink_id) and the
-/// cursor icon, preserving `modifier_held` set earlier this frame. Used
-/// when the cursor is observable but lands outside any pane or the
-/// hovered entity has no `TerminalGrid` — modifier state remains valid.
-fn clear_target(
-    hover: &mut HyperlinkHoverState,
+/// Returns `true` when `cursor_phys` is inside the host's CEF render
+/// area. For an Extension surface the whole host carries `WebviewSource`,
+/// so the host itself is the render area; for a Browser surface only the
+/// `BrowserPageWebview` child is CEF — the toolbar above it is native
+/// chrome and must NOT count, so it is hit-tested separately.
+fn cursor_over_cef_area(
+    host: Entity,
+    cursor_phys: Vec2,
+    webview_hosts: &Query<&WebviewSource>,
+    browser_hosts: &Query<&BrowserPageWebview>,
+    nodes: &Query<(&ComputedNode, &UiGlobalTransform)>,
+) -> bool {
+    if webview_hosts.get(host).is_ok() {
+        return true;
+    }
+    let Ok(page) = browser_hosts.get(host) else {
+        return false;
+    };
+    let Ok((node, transform)) = nodes.get(page.0) else {
+        return false;
+    };
+    node.contains_point(*transform, cursor_phys)
+}
+
+/// Applies a cursor decision: writes the icon when `Some`, leaves the
+/// cursor untouched (CEF-owned) when `None`.
+fn apply_cursor(
     cursor_icons: &mut Query<&mut CursorIcon, With<PrimaryWindow>>,
+    decision: Option<SystemCursorIcon>,
 ) {
-    hover.entity = None;
-    hover.hyperlink_id = None;
-    write_cursor_icon(cursor_icons, SystemCursorIcon::Text);
+    if let Some(icon) = decision {
+        write_cursor_icon(cursor_icons, icon);
+    }
 }
 
 fn write_cursor_icon(
@@ -193,6 +228,31 @@ fn write_cursor_icon(
     };
     if !already {
         *icon = CursorIcon::System(desired);
+    }
+}
+
+/// Which region the mouse is over, distilled to what the cursor needs.
+/// `Default` covers everything that is neither terminal grid nor a CEF
+/// render area (chrome, gaps, the browser toolbar, an unobservable
+/// window).
+enum HoverTarget {
+    Terminal { has_link: bool, modifier_held: bool },
+    Webview,
+    Default,
+}
+
+/// Maps a `HoverTarget` to the cursor to set. `None` means "leave the
+/// cursor untouched" so `bevy_cef`'s `SystemCursorIconPlugin` owns it
+/// over CEF render areas.
+fn cursor_decision(target: HoverTarget) -> Option<SystemCursorIcon> {
+    match target {
+        HoverTarget::Terminal {
+            has_link: true,
+            modifier_held: true,
+        } => Some(SystemCursorIcon::Pointer),
+        HoverTarget::Terminal { .. } => Some(SystemCursorIcon::Text),
+        HoverTarget::Webview => None,
+        HoverTarget::Default => Some(SystemCursorIcon::Default),
     }
 }
 
@@ -362,5 +422,62 @@ mod tests {
         )
         .expect("hyperlink present");
         assert_eq!(uri.as_str(), "https://example.com");
+    }
+
+    #[test]
+    fn cursor_decision_default_is_arrow() {
+        assert_eq!(
+            cursor_decision(HoverTarget::Default),
+            Some(SystemCursorIcon::Default)
+        );
+    }
+
+    #[test]
+    fn cursor_decision_webview_leaves_cursor_alone() {
+        assert_eq!(cursor_decision(HoverTarget::Webview), None);
+    }
+
+    #[test]
+    fn cursor_decision_terminal_link_with_modifier_is_pointer() {
+        assert_eq!(
+            cursor_decision(HoverTarget::Terminal {
+                has_link: true,
+                modifier_held: true,
+            }),
+            Some(SystemCursorIcon::Pointer)
+        );
+    }
+
+    #[test]
+    fn cursor_decision_terminal_link_without_modifier_is_text() {
+        assert_eq!(
+            cursor_decision(HoverTarget::Terminal {
+                has_link: true,
+                modifier_held: false,
+            }),
+            Some(SystemCursorIcon::Text)
+        );
+    }
+
+    #[test]
+    fn cursor_decision_terminal_no_link_is_text() {
+        assert_eq!(
+            cursor_decision(HoverTarget::Terminal {
+                has_link: false,
+                modifier_held: true,
+            }),
+            Some(SystemCursorIcon::Text)
+        );
+    }
+
+    #[test]
+    fn cursor_decision_terminal_plain_is_text() {
+        assert_eq!(
+            cursor_decision(HoverTarget::Terminal {
+                has_link: false,
+                modifier_held: false,
+            }),
+            Some(SystemCursorIcon::Text)
+        );
     }
 }

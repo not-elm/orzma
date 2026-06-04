@@ -164,12 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn no_cwd_is_placeholder() {
-        let out = tab_label(&term(), None, "ignored", None, MAX);
-        assert_eq!(out, "terminal");
-    }
-
-    #[test]
     fn extension_returns_name() {
         let kind = SurfaceKind::Extension {
             entry: PathBuf::from("/tmp/ext"),

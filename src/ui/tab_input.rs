@@ -62,8 +62,9 @@ fn drive_tab_clicks(
 
 /// Shows a pointer cursor while the mouse hovers any tab, so tabs read as
 /// clickable. Runs after `InputPhase::Hover` so it wins over the hyperlink
-/// system's per-frame `Text` write; leaving a tab reverts to `Text` when that
-/// system re-asserts. Mirrors `crate::browser_render::nav_button_hover_cursor`.
+/// system's baseline cursor write; leaving a tab reverts to that baseline (the
+/// I-beam over terminal text, the arrow over chrome) when the hyperlink system
+/// re-asserts. Mirrors `crate::browser_render::nav_button_hover_cursor`.
 fn tab_hover_cursor(
     tabs: Query<&Interaction, With<TabButton>>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
