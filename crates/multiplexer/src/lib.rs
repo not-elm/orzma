@@ -24,9 +24,9 @@ pub use components::{
     SurfaceKind, SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions,
     WorkspaceMarker, WorkspaceUiSubtree,
 };
-pub use direction::{CycleDirection, PaneDirection};
+pub use direction::{CycleDirection, PaneDirection, pane_in_direction};
 pub use error::{MultiplexerError, MultiplexerResult};
-pub use layout::{Rect, Side, SplitOrientation, split_ratio};
+pub use layout::{LayoutTree, Rect, Side, SplitOrientation, split_ratio};
 pub use plugin::MultiplexerPlugin;
 pub use resize::ResizePaneOutcome;
 pub use swap::{SwapOffset, SwapOutcome};
