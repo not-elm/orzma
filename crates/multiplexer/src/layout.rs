@@ -1,8 +1,12 @@
 //! Structural types and arithmetic for the entity-based layout tree.
-//! Currently owns `SplitOrientation`, `Side`, `Rect`, `split_ratio`, and the
-//! `normalized_grows` invariant. The read-only `LayoutTree` query view,
-//! spawn-bundle helpers, and tree mutations (split / close / swap) are added
-//! incrementally across the rearch plan.
+//! Owns `SplitOrientation`, `Side`, `Rect`, `split_ratio`, `normalized_grows`,
+//! spawn-bundle helpers (`child_flex`, `split_node_bundle`, `pane_frame_node`),
+//! and the read-only `LayoutTree` query view.
+
+use crate::components::{PaneMarker, SplitNode};
+use bevy::ecs::system::SystemParam;
+use bevy::prelude::*;
+use bevy::ui::{FlexDirection, UiRect, Val};
 
 /// Split axis.
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
@@ -57,6 +61,92 @@ pub fn split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
     if total == 0.0 { 0.5 } else { lhs_weight / total }
 }
 
+/// `Node` props that make an entity a flex *child* occupying `grow` share of
+/// its parent's main axis with a zero basis (so equal grows split evenly).
+/// Merge these onto a Pane/Split node when it becomes a layout child.
+pub(crate) fn child_flex(grow: f32) -> Node {
+    Node {
+        flex_grow: grow,
+        flex_basis: Val::Px(0.0),
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        ..default()
+    }
+}
+
+/// The `Node` + `SplitNode` pair for a split container at `orientation`.
+/// The caller merges in `child_flex(..)` when this split is itself a child.
+pub(crate) fn split_node_bundle(orientation: SplitOrientation) -> (Node, SplitNode) {
+    let flex_direction = match orientation {
+        SplitOrientation::Horizontal => FlexDirection::Row,
+        SplitOrientation::Vertical => FlexDirection::Column,
+    };
+    (
+        Node {
+            flex_direction,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        SplitNode { orientation },
+    )
+}
+
+/// The `Node` for a Pane frame (flex column; 1px padding for the border the
+/// GUI chrome draws in a later plan). Caller merges in `child_flex(..)`.
+pub(crate) fn pane_frame_node() -> Node {
+    Node {
+        flex_direction: FlexDirection::Column,
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        padding: UiRect::all(Val::Px(1.0)),
+        ..default()
+    }
+}
+
+/// Read-only view of the layout entity tree, used by resize / navigation /
+/// traversal so the math doesn't thread several raw queries everywhere.
+#[derive(SystemParam)]
+pub struct LayoutTree<'w, 's> {
+    splits: Query<'w, 's, &'static SplitNode>,
+    panes: Query<'w, 's, (), With<PaneMarker>>,
+    nodes: Query<'w, 's, &'static Node>,
+    child_of: Query<'w, 's, &'static ChildOf>,
+    children: Query<'w, 's, &'static Children>,
+}
+
+impl LayoutTree<'_, '_> {
+    /// `true` if `e` is a Pane leaf.
+    pub fn is_pane(&self, e: Entity) -> bool {
+        self.panes.get(e).is_ok()
+    }
+
+    /// The split's orientation, or `None` if `e` is not a `Split`.
+    pub fn orientation(&self, e: Entity) -> Option<SplitOrientation> {
+        self.splits.get(e).ok().map(|s| s.orientation)
+    }
+
+    /// The parent layout node, or `None` at the layout-root node.
+    pub fn parent(&self, e: Entity) -> Option<Entity> {
+        self.child_of.get(e).ok().map(|c| c.parent())
+    }
+
+    /// The `flex_grow` weight of a layout child (0.0 if unset).
+    pub fn grow(&self, e: Entity) -> f32 {
+        self.nodes.get(e).map(|n| n.flex_grow).unwrap_or(0.0)
+    }
+
+    /// The two children of a `Split`, in `(lhs, rhs)` order, or `None` if `e`
+    /// is not a split with exactly two children.
+    pub fn split_children(&self, e: Entity) -> Option<(Entity, Entity)> {
+        let kids = self.children.get(e).ok()?;
+        match kids.iter().collect::<Vec<_>>().as_slice() {
+            [a, b] => Some((*a, *b)),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +160,21 @@ mod tests {
     fn set_split_grows_passes_through_nonzero() {
         assert_eq!(normalized_grows(0.25, 0.75), (0.25, 0.75));
         assert_eq!(normalized_grows(3.0, 0.0), (3.0, 0.0));
+    }
+
+    #[test]
+    fn split_node_bundle_sets_flex_direction_from_orientation() {
+        let (node, split) = split_node_bundle(SplitOrientation::Vertical);
+        assert_eq!(node.flex_direction, FlexDirection::Column);
+        assert_eq!(split.orientation, SplitOrientation::Vertical);
+        let (node_h, _) = split_node_bundle(SplitOrientation::Horizontal);
+        assert_eq!(node_h.flex_direction, FlexDirection::Row);
+    }
+
+    #[test]
+    fn child_flex_uses_zero_basis() {
+        let n = child_flex(0.5);
+        assert_eq!(n.flex_grow, 0.5);
+        assert_eq!(n.flex_basis, Val::Px(0.0));
     }
 }
