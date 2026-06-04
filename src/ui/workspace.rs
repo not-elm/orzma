@@ -11,6 +11,7 @@ use crate::ui::layout::build_cell_recursive;
 use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::tab_label::LabelCtx;
 use crate::ui::terminal::resolve_pane_workspace;
+use crate::ui::web_title::WebTitle;
 use crate::ui::{
     HomeDir, HostSurfaceEntity, PaneDimOverlay, StructuralNode, SurfaceHostNode,
     TerminalSurfaceMarker, WorkspaceUiDirty, WorkspaceUiRoot,
@@ -132,7 +133,7 @@ fn rebuild_workspace_ui(
     structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
     surface_hosts: Query<(Entity, &SurfaceHostNode)>,
     children: Query<&Children>,
-    surfaces: Query<(&SurfaceKind, &Name, Option<&Cwd>), With<SurfaceMarker>>,
+    surfaces: Query<(&SurfaceKind, &Name, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
     active_surfaces: Query<&ActiveSurface, With<PaneMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
     configs: Option<Res<OzmuxConfigsResource>>,
