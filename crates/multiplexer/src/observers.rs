@@ -79,8 +79,8 @@ pub fn on_remove_surface_marker(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{Side, SplitOrientation};
     use crate::commands::MultiplexerCommands;
+    use crate::layout::{Side, SplitOrientation};
     use bevy::ecs::system::RunSystemOnce;
 
     #[test]

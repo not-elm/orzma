@@ -109,7 +109,9 @@ mod tests {
         }
         queue.apply(&mut world);
 
-        let node = world.get::<Node>(surface).expect("surface must have a Node");
+        let node = world
+            .get::<Node>(surface)
+            .expect("surface must have a Node");
         assert_eq!(
             node.flex_direction,
             FlexDirection::Column,

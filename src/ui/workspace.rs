@@ -501,7 +501,10 @@ mod tests {
         app.update();
         app.update();
 
-        let first_parent = app.world().get::<ChildOf>(first_surface).map(|c| c.parent());
+        let first_parent = app
+            .world()
+            .get::<ChildOf>(first_surface)
+            .map(|c| c.parent());
         assert_eq!(
             first_parent,
             Some(workspace),
@@ -663,5 +666,4 @@ mod tests {
             "old workspace's subtree must be parked under its workspace entity",
         );
     }
-
 }

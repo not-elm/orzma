@@ -27,15 +27,12 @@ pub(crate) struct OzmuxChromePlugin;
 
 impl Plugin for OzmuxChromePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            build_pane_chrome.in_set(OzmuxSystems::BuildChrome),
-        )
-        .add_systems(
-            Update,
-            (slot_active_surface, sync_pane_veil, refresh_pane_tabs)
-                .after(OzmuxSystems::BuildChrome),
-        );
+        app.add_systems(Update, build_pane_chrome.in_set(OzmuxSystems::BuildChrome))
+            .add_systems(
+                Update,
+                (slot_active_surface, sync_pane_veil, refresh_pane_tabs)
+                    .after(OzmuxSystems::BuildChrome),
+            );
     }
 }
 
@@ -109,7 +106,10 @@ fn build_pane_chrome(
 /// is found by scanning `Slotted` surfaces whose `SurfaceOf` is this pane.
 fn slot_active_surface(
     mut commands: Commands,
-    switched_panes: Query<(Entity, &ActiveSurface, &OwningWorkspace, &PaneChrome), Changed<ActiveSurface>>,
+    switched_panes: Query<
+        (Entity, &ActiveSurface, &OwningWorkspace, &PaneChrome),
+        Changed<ActiveSurface>,
+    >,
     slotted: Query<(Entity, &SurfaceOf), With<Slotted>>,
     kinds: Query<&SurfaceKind, With<SurfaceMarker>>,
 ) {
@@ -171,10 +171,7 @@ fn refresh_pane_tabs(
     };
 
     for pane in dirty {
-        let Ok((active, surfaces, chrome)) = panes
-            .get(pane)
-            .map(|(_, a, s, c)| (a.0, s, c))
-        else {
+        let Ok((active, surfaces, chrome)) = panes.get(pane).map(|(_, a, s, c)| (a.0, s, c)) else {
             continue;
         };
         if let Ok(existing) = children.get(chrome.tab_bar) {
@@ -200,7 +197,14 @@ fn refresh_pane_tabs(
             // NOTE: `is_active_pane` is always true in a single-workspace view;
             // the workspace-level active pane is not threaded here yet, so every
             // pane gets the solid accent indicator on its active tab.
-            build_tab(&mut commands, chrome.tab_bar, pane, &entry, true, &ui_font_handle);
+            build_tab(
+                &mut commands,
+                chrome.tab_bar,
+                pane,
+                &entry,
+                true,
+                &ui_font_handle,
+            );
         }
     }
 }

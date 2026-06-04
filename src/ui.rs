@@ -338,7 +338,10 @@ mod tests {
                 .world_mut()
                 .run_system_once(
                     |mux: MultiplexerCommands,
-                     workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
                         mux.workspaces_active_pane(workspaces.iter().next().unwrap())
                     },
                 )

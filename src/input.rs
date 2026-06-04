@@ -1234,11 +1234,9 @@ mod tests {
 
     fn run_execute_action(app: &mut App, action: ShortcutAction, workspace: Entity) {
         app.world_mut()
-            .run_system_once(
-                move |mut commands: Commands, mux: MultiplexerCommands| {
-                    execute_action(&mut commands, &mux, action.clone(), workspace);
-                },
-            )
+            .run_system_once(move |mut commands: Commands, mux: MultiplexerCommands| {
+                execute_action(&mut commands, &mux, action.clone(), workspace);
+            })
             .unwrap();
         app.world_mut().flush();
     }

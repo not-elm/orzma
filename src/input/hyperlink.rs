@@ -106,10 +106,7 @@ fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    hosts: Query<
-        (Entity, &ComputedNode, &UiGlobalTransform),
-        (With<SurfaceMarker>, With<Slotted>),
-    >,
+    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), (With<SurfaceMarker>, With<Slotted>)>,
     grids: Query<&TerminalGrid>,
     webview_hosts: Query<&WebviewSource>,
     browser_hosts: Query<&BrowserPageWebview>,

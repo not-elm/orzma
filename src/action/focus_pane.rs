@@ -1,7 +1,9 @@
 //! Focus-pane shortcut action. Resolves the adjacent pane via the entity-tree
 //! layout and promotes it to `ActivePane` on the workspace.
 use bevy::prelude::*;
-use ozmux_multiplexer::{LayoutTree, MultiplexerCommands, PaneDirection, WorkspaceUiSubtree, pane_in_direction};
+use ozmux_multiplexer::{
+    LayoutTree, MultiplexerCommands, PaneDirection, WorkspaceUiSubtree, pane_in_direction,
+};
 
 /// Registers the `apply_focus_pane` observer for `FocusPaneActionEvent`.
 pub struct FocusPaneActionPlugin;
@@ -59,7 +61,9 @@ fn apply_focus_pane(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use ozmux_multiplexer::{ActivePane, MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation};
+    use ozmux_multiplexer::{
+        ActivePane, MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation,
+    };
 
     fn setup_app() -> App {
         let mut app = App::new();

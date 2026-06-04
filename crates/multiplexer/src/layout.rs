@@ -226,7 +226,10 @@ fn walk_bounds(tree: &LayoutTree, node: Entity, bounds: Rect, out: &mut Vec<(Ent
         }
         // NOTE: a node with two children but no orientation is not a valid
         // `SplitNode`; reaching here means the tree invariant is broken.
-        None => debug_assert!(false, "split node {node:?} has two children but no SplitNode orientation"),
+        None => debug_assert!(
+            false,
+            "split node {node:?} has two children but no SplitNode orientation"
+        ),
     }
 }
 

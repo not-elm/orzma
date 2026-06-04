@@ -5,8 +5,8 @@
 //! single tab.
 
 use crate::theme;
-use crate::ui::palette;
 use crate::ui::TabButton;
+use crate::ui::palette;
 use bevy::color::Color;
 use bevy::prelude::*;
 use bevy::text::{LineBreak, TextLayout};
