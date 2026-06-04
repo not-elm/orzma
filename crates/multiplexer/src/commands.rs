@@ -11,7 +11,7 @@ use crate::components::{
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
-use crate::layout::{Side, SplitOrientation};
+use crate::layout::{LayoutTree, Side, SplitOrientation};
 use crate::resize::{ResizePaneOutcome, resize_split_for_pane};
 use crate::swap::{SwapOffset, SwapOutcome};
 use bevy::ecs::system::SystemParam;
@@ -88,6 +88,7 @@ pub struct MultiplexerCommands<'w, 's> {
     splits: Query<'w, 's, &'static SplitNode>,
     panes_only: Query<'w, 's, (), With<PaneMarker>>,
     subtrees: Query<'w, 's, &'static WorkspaceUiSubtree>,
+    tree: LayoutTree<'w, 's>,
 }
 
 impl<'w, 's> MultiplexerCommands<'w, 's> {
@@ -106,14 +107,22 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         let root = self
             .commands
             .spawn((
-                Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
                 Name::new(format!("layout-root: {name}")),
             ))
             .id();
 
         let surface = self
             .commands
-            .spawn((SurfaceMarker, SurfaceKind::Terminal, Name::new(format!("surface: {name}#0"))))
+            .spawn((
+                SurfaceMarker,
+                SurfaceKind::Terminal,
+                Name::new(format!("surface: {name}#0")),
+            ))
             .id();
 
         let mut pane_node = crate::layout::pane_frame_node();
@@ -141,7 +150,11 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         self.commands.entity(pane).insert(ChildOf(root));
         self.commands.entity(surface).insert(ChildOf(pane));
 
-        WorkspaceCreated { workspace, pane, surface }
+        WorkspaceCreated {
+            workspace,
+            pane,
+            surface,
+        }
     }
 
     /// Mints a workspace via `create_workspace`, attaches `AttachedWorkspace` +
@@ -151,8 +164,11 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// `create_workspace`.
     pub fn spawn_attached_workspace(&mut self) -> Entity {
         let n = self.counter.next();
-        let WorkspaceCreated { workspace, .. } = self.create_workspace(Some(format!("workspace{n}")));
-        self.commands.entity(workspace).insert((AttachedWorkspace, WorkspaceCreatedAt(n)));
+        let WorkspaceCreated { workspace, .. } =
+            self.create_workspace(Some(format!("workspace{n}")));
+        self.commands
+            .entity(workspace)
+            .insert((AttachedWorkspace, WorkspaceCreatedAt(n)));
         workspace
     }
 
@@ -387,16 +403,18 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         let workspace = self
             .workspace_of_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
-        let (mut layout, _, _, dims) = self
+        let (cols, rows) = self
             .workspaces
-            .get_mut(workspace)
-            .map_err(|_| MultiplexerError::WorkspaceNotFound(workspace))?;
-        let (cols, rows) = dims.as_ref().map(|d| (d.cols, d.rows)).unwrap_or((0, 0));
+            .get(workspace)
+            .ok()
+            .and_then(|(_, _, _, dims)| dims.map(|d| (d.cols, d.rows)))
+            .unwrap_or((0, 0));
         if cols == 0 || rows == 0 {
             return Ok(ResizePaneOutcome::NoOp);
         }
         Ok(resize_split_for_pane(
-            &mut layout.cells,
+            &mut self.commands,
+            &self.tree,
             pane,
             direction,
             amount,
@@ -680,29 +698,62 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<WorkspaceNameCounter>();
         let outcome = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(Some("test".into())))
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_workspace(Some("test".into()))
+            })
             .unwrap();
         world.flush();
 
         assert!(world.get::<WorkspaceMarker>(outcome.workspace).is_some());
-        assert_eq!(world.get::<Name>(outcome.workspace).map(|n| n.as_str()), Some("test"));
-        assert_eq!(world.get::<ActivePane>(outcome.workspace).map(|a| a.0), Some(outcome.pane));
+        assert_eq!(
+            world.get::<Name>(outcome.workspace).map(|n| n.as_str()),
+            Some("test")
+        );
+        assert_eq!(
+            world.get::<ActivePane>(outcome.workspace).map(|a| a.0),
+            Some(outcome.pane)
+        );
         // LayoutCells is still present (vestigial; removed in a later task).
         assert!(world.get::<LayoutCells>(outcome.workspace).is_some());
-        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).expect("subtree").0;
+        let root = world
+            .get::<WorkspaceUiSubtree>(outcome.workspace)
+            .expect("subtree")
+            .0;
 
         // Layout-root node's single child is the pane.
-        let root_kids: Vec<Entity> = world.get::<Children>(root).map(|c| c.iter().collect()).unwrap_or_default();
-        assert_eq!(root_kids, vec![outcome.pane], "root node's single child is the pane");
+        let root_kids: Vec<Entity> = world
+            .get::<Children>(root)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(
+            root_kids,
+            vec![outcome.pane],
+            "root node's single child is the pane"
+        );
 
         assert!(world.get::<PaneMarker>(outcome.pane).is_some());
-        assert_eq!(world.get::<OwningWorkspace>(outcome.pane).map(|o| o.0), Some(outcome.workspace));
-        assert_eq!(world.get::<ChildOf>(outcome.pane).map(|c| c.parent()), Some(root));
-        assert_eq!(world.get::<Node>(outcome.pane).map(|n| n.flex_grow), Some(1.0));
-        assert_eq!(world.get::<ActiveSurface>(outcome.pane).map(|a| a.0), Some(outcome.surface));
+        assert_eq!(
+            world.get::<OwningWorkspace>(outcome.pane).map(|o| o.0),
+            Some(outcome.workspace)
+        );
+        assert_eq!(
+            world.get::<ChildOf>(outcome.pane).map(|c| c.parent()),
+            Some(root)
+        );
+        assert_eq!(
+            world.get::<Node>(outcome.pane).map(|n| n.flex_grow),
+            Some(1.0)
+        );
+        assert_eq!(
+            world.get::<ActiveSurface>(outcome.pane).map(|a| a.0),
+            Some(outcome.surface)
+        );
 
         assert!(world.get::<SurfaceMarker>(outcome.surface).is_some());
-        assert_eq!(world.get::<ChildOf>(outcome.surface).map(|c| c.parent()), Some(outcome.pane));
+        assert_eq!(
+            world.get::<ChildOf>(outcome.surface).map(|c| c.parent()),
+            Some(outcome.pane)
+        );
     }
 
     #[test]
@@ -716,9 +767,16 @@ mod tests {
         let ws = world
             .run_system_once(move |mux: MultiplexerCommands| mux.workspace_of_pane(outcome.pane))
             .unwrap();
-        assert_eq!(ws, Some(outcome.workspace), "resolved via OwningWorkspace (pane is ChildOf the root node)");
+        assert_eq!(
+            ws,
+            Some(outcome.workspace),
+            "resolved via OwningWorkspace (pane is ChildOf the root node)"
+        );
         let panes: Vec<Entity> = world
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_workspace(outcome.workspace).collect::<Vec<_>>())
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.panes_of_workspace(outcome.workspace)
+                    .collect::<Vec<_>>()
+            })
             .unwrap();
         assert_eq!(panes, vec![outcome.pane]);
     }
@@ -833,7 +891,10 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         world.flush();
-        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
+        let root = world
+            .get::<WorkspaceUiSubtree>(outcome.workspace)
+            .unwrap()
+            .0;
 
         let new_pane = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -852,7 +913,10 @@ mod tests {
         assert_eq!(world.get::<Node>(split).map(|n| n.flex_grow), Some(1.0));
         let kids: Vec<Entity> = world.get::<Children>(split).unwrap().iter().collect();
         assert_eq!(kids, vec![outcome.pane, new_pane]);
-        assert_eq!(world.get::<Node>(outcome.pane).map(|n| n.flex_grow), Some(1.0));
+        assert_eq!(
+            world.get::<Node>(outcome.pane).map(|n| n.flex_grow),
+            Some(1.0)
+        );
         assert_eq!(world.get::<Node>(new_pane).map(|n| n.flex_grow), Some(1.0));
         assert_eq!(
             world.get::<OwningWorkspace>(new_pane).map(|o| o.0),
@@ -883,10 +947,17 @@ mod tests {
             })
             .unwrap();
         world.flush();
-        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
+        let root = world
+            .get::<WorkspaceUiSubtree>(outcome.workspace)
+            .unwrap()
+            .0;
         let split = world.get::<Children>(root).unwrap().iter().next().unwrap();
         let kids: Vec<Entity> = world.get::<Children>(split).unwrap().iter().collect();
-        assert_eq!(kids, vec![new_pane, outcome.pane], "Side::Before puts new pane first");
+        assert_eq!(
+            kids,
+            vec![new_pane, outcome.pane],
+            "Side::Before puts new pane first"
+        );
     }
 
     #[test]
@@ -897,7 +968,10 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         world.flush();
-        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
+        let root = world
+            .get::<WorkspaceUiSubtree>(outcome.workspace)
+            .unwrap()
+            .0;
         let new_pane = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
                 mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal)
@@ -916,7 +990,10 @@ mod tests {
         assert!(world.get_entity(split).is_err(), "parent split despawned");
         let root_kids: Vec<Entity> = world.get::<Children>(root).unwrap().iter().collect();
         assert_eq!(root_kids, vec![outcome.pane]);
-        assert_eq!(world.get::<Node>(outcome.pane).map(|n| n.flex_grow), Some(1.0));
+        assert_eq!(
+            world.get::<Node>(outcome.pane).map(|n| n.flex_grow),
+            Some(1.0)
+        );
         assert!(world.get_entity(outcome.surface).is_ok());
         assert_eq!(
             world.get::<ActivePane>(outcome.workspace).map(|a| a.0),
@@ -951,12 +1028,16 @@ mod tests {
         world.flush();
         let other = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal).unwrap()
+                mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal)
+                    .unwrap()
             })
             .unwrap();
         world.flush();
 
-        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
+        let root = world
+            .get::<WorkspaceUiSubtree>(outcome.workspace)
+            .unwrap()
+            .0;
         let split = world.get::<Children>(root).unwrap().iter().next().unwrap();
         // Slot A (index 0) holds outcome.pane; slot B (index 1) holds `other`.
         // Give the two slots DISTINCT grows so slot-pinning is observable.
@@ -976,8 +1057,16 @@ mod tests {
         assert_eq!(kids, vec![other, outcome.pane]);
         // Slot-pinning: slot A (index 0) keeps grow 3.0 (now holding `other`),
         // slot B (index 1) keeps grow 1.0 (now holding outcome.pane).
-        assert_eq!(world.get::<Node>(other).unwrap().flex_grow, 3.0, "slot A keeps its grow; pane moved in");
-        assert_eq!(world.get::<Node>(outcome.pane).unwrap().flex_grow, 1.0, "slot B keeps its grow");
+        assert_eq!(
+            world.get::<Node>(other).unwrap().flex_grow,
+            3.0,
+            "slot A keeps its grow; pane moved in"
+        );
+        assert_eq!(
+            world.get::<Node>(outcome.pane).unwrap().flex_grow,
+            1.0,
+            "slot B keeps its grow"
+        );
     }
 
     #[test]
@@ -1123,7 +1212,10 @@ mod tests {
         world.flush();
 
         assert!(world.get::<PaneMarker>(split.pane).is_some());
-        let root = world.get::<WorkspaceUiSubtree>(outcome.workspace).unwrap().0;
+        let root = world
+            .get::<WorkspaceUiSubtree>(outcome.workspace)
+            .unwrap()
+            .0;
         let split_node = world.get::<Children>(root).unwrap().iter().next().unwrap();
         assert!(
             world.get::<SplitNode>(split_node).is_some(),

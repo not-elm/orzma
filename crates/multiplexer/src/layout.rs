@@ -59,7 +59,11 @@ pub(crate) fn normalized_grows(lhs: f32, rhs: f32) -> (f32, f32) {
 /// `LayoutCellState::split_ratio` so the resize math ports unchanged.
 pub fn split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
     let total = lhs_weight + rhs_weight;
-    if total == 0.0 { 0.5 } else { lhs_weight / total }
+    if total == 0.0 {
+        0.5
+    } else {
+        lhs_weight / total
+    }
 }
 
 /// `Node` props that make an entity a flex *child* occupying `grow` share of
@@ -146,6 +150,20 @@ impl LayoutTree<'_, '_> {
             _ => None,
         }
     }
+}
+
+/// Set both children of a split, enforcing the never-both-zero invariant
+/// (`set_child_grow` for each; `normalized_grows` maps `(0,0)→(1,1)`).
+pub(crate) fn set_split_grows(
+    commands: &mut Commands,
+    lhs: Entity,
+    rhs: Entity,
+    lhs_grow: f32,
+    rhs_grow: f32,
+) {
+    let (l, r) = normalized_grows(lhs_grow, rhs_grow);
+    set_child_grow(commands, lhs, l);
+    set_child_grow(commands, rhs, r);
 }
 
 /// Set a layout child's `flex_grow` (with zero basis) without disturbing its
