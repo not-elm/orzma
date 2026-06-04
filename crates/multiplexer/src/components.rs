@@ -44,6 +44,22 @@ pub struct OwningWorkspace(pub Entity);
 #[derive(Component, Default, Debug)]
 pub struct SurfaceMarker;
 
+/// Logical Pane→Surface ownership (one direction). A Surface points at its
+/// owning Pane regardless of where the surface currently sits in the layout
+/// `ChildOf` tree (slotted under the pane's surface-slot, or parked under the
+/// non-Node Workspace). Paired with [`Surfaces`].
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = Surfaces)]
+pub struct SurfaceOf(#[entities] pub Entity);
+
+/// The Surfaces a Pane owns (auto-maintained reverse collection of
+/// [`SurfaceOf`]). `linked_spawn`: despawning the Pane cascade-despawns every
+/// owned Surface — including inactive ones parked under the Workspace, which
+/// are NOT `ChildOf(pane)` and would otherwise leak.
+#[derive(Component, Debug, Default)]
+#[relationship_target(relationship = SurfaceOf, linked_spawn)]
+pub struct Surfaces(Vec<Entity>);
+
 /// The currently focused Pane entity within a Workspace. `Changed<ActivePane>`
 /// is the signal for the terminal-focus and IME-target-switch systems.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

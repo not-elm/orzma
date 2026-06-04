@@ -6,8 +6,8 @@
 
 use crate::components::{
     ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, OwningWorkspace, PaneMarker, SplitNode,
-    SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
-    WorkspaceUiSubtree,
+    SurfaceKind, SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions,
+    WorkspaceMarker, WorkspaceUiSubtree,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
@@ -80,7 +80,8 @@ pub struct MultiplexerCommands<'w, 's> {
         With<PaneMarker>,
     >,
     panes_owned: Query<'w, 's, (Entity, &'static OwningWorkspace), With<PaneMarker>>,
-    surfaces: Query<'w, 's, (&'static SurfaceKind, &'static ChildOf), With<SurfaceMarker>>,
+    surface_owner: Query<'w, 's, &'static SurfaceOf, With<SurfaceMarker>>,
+    pane_surfaces: Query<'w, 's, &'static Surfaces, With<PaneMarker>>,
     children: Query<'w, 's, &'static Children>,
     child_of: Query<'w, 's, &'static ChildOf>,
     layout_nodes: Query<'w, 's, &'static Node>,
@@ -143,7 +144,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .insert((ActivePane(pane), WorkspaceUiSubtree(root)));
         self.commands.entity(root).insert(ChildOf(workspace));
         self.commands.entity(pane).insert(ChildOf(root));
-        self.commands.entity(surface).insert(ChildOf(pane));
+        self.commands
+            .entity(surface)
+            .insert((ChildOf(pane), SurfaceOf(pane)));
 
         WorkspaceCreated {
             workspace,
@@ -234,7 +237,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
                 self.commands
                     .entity(new_pane)
                     .insert(ActiveSurface(surface));
-                self.commands.entity(surface).insert(ChildOf(new_pane));
+                self.commands
+                    .entity(surface)
+                    .insert((ChildOf(new_pane), SurfaceOf(new_pane)));
                 Ok(SplitOutcome {
                     pane: new_pane,
                     surface,
@@ -336,7 +341,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .commands
             .spawn((SurfaceMarker, kind, Name::new("surface")))
             .id();
-        self.commands.entity(surface).insert(ChildOf(pane));
+        self.commands
+            .entity(surface)
+            .insert((ChildOf(pane), SurfaceOf(pane)));
         surface
     }
 
@@ -365,7 +372,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         //       reparent below, leaving the bootstrap entity orphaned.
         let (new_pane, _) = self.split_pane_inner(source_pane, side, orientation)?;
 
-        self.commands.entity(surface).insert(ChildOf(new_pane));
+        self.commands
+            .entity(surface)
+            .insert((ChildOf(new_pane), SurfaceOf(new_pane)));
         self.commands
             .entity(new_pane)
             .insert(ActiveSurface(surface));
@@ -423,12 +432,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         self.panes.get(pane).ok().map(|(_, _, _, owner)| owner.0)
     }
 
-    /// Walk up `ChildOf` from a Surface entity to find its owning Pane.
+    /// The Pane that owns this Surface, via the `SurfaceOf` relationship.
     pub fn pane_of_surface(&self, surface: Entity) -> Option<Entity> {
-        self.surfaces
-            .get(surface)
-            .ok()
-            .map(|(_, child_of)| child_of.parent())
+        self.surface_owner.get(surface).ok().map(|o| o.0)
     }
 
     /// Read the Workspace's `ActivePane` pointer.
@@ -452,13 +458,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .map(|(e, _)| e)
     }
 
-    /// Iterate the Surface entities owned by the given Pane.
+    /// Iterate the Surfaces a Pane owns, via the `Surfaces` collection.
     pub fn surfaces_of_pane(&self, pane: Entity) -> impl Iterator<Item = Entity> + '_ {
-        self.children
+        self.pane_surfaces
             .get(pane)
             .into_iter()
-            .flat_map(|c| c.iter())
-            .filter(move |child| self.surfaces.get(*child).is_ok())
+            .flat_map(|s| s.iter())
     }
 
     /// Inserts a `Split` node into the target's layout slot, reparents the
@@ -1299,5 +1304,56 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(result, Ok(ResizePaneOutcome::NoOp)));
+    }
+
+    #[test]
+    fn add_surface_stamps_surfaceof_and_appears_in_surfaces() {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        world.flush();
+        let s2 = world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
+            })
+            .unwrap();
+        world.flush();
+        assert_eq!(world.get::<SurfaceOf>(s2).map(|o| o.0), Some(outcome.pane));
+        let pane = world
+            .run_system_once(move |mux: MultiplexerCommands| mux.pane_of_surface(s2))
+            .unwrap();
+        assert_eq!(pane, Some(outcome.pane));
+        let surfaces: Vec<Entity> = world
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.surfaces_of_pane(outcome.pane).collect::<Vec<_>>()
+            })
+            .unwrap();
+        assert!(surfaces.contains(&outcome.surface) && surfaces.contains(&s2));
+    }
+
+    #[test]
+    fn closing_pane_despawns_parked_surface_via_linked_spawn() {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        world.flush();
+        let parked = world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
+            })
+            .unwrap();
+        world.flush();
+        world.entity_mut(parked).insert(ChildOf(outcome.workspace));
+        world.flush();
+        world.entity_mut(outcome.pane).despawn();
+        world.flush();
+        assert!(
+            world.get_entity(parked).is_err(),
+            "parked surface cascade-despawned via Surfaces(linked_spawn)"
+        );
     }
 }

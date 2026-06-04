@@ -21,8 +21,8 @@ pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, Workspac
 pub use components::{
     ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd,
     ExtensionSurfaceId, OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker, SplitNode,
-    SurfaceKind, SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
-    WorkspaceUiSubtree,
+    SurfaceKind, SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions,
+    WorkspaceMarker, WorkspaceUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};
