@@ -159,7 +159,7 @@ pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
 /// Back-pointer from a stable Surface host entity to its owning
 /// multiplexer Surface entity. Stamped by
 /// `SurfaceEntityRegistry::get_or_spawn`. `finish_terminal_setup` reads
-/// this to resolve the host's multiplexer Pane / Session entities (via
+/// this to resolve the host's multiplexer Pane / Workspace entities (via
 /// `ChildOf`) so the spawned terminal's env carries the correct
 /// `OZMUX_PANE_ID` for the `@memo` control bridge.
 #[derive(Component)]
@@ -495,7 +495,7 @@ mod tests {
             q.iter(world).next().expect("at least one host")
         };
 
-        // Rename via MultiplexerCommands — triggers Changed<Name> on the Session
+        // Rename via MultiplexerCommands — triggers Changed<Name> on the Workspace
         // which causes a rebuild in the next update.
         app.world_mut()
             .run_system_once(

@@ -183,7 +183,7 @@ pub(crate) fn next_click_count(
 
 /// Pre-route helper. If `target_entity` belongs to a pane that is not
 /// the currently active pane in the attached workspace, updates
-/// `Session::ActivePane`. No-op when:
+/// `Workspace::ActivePane`. No-op when:
 ///   - The entity isn't registered as the active surface of any pane
 ///     in the attached workspace.
 ///   - The pane is already active.

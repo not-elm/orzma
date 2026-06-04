@@ -35,8 +35,8 @@ pub(crate) fn split_ratio_to_flex_grows(lhs_weight: f32, rhs_weight: f32) -> (f3
 /// is expected to unwrap into `RootCell::child` first.
 ///
 /// `inactive_host_parent` — the Entity under which inactive Surface hosts
-/// (within this session) are parked. In production this is the owning
-/// Session entity itself, which lacks `Node`, so the host falls out of
+/// (within this workspace) are parked. In production this is the owning
+/// Workspace entity itself, which lacks `Node`, so the host falls out of
 /// Bevy's UI walker (`UiChildren::iter_ui_children` filters `With<Node>`).
 /// This is the mechanism that replaces the previous `hidden_stash`
 /// `Display::None` workaround.
@@ -228,8 +228,8 @@ fn build_pane(
         })
         .collect();
 
-    // NOTE: `is_active_pane` is always true in a single-session view. A
-    // multi-session tab indicator would require knowing the session-level
+    // NOTE: `is_active_pane` is always true in a single-workspace view. A
+    // multi-workspace tab indicator would require knowing the workspace-level
     // active pane, which is not threaded here yet. Safe default: treat
     // every pane as the active one (solid accent indicator).
     build_pane_tab_bar(commands, pane_frame, pane_entity, &tabs, true, ui_font);

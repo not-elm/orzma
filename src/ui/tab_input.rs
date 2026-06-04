@@ -18,7 +18,7 @@ impl Plugin for TabInteractionPlugin {
         app.add_systems(
             Update,
             (
-                // NOTE: drive_tab_clicks mutates `Session::active_pane`, which
+                // NOTE: drive_tab_clicks mutates `Workspace::active_pane`, which
                 // dispatch_focused_key (InputPhase::FocusedKey) reads to route
                 // keystrokes, and which the chrome-rebuild / dim systems (run
                 // after OzmuxSystems::Input) react to. It MUST live in
