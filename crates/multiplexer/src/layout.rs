@@ -150,6 +150,85 @@ impl LayoutTree<'_, '_> {
             _ => None,
         }
     }
+
+    /// The single child of a node (the layout-root has exactly one), or `None`.
+    fn only_child(&self, e: Entity) -> Option<Entity> {
+        self.children.get(e).ok().and_then(|k| {
+            let mut it = k.iter();
+            let first = it.next()?;
+            if it.next().is_none() {
+                Some(first)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+/// Compute each Pane leaf's normalized rectangle by walking the entity tree
+/// from `root`. DFS first-child-first order (matches `ordered_panes`). Splits
+/// partition their rect by the two children's `flex_grow` ratio.
+pub(crate) fn pane_bounds(tree: &LayoutTree, root: Entity) -> Vec<(Entity, Rect)> {
+    let mut out = Vec::new();
+    walk_bounds(
+        tree,
+        root,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        },
+        &mut out,
+    );
+    out
+}
+
+fn walk_bounds(tree: &LayoutTree, node: Entity, bounds: Rect, out: &mut Vec<(Entity, Rect)>) {
+    if tree.is_pane(node) {
+        out.push((node, bounds));
+        return;
+    }
+    let Some((lhs, rhs)) = tree.split_children(node) else {
+        if let Some(only) = tree.only_child(node) {
+            walk_bounds(tree, only, bounds, out);
+        }
+        return;
+    };
+    let ratio = split_ratio(tree.grow(lhs), tree.grow(rhs));
+    match tree.orientation(node) {
+        Some(SplitOrientation::Horizontal) => {
+            let lw = bounds.w * ratio;
+            walk_bounds(tree, lhs, Rect { w: lw, ..bounds }, out);
+            walk_bounds(
+                tree,
+                rhs,
+                Rect {
+                    x: bounds.x + lw,
+                    w: bounds.w - lw,
+                    ..bounds
+                },
+                out,
+            );
+        }
+        Some(SplitOrientation::Vertical) => {
+            let lh = bounds.h * ratio;
+            walk_bounds(tree, lhs, Rect { h: lh, ..bounds }, out);
+            walk_bounds(
+                tree,
+                rhs,
+                Rect {
+                    y: bounds.y + lh,
+                    h: bounds.h - lh,
+                    ..bounds
+                },
+                out,
+            );
+        }
+        // NOTE: a node with two children but no orientation is not a valid
+        // `SplitNode`; reaching here means the tree invariant is broken.
+        None => debug_assert!(false, "split node {node:?} has two children but no SplitNode orientation"),
+    }
 }
 
 /// Set both children of a split, enforcing the never-both-zero invariant
