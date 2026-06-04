@@ -53,4 +53,5 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# TODO: drop once bevy_cef 0.11 (TitleChanged/WebviewTitle API) is published to crates.io.
+allow-git = ["https://github.com/not-elm/bevy_cef"]
