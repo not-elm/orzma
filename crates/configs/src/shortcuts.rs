@@ -348,15 +348,15 @@ pub struct Bindings {
     /// Enter tmux-style copy mode on the active terminal surface.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub enter_copy_mode: Option<KeyChord>,
-    /// Create a new session.
+    /// Create a new workspace.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub new_session: Option<KeyChord>,
-    /// Cycle session focus to the previous one.
+    pub new_workspace: Option<KeyChord>,
+    /// Cycle workspace focus to the previous one.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_session_prev: Option<KeyChord>,
-    /// Cycle session focus to the next one.
+    pub focus_workspace_prev: Option<KeyChord>,
+    /// Cycle workspace focus to the next one.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_session_next: Option<KeyChord>,
+    pub focus_workspace_next: Option<KeyChord>,
     /// Copy the active terminal's selection to the system clipboard.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub copy: Option<KeyChord>,
@@ -386,9 +386,9 @@ impl Default for Bindings {
             focus_surface_prev: Some(parse_default_chord("Cmd+[")),
             focus_surface_next: Some(parse_default_chord("Cmd+]")),
             enter_copy_mode: Some(parse_default_chord("Cmd+U")),
-            new_session: Some(parse_default_chord("Cmd+R")),
-            focus_session_prev: Some(parse_default_chord("Cmd+Shift+[")),
-            focus_session_next: Some(parse_default_chord("Cmd+Shift+]")),
+            new_workspace: Some(parse_default_chord("Cmd+R")),
+            focus_workspace_prev: Some(parse_default_chord("Cmd+Shift+[")),
+            focus_workspace_next: Some(parse_default_chord("Cmd+Shift+]")),
             copy: Some(parse_default_chord("Cmd+C")),
             paste: Some(parse_default_chord("Cmd+V")),
         }
@@ -490,19 +490,23 @@ impl Bindings {
                 &self.enter_copy_mode,
                 ShortcutAction::EnterCopyMode,
             ),
-            ("new-session", &self.new_session, ShortcutAction::NewSession),
             (
-                "focus-session-prev",
-                &self.focus_session_prev,
-                ShortcutAction::FocusSession {
-                    offset: SessionOffset::Prev,
+                "new-workspace",
+                &self.new_workspace,
+                ShortcutAction::NewWorkspace,
+            ),
+            (
+                "focus-workspace-prev",
+                &self.focus_workspace_prev,
+                ShortcutAction::FocusWorkspace {
+                    offset: WorkspaceOffset::Prev,
                 },
             ),
             (
-                "focus-session-next",
-                &self.focus_session_next,
-                ShortcutAction::FocusSession {
-                    offset: SessionOffset::Next,
+                "focus-workspace-next",
+                &self.focus_workspace_next,
+                ShortcutAction::FocusWorkspace {
+                    offset: WorkspaceOffset::Next,
                 },
             ),
             ("copy", &self.copy, ShortcutAction::Copy),
@@ -548,21 +552,21 @@ impl Bindings {
 pub enum ShortcutAction {
     /// Close the active pane.
     ClosePane,
-    /// Close the active session.
-    CloseSession,
+    /// Close the active workspace.
+    CloseWorkspace,
     /// Move pane focus in a direction.
     FocusPane {
         /// Direction to move focus.
         direction: Direction,
     },
-    /// Move session focus by offset.
-    FocusSession {
-        /// Session offset to apply.
-        offset: SessionOffset,
+    /// Move workspace focus by offset.
+    FocusWorkspace {
+        /// Workspace offset to apply.
+        offset: WorkspaceOffset,
     },
-    /// Jump to a session by index.
-    FocusSessionNumber {
-        /// Target session index (0–9 in practice).
+    /// Jump to a workspace by index.
+    FocusWorkspaceNumber {
+        /// Target workspace index (0–9 in practice).
         index: u8,
     },
     /// Move surface focus by offset.
@@ -580,20 +584,20 @@ pub enum ShortcutAction {
         /// Split direction.
         direction: SplitDirection,
     },
-    /// Create a new session.
-    NewSession,
+    /// Create a new workspace.
+    NewWorkspace,
     /// Add a new terminal surface to the active pane.
     NewTerminalSurface,
     /// Add a new extension surface to the active pane.
     NewExtensionSurface,
-    /// Rename the active session.
-    RenameSession,
+    /// Rename the active workspace.
+    RenameWorkspace,
     /// Rename the active surface.
     RenameSurface,
     /// Close the active surface.
     CloseSurface,
-    /// Show the session list.
-    ListSessions,
+    /// Show the workspace list.
+    ListWorkspaces,
     /// Show the surface list for the active pane.
     ListSurfaces,
     /// Resize the active pane in a direction.
@@ -608,8 +612,8 @@ pub enum ShortcutAction {
         /// Swap offset.
         offset: SwapOffset,
     },
-    /// Break the active pane into a new session.
-    BreakPaneToSession,
+    /// Break the active pane into a new workspace.
+    BreakPaneToWorkspace,
     /// Enter tmux-style copy mode on the active Terminal Surface.
     EnterCopyMode,
     /// Copy the active terminal's selection to the system clipboard.
@@ -642,15 +646,15 @@ pub enum SplitDirection {
     Vertical,
 }
 
-/// Session offset selectors for `FocusSession`.
+/// Workspace offset selectors for `FocusWorkspace`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum SessionOffset {
-    /// Next session.
+pub enum WorkspaceOffset {
+    /// Next workspace.
     Next,
-    /// Previous session.
+    /// Previous workspace.
     Prev,
-    /// Last-active session.
+    /// Last-active workspace.
     Last,
 }
 
@@ -900,9 +904,9 @@ mod tests {
         assert!(b.focus_surface_prev.is_some());
         assert!(b.focus_surface_next.is_some());
         assert!(b.enter_copy_mode.is_some());
-        assert!(b.new_session.is_some());
-        assert!(b.focus_session_prev.is_some());
-        assert!(b.focus_session_next.is_some());
+        assert!(b.new_workspace.is_some());
+        assert!(b.focus_workspace_prev.is_some());
+        assert!(b.focus_workspace_next.is_some());
         assert!(b.copy.is_some());
         assert!(b.paste.is_some());
     }
@@ -982,7 +986,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Any change to defaults updates this string.
-        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-surface":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-surface":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-session":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-session-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-session-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}}}}"#;
+        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-surface":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-surface":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-workspace":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-workspace-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-workspace-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}}}}"#;
         assert_eq!(json, expected);
     }
 
