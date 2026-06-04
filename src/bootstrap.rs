@@ -21,9 +21,11 @@ pub(crate) fn bootstrap(mut mux: MultiplexerCommands) {
     let _ = mux.spawn_attached_session();
 }
 
-/// Inserts an initial `CursorIcon::System(SystemCursorIcon::Text)` on
-/// the primary window so the hover system in `src/input/hyperlink.rs`
-/// can mutate the component without first having to insert it.
+/// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
+/// (the arrow) on the primary window so the hover system in
+/// `src/input/hyperlink.rs` can mutate the component without first
+/// having to insert it. The arrow is the default for non-terminal
+/// regions; the hover system narrows it to the I-beam over terminal text.
 fn insert_initial_cursor_icon(
     mut commands: Commands,
     windows: Query<Entity, (With<PrimaryWindow>, Without<CursorIcon>)>,
@@ -31,7 +33,7 @@ fn insert_initial_cursor_icon(
     for window in windows.iter() {
         commands
             .entity(window)
-            .insert(CursorIcon::System(SystemCursorIcon::Text));
+            .insert(CursorIcon::System(SystemCursorIcon::Default));
     }
 }
 
