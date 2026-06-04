@@ -95,6 +95,7 @@ pub fn terminal_env(
     let mut env = vec![
         ("PATH".into(), extension_path_prefix(&bins, &current)),
         ("OZMUX_PANE_ID".into(), pane.to_bits().to_string()),
+        // NOTE: env-var key keeps its legacy "SESSION" name on purpose — it is a wire contract the SDK and user extensions read; renaming it breaks them. Value = workspace entity bits.
         ("OZMUX_SESSION_ID".into(), workspace.to_bits().to_string()),
     ];
     if let Some(first) = extensions.first() {
@@ -274,7 +275,9 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::bounded;
-    use ozmux_multiplexer::{MultiplexerCommands, WorkspaceNameCounter, SurfaceKind, SurfaceMarker};
+    use ozmux_multiplexer::{
+        MultiplexerCommands, SurfaceKind, SurfaceMarker, WorkspaceNameCounter,
+    };
 
     fn split_request(pane_bits: u64) -> ControlRequest {
         ControlRequest {

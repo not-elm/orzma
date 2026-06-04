@@ -13,8 +13,8 @@
 use crate::system_set::OzmuxSystems;
 use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::root::OzmuxUiRootPlugin;
-use crate::ui::workspace::OzmuxWorkspaceUiPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
+use crate::ui::workspace::OzmuxWorkspaceUiPlugin;
 use bevy::prelude::*;
 use std::path::PathBuf;
 
@@ -25,7 +25,6 @@ pub mod layout;
 pub mod palette;
 pub mod registry;
 pub mod root;
-pub mod workspace;
 pub mod status_bar;
 pub mod status_bar_sync;
 #[cfg(test)]
@@ -35,6 +34,7 @@ pub mod tab_bar;
 pub(crate) mod tab_input;
 pub(crate) mod tab_label;
 pub mod terminal;
+pub mod workspace;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
 /// never despawned. Hosts `WorkspaceUiRoot` (the attachment point for the
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn split_pane_produces_two_pane_frames() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -427,7 +427,7 @@ mod tests {
     fn surface_registry_prunes_removed_surface() {
         use crate::ui::registry::SurfaceEntityRegistry;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -501,7 +501,8 @@ mod tests {
             .run_system_once(
                 |mut mux: MultiplexerCommands, workspaces: Query<Entity, With<WorkspaceMarker>>| {
                     let workspace = workspaces.iter().next().expect("workspace");
-                    mux.rename_workspace(workspace, "second-rename".into()).unwrap();
+                    mux.rename_workspace(workspace, "second-rename".into())
+                        .unwrap();
                 },
             )
             .unwrap();
@@ -559,7 +560,7 @@ mod tests {
     #[test]
     fn inactive_surface_host_persists_across_focus_switch() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker, SurfaceKind};
+        use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -709,7 +710,7 @@ mod tests {
     #[test]
     fn split_dims_inactive_terminal_keeps_active_bright() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
@@ -732,16 +733,19 @@ mod tests {
         }
         mount_terminal_hosts(&mut app);
 
-        let active_pane = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
-                    let workspace = workspaces.iter().next().unwrap();
-                    mux.workspaces_active_pane(workspace).unwrap()
-                },
-            )
-            .unwrap();
+        let active_pane =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next().unwrap();
+                        mux.workspaces_active_pane(workspace).unwrap()
+                    },
+                )
+                .unwrap();
 
         {
             let world = app.world_mut();
@@ -789,23 +793,26 @@ mod tests {
     #[test]
     fn extension_pane_keeps_pickable_ignore_veil() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{LayoutCells, MultiplexerCommands, WorkspaceMarker, SurfaceKind};
+        use ozmux_multiplexer::{LayoutCells, MultiplexerCommands, SurfaceKind, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
             app.update();
         }
 
-        let pane = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
-                    let workspace = workspaces.iter().next().unwrap();
-                    mux.workspaces_active_pane(workspace).unwrap()
-                },
-            )
-            .unwrap();
+        let pane =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next().unwrap();
+                        mux.workspaces_active_pane(workspace).unwrap()
+                    },
+                )
+                .unwrap();
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
                 let ext = mux.add_surface(
@@ -847,7 +854,7 @@ mod tests {
     #[test]
     fn disabled_config_dims_nothing() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         // Override to disabled BEFORE hosts mount, so the first PaneDim
@@ -899,7 +906,7 @@ mod tests {
     #[test]
     fn focus_change_moves_terminal_dim() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker, Side, SplitOrientation};
+        use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
@@ -922,21 +929,24 @@ mod tests {
         }
         mount_terminal_hosts(&mut app);
 
-        let (workspace, target_pane) = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
-                    let workspace = workspaces.iter().next().unwrap();
-                    let active = mux.workspaces_active_pane(workspace).unwrap();
-                    let target = mux
-                        .panes_of_workspace(workspace)
-                        .find(|p| *p != active)
-                        .expect("a non-active pane exists after split");
-                    (workspace, target)
-                },
-            )
-            .unwrap();
+        let (workspace, target_pane) =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next().unwrap();
+                        let active = mux.workspaces_active_pane(workspace).unwrap();
+                        let target = mux
+                            .panes_of_workspace(workspace)
+                            .find(|p| *p != active)
+                            .expect("a non-active pane exists after split");
+                        (workspace, target)
+                    },
+                )
+                .unwrap();
 
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -996,7 +1006,9 @@ mod tests {
             .single(app.world())
             .expect("one attached workspace before CMD+R");
         app.world_mut()
-            .trigger(crate::action::workspace::NewWorkspaceActionEvent { workspace: attached });
+            .trigger(crate::action::workspace::NewWorkspaceActionEvent {
+                workspace: attached,
+            });
         // One tick for commands to flush + status bar rebuild to enqueue,
         // one for rebuild's commands to flush.
         app.update();
@@ -1118,7 +1130,7 @@ mod tests {
 
     #[test]
     fn terminal_tab_renders_cwd_after_rebuild() {
-        use ozmux_multiplexer::{Cwd, LayoutCells, WorkspaceMarker, SurfaceMarker};
+        use ozmux_multiplexer::{Cwd, LayoutCells, SurfaceMarker, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.insert_resource(HomeDir(None));

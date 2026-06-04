@@ -70,7 +70,11 @@ mod tests {
     fn new_terminal_surface_event_adds_and_activates_surface_on_active_pane() {
         let mut app = setup_app();
         let workspace = bootstrap_workspace(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_pane = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         app.world_mut()
             .trigger(NewTerminalSurfaceActionEvent { workspace });
         app.world_mut().flush();
@@ -88,7 +92,11 @@ mod tests {
         use ozmux_multiplexer::Cwd;
         let mut app = setup_app();
         let workspace = bootstrap_workspace(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_pane = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         let src = app
             .world_mut()
             .run_system_once(move |mux: MultiplexerCommands| {
@@ -111,7 +119,10 @@ mod tests {
     #[test]
     fn new_terminal_surface_event_on_vanished_workspace_is_a_noop() {
         let mut app = setup_app();
-        let bogus = app.world_mut().spawn(ozmux_multiplexer::WorkspaceMarker).id();
+        let bogus = app
+            .world_mut()
+            .spawn(ozmux_multiplexer::WorkspaceMarker)
+            .id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
         // Triggering on a despawned entity must not panic and must not mutate state.

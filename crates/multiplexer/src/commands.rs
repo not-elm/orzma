@@ -6,9 +6,8 @@
 
 use crate::cells::{Side, SplitOrientation};
 use crate::components::{
-    ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, LayoutCells, PaneMarker,
-    WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker, WorkspaceUiSubtree, SurfaceKind,
-    SurfaceMarker,
+    ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, LayoutCells, PaneMarker, SurfaceKind,
+    SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker, WorkspaceUiSubtree,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
@@ -135,7 +134,9 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// `WorkspaceNameCounter`.
     pub fn spawn_attached_workspace(&mut self) -> Entity {
         let n = self.counter.next();
-        let workspace = self.create_workspace(Some(format!("workspace{n}"))).workspace;
+        let workspace = self
+            .create_workspace(Some(format!("workspace{n}")))
+            .workspace;
         let subtree = self
             .commands
             .spawn(Node {
@@ -662,7 +663,9 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<WorkspaceNameCounter>();
         let outcome = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(Some("test".into())))
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_workspace(Some("test".into()))
+            })
             .unwrap();
 
         assert!(world.get::<WorkspaceMarker>(outcome.workspace).is_some());
@@ -709,7 +712,8 @@ mod tests {
 
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.rename_workspace(outcome.workspace, "after".into()).unwrap();
+                mux.rename_workspace(outcome.workspace, "after".into())
+                    .unwrap();
             })
             .unwrap();
 

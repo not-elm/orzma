@@ -6,7 +6,7 @@
 //! Observer registration happens in `MultiplexerPlugin::build`.
 
 use crate::components::{
-    ActivePane, ActiveSurface, LayoutCells, PaneMarker, WorkspaceMarker, SurfaceMarker,
+    ActivePane, ActiveSurface, LayoutCells, PaneMarker, SurfaceMarker, WorkspaceMarker,
 };
 use bevy::prelude::*;
 
@@ -105,7 +105,9 @@ mod tests {
         app.update();
 
         assert_eq!(
-            app.world().get::<ActivePane>(outcome.workspace).map(|a| a.0),
+            app.world()
+                .get::<ActivePane>(outcome.workspace)
+                .map(|a| a.0),
             Some(outcome.pane),
             "observer must repoint ActivePane to the surviving sibling",
         );

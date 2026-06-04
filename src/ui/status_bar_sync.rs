@@ -45,7 +45,8 @@ pub fn rebuild_status_bar_on_workspace_set_change(
     let any_attached_added = attached_added.iter().count() > 0;
     let any_attached_removed = attached_removed.read().count() > 0;
 
-    if !(any_workspace_added || any_workspace_removed || any_attached_added || any_attached_removed) {
+    if !(any_workspace_added || any_workspace_removed || any_attached_added || any_attached_removed)
+    {
         return;
     }
 

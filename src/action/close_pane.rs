@@ -68,13 +68,21 @@ mod tests {
             })
             .unwrap();
         app.world_mut().flush();
-        let active_before = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_before = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         assert_ne!(active_before, original_pane, "split must promote new pane");
 
         app.world_mut().trigger(ClosePaneActionEvent { workspace });
         app.world_mut().flush();
 
-        let active_after = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_after = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         assert_ne!(
             active_after, active_before,
             "active pane should change after close"
@@ -87,13 +95,17 @@ mod tests {
         let workspace = bootstrap_workspace(app.world_mut());
         let pane_count_before = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_workspace(workspace).count())
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.panes_of_workspace(workspace).count()
+            })
             .unwrap();
         app.world_mut().trigger(ClosePaneActionEvent { workspace });
         app.world_mut().flush();
         let pane_count_after = app
             .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.panes_of_workspace(workspace).count())
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.panes_of_workspace(workspace).count()
+            })
             .unwrap();
         assert_eq!(pane_count_after, pane_count_before);
     }
@@ -101,7 +113,10 @@ mod tests {
     #[test]
     fn close_pane_event_on_vanished_workspace_is_a_noop() {
         let mut app = setup_app();
-        let bogus = app.world_mut().spawn(ozmux_multiplexer::WorkspaceMarker).id();
+        let bogus = app
+            .world_mut()
+            .spawn(ozmux_multiplexer::WorkspaceMarker)
+            .id();
         app.world_mut().despawn(bogus);
         app.world_mut().flush();
         app.world_mut()

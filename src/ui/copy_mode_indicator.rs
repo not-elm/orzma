@@ -482,7 +482,7 @@ mod tests {
     fn inactive_host_parent_is_walker_skipped_workspace_entity() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{
-            AttachedWorkspace, LayoutCells, MultiplexerCommands, WorkspaceMarker, SurfaceKind,
+            AttachedWorkspace, LayoutCells, MultiplexerCommands, SurfaceKind, WorkspaceMarker,
         };
 
         let (mut app, _guard) = make_ui_test_app();
@@ -490,19 +490,22 @@ mod tests {
         app.update();
         app.update();
 
-        let (workspace, pane, first_surface) = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
-                    let workspace = workspaces.iter().next()?;
-                    let pane = mux.workspaces_active_pane(workspace)?;
-                    let surface = mux.panes_active_surface(pane)?;
-                    Some((workspace, pane, surface))
-                },
-            )
-            .unwrap()
-            .expect("bootstrap workspace + pane + surface");
+        let (workspace, pane, first_surface) =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next()?;
+                        let pane = mux.workspaces_active_pane(workspace)?;
+                        let surface = mux.panes_active_surface(pane)?;
+                        Some((workspace, pane, surface))
+                    },
+                )
+                .unwrap()
+                .expect("bootstrap workspace + pane + surface");
 
         let first_host = app
             .world()

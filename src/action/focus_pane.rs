@@ -58,13 +58,21 @@ mod tests {
     fn focus_pane_event_in_single_pane_workspace_is_a_noop() {
         let mut app = setup_app();
         let workspace = bootstrap_workspace(app.world_mut());
-        let active_before = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_before = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         app.world_mut().trigger(FocusPaneActionEvent {
             workspace,
             direction: PaneDirection::Right,
         });
         app.world_mut().flush();
-        let active_after = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_after = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         assert_eq!(active_after, active_before);
     }
 }

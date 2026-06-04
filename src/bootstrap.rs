@@ -38,7 +38,9 @@ fn insert_initial_cursor_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker, WorkspaceUiSubtree};
+    use ozmux_multiplexer::{
+        AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker, WorkspaceUiSubtree,
+    };
 
     #[test]
     fn bootstrap_spawns_workspace_entity_with_attached_marker() {
@@ -55,7 +57,8 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        let mut q = world.query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>();
+        let mut q =
+            world.query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>();
         assert_eq!(
             q.iter(world).count(),
             1,

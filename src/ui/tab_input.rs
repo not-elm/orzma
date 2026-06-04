@@ -120,7 +120,9 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
-        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
         (app, workspace, pane, first, second)
     }
 
@@ -211,7 +213,9 @@ mod tests {
             })
             .unwrap();
         app.world_mut().flush();
-        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
 
         let other_surface = app
             .world_mut()

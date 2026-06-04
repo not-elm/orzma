@@ -2,7 +2,7 @@
 //! Runs after bootstrap, but no longer depends on AttachedWorkspace (which
 //! now lives on workspace entities, not on the OS window).
 
-use crate::ui::{WorkspaceUiRoot, UiRoot};
+use crate::ui::{UiRoot, WorkspaceUiRoot};
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, IsDefaultUiCamera, Val};

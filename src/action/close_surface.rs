@@ -71,13 +71,22 @@ mod tests {
     fn close_surface_event_in_single_surface_pane_is_a_noop() {
         let mut app = setup_app();
         let workspace = bootstrap_workspace(app.world_mut());
-        let active_before = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
-        app.world_mut().trigger(CloseSurfaceActionEvent { workspace });
+        let active_before = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
+        app.world_mut()
+            .trigger(CloseSurfaceActionEvent { workspace });
         app.world_mut().flush();
         // Single-surface pane is closed via close_pane; only one pane exists,
         // so the close-last-pane invariant inside ozmux_multiplexer prevents
         // the pane from going away. Active pane identity stays put.
-        let active_after = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_after = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         assert_eq!(active_after, active_before);
     }
 }

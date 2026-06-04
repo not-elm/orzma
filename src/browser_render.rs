@@ -19,7 +19,7 @@ use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
 use bevy::window::{CursorIcon, Ime, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker, SurfaceKind};
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind, WorkspaceMarker};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
 /// Vimium-style scroll keybindings, injected into each browser page webview as
@@ -970,7 +970,9 @@ mod tests {
             })
             .unwrap();
         app.world_mut().flush();
-        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
 
         let host = app.world_mut().spawn_empty().id();
         app.world_mut()

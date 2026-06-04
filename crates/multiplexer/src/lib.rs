@@ -21,11 +21,11 @@ pub use cells::{
     Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
     SplitOrientation,
 };
-pub use commands::{MultiplexerCommands, WorkspaceCreated, WorkspaceNameCounter, SplitOutcome};
+pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter};
 pub use components::{
-    ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd, ExtensionSurfaceId,
-    LayoutCells, OwningExtension, PaneDimensions, PaneMarker, WorkspaceCreatedAt, WorkspaceDimensions,
-    WorkspaceMarker, WorkspaceUiSubtree, SurfaceKind, SurfaceMarker,
+    ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd,
+    ExtensionSurfaceId, LayoutCells, OwningExtension, PaneDimensions, PaneMarker, SurfaceKind,
+    SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker, WorkspaceUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};

@@ -7,18 +7,18 @@ use close_surface::CloseSurfaceActionPlugin;
 use focus_pane::FocusPaneActionPlugin;
 use focus_surface::FocusSurfaceActionPlugin;
 use new_terminal_surface::NewTerminalSurfaceActionPlugin;
-use workspace::OzmuxWorkspaceActionPlugin;
 use split_pane::SplitPaneActionPlugin;
 use swap_pane::SwapPaneActionPlugin;
+use workspace::OzmuxWorkspaceActionPlugin;
 
 pub(crate) mod close_pane;
 pub(crate) mod close_surface;
 pub(crate) mod focus_pane;
 pub(crate) mod focus_surface;
 pub(crate) mod new_terminal_surface;
-pub(crate) mod workspace;
 pub(crate) mod split_pane;
 pub(crate) mod swap_pane;
+pub(crate) mod workspace;
 
 /// Bevy Plugin that registers every action-dispatch sub-plugin under the
 /// `action` module.

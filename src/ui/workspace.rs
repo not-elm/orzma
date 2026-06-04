@@ -12,16 +12,16 @@ use crate::ui::registry::SurfaceEntityRegistry;
 use crate::ui::tab_label::LabelCtx;
 use crate::ui::terminal::resolve_pane_workspace;
 use crate::ui::{
-    HomeDir, HostSurfaceEntity, PaneDimOverlay, WorkspaceUiDirty, WorkspaceUiRoot, StructuralNode,
-    SurfaceHostNode, TerminalSurfaceMarker,
+    HomeDir, HostSurfaceEntity, PaneDimOverlay, StructuralNode, SurfaceHostNode,
+    TerminalSurfaceMarker, WorkspaceUiDirty, WorkspaceUiRoot,
 };
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, AttachedWorkspace, Cell, Cwd, LayoutCells, PaneMarker, WorkspaceMarker,
-    WorkspaceUiSubtree, SurfaceKind, SurfaceMarker,
+    ActivePane, ActiveSurface, AttachedWorkspace, Cell, Cwd, LayoutCells, PaneMarker, SurfaceKind,
+    SurfaceMarker, WorkspaceMarker, WorkspaceUiSubtree,
 };
 
 pub struct OzmuxWorkspaceUiPlugin;
@@ -33,7 +33,10 @@ impl Plugin for OzmuxWorkspaceUiPlugin {
             Update,
             flag_chrome_dirty_on_surface_change.in_set(OzmuxSystems::ChromeInvalidate),
         )
-        .add_systems(Update, rebuild_workspace_ui.in_set(OzmuxSystems::WorkspaceUi))
+        .add_systems(
+            Update,
+            rebuild_workspace_ui.in_set(OzmuxSystems::WorkspaceUi),
+        )
         .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
         .add_systems(
             Update,
@@ -181,7 +184,9 @@ fn rebuild_workspace_ui(
         // NOTE: must remove the marker after rebuilding, or `With<WorkspaceUiDirty>`
         // keeps matching and the workspace rebuilds every frame. No-op when the
         // rebuild was triggered by `Changed<LayoutCells>` (marker absent).
-        commands.entity(workspace_entity).remove::<WorkspaceUiDirty>();
+        commands
+            .entity(workspace_entity)
+            .remove::<WorkspaceUiDirty>();
     }
 }
 
@@ -209,7 +214,9 @@ fn flag_chrome_dirty_on_surface_change(
     }
     for pane in switched_panes.iter() {
         if let Ok(pane_parent) = child_of.get(pane) {
-            commands.entity(pane_parent.parent()).insert(WorkspaceUiDirty);
+            commands
+                .entity(pane_parent.parent())
+                .insert(WorkspaceUiDirty);
         }
     }
     for surface in changed_cwd.iter() {
@@ -321,7 +328,8 @@ fn sync_terminal_dim_on_focus(
     let dim_factor = inactive_dim_factor(configs.as_deref());
     for (workspace, active) in changed_workspaces.iter() {
         for (host, host_surface) in hosts.iter() {
-            let Some((pane, host_workspace)) = resolve_pane_workspace(host_surface.0, &child_of) else {
+            let Some((pane, host_workspace)) = resolve_pane_workspace(host_surface.0, &child_of)
+            else {
                 continue;
             };
             if host_workspace != workspace {
@@ -451,9 +459,15 @@ mod tests {
         let subtree = app.world_mut().spawn(Node::default()).id();
         let workspace = app
             .world_mut()
-            .spawn((WorkspaceMarker, AttachedWorkspace, WorkspaceUiSubtree(subtree)))
+            .spawn((
+                WorkspaceMarker,
+                AttachedWorkspace,
+                WorkspaceUiSubtree(subtree),
+            ))
             .id();
-        app.world_mut().entity_mut(subtree).insert(ChildOf(workspace));
+        app.world_mut()
+            .entity_mut(subtree)
+            .insert(ChildOf(workspace));
 
         app.update();
 
@@ -480,7 +494,11 @@ mod tests {
         let subtree_a = app.world_mut().spawn(Node::default()).id();
         let workspace_a = app
             .world_mut()
-            .spawn((WorkspaceMarker, AttachedWorkspace, WorkspaceUiSubtree(subtree_a)))
+            .spawn((
+                WorkspaceMarker,
+                AttachedWorkspace,
+                WorkspaceUiSubtree(subtree_a),
+            ))
             .id();
         app.world_mut()
             .entity_mut(subtree_a)
@@ -578,17 +596,20 @@ mod tests {
         app.update();
         app.update();
 
-        let pane = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
-                    let workspace = workspaces.iter().next()?;
-                    mux.workspaces_active_pane(workspace)
-                },
-            )
-            .unwrap()
-            .expect("bootstrap workspace + active pane");
+        let pane =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next()?;
+                        mux.workspaces_active_pane(workspace)
+                    },
+                )
+                .unwrap()
+                .expect("bootstrap workspace + active pane");
 
         // Add an in-pane surface WITHOUT touching LayoutCells. The only path
         // that can drive a rebuild here is flag_chrome_dirty_on_surface_change
@@ -623,19 +644,22 @@ mod tests {
         app.update();
         app.update();
 
-        let (workspace, pane, first_surface) = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
-                    let workspace = workspaces.iter().next()?;
-                    let pane = mux.workspaces_active_pane(workspace)?;
-                    let surface = mux.panes_active_surface(pane)?;
-                    Some((workspace, pane, surface))
-                },
-            )
-            .unwrap()
-            .expect("bootstrap workspace + pane + first_surface");
+        let (workspace, pane, first_surface) =
+            app.world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<
+                        Entity,
+                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                    >| {
+                        let workspace = workspaces.iter().next()?;
+                        let pane = mux.workspaces_active_pane(workspace)?;
+                        let surface = mux.panes_active_surface(pane)?;
+                        Some((workspace, pane, surface))
+                    },
+                )
+                .unwrap()
+                .expect("bootstrap workspace + pane + first_surface");
 
         let first_host = app
             .world()
@@ -698,7 +722,9 @@ mod tests {
         for _ in 0..5 {
             app.update();
         }
-        let computed = app.world().get::<bevy::ui::ComputedNode>(inactive_workspace);
+        let computed = app
+            .world()
+            .get::<bevy::ui::ComputedNode>(inactive_workspace);
         match computed {
             None => {
                 // Walker skipped — ideal.

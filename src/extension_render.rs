@@ -15,8 +15,8 @@ use ozmux_extension_host::HandlersBridge;
 use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
-    AttachedWorkspace, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, WorkspaceMarker,
-    SurfaceKind,
+    AttachedWorkspace, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind,
+    WorkspaceMarker,
 };
 
 /// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension surface,
@@ -292,6 +292,7 @@ fn context_preload_js(
     extension_name: &str,
 ) -> String {
     let workspace_id = workspace.to_bits().to_string();
+    // NOTE: JS keys "sessionId"/"windowId" are the browser-side wire contract read by the SDK surface client; keep the legacy names. Both carry the workspace entity bits.
     format!(
         "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:\"extension\",extensionName:{n:?}}};",
         s = workspace_id,
@@ -510,7 +511,9 @@ mod tests {
                 )
             })
             .unwrap();
-        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
 
         // Terminal host: no WebviewSource. Extension host: carries WebviewSource.
         let terminal_host = app.world_mut().spawn_empty().id();
@@ -527,7 +530,8 @@ mod tests {
         let set_active = move |app: &mut App, pane: Entity| {
             app.world_mut()
                 .run_system_once(move |mut mux: MultiplexerCommands| {
-                    mux.set_active_pane(workspace, pane).expect("set_active_pane");
+                    mux.set_active_pane(workspace, pane)
+                        .expect("set_active_pane");
                 })
                 .unwrap();
             app.world_mut().flush();
@@ -836,7 +840,9 @@ mod tests {
             })
             .unwrap();
         app.world_mut().flush();
-        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
 
         let child = app
             .world_mut()

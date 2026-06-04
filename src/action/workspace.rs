@@ -8,7 +8,9 @@
 //! observer's commands before the next queued trigger runs).
 
 use bevy::prelude::*;
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceCreatedAt, WorkspaceMarker};
+use ozmux_multiplexer::{
+    AttachedWorkspace, MultiplexerCommands, WorkspaceCreatedAt, WorkspaceMarker,
+};
 
 /// Bevy Plugin that registers the workspace-action observers.
 pub struct OzmuxWorkspaceActionPlugin;
@@ -132,7 +134,9 @@ fn apply_focus_workspace(
         return;
     }
 
-    commands.entity(current_entity).remove::<AttachedWorkspace>();
+    commands
+        .entity(current_entity)
+        .remove::<AttachedWorkspace>();
     commands.entity(target_entity).insert(AttachedWorkspace);
 }
 
@@ -158,7 +162,9 @@ mod tests {
             .unwrap()
             .workspace;
         app.world_mut().flush();
-        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
         (app, workspace)
     }
 
@@ -199,8 +205,9 @@ mod tests {
         assert_eq!(count_workspace_entities(&mut app), 1);
         assert_eq!(count_attached_workspace_entities(&mut app), 1);
 
-        app.world_mut()
-            .trigger(NewWorkspaceActionEvent { workspace: bootstrap });
+        app.world_mut().trigger(NewWorkspaceActionEvent {
+            workspace: bootstrap,
+        });
         app.update();
 
         assert_eq!(count_workspace_entities(&mut app), 2);
@@ -208,7 +215,9 @@ mod tests {
         let new_attached = attached_now(&mut app);
         assert_ne!(new_attached, bootstrap);
         assert!(
-            app.world().get::<WorkspaceUiSubtree>(new_attached).is_some(),
+            app.world()
+                .get::<WorkspaceUiSubtree>(new_attached)
+                .is_some(),
             "new attached workspace must carry a WorkspaceUiSubtree pointer",
         );
     }
@@ -224,8 +233,12 @@ mod tests {
 
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
-                commands.trigger(NewWorkspaceActionEvent { workspace: bootstrap });
-                commands.trigger(NewWorkspaceActionEvent { workspace: bootstrap });
+                commands.trigger(NewWorkspaceActionEvent {
+                    workspace: bootstrap,
+                });
+                commands.trigger(NewWorkspaceActionEvent {
+                    workspace: bootstrap,
+                });
             })
             .unwrap();
         app.update();
@@ -245,12 +258,14 @@ mod tests {
     #[test]
     fn new_workspace_event_uses_monotonic_name_and_created_at() {
         let (mut app, bootstrap) = setup_app();
-        app.world_mut()
-            .trigger(NewWorkspaceActionEvent { workspace: bootstrap });
+        app.world_mut().trigger(NewWorkspaceActionEvent {
+            workspace: bootstrap,
+        });
         app.update();
         let first_new = attached_now(&mut app);
-        app.world_mut()
-            .trigger(NewWorkspaceActionEvent { workspace: first_new });
+        app.world_mut().trigger(NewWorkspaceActionEvent {
+            workspace: first_new,
+        });
         app.update();
 
         let world = app.world_mut();
@@ -276,8 +291,9 @@ mod tests {
         let (mut app, bootstrap) = setup_app();
         // Add a second workspace via the event; it gets WorkspaceCreatedAt(1),
         // so sort order is [workspace1(1), default(u32::MAX)].
-        app.world_mut()
-            .trigger(NewWorkspaceActionEvent { workspace: bootstrap });
+        app.world_mut().trigger(NewWorkspaceActionEvent {
+            workspace: bootstrap,
+        });
         app.update();
         let workspace1 = attached_now(&mut app);
 
@@ -291,14 +307,18 @@ mod tests {
 
         assert_eq!(count_attached_workspace_entities(&mut app), 1);
         let focused = attached_now(&mut app);
-        assert_eq!(focused, bootstrap, "Number(1) targets the default workspace");
+        assert_eq!(
+            focused, bootstrap,
+            "Number(1) targets the default workspace"
+        );
     }
 
     #[test]
     fn focus_workspace_next_moves_marker_to_other_workspace() {
         let (mut app, bootstrap) = setup_app();
-        app.world_mut()
-            .trigger(NewWorkspaceActionEvent { workspace: bootstrap });
+        app.world_mut().trigger(NewWorkspaceActionEvent {
+            workspace: bootstrap,
+        });
         app.update();
         let workspace1 = attached_now(&mut app);
 
@@ -319,8 +339,9 @@ mod tests {
     #[test]
     fn focus_workspace_prev_moves_marker_to_other_workspace() {
         let (mut app, bootstrap) = setup_app();
-        app.world_mut()
-            .trigger(NewWorkspaceActionEvent { workspace: bootstrap });
+        app.world_mut().trigger(NewWorkspaceActionEvent {
+            workspace: bootstrap,
+        });
         app.update();
         let workspace1 = attached_now(&mut app);
 
@@ -341,8 +362,9 @@ mod tests {
     #[test]
     fn focus_workspace_number_out_of_bounds_is_noop() {
         let (mut app, bootstrap) = setup_app();
-        app.world_mut()
-            .trigger(NewWorkspaceActionEvent { workspace: bootstrap });
+        app.world_mut().trigger(NewWorkspaceActionEvent {
+            workspace: bootstrap,
+        });
         app.update();
         let workspace1 = attached_now(&mut app);
 

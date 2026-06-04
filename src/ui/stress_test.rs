@@ -16,7 +16,9 @@ use bevy::render::storage::ShaderStorageBuffer;
 use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker, WorkspaceUiSubtree};
+use ozmux_multiplexer::{
+    AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker, WorkspaceUiSubtree,
+};
 use std::sync::MutexGuard;
 
 fn make_app() -> (App, MutexGuard<'static, ()>) {

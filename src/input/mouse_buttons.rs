@@ -1586,7 +1586,9 @@ mod tests {
             .run_system_once(move |mux: MultiplexerCommands| mux.panes_active_surface(ext_pane))
             .unwrap()
             .expect("new pane has an active surface");
-        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
 
         // The clicked pane's host: SurfaceHostNode + a laid-out node under the
         // cursor, but NO TerminalHandle (a webview host). `VisibleSurfaceHost`

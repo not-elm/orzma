@@ -73,7 +73,11 @@ mod tests {
                 mux.create_workspace(Some("t".into())).workspace
             })
             .unwrap();
-        let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_pane = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         let src_surface = app
             .world_mut()
             .run_system_once(move |mux: MultiplexerCommands| {

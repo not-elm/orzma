@@ -22,7 +22,10 @@ pub struct FocusSurfaceActionEvent {
 }
 
 fn apply_focus_surface(trigger: On<FocusSurfaceActionEvent>, mut mux: MultiplexerCommands) {
-    let FocusSurfaceActionEvent { workspace, direction } = trigger.event();
+    let FocusSurfaceActionEvent {
+        workspace,
+        direction,
+    } = trigger.event();
     let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
         tracing::warn!(target: "ozmux_gui::commands", ?workspace, "FocusSurface: workspace vanished");
         return;
@@ -81,7 +84,11 @@ mod tests {
     fn focus_surface_next_advances_active_surface() {
         let mut app = setup_app();
         let workspace = bootstrap_workspace(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_pane = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         // Add a second surface so we have something to cycle to.
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -129,7 +136,11 @@ mod tests {
     fn focus_surface_in_single_surface_pane_is_a_noop() {
         let mut app = setup_app();
         let workspace = bootstrap_workspace(app.world_mut());
-        let active_pane = app.world().get::<ActivePane>(workspace).map(|a| a.0).unwrap();
+        let active_pane = app
+            .world()
+            .get::<ActivePane>(workspace)
+            .map(|a| a.0)
+            .unwrap();
         let active_before = app
             .world()
             .get::<ActiveSurface>(active_pane)

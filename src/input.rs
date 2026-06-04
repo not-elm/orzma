@@ -12,9 +12,11 @@ use crate::action::close_surface::CloseSurfaceActionEvent;
 use crate::action::focus_pane::FocusPaneActionEvent;
 use crate::action::focus_surface::FocusSurfaceActionEvent;
 use crate::action::new_terminal_surface::NewTerminalSurfaceActionEvent;
-use crate::action::workspace::{FocusWorkspaceActionEvent, FocusWorkspaceTarget, NewWorkspaceActionEvent};
 use crate::action::split_pane::SplitPaneActionEvent;
 use crate::action::swap_pane::SwapPaneActionEvent;
+use crate::action::workspace::{
+    FocusWorkspaceActionEvent, FocusWorkspaceTarget, NewWorkspaceActionEvent,
+};
 use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::ime::{ImeState, read_ime_events};
@@ -28,12 +30,12 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
-    Direction as ConfigDirection, KeyChord, Modifiers, WorkspaceOffset, ShortcutAction,
-    SplitDirection, SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset,
+    Direction as ConfigDirection, KeyChord, Modifiers, ShortcutAction, SplitDirection,
+    SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset, WorkspaceOffset,
 };
 use ozmux_multiplexer::{
-    AttachedWorkspace, CycleDirection, MultiplexerCommands, PaneDirection, WorkspaceMarker,
-    SplitOrientation, SwapOffset,
+    AttachedWorkspace, CycleDirection, MultiplexerCommands, PaneDirection, SplitOrientation,
+    SwapOffset, WorkspaceMarker,
 };
 use std::collections::HashSet;
 
@@ -340,7 +342,9 @@ fn execute_action(
             });
         }
         ShortcutAction::NewTerminalSurface => {
-            commands.trigger(NewTerminalSurfaceActionEvent { workspace: workspace });
+            commands.trigger(NewTerminalSurfaceActionEvent {
+                workspace,
+            });
         }
         ShortcutAction::FocusPane { direction } => {
             commands.trigger(FocusPaneActionEvent {
@@ -350,7 +354,10 @@ fn execute_action(
         }
         ShortcutAction::FocusSurface { offset } => {
             if let Some(direction) = cycle_direction(offset.clone()) {
-                commands.trigger(FocusSurfaceActionEvent { workspace: workspace, direction });
+                commands.trigger(FocusSurfaceActionEvent {
+                    workspace,
+                    direction,
+                });
             }
         }
         ShortcutAction::SwapPane { offset } => {
@@ -360,10 +367,14 @@ fn execute_action(
             });
         }
         ShortcutAction::ClosePane => {
-            commands.trigger(ClosePaneActionEvent { workspace: workspace });
+            commands.trigger(ClosePaneActionEvent {
+                workspace,
+            });
         }
         ShortcutAction::CloseSurface => {
-            commands.trigger(CloseSurfaceActionEvent { workspace: workspace });
+            commands.trigger(CloseSurfaceActionEvent {
+                workspace,
+            });
         }
         other => tracing::debug!(
             target: "ozmux_gui::input",
@@ -523,7 +534,9 @@ mod tests {
             .workspace;
         app.world_mut().flush();
         // Mark the workspace entity with AttachedWorkspace (mirrors bootstrap).
-        app.world_mut().entity_mut(workspace).insert(AttachedWorkspace);
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
 
         let window_entity = app
             .world_mut()
@@ -586,21 +599,21 @@ mod tests {
     /// observer still records the trigger regardless of observer order.
     fn install_active_terminal_surface(app: &mut App) -> Entity {
         let surface_entity = app.world_mut().spawn_empty().id();
-        let surface_id =
-            app.world_mut()
-                .run_system_once(
-                    |mux: MultiplexerCommands,
-                     attached_workspace: Query<
-                        Entity,
-                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
-                    >| {
-                        let workspace = attached_workspace.iter().next()?;
-                        let pane = mux.workspaces_active_pane(workspace)?;
-                        mux.panes_active_surface(pane)
-                    },
-                )
-                .unwrap()
-                .unwrap();
+        let surface_id = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 attached_workspace: Query<
+                    Entity,
+                    (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                >| {
+                    let workspace = attached_workspace.iter().next()?;
+                    let pane = mux.workspaces_active_pane(workspace)?;
+                    mux.panes_active_surface(pane)
+                },
+            )
+            .unwrap()
+            .unwrap();
         let mut registry = app
             .world_mut()
             .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>();
@@ -623,21 +636,21 @@ mod tests {
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let entity = app.world_mut().spawn(bundle).id();
-        let surface_id =
-            app.world_mut()
-                .run_system_once(
-                    |mux: MultiplexerCommands,
-                     attached_workspace: Query<
-                        Entity,
-                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
-                    >| {
-                        let workspace = attached_workspace.iter().next()?;
-                        let pane = mux.workspaces_active_pane(workspace)?;
-                        mux.panes_active_surface(pane)
-                    },
-                )
-                .unwrap()
-                .unwrap();
+        let surface_id = app
+            .world_mut()
+            .run_system_once(
+                |mux: MultiplexerCommands,
+                 attached_workspace: Query<
+                    Entity,
+                    (With<WorkspaceMarker>, With<AttachedWorkspace>),
+                >| {
+                    let workspace = attached_workspace.iter().next()?;
+                    let pane = mux.workspaces_active_pane(workspace)?;
+                    mux.panes_active_surface(pane)
+                },
+            )
+            .unwrap()
+            .unwrap();
         let mut registry = app
             .world_mut()
             .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>();
