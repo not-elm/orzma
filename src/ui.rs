@@ -49,12 +49,6 @@ pub struct UiRoot;
 #[derive(Component)]
 pub struct WorkspaceUiRoot;
 
-/// Marker for transient status-bar UI Nodes. The status-bar rebuild
-/// (`status_bar_sync`) queries this and despawns every match before
-/// respawning. Surface entities and per-pane chrome must NOT carry this.
-#[derive(Component)]
-pub struct StructuralNode;
-
 /// Marks the Surface entity currently slotted into its pane's visible
 /// `surface_slot` (i.e. the active surface). Inactive surfaces are parked
 /// under a non-`Node` parent and keep this marker removed.

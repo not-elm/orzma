@@ -21,6 +21,7 @@ use ozmux_multiplexer::{
     ActivePane, ActiveSurface, Cwd, OwningWorkspace, PaneMarker, SurfaceKind, SurfaceMarker,
     SurfaceOf, Surfaces,
 };
+use std::collections::HashSet;
 
 /// Bevy Plugin wiring the incremental chrome systems.
 pub(crate) struct OzmuxChromePlugin;
@@ -150,16 +151,14 @@ fn refresh_pane_tabs(
     ui_font: Option<Res<TerminalUiFont>>,
     home_dir: Option<Res<HomeDir>>,
 ) {
-    let mut dirty: Vec<Entity> = changed_active.iter().collect();
-    for owner in added_surfaces
-        .iter()
-        .chain(changed_cwd.iter())
-        .chain(changed_title.iter())
-    {
-        if !dirty.contains(&owner.0) {
-            dirty.push(owner.0);
-        }
-    }
+    let mut dirty: HashSet<Entity> = changed_active.iter().collect();
+    dirty.extend(
+        added_surfaces
+            .iter()
+            .chain(changed_cwd.iter())
+            .chain(changed_title.iter())
+            .map(|owner| owner.0),
+    );
     if dirty.is_empty() {
         return;
     }

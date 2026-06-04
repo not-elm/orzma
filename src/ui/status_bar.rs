@@ -6,7 +6,6 @@
 
 use crate::theme;
 use crate::theme::UI_FONT_SIZE;
-use crate::ui::StructuralNode;
 use crate::ui::palette;
 use crate::ui::status_bar_sync::StatusBarRoot;
 use bevy::prelude::*;
@@ -32,7 +31,6 @@ pub(crate) fn build_status_bar(
                 ..default()
             },
             BackgroundColor(palette::PANEL),
-            StructuralNode,
             StatusBarRoot,
             ChildOf(parent),
         ))
@@ -43,7 +41,6 @@ pub(crate) fn build_status_bar(
             width: Val::Px(theme::ELEMENT_PADDING_PX),
             ..default()
         },
-        StructuralNode,
         ChildOf(bar),
     ));
     commands.spawn((
@@ -53,7 +50,6 @@ pub(crate) fn build_status_bar(
             ..default()
         },
         BackgroundColor(palette::BORDER),
-        StructuralNode,
         ChildOf(bar),
     ));
     commands.spawn((
@@ -61,7 +57,6 @@ pub(crate) fn build_status_bar(
             width: Val::Px(theme::ELEMENT_PADDING_PX),
             ..default()
         },
-        StructuralNode,
         ChildOf(bar),
     ));
 
@@ -85,7 +80,6 @@ fn build_workspace_chips(
                 ..default()
             },
             BackgroundColor(palette::PANEL),
-            StructuralNode,
             ChildOf(bar),
         ))
         .id();
@@ -105,7 +99,6 @@ fn build_workspace_chips(
                 font_size: UI_FONT_SIZE,
                 ..default()
             },
-            StructuralNode,
             ChildOf(container),
         ));
     }

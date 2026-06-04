@@ -1,14 +1,14 @@
-//! Layout-change logging system. Watches `Changed<Children>` on Workspace
-//! layout-root nodes and logs a human-readable summary of the pane tree.
+//! Layout-change logging system. Logs a human-readable summary of a
+//! workspace's pane set when a pane is added to it (split / bootstrap).
 //! `OzmuxLayoutLogPlugin` registers the system in `Update`.
 
 use bevy::prelude::*;
 use ozmux_multiplexer::{OwningWorkspace, PaneMarker, WorkspaceMarker};
+use std::collections::HashSet;
 
-/// Bevy Plugin that registers `log_layout_changes` in the `Update`
-/// schedule. The system fires only on workspaces whose `Name` changed or
-/// whose pane set changed (a layout mutation reparents panes, flagging
-/// `Changed<Children>` on the affected nodes).
+/// Bevy Plugin that registers `log_layout_changes` in the `Update` schedule.
+/// The system fires when a pane is added to a workspace (`Added<PaneMarker>`),
+/// covering splits and the bootstrap pane.
 pub struct OzmuxLayoutLogPlugin;
 
 impl Plugin for OzmuxLayoutLogPlugin {
@@ -18,19 +18,29 @@ impl Plugin for OzmuxLayoutLogPlugin {
 }
 
 fn log_layout_changes(
-    workspaces: Query<(Entity, &Name), (With<WorkspaceMarker>, Changed<Name>)>,
+    added_panes: Query<&OwningWorkspace, Added<PaneMarker>>,
+    workspace_names: Query<&Name, With<WorkspaceMarker>>,
     panes: Query<(&Name, &OwningWorkspace), With<PaneMarker>>,
 ) {
-    for (entity, name) in workspaces.iter() {
+    let mut seen: HashSet<Entity> = HashSet::new();
+    for owner in added_panes.iter() {
+        let workspace = owner.0;
+        if !seen.insert(workspace) {
+            continue;
+        }
+        let workspace_name = workspace_names
+            .get(workspace)
+            .map(|n| n.as_str().to_owned())
+            .unwrap_or_default();
         let pane_names: Vec<&str> = panes
             .iter()
-            .filter(|(_, owner)| owner.0 == entity)
+            .filter(|(_, o)| o.0 == workspace)
             .map(|(n, _)| n.as_str())
             .collect();
         tracing::info!(
             target: "ozmux_gui::layout",
-            ?entity,
-            workspace = %name,
+            ?workspace,
+            workspace = %workspace_name,
             pane_count = pane_names.len(),
             panes = ?pane_names,
             "layout changed",

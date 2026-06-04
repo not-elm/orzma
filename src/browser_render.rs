@@ -1,6 +1,6 @@
 //! Browser surface rendering: a native back/forward/reload + address-bar
 //! toolbar over a `bevy_cef` page webview. The surface host (a column) gets
-//! two persistent, non-`StructuralNode` children built once — a toolbar and a
+//! two persistent children built once — a toolbar and a
 //! page-webview node — and (in a later phase) a CEF webview attached to the
 //! laid-out page child after host-side omnibox resolution.
 

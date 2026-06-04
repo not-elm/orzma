@@ -144,10 +144,10 @@ impl LayoutTree<'_, '_> {
     /// is not a split with exactly two children.
     pub fn split_children(&self, e: Entity) -> Option<(Entity, Entity)> {
         let kids = self.children.get(e).ok()?;
-        match kids.iter().collect::<Vec<_>>().as_slice() {
-            [a, b] => Some((*a, *b)),
-            _ => None,
-        }
+        let mut it = kids.iter();
+        let a = it.next()?;
+        let b = it.next()?;
+        it.next().is_none().then_some((a, b))
     }
 
     /// The single child of a node (the layout-root has exactly one), or `None`.
