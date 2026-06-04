@@ -3,13 +3,11 @@ use bevy::prelude::*;
 /// The label enum labeling the types of systems in Ozmux
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
 pub enum OzmuxSystems {
-    /// Flags workspaces needing a UI rebuild after an in-pane surface add /
-    /// active-surface switch (which do not change `LayoutCells`). Runs after
-    /// the control-bridge drain and before `WorkspaceUi` so the inserted
-    /// `WorkspaceUiDirty` marker is visible to the rebuild the same frame.
-    ChromeInvalidate,
-    /// The phase for building the workspace UI.
-    WorkspaceUi,
+    /// The phase that builds per-pane chrome (tab bar + surface slot) once on
+    /// `Added<PaneMarker>`. Runs after the control-bridge drain and input so a
+    /// freshly-spawned pane (whose `ChildOf` / `ActiveSurface` were queued via
+    /// deferred `Commands`) is fully committed before chrome attaches.
+    BuildChrome,
     /// The phase that setup surfaces.
     SetupSurface,
     /// Per-frame input handling — keyboard and mouse. Members run in

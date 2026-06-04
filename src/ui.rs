@@ -1,24 +1,27 @@
-//! Bevy UI Plugin and rebuild systems. Per-workspace UI subtrees are owned
-//! by their Workspace entity and rebuilt via `rebuild_workspace_ui` whenever
-//! the per-workspace `LayoutCells` changes. The status bar rebuilds
-//! independently via
+//! Bevy UI Plugin and incremental chrome systems. Per-pane chrome (tab bar +
+//! surface slot) is built once on `Added<PaneMarker>` by `crate::ui::chrome`
+//! and diffed on `Changed<…>`; the active surface is slotted/parked via the
+//! `Slotted` marker. Per-workspace UI subtrees are owned by their Workspace
+//! entity and attached/parked by `sync_active_workspace`. The status bar
+//! rebuilds independently via
 //! `status_bar_sync::rebuild_status_bar_on_workspace_set_change` when the
 //! workspace list or `AttachedWorkspace` marker changes. The multiplexer
-//! Surface entity *is* its render host: the rebuild stamps a `Node` + a
-//! kind-marker on it and re-parents it via `ChildOf` — the active surface
-//! (`Slotted`) under the active workspace's pane slot, inactive surfaces
-//! under the owning Workspace entity (a non-Node walker-skipped park).
+//! Surface entity *is* its render host: it carries its own `Node` + a
+//! kind-marker — the active surface (`Slotted`) under its pane's surface slot,
+//! inactive surfaces under the owning Workspace entity (a non-Node
+//! walker-skipped park).
 
+use crate::ui::chrome::OzmuxChromePlugin;
 use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use crate::ui::workspace::OzmuxWorkspaceUiPlugin;
 use bevy::prelude::*;
 use std::path::PathBuf;
 
+pub(crate) mod chrome;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
-pub mod layout;
 pub mod palette;
 pub mod root;
 pub mod status_bar;
@@ -46,9 +49,9 @@ pub struct UiRoot;
 #[derive(Component)]
 pub struct WorkspaceUiRoot;
 
-/// Marker for every transient UI Node (status bar, tab bar, pane frame,
-/// split container, placeholder surface content). Rebuilds query this
-/// and despawn every match. Surface entities must NOT carry this.
+/// Marker for transient status-bar UI Nodes. The status-bar rebuild
+/// (`status_bar_sync`) queries this and despawns every match before
+/// respawning. Surface entities and per-pane chrome must NOT carry this.
 #[derive(Component)]
 pub struct StructuralNode;
 
@@ -152,8 +155,9 @@ pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
 #[derive(Component)]
 pub struct TerminalSpawnFailed;
 
-/// Marker for the pane frame Node (the outermost Node of one
-/// `Cell::Pane` subtree). Used by tests; not load-bearing for runtime.
+/// Marker for the pane frame — the Pane entity's own Node, stamped by
+/// `build_pane_chrome` once its chrome (tab bar + surface slot) exists. Used
+/// by tests; not load-bearing for runtime.
 #[derive(Component)]
 pub struct PaneFrame;
 
@@ -167,18 +171,7 @@ pub(crate) struct PaneDimOverlay {
     pub(crate) pane: Entity,
 }
 
-/// Marks a Workspace whose UI subtree must be rebuilt for a reason other than a
-/// layout-geometry change — i.e. an in-pane surface was added or the active
-/// surface switched (neither mutates `LayoutCells`). Set by
-/// `flag_chrome_dirty_on_surface_change` and consumed (removed) by
-/// `rebuild_workspace_ui`, which gates on `Or<(Changed<LayoutCells>,
-/// With<WorkspaceUiDirty>)>`. Keeping the single full-rebuild path is deliberate:
-/// reparenting stable UI nodes across a rebuild does not survive Bevy's UI
-/// layout, so every rebuild despawns + respawns chrome as fresh nodes.
-#[derive(Component)]
-pub(crate) struct WorkspaceUiDirty;
-
-/// Resolved `$HOME` at startup (`None` if unset). Read by `rebuild_workspace_ui`
+/// Resolved `$HOME` at startup (`None` if unset). Read by `refresh_pane_tabs`
 /// to home-abbreviate terminal tab paths; the value matches the terminal
 /// spawner's `$HOME` fallback so the tab agrees with where the shell started.
 #[derive(Resource)]
@@ -193,6 +186,7 @@ impl Plugin for OzmuxUiPlugin {
             .add_plugins((
                 OzmuxUiRootPlugin,
                 OzmuxWorkspaceUiPlugin,
+                OzmuxChromePlugin,
                 OzmuxTerminalUiPlugin,
                 web_title::WebTitlePlugin,
             ))
@@ -291,19 +285,19 @@ mod tests {
     }
 
     #[test]
-    fn rebuild_after_bootstrap_spawns_structural_and_pane_frame() {
+    fn bootstrap_builds_pane_chrome_and_pane_frame() {
+        use crate::ui::chrome::PaneChrome;
         let (mut app, _guard) = make_test_app();
         // NOTE: two `app.update()` calls are required here (and in every test that
-        // needs a visible rebuild): the first tick runs Startup systems (bootstrap +
-        // setup_root_camera_and_ui_root); the second tick runs the first Update pass
-        // where `rebuild_workspace_ui` fires because the bootstrap workspace's
-        // LayoutCells was just changed.
+        // needs visible chrome): the first tick runs Startup systems (bootstrap +
+        // setup_root_camera_and_ui_root); the second tick runs the first Update
+        // pass where `build_pane_chrome` fires on the `Added<PaneMarker>`.
         app.update();
         app.update();
 
         let world = app.world_mut();
-        let structural_count = world
-            .query_filtered::<Entity, With<StructuralNode>>()
+        let chrome_count = world
+            .query_filtered::<Entity, With<PaneChrome>>()
             .iter(world)
             .count();
         let pane_frame_count = world
@@ -311,9 +305,9 @@ mod tests {
             .iter(world)
             .count();
 
-        assert!(
-            structural_count > 0,
-            "expected structural nodes after bootstrap"
+        assert_eq!(
+            chrome_count, 1,
+            "expected exactly one PaneChrome after bootstrap"
         );
         assert_eq!(
             pane_frame_count, 1,
@@ -322,8 +316,8 @@ mod tests {
     }
 
     #[test]
-    fn surface_entity_persists_across_rebuild() {
-        use ozmux_multiplexer::SurfaceMarker;
+    fn surface_entity_persists_across_surface_switch() {
+        use ozmux_multiplexer::{SurfaceKind, SurfaceMarker};
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
@@ -333,33 +327,45 @@ mod tests {
             let mut q = world.query_filtered::<Entity, (With<SurfaceMarker>, With<Node>)>();
             q.iter(world)
                 .next()
-                .expect("at least one slotted surface after first rebuild")
+                .expect("at least one slotted surface after chrome build")
         };
 
+        // A surface switch parks the previous surface but never despawns it.
         {
-            let world = app.world_mut();
-            let workspace = world
-                .query_filtered::<Entity, (
-                    With<ozmux_multiplexer::WorkspaceMarker>,
-                    With<AttachedWorkspace>,
-                )>()
-                .single(world)
-                .expect("one attached workspace");
-            world
-                .entity_mut(workspace)
-                .get_mut::<ozmux_multiplexer::LayoutCells>()
-                .expect("LayoutCells")
-                .set_changed();
+            use bevy::ecs::system::RunSystemOnce;
+            use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
+            let pane = app
+                .world_mut()
+                .run_system_once(
+                    |mux: MultiplexerCommands,
+                     workspaces: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>| {
+                        mux.workspaces_active_pane(workspaces.iter().next().unwrap())
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            let new_surface = app
+                .world_mut()
+                .run_system_once(move |mut mux: MultiplexerCommands| {
+                    mux.add_surface(pane, SurfaceKind::Terminal)
+                })
+                .unwrap();
+            app.world_mut().flush();
+            app.world_mut()
+                .run_system_once(move |mut mux: MultiplexerCommands| {
+                    mux.set_active_surface(pane, new_surface).unwrap();
+                })
+                .unwrap();
         }
         app.update();
 
         assert!(
             app.world().get_entity(surface_before).is_ok(),
-            "the Surface entity (= its own host) must survive a rebuild"
+            "the Surface entity (= its own host) must survive a surface switch"
         );
         assert!(
             app.world().get::<Node>(surface_before).is_some(),
-            "the surviving surface must keep its Node across the rebuild"
+            "the parked surface keeps its Node"
         );
     }
 
@@ -471,8 +477,8 @@ mod tests {
             q.iter(world).next().expect("at least one slotted surface")
         };
 
-        // Rename via MultiplexerCommands — triggers Changed<Name> on the Workspace
-        // which causes a rebuild in the next update.
+        // Rename via MultiplexerCommands — a workspace mutation that must not
+        // disturb the persistent surface entity.
         app.world_mut()
             .run_system_once(
                 |mut mux: MultiplexerCommands, workspaces: Query<Entity, With<WorkspaceMarker>>| {
@@ -486,7 +492,7 @@ mod tests {
 
         assert!(
             app.world().get_entity(entity_before).is_ok(),
-            "surface entity must still exist after rebuild — load-bearing for stable handles"
+            "surface entity must still exist after a workspace mutation — load-bearing for stable handles"
         );
     }
 
@@ -572,15 +578,7 @@ mod tests {
                 mux.set_active_surface(pane, second_surface).unwrap();
             })
             .unwrap();
-
-        {
-            let world = app.world_mut();
-            world
-                .entity_mut(workspace)
-                .get_mut::<ozmux_multiplexer::LayoutCells>()
-                .expect("LayoutCells")
-                .set_changed();
-        }
+        app.update();
         app.update();
 
         assert!(
@@ -757,7 +755,7 @@ mod tests {
     #[test]
     fn extension_pane_keeps_pickable_ignore_veil() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{LayoutCells, MultiplexerCommands, SurfaceKind, WorkspaceMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..3 {
@@ -788,16 +786,7 @@ mod tests {
                 mux.set_active_surface(pane, ext).unwrap();
             })
             .unwrap();
-        // A surface switch reparents hosts via a rebuild; force it in the harness.
-        app.world_mut()
-            .run_system_once(
-                |mut workspaces: Query<&mut LayoutCells, With<WorkspaceMarker>>| {
-                    for mut lc in workspaces.iter_mut() {
-                        lc.set_changed();
-                    }
-                },
-            )
-            .unwrap();
+        // The surface switch fires `sync_pane_veil` on `Changed<ActiveSurface>`.
         for _ in 0..2 {
             app.update();
         }
@@ -1075,35 +1064,6 @@ mod tests {
             .entity_mut(surface)
             .insert(Cwd("/tmp/proj".into()));
         app.update();
-        app.update();
-
-        assert_eq!(tab_texts(app.world_mut()), vec!["/tmp/proj".to_string()]);
-    }
-
-    #[test]
-    fn terminal_tab_renders_cwd_after_rebuild() {
-        use ozmux_multiplexer::{Cwd, LayoutCells, SurfaceMarker, WorkspaceMarker};
-
-        let (mut app, _guard) = make_test_app();
-        app.insert_resource(HomeDir(None));
-        app.update();
-        app.update();
-
-        let surface = app
-            .world_mut()
-            .query_filtered::<Entity, With<SurfaceMarker>>()
-            .single(app.world())
-            .expect("one bootstrap surface");
-        app.world_mut()
-            .entity_mut(surface)
-            .insert(Cwd("/tmp/proj".into()));
-        {
-            let world = app.world_mut();
-            let mut q = world.query_filtered::<&mut LayoutCells, With<WorkspaceMarker>>();
-            for mut lc in q.iter_mut(world) {
-                lc.set_changed();
-            }
-        }
         app.update();
 
         assert_eq!(tab_texts(app.world_mut()), vec!["/tmp/proj".to_string()]);

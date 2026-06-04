@@ -860,15 +860,29 @@ mod tests {
 
     #[test]
     fn no_active_terminal_entity_means_no_panic_just_silent_drop() {
+        use ozmux_multiplexer::{ActiveSurface, PaneMarker};
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
+
+        // Strip every pane's ActiveSurface so the dispatcher resolves no focused
+        // surface entity — keys must silently drop rather than panic.
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands, panes: Query<Entity, With<PaneMarker>>| {
+                    for pane in panes.iter() {
+                        commands.entity(pane).remove::<ActiveSurface>();
+                    }
+                },
+            )
+            .unwrap();
+        app.world_mut().flush();
 
         press(&mut app, window_entity, Bk::Character("h".into()));
         app.update();
 
         let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
-        assert!(captured.is_empty(), "no registry entry → no trigger");
+        assert!(captured.is_empty(), "no active surface → no trigger");
     }
 
     #[test]

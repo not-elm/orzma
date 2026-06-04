@@ -428,12 +428,11 @@ mod tests {
     }
 
     /// Spawns a workspace/pane/extension-surface chain and decorates the
-    /// Surface entity (which *is* its own host) with `ExtensionSurfaceMarker`
-    /// + `extra`, returning the `(surface, workspace, pane)` handles.
-    /// `finish_extension_setup` needs the chain to resolve the per-webview
-    /// context. The surface is stamped with
-    /// `SurfaceKind::Extension { entry: "ui/app.html" }` and
-    /// `OwningExtension("memo")`.
+    /// Surface entity (which is its own host) with the extension marker plus
+    /// the caller's `extra` bundle, returning the surface/workspace/pane
+    /// handles so `finish_extension_setup` can resolve the per-webview
+    /// context. The surface is stamped with an extension kind (entry
+    /// "ui/app.html") and an owning extension of "memo".
     fn spawn_extension_host(app: &mut App, extra: impl Bundle) -> (Entity, Entity, Entity) {
         use std::path::PathBuf;
         let (workspace, pane, surface) = app
