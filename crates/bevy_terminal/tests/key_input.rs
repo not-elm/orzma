@@ -2,7 +2,7 @@
 //! entity and verify the PTY child receives the bytes. Uses `/bin/cat`
 //! as a minimal echo program — typing characters and pressing Enter
 //! makes `cat` flush the line back through the PTY, which we observe
-//! via the renderer-side `FrameSnapshot` / `FrameDelta` stream.
+//! via the renderer-side `TerminalSnapshot` / `TerminalDelta` stream.
 
 use bevy::ecs::observer::On;
 use bevy::prelude::*;
@@ -10,16 +10,16 @@ use bevy_terminal::{
     SpawnOptions, TerminalBundle, TerminalHandlePlugin, TerminalKey, TerminalKeyInput,
     TerminalModifiers,
 };
-use bevy_terminal_renderer::prelude::{FrameDelta, FrameSnapshot};
+use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalSnapshot};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Resource, Clone, Default)]
 struct CollectedText(Arc<Mutex<String>>);
 
-fn collect_snapshot(snap: On<FrameSnapshot>, collected: Res<CollectedText>) {
+fn collect_snapshot(snap: On<TerminalSnapshot>, collected: Res<CollectedText>) {
     let mut out = collected.0.lock().unwrap();
-    for row in snap.rows_data.iter() {
+    for row in snap.snapshot.rows_data.iter() {
         for run in row.runs.iter() {
             out.push_str(&run.text);
         }
@@ -27,9 +27,9 @@ fn collect_snapshot(snap: On<FrameSnapshot>, collected: Res<CollectedText>) {
     }
 }
 
-fn collect_delta(delta: On<FrameDelta>, collected: Res<CollectedText>) {
+fn collect_delta(delta: On<TerminalDelta>, collected: Res<CollectedText>) {
     let mut out = collected.0.lock().unwrap();
-    for dirty in delta.dirty_rows.iter() {
+    for dirty in delta.delta.dirty_rows.iter() {
         for run in dirty.runs.iter() {
             out.push_str(&run.text);
         }

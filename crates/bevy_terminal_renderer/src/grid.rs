@@ -1,7 +1,7 @@
 //! `TerminalGridPlugin` — applies snapshots and deltas to the per-entity
 //! `TerminalGrid` Component via two `EntityEvent` observers.
 
-use crate::schema::{Cell, FrameDelta, FrameSnapshot, RgbaColor, Run, TerminalGrid};
+use crate::schema::{Cell, RgbaColor, Run, TerminalDelta, TerminalGrid, TerminalSnapshot};
 use bevy::prelude::{App, Color, On, Plugin, Query};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -16,44 +16,45 @@ impl Plugin for TerminalGridPlugin {
     }
 }
 
-fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGrid>) {
-    let Ok(mut grid) = terminals.get_mut(snap.entity) else {
+fn apply_snapshot(ev: On<TerminalSnapshot>, mut terminals: Query<&mut TerminalGrid>) {
+    let Ok(mut grid) = terminals.get_mut(ev.entity) else {
         return;
     };
-    grid.cols = snap.cols;
-    grid.rows = snap.rows;
-    grid.cursor = Some(snap.cursor.clone());
-    grid.display_offset = snap.display_offset;
-    grid.history_size = snap.history_size;
-    grid.last_seq = snap.seq;
-    grid.modes = snap.modes.clone();
+    grid.cols = ev.snapshot.cols;
+    grid.rows = ev.snapshot.rows;
+    grid.cursor = Some(ev.snapshot.cursor.clone());
+    grid.display_offset = ev.snapshot.display_offset;
+    grid.history_size = ev.snapshot.history_size;
+    grid.last_seq = ev.snapshot.seq;
+    grid.modes = ev.snapshot.modes.clone();
     grid.hyperlinks.clear();
     grid.hyperlinks
-        .extend(snap.hyperlinks.iter().map(|h| (h.id, h.uri.clone())));
-    grid.vi_cursor = snap.vi_cursor;
-    grid.selection = snap.selection;
-    grid.cells = snap
+        .extend(ev.snapshot.hyperlinks.iter().map(|h| (h.id, h.uri.clone())));
+    grid.vi_cursor = ev.snapshot.vi_cursor;
+    grid.selection = ev.snapshot.selection;
+    grid.cells = ev
+        .snapshot
         .rows_data
         .iter()
         .map(|row| runs_to_cells(&row.runs))
         .collect();
 }
 
-fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
-    let Ok(mut grid) = terminals.get_mut(delta.entity) else {
+fn apply_delta(ev: On<TerminalDelta>, mut terminals: Query<&mut TerminalGrid>) {
+    let Ok(mut grid) = terminals.get_mut(ev.entity) else {
         return;
     };
-    grid.cursor = Some(delta.cursor.clone());
-    grid.display_offset = delta.display_offset;
-    grid.last_seq = delta.seq;
-    grid.vi_cursor = delta.vi_cursor;
-    grid.selection = delta.selection;
-    for h in &delta.hyperlinks {
+    grid.cursor = Some(ev.delta.cursor.clone());
+    grid.display_offset = ev.delta.display_offset;
+    grid.last_seq = ev.delta.seq;
+    grid.vi_cursor = ev.delta.vi_cursor;
+    grid.selection = ev.delta.selection;
+    for h in &ev.delta.hyperlinks {
         if !grid.hyperlinks.iter().any(|(id, _)| *id == h.id) {
             grid.hyperlinks.push((h.id, h.uri.clone()));
         }
     }
-    for dirty in &delta.dirty_rows {
+    for dirty in &ev.delta.dirty_rows {
         let row_idx = dirty.row as usize;
         if row_idx < grid.cells.len() {
             grid.cells[row_idx] = runs_to_cells(&dirty.runs);
@@ -96,6 +97,7 @@ fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
 mod tests {
     use super::*;
     use crate::schema::{Hyperlink, HyperlinkId, HyperlinkUri, Row};
+    use ozmux_vt::frame::{FrameDelta, FrameSnapshot};
 
     fn grid_with(seed: Vec<(HyperlinkId, HyperlinkUri)>) -> TerminalGrid {
         TerminalGrid {
@@ -115,23 +117,25 @@ mod tests {
             .world_mut()
             .spawn(grid_with(vec![(HyperlinkId(99), HyperlinkUri::new("old"))]))
             .id();
-        app.world_mut().trigger(FrameSnapshot {
+        app.world_mut().trigger(TerminalSnapshot {
             entity,
-            seq: 1,
-            cols: 1,
-            rows: 1,
-            cursor: Default::default(),
-            rows_data: vec![Row { runs: vec![] }],
-            reason: Default::default(),
-            modes: vec![],
-            hyperlinks: vec![Hyperlink {
-                id: HyperlinkId(1),
-                uri: HyperlinkUri::new("https://new"),
-            }],
-            display_offset: 0,
-            history_size: 0,
-            vi_cursor: None,
-            selection: None,
+            snapshot: FrameSnapshot {
+                seq: 1,
+                cols: 1,
+                rows: 1,
+                cursor: Default::default(),
+                rows_data: vec![Row { runs: vec![] }],
+                reason: Default::default(),
+                modes: vec![],
+                hyperlinks: vec![Hyperlink {
+                    id: HyperlinkId(1),
+                    uri: HyperlinkUri::new("https://new"),
+                }],
+                display_offset: 0,
+                history_size: 0,
+                vi_cursor: None,
+                selection: None,
+            },
         });
         app.update();
         let grid = app.world().get::<TerminalGrid>(entity).unwrap();
@@ -151,24 +155,26 @@ mod tests {
                 HyperlinkUri::new("https://old"),
             )]))
             .id();
-        app.world_mut().trigger(FrameDelta {
+        app.world_mut().trigger(TerminalDelta {
             entity,
-            seq: 2,
-            cursor: Default::default(),
-            dirty_rows: vec![],
-            hyperlinks: vec![
-                Hyperlink {
-                    id: HyperlinkId(1),
-                    uri: HyperlinkUri::new("https://CHANGED"),
-                },
-                Hyperlink {
-                    id: HyperlinkId(2),
-                    uri: HyperlinkUri::new("https://new"),
-                },
-            ],
-            display_offset: 0,
-            vi_cursor: None,
-            selection: None,
+            delta: FrameDelta {
+                seq: 2,
+                cursor: Default::default(),
+                dirty_rows: vec![],
+                hyperlinks: vec![
+                    Hyperlink {
+                        id: HyperlinkId(1),
+                        uri: HyperlinkUri::new("https://CHANGED"),
+                    },
+                    Hyperlink {
+                        id: HyperlinkId(2),
+                        uri: HyperlinkUri::new("https://new"),
+                    },
+                ],
+                display_offset: 0,
+                vi_cursor: None,
+                selection: None,
+            },
         });
         app.update();
         let grid = app.world().get::<TerminalGrid>(entity).unwrap();

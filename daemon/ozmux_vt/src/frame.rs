@@ -156,6 +156,70 @@ pub struct SelectionRange {
     pub kind: SelectionKind,
 }
 
+/// Full snapshot of the visible viewport (pure wire type — no `Entity`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrameSnapshot {
+    /// Monotonic emission sequence number.
+    pub seq: u32,
+    /// Visible column count.
+    pub cols: u16,
+    /// Visible row count.
+    pub rows: u16,
+    /// Cursor state at emit time.
+    pub cursor: Cursor,
+    /// Row contents (length == rows).
+    pub rows_data: Vec<Row>,
+    /// Why this snapshot was emitted.
+    pub reason: SnapshotReason,
+    /// Currently active wire modes (e.g. "alt-screen", "mouse-vt200").
+    pub modes: Vec<String>,
+    /// Hyperlinks referenced by row Runs.
+    pub hyperlinks: Vec<Hyperlink>,
+    /// Lines scrolled back from the live tail. `0` = at live tail.
+    #[serde(default)]
+    pub display_offset: u32,
+    /// Total scrollback history line count (upper bound for display_offset).
+    #[serde(default)]
+    pub history_size: u32,
+    /// Vi-mode cursor (active only in copy mode). Absent in normal mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vi_cursor: Option<ViCursor>,
+    /// Active selection range. Independent of vi cursor — survives motion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<SelectionRange>,
+}
+
+/// Differential update relative to the prior frame (pure wire type — no `Entity`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrameDelta {
+    /// Monotonic frame sequence number.
+    pub seq: u32,
+    /// Cursor state at delta emit time.
+    pub cursor: Cursor,
+    /// Entire rows that changed.
+    pub dirty_rows: Vec<DirtyRow>,
+    /// Hyperlinks referenced by this delta's dirty rows.
+    pub hyperlinks: Vec<Hyperlink>,
+    /// Lines scrolled back from the live tail. `0` = at live tail.
+    #[serde(default)]
+    pub display_offset: u32,
+    /// Vi-mode cursor (active only in copy mode). Absent in normal mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vi_cursor: Option<ViCursor>,
+    /// Active selection range. Independent of vi cursor — survives motion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<SelectionRange>,
+}
+
+/// The return type of a frame emit — either a full snapshot or an incremental delta.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Frame {
+    /// Full viewport snapshot.
+    Snapshot(FrameSnapshot),
+    /// Incremental row-level delta.
+    Delta(FrameDelta),
+}
+
 /// A point in viewport coordinates.
 ///
 /// Endpoints resolving to scrollback are clamped to `row = -1` (above) or
@@ -181,6 +245,27 @@ pub enum SelectionKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_snapshot_msgpack_round_trip() {
+        let s = FrameSnapshot {
+            seq: 1,
+            cols: 2,
+            rows: 1,
+            cursor: Cursor::default(),
+            rows_data: vec![],
+            reason: SnapshotReason::Initial,
+            modes: vec![],
+            hyperlinks: vec![],
+            display_offset: 0,
+            history_size: 0,
+            vi_cursor: None,
+            selection: None,
+        };
+        let b = rmp_serde::to_vec(&s).unwrap();
+        let back: FrameSnapshot = rmp_serde::from_slice(&b).unwrap();
+        assert_eq!(s, back);
+    }
 
     #[test]
     fn run_msgpack_round_trip_preserves_rgba() {

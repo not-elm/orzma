@@ -1,6 +1,6 @@
 //! Integration: a minimal Bevy `App` with `TerminalHandlePlugin`
 //! spawns a `TerminalBundle` running `/bin/sh` (interactive) and
-//! verifies a `FrameSnapshot` trigger arrives within N ticks. The
+//! verifies a `TerminalSnapshot` trigger arrives within N ticks. The
 //! test exercises the bootstrap-snapshot rescue path in
 //! `check_deadline_flush` — alacritty's first `damage()` returns
 //! `Full`, so the initial snapshot is emitted regardless of whether
@@ -10,14 +10,14 @@
 use bevy::ecs::observer::On;
 use bevy::prelude::*;
 use bevy_terminal::{SpawnOptions, TerminalBundle, TerminalHandlePlugin};
-use bevy_terminal_renderer::prelude::FrameSnapshot;
+use bevy_terminal_renderer::prelude::TerminalSnapshot;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Resource, Clone)]
 struct SnapshotsSeen(Arc<Mutex<u32>>);
 
-fn observe_snapshot(snap: On<FrameSnapshot>, counter: Res<SnapshotsSeen>) {
+fn observe_snapshot(snap: On<TerminalSnapshot>, counter: Res<SnapshotsSeen>) {
     let _ = snap.entity;
     *counter.0.lock().unwrap() += 1;
 }
@@ -50,7 +50,7 @@ fn bundle_emits_initial_snapshot_within_a_few_ticks() {
     }
 
     panic!(
-        "no FrameSnapshot triggered within 120 ticks (count={})",
+        "no TerminalSnapshot triggered within 120 ticks (count={})",
         *counter.lock().unwrap()
     );
 }

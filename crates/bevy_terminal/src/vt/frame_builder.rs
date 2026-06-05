@@ -12,12 +12,14 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
-use bevy::ecs::entity::Entity;
 use bevy_terminal_renderer::prelude::{
-    Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri,
-    Row, Run, SelectionKind, SelectionRange, SnapshotReason, ViCursor, ViewportPoint,
+    Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor, ViewportPoint,
 };
 use ozmux_vt::color::{RgbaColor, acolor_to_rgba};
+use ozmux_vt::frame::{
+    DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri, Row, Run,
+    SelectionKind,
+};
 use unicode_width::UnicodeWidthChar;
 
 /// Style bitmask constants (kept compatible with the schema's
@@ -38,7 +40,6 @@ pub(crate) mod style {
 /// skipped so the wide character itself accounts for its full column width.
 pub(crate) fn build_snapshot<T>(
     term: &Term<T>,
-    entity: Entity,
     seq: u32,
     reason: SnapshotReason,
     interner: &mut HyperlinkInterner,
@@ -52,7 +53,6 @@ pub(crate) fn build_snapshot<T>(
         })
         .collect();
     FrameSnapshot {
-        entity,
         seq,
         cols,
         rows,
@@ -78,7 +78,6 @@ pub(crate) fn build_snapshot<T>(
 /// the supplied slice.
 pub(crate) fn build_delta<T>(
     term: &Term<T>,
-    entity: Entity,
     seq: u32,
     rows: &[u16],
     interner: &mut HyperlinkInterner,
@@ -92,7 +91,6 @@ pub(crate) fn build_delta<T>(
         })
         .collect();
     FrameDelta {
-        entity,
         seq,
         cursor: extract_cursor(term),
         dirty_rows,
@@ -451,13 +449,7 @@ mod tests {
     fn snapshot_empty_grid_yields_empty_or_space_rows() {
         let term = make_term(10, 3);
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            5,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, 5, SnapshotReason::Initial, &mut interner);
         assert_eq!(snap.seq, 5);
         assert_eq!(snap.cols, 10);
         assert_eq!(snap.rows, 3);
@@ -479,13 +471,7 @@ mod tests {
         let mut term = make_term(10, 1);
         install_text(&mut term, "abc");
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         let row = &snap.rows_data[0];
         let merged: String = row.runs.iter().map(|r| r.text.as_str()).collect();
         assert!(merged.starts_with("abc"), "got: {merged:?}");
@@ -497,13 +483,7 @@ mod tests {
         // NOTE: "あ" is U+3042, East Asian Wide.
         install_text(&mut term, "あ");
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         let row = &snap.rows_data[0];
         let merged: String = row.runs.iter().map(|r| r.text.as_str()).collect();
         assert!(merged.starts_with("あ"), "got: {merged:?}");
@@ -516,13 +496,7 @@ mod tests {
         let mut term = make_term(10, 1);
         install_text(&mut term, "\x1b[?1049h");
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         assert!(
             snap.modes.iter().any(|s| s == "alt-screen"),
             "expected alt-screen in modes; got {:?}",
@@ -534,13 +508,7 @@ mod tests {
     fn snapshot_cursor_position_zero_zero_initially() {
         let term = make_term(10, 3);
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         assert_eq!(snap.cursor.x, 0);
         assert_eq!(snap.cursor.y, 0);
         assert!(snap.cursor.visible);
@@ -551,7 +519,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "xyz");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 9, &[0u16], &mut interner);
+        let delta = build_delta(&term, 9, &[0u16], &mut interner);
         assert_eq!(delta.seq, 9);
         assert_eq!(delta.dirty_rows.len(), 1);
         assert_eq!(delta.dirty_rows[0].row, 0);
@@ -568,7 +536,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "aaa\r\nbbb\r\nccc");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, &[0, 2], &mut interner);
+        let delta = build_delta(&term, 0, &[0, 2], &mut interner);
         assert_eq!(delta.dirty_rows.len(), 2);
         assert_eq!(delta.dirty_rows[0].row, 0);
         assert_eq!(delta.dirty_rows[1].row, 2);
@@ -578,7 +546,7 @@ mod tests {
     fn delta_empty_rows_slice_yields_empty_dirty_rows() {
         let term = make_term(10, 3);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 100, &[], &mut interner);
+        let delta = build_delta(&term, 100, &[], &mut interner);
         assert_eq!(delta.seq, 100);
         assert!(delta.dirty_rows.is_empty());
     }
@@ -588,7 +556,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "abc");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 1, &[0], &mut interner);
+        let delta = build_delta(&term, 1, &[0], &mut interner);
         assert_eq!(delta.cursor.x, 3);
         assert_eq!(delta.cursor.y, 0);
         assert!(delta.cursor.visible);
@@ -649,13 +617,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Delta(2));
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         assert_eq!(snap.display_offset, 2);
         assert!(snap.history_size >= 2, "history_size={}", snap.history_size);
     }
@@ -749,13 +711,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Top);
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         let row0: String = snap.rows_data[0]
             .runs
             .iter()
@@ -780,7 +736,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Top);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, &[0u16], &mut interner);
+        let delta = build_delta(&term, 0, &[0u16], &mut interner);
         let row0: String = delta.dirty_rows[0]
             .runs
             .iter()
@@ -939,13 +895,7 @@ mod tests {
         install_text(&mut term, "abc");
         term.toggle_vi_mode();
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, 0, SnapshotReason::Initial, &mut interner);
         assert!(
             snap.vi_cursor.is_some(),
             "vi mode on → snapshot must carry vi_cursor"
@@ -966,7 +916,7 @@ mod tests {
         sel.update(p, Side::Right);
         term.selection = Some(sel);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, &[0u16], &mut interner);
+        let delta = build_delta(&term, 0, &[0u16], &mut interner);
         assert!(
             delta.selection.is_some(),
             "selection present → delta must carry it"

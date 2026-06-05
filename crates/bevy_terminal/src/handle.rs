@@ -26,7 +26,7 @@ use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Commands;
 use bevy_terminal_renderer::prelude::{
-    Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor,
+    Cursor, CursorShape, SelectionRange, SnapshotReason, TerminalDelta, TerminalSnapshot, ViCursor,
 };
 use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashMap;
@@ -763,7 +763,7 @@ impl TerminalHandle {
         });
     }
 
-    /// Builds + triggers a `FrameSnapshot`, then rebuilds
+    /// Builds + triggers a `TerminalSnapshot`, then rebuilds
     /// `row_hashes` from scratch so subsequent Delta emits can
     /// hash-filter against the snapshot baseline.
     fn emit_snapshot(
@@ -773,8 +773,8 @@ impl TerminalHandle {
         seq: u32,
         reason: SnapshotReason,
     ) {
-        let snap = build_snapshot(&self.term, entity, seq, reason, &mut self.hyperlinks);
-        commands.trigger(snap);
+        let snapshot = build_snapshot(&self.term, seq, reason, &mut self.hyperlinks);
+        commands.trigger(TerminalSnapshot { entity, snapshot });
         self.rebuild_full_row_hashes();
     }
 
@@ -792,7 +792,7 @@ impl TerminalHandle {
         }
     }
 
-    /// Builds + triggers a `FrameDelta`, restores the consumed
+    /// Builds + triggers a `TerminalDelta`, restores the consumed
     /// `scratch_dirty` Vec for next-cycle reuse, and folds
     /// `kept_hashes` into `row_hashes` so subsequent Delta emits can
     /// hash-filter correctly.
@@ -804,9 +804,9 @@ impl TerminalHandle {
         rows: Vec<u16>,
         kept_hashes: Vec<(i32, u64)>,
     ) {
-        let delta = build_delta(&self.term, entity, seq, &rows, &mut self.hyperlinks);
+        let delta = build_delta(&self.term, seq, &rows, &mut self.hyperlinks);
         self.scratch_dirty = rows;
-        commands.trigger(delta);
+        commands.trigger(TerminalDelta { entity, delta });
         for (line_i32, h) in kept_hashes {
             self.row_hashes.insert(line_i32, h);
         }
