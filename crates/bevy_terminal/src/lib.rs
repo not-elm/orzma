@@ -1,5 +1,6 @@
 //! Bevy-native terminal: PTY ownership, alacritty VT emulation, and
-//! coalesced `FrameSnapshot` / `FrameDelta` emission against the
+//! coalesced `TerminalSnapshot` / `TerminalDelta` emission (wrapping the
+//! pure `ozmux_vt::frame` payloads) against the
 //! `bevy_terminal_renderer` schema.
 
 mod bundle;

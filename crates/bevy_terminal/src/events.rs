@@ -4,10 +4,11 @@
 //! `TerminalCurrentDir`) and inbound commands triggered by the host UI
 //! and observed by `TerminalHandlePlugin` (`TerminalKeyInput`).
 //!
-//! Frame events (`FrameSnapshot`, `FrameDelta`) come from
-//! `bevy_terminal_renderer::schema` and are emitted via
-//! `commands.trigger(FrameSnapshot { entity, .. })` — the
-//! `#[event_target] entity` field routes the trigger to the
+//! Frame events (`TerminalSnapshot`, `TerminalDelta`) come from
+//! `bevy_terminal_renderer::schema` and wrap the pure
+//! `ozmux_vt::frame::{FrameSnapshot, FrameDelta}` payloads; they are
+//! emitted via `commands.trigger(TerminalSnapshot { entity, snapshot })`
+//! — the `#[event_target] entity` field routes the trigger to the
 //! correct observer.
 
 use bevy::ecs::entity::Entity;
