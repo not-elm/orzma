@@ -105,16 +105,29 @@ fn drain_pty_chunks(
 /// output. `Vt::tick` folds both behaviours.
 fn check_deadline_flush(
     par_commands: ParallelCommands,
-    mut q: Query<(Entity, &mut TerminalHandle)>,
+    mut q: Query<(Entity, &mut TerminalHandle, &mut TerminalTitle)>,
 ) {
     let now = Instant::now();
-    q.par_iter_mut().for_each(|(entity, mut handle)| {
-        if let Some(frame) = handle.vt.tick(now) {
-            par_commands.command_scope(|mut commands| {
-                trigger_frame(&mut commands, entity, frame);
-            });
-        }
-    });
+    q.par_iter_mut()
+        .for_each(|(entity, mut handle, mut title)| {
+            if let Some(frame) = handle.vt.tick(now) {
+                par_commands.command_scope(|mut commands| {
+                    trigger_frame(&mut commands, entity, frame);
+                });
+            }
+            // NOTE: a deadline-path emit can produce VtEvents (e.g. ModeChanged
+            // via announce_mode_change); drain them here so they fire in the same
+            // frame as their snapshot — the pre-extraction `emit` triggered them
+            // inline, so omitting this drain deferred them a frame.
+            let events = handle.vt.drain_events();
+            if !events.is_empty() {
+                par_commands.command_scope(|mut commands| {
+                    for ev in events {
+                        trigger_vt_event(&mut commands, &mut title, entity, ev);
+                    }
+                });
+            }
+        });
 }
 
 /// Polls `exit_rx` and fires `TerminalChildExit` once per terminal.
@@ -137,8 +150,12 @@ fn process_pty_chunks(
     pty: &mut PtyHandle,
     title: &mut TerminalTitle,
 ) {
-    let now = Instant::now();
     while let Ok(chunk) = pty.try_recv_chunk() {
+        // NOTE: capture `now` per chunk (not once before the loop) so the
+        // coalescer's IDLE deadline is measured from each chunk's actual
+        // arrival; a single pre-loop timestamp anchors the deadline in the
+        // past during multi-chunk bursts and flushes prematurely.
+        let now = Instant::now();
         if matches!(handle.vt.on_output(&chunk, now), OutputAction::EmitNow)
             && let Some(frame) = handle.vt.emit()
         {
