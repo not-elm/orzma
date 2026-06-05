@@ -251,7 +251,6 @@ fn realize_layout_node(
         } => {
             let pane_ent = spawn_pane(commands, state, *id, ws_ent, grow);
 
-            // Snapshot surfaces from the Mux before mutating state.
             let surface_ids = state
                 .mux
                 .surfaces(*id)
@@ -261,9 +260,9 @@ fn realize_layout_node(
                 .active_surface(*id)
                 .expect("active surface must exist");
 
-            // NOTE: surface_kind in LayoutNode only reflects the ACTIVE surface's kind;
-            // we use it as a fallback for non-active surfaces when the per-surface kind
-            // is needed. However, mux.surface_kind gives us the correct per-surface kind.
+            // NOTE: LayoutNode.surface_kind carries only the ACTIVE surface's
+            // kind; using it for non-active surfaces yields the wrong kind. Use
+            // mux.surface_kind() per surface id instead.
             let _ = surface_kind;
 
             let mut active_surface_ent = None;
@@ -459,6 +458,21 @@ mod tests {
             assert!(
                 surface_kind_discriminant_eq(o_kind, m_kind),
                 "ws[{ws_idx}] path {path:?}: active surface kind mismatch: oracle={o_kind:?} mux={m_kind:?}",
+            );
+
+            let o_node = o_world
+                .get::<Node>(o_ent)
+                .unwrap_or_else(|| panic!("ws[{ws_idx}] path {path:?}: oracle pane missing Node"));
+            let m_node = m_world
+                .get::<Node>(m_ent)
+                .unwrap_or_else(|| panic!("ws[{ws_idx}] path {path:?}: mux pane missing Node"));
+            assert_eq!(
+                o_node.flex_direction, m_node.flex_direction,
+                "ws[{ws_idx}] path {path:?}: pane flex_direction mismatch",
+            );
+            assert_eq!(
+                o_node.padding, m_node.padding,
+                "ws[{ws_idx}] path {path:?}: pane padding mismatch",
             );
 
             let o_surf_count = o_world
