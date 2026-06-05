@@ -655,7 +655,7 @@ dependencies = [
 [[package]]
 name = "bevy_cef"
 version = "0.11.0-dev"
-source = "git+https://github.com/not-elm/bevy_cef?rev=d357288#d357288a01fb5145005dce1ac2166c0d8b57b7d9"
+source = "git+https://github.com/not-elm/bevy_cef?branch=poc%2Fmacos-accelerated-paint-iosurface#7f99a9d600ea40f2206732ed37ad94e2e65d64d6"
 dependencies = [
  "async-channel",
  "bevy",
@@ -671,17 +671,22 @@ dependencies = [
 [[package]]
 name = "bevy_cef_core"
 version = "0.11.0-dev"
-source = "git+https://github.com/not-elm/bevy_cef?rev=d357288#d357288a01fb5145005dce1ac2166c0d8b57b7d9"
+source = "git+https://github.com/not-elm/bevy_cef?branch=poc%2Fmacos-accelerated-paint-iosurface#7f99a9d600ea40f2206732ed37ad94e2e65d64d6"
 dependencies = [
  "async-channel",
  "bevy",
  "bevy_remote",
  "cef",
  "cef-dll-sys",
+ "metal",
+ "objc",
+ "objc2-core-foundation",
+ "objc2-io-surface",
  "raw-window-handle",
  "serde",
  "serde_json",
  "uuid",
+ "wgpu",
 ]
 
 [[package]]
@@ -4321,7 +4326,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.11.1",
+ "block2 0.6.2",
  "dispatch2",
+ "libc",
  "objc2 0.6.4",
 ]
 
@@ -4410,8 +4417,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "180788110936d59bab6bd83b6060ffdfffb3b922ba1396b312ae795e1de9d81d"
 dependencies = [
  "bitflags 2.11.1",
+ "libc",
  "objc2 0.6.4",
  "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
