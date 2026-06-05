@@ -7,7 +7,7 @@ use alacritty_terminal::term::TermMode;
 
 /// Mode flag transition between two Term states.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ModeChange {
+pub struct ModeChange {
     /// Mode names that transitioned from unset to set.
     pub added: Vec<&'static str>,
     /// Mode names that transitioned from set to unset.
@@ -25,7 +25,7 @@ impl ModeChange {
 // (term/mod.rs bitflags definition). Only wire spec § 4.7 modes are
 // tracked here; alacritty-internal flags like LINE_WRAP are
 // intentionally excluded.
-pub(crate) const TRACKED_MODES: &[(TermMode, &str)] = &[
+pub const TRACKED_MODES: &[(TermMode, &str)] = &[
     (TermMode::ALT_SCREEN, "alt-screen"),
     (TermMode::BRACKETED_PASTE, "bracketed-paste"),
     (TermMode::APP_CURSOR, "app-cursor-keys"),
@@ -37,7 +37,7 @@ pub(crate) const TRACKED_MODES: &[(TermMode, &str)] = &[
 ];
 
 /// Computes the transition between two `TermMode` snapshots.
-pub(crate) fn diff_mode(before: TermMode, after: TermMode) -> ModeChange {
+pub fn diff_mode(before: TermMode, after: TermMode) -> ModeChange {
     let mut added = Vec::new();
     let mut removed = Vec::new();
     for &(flag, name) in TRACKED_MODES {

@@ -1,21 +1,11 @@
 //! `TerminalHandle` — Component holding alacritty `Term` + bridge state.
 
-use crate::coalescer::Coalescer;
 use crate::events::{
     TerminalBell, TerminalClipboardStore, TerminalCurrentDir, TerminalModeChanged,
     TerminalTitleChanged,
 };
-use crate::osc7::Osc7Capture;
 use crate::pty::PtyHandle;
 use crate::title::{TerminalTitle, sanitize_title};
-use crate::vt::damage::{DamageVerdict, DirtyRows};
-use crate::vt::frame_builder::{
-    build_delta, build_snapshot, extract_cursor, extract_selection_range, extract_vi_cursor,
-    viewport_row_to_line,
-};
-use crate::vt::hyperlink::HyperlinkInterner;
-use crate::vt::listener::{ControlFrame, TermListener};
-use crate::vt::mode_diff::diff_mode;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::Line;
@@ -29,6 +19,16 @@ use bevy_terminal_renderer::prelude::{
     Cursor, CursorShape, SelectionRange, SnapshotReason, TerminalDelta, TerminalSnapshot, ViCursor,
 };
 use crossbeam_channel::{Receiver, Sender};
+use ozmux_vt::coalescer::Coalescer;
+use ozmux_vt::osc7::Osc7Capture;
+use ozmux_vt::vt::damage::{DamageVerdict, DirtyRows};
+use ozmux_vt::vt::frame_builder::{
+    build_delta, build_snapshot, extract_cursor, extract_selection_range, extract_vi_cursor,
+    viewport_row_to_line,
+};
+use ozmux_vt::vt::hyperlink::HyperlinkInterner;
+use ozmux_vt::vt::listener::{ControlFrame, TermListener};
+use ozmux_vt::vt::mode_diff::diff_mode;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -930,8 +930,8 @@ mod tests {
         use alacritty_terminal::selection::{Selection, SelectionType};
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -946,7 +946,7 @@ mod tests {
         let mut sel = Selection::new(SelectionType::Simple, p, Side::Left);
         sel.update(p, Side::Right);
         h.term.selection = Some(sel);
-        let dirty = crate::vt::damage::DirtyRows::Rows(Vec::new());
+        let dirty = ozmux_vt::vt::damage::DirtyRows::Rows(Vec::new());
         let curr_cursor = extract_cursor(&h.term);
         let mode = *h.term.mode();
         let curr_sel = extract_selection_range(&h.term);
@@ -961,8 +961,8 @@ mod tests {
     fn is_noop_emit_returns_false_when_only_vi_cursor_changed() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -971,7 +971,7 @@ mod tests {
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_vi_cursor = None;
         h.term.toggle_vi_mode();
-        let dirty = crate::vt::damage::DirtyRows::Rows(Vec::new());
+        let dirty = ozmux_vt::vt::damage::DirtyRows::Rows(Vec::new());
         let curr_cursor = extract_cursor(&h.term);
         let mode = *h.term.mode();
         let curr_sel = extract_selection_range(&h.term);
@@ -987,8 +987,8 @@ mod tests {
     fn enter_vi_mode_sets_term_mode_vi_bit() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1002,8 +1002,8 @@ mod tests {
     fn enter_vi_mode_is_idempotent_when_already_in_vi() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1022,8 +1022,8 @@ mod tests {
         use alacritty_terminal::vi_mode::ViMotion;
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1039,8 +1039,8 @@ mod tests {
     fn scroll_page_up_grows_display_offset() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1064,8 +1064,8 @@ mod tests {
         use alacritty_terminal::grid::Scroll;
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1092,8 +1092,8 @@ mod tests {
     fn selection_start_simple_at_vi_cursor_includes_that_cell() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1119,8 +1119,8 @@ mod tests {
     fn selection_clear_drops_term_selection() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1136,8 +1136,8 @@ mod tests {
     fn selection_to_string_returns_none_when_no_selection() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1149,8 +1149,8 @@ mod tests {
     fn selection_type_returns_ty_of_active_selection() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1169,8 +1169,8 @@ mod tests {
         use alacritty_terminal::vi_mode::ViMotion;
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1364,8 +1364,8 @@ mod tests {
     fn selection_change_type_returns_false_when_no_selection_active() {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
@@ -1491,10 +1491,10 @@ mod tests {
     fn advance_osc7_then_drain_triggers_current_dir_event() {
         use crate::events::TerminalCurrentDir;
         use crate::title::TerminalTitle;
-        use crate::vt::listener::{ControlFrame, TermListener};
         use bevy::ecs::system::RunSystemOnce;
         use bevy::prelude::*;
         use crossbeam_channel::unbounded;
+        use ozmux_vt::vt::listener::{ControlFrame, TermListener};
         use std::path::PathBuf;
 
         #[derive(Resource, Default)]
@@ -1542,8 +1542,8 @@ mod accessor_tests {
     fn new_handle() -> TerminalHandle {
         let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
         let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
+            crossbeam_channel::unbounded::<ozmux_vt::vt::listener::ControlFrame>();
+        let listener = ozmux_vt::vt::listener::TermListener {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };

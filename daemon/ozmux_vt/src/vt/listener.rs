@@ -14,7 +14,7 @@ use std::path::PathBuf;
 /// channel is currently unbounded; see spec § Risks > "control_tx is
 /// unbounded" for the back-pressure trade-off.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ControlFrame {
+pub enum ControlFrame {
     Bell,
     Title(String),
     ResetTitle,
@@ -29,7 +29,7 @@ pub(crate) enum ControlFrame {
 
 /// Reply-required reply bytes (currently just `PtyWrite`). The
 /// channel uses unbounded crossbeam — must-not-drop semantics.
-pub(crate) struct TermListener {
+pub struct TermListener {
     pub reply_tx: Sender<Vec<u8>>,
     pub control_tx: Sender<ControlFrame>,
 }

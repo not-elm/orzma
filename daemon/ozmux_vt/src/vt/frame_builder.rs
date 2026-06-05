@@ -4,6 +4,11 @@
 //! `Term::damage()` mutates internal damage state. Callers must hold the
 //! `vt_state` lock; this module performs no locking.
 
+use crate::color::{RgbaColor, acolor_to_rgba};
+use crate::frame::{
+    Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri,
+    Row, Run, SelectionKind, SelectionRange, SnapshotReason, ViCursor, ViewportPoint,
+};
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::mode_diff::TRACKED_MODES;
 use alacritty_terminal::Term;
@@ -12,19 +17,11 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
-use bevy_terminal_renderer::prelude::{
-    Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor, ViewportPoint,
-};
-use ozmux_vt::color::{RgbaColor, acolor_to_rgba};
-use ozmux_vt::frame::{
-    DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri, Row, Run,
-    SelectionKind,
-};
 use unicode_width::UnicodeWidthChar;
 
 /// Style bitmask constants (kept compatible with the schema's
 /// `Run.style: u16`).
-pub(crate) mod style {
+pub mod style {
     pub const BOLD: u16 = 1;
     pub const ITALIC: u16 = 2;
     pub const UNDERLINE: u16 = 4;
@@ -38,7 +35,7 @@ pub(crate) mod style {
 /// Reads the current terminal grid via shared reference, coalescing each row
 /// into runs of cells with identical attributes. Wide-char spacer cells are
 /// skipped so the wide character itself accounts for its full column width.
-pub(crate) fn build_snapshot<T>(
+pub fn build_snapshot<T>(
     term: &Term<T>,
     seq: u32,
     reason: SnapshotReason,
@@ -76,7 +73,7 @@ pub(crate) fn build_snapshot<T>(
 ///
 /// Each entry is a full-row replacement (not partial). Row ordering follows
 /// the supplied slice.
-pub(crate) fn build_delta<T>(
+pub fn build_delta<T>(
     term: &Term<T>,
     seq: u32,
     rows: &[u16],
@@ -105,7 +102,7 @@ pub(crate) fn build_delta<T>(
     }
 }
 
-pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
+pub fn extract_cursor<T>(term: &Term<T>) -> Cursor {
     let point = term.grid().cursor.point;
     let mut x = point.column.0 as u16;
     // NOTE: alacritty's RenderableCursor shifts x left by 1 when the cursor
@@ -162,7 +159,7 @@ pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
 /// viewport row falls above the visible area, `in_scrollback` is
 /// set and `row` is clamped to `-1` per the schema convention on
 /// `ozmux_vt::frame::ViCursor`.
-pub(crate) fn extract_vi_cursor<T>(term: &Term<T>) -> Option<ViCursor> {
+pub fn extract_vi_cursor<T>(term: &Term<T>) -> Option<ViCursor> {
     if !term.mode().contains(TermMode::VI) {
         return None;
     }
@@ -190,7 +187,7 @@ pub(crate) fn extract_vi_cursor<T>(term: &Term<T>) -> Option<ViCursor> {
 /// `None` when no selection is active or when the selection range is
 /// empty (alacritty's `Selection::to_range` returns `None` in that
 /// case; see `alacritty_terminal/selection.rs:332`).
-pub(crate) fn extract_selection_range<T>(term: &Term<T>) -> Option<SelectionRange> {
+pub fn extract_selection_range<T>(term: &Term<T>) -> Option<SelectionRange> {
     let sel = term.selection.as_ref()?;
     let range = sel.to_range(term)?;
     let kind = match sel.ty {
@@ -238,7 +235,7 @@ fn viewport_point_of<T>(term: &Term<T>, p: Point) -> ViewportPoint {
 /// - `0 <= y < screen_lines`
 /// - `display_offset` fits in `i32`. ozmux uses the default
 ///   `scrolling_history = 10000`, far below `i32::MAX`.
-pub(crate) fn viewport_row_to_line<T>(term: &Term<T>, y: i32) -> Line {
+pub fn viewport_row_to_line<T>(term: &Term<T>, y: i32) -> Line {
     debug_assert!(
         (0..term.screen_lines() as i32).contains(&y),
         "viewport row {y} out of range 0..{}",

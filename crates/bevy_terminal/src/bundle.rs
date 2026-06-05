@@ -8,9 +8,9 @@
 use crate::handle::TerminalHandle;
 use crate::pty::{PtyHandle, spawn_pty_thread};
 use crate::title::TerminalTitle;
-use crate::vt::listener::{ControlFrame, TermListener};
 use bevy::ecs::bundle::Bundle;
 use crossbeam_channel::unbounded;
+use ozmux_vt::vt::listener::{ControlFrame, TermListener};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::path::PathBuf;
 

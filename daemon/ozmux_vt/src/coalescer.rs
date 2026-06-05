@@ -1,9 +1,9 @@
 //! Per-bridge frame-emit coalescer.
 //!
-//! Wraps the deadline state machine that decides when
-//! [`crate::plugin::drain_pty_chunks`] flushes accumulated terminal
-//! damage to the wire. The Coalescer never touches the `Term` directly;
-//! the chunk-drain system classifies damage and passes a verdict in.
+//! Wraps the deadline state machine that decides when the
+//! PTY-chunk consumer flushes accumulated terminal damage to the wire.
+//! The Coalescer never touches the `Term` directly; the chunk-drain
+//! system classifies damage and passes a verdict in.
 
 use crate::vt::damage::DamageVerdict;
 use std::cmp::min;
@@ -26,9 +26,9 @@ pub struct Coalescer {
 
 impl Coalescer {
     /// Idle-debounce: time after the most recent chunk before flushing.
-    pub(crate) const IDLE: Duration = Duration::from_millis(3);
+    pub const IDLE: Duration = Duration::from_millis(3);
     /// Hard ceiling: maximum time the first pending chunk waits.
-    pub(crate) const MAX_CAP: Duration = Duration::from_millis(12);
+    pub const MAX_CAP: Duration = Duration::from_millis(12);
     /// Row-count cap for the immediate-flush branch that fires on
     /// `ManyRows + pending_user_input`. NeoVim 1-line scroll in a TUI
     /// dirties scrolled-in row + status line + (sometimes) tabline =
@@ -38,24 +38,24 @@ impl Coalescer {
     const MANY_ROWS_INSTANT_CAP: usize = 4;
 
     /// Constructs a disarmed Coalescer.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
     /// Returns true while a window is open (deadline armed).
-    pub(crate) fn is_armed(&self) -> bool {
+    pub fn is_armed(&self) -> bool {
         self.armed_at.is_some()
     }
 
     /// Arms the window on first call after disarm; extends `last_chunk_at` on
     /// subsequent calls inside the same window.
-    pub(crate) fn arm_or_extend(&mut self, now: Instant) {
+    pub fn arm_or_extend(&mut self, now: Instant) {
         self.armed_at.get_or_insert(now);
         self.last_chunk_at = Some(now);
     }
 
     /// Resets the window. Called after `emit_now` runs.
-    pub(crate) fn disarm(&mut self) {
+    pub fn disarm(&mut self) {
         self.armed_at = None;
         self.last_chunk_at = None;
     }
@@ -79,7 +79,7 @@ impl Coalescer {
     ///
     /// PR-E2b extends this with a `ManyRows` branch gated on a row cap and
     /// the coalescer NOT being armed — see spec § 2 and § 7.
-    pub(crate) fn should_flush_immediately(
+    pub fn should_flush_immediately(
         &self,
         is_bootstrap: bool,
         verdict: &DamageVerdict,
@@ -105,7 +105,7 @@ impl Coalescer {
 
     /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
     /// Returns `None` when the Coalescer is disarmed.
-    pub(crate) fn next_deadline(&self) -> Option<Instant> {
+    pub fn next_deadline(&self) -> Option<Instant> {
         let armed = self.armed_at?;
         let last = self.last_chunk_at.unwrap_or(armed);
         Some(min(last + Self::IDLE, armed + Self::MAX_CAP))

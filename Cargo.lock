@@ -4691,8 +4691,14 @@ name = "ozmux_vt"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "crossbeam-channel",
+ "gethostname",
+ "percent-encoding",
  "rmp-serde",
  "serde",
+ "tracing",
+ "unicode-width",
+ "vte",
 ]
 
 [[package]]

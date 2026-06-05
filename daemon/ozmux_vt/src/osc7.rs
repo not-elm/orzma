@@ -14,7 +14,7 @@ use vte::Perform;
 /// NUL. `local_host` is the machine hostname (OSC 7 emitters send the real
 /// host). The path component is percent-decoded byte-wise to preserve
 /// non-UTF-8 paths.
-pub(crate) fn parse_osc7(payload: &[u8], local_host: &str) -> Option<PathBuf> {
+pub fn parse_osc7(payload: &[u8], local_host: &str) -> Option<PathBuf> {
     let rest = payload.strip_prefix(b"file://")?;
     let slash = rest.iter().position(|&b| b == b'/')?;
     let host = std::str::from_utf8(&rest[..slash]).ok()?;
@@ -32,7 +32,7 @@ pub(crate) fn parse_osc7(payload: &[u8], local_host: &str) -> Option<PathBuf> {
 /// forwards changed directories onto the terminal's `ControlFrame` channel.
 /// Dedups: a shell re-emits OSC 7 on every prompt, so only a *changed* path is
 /// sent.
-pub(crate) struct Osc7Capture {
+pub struct Osc7Capture {
     control_tx: Sender<ControlFrame>,
     local_host: String,
     last: Option<PathBuf>,
@@ -41,7 +41,7 @@ pub(crate) struct Osc7Capture {
 impl Osc7Capture {
     /// Builds a capture that sends `ControlFrame::CurrentDir` on `control_tx`,
     /// accepting OSC 7 paths whose host is empty / `localhost` / `local_host`.
-    pub(crate) fn new(control_tx: Sender<ControlFrame>, local_host: String) -> Self {
+    pub fn new(control_tx: Sender<ControlFrame>, local_host: String) -> Self {
         Self {
             control_tx,
             local_host,

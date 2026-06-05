@@ -5,16 +5,13 @@
 
 mod bundle;
 mod buttons;
-mod coalescer;
 mod events;
 mod handle;
 mod input_codec;
 mod mouse_encode;
-mod osc7;
 mod plugin;
 mod pty;
 mod title;
-mod vt;
 mod wheel;
 
 pub use alacritty_terminal::index::{Column, Line, Point, Side};

@@ -1,5 +1,9 @@
-//! Bevy-free terminal VT core. Provides wire DTO schema and color types.
-//! Pure logic shared by both the daemon and the Bevy GUI.
+//! Bevy-free terminal VT core. Provides wire DTO schema, color types,
+//! VT submodules (coalescer, OSC 7, frame builders, and damage classification),
+//! shared by both the daemon and the Bevy GUI.
 
+pub mod coalescer;
 pub mod color;
 pub mod frame;
+pub mod osc7;
+pub mod vt;

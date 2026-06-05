@@ -10,6 +10,12 @@ publish.workspace = true
 [dependencies]
 serde = { workspace = true }
 alacritty_terminal = { workspace = true }
+vte = "0.15"
+crossbeam-channel = "0.5"
+unicode-width = { workspace = true }
+percent-encoding = "2"
+gethostname = "1"
+tracing = { workspace = true }
 
 [dev-dependencies]
 rmp-serde = "1"
