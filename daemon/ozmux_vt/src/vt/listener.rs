@@ -15,12 +15,14 @@ use std::path::PathBuf;
 /// unbounded" for the back-pressure trade-off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlFrame {
+    /// Terminal bell notification (BEL / `\x07`).
     Bell,
+    /// New title string reported via `OSC 0` / `OSC 2`.
     Title(String),
+    /// Terminal title reset requested (OSC with empty string or `ESC c`).
     ResetTitle,
     Clipboard {
         content: String,
-        #[allow(dead_code)] // reserved for future correlation tracking
         correlation_seq: Option<u32>,
     },
     /// A new current working directory reported via OSC 7.

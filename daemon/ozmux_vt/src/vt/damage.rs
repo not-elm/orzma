@@ -1,3 +1,5 @@
+//! Damage classification and dirty-row collection for the VT emit pipeline.
+
 use alacritty_terminal::{Term, term::TermDamage};
 
 /// Classification of accumulated damage that drives the immediate-flush decision.

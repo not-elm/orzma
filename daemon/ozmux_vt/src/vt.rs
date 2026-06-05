@@ -498,7 +498,6 @@ impl Vt {
         );
         sel.update(cursor, alacritty_terminal::index::Side::Right);
         self.term.selection = Some(sel);
-        // NOTE: anchor stays as-is — type change preserves it
         self.stage_full_damage();
         true
     }
@@ -618,12 +617,14 @@ impl Vt {
     }
 
     fn force_bootstrap_damage(&mut self) {
-        let mut scratch = std::mem::take(&mut self.scratch_dirty);
-        self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
-        self.scratch_dirty = scratch;
+        self.collect_full_damage();
     }
 
     fn stage_full_damage(&mut self) {
+        self.collect_full_damage();
+    }
+
+    fn collect_full_damage(&mut self) {
         let mut scratch = std::mem::take(&mut self.scratch_dirty);
         self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
         self.scratch_dirty = scratch;
@@ -746,12 +747,12 @@ enum FrameKind {
 }
 
 /// Row-count fraction at which Partial damage promotes to a Snapshot.
-/// `partial * SNAPSHOT_THRESHOLD_NUM >= total * SNAPSHOT_THRESHOLD_DEN`
+/// `partial * SNAPSHOT_THRESHOLD_DENOM >= total * SNAPSHOT_THRESHOLD_NUMER`
 /// holds when partial / total >= 17 / 20 = 85 %. Beyond this fraction,
 /// a full snapshot is more bandwidth-efficient than enumerating dirty
 /// rows.
-const SNAPSHOT_THRESHOLD_NUM: u32 = 20;
-const SNAPSHOT_THRESHOLD_DEN: u32 = 17;
+const SNAPSHOT_THRESHOLD_NUMER: u32 = 17; // threshold is 17/20 = 85 %
+const SNAPSHOT_THRESHOLD_DENOM: u32 = 20;
 
 /// Selects the frame type. Policy (priority order):
 /// 1. `first_emit` → `Snapshot { reason: Initial }`
@@ -770,8 +771,8 @@ fn decide_frame_kind(vt: &Vt, dirty: DirtyRows) -> FrameKind {
             reason: SnapshotReason::Resize,
         },
         DirtyRows::Rows(rows) => {
-            if (rows.len() as u32) * SNAPSHOT_THRESHOLD_NUM
-                >= (total_rows as u32) * SNAPSHOT_THRESHOLD_DEN
+            if (rows.len() as u32) * SNAPSHOT_THRESHOLD_DENOM
+                >= (total_rows as u32) * SNAPSHOT_THRESHOLD_NUMER
             {
                 FrameKind::Snapshot {
                     reason: SnapshotReason::Resize,
@@ -1258,5 +1259,30 @@ mod tests {
             !replies.is_empty(),
             "DSR cursor-position query must produce a reply"
         );
+    }
+
+    #[test]
+    fn alt_screen_enter_emits_mode_changed_event() {
+        let mut vt = Vt::new(10, 5);
+        vt.on_output(b"\x1b[?1049h", Instant::now());
+        let _ = vt.emit();
+        let events = vt.drain_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                VtEvent::ModeChanged { added, .. }
+                    if added.iter().any(|m| m == "alt-screen")
+            )),
+            "alt-screen enter (\\x1b[?1049h) must produce ModeChanged with \"alt-screen\" in added; events = {events:?}",
+        );
+        let mode_event = events.iter().find(|e| {
+            matches!(e, VtEvent::ModeChanged { added, .. } if added.iter().any(|m| m == "alt-screen"))
+        });
+        if let Some(VtEvent::ModeChanged { removed, .. }) = mode_event {
+            assert!(
+                removed.is_empty(),
+                "alt-screen enter must have an empty removed list, got {removed:?}"
+            );
+        }
     }
 }
