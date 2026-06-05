@@ -4,6 +4,7 @@
 //! the daemon serializes them to UDS and the Bevy mirror applies them.
 
 pub mod error;
+pub mod geometry;
 pub mod id;
 pub mod mux;
 pub mod surface;

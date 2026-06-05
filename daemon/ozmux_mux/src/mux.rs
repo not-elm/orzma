@@ -105,6 +105,41 @@ impl Mux {
         Ok(self.surface(surface)?.kind.clone())
     }
 
+    /// Each pane's normalized rect, DFS first-child-first. Port of `pane_bounds`.
+    pub fn pane_bounds(
+        &self,
+        workspace: WorkspaceId,
+    ) -> MuxResult<Vec<(PaneId, crate::geometry::Rect)>> {
+        let root = self.workspace(workspace)?.root;
+        let mut out = Vec::new();
+        self.walk_bounds(
+            root,
+            crate::geometry::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            &mut out,
+        );
+        Ok(out)
+    }
+
+    /// Resolve each pane's integer `cols × rows` for a workspace of total
+    /// `cols × rows`, distributing cells down the tree so children sum exactly
+    /// to the parent. Port of the `split_cells`-based recursion.
+    pub fn resolve_sizes(
+        &self,
+        workspace: WorkspaceId,
+        cols: u16,
+        rows: u16,
+    ) -> MuxResult<Vec<(PaneId, (u16, u16))>> {
+        let root = self.workspace(workspace)?.root;
+        let mut out = Vec::new();
+        self.resolve_node(root, cols, rows, &mut out);
+        Ok(out)
+    }
+
     /// Every pane in a workspace, DFS first-child-first (matches the old
     /// `ordered_panes`): leftmost leaf first.
     pub fn ordered_panes(&self, workspace: WorkspaceId) -> MuxResult<Vec<PaneId>> {
@@ -124,6 +159,86 @@ impl Mux {
             }
         }
         Ok(out)
+    }
+
+    fn walk_bounds(
+        &self,
+        node: NodeId,
+        bounds: crate::geometry::Rect,
+        out: &mut Vec<(PaneId, crate::geometry::Rect)>,
+    ) {
+        use crate::tree::SplitOrientation::{Horizontal, Vertical};
+        match node {
+            NodeId::Pane(p) => out.push((p, bounds)),
+            NodeId::Split(s) => {
+                let split = &self.splits[s];
+                let r = split.ratio();
+                match split.orientation {
+                    Horizontal => {
+                        let lw = bounds.w * r;
+                        self.walk_bounds(
+                            split.first,
+                            crate::geometry::Rect { w: lw, ..bounds },
+                            out,
+                        );
+                        self.walk_bounds(
+                            split.second,
+                            crate::geometry::Rect {
+                                x: bounds.x + lw,
+                                w: bounds.w - lw,
+                                ..bounds
+                            },
+                            out,
+                        );
+                    }
+                    Vertical => {
+                        let lh = bounds.h * r;
+                        self.walk_bounds(
+                            split.first,
+                            crate::geometry::Rect { h: lh, ..bounds },
+                            out,
+                        );
+                        self.walk_bounds(
+                            split.second,
+                            crate::geometry::Rect {
+                                y: bounds.y + lh,
+                                h: bounds.h - lh,
+                                ..bounds
+                            },
+                            out,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn resolve_node(
+        &self,
+        node: NodeId,
+        cols: u16,
+        rows: u16,
+        out: &mut Vec<(PaneId, (u16, u16))>,
+    ) {
+        use crate::tree::SplitOrientation::{Horizontal, Vertical};
+        match node {
+            NodeId::Pane(p) => out.push((p, (cols, rows))),
+            NodeId::Split(s) => {
+                let split = &self.splits[s];
+                match split.orientation {
+                    Horizontal => {
+                        let (lc, rc) = crate::geometry::split_cells(cols, split.ratio());
+                        self.resolve_node(split.first, lc, rows, out);
+                        self.resolve_node(split.second, rc, rows, out);
+                    }
+                    Vertical => {
+                        let (lr, rr) = crate::geometry::split_cells(rows, split.ratio());
+                        self.resolve_node(split.first, cols, lr, out);
+                        self.resolve_node(split.second, cols, rr, out);
+                    }
+                }
+            }
+        }
     }
 
     fn workspace(&self, id: WorkspaceId) -> MuxResult<&Workspace> {
@@ -170,5 +285,27 @@ mod tests {
             mux.surfaces(PaneId::default()),
             Err(MuxError::PaneNotFound(PaneId::default()))
         );
+    }
+
+    #[test]
+    fn single_pane_fills_workspace_and_resolves_full_size() {
+        let mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let bounds = mux.pane_bounds(ws).unwrap();
+        assert_eq!(
+            bounds,
+            vec![(
+                pane,
+                crate::geometry::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0,
+                }
+            )]
+        );
+        let sizes = mux.resolve_sizes(ws, 80, 24).unwrap();
+        assert_eq!(sizes, vec![(pane, (80, 24))]);
     }
 }
