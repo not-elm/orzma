@@ -1600,10 +1600,8 @@ dependencies = [
  "bevy",
  "bevy_terminal_renderer",
  "crossbeam-channel",
- "gethostname",
  "ozmux_vt",
  "tracing",
- "vte",
 ]
 
 [[package]]

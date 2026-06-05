@@ -12,11 +12,9 @@ bevy = { workspace = true }
 bevy_terminal_renderer = { path = "../bevy_terminal_renderer" }
 alacritty_terminal = { workspace = true }
 ozmux_vt = { path = "../../daemon/ozmux_vt", features = ["pty"] }
-vte = "0.15"
 crossbeam-channel = "0.5"
 anyhow = { workspace = true }
 tracing = { workspace = true }
-gethostname = "1"
 
 [lints]
 workspace = true
