@@ -615,20 +615,34 @@ impl Mux {
         self.workspace(workspace)?;
         let session = self.active_session;
 
-        let panes = self.ordered_panes(workspace)?;
+        // Walk the whole subtree (intact) to remove EVERY split, pane, and
+        // surface. Removing only each leaf's parent split (its parent) would
+        // leak interior splits whose two children are both splits.
+        let root = self.workspace(workspace)?.root;
         let mut events: Vec<MuxEvent> = Vec::new();
-        for pane in &panes {
-            let surfaces = self.panes[*pane].surfaces.clone();
-            events.push(MuxEvent::PaneClosed { pane: *pane });
-            for surface in surfaces {
-                events.push(MuxEvent::SurfaceClosed { surface });
-                self.surfaces.remove(surface);
+        let mut split_ids: Vec<SplitId> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            match node {
+                NodeId::Split(s) => {
+                    let split = &self.splits[s];
+                    stack.push(split.second);
+                    stack.push(split.first);
+                    split_ids.push(s);
+                }
+                NodeId::Pane(p) => {
+                    let surfaces = self.panes[p].surfaces.clone();
+                    events.push(MuxEvent::PaneClosed { pane: p });
+                    for surface in surfaces {
+                        events.push(MuxEvent::SurfaceClosed { surface });
+                        self.surfaces.remove(surface);
+                    }
+                    self.panes.remove(p);
+                }
             }
-            let parent = self.panes[*pane].parent;
-            if let Some(NodeId::Split(s)) = parent {
-                self.splits.remove(s);
-            }
-            self.panes.remove(*pane);
+        }
+        for s in split_ids {
+            self.splits.remove(s);
         }
         self.workspaces.remove(workspace);
         let sess = &mut self.sessions[session];
@@ -2036,6 +2050,52 @@ mod tests {
             mux.active_workspace(),
             first_ws,
             "active re-points to the remaining workspace after closing the active one"
+        );
+    }
+
+    #[test]
+    fn close_workspace_frees_interior_splits() {
+        let mut mux = Mux::new();
+        mux.new_workspace().unwrap();
+        let ws1 = mux.active_workspace();
+        let p1 = mux.active_pane(ws1).unwrap();
+        // Build SplitA(SplitB(p1, p1b), SplitC(p2, p2b)) — SplitA is interior
+        // (both children are splits), the case the buggy leaf-parent loop leaked.
+        mux.split_pane(
+            p1,
+            SplitOrientation::Horizontal,
+            Side::After,
+            SurfaceKind::Terminal,
+        )
+        .unwrap();
+        let panes = mux.ordered_panes(ws1).unwrap();
+        let (left, right) = (panes[0], panes[1]);
+        mux.split_pane(
+            left,
+            SplitOrientation::Vertical,
+            Side::After,
+            SurfaceKind::Terminal,
+        )
+        .unwrap();
+        mux.split_pane(
+            right,
+            SplitOrientation::Vertical,
+            Side::After,
+            SurfaceKind::Terminal,
+        )
+        .unwrap();
+        assert_eq!(mux.ordered_panes(ws1).unwrap().len(), 4);
+        assert_eq!(mux.splits.len(), 3, "3 splits: interior A + B + C");
+
+        mux.close_workspace(ws1).unwrap();
+        assert_eq!(
+            mux.splits.len(),
+            0,
+            "all splits freed, including the interior one"
+        );
+        assert!(
+            mux.panes.len() <= 1,
+            "only the replacement workspace's pane remains"
         );
     }
 
