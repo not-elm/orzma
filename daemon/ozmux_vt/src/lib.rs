@@ -9,4 +9,6 @@ pub mod frame;
 pub mod input;
 pub mod mouse;
 pub mod osc7;
+#[cfg(feature = "pty")]
+pub mod pty;
 pub mod vt;
