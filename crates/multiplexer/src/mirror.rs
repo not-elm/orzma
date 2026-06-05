@@ -11,7 +11,7 @@ use crate::layout::{
     SplitOrientation, child_flex, pane_frame_node, split_node_bundle, split_ratio,
 };
 use bevy::prelude::*;
-use ozmux_mux::{LayoutNode, PaneId, SplitId, SurfaceId, WorkspaceId};
+use ozmux_mux::{LayoutNode, MuxEvent, NodeId, PaneId, SplitId, SurfaceId, WorkspaceId};
 use slotmap::SecondaryMap;
 
 /// Authoritative `Mux` plus the reverse maps (`MuxId` → `Entity`). Forward
@@ -79,6 +79,171 @@ impl MuxState {
         let active_pane_ent = self.panes[active_pane_id];
         commands.entity(ws_ent).insert(ActivePane(active_pane_ent));
     }
+}
+
+/// Applies one `MuxEvent` to the ECS mirror.
+///
+/// `LayoutChanged` and `WorkspaceRootChanged` are handled by the
+/// find-and-replace path (Plan 2b-1 Task 5 — currently `unimplemented!`).
+/// All other structural and leaf events are implemented here.
+///
+/// `children_q` is needed by `LayoutRatioChanged` to resolve the split
+/// entity's two child entities (Commands is write-only).
+///
+/// The `Mux` inside `state` MUST already reflect the post-event state before
+/// this is called (so queries like `state.mux.surfaces(pane)` see the new
+/// surface list).
+pub fn apply_event(
+    commands: &mut Commands,
+    state: &mut MuxState,
+    children_q: &Query<&Children>,
+    event: &MuxEvent,
+) {
+    match event {
+        MuxEvent::WorkspaceCreated { workspace, .. } => {
+            let name = state
+                .mux
+                .workspace_name(*workspace)
+                .unwrap_or("default")
+                .to_owned();
+            spawn_workspace(commands, state, *workspace, &name);
+        }
+
+        MuxEvent::PaneCreated {
+            pane,
+            workspace,
+            surface_kind,
+        } => {
+            let ws_ent = state.workspaces[*workspace];
+            let pane_ent = spawn_pane(commands, state, *pane, ws_ent, 1.0);
+
+            let is_root = state
+                .mux
+                .workspace_root(*workspace)
+                .map(|r| r == NodeId::Pane(*pane))
+                .unwrap_or(false);
+            if is_root {
+                let container = state.layout_roots[*workspace];
+                commands.entity(pane_ent).insert(ChildOf(container));
+            }
+
+            // NOTE: query surfaces from the Mux AFTER the mutation so the list
+            // already includes any surfaces carried by this new pane (e.g. a
+            // moved surface from break_surface_to_pane uses the existing
+            // SurfaceId; detect reuse by checking state.surfaces).
+            let surface_ids = state
+                .mux
+                .surfaces(*pane)
+                .expect("PaneCreated: pane surfaces must be readable");
+            let active_surface_id = state
+                .mux
+                .active_surface(*pane)
+                .expect("PaneCreated: active surface must exist");
+
+            let _ = surface_kind;
+
+            let mut active_surface_ent = None;
+            for sid in &surface_ids {
+                let surf_ent = if state.surfaces.contains_key(*sid) {
+                    let ent = state.surfaces[*sid];
+                    commands
+                        .entity(ent)
+                        .insert((ChildOf(pane_ent), SurfaceOf(pane_ent)));
+                    ent
+                } else {
+                    let sk = state
+                        .mux
+                        .surface_kind(*sid)
+                        .expect("PaneCreated: surface kind must be readable");
+                    spawn_surface(commands, state, *sid, pane_ent, sk)
+                };
+                if *sid == active_surface_id {
+                    active_surface_ent = Some(surf_ent);
+                }
+            }
+
+            let active_ent =
+                active_surface_ent.expect("PaneCreated: active surface entity must exist");
+            commands.entity(pane_ent).insert(ActiveSurface(active_ent));
+        }
+
+        MuxEvent::SurfaceSpawned {
+            pane,
+            surface,
+            kind,
+        } => {
+            let pane_ent = state.panes[*pane];
+            spawn_surface(commands, state, *surface, pane_ent, kind.clone());
+        }
+
+        MuxEvent::SurfaceClosed { surface } => {
+            if let Some(ent) = state.surfaces.remove(*surface)
+                && let Ok(mut ec) = commands.get_entity(ent)
+            {
+                ec.try_despawn();
+            }
+        }
+
+        MuxEvent::PaneClosed { pane } => {
+            if let Some(ent) = state.panes.remove(*pane) {
+                commands.entity(ent).despawn();
+            }
+        }
+
+        MuxEvent::ActivePaneChanged { workspace, pane } => {
+            let ws_ent = state.workspaces[*workspace];
+            let pane_ent = state.panes[*pane];
+            commands.entity(ws_ent).insert(ActivePane(pane_ent));
+        }
+
+        MuxEvent::ActiveSurfaceChanged { pane, surface } => {
+            let pane_ent = state.panes[*pane];
+            let surf_ent = state.surfaces[*surface];
+            commands.entity(pane_ent).insert(ActiveSurface(surf_ent));
+        }
+
+        MuxEvent::LayoutRatioChanged { split, ratio } => {
+            let split_ent = state.splits[*split];
+            if let Ok(kids) = children_q.get(split_ent) {
+                let mut it = kids.iter();
+                if let (Some(lhs), Some(rhs)) = (it.next(), it.next()) {
+                    set_split_grows_from_ratio(commands, lhs, rhs, *ratio);
+                }
+            }
+        }
+
+        MuxEvent::WorkspaceRenamed { workspace, name } => {
+            let ws_ent = state.workspaces[*workspace];
+            commands.entity(ws_ent).insert(Name::new(name.clone()));
+        }
+
+        MuxEvent::WorkspaceDestroyed { workspace } => {
+            if let Some(ent) = state.workspaces.remove(*workspace) {
+                commands.entity(ent).despawn();
+            }
+            state.layout_roots.remove(*workspace);
+        }
+
+        // GUI-side concerns (Plan 2b-2) or size-flow events — no ECS mirror
+        // mutation needed at this layer.
+        MuxEvent::SessionCreated { .. }
+        | MuxEvent::WorkspaceSelected { .. }
+        | MuxEvent::PaneResized { .. }
+        | MuxEvent::SurfaceCwdChanged { .. } => {}
+
+        MuxEvent::LayoutChanged { .. } | MuxEvent::WorkspaceRootChanged { .. } => {
+            unimplemented!("find-and-replace: Plan 2b-1 Task 5")
+        }
+    }
+}
+
+/// Sets the two children of a split's `Node.flex_grow` from a ratio,
+/// matching the `set_child_grow` convention (`flex_basis = Px(0.0)`).
+fn set_split_grows_from_ratio(commands: &mut Commands, lhs: Entity, rhs: Entity, ratio: f32) {
+    use crate::layout::{normalized_grows, set_child_grow};
+    let (l, r) = normalized_grows(ratio, 1.0 - ratio);
+    set_child_grow(commands, lhs, l);
+    set_child_grow(commands, rhs, r);
 }
 
 /// Spawns the workspace entity + layout-root container and records the reverse maps.
@@ -932,5 +1097,269 @@ mod tests {
 
     fn mirror_matches_with(world: &World, state: &MuxState) -> Result<(), Mismatch> {
         mirror_matches(world, state)
+    }
+
+    /// Runs a Mux mutation op, applies every returned `MuxEvent` via
+    /// `apply_event`, flushes commands, and asserts `mirror_matches` is `Ok`.
+    fn run_mux_op(app: &mut App, op: impl FnOnce(&mut ozmux_mux::Mux) -> Vec<MuxEvent>) {
+        // Step 1: run the Mux mutation directly on the resource (no system).
+        let events: Vec<MuxEvent> = {
+            let mut state = app.world_mut().resource_mut::<MuxState>();
+            op(&mut state.mux)
+        };
+
+        // Step 2: apply every event via apply_event in a one-shot system.
+        // NOTE: Bevy run_system_once requires the closure to be FnMut + Send +
+        // Sync; capture events as a local moved into a closure that wraps the
+        // loop to satisfy the system signature constraints.
+        app.world_mut()
+            .run_system_once({
+                let events = events;
+                move |mut commands: Commands,
+                      mut state: ResMut<MuxState>,
+                      children_q: Query<&Children>| {
+                    for ev in &events {
+                        apply_event(&mut commands, &mut state, &children_q, ev);
+                    }
+                }
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let result = {
+            let world = app.world();
+            let s = world.resource::<MuxState>();
+            mirror_matches(world, s)
+        };
+        assert!(result.is_ok(), "mirror_matches after op: {result:?}");
+    }
+
+    fn make_mux_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MultiplexerPlugin);
+        app.world_mut()
+            .insert_resource(MuxState::new(ozmux_mux::Mux::new()));
+        app.world_mut()
+            .run_system_once(|mut commands: Commands, mut state: ResMut<MuxState>| {
+                state.materialize_snapshot(&mut commands);
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+        app
+    }
+
+    fn make_oracle_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MultiplexerPlugin);
+        app.world_mut()
+            .run_system_once(|mut mux: crate::commands::MultiplexerCommands| {
+                mux.create_workspace(Some("0".to_owned()));
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+        app
+    }
+
+    #[test]
+    fn new_workspace_equiv() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // Oracle: spawn a second attached workspace.
+        oracle
+            .world_mut()
+            .run_system_once(|mut mux: crate::commands::MultiplexerCommands| {
+                mux.create_workspace(Some("1".to_owned()));
+            })
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        // Mux: new_workspace emits [WorkspaceCreated, PaneCreated,
+        // WorkspaceSelected, ActivePaneChanged]; apply all.
+        run_mux_op(&mut mux_app, |m| m.new_workspace().unwrap());
+
+        assert_layout_equiv(&mut oracle, &mut mux_app);
+    }
+
+    #[test]
+    fn add_surface_equiv_active_unchanged() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // Oracle: add_surface, active must stay on the original surface.
+        oracle
+            .world_mut()
+            .run_system_once(
+                |mut mux: crate::commands::MultiplexerCommands,
+                 panes_q: Query<Entity, With<PaneMarker>>| {
+                    let pane = panes_q.iter().next().expect("pane must exist");
+                    mux.add_surface(pane, SurfaceKind::Terminal);
+                },
+            )
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        // Mux: spawn_surface emits [SurfaceSpawned].
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let pane = m.active_pane(ws).unwrap();
+            m.spawn_surface(pane, ozmux_mux::SurfaceKind::Terminal)
+                .unwrap()
+        });
+
+        assert_layout_equiv(&mut oracle, &mut mux_app);
+    }
+
+    #[test]
+    fn set_active_surface_equiv() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // Both sides: add a second surface, then activate it.
+        // Oracle.
+        let oracle_second_surface = oracle
+            .world_mut()
+            .run_system_once(
+                |mut mux: crate::commands::MultiplexerCommands,
+                 panes_q: Query<Entity, With<PaneMarker>>| {
+                    let pane = panes_q.iter().next().expect("pane must exist");
+                    mux.add_surface(pane, SurfaceKind::Terminal)
+                },
+            )
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+        oracle
+            .world_mut()
+            .run_system_once(
+                move |mut mux: crate::commands::MultiplexerCommands,
+                      panes_q: Query<Entity, With<PaneMarker>>| {
+                    let pane = panes_q.iter().next().expect("pane must exist");
+                    mux.set_active_surface(pane, oracle_second_surface).unwrap();
+                },
+            )
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        // Mux: spawn + activate.
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let pane = m.active_pane(ws).unwrap();
+            m.spawn_surface(pane, ozmux_mux::SurfaceKind::Terminal)
+                .unwrap()
+        });
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let pane = m.active_pane(ws).unwrap();
+            let surfs = m.surfaces(pane).unwrap();
+            let second = surfs[1];
+            m.set_active_surface(pane, second).unwrap()
+        });
+
+        assert_layout_equiv(&mut oracle, &mut mux_app);
+    }
+
+    #[test]
+    fn rename_workspace_equiv() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // Oracle: rename.
+        oracle
+            .world_mut()
+            .run_system_once(
+                |mut mux: crate::commands::MultiplexerCommands,
+                 ws_q: Query<Entity, With<WorkspaceMarker>>| {
+                    let ws = ws_q.iter().next().expect("workspace must exist");
+                    mux.rename_workspace(ws, "renamed".to_owned()).unwrap();
+                },
+            )
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        // Mux: rename.
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            m.rename_workspace(ws, "renamed".to_owned()).unwrap()
+        });
+
+        // Just check names match (assert_layout_equiv does not check names).
+        let oracle_name = oracle
+            .world_mut()
+            .query_filtered::<&Name, With<WorkspaceMarker>>()
+            .iter(oracle.world())
+            .next()
+            .map(|n| n.as_str().to_owned())
+            .unwrap();
+        let mux_name = mux_app
+            .world_mut()
+            .query_filtered::<&Name, With<WorkspaceMarker>>()
+            .iter(mux_app.world())
+            .next()
+            .map(|n| n.as_str().to_owned())
+            .unwrap();
+        assert_eq!(oracle_name, "renamed");
+        assert_eq!(mux_name, "renamed");
+    }
+
+    #[test]
+    fn close_workspace_equiv() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // Both start with 1 workspace. Create a second so we can close the first.
+        oracle
+            .world_mut()
+            .run_system_once(|mut mux: crate::commands::MultiplexerCommands| {
+                mux.create_workspace(Some("1".to_owned()));
+            })
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        run_mux_op(&mut mux_app, |m| m.new_workspace().unwrap());
+
+        // Now close the second workspace on both sides to get back to one.
+        oracle
+            .world_mut()
+            .run_system_once(
+                |mut mux: crate::commands::MultiplexerCommands,
+                 ws_q: Query<Entity, With<WorkspaceMarker>>| {
+                    // close the last (most recently added) workspace by Name "1"
+                    let ws = ws_q.iter().find(|_| true).expect("workspace must exist");
+                    mux.close_workspace(ws);
+                },
+            )
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            m.close_workspace(ws).unwrap()
+        });
+
+        // Both should have exactly one workspace.
+        let oracle_count = oracle
+            .world_mut()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(oracle.world())
+            .count();
+        let mux_count = mux_app
+            .world_mut()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(mux_app.world())
+            .count();
+        assert_eq!(oracle_count, 1, "oracle workspace count after close");
+        assert_eq!(mux_count, 1, "mux workspace count after close");
     }
 }

@@ -765,6 +765,11 @@ impl Mux {
         Ok(&self.workspace(workspace)?.name)
     }
 
+    /// The root `NodeId` of the workspace's layout tree.
+    pub fn workspace_root(&self, workspace: WorkspaceId) -> MuxResult<NodeId> {
+        Ok(self.workspace(workspace)?.root)
+    }
+
     /// Serializes a workspace's tree to the wire `LayoutNode`, resolving each
     /// pane's cell size from the workspace's logical size (0 when unset).
     pub fn workspace_layout(&self, workspace: WorkspaceId) -> MuxResult<LayoutNode> {
