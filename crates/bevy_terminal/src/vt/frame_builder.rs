@@ -4,7 +4,6 @@
 //! `Term::damage()` mutates internal damage state. Callers must hold the
 //! `vt_state` lock; this module performs no locking.
 
-use crate::palette::acolor_to_bevy;
 use crate::vt::hyperlink::HyperlinkInterner;
 use crate::vt::mode_diff::TRACKED_MODES;
 use alacritty_terminal::Term;
@@ -14,11 +13,11 @@ use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use bevy::ecs::entity::Entity;
-use bevy::prelude::Color;
 use bevy_terminal_renderer::prelude::{
     Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri,
     Row, Run, SelectionKind, SelectionRange, SnapshotReason, ViCursor, ViewportPoint,
 };
+use ozmux_vt::color::{RgbaColor, acolor_to_rgba};
 use unicode_width::UnicodeWidthChar;
 
 /// Style bitmask constants (kept compatible with the schema's
@@ -340,8 +339,8 @@ fn coalesce_row<T>(
 
 #[derive(Debug, Clone, PartialEq)]
 struct RunAttrs {
-    fg: Color,
-    bg: Color,
+    fg: RgbaColor,
+    bg: RgbaColor,
     style: u16,
     hyperlink_id: Option<HyperlinkId>,
 }
@@ -349,8 +348,8 @@ struct RunAttrs {
 impl RunAttrs {
     fn from_cell(cell: &Cell, hyperlink_id: Option<HyperlinkId>) -> Self {
         Self {
-            fg: acolor_to_bevy(cell.fg),
-            bg: acolor_to_bevy(cell.bg),
+            fg: acolor_to_rgba(cell.fg),
+            bg: acolor_to_rgba(cell.bg),
             style: style_from_flags(cell.flags),
             hyperlink_id,
         }

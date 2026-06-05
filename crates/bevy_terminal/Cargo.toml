@@ -11,6 +11,7 @@ publish.workspace = true
 bevy = { workspace = true }
 bevy_terminal_renderer = { path = "../bevy_terminal_renderer" }
 alacritty_terminal = { workspace = true }
+ozmux_vt = { path = "../../daemon/ozmux_vt" }
 vte = "0.15"
 portable-pty = { workspace = true }
 crossbeam-channel = "0.5"

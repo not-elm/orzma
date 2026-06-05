@@ -1601,6 +1601,7 @@ dependencies = [
  "bevy_terminal_renderer",
  "crossbeam-channel",
  "gethostname",
+ "ozmux_vt",
  "percent-encoding",
  "portable-pty",
  "tracing",
