@@ -4,6 +4,7 @@
 use crate::direction::{CycleDirection, PaneDirection, SwapOffset};
 use crate::error::{MuxError, MuxResult};
 use crate::event::MuxEvent;
+use crate::geometry::{Rect, split_cells};
 use crate::id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
 use crate::surface::{Surface, SurfaceKind};
 use crate::tree::{LayoutNode, Pane, Side, Split, SplitOrientation};
@@ -15,8 +16,8 @@ const MIN_PANE_COLS: u16 = 10;
 /// Hard floor on a leaf pane's cell count along the top-bottom axis.
 const MIN_PANE_ROWS: u16 = 3;
 
-#[allow(dead_code)]
 struct Session {
+    #[expect(dead_code, reason = "read in Task 8 workspace selection/close")]
     workspaces: Vec<WorkspaceId>,
     active: WorkspaceId,
 }
@@ -24,9 +25,9 @@ struct Session {
 struct Workspace {
     root: NodeId,
     active_pane: PaneId,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "read in Task 8 rename")]
     name: String,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "read in Task 8 workspace ordering")]
     created_at: u32,
     size: Option<(u16, u16)>,
 }
@@ -114,15 +115,12 @@ impl Mux {
     }
 
     /// Each pane's normalized rect, DFS first-child-first. Port of `pane_bounds`.
-    pub fn pane_bounds(
-        &self,
-        workspace: WorkspaceId,
-    ) -> MuxResult<Vec<(PaneId, crate::geometry::Rect)>> {
+    pub fn pane_bounds(&self, workspace: WorkspaceId) -> MuxResult<Vec<(PaneId, Rect)>> {
         let root = self.workspace(workspace)?.root;
         let mut out = Vec::new();
         self.walk_bounds(
             root,
-            crate::geometry::Rect {
+            Rect {
                 x: 0.0,
                 y: 0.0,
                 w: 1.0,
@@ -219,6 +217,9 @@ impl Mux {
                 workspace,
                 surface_kind,
             },
+            // NOTE: `root` is the *replaced* node (the old pane slot), NOT the
+            // new split — the consumer uses it as a find-and-replace key to
+            // swap that child for `subtree`. Emitting Split(split) would be wrong.
             MuxEvent::LayoutChanged {
                 workspace,
                 root: NodeId::Pane(pane),
@@ -277,6 +278,9 @@ impl Mux {
         } else {
             let (cols, rows) = self.node_cell_extent(sibling);
             let subtree = self.build_layout_node(sibling, cols, rows);
+            // NOTE: `root` is the now-removed split id used as a find-and-replace
+            // key (the consumer swaps that subtree for the surviving sibling); it
+            // is intentionally a stale id, not a live arena reference.
             events.push(MuxEvent::LayoutChanged {
                 workspace,
                 root: NodeId::Split(split_id),
@@ -485,7 +489,7 @@ impl Mux {
 
         let split = &self.splits[ancestor];
         let (lhs, rhs) = (split.first, split.second);
-        let (current_lhs, current_rhs) = crate::geometry::split_cells(p_ancestor, split.ratio());
+        let (current_lhs, current_rhs) = split_cells(p_ancestor, split.ratio());
 
         let (shrink_cell, shrink_p) = if sign > 0 {
             (rhs, current_rhs)
@@ -528,29 +532,19 @@ impl Mux {
         Ok(events)
     }
 
-    fn walk_bounds(
-        &self,
-        node: NodeId,
-        bounds: crate::geometry::Rect,
-        out: &mut Vec<(PaneId, crate::geometry::Rect)>,
-    ) {
-        use crate::tree::SplitOrientation::{Horizontal, Vertical};
+    fn walk_bounds(&self, node: NodeId, bounds: Rect, out: &mut Vec<(PaneId, Rect)>) {
         match node {
             NodeId::Pane(p) => out.push((p, bounds)),
             NodeId::Split(s) => {
                 let split = &self.splits[s];
                 let r = split.ratio();
                 match split.orientation {
-                    Horizontal => {
+                    SplitOrientation::Horizontal => {
                         let lw = bounds.w * r;
-                        self.walk_bounds(
-                            split.first,
-                            crate::geometry::Rect { w: lw, ..bounds },
-                            out,
-                        );
+                        self.walk_bounds(split.first, Rect { w: lw, ..bounds }, out);
                         self.walk_bounds(
                             split.second,
-                            crate::geometry::Rect {
+                            Rect {
                                 x: bounds.x + lw,
                                 w: bounds.w - lw,
                                 ..bounds
@@ -558,16 +552,12 @@ impl Mux {
                             out,
                         );
                     }
-                    Vertical => {
+                    SplitOrientation::Vertical => {
                         let lh = bounds.h * r;
-                        self.walk_bounds(
-                            split.first,
-                            crate::geometry::Rect { h: lh, ..bounds },
-                            out,
-                        );
+                        self.walk_bounds(split.first, Rect { h: lh, ..bounds }, out);
                         self.walk_bounds(
                             split.second,
-                            crate::geometry::Rect {
+                            Rect {
                                 y: bounds.y + lh,
                                 h: bounds.h - lh,
                                 ..bounds
@@ -587,19 +577,18 @@ impl Mux {
         rows: u16,
         out: &mut Vec<(PaneId, (u16, u16))>,
     ) {
-        use crate::tree::SplitOrientation::{Horizontal, Vertical};
         match node {
             NodeId::Pane(p) => out.push((p, (cols, rows))),
             NodeId::Split(s) => {
                 let split = &self.splits[s];
                 match split.orientation {
-                    Horizontal => {
-                        let (lc, rc) = crate::geometry::split_cells(cols, split.ratio());
+                    SplitOrientation::Horizontal => {
+                        let (lc, rc) = split_cells(cols, split.ratio());
                         self.resolve_node(split.first, lc, rows, out);
                         self.resolve_node(split.second, rc, rows, out);
                     }
-                    Vertical => {
-                        let (lr, rr) = crate::geometry::split_cells(rows, split.ratio());
+                    SplitOrientation::Vertical => {
+                        let (lr, rr) = split_cells(rows, split.ratio());
                         self.resolve_node(split.first, cols, lr, out);
                         self.resolve_node(split.second, cols, rr, out);
                     }
@@ -727,11 +716,11 @@ impl Mux {
             let child = window[1];
             match split.orientation {
                 SplitOrientation::Horizontal => {
-                    let (lc, rc) = crate::geometry::split_cells(cols, split.ratio());
+                    let (lc, rc) = split_cells(cols, split.ratio());
                     cols = if child == split.first { lc } else { rc };
                 }
                 SplitOrientation::Vertical => {
-                    let (lr, rr) = crate::geometry::split_cells(rows, split.ratio());
+                    let (lr, rr) = split_cells(rows, split.ratio());
                     rows = if child == split.first { lr } else { rr };
                 }
             }
@@ -762,14 +751,14 @@ impl Mux {
                 let split = &self.splits[s];
                 let (first, second) = match split.orientation {
                     SplitOrientation::Horizontal => {
-                        let (lc, rc) = crate::geometry::split_cells(cols, split.ratio());
+                        let (lc, rc) = split_cells(cols, split.ratio());
                         (
                             self.build_layout_node(split.first, lc, rows),
                             self.build_layout_node(split.second, rc, rows),
                         )
                     }
                     SplitOrientation::Vertical => {
-                        let (lr, rr) = crate::geometry::split_cells(rows, split.ratio());
+                        let (lr, rr) = split_cells(rows, split.ratio());
                         (
                             self.build_layout_node(split.first, cols, lr),
                             self.build_layout_node(split.second, cols, rr),
@@ -829,7 +818,7 @@ impl Mux {
                 continue;
             }
             let child = window[1];
-            let (lc, rc) = crate::geometry::split_cells(p, split.ratio());
+            let (lc, rc) = split_cells(p, split.ratio());
             p = if child == split.first { lc } else { rc };
         }
         p
@@ -848,7 +837,7 @@ impl Mux {
         };
         let split = &self.splits[s];
         if split.orientation == axis {
-            let (lc, rc) = crate::geometry::split_cells(p, split.ratio());
+            let (lc, rc) = split_cells(p, split.ratio());
             self.satisfies_min_at(split.first, axis, lc, min_cells)
                 && self.satisfies_min_at(split.second, axis, rc, min_cells)
         } else {
@@ -931,7 +920,7 @@ mod tests {
             bounds,
             vec![(
                 pane,
-                crate::geometry::Rect {
+                Rect {
                     x: 0.0,
                     y: 0.0,
                     w: 1.0,
@@ -943,7 +932,7 @@ mod tests {
         assert_eq!(sizes, vec![(pane, (80, 24))]);
     }
 
-    use crate::geometry::Rect;
+    use Rect;
 
     fn split_after(mux: &mut Mux, pane: PaneId, orientation: SplitOrientation) -> PaneId {
         let events = mux
