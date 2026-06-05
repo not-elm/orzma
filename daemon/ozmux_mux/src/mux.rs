@@ -1,11 +1,19 @@
 //! The `Mux` aggregate: owns every slotmap and the active pointers, and
 //! exposes the mutation API (each op returns `Vec<MuxEvent>`) plus queries.
 
+use crate::direction::{CycleDirection, PaneDirection, SwapOffset};
 use crate::error::{MuxError, MuxResult};
+use crate::event::MuxEvent;
 use crate::id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
 use crate::surface::{Surface, SurfaceKind};
-use crate::tree::{Pane, Split};
+use crate::tree::{LayoutNode, Pane, Side, Split, SplitOrientation};
 use slotmap::SlotMap;
+
+/// Hard floor on a leaf pane's cell count along the left-right axis.
+const MIN_PANE_COLS: u16 = 10;
+
+/// Hard floor on a leaf pane's cell count along the top-bottom axis.
+const MIN_PANE_ROWS: u16 = 3;
 
 #[allow(dead_code)]
 struct Session {
@@ -13,11 +21,12 @@ struct Session {
     active: WorkspaceId,
 }
 
-#[allow(dead_code)]
 struct Workspace {
     root: NodeId,
     active_pane: PaneId,
+    #[allow(dead_code)]
     name: String,
+    #[allow(dead_code)]
     created_at: u32,
     size: Option<(u16, u16)>,
 }
@@ -30,7 +39,6 @@ pub struct Mux {
     splits: SlotMap<SplitId, Split>,
     panes: SlotMap<PaneId, Pane>,
     surfaces: SlotMap<SurfaceId, Surface>,
-    #[allow(dead_code)]
     name_counter: u32,
 }
 
@@ -161,6 +169,365 @@ impl Mux {
         Ok(out)
     }
 
+    /// Split `pane` along `orientation`, inserting a new pane (seeded with one
+    /// `surface_kind` surface) on `side`. Reparents `pane` and the new pane
+    /// under a fresh `Split` (ratio `0.5`) that takes `pane`'s old layout slot.
+    /// The new pane becomes the workspace's active pane.
+    ///
+    /// Port of `layout::split_in_tree` + `commands::split_pane`. Returns
+    /// `[PaneCreated, LayoutChanged{root: Pane(pane)}, ActivePaneChanged]`.
+    pub fn split_pane(
+        &mut self,
+        pane: PaneId,
+        orientation: SplitOrientation,
+        side: Side,
+        surface_kind: SurfaceKind,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        let workspace = self.owning_workspace_of_pane(pane)?;
+        let old_parent = self.pane(pane)?.parent;
+
+        let surface = self.surfaces.insert(Surface {
+            kind: surface_kind.clone(),
+            cwd: None,
+        });
+        let new_pane = self.panes.insert(Pane {
+            surfaces: vec![surface],
+            active_surface: surface,
+            parent: None,
+        });
+
+        let (first, second) = match side {
+            Side::Before => (NodeId::Pane(new_pane), NodeId::Pane(pane)),
+            Side::After => (NodeId::Pane(pane), NodeId::Pane(new_pane)),
+        };
+        let split = self
+            .splits
+            .insert(Split::new(orientation, 0.5, first, second, old_parent));
+        let split_node = NodeId::Split(split);
+
+        self.panes[pane].parent = Some(split_node);
+        self.panes[new_pane].parent = Some(split_node);
+        self.rewrite_child_pointer(workspace, old_parent, NodeId::Pane(pane), split_node);
+
+        self.workspaces[workspace].active_pane = new_pane;
+
+        let (cols, rows) = self.node_cell_extent(split_node);
+        let subtree = self.build_layout_node(split_node, cols, rows);
+        Ok(vec![
+            MuxEvent::PaneCreated {
+                pane: new_pane,
+                workspace,
+                surface_kind,
+            },
+            MuxEvent::LayoutChanged {
+                workspace,
+                root: NodeId::Pane(pane),
+                subtree,
+            },
+            MuxEvent::ActivePaneChanged {
+                workspace,
+                pane: new_pane,
+            },
+        ])
+    }
+
+    /// Close `pane`: promote its sibling into the grandparent slot, despawn the
+    /// pane, its parent split, and its surfaces. Errors if `pane` is the
+    /// workspace's only pane.
+    ///
+    /// Port of `layout::close_in_tree` + `commands::close_pane`. Emits
+    /// `[PaneClosed, SurfaceClosed*, (LayoutChanged | WorkspaceRootChanged),
+    /// ActivePaneChanged?]`.
+    pub fn close_pane(&mut self, pane: PaneId) -> MuxResult<Vec<MuxEvent>> {
+        let workspace = self.owning_workspace_of_pane(pane)?;
+        let parent = self.pane(pane)?.parent;
+        let split_id = match parent {
+            Some(NodeId::Split(s)) => s,
+            _ => return Err(MuxError::CannotCloseLastPaneInWorkspace(workspace)),
+        };
+
+        let split = self.splits[split_id].clone();
+        let sibling = if split.first == NodeId::Pane(pane) {
+            split.second
+        } else {
+            split.first
+        };
+        let grandparent = split.parent;
+
+        self.set_node_parent(sibling, grandparent);
+        self.rewrite_child_pointer(workspace, grandparent, NodeId::Split(split_id), sibling);
+
+        let removed_surfaces = self.panes[pane].surfaces.clone();
+        for surface in &removed_surfaces {
+            self.surfaces.remove(*surface);
+        }
+        self.panes.remove(pane);
+        self.splits.remove(split_id);
+
+        let mut events = vec![MuxEvent::PaneClosed { pane }];
+        for surface in removed_surfaces {
+            events.push(MuxEvent::SurfaceClosed { surface });
+        }
+
+        let reached_root = grandparent.is_none();
+        if reached_root {
+            let (cols, rows) = self.node_cell_extent(sibling);
+            let root = self.build_layout_node(sibling, cols, rows);
+            events.push(MuxEvent::WorkspaceRootChanged { workspace, root });
+        } else {
+            let (cols, rows) = self.node_cell_extent(sibling);
+            let subtree = self.build_layout_node(sibling, cols, rows);
+            events.push(MuxEvent::LayoutChanged {
+                workspace,
+                root: NodeId::Split(split_id),
+                subtree,
+            });
+        }
+
+        if self.workspaces[workspace].active_pane == pane {
+            let survivor = self.leftmost_pane(sibling);
+            self.workspaces[workspace].active_pane = survivor;
+            events.push(MuxEvent::ActivePaneChanged {
+                workspace,
+                pane: survivor,
+            });
+        }
+
+        Ok(events)
+    }
+
+    /// Focus `pane`: set its workspace's active pane. Emits
+    /// `[ActivePaneChanged]`, or `[]` if already active.
+    pub fn focus_pane(&mut self, pane: PaneId) -> MuxResult<Vec<MuxEvent>> {
+        let workspace = self.owning_workspace_of_pane(pane)?;
+        if self.workspaces[workspace].active_pane == pane {
+            return Ok(vec![]);
+        }
+        self.workspaces[workspace].active_pane = pane;
+        Ok(vec![MuxEvent::ActivePaneChanged { workspace, pane }])
+    }
+
+    /// Move focus to the next/previous pane in DFS order (wrapping). Emits
+    /// `[ActivePaneChanged]`, or `[]` if it resolves to the current pane.
+    pub fn cycle_pane(
+        &mut self,
+        workspace: WorkspaceId,
+        direction: CycleDirection,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        let ordered = self.ordered_panes(workspace)?;
+        if ordered.is_empty() {
+            return Ok(vec![]);
+        }
+        let active = self.workspaces[workspace].active_pane;
+        let i = ordered.iter().position(|p| *p == active).unwrap_or(0);
+        let len = ordered.len() as isize;
+        let delta = match direction {
+            CycleDirection::Prev => -1,
+            CycleDirection::Next => 1,
+        };
+        let j = ((i as isize + delta).rem_euclid(len)) as usize;
+        let target = ordered[j];
+        self.focus_pane(target)
+    }
+
+    /// Move focus to the geometric neighbor of `pane` in `direction` (with
+    /// wrap-around). Emits `[ActivePaneChanged]`, or `[]` when no neighbor
+    /// exists or it resolves to `pane`.
+    pub fn navigate(&mut self, pane: PaneId, direction: PaneDirection) -> MuxResult<Vec<MuxEvent>> {
+        let workspace = self.owning_workspace_of_pane(pane)?;
+        let bounds = self.pane_bounds(workspace)?;
+        match crate::direction::pane_in_direction(&bounds, pane, direction, |_| 0) {
+            Some(target) => self.focus_pane(target),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Set the pane's focused surface. Emits `[ActiveSurfaceChanged]`, or `[]`
+    /// if unchanged. Errors if `surface` is not one of the pane's surfaces.
+    pub fn set_active_surface(
+        &mut self,
+        pane: PaneId,
+        surface: SurfaceId,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        let p = self.pane(pane)?;
+        if !p.surfaces.contains(&surface) {
+            return Err(MuxError::SurfaceNotFound(surface));
+        }
+        if p.active_surface == surface {
+            return Ok(vec![]);
+        }
+        self.panes[pane].active_surface = surface;
+        Ok(vec![MuxEvent::ActiveSurfaceChanged { pane, surface }])
+    }
+
+    /// Swap `pane` with its prev/next neighbor in DFS leaf order, keeping each
+    /// SLOT's ratio (slot-pinned, since ratios live on the split slots).
+    /// `[]` (no-op) for a single-pane workspace.
+    ///
+    /// Port of `layout::swap_in_tree` + `commands::swap_pane`. Emits a
+    /// `LayoutChanged` for each affected slot.
+    pub fn swap_pane(&mut self, pane: PaneId, offset: SwapOffset) -> MuxResult<Vec<MuxEvent>> {
+        let workspace = self.owning_workspace_of_pane(pane)?;
+        let ordered = self.ordered_panes(workspace)?;
+        if ordered.len() < 2 {
+            return Ok(vec![]);
+        }
+        let i = ordered
+            .iter()
+            .position(|p| *p == pane)
+            .ok_or(MuxError::PaneNotFound(pane))?;
+        let len = ordered.len() as isize;
+        let delta = match offset {
+            SwapOffset::Prev => -1,
+            SwapOffset::Next => 1,
+        };
+        let j = ((i as isize + delta).rem_euclid(len)) as usize;
+        let other = ordered[j];
+        if other == pane {
+            return Ok(vec![]);
+        }
+
+        let pa = self.pane(pane)?.parent.ok_or(MuxError::MissingParentCell)?;
+        let pb = self
+            .pane(other)?
+            .parent
+            .ok_or(MuxError::MissingParentCell)?;
+        let side_a = self.slot_side_of(pa, NodeId::Pane(pane));
+        let side_b = self.slot_side_of(pb, NodeId::Pane(other));
+
+        self.write_split_slot(pa, side_a, NodeId::Pane(other));
+        self.write_split_slot(pb, side_b, NodeId::Pane(pane));
+        self.set_node_parent(NodeId::Pane(pane), Some(pb));
+        self.set_node_parent(NodeId::Pane(other), Some(pa));
+
+        let mut events = Vec::new();
+        let mut affected = vec![pa];
+        if pb != pa {
+            affected.push(pb);
+        }
+        for node in affected {
+            let (cols, rows) = self.node_cell_extent(node);
+            let subtree = self.build_layout_node(node, cols, rows);
+            events.push(MuxEvent::LayoutChanged {
+                workspace,
+                root: node,
+                subtree,
+            });
+        }
+        Ok(events)
+    }
+
+    /// Store the workspace's terminal size. Emits a `PaneResized` for every
+    /// pane whose resolved cell size changed.
+    pub fn set_workspace_size(
+        &mut self,
+        workspace: WorkspaceId,
+        cols: u16,
+        rows: u16,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        let before = self.resolved_sizes_or_empty(workspace);
+        self.workspace(workspace)?;
+        self.workspaces[workspace].size = Some((cols, rows));
+        let after = self.resolve_sizes(workspace, cols, rows)?;
+
+        let mut events = Vec::new();
+        for (pane, (c, r)) in after {
+            let changed = before
+                .iter()
+                .find(|(p, _)| *p == pane)
+                .map(|(_, prev)| *prev != (c, r))
+                .unwrap_or(true);
+            if changed {
+                events.push(MuxEvent::PaneResized {
+                    pane,
+                    cols: c,
+                    rows: r,
+                });
+            }
+        }
+        Ok(events)
+    }
+
+    /// Resize the split controlling `pane`'s extent in `direction` by up to
+    /// `amount` cells, clamped by descendant min-cell floors. `[]` (no-op)
+    /// when the workspace has no size or no matching ancestor split.
+    ///
+    /// Port of `resize::resize_split_for_pane`. Emits
+    /// `[LayoutRatioChanged, PaneResized*]`.
+    pub fn resize_pane(
+        &mut self,
+        pane: PaneId,
+        direction: PaneDirection,
+        amount: u16,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        let workspace = self.owning_workspace_of_pane(pane)?;
+        let Some((ws_cols, ws_rows)) = self.workspace(workspace)?.size else {
+            return Ok(vec![]);
+        };
+        if ws_cols == 0 || ws_rows == 0 {
+            return Ok(vec![]);
+        }
+
+        let (axis, sign) = direction_to_axis_sign(direction);
+        let Some(ancestor) = self.find_matching_ancestor(NodeId::Pane(pane), axis) else {
+            return Ok(vec![]);
+        };
+
+        let workspace_p = match axis {
+            SplitOrientation::Horizontal => ws_cols,
+            SplitOrientation::Vertical => ws_rows,
+        };
+        let min_cells = match axis {
+            SplitOrientation::Horizontal => MIN_PANE_COLS,
+            SplitOrientation::Vertical => MIN_PANE_ROWS,
+        };
+        let p_ancestor = self.compute_p_at(ancestor, axis, workspace_p);
+
+        let split = &self.splits[ancestor];
+        let (lhs, rhs) = (split.first, split.second);
+        let (current_lhs, current_rhs) = crate::geometry::split_cells(p_ancestor, split.ratio());
+
+        let (shrink_cell, shrink_p) = if sign > 0 {
+            (rhs, current_rhs)
+        } else {
+            (lhs, current_lhs)
+        };
+
+        let applied = self.available_to_shrink(shrink_cell, axis, shrink_p, min_cells, amount);
+        if applied == 0 {
+            return Ok(vec![]);
+        }
+
+        let signed_delta = sign * applied as i16;
+        let new_lhs_cells: u16 = (i32::from(current_lhs) + i32::from(signed_delta))
+            .clamp(0, i32::from(p_ancestor)) as u16;
+        let ratio = f32::from(new_lhs_cells) / f32::from(p_ancestor);
+
+        let before = self.resolve_sizes(workspace, ws_cols, ws_rows)?;
+        self.splits[ancestor].set_ratio(ratio);
+        let after = self.resolve_sizes(workspace, ws_cols, ws_rows)?;
+
+        let mut events = vec![MuxEvent::LayoutRatioChanged {
+            split: ancestor,
+            ratio: self.splits[ancestor].ratio(),
+        }];
+        for (pane_id, (c, r)) in after {
+            let changed = before
+                .iter()
+                .find(|(p, _)| *p == pane_id)
+                .map(|(_, prev)| *prev != (c, r))
+                .unwrap_or(true);
+            if changed {
+                events.push(MuxEvent::PaneResized {
+                    pane: pane_id,
+                    cols: c,
+                    rows: r,
+                });
+            }
+        }
+        Ok(events)
+    }
+
     fn walk_bounds(
         &self,
         node: NodeId,
@@ -254,6 +621,273 @@ impl Mux {
     fn surface(&self, id: SurfaceId) -> MuxResult<&Surface> {
         self.surfaces.get(id).ok_or(MuxError::SurfaceNotFound(id))
     }
+
+    fn owning_workspace_of_pane(&self, pane: PaneId) -> MuxResult<WorkspaceId> {
+        self.pane(pane)?;
+        self.owning_workspace_of_node(NodeId::Pane(pane))
+            .ok_or(MuxError::PaneNotFound(pane))
+    }
+
+    fn owning_workspace_of_node(&self, node: NodeId) -> Option<WorkspaceId> {
+        let mut cursor = node;
+        loop {
+            let parent = match cursor {
+                NodeId::Pane(p) => self.panes.get(p)?.parent,
+                NodeId::Split(s) => self.splits.get(s)?.parent,
+            };
+            match parent {
+                Some(p) => cursor = p,
+                None => break,
+            }
+        }
+        self.workspaces
+            .iter()
+            .find(|(_, ws)| ws.root == cursor)
+            .map(|(id, _)| id)
+    }
+
+    fn rewrite_child_pointer(
+        &mut self,
+        workspace: WorkspaceId,
+        parent: Option<NodeId>,
+        from: NodeId,
+        to: NodeId,
+    ) {
+        match parent {
+            Some(p) => self.replace_split_child(p, from, to),
+            None => self.workspaces[workspace].root = to,
+        }
+    }
+
+    fn replace_split_child(&mut self, parent: NodeId, from: NodeId, to: NodeId) {
+        if let NodeId::Split(s) = parent {
+            let split = &mut self.splits[s];
+            if split.first == from {
+                split.first = to;
+            } else if split.second == from {
+                split.second = to;
+            }
+        }
+    }
+
+    fn slot_side_of(&self, parent: NodeId, child: NodeId) -> Side {
+        match parent {
+            NodeId::Split(s) if self.splits[s].first == child => Side::Before,
+            _ => Side::After,
+        }
+    }
+
+    fn write_split_slot(&mut self, parent: NodeId, side: Side, child: NodeId) {
+        if let NodeId::Split(s) = parent {
+            match side {
+                Side::Before => self.splits[s].first = child,
+                Side::After => self.splits[s].second = child,
+            }
+        }
+    }
+
+    fn set_node_parent(&mut self, node: NodeId, parent: Option<NodeId>) {
+        match node {
+            NodeId::Pane(p) => self.panes[p].parent = parent,
+            NodeId::Split(s) => self.splits[s].parent = parent,
+        }
+    }
+
+    fn leftmost_pane(&self, start: NodeId) -> PaneId {
+        let mut cur = start;
+        loop {
+            match cur {
+                NodeId::Pane(p) => return p,
+                NodeId::Split(s) => cur = self.splits[s].first,
+            }
+        }
+    }
+
+    fn node_cell_extent(&self, node: NodeId) -> (u16, u16) {
+        let Some(workspace) = self.owning_workspace_of_node(node) else {
+            return (0, 0);
+        };
+        let Some((mut cols, mut rows)) = self.workspaces[workspace].size else {
+            return (0, 0);
+        };
+
+        let mut path = vec![node];
+        let mut cursor = node;
+        while let Some(parent) = self.parent_of(cursor) {
+            path.push(parent);
+            cursor = parent;
+        }
+        path.reverse();
+
+        for window in path.windows(2) {
+            let NodeId::Split(s) = window[0] else {
+                continue;
+            };
+            let split = &self.splits[s];
+            let child = window[1];
+            match split.orientation {
+                SplitOrientation::Horizontal => {
+                    let (lc, rc) = crate::geometry::split_cells(cols, split.ratio());
+                    cols = if child == split.first { lc } else { rc };
+                }
+                SplitOrientation::Vertical => {
+                    let (lr, rr) = crate::geometry::split_cells(rows, split.ratio());
+                    rows = if child == split.first { lr } else { rr };
+                }
+            }
+        }
+        (cols, rows)
+    }
+
+    fn parent_of(&self, node: NodeId) -> Option<NodeId> {
+        match node {
+            NodeId::Pane(p) => self.panes.get(p).and_then(|n| n.parent),
+            NodeId::Split(s) => self.splits.get(s).and_then(|n| n.parent),
+        }
+    }
+
+    fn build_layout_node(&self, node: NodeId, cols: u16, rows: u16) -> LayoutNode {
+        match node {
+            NodeId::Pane(p) => {
+                let pane = &self.panes[p];
+                let surface_kind = self.surfaces[pane.active_surface].kind.clone();
+                LayoutNode::Pane {
+                    id: p,
+                    surface_kind,
+                    cols,
+                    rows,
+                }
+            }
+            NodeId::Split(s) => {
+                let split = &self.splits[s];
+                let (first, second) = match split.orientation {
+                    SplitOrientation::Horizontal => {
+                        let (lc, rc) = crate::geometry::split_cells(cols, split.ratio());
+                        (
+                            self.build_layout_node(split.first, lc, rows),
+                            self.build_layout_node(split.second, rc, rows),
+                        )
+                    }
+                    SplitOrientation::Vertical => {
+                        let (lr, rr) = crate::geometry::split_cells(rows, split.ratio());
+                        (
+                            self.build_layout_node(split.first, cols, lr),
+                            self.build_layout_node(split.second, cols, rr),
+                        )
+                    }
+                };
+                LayoutNode::Split {
+                    id: s,
+                    orientation: split.orientation,
+                    ratio: split.ratio(),
+                    first: Box::new(first),
+                    second: Box::new(second),
+                }
+            }
+        }
+    }
+
+    fn resolved_sizes_or_empty(&self, workspace: WorkspaceId) -> Vec<(PaneId, (u16, u16))> {
+        match self.workspaces.get(workspace).and_then(|w| w.size) {
+            Some((cols, rows)) => self
+                .resolve_sizes(workspace, cols, rows)
+                .unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    fn find_matching_ancestor(&self, start: NodeId, axis: SplitOrientation) -> Option<SplitId> {
+        let mut cursor = self.parent_of(start);
+        while let Some(node) = cursor {
+            if let NodeId::Split(s) = node
+                && self.splits[s].orientation == axis
+            {
+                return Some(s);
+            }
+            cursor = self.parent_of(node);
+        }
+        None
+    }
+
+    fn compute_p_at(&self, target: SplitId, axis: SplitOrientation, workspace_p: u16) -> u16 {
+        let target_node = NodeId::Split(target);
+        let mut path = vec![target_node];
+        let mut cursor = target_node;
+        while let Some(parent) = self.parent_of(cursor) {
+            path.push(parent);
+            cursor = parent;
+        }
+        path.reverse();
+
+        let mut p = workspace_p;
+        for window in path.windows(2) {
+            let NodeId::Split(s) = window[0] else {
+                continue;
+            };
+            let split = &self.splits[s];
+            if split.orientation != axis {
+                continue;
+            }
+            let child = window[1];
+            let (lc, rc) = crate::geometry::split_cells(p, split.ratio());
+            p = if child == split.first { lc } else { rc };
+        }
+        p
+    }
+
+    fn satisfies_min_at(
+        &self,
+        cell: NodeId,
+        axis: SplitOrientation,
+        p: u16,
+        min_cells: u16,
+    ) -> bool {
+        let s = match cell {
+            NodeId::Pane(_) => return p >= min_cells,
+            NodeId::Split(s) => s,
+        };
+        let split = &self.splits[s];
+        if split.orientation == axis {
+            let (lc, rc) = crate::geometry::split_cells(p, split.ratio());
+            self.satisfies_min_at(split.first, axis, lc, min_cells)
+                && self.satisfies_min_at(split.second, axis, rc, min_cells)
+        } else {
+            self.satisfies_min_at(split.first, axis, p, min_cells)
+                && self.satisfies_min_at(split.second, axis, p, min_cells)
+        }
+    }
+
+    fn available_to_shrink(
+        &self,
+        cell: NodeId,
+        axis: SplitOrientation,
+        p_sub: u16,
+        min_cells: u16,
+        requested: u16,
+    ) -> u16 {
+        if p_sub == 0 {
+            return 0;
+        }
+        let upper = requested.min(p_sub);
+        let mut max_d = 0u16;
+        for d in 1..=upper {
+            if self.satisfies_min_at(cell, axis, p_sub - d, min_cells) {
+                max_d = d;
+            } else {
+                break;
+            }
+        }
+        max_d
+    }
+}
+
+fn direction_to_axis_sign(d: PaneDirection) -> (SplitOrientation, i16) {
+    match d {
+        PaneDirection::Right => (SplitOrientation::Horizontal, 1),
+        PaneDirection::Left => (SplitOrientation::Horizontal, -1),
+        PaneDirection::Down => (SplitOrientation::Vertical, 1),
+        PaneDirection::Up => (SplitOrientation::Vertical, -1),
+    }
 }
 
 #[cfg(test)]
@@ -307,5 +941,718 @@ mod tests {
         );
         let sizes = mux.resolve_sizes(ws, 80, 24).unwrap();
         assert_eq!(sizes, vec![(pane, (80, 24))]);
+    }
+
+    use crate::geometry::Rect;
+
+    fn split_after(mux: &mut Mux, pane: PaneId, orientation: SplitOrientation) -> PaneId {
+        let events = mux
+            .split_pane(pane, orientation, Side::After, SurfaceKind::Terminal)
+            .unwrap();
+        match events[0] {
+            MuxEvent::PaneCreated { pane, .. } => pane,
+            _ => panic!("first event must be PaneCreated"),
+        }
+    }
+
+    fn root_split(mux: &Mux, workspace: WorkspaceId) -> SplitId {
+        match mux.workspaces[workspace].root {
+            NodeId::Split(s) => s,
+            NodeId::Pane(_) => panic!("workspace root is a pane, not a split"),
+        }
+    }
+
+    #[test]
+    fn split_pane_inserts_split_reparents_target_and_sets_grows() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let target = mux.active_pane(ws).unwrap();
+
+        let events = mux
+            .split_pane(
+                target,
+                SplitOrientation::Horizontal,
+                Side::After,
+                SurfaceKind::Terminal,
+            )
+            .unwrap();
+
+        let new_pane = match events[0] {
+            MuxEvent::PaneCreated {
+                pane, workspace, ..
+            } => {
+                assert_eq!(workspace, ws);
+                pane
+            }
+            _ => panic!("first event must be PaneCreated"),
+        };
+
+        let split = root_split(&mux, ws);
+        assert_eq!(mux.splits[split].orientation, SplitOrientation::Horizontal);
+        assert_eq!(mux.splits[split].ratio(), 0.5);
+        assert_eq!(mux.splits[split].first, NodeId::Pane(target));
+        assert_eq!(mux.splits[split].second, NodeId::Pane(new_pane));
+        assert_eq!(mux.splits[split].parent, None);
+        assert_eq!(mux.panes[target].parent, Some(NodeId::Split(split)));
+        assert_eq!(mux.panes[new_pane].parent, Some(NodeId::Split(split)));
+        assert_eq!(mux.active_pane(ws).unwrap(), new_pane);
+
+        match &events[1] {
+            MuxEvent::LayoutChanged {
+                workspace,
+                root,
+                subtree,
+            } => {
+                assert_eq!(*workspace, ws);
+                assert_eq!(*root, NodeId::Pane(target));
+                match subtree {
+                    LayoutNode::Split { first, second, .. } => {
+                        assert!(matches!(**first, LayoutNode::Pane { id, .. } if id == target));
+                        assert!(matches!(**second, LayoutNode::Pane { id, .. } if id == new_pane));
+                    }
+                    _ => panic!("subtree must be a Split"),
+                }
+            }
+            _ => panic!("second event must be LayoutChanged"),
+        }
+
+        assert_eq!(
+            events[2],
+            MuxEvent::ActivePaneChanged {
+                workspace: ws,
+                pane: new_pane,
+            }
+        );
+    }
+
+    #[test]
+    fn split_pane_before_orders_new_then_target() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let target = mux.active_pane(ws).unwrap();
+
+        let events = mux
+            .split_pane(
+                target,
+                SplitOrientation::Vertical,
+                Side::Before,
+                SurfaceKind::Terminal,
+            )
+            .unwrap();
+        let new_pane = match events[0] {
+            MuxEvent::PaneCreated { pane, .. } => pane,
+            _ => panic!("first event must be PaneCreated"),
+        };
+
+        let split = root_split(&mux, ws);
+        assert_eq!(
+            (mux.splits[split].first, mux.splits[split].second),
+            (NodeId::Pane(new_pane), NodeId::Pane(target)),
+            "Side::Before puts new pane first"
+        );
+        match &events[1] {
+            MuxEvent::LayoutChanged { subtree, .. } => match subtree {
+                LayoutNode::Split { first, second, .. } => {
+                    assert!(matches!(**first, LayoutNode::Pane { id, .. } if id == new_pane));
+                    assert!(matches!(**second, LayoutNode::Pane { id, .. } if id == target));
+                }
+                _ => panic!("subtree must be a Split"),
+            },
+            _ => panic!("second event must be LayoutChanged"),
+        }
+    }
+
+    #[test]
+    fn close_pane_promotes_sibling_into_slot_and_despawns_split() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let target = mux.active_pane(ws).unwrap();
+        let new_pane = split_after(&mut mux, target, SplitOrientation::Horizontal);
+        let split = root_split(&mux, ws);
+
+        let events = mux.close_pane(new_pane).unwrap();
+
+        assert!(mux.panes.get(new_pane).is_none(), "closed pane removed");
+        assert!(mux.splits.get(split).is_none(), "parent split removed");
+        assert_eq!(mux.workspaces[ws].root, NodeId::Pane(target));
+        assert_eq!(mux.panes[target].parent, None);
+        assert_eq!(mux.active_pane(ws).unwrap(), target);
+
+        assert_eq!(events[0], MuxEvent::PaneClosed { pane: new_pane });
+    }
+
+    #[test]
+    fn close_pane_at_root_emits_workspace_root_changed() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let target = mux.active_pane(ws).unwrap();
+        let new_pane = split_after(&mut mux, target, SplitOrientation::Horizontal);
+
+        let events = mux.close_pane(new_pane).unwrap();
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                MuxEvent::WorkspaceRootChanged { workspace, root }
+                    if *workspace == ws
+                        && matches!(root, LayoutNode::Pane { id, .. } if *id == target)
+            )),
+            "collapse to root emits WorkspaceRootChanged with the surviving pane: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, MuxEvent::LayoutChanged { .. })),
+            "root collapse must not also emit LayoutChanged"
+        );
+    }
+
+    #[test]
+    fn close_non_root_split_emits_layout_changed() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p1 = mux.active_pane(ws).unwrap();
+        let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
+        let p3 = split_after(&mut mux, p2, SplitOrientation::Vertical);
+        // p3's split (p2's current parent) is the inner SplitV, NOT the root SplitH;
+        // closing p3 collapses it without reaching the root.
+        let inner_split = match mux.panes[p3].parent {
+            Some(NodeId::Split(s)) => s,
+            _ => panic!("p3 must have a split parent"),
+        };
+
+        let events = mux.close_pane(p3).unwrap();
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                MuxEvent::LayoutChanged { workspace, root, subtree }
+                    if *workspace == ws
+                        && matches!(root, NodeId::Split(s) if *s == inner_split)
+                        && matches!(subtree, LayoutNode::Pane { id, .. } if *id == p2)
+            )),
+            "closing a non-root sibling emits LayoutChanged for the removed split's slot: {events:?}"
+        );
+    }
+
+    #[test]
+    fn close_last_pane_errors() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        assert_eq!(
+            mux.close_pane(pane),
+            Err(MuxError::CannotCloseLastPaneInWorkspace(ws))
+        );
+    }
+
+    #[test]
+    fn closing_pane_removes_its_surfaces() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let target = mux.active_pane(ws).unwrap();
+        let new_pane = split_after(&mut mux, target, SplitOrientation::Horizontal);
+        let removed_surface = mux.active_surface(new_pane).unwrap();
+
+        let events = mux.close_pane(new_pane).unwrap();
+
+        assert_eq!(
+            mux.surface(removed_surface),
+            Err(MuxError::SurfaceNotFound(removed_surface)),
+            "the closed pane's surface is gone"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                MuxEvent::SurfaceClosed { surface } if *surface == removed_surface
+            )),
+            "a SurfaceClosed is emitted for each removed surface: {events:?}"
+        );
+    }
+
+    #[test]
+    fn focus_pane_emits_only_on_change() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p1 = mux.active_pane(ws).unwrap();
+        let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
+        assert_eq!(mux.active_pane(ws).unwrap(), p2);
+
+        assert_eq!(mux.focus_pane(p2).unwrap(), vec![]);
+        assert_eq!(
+            mux.focus_pane(p1).unwrap(),
+            vec![MuxEvent::ActivePaneChanged {
+                workspace: ws,
+                pane: p1,
+            }]
+        );
+    }
+
+    #[test]
+    fn cycle_pane_wraps_in_dfs_order() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p1 = mux.active_pane(ws).unwrap();
+        let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
+        let p3 = split_after(&mut mux, p2, SplitOrientation::Horizontal);
+        let ordered = mux.ordered_panes(ws).unwrap();
+        assert_eq!(ordered, vec![p1, p2, p3]);
+
+        mux.focus_pane(p1).unwrap();
+        assert_eq!(
+            mux.cycle_pane(ws, CycleDirection::Next).unwrap(),
+            vec![MuxEvent::ActivePaneChanged {
+                workspace: ws,
+                pane: p2,
+            }]
+        );
+        mux.focus_pane(p1).unwrap();
+        assert_eq!(
+            mux.cycle_pane(ws, CycleDirection::Prev).unwrap(),
+            vec![MuxEvent::ActivePaneChanged {
+                workspace: ws,
+                pane: p3,
+            }],
+            "Prev wraps to the last pane"
+        );
+    }
+
+    #[test]
+    fn set_active_surface_changed_only() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let s1 = mux.active_surface(pane).unwrap();
+        let s2 = mux.surfaces.insert(Surface {
+            kind: SurfaceKind::Terminal,
+            cwd: None,
+        });
+        mux.panes[pane].surfaces.push(s2);
+
+        assert_eq!(mux.set_active_surface(pane, s1).unwrap(), vec![]);
+        assert_eq!(
+            mux.set_active_surface(pane, s2).unwrap(),
+            vec![MuxEvent::ActiveSurfaceChanged { pane, surface: s2 }]
+        );
+        assert_eq!(
+            mux.set_active_surface(pane, SurfaceId::default()),
+            Err(MuxError::SurfaceNotFound(SurfaceId::default()))
+        );
+    }
+
+    fn dir_bounds(mux: &Mux, ws: WorkspaceId, pane: PaneId) -> Rect {
+        mux.pane_bounds(ws)
+            .unwrap()
+            .into_iter()
+            .find(|(p, _)| *p == pane)
+            .unwrap()
+            .1
+    }
+
+    #[test]
+    fn horizontal_split_right_then_left_wraps() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let left = mux.active_pane(ws).unwrap();
+        let right = split_after(&mut mux, left, SplitOrientation::Horizontal);
+        let bounds = mux.pane_bounds(ws).unwrap();
+
+        assert_eq!(
+            crate::direction::pane_in_direction(&bounds, left, PaneDirection::Right, |_| 0),
+            Some(right)
+        );
+        assert_eq!(
+            crate::direction::pane_in_direction(&bounds, left, PaneDirection::Left, |_| 0),
+            Some(right),
+            "wrap from left edge picks the rightmost pane"
+        );
+        assert_eq!(
+            crate::direction::pane_in_direction(&bounds, right, PaneDirection::Up, |_| 0),
+            None,
+            "1xN strip has no candidate on the perpendicular axis"
+        );
+    }
+
+    #[test]
+    fn vertical_split_down_and_up_wrap() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let top = mux.active_pane(ws).unwrap();
+        let bottom = split_after(&mut mux, top, SplitOrientation::Vertical);
+        let bounds = mux.pane_bounds(ws).unwrap();
+
+        assert_eq!(
+            crate::direction::pane_in_direction(&bounds, top, PaneDirection::Down, |_| 0),
+            Some(bottom)
+        );
+        assert_eq!(
+            crate::direction::pane_in_direction(&bounds, top, PaneDirection::Up, |_| 0),
+            Some(bottom),
+            "wrap from top edge"
+        );
+    }
+
+    #[test]
+    fn single_pane_returns_none_in_all_directions() {
+        let mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p = mux.active_pane(ws).unwrap();
+        assert_eq!(
+            dir_bounds(&mux, ws, p),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            }
+        );
+        let bounds = mux.pane_bounds(ws).unwrap();
+        for d in [
+            PaneDirection::Up,
+            PaneDirection::Down,
+            PaneDirection::Left,
+            PaneDirection::Right,
+        ] {
+            assert_eq!(
+                crate::direction::pane_in_direction(&bounds, p, d, |_| 0),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn two_by_two_grid_picks_geometric_neighbor() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p1 = mux.active_pane(ws).unwrap();
+        let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
+        let p3 = split_after(&mut mux, p1, SplitOrientation::Vertical);
+        let p4 = split_after(&mut mux, p2, SplitOrientation::Vertical);
+        let (tl, tr, bl, br) = (p1, p2, p3, p4);
+
+        let r = |e: PaneId| dir_bounds(&mux, ws, e);
+        assert!(r(tl).x < r(tr).x && r(tl).y < r(bl).y);
+        assert!(r(br).x > r(bl).x && r(br).y > r(tr).y);
+
+        let bounds = mux.pane_bounds(ws).unwrap();
+        let nav = |from, d| crate::direction::pane_in_direction(&bounds, from, d, |_| 0);
+        assert_eq!(nav(tl, PaneDirection::Right), Some(tr));
+        assert_eq!(nav(tl, PaneDirection::Down), Some(bl));
+        assert_eq!(nav(br, PaneDirection::Left), Some(bl));
+        assert_eq!(nav(br, PaneDirection::Up), Some(tr));
+    }
+
+    #[test]
+    fn deep_horizontal_split_keeps_immediate_neighbor() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let first = mux.active_pane(ws).unwrap();
+        let mut current_pane = first;
+        let mut second_last_pane = first;
+        for _ in 2..=21_u32 {
+            second_last_pane = current_pane;
+            current_pane = split_after(&mut mux, current_pane, SplitOrientation::Horizontal);
+        }
+        let bounds = mux.pane_bounds(ws).unwrap();
+        assert_eq!(
+            crate::direction::pane_in_direction(&bounds, current_pane, PaneDirection::Left, |_| 0),
+            Some(second_last_pane)
+        );
+    }
+
+    #[test]
+    fn tiebreak_prefers_most_recent_active_point() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let tl = mux.active_pane(ws).unwrap();
+        let r = split_after(&mut mux, tl, SplitOrientation::Horizontal);
+        let bl = split_after(&mut mux, tl, SplitOrientation::Vertical);
+        let bounds = mux.pane_bounds(ws).unwrap();
+
+        let scores_tl_higher = |p: PaneId| {
+            if p == tl {
+                2u64
+            } else if p == bl {
+                1
+            } else {
+                0
+            }
+        };
+        assert_eq!(
+            crate::direction::pane_in_direction(&bounds, r, PaneDirection::Left, scores_tl_higher),
+            Some(tl),
+            "tl has higher score so wins tiebreak"
+        );
+
+        let scores_bl_higher = |p: PaneId| {
+            if p == bl {
+                2u64
+            } else if p == tl {
+                1
+            } else {
+                0
+            }
+        };
+        assert_eq!(
+            crate::direction::pane_in_direction(&bounds, r, PaneDirection::Left, scores_bl_higher),
+            Some(bl)
+        );
+    }
+
+    #[test]
+    fn navigate_focuses_geometric_neighbor() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let left = mux.active_pane(ws).unwrap();
+        let right = split_after(&mut mux, left, SplitOrientation::Horizontal);
+        mux.focus_pane(left).unwrap();
+
+        assert_eq!(
+            mux.navigate(left, PaneDirection::Right).unwrap(),
+            vec![MuxEvent::ActivePaneChanged {
+                workspace: ws,
+                pane: right,
+            }]
+        );
+        assert_eq!(mux.active_pane(ws).unwrap(), right);
+        assert_eq!(
+            mux.navigate(right, PaneDirection::Down).unwrap(),
+            vec![],
+            "no neighbor downward in a 1x2 horizontal strip"
+        );
+    }
+
+    fn swap_resolved(mux: &Mux, ws: WorkspaceId) -> Vec<(PaneId, (u16, u16))> {
+        mux.resolve_sizes(ws, 120, 40).unwrap()
+    }
+
+    #[test]
+    fn swap_pane_swaps_positions_and_slot_grows() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let a = mux.active_pane(ws).unwrap();
+        let b = split_after(&mut mux, a, SplitOrientation::Horizontal);
+        let split = root_split(&mux, ws);
+        mux.set_workspace_size(ws, 120, 40).unwrap();
+        // Distinct ratio so slot-pinning is observable: slot A (first) gets 3/4.
+        mux.splits[split].set_ratio(0.75);
+        let before = swap_resolved(&mux, ws);
+
+        let events = mux.swap_pane(a, SwapOffset::Next).unwrap();
+
+        assert_eq!(mux.splits[split].first, NodeId::Pane(b));
+        assert_eq!(mux.splits[split].second, NodeId::Pane(a));
+        assert_eq!(mux.panes[a].parent, Some(NodeId::Split(split)));
+        assert_eq!(mux.panes[b].parent, Some(NodeId::Split(split)));
+        assert_eq!(mux.splits[split].ratio(), 0.75, "ratio stays on the slot");
+
+        let after = swap_resolved(&mux, ws);
+        // Slot A's size (90 cols at ratio 0.75 of 120) now belongs to `b`; B's to `a`.
+        let size =
+            |pane, list: &[(PaneId, (u16, u16))]| list.iter().find(|(p, _)| *p == pane).unwrap().1;
+        assert_eq!(size(a, &before), (90, 40));
+        assert_eq!(size(b, &after), (90, 40), "b inherited slot A's size");
+        assert_eq!(size(a, &after), (30, 40), "a inherited slot B's size");
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                MuxEvent::LayoutChanged { root, .. }
+                    if matches!(root, NodeId::Split(s) if *s == split)
+            )),
+            "a LayoutChanged is emitted for the affected split: {events:?}"
+        );
+    }
+
+    #[test]
+    fn swap_pane_single_pane_is_noop() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        assert_eq!(mux.swap_pane(pane, SwapOffset::Next).unwrap(), vec![]);
+    }
+
+    fn two_panes_h(cols: u16, rows: u16) -> (Mux, WorkspaceId, PaneId, PaneId, SplitId) {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let left = mux.active_pane(ws).unwrap();
+        let right = split_after(&mut mux, left, SplitOrientation::Horizontal);
+        let split = root_split(&mux, ws);
+        mux.set_workspace_size(ws, cols, rows).unwrap();
+        (mux, ws, left, right, split)
+    }
+
+    #[test]
+    fn resize_right_grows_lhs_shrinks_rhs() {
+        let (mut mux, _ws, left, _right, split) = two_panes_h(120, 40);
+        let before = mux.splits[split].ratio();
+        let events = mux.resize_pane(left, PaneDirection::Right, 1).unwrap();
+        let after = mux.splits[split].ratio();
+        assert!(after > before, "lhs grew: {after} > {before}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MuxEvent::LayoutRatioChanged { .. })),
+            "an applied resize emits LayoutRatioChanged: {events:?}"
+        );
+    }
+
+    #[test]
+    fn resize_no_matching_ancestor_is_noop() {
+        let (mut mux, _ws, left, _right, _split) = two_panes_h(120, 40);
+        assert_eq!(
+            mux.resize_pane(left, PaneDirection::Down, 1).unwrap(),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn resize_clamps_at_min_cells_when_shrinking_subtree_is_at_floor() {
+        let (mut mux, _ws, left, _right, split) = two_panes_h(120, 40);
+        // Push rhs to its 10-col floor (110/10 of 120) so Right has no budget.
+        mux.splits[split].set_ratio(110.0 / 120.0);
+        assert_eq!(
+            mux.resize_pane(left, PaneDirection::Right, 5).unwrap(),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn resize_partially_applies_when_amount_exceeds_available_budget() {
+        let (mut mux, _ws, left, _right, split) = two_panes_h(120, 40);
+        let events = mux.resize_pane(left, PaneDirection::Right, 100).unwrap();
+        assert!(!events.is_empty(), "resize applied");
+        let ratio = mux.splits[split].ratio();
+        assert!(
+            (ratio - 110.0 / 120.0).abs() < 1e-6,
+            "lhs fraction ~ 110/120, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn resize_in_2x2_grid_resolves_cross_axis_and_same_axis_ancestors() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p1 = mux.active_pane(ws).unwrap();
+        let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
+        let _p3 = split_after(&mut mux, p1, SplitOrientation::Vertical);
+        let _p4 = split_after(&mut mux, p2, SplitOrientation::Vertical);
+        mux.set_workspace_size(ws, 120, 40).unwrap();
+        let outer = root_split(&mux, ws);
+        let before = mux.splits[outer].ratio();
+
+        let ev = mux.resize_pane(p1, PaneDirection::Right, 5).unwrap();
+        assert!(!ev.is_empty());
+        assert!(
+            mux.splits[outer].ratio() > before,
+            "outer (cross-axis-walked) split's lhs grew"
+        );
+
+        assert!(
+            !mux.resize_pane(p1, PaneDirection::Down, 3)
+                .unwrap()
+                .is_empty(),
+            "Down matches the inner same-axis SplitV ancestor"
+        );
+    }
+
+    #[test]
+    fn resize_clamps_via_recursive_min_check_in_same_axis_chain() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p1 = mux.active_pane(ws).unwrap();
+        let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
+        let p3 = split_after(&mut mux, p2, SplitOrientation::Horizontal);
+        mux.set_workspace_size(ws, 120, 40).unwrap();
+
+        let mut terminated = false;
+        let mut iterations = 0;
+        for _ in 0..200 {
+            iterations += 1;
+            if mux
+                .resize_pane(p1, PaneDirection::Right, 1)
+                .unwrap()
+                .is_empty()
+            {
+                terminated = true;
+                break;
+            }
+        }
+        assert!(
+            terminated && iterations < 200,
+            "growth must clamp to NoOp within 200 iterations; ran {iterations}"
+        );
+        assert!(
+            mux.resize_pane(p1, PaneDirection::Right, 50)
+                .unwrap()
+                .is_empty(),
+            "already at the floor: a large further grow is a NoOp"
+        );
+        assert!(mux.panes.get(p2).is_some(), "p2 leaf present after clamp");
+        assert!(mux.panes.get(p3).is_some(), "p3 leaf present after clamp");
+    }
+
+    #[test]
+    fn resize_no_drift_across_repeated_one_cell_adjustments() {
+        let (mut mux, _ws, left, _right, split) = two_panes_h(120, 40);
+        mux.resize_pane(left, PaneDirection::Right, 1).unwrap();
+        mux.resize_pane(left, PaneDirection::Left, 1).unwrap();
+        let before = mux.splits[split].ratio();
+        for _ in 0..50 {
+            mux.resize_pane(left, PaneDirection::Right, 1).unwrap();
+            mux.resize_pane(left, PaneDirection::Left, 1).unwrap();
+        }
+        let after = mux.splits[split].ratio();
+        assert!(
+            (before - after).abs() < 1e-3,
+            "ratio drift: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn resize_pane_returns_noop_without_workspace_size() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p1 = mux.active_pane(ws).unwrap();
+        let _p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
+        assert_eq!(
+            mux.resize_pane(p1, PaneDirection::Right, 5).unwrap(),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn resize_pane_returns_noop_for_single_pane_workspace() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let p = mux.active_pane(ws).unwrap();
+        mux.set_workspace_size(ws, 120, 40).unwrap();
+        assert_eq!(mux.resize_pane(p, PaneDirection::Right, 5).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn set_workspace_size_emits_resized_for_changed_panes() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let left = mux.active_pane(ws).unwrap();
+        let right = split_after(&mut mux, left, SplitOrientation::Horizontal);
+
+        let events = mux.set_workspace_size(ws, 120, 40).unwrap();
+        assert!(events.contains(&MuxEvent::PaneResized {
+            pane: left,
+            cols: 60,
+            rows: 40,
+        }));
+        assert!(events.contains(&MuxEvent::PaneResized {
+            pane: right,
+            cols: 60,
+            rows: 40,
+        }));
+
+        assert_eq!(
+            mux.set_workspace_size(ws, 120, 40).unwrap(),
+            vec![],
+            "re-setting the same size emits nothing"
+        );
     }
 }
