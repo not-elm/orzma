@@ -1,6 +1,7 @@
-use crate::schema::{CURSOR_VISIBLE_BIT, Cursor, CursorShape, HyperlinkId, HyperlinkUri, ViCursor};
+use crate::schema::{
+    CURSOR_VISIBLE_BIT, Cursor, CursorShape, HyperlinkId, HyperlinkUri, SelectionRange, ViCursor,
+};
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
 /// A structure represents the layout structure of the terminal grid.
 /// Each terminal entity owns this component.
@@ -125,71 +126,6 @@ pub struct Cell {
     pub style: u16,
     /// OSC 8 hyperlink wire id, if any.
     pub hyperlink_id: Option<HyperlinkId>,
-}
-
-/// A row of runs ordered left-to-right.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Row {
-    /// Runs in left-to-right column order.
-    pub runs: Vec<Run>,
-}
-
-/// A run of cells sharing identical fg/bg/style attributes.
-///
-/// Wide-char spacers (alacritty internal) are absorbed server-side and do
-/// not appear in `text`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Run {
-    /// Total column span (sum of grapheme cluster widths in `text`).
-    pub cols: u16,
-    /// Foreground color.
-    pub fg: Color,
-    /// Background color.
-    pub bg: Color,
-    /// Style bitmask (see the `style` module). Widened from u8 to u16 so
-    /// HIDDEN (bit 6) and future underline variants fit. Wire-compatible:
-    /// rmp-serde picks the smallest msgpack int form per value, so masks
-    /// ≤ 127 still serialize to one byte.
-    pub style: u16,
-    /// UTF-8 text; the client uses Unicode East Asian Width to position each
-    /// grapheme cluster within the run.
-    pub text: String,
-    /// Hyperlink id (OSC 8); always `None` until Phase 3.
-    pub hyperlink_id: Option<HyperlinkId>,
-}
-
-/// Active selection range in viewport coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SelectionRange {
-    /// Anchor point where the selection started.
-    pub start: ViewportPoint,
-    /// Cursor point where the selection currently ends.
-    pub end: ViewportPoint,
-    /// Selection geometry (char-wise or line-wise).
-    pub kind: SelectionKind,
-}
-/// A point in viewport coordinates (server-converted from alacritty `Line(i32)`).
-///
-/// Endpoints that resolve to scrollback are clamped to `row = -1` (above
-/// viewport) or `row = rows` (below viewport) so the client can still draw
-/// the portion of the selection that intersects the visible grid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewportPoint {
-    /// Viewport row; clamped to `-1` (above) or `rows` (below) for scrollback endpoints.
-    pub row: i16,
-    /// Viewport column (0-based).
-    pub column: u16,
-}
-
-/// Selection geometry. `Block` (rectangle) and `Semantic` are non-goals
-/// for v1 — see the design spec's Non-goals section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SelectionKind {
-    /// Character-wise selection.
-    Char,
-    /// Line-wise selection.
-    Line,
 }
 
 #[cfg(test)]

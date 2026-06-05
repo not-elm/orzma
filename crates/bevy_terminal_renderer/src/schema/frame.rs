@@ -1,5 +1,5 @@
-use crate::schema::{Cursor, Hyperlink, Row, Run, SelectionRange, ViCursor};
 use bevy::ecs::{entity::Entity, event::EntityEvent};
+use ozmux_vt::frame::{Cursor, DirtyRow, Hyperlink, Row, SelectionRange, SnapshotReason, ViCursor};
 use serde::{Deserialize, Serialize};
 
 /// Full snapshot of the visible viewport at a given seq.
@@ -64,29 +64,4 @@ pub struct FrameDelta {
     /// Active selection range. Independent of vi cursor — survives motion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<SelectionRange>,
-}
-
-/// A dirty row entry inside a `FrameDelta`.
-///
-/// `runs` represents the entire row (full row replacement, not partial).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DirtyRow {
-    /// Row index, zero-based from the top of the screen.
-    pub row: u16,
-    /// Full set of runs for the row.
-    pub runs: Vec<Run>,
-}
-
-/// Reason a snapshot was sent.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SnapshotReason {
-    /// Initial connect.
-    #[default]
-    Initial,
-    /// Reconnect with no replay available.
-    Reconnect,
-    /// Receiver fell too far behind the broadcast.
-    Lagged,
-    /// Terminal was resized.
-    Resize,
 }

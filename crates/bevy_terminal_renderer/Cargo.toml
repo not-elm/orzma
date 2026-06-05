@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 bevy = { workspace = true }
+ozmux_vt = { path = "../../daemon/ozmux_vt" }
 ab_glyph = "0.2"
 ttf-parser = "0.25"
 unicode-segmentation = "1"

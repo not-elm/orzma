@@ -1,8 +1,8 @@
 //! `TerminalGridPlugin` — applies snapshots and deltas to the per-entity
 //! `TerminalGrid` Component via two `EntityEvent` observers.
 
-use crate::schema::{Cell, FrameDelta, FrameSnapshot, Run, TerminalGrid};
-use bevy::prelude::*;
+use crate::schema::{Cell, FrameDelta, FrameSnapshot, RgbaColor, Run, TerminalGrid};
+use bevy::prelude::{App, Color, On, Plugin, Query};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -61,6 +61,10 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     }
 }
 
+fn rgba_to_color(c: RgbaColor) -> Color {
+    Color::srgb_u8(c.r, c.g, c.b)
+}
+
 fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
     let mut out: Vec<Cell> = Vec::new();
     for run in runs {
@@ -76,8 +80,8 @@ fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
             out.push(Cell {
                 text: grapheme.to_string(),
                 width,
-                fg: run.fg,
-                bg: run.bg,
+                fg: rgba_to_color(run.fg),
+                bg: rgba_to_color(run.bg),
                 style: run.style,
                 hyperlink_id: run.hyperlink_id,
             });
