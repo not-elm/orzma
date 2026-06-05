@@ -1,8 +1,38 @@
-//! Pure VT-encoder for `TerminalKeyInput`. Translates a logical key + modifiers
-//! into the byte sequence the PTY expects. No I/O, no Bevy types — kept
-//! pure so unit tests can cover every branch without an `App`.
+//! Pure key encoder for terminal input. Translates a logical key +
+//! modifiers into the VT byte sequence the PTY expects. No I/O, no Bevy
+//! types — kept pure so unit tests cover every branch without an `App`.
 
-use crate::events::{TerminalKey, TerminalModifiers};
+/// Subset of keys the terminal input codec understands. Keeps the public
+/// surface stable and tells callers exactly which keys are wired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalKey {
+    /// UTF-8 text (single char or multi-codepoint dead-key composition).
+    Text(String),
+    Enter,
+    Backspace,
+    Tab,
+    Escape,
+    Delete,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+}
+
+/// Modifier flags carried alongside `TerminalKey`. MVP only reads `ctrl`;
+/// `shift` / `alt` / `meta` are reserved for future CSI u / modifyOtherKeys
+/// support.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TerminalModifiers {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub meta: bool,
+}
 
 /// Translates a logical key + modifiers into VT-escape bytes.
 ///
@@ -15,7 +45,7 @@ use crate::events::{TerminalKey, TerminalModifiers};
 ///
 /// Returns `None` if the key/modifier combination produces no PTY output
 /// (e.g. empty `Text`, unmapped combination).
-pub(crate) fn encode_key(
+pub fn encode_key(
     key: &TerminalKey,
     mods: &TerminalModifiers,
     app_cursor_keys: bool,

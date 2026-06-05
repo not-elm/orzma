@@ -13,6 +13,7 @@
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
+use ozmux_vt::input::{TerminalKey, TerminalModifiers};
 use std::path::PathBuf;
 
 /// Fired when alacritty raises `Event::Bell`. Best-effort — no
@@ -66,38 +67,6 @@ pub struct TerminalCurrentDir {
     #[event_target]
     pub entity: Entity,
     pub path: PathBuf,
-}
-
-/// Subset of keys the terminal input codec understands. Keeps the public
-/// surface stable and tells callers exactly which keys are wired.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerminalKey {
-    /// UTF-8 text (single char or multi-codepoint dead-key composition).
-    Text(String),
-    Enter,
-    Backspace,
-    Tab,
-    Escape,
-    Delete,
-    ArrowUp,
-    ArrowDown,
-    ArrowLeft,
-    ArrowRight,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-}
-
-/// Modifier flags carried alongside `TerminalKey`. MVP only reads `ctrl`;
-/// `shift` / `alt` / `meta` are reserved for future CSI u / modifyOtherKeys
-/// support.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TerminalModifiers {
-    pub ctrl: bool,
-    pub shift: bool,
-    pub alt: bool,
-    pub meta: bool,
 }
 
 /// Fired by the host UI to forward a key press to a specific Terminal

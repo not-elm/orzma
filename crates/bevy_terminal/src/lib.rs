@@ -7,7 +7,6 @@ mod bundle;
 mod buttons;
 mod events;
 mod handle;
-mod input_codec;
 mod mouse_encode;
 mod plugin;
 mod pty;
@@ -21,11 +20,12 @@ pub use alacritty_terminal::vi_mode::ViMotion;
 pub use bundle::{SpawnOptions, TerminalBundle};
 pub use buttons::{ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind};
 pub use events::{
-    TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir, TerminalKey,
-    TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
+    TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir, TerminalKeyInput,
+    TerminalModeChanged, TerminalTitleChanged,
 };
 pub use handle::TerminalHandle;
 pub use mouse_encode::ProtocolModifiers;
+pub use ozmux_vt::input::{TerminalKey, TerminalModifiers};
 pub use ozmux_vt::vt::ViIndicatorSnapshot;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;

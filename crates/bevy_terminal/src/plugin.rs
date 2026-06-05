@@ -8,7 +8,6 @@ use crate::events::{
     TerminalModeChanged, TerminalTitleChanged,
 };
 use crate::handle::TerminalHandle;
-use crate::input_codec::encode_key;
 use crate::pty::PtyHandle;
 use crate::title::{TerminalTitle, sanitize_title};
 use bevy::ecs::entity::Entity;
@@ -18,6 +17,7 @@ use bevy::prelude::*;
 use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalSnapshot};
 use ozmux_vt::event::VtEvent;
 use ozmux_vt::frame::Frame;
+use ozmux_vt::input::encode_key;
 use ozmux_vt::vt::OutputAction;
 use std::time::Instant;
 
