@@ -24,14 +24,6 @@ pub struct TerminalHandle {
 }
 
 impl TerminalHandle {
-    /// Constructs a fresh handle sized `cols` x `rows`. Called only from
-    /// `TerminalBundle::spawn`.
-    pub(crate) fn new(cols: u16, rows: u16) -> Self {
-        Self {
-            vt: Vt::new(cols, rows),
-        }
-    }
-
     /// Writes bytes to the PTY master.
     ///
     /// # Invariants
@@ -163,11 +155,6 @@ impl TerminalHandle {
         self.vt.current_modes()
     }
 
-    /// True iff `TermMode::APP_CURSOR` (DECCKM) is set.
-    pub fn is_app_cursor_keys(&self) -> bool {
-        self.vt.is_app_cursor_keys()
-    }
-
     /// True iff `TermMode::BRACKETED_PASTE` is set.
     pub fn bracketed_paste_enabled(&self) -> bool {
         self.vt.bracketed_paste_enabled()
@@ -194,6 +181,20 @@ impl TerminalHandle {
     /// copy-mode indicator's `[offset/total]` chip.
     pub fn vi_indicator_snapshot(&self) -> ViIndicatorSnapshot {
         self.vt.vi_indicator_snapshot()
+    }
+
+    /// True iff `TermMode::APP_CURSOR` (DECCKM) is set. Used by `plugin.rs`
+    /// to select the cursor-key encoding for forwarded key input.
+    pub(crate) fn is_app_cursor_keys(&self) -> bool {
+        self.vt.is_app_cursor_keys()
+    }
+
+    /// Constructs a fresh handle sized `cols` x `rows`. Called only from
+    /// `TerminalBundle::spawn`.
+    pub(crate) fn new(cols: u16, rows: u16) -> Self {
+        Self {
+            vt: Vt::new(cols, rows),
+        }
     }
 }
 

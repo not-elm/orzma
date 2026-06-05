@@ -155,6 +155,9 @@ fn process_pty_chunks(
             }
         });
     }
+    // NOTE: replies are produced only by `Vt::on_output` (parser advance),
+    // never by `emit`/`tick`, so draining once after the chunk loop captures
+    // every reply — `check_deadline_flush` needs no separate reply drain.
     let replies = handle.vt.drain_replies();
     if !replies.is_empty()
         && let Err(e) = pty.write_all(&replies)
