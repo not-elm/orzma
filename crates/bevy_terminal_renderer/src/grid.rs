@@ -62,12 +62,14 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
 }
 
 fn rgba_to_color(c: RgbaColor) -> Color {
-    Color::srgb_u8(c.r, c.g, c.b)
+    Color::srgba_u8(c.r, c.g, c.b, c.a)
 }
 
 fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
     let mut out: Vec<Cell> = Vec::new();
     for run in runs {
+        let fg = rgba_to_color(run.fg);
+        let bg = rgba_to_color(run.bg);
         for grapheme in run.text.graphemes(true) {
             let w = grapheme.width();
             let width = if w >= 2 {
@@ -80,8 +82,8 @@ fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
             out.push(Cell {
                 text: grapheme.to_string(),
                 width,
-                fg: rgba_to_color(run.fg),
-                bg: rgba_to_color(run.bg),
+                fg,
+                bg,
                 style: run.style,
                 hyperlink_id: run.hyperlink_id,
             });
