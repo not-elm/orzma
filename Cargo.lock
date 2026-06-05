@@ -4685,6 +4685,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_vt"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "rmp-serde",
+ "serde",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

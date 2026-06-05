@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 serde = { workspace = true }
-alacritty_terminal = "0.26"
+alacritty_terminal = { workspace = true }
 
 [dev-dependencies]
 rmp-serde = "1"

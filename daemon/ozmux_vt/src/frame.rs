@@ -115,6 +115,8 @@ pub struct Run {
     /// Style bitmask. rmp-serde picks the smallest msgpack int form per value.
     pub style: u16,
     /// UTF-8 text; clients position graphemes by East Asian Width.
+    /// Wide-char spacers (alacritty's internal trailing-cell markers) are
+    /// absorbed server-side and do not appear in `text`.
     pub text: String,
     /// Hyperlink id (OSC 8), if any.
     pub hyperlink_id: Option<HyperlinkId>,
@@ -208,5 +210,16 @@ mod tests {
             c.pack_cursor_style() & CURSOR_VISIBLE_BIT,
             CURSOR_VISIBLE_BIT
         );
+    }
+
+    #[test]
+    fn pack_cursor_style_encodes_shape_and_blink() {
+        let c = Cursor {
+            visible: true,
+            shape: CursorShape::Bar,
+            blinking: true,
+            ..Default::default()
+        };
+        assert_eq!(c.pack_cursor_style(), 13);
     }
 }

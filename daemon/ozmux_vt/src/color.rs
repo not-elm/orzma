@@ -84,14 +84,22 @@ fn named_color_to_rgba(named: NamedColor) -> RgbaColor {
         NamedColor::DimMagenta => palette_index_to_rgba(5),
         NamedColor::DimCyan => palette_index_to_rgba(6),
         NamedColor::DimWhite => palette_index_to_rgba(7),
-        _ => {
-            let idx = named as u32;
-            if idx < 16 {
-                palette_index_to_rgba(idx as u8)
-            } else {
-                RgbaColor::WHITE
-            }
-        }
+        NamedColor::Black => palette_index_to_rgba(0),
+        NamedColor::Red => palette_index_to_rgba(1),
+        NamedColor::Green => palette_index_to_rgba(2),
+        NamedColor::Yellow => palette_index_to_rgba(3),
+        NamedColor::Blue => palette_index_to_rgba(4),
+        NamedColor::Magenta => palette_index_to_rgba(5),
+        NamedColor::Cyan => palette_index_to_rgba(6),
+        NamedColor::White => palette_index_to_rgba(7),
+        NamedColor::BrightBlack => palette_index_to_rgba(8),
+        NamedColor::BrightRed => palette_index_to_rgba(9),
+        NamedColor::BrightGreen => palette_index_to_rgba(10),
+        NamedColor::BrightYellow => palette_index_to_rgba(11),
+        NamedColor::BrightBlue => palette_index_to_rgba(12),
+        NamedColor::BrightMagenta => palette_index_to_rgba(13),
+        NamedColor::BrightCyan => palette_index_to_rgba(14),
+        NamedColor::BrightWhite => palette_index_to_rgba(15),
     }
 }
 
@@ -203,6 +211,14 @@ mod tests {
         assert_eq!(
             acolor_to_rgba(AColor::Named(NamedColor::DimWhite)),
             RgbaColor::srgb(229, 229, 229)
+        );
+    }
+
+    #[test]
+    fn named_bright_red_maps_to_ansi_index_9() {
+        assert_eq!(
+            acolor_to_rgba(AColor::Named(NamedColor::BrightRed)),
+            RgbaColor::srgb(255, 0, 0)
         );
     }
 }
