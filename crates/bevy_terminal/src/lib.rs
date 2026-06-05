@@ -22,7 +22,6 @@ pub use alacritty_terminal::term::TermMode;
 pub use alacritty_terminal::vi_mode::ViMotion;
 pub use bundle::{SpawnOptions, TerminalBundle};
 pub use buttons::{ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind};
-pub use coalescer::Coalescer;
 pub use events::{
     TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir, TerminalKey,
     TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,

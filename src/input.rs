@@ -608,7 +608,7 @@ mod tests {
             .unwrap()
     }
 
-    /// Attaches a real `TerminalHandle` / `PtyHandle` / `Coalescer` (via
+    /// Attaches a real `TerminalHandle` / `PtyHandle` (via
     /// `TerminalBundle::spawn`) onto the active pane's Surface entity. Used by
     /// the paste-gate integration tests that need to observe
     /// `pending_user_input` flipping after the gate runs.
