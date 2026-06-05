@@ -3,4 +3,6 @@
 //! Every mutation on `mux::Mux` returns a list of `event::MuxEvent`s;
 //! the daemon serializes them to UDS and the Bevy mirror applies them.
 
+pub mod error;
 pub mod id;
+pub mod surface;
