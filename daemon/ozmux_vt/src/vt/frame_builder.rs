@@ -21,7 +21,7 @@ use unicode_width::UnicodeWidthChar;
 
 /// Style bitmask constants (kept compatible with the schema's
 /// `Run.style: u16`).
-pub mod style {
+pub(crate) mod style {
     pub const BOLD: u16 = 1;
     pub const ITALIC: u16 = 2;
     pub const UNDERLINE: u16 = 4;
