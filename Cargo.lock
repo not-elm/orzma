@@ -4677,6 +4677,8 @@ name = "ozmux_multiplexer"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ozmux_mux",
+ "slotmap",
  "thiserror 2.0.18",
  "tracing",
 ]

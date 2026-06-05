@@ -9,7 +9,9 @@ publish.workspace = true
 
 [dependencies]
 bevy = { workspace = true }
-thiserror = { workspace = true } 
+ozmux_mux = { path = "../../daemon/ozmux_mux" }
+slotmap = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [lints]
