@@ -1,14 +1,16 @@
-//! Tab bar Bevy UI builder for a Pane. `build_pane_tab_bar` spawns one
-//! Row Node per Pane with one child per Surface. `tab_colors` computes
-//! the (background, indicator, text) color triple for a single tab.
+//! Tab bar Bevy UI builders for a Pane. `build_tab` spawns one tab (a
+//! `Button` + its `Text` child) into a pane's tab-bar row; the chrome layer
+//! (`crate::ui::chrome`) owns the row Node and calls `build_tab` per surface.
+//! `tab_colors` computes the (background, indicator, text) color triple for a
+//! single tab.
 
 use crate::theme;
+use crate::ui::TabButton;
 use crate::ui::palette;
-use crate::ui::{StructuralNode, TabButton};
 use bevy::color::Color;
 use bevy::prelude::*;
 use bevy::text::{LineBreak, TextLayout};
-use bevy::ui::{AlignItems, BorderRadius, FlexDirection, JustifyContent, Overflow, UiRect, Val};
+use bevy::ui::{AlignItems, BorderRadius, JustifyContent, Overflow, UiRect, Val};
 
 /// Color triple for one tab.
 struct TabColors {
@@ -55,38 +57,10 @@ pub(crate) struct TabEntry {
     pub is_active: bool,
 }
 
-/// Spawn the per-pane tab bar (one tab per Surface) as a child of `parent`.
-/// Every spawned Entity carries `StructuralNode`. `is_active_pane` drives
-/// the indicator accent (accent vs border).
-pub(crate) fn build_pane_tab_bar(
-    commands: &mut Commands,
-    parent: Entity,
-    pane: Entity,
-    tabs: &[TabEntry],
-    is_active_pane: bool,
-    ui_font: &Handle<Font>,
-) {
-    let bar = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                width: Val::Percent(100.0),
-                height: Val::Auto,
-                padding: UiRect::ZERO,
-                ..default()
-            },
-            BackgroundColor(palette::TAB_BAR_BG),
-            StructuralNode,
-            ChildOf(parent),
-        ))
-        .id();
-
-    for tab in tabs {
-        build_tab(commands, bar, pane, tab, is_active_pane, ui_font);
-    }
-}
-
-fn build_tab(
+/// Spawn one tab (a `Button` Node + its `Text` child) as a child of the
+/// pane's tab-bar row `parent`. `is_active_pane` drives the indicator accent
+/// (accent vs border).
+pub(crate) fn build_tab(
     commands: &mut Commands,
     parent: Entity,
     pane: Entity,
@@ -131,7 +105,6 @@ fn build_tab(
                 right: theme::BORDER,
                 bottom: Color::NONE,
             },
-            StructuralNode,
             ChildOf(parent),
         ))
         .id();
@@ -148,7 +121,6 @@ fn build_tab(
             linebreak: LineBreak::NoWrap,
             ..default()
         },
-        StructuralNode,
         ChildOf(tab_entity),
     ));
 }

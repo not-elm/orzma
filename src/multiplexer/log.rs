@@ -1,13 +1,14 @@
-//! Layout-change logging system. Watches `Changed<LayoutCells>` on
-//! Workspace entities and logs a human-readable summary of the cell tree.
+//! Layout-change logging system. Logs a human-readable summary of a
+//! workspace's pane set when a pane is added to it (split / bootstrap).
 //! `OzmuxLayoutLogPlugin` registers the system in `Update`.
 
 use bevy::prelude::*;
-use ozmux_multiplexer::{Cell, LayoutCells, PaneMarker, WorkspaceMarker};
+use ozmux_multiplexer::{OwningWorkspace, PaneMarker, WorkspaceMarker};
+use std::collections::HashSet;
 
-/// Bevy Plugin that registers `log_layout_changes` in the `Update`
-/// schedule behind `Changed<LayoutCells>` so it fires only on layout
-/// mutations.
+/// Bevy Plugin that registers `log_layout_changes` in the `Update` schedule.
+/// The system fires when a pane is added to a workspace (`Added<PaneMarker>`),
+/// covering splits and the bootstrap pane.
 pub struct OzmuxLayoutLogPlugin;
 
 impl Plugin for OzmuxLayoutLogPlugin {
@@ -17,62 +18,50 @@ impl Plugin for OzmuxLayoutLogPlugin {
 }
 
 fn log_layout_changes(
-    workspaces: Query<(Entity, &Name, &LayoutCells), (With<WorkspaceMarker>, Changed<LayoutCells>)>,
-    panes: Query<&Name, With<PaneMarker>>,
+    added_panes: Query<&OwningWorkspace, Added<PaneMarker>>,
+    workspace_names: Query<&Name, With<WorkspaceMarker>>,
+    panes: Query<(&Name, &OwningWorkspace), With<PaneMarker>>,
 ) {
-    for (entity, name, layout) in workspaces.iter() {
-        let pane_count = count_panes(layout);
-        let pane_names: Vec<&str> = collect_pane_names(layout, &panes);
+    let mut seen: HashSet<Entity> = HashSet::new();
+    for owner in added_panes.iter() {
+        let workspace = owner.0;
+        if !seen.insert(workspace) {
+            continue;
+        }
+        let workspace_name = workspace_names
+            .get(workspace)
+            .map(|n| n.as_str().to_owned())
+            .unwrap_or_default();
+        let pane_names: Vec<&str> = panes
+            .iter()
+            .filter(|(_, o)| o.0 == workspace)
+            .map(|(n, _)| n.as_str())
+            .collect();
         tracing::info!(
             target: "ozmux_gui::layout",
-            ?entity,
-            workspace = %name,
-            pane_count,
+            ?workspace,
+            workspace = %workspace_name,
+            pane_count = pane_names.len(),
             panes = ?pane_names,
             "layout changed",
         );
     }
 }
 
-/// Count the number of `Cell::Pane` leaves in the layout's cell tree.
-fn count_panes(layout: &LayoutCells) -> usize {
-    let mut count = 0;
-    let mut stack = vec![layout.root];
-    while let Some(cell_id) = stack.pop() {
-        match layout.cells.cell(&cell_id) {
-            Ok(Cell::Root(r)) => stack.push(r.child),
-            Ok(Cell::Split(s)) => {
-                stack.push(s.lhs_cell);
-                stack.push(s.rhs_cell);
-            }
-            Ok(Cell::Pane(_)) => count += 1,
-            Err(_) => {}
-        }
-    }
-    count
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ozmux_multiplexer::MultiplexerPlugin;
 
-/// Collect the display names of all panes in DFS order.
-fn collect_pane_names<'a>(
-    layout: &LayoutCells,
-    panes: &'a Query<&Name, With<PaneMarker>>,
-) -> Vec<&'a str> {
-    let mut names = Vec::new();
-    let mut stack = vec![layout.root];
-    while let Some(cell_id) = stack.pop() {
-        match layout.cells.cell(&cell_id) {
-            Ok(Cell::Root(r)) => stack.push(r.child),
-            Ok(Cell::Split(s)) => {
-                stack.push(s.rhs_cell);
-                stack.push(s.lhs_cell);
-            }
-            Ok(Cell::Pane(p)) => {
-                if let Ok(name) = panes.get(p.pane) {
-                    names.push(name.as_str());
-                }
-            }
-            Err(_) => {}
-        }
+    #[test]
+    fn log_layout_changes_has_no_system_param_conflict() {
+        // Regression for the B0001 panic: the system must not pair a `&mut Name`
+        // (via MultiplexerCommands) with a `&Name` workspace query. Building the
+        // schedule and running one update would panic if the params conflict.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin)
+            .add_plugins(OzmuxLayoutLogPlugin);
+        app.update();
     }
-    names
 }

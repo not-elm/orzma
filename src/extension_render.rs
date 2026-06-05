@@ -6,8 +6,7 @@
 
 use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
-use crate::ui::registry::SurfaceEntityRegistry;
-use crate::ui::{AddressBarFocus, BrowserPageWebview, ExtensionSurfaceMarker, HostSurfaceEntity};
+use crate::ui::{AddressBarFocus, BrowserPageWebview, ExtensionSurfaceMarker};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
@@ -133,25 +132,23 @@ impl Plugin for OzmuxExtensionRenderPlugin {
 ///
 /// For browser surfaces the webview lives on a child entity pointed to by
 /// `BrowserPageWebview`; `active_webview` resolves through that indirection.
-/// When `AddressBarFocus` names the active host, CEF focus is released so the
-/// address bar can own the keyboard.
+/// When `AddressBarFocus` names the active surface, CEF focus is released so
+/// the address bar can own the keyboard.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: Res<SurfaceEntityRegistry>,
     webviews: Query<(), With<WebviewSource>>,
     browser_hosts: Query<&BrowserPageWebview>,
     address_focus: Option<Res<AddressBarFocus>>,
 ) {
-    let bar_focused_host = address_focus.as_ref().and_then(|f| f.0);
+    let bar_focused_surface = address_focus.as_ref().and_then(|f| f.0);
     let active = active_webview(
         &mux,
         &attached_workspace,
-        &registry,
         &webviews,
         &browser_hosts,
-        bar_focused_host,
+        bar_focused_surface,
     );
     if focused.0 != active {
         focused.0 = active;
@@ -161,26 +158,25 @@ fn sync_focused_webview(
 /// The active pane's focused webview entity, or `None` when the active surface
 /// is not a webview (e.g. a terminal pane) or when the address bar owns input.
 ///
-/// For extension surfaces the webview is on the host itself (`WebviewSource`).
-/// For browser surfaces the webview is on the `BrowserPageWebview` child;
-/// when `bar_focused_host` matches the host, returns `None` to release CEF focus.
+/// For extension surfaces the webview is on the Surface entity itself
+/// (`WebviewSource`). For browser surfaces the webview is on the
+/// `BrowserPageWebview` child; when `bar_focused_surface` matches the Surface,
+/// returns `None` to release CEF focus.
 fn active_webview(
     mux: &MultiplexerCommands,
     attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: &SurfaceEntityRegistry,
     webviews: &Query<(), With<WebviewSource>>,
     browser_hosts: &Query<&BrowserPageWebview>,
-    bar_focused_host: Option<Entity>,
+    bar_focused_surface: Option<Entity>,
 ) -> Option<Entity> {
     let workspace = attached_workspace.iter().next()?;
     let pane = mux.workspaces_active_pane(workspace)?;
     let surface = mux.panes_active_surface(pane)?;
-    let host = registry.get(surface)?;
-    if webviews.contains(host) {
-        return Some(host);
+    if webviews.contains(surface) {
+        return Some(surface);
     }
-    if let Ok(page) = browser_hosts.get(host) {
-        if bar_focused_host == Some(host) {
+    if let Ok(page) = browser_hosts.get(surface) {
+        if bar_focused_surface == Some(surface) {
             return None;
         }
         return Some(page.0);
@@ -211,10 +207,9 @@ fn finish_extension_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<WebviewUiMaterial>>,
     mux: MultiplexerCommands,
-    surface_hosts: Query<&HostSurfaceEntity>,
     owners: Query<&OwningExtension>,
     kinds: Query<&SurfaceKind>,
-    hosts: Query<
+    surfaces: Query<
         (Entity, &ComputedNode),
         (
             With<ExtensionSurfaceMarker>,
@@ -223,22 +218,20 @@ fn finish_extension_setup(
         ),
     >,
 ) {
-    for (host, computed) in hosts.iter() {
+    for (surface, computed) in surfaces.iter() {
         let Some(logical) = pane_logical_size(computed.size(), computed.inverse_scale_factor())
         else {
             continue;
         };
-        let Some((workspace, pane, surface)) = host_multiplexer_chain(host, &surface_hosts, &mux)
-        else {
+        let Some((workspace, pane)) = surface_multiplexer_chain(surface, &mux) else {
             continue;
         };
         let Ok(owner) = owners.get(surface) else {
             tracing::warn!(
-                ?host,
                 ?surface,
                 "extension surface has no OwningExtension; webview cannot be mounted (terminal-kind split over control socket?)"
             );
-            commands.entity(host).insert(WebviewMountUnresolved);
+            commands.entity(surface).insert(WebviewMountUnresolved);
             continue;
         };
         let Ok(SurfaceKind::Extension { entry }) = kinds.get(surface) else {
@@ -247,7 +240,7 @@ fn finish_extension_setup(
         let entry = entry.to_string_lossy();
         let name = owner.0.as_str();
         let url = webview_url(name, &entry);
-        tracing::debug!(?host, ?logical, %url, "spawning extension webview");
+        tracing::debug!(?surface, ?logical, %url, "spawning extension webview");
         // NOTE: `window.ozmux` MUST be a PreloadScript, not a global CefExtension.
         // ozmux.js calls cef.listen() at top level; a global extension runs that
         // during V8 context creation, where there is no entered V8 context, so the
@@ -256,7 +249,7 @@ fn finish_extension_setup(
         // entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
         let ctx_js = context_preload_js(workspace, pane, surface, name);
-        commands.entity(host).insert((
+        commands.entity(surface).insert((
             WebviewSource::new(url),
             WebviewSize(logical),
             PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
@@ -265,20 +258,17 @@ fn finish_extension_setup(
     }
 }
 
-/// Resolves the `(workspace, pane, surface)` multiplexer entities backing an
-/// extension webview host: host → surface via `HostSurfaceEntity`, surface →
-/// pane via `pane_of_surface`, pane → workspace via `workspace_of_pane`. Returns
-/// `None` until every link exists (e.g. before the surface is laid out into a
-/// pane).
-fn host_multiplexer_chain(
-    host: Entity,
-    surface_hosts: &Query<&HostSurfaceEntity>,
+/// Resolves the `(workspace, pane)` multiplexer entities owning an extension
+/// Surface: surface → pane via `pane_of_surface`, pane → workspace via
+/// `workspace_of_pane`. Returns `None` until every link exists (e.g. before
+/// the surface is laid out into a pane).
+fn surface_multiplexer_chain(
+    surface: Entity,
     mux: &MultiplexerCommands,
-) -> Option<(Entity, Entity, Entity)> {
-    let surface = surface_hosts.get(host).ok()?.0;
+) -> Option<(Entity, Entity)> {
     let pane = mux.pane_of_surface(surface)?;
     let workspace = mux.workspace_of_pane(pane)?;
-    Some((workspace, pane, surface))
+    Some((workspace, pane))
 }
 
 /// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`.
@@ -316,18 +306,15 @@ fn pane_logical_size(physical: Vec2, inverse_scale_factor: f32) -> Option<Vec2> 
     }
 }
 
-/// Resolves the SDK surface id (`surface_id`) for the webview entity that emitted a
-/// frame: the webview entity is the Extension Surface host, so its
-/// `HostSurfaceEntity` points at the multiplexer Surface entity carrying the
-/// `ExtensionSurfaceId`. Returns `None` when either link is missing (e.g. the
-/// surface has not yet been stamped by the control bridge).
+/// Resolves the SDK surface id (`surface_id`) for the webview entity that
+/// emitted a frame: the webview entity *is* the Extension Surface, so it
+/// carries the `ExtensionSurfaceId` directly. Returns `None` when the surface
+/// has not yet been stamped by the control bridge.
 fn surface_id_for_webview(
     webview: Entity,
-    hosts: &Query<&HostSurfaceEntity>,
     surface_ids: &Query<&ExtensionSurfaceId>,
 ) -> Option<String> {
-    let surface = hosts.get(webview).ok()?.0;
-    Some(surface_ids.get(surface).ok()?.0.clone())
+    Some(surface_ids.get(webview).ok()?.0.clone())
 }
 
 /// Inbound: a `window.ozmux` `cef.emit(frame)` arrives as `Receive<OzmuxFrame>`
@@ -344,15 +331,14 @@ fn on_ozmux_frame(
     bridge: Res<ExtensionHandlersBridge>,
     registry: Res<ExtensionRegistry>,
     mut surface_id_map: ResMut<WebviewSurfaceIdMap>,
-    hosts: Query<&HostSurfaceEntity>,
     owners: Query<&OwningExtension>,
     surface_ids: Query<&ExtensionSurfaceId>,
 ) {
     let webview = frame.webview;
-    let Some(surface_id) = surface_id_for_webview(webview, &hosts, &surface_ids) else {
+    let Some(surface_id) = surface_id_for_webview(webview, &surface_ids) else {
         return;
     };
-    let Ok(owner) = hosts.get(webview).and_then(|h| owners.get(h.0)) else {
+    let Ok(owner) = owners.get(webview) else {
         return;
     };
     let Some(ext) = registry.extensions.get(&owner.0) else {
@@ -441,13 +427,13 @@ mod tests {
         app
     }
 
-    /// Spawns a workspace/pane/extension-surface chain and an extension host
-    /// entity carrying that surface via `HostSurfaceEntity`, returning the
-    /// `(host, workspace, pane, surface)` handles. `finish_extension_setup`
-    /// needs the chain to resolve the per-webview context. The surface is
-    /// stamped with `SurfaceKind::Extension { entry: "ui/app.html" }` and
-    /// `OwningExtension("memo")`.
-    fn spawn_extension_host(app: &mut App, extra: impl Bundle) -> (Entity, Entity, Entity, Entity) {
+    /// Spawns a workspace/pane/extension-surface chain and decorates the
+    /// Surface entity (which is its own host) with the extension marker plus
+    /// the caller's `extra` bundle, returning the surface/workspace/pane
+    /// handles so `finish_extension_setup` can resolve the per-webview
+    /// context. The surface is stamped with an extension kind (entry
+    /// "ui/app.html") and an owning extension of "memo".
+    fn spawn_extension_host(app: &mut App, extra: impl Bundle) -> (Entity, Entity, Entity) {
         use std::path::PathBuf;
         let (workspace, pane, surface) = app
             .world_mut()
@@ -461,13 +447,11 @@ mod tests {
             SurfaceKind::Extension {
                 entry: PathBuf::from("ui/app.html"),
             },
+            ExtensionSurfaceMarker,
+            extra,
         ));
         app.world_mut().flush();
-        let host = app
-            .world_mut()
-            .spawn((ExtensionSurfaceMarker, HostSurfaceEntity(surface), extra))
-            .id();
-        (host, workspace, pane, surface)
+        (surface, workspace, pane)
     }
 
     #[test]
@@ -482,7 +466,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.init_resource::<SurfaceEntityRegistry>();
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
@@ -516,17 +499,12 @@ mod tests {
             .entity_mut(workspace)
             .insert(AttachedWorkspace);
 
-        // Terminal host: no WebviewSource. Extension host: carries WebviewSource.
-        let terminal_host = app.world_mut().spawn_empty().id();
-        let ext_host = app
-            .world_mut()
-            .spawn(WebviewSource::new(webview_url("memo", "ui/app.html")))
-            .id();
-        {
-            let mut reg = app.world_mut().resource_mut::<SurfaceEntityRegistry>();
-            reg.insert_for_test(terminal_surface, terminal_host);
-            reg.insert_for_test(ext_surface, ext_host);
-        }
+        // The Surface entity IS its own host: the terminal surface carries no
+        // WebviewSource; the extension surface carries one.
+        let _ = terminal_surface;
+        app.world_mut()
+            .entity_mut(ext_surface)
+            .insert(WebviewSource::new(webview_url("memo", "ui/app.html")));
 
         let set_active = move |app: &mut App, pane: Entity| {
             app.world_mut()
@@ -542,7 +520,7 @@ mod tests {
         set_active(&mut app, ext_pane);
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
-            Some(ext_host),
+            Some(ext_surface),
             "active extension pane must focus its webview"
         );
 
@@ -640,30 +618,26 @@ mod tests {
             })
             .unwrap();
         app.world_mut().flush();
-        let host = app
-            .world_mut()
-            .spawn((
-                ExtensionSurfaceMarker,
-                HostSurfaceEntity(surface),
-                laid_out_node(Vec2::new(800.0, 600.0)),
-            ))
-            .id();
+        app.world_mut().entity_mut(surface).insert((
+            ExtensionSurfaceMarker,
+            laid_out_node(Vec2::new(800.0, 600.0)),
+        ));
 
         app.update();
         assert!(
-            app.world().get::<WebviewSource>(host).is_none(),
-            "a host whose surface lacks OwningExtension must not get a webview"
+            app.world().get::<WebviewSource>(surface).is_none(),
+            "a surface that lacks OwningExtension must not get a webview"
         );
         assert!(
-            app.world().get::<WebviewMountUnresolved>(host).is_some(),
-            "the host must be marked so the diagnostic fires once, not every frame"
+            app.world().get::<WebviewMountUnresolved>(surface).is_some(),
+            "the surface must be marked so the diagnostic fires once, not every frame"
         );
 
-        // A second tick must not re-process the marked host (still no webview).
+        // A second tick must not re-process the marked surface (still no webview).
         app.update();
         assert!(
-            app.world().get::<WebviewSource>(host).is_none(),
-            "the marked host must stay excluded from the query"
+            app.world().get::<WebviewSource>(surface).is_none(),
+            "the marked surface must stay excluded from the query"
         );
     }
 
@@ -774,25 +748,23 @@ mod tests {
 
         let mut app = make_test_app();
         let world = app.world_mut();
+        // The webview entity IS the Extension Surface; it carries the id directly.
         let surface = world.spawn(ExtensionSurfaceId("aid-42".into())).id();
-        let webview = world.spawn(HostSurfaceEntity(surface)).id();
         let stray = world.spawn_empty().id();
 
         let resolved = world
-            .run_system_once(
-                move |hosts: Query<&HostSurfaceEntity>, surface_ids: Query<&ExtensionSurfaceId>| {
-                    (
-                        surface_id_for_webview(webview, &hosts, &surface_ids),
-                        surface_id_for_webview(stray, &hosts, &surface_ids),
-                    )
-                },
-            )
+            .run_system_once(move |surface_ids: Query<&ExtensionSurfaceId>| {
+                (
+                    surface_id_for_webview(surface, &surface_ids),
+                    surface_id_for_webview(stray, &surface_ids),
+                )
+            })
             .unwrap();
 
         assert_eq!(resolved.0.as_deref(), Some("aid-42"));
         assert_eq!(
             resolved.1, None,
-            "a webview with no HostSurfaceEntity must resolve to no surface_id"
+            "a webview with no ExtensionSurfaceId must resolve to no surface_id"
         );
     }
 
@@ -803,14 +775,11 @@ mod tests {
         let mut app = make_test_app();
         let world = app.world_mut();
         let surface = world.spawn_empty().id();
-        let webview = world.spawn(HostSurfaceEntity(surface)).id();
 
         let resolved = world
-            .run_system_once(
-                move |hosts: Query<&HostSurfaceEntity>, surface_ids: Query<&ExtensionSurfaceId>| {
-                    surface_id_for_webview(webview, &hosts, &surface_ids)
-                },
-            )
+            .run_system_once(move |surface_ids: Query<&ExtensionSurfaceId>| {
+                surface_id_for_webview(surface, &surface_ids)
+            })
             .unwrap();
 
         assert_eq!(
@@ -828,7 +797,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.init_resource::<SurfaceEntityRegistry>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<AddressBarFocus>();
         app.add_systems(Update, sync_focused_webview);
@@ -845,15 +813,14 @@ mod tests {
             .entity_mut(workspace)
             .insert(AttachedWorkspace);
 
+        // The Surface entity IS its own host; it owns the page-webview child.
         let child = app
             .world_mut()
             .spawn(WebviewSource::new("https://example.com"))
             .id();
-        let host = app.world_mut().spawn(BrowserPageWebview(child)).id();
-        {
-            let mut reg = app.world_mut().resource_mut::<SurfaceEntityRegistry>();
-            reg.insert_for_test(surface, host);
-        }
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(BrowserPageWebview(child));
 
         app.update();
         assert_eq!(
@@ -862,7 +829,7 @@ mod tests {
             "active browser pane focuses its page-webview child"
         );
 
-        app.world_mut().resource_mut::<AddressBarFocus>().0 = Some(host);
+        app.world_mut().resource_mut::<AddressBarFocus>().0 = Some(surface);
         app.update();
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,

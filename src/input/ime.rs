@@ -9,7 +9,6 @@
 use crate::ui::AddressBarFocus;
 use crate::ui::TerminalSurfaceMarker;
 use crate::ui::copy_mode::CopyModeState;
-use crate::ui::registry::SurfaceEntityRegistry;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
@@ -150,7 +149,6 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 pub(crate) fn ime_policy_system(
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: Res<SurfaceEntityRegistry>,
     terminals: Query<(), With<TerminalSurfaceMarker>>,
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
@@ -186,7 +184,7 @@ pub(crate) fn ime_policy_system(
         return;
     }
 
-    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_workspace, &registry) else {
+    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_workspace) else {
         if window.ime_enabled {
             window.ime_enabled = false;
         }
@@ -259,7 +257,6 @@ pub(crate) fn read_ime_events(
     mut commands: Commands,
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: Res<SurfaceEntityRegistry>,
 ) {
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
@@ -273,7 +270,6 @@ pub(crate) fn read_ime_events(
             super::forward_to_active_terminal(
                 &mut commands,
                 &mux,
-                &registry,
                 workspace,
                 TerminalKey::Text(commit_text),
                 TerminalModifiers::default(),
@@ -285,7 +281,6 @@ pub(crate) fn read_ime_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::registry::SurfaceEntityRegistry;
     use bevy::app::{App, Update};
     use bevy::ecs::entity::Entity;
     use bevy::ecs::observer::On;
@@ -488,7 +483,6 @@ mod tests {
             .add_plugins(MultiplexerPlugin)
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
-        app.init_resource::<SurfaceEntityRegistry>();
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
         app.add_message::<Ime>();
@@ -504,13 +498,9 @@ mod tests {
             .entity_mut(outcome.workspace)
             .insert(AttachedWorkspace);
 
-        // Spawn a host UI entity and register it in the entity-keyed map so
-        // resolve_focused_terminal / forward_to_active_terminal resolve to it.
-        let term_entity = app.world_mut().spawn_empty().id();
-        {
-            let mut registry = app.world_mut().resource_mut::<SurfaceEntityRegistry>();
-            registry.insert_for_test(outcome.surface, term_entity);
-        }
+        // The Surface entity IS its own host: `resolve_focused_terminal` /
+        // `forward_to_active_terminal` resolve directly to the active surface.
+        let term_entity = outcome.surface;
 
         app.world_mut().spawn(Window {
             focused: true,
@@ -528,7 +518,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.init_resource::<SurfaceEntityRegistry>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<AddressBarFocus>();
         app.insert_resource(TerminalCellMetricsResource {
@@ -578,7 +567,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.init_resource::<SurfaceEntityRegistry>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<AddressBarFocus>();
         app.insert_resource(TerminalCellMetricsResource {

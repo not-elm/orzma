@@ -1,19 +1,16 @@
-//! Surface host Bevy UI builder. The host entity itself is owned by
-//! `SurfaceEntityRegistry` and lives across structural rebuilds; this
-//! module's `build_surface_host_children` populates its children (the
-//! placeholder Row + name Text) on each rebuild.
-//!
-//! Phase 3+ replaces these placeholder children with a `MaterialNode<
-//! TerminalMaterial>` for the GPU terminal grid.
+//! Surface decoration: the multiplexer Surface entity *is* its own render
+//! host. `decorate_surface` stamps the `Node` bundle (+ kind-colored
+//! background and the kind-marker) onto the Surface entity per its
+//! `SurfaceKind`, so the renderers (`ui::terminal`, `extension_render`,
+//! `browser_render`) can attach their material / webview directly to it.
 
-use crate::ui::StructuralNode;
-use crate::ui::palette;
+use crate::ui::{BrowserSurfaceMarker, ExtensionSurfaceMarker, TerminalSurfaceMarker, palette};
 use bevy::color::Color;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
 use ozmux_multiplexer::SurfaceKind;
 
-/// Background color for the Surface placeholder host, chosen by kind.
+/// Background color for the Surface entity, chosen by kind.
 fn kind_color(kind: &SurfaceKind) -> Color {
     match kind {
         SurfaceKind::Terminal => palette::SURFACE_TERMINAL,
@@ -22,28 +19,18 @@ fn kind_color(kind: &SurfaceKind) -> Color {
     }
 }
 
-/// Insert / refresh the `Node` bundle on the stable Surface host entity,
-/// then spawn its (structural, replaced each rebuild) placeholder children
-/// showing the surface name. The host's `Node` is set with
-/// `commands.entity(host).insert(...)` so the existing entity remains;
-/// children are spawned fresh.
-///
-/// For `SurfaceKind::Terminal` and `SurfaceKind::Extension` the
-/// placeholder children are skipped because a full-size `MaterialNode`
-/// (`TerminalUiMaterial` / `WebviewUiMaterial`) covers the host node
-/// entirely. For `SurfaceKind::Browser` the host is a `FlexDirection::Column`
-/// so the browser renderer can stack a toolbar above a page webview; the
-/// placeholder children are also skipped (the browser renderer spawns the
-/// real toolbar + webview children). The kind-colored `BackgroundColor` still
-/// shows briefly between surface creation and renderer readiness.
-pub(crate) fn build_surface_host_children(
-    commands: &mut Commands,
-    host: Entity,
-    kind: &SurfaceKind,
-    name: &Name,
-) {
+/// Inserts / refreshes the `Node` bundle, kind-colored `BackgroundColor`, and
+/// the kind-marker (`TerminalSurfaceMarker` / `ExtensionSurfaceMarker` /
+/// `BrowserSurfaceMarker`) on the Surface entity. A full-size `MaterialNode`
+/// (`TerminalUiMaterial` / `WebviewUiMaterial`) attached later by the renderer
+/// covers the node entirely; the kind-colored background shows briefly between
+/// surface creation and renderer readiness. For `SurfaceKind::Browser` the
+/// node is a `FlexDirection::Column` so the browser renderer can stack a
+/// toolbar above a page webview.
+pub(crate) fn decorate_surface(commands: &mut Commands, surface: Entity, kind: &SurfaceKind) {
     let is_browser = matches!(kind, SurfaceKind::Browser { .. });
-    commands.entity(host).insert((
+    let mut entity = commands.entity(surface);
+    entity.insert((
         Node {
             flex_grow: 1.0,
             width: Val::Percent(100.0),
@@ -67,31 +54,17 @@ pub(crate) fn build_surface_host_children(
         },
         BackgroundColor(kind_color(kind)),
     ));
-
-    if matches!(
-        kind,
-        SurfaceKind::Terminal | SurfaceKind::Extension { .. } | SurfaceKind::Browser { .. }
-    ) {
-        return;
+    match kind {
+        SurfaceKind::Terminal => {
+            entity.insert(TerminalSurfaceMarker);
+        }
+        SurfaceKind::Extension { .. } => {
+            entity.insert(ExtensionSurfaceMarker);
+        }
+        SurfaceKind::Browser { .. } => {
+            entity.insert(BrowserSurfaceMarker);
+        }
     }
-
-    let row = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                ..default()
-            },
-            StructuralNode,
-            ChildOf(host),
-        ))
-        .id();
-
-    commands.spawn((
-        Text::new(name.as_str().to_string()),
-        TextColor(palette::FOREGROUND),
-        StructuralNode,
-        ChildOf(row),
-    ));
 }
 
 #[cfg(test)]
@@ -118,57 +91,57 @@ mod tests {
     }
 
     #[test]
-    fn browser_host_is_column_and_skips_placeholder() {
+    fn browser_surface_is_column_and_carries_browser_marker() {
         let mut world = World::new();
-        let host = world.spawn_empty().id();
+        let surface = world.spawn_empty().id();
 
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            build_surface_host_children(
+            decorate_surface(
                 &mut commands,
-                host,
+                surface,
                 &SurfaceKind::Browser {
                     initial_url: Some("https://example.com".into()),
                     profile: BrowserProfile::default(),
                 },
-                &Name::new("browser"),
             );
         }
         queue.apply(&mut world);
 
-        let node = world.get::<Node>(host).expect("host must have a Node");
+        let node = world
+            .get::<Node>(surface)
+            .expect("surface must have a Node");
         assert_eq!(
             node.flex_direction,
             FlexDirection::Column,
-            "browser host must use FlexDirection::Column"
+            "browser surface must use FlexDirection::Column"
         );
         assert!(
-            world.get::<Children>(host).is_none(),
-            "browser host must not spawn placeholder children"
+            world.get::<BrowserSurfaceMarker>(surface).is_some(),
+            "browser surface must carry BrowserSurfaceMarker"
         );
     }
 
     #[test]
-    fn terminal_host_skips_placeholder_children() {
+    fn terminal_surface_carries_terminal_marker() {
         let mut world = World::new();
-        let host = world.spawn_empty().id();
+        let surface = world.spawn_empty().id();
 
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            build_surface_host_children(
-                &mut commands,
-                host,
-                &SurfaceKind::Terminal,
-                &Name::new("terminal"),
-            );
+            decorate_surface(&mut commands, surface, &SurfaceKind::Terminal);
         }
         queue.apply(&mut world);
 
         assert!(
-            world.get::<Children>(host).is_none(),
-            "terminal host must not spawn placeholder children"
+            world.get::<TerminalSurfaceMarker>(surface).is_some(),
+            "terminal surface must carry TerminalSurfaceMarker"
+        );
+        assert!(
+            world.get::<Node>(surface).is_some(),
+            "terminal surface must have a Node"
         );
     }
 }

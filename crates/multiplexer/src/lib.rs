@@ -7,28 +7,26 @@
 //! is a Bevy `Entity`. Each entity also carries `Name` (from
 //! `bevy::prelude::Name`) for tracing readability.
 
-pub mod cells;
 pub mod commands;
 pub mod components;
 pub mod direction;
 pub mod error;
+pub mod layout;
 pub mod observers;
 pub mod plugin;
 pub mod resize;
 pub mod swap;
 
-pub use cells::{
-    Cell, CellId, CloseOutcome, LayoutCellState, PaneCell, Rect, RootCell, Side, SplitCell,
-    SplitOrientation,
-};
 pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter};
 pub use components::{
     ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd,
-    ExtensionSurfaceId, LayoutCells, OwningExtension, PaneDimensions, PaneMarker, SurfaceKind,
-    SurfaceMarker, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker, WorkspaceUiSubtree,
+    ExtensionSurfaceId, OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker, SplitNode,
+    SurfaceKind, SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions,
+    WorkspaceMarker, WorkspaceUiSubtree,
 };
-pub use direction::{CycleDirection, PaneDirection};
+pub use direction::{CycleDirection, PaneDirection, pane_in_direction};
 pub use error::{MultiplexerError, MultiplexerResult};
+pub use layout::{LayoutTree, Rect, Side, SplitOrientation, split_ratio};
 pub use plugin::MultiplexerPlugin;
 pub use resize::ResizePaneOutcome;
 pub use swap::{SwapOffset, SwapOutcome};

@@ -1,6 +1,6 @@
 //! Browser surface rendering: a native back/forward/reload + address-bar
 //! toolbar over a `bevy_cef` page webview. The surface host (a column) gets
-//! two persistent, non-`StructuralNode` children built once — a toolbar and a
+//! two persistent children built once — a toolbar and a
 //! page-webview node — and (in a later phase) a CEF webview attached to the
 //! laid-out page child after host-side omnibox resolution.
 
@@ -10,7 +10,7 @@ use crate::system_set::OzmuxSystems;
 use crate::ui::palette;
 use crate::ui::{
     AddrBarText, AddressBarFocus, AddressEdit, BrowserNavButton, BrowserPageWebview,
-    BrowserSurfaceMarker, BrowserToolbarState, HostSurfaceEntity, NavAction, PageWebviewOf,
+    BrowserSurfaceMarker, BrowserToolbarState, NavAction, PageWebviewOf,
 };
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
@@ -131,7 +131,6 @@ fn attach_browser_webview(
     mut materials: ResMut<Assets<WebviewUiMaterial>>,
     configs: Res<OzmuxConfigsResource>,
     pages: Query<(Entity, &ComputedNode, &PageWebviewOf), Without<WebviewSource>>,
-    hosts: Query<&HostSurfaceEntity>,
     kinds: Query<&SurfaceKind>,
     mut states: Query<&mut BrowserToolbarState>,
 ) {
@@ -140,10 +139,7 @@ fn attach_browser_webview(
         if size.x < 1.0 || size.y < 1.0 {
             continue;
         }
-        let Ok(host_surface) = hosts.get(owner.0) else {
-            continue;
-        };
-        let Ok(SurfaceKind::Browser { initial_url, .. }) = kinds.get(host_surface.0) else {
+        let Ok(SurfaceKind::Browser { initial_url, .. }) = kinds.get(owner.0) else {
             continue;
         };
         let raw = initial_url.as_deref().unwrap_or("");
@@ -504,8 +500,7 @@ fn focus_address_bar_on_cmd_l(
     mut focus: ResMut<AddressBarFocus>,
     mux: MultiplexerCommands,
     attached: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: Res<crate::ui::registry::SurfaceEntityRegistry>,
-    browser_hosts: Query<(), With<BrowserSurfaceMarker>>,
+    browser_surfaces: Query<(), With<BrowserSurfaceMarker>>,
     mut edits: Query<(&mut AddressEdit, &BrowserToolbarState)>,
 ) {
     let cmd = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
@@ -521,18 +516,15 @@ fn focus_address_bar_on_cmd_l(
     let Some(surface) = mux.panes_active_surface(pane) else {
         return;
     };
-    let Some(host) = registry.get(surface) else {
-        return;
-    };
-    if !browser_hosts.contains(host) {
+    if !browser_surfaces.contains(surface) {
         return;
     }
-    let Ok((mut edit, state)) = edits.get_mut(host) else {
+    let Ok((mut edit, state)) = edits.get_mut(surface) else {
         return;
     };
     edit.buffer = state.url.clone();
     edit.caret = edit.buffer.chars().count();
-    focus.0 = Some(host);
+    focus.0 = Some(surface);
 }
 
 /// Run condition gating `blur_address_bar_on_focus_leave`: only poll while the
@@ -550,15 +542,14 @@ fn blur_address_bar_on_focus_leave(
     mut focus: ResMut<AddressBarFocus>,
     mux: MultiplexerCommands,
     attached: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: Res<crate::ui::registry::SurfaceEntityRegistry>,
     mouse: Res<ButtonInput<MouseButton>>,
     addr_bars: Query<&Interaction, With<AddrBarText>>,
 ) {
-    let Some(focused_host) = focus.0 else {
+    let Some(focused_surface) = focus.0 else {
         return;
     };
-    let active_host = crate::input::resolve_focused_terminal(&mux, &attached, &registry);
-    let pane_left = active_host != Some(focused_host);
+    let active_surface = crate::input::resolve_focused_terminal(&mux, &attached);
+    let pane_left = active_surface != Some(focused_surface);
     let clicked_outside = mouse.just_pressed(MouseButton::Left)
         && !addr_bars.iter().any(|i| *i == Interaction::Pressed);
     if pane_left || clicked_outside {
@@ -710,7 +701,6 @@ mod tests {
 
     #[test]
     fn attach_resolves_omnibox_and_seeds_child_size() {
-        use crate::ui::HostSurfaceEntity;
         use ozmux_multiplexer::SurfaceKind;
         let mut app = make_test_app();
         app.add_systems(
@@ -718,18 +708,16 @@ mod tests {
             (build_browser_chrome, attach_browser_webview).chain(),
         );
 
-        let surface = app
-            .world_mut()
-            .spawn(SurfaceKind::Browser {
-                initial_url: Some("github.com".into()),
-                profile: Default::default(),
-            })
-            .id();
+        // The Surface entity IS its own host: it carries the SurfaceKind, the
+        // BrowserSurfaceMarker, and the laid-out node.
         let host = app
             .world_mut()
             .spawn((
+                SurfaceKind::Browser {
+                    initial_url: Some("github.com".into()),
+                    profile: Default::default(),
+                },
                 BrowserSurfaceMarker,
-                HostSurfaceEntity(surface),
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -950,8 +938,8 @@ mod tests {
         );
     }
 
-    /// Builds an app with one attached workspace whose active surface maps (in the
-    /// registry) to `host`, and the address bar focused on that same `host` — so
+    /// Builds an app with one attached workspace whose active surface is its
+    /// own host, and the address bar focused on that surface — so
     /// `blur_address_bar_on_focus_leave`'s pane-left condition is false by default.
     fn focused_app_on_active_host() -> (App, Entity) {
         use bevy::ecs::system::RunSystemOnce;
@@ -961,7 +949,6 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
         app.init_resource::<crate::ui::AddressBarFocus>();
-        app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<ButtonInput<MouseButton>>();
 
         let (workspace, _pane, surface) = app
@@ -976,14 +963,10 @@ mod tests {
             .entity_mut(workspace)
             .insert(AttachedWorkspace);
 
-        let host = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>()
-            .insert_for_test(surface, host);
         app.world_mut()
             .resource_mut::<crate::ui::AddressBarFocus>()
-            .0 = Some(host);
-        (app, host)
+            .0 = Some(surface);
+        (app, surface)
     }
 
     #[test]
@@ -1120,7 +1103,6 @@ mod tests {
 
     #[test]
     fn attach_injects_vim_scroll_preload() {
-        use crate::ui::HostSurfaceEntity;
         use ozmux_multiplexer::SurfaceKind;
         let mut app = make_test_app();
         app.add_systems(
@@ -1128,18 +1110,14 @@ mod tests {
             (build_browser_chrome, attach_browser_webview).chain(),
         );
 
-        let surface = app
-            .world_mut()
-            .spawn(SurfaceKind::Browser {
-                initial_url: Some("github.com".into()),
-                profile: Default::default(),
-            })
-            .id();
         let host = app
             .world_mut()
             .spawn((
+                SurfaceKind::Browser {
+                    initial_url: Some("github.com".into()),
+                    profile: Default::default(),
+                },
                 BrowserSurfaceMarker,
-                HostSurfaceEntity(surface),
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();
@@ -1168,25 +1146,20 @@ mod tests {
 
     #[test]
     fn attach_skips_empty_input() {
-        use crate::ui::HostSurfaceEntity;
         use ozmux_multiplexer::SurfaceKind;
         let mut app = make_test_app();
         app.add_systems(
             Update,
             (build_browser_chrome, attach_browser_webview).chain(),
         );
-        let surface = app
-            .world_mut()
-            .spawn(SurfaceKind::Browser {
-                initial_url: None,
-                profile: Default::default(),
-            })
-            .id();
         let host = app
             .world_mut()
             .spawn((
+                SurfaceKind::Browser {
+                    initial_url: None,
+                    profile: Default::default(),
+                },
                 BrowserSurfaceMarker,
-                HostSurfaceEntity(surface),
                 laid_out_node(Vec2::new(800.0, 600.0)),
             ))
             .id();

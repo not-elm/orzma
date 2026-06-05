@@ -8,7 +8,7 @@
 //! design doc §3 "Naming" for why and for the `With<WorkspaceMarker>`
 //! filter discipline that follows.
 
-use crate::cells::{CellId, LayoutCellState};
+use crate::layout::SplitOrientation;
 use bevy::prelude::*;
 use std::path::PathBuf;
 
@@ -22,32 +22,43 @@ pub struct WorkspaceMarker;
 #[derive(Component, Default, Debug)]
 pub struct PaneMarker;
 
+/// Zero-payload-plus-orientation marker on every Split entity. The split's
+/// two children carry the relative weights as `flex_grow`; this only records
+/// the axis. The split entity also carries a flex-container `Node` whose
+/// `flex_direction` matches `orientation`.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitNode {
+    /// Axis of this split.
+    pub orientation: SplitOrientation,
+}
+
+/// Back-pointer from a Pane to its owning Workspace. Required because a Pane
+/// is `ChildOf` its `Split` (or the layout-root node) — never the Workspace
+/// directly — and the layout-root node reparents between the Workspace
+/// (parked) and `WorkspaceUiRoot` (attached), so an ancestor walk cannot
+/// reliably reach the Workspace.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwningWorkspace(pub Entity);
+
 /// Zero-sized marker on every Surface entity.
 #[derive(Component, Default, Debug)]
 pub struct SurfaceMarker;
 
-/// Layout cell state plus the workspace's `root` cell id, owned together
-/// because every consumer needs both. `Default` returns a freshly-empty
-/// `LayoutCellState` and a `CellId(0)` placeholder root that must be
-/// overwritten by the spawn site (`MultiplexerCommands::create_workspace`).
-#[derive(Component, Debug, Default, Clone)]
-pub struct LayoutCells {
-    /// The BSP cell tree for this workspace.
-    pub cells: LayoutCellState,
-    /// The root `CellId` of the cell tree.
-    pub root: CellId,
-}
+/// Logical Pane→Surface ownership (one direction). A Surface points at its
+/// owning Pane regardless of where the surface currently sits in the layout
+/// `ChildOf` tree (slotted under the pane's surface-slot, or parked under the
+/// non-Node Workspace). Paired with [`Surfaces`].
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = Surfaces)]
+pub struct SurfaceOf(#[entities] pub Entity);
 
-impl LayoutCells {
-    /// Construct a `LayoutCells` from a freshly-spawned bootstrap pane:
-    /// builds a `LayoutCellState`, mints the root, and stashes the root
-    /// id together so callers do not need to track it separately.
-    pub fn new_workspace_layout(pane: Entity) -> Self {
-        let mut cells = LayoutCellState::default();
-        let (root, _pane_cell) = cells.new_workspace_layout(pane);
-        Self { cells, root }
-    }
-}
+/// The Surfaces a Pane owns (auto-maintained reverse collection of
+/// [`SurfaceOf`]). `linked_spawn`: despawning the Pane cascade-despawns every
+/// owned Surface — including inactive ones parked under the Workspace, which
+/// are NOT `ChildOf(pane)` and would otherwise leak.
+#[derive(Component, Debug, Default)]
+#[relationship_target(relationship = SurfaceOf, linked_spawn)]
+pub struct Surfaces(Vec<Entity>);
 
 /// The currently focused Pane entity within a Workspace. `Changed<ActivePane>`
 /// is the signal for the terminal-focus and IME-target-switch systems.

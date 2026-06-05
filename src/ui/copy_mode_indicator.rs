@@ -482,7 +482,7 @@ mod tests {
     fn inactive_host_parent_is_walker_skipped_workspace_entity() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{
-            AttachedWorkspace, LayoutCells, MultiplexerCommands, SurfaceKind, WorkspaceMarker,
+            AttachedWorkspace, MultiplexerCommands, SurfaceKind, WorkspaceMarker,
         };
 
         let (mut app, _guard) = make_ui_test_app();
@@ -507,11 +507,8 @@ mod tests {
                 .unwrap()
                 .expect("bootstrap workspace + pane + surface");
 
-        let first_host = app
-            .world()
-            .resource::<crate::ui::registry::SurfaceEntityRegistry>()
-            .get(first_surface)
-            .expect("first surface host registered");
+        // The Surface entity IS its own host.
+        let first_host = first_surface;
 
         let second_surface = app
             .world_mut()
@@ -526,12 +523,7 @@ mod tests {
                 mux.set_active_surface(pane, second_surface).unwrap();
             })
             .unwrap();
-
-        app.world_mut()
-            .entity_mut(workspace)
-            .get_mut::<LayoutCells>()
-            .expect("LayoutCells")
-            .set_changed();
+        app.update();
         app.update();
 
         let first_host_parent = app.world().get::<ChildOf>(first_host).map(|c| c.parent());

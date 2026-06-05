@@ -1,8 +1,8 @@
 //! Direction-resolution algorithm for pane focus movement. Owns `PaneDirection`,
 //! `CycleDirection`, and the pure adjacency / overlap helpers. No I/O.
 
-use crate::cells::{CellId, LayoutCellState, Rect};
 use crate::error::{MultiplexerError, MultiplexerResult};
+use crate::layout::{LayoutTree, Rect, pane_bounds};
 use bevy::ecs::entity::Entity;
 
 /// Cardinal direction for pane-focus movement.
@@ -119,7 +119,8 @@ fn find_in_direction(
     pick_best(panes, from, me, direction, direction.wrap_edge(), &score)
 }
 
-/// Resolve the pane that should receive focus when moving `direction` from `from`.
+/// Resolve the pane that should receive focus when moving `direction` from
+/// `from` within the layout tree rooted at `root` (the layout-root node).
 ///
 /// Returns `Ok(None)` when no candidate exists (single-pane workspace or
 /// pathological layout); never picks `from` itself.
@@ -127,13 +128,13 @@ fn find_in_direction(
 /// `score` assigns a tiebreaking weight to each candidate entity; the
 /// candidate with the highest score wins. Pass `|_| 0` for no preference.
 pub fn pane_in_direction(
-    state: &LayoutCellState,
-    root: &CellId,
+    tree: &LayoutTree,
+    root: Entity,
     from: Entity,
     direction: PaneDirection,
     score: impl Fn(Entity) -> u64,
 ) -> MultiplexerResult<Option<Entity>> {
-    let panes = state.pane_bounds(root)?;
+    let panes = pane_bounds(tree, root);
     let me = panes
         .iter()
         .find(|(pid, _)| *pid == from)
@@ -145,39 +146,97 @@ pub fn pane_in_direction(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cells::{LayoutCellState, Side, SplitOrientation};
+    use crate::commands::MultiplexerCommands;
+    use crate::components::WorkspaceUiSubtree;
+    use crate::layout::{Side, SplitOrientation};
+    use bevy::ecs::system::{In, RunSystemOnce};
+    use bevy::prelude::App;
+    use bevy::prelude::MinimalPlugins;
 
-    fn pane(n: u32) -> Entity {
-        Entity::from_raw_u32(n).expect("nonzero entity id")
+    fn new_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::plugin::MultiplexerPlugin);
+        app
     }
 
-    fn setup_two_panes(orientation: SplitOrientation) -> (LayoutCellState, CellId, Entity, Entity) {
-        let mut state = LayoutCellState::default();
-        let pa = pane(1);
-        let pb = pane(2);
-        let (root, cell_a) = state.new_workspace_layout(pa);
-        let cell_b = state.new_pane(pb, None);
-        state
-            .split_cell(cell_a, cell_b, Side::After, orientation)
+    fn create_workspace(app: &mut App) -> (Entity, Entity) {
+        let created = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
-        (state, root, pa, pb)
+        app.world_mut().flush();
+        (created.workspace, created.pane)
+    }
+
+    fn split(app: &mut App, target: Entity, orientation: SplitOrientation) -> Entity {
+        let new_pane = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(target, Side::After, orientation).unwrap()
+            })
+            .unwrap();
+        app.world_mut().flush();
+        new_pane
+    }
+
+    fn root_of(app: &App, workspace: Entity) -> Entity {
+        app.world().get::<WorkspaceUiSubtree>(workspace).unwrap().0
+    }
+
+    fn resolve(
+        app: &mut App,
+        root: Entity,
+        from: Entity,
+        direction: PaneDirection,
+    ) -> Option<Entity> {
+        resolve_scored(app, root, from, direction, |_| 0)
+    }
+
+    fn resolve_scored(
+        app: &mut App,
+        root: Entity,
+        from: Entity,
+        direction: PaneDirection,
+        score: impl Fn(Entity) -> u64 + Send + Sync + 'static,
+    ) -> Option<Entity> {
+        app.world_mut()
+            .run_system_once_with(
+                move |In((root, from)): In<(Entity, Entity)>, tree: LayoutTree| {
+                    pane_in_direction(&tree, root, from, direction, &score).unwrap()
+                },
+                (root, from),
+            )
+            .unwrap()
+    }
+
+    fn bounds_of(app: &mut App, root: Entity) -> Vec<(Entity, Rect)> {
+        app.world_mut()
+            .run_system_once_with(
+                |In(root): In<Entity>, tree: LayoutTree| pane_bounds(&tree, root),
+                root,
+            )
+            .unwrap()
     }
 
     #[test]
     fn horizontal_split_right_then_left_wraps() {
-        let (state, root, left, right) = setup_two_panes(SplitOrientation::Horizontal);
+        let mut app = new_app();
+        let (ws, left) = create_workspace(&mut app);
+        let right = split(&mut app, left, SplitOrientation::Horizontal);
+        let root = root_of(&app, ws);
 
         assert_eq!(
-            pane_in_direction(&state, &root, left, PaneDirection::Right, |_| 0).unwrap(),
+            resolve(&mut app, root, left, PaneDirection::Right),
             Some(right),
         );
         assert_eq!(
-            pane_in_direction(&state, &root, left, PaneDirection::Left, |_| 0).unwrap(),
+            resolve(&mut app, root, left, PaneDirection::Left),
             Some(right),
             "wrap from left edge picks the rightmost pane",
         );
         assert_eq!(
-            pane_in_direction(&state, &root, right, PaneDirection::Up, |_| 0).unwrap(),
+            resolve(&mut app, root, right, PaneDirection::Up),
             None,
             "1xN strip has no candidate on the perpendicular axis",
         );
@@ -185,13 +244,17 @@ mod tests {
 
     #[test]
     fn vertical_split_down_and_up_wrap() {
-        let (state, root, top, bottom) = setup_two_panes(SplitOrientation::Vertical);
+        let mut app = new_app();
+        let (ws, top) = create_workspace(&mut app);
+        let bottom = split(&mut app, top, SplitOrientation::Vertical);
+        let root = root_of(&app, ws);
+
         assert_eq!(
-            pane_in_direction(&state, &root, top, PaneDirection::Down, |_| 0).unwrap(),
+            resolve(&mut app, root, top, PaneDirection::Down),
             Some(bottom),
         );
         assert_eq!(
-            pane_in_direction(&state, &root, top, PaneDirection::Up, |_| 0).unwrap(),
+            resolve(&mut app, root, top, PaneDirection::Up),
             Some(bottom),
             "wrap from top edge",
         );
@@ -199,103 +262,79 @@ mod tests {
 
     #[test]
     fn single_pane_returns_none_in_all_directions() {
-        let mut state = LayoutCellState::default();
-        let p = pane(1);
-        let (root, _) = state.new_workspace_layout(p);
+        let mut app = new_app();
+        let (ws, p) = create_workspace(&mut app);
+        let root = root_of(&app, ws);
+        assert_eq!(
+            bounds_of(&mut app, root),
+            vec![(
+                p,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1.0,
+                    h: 1.0
+                }
+            )],
+            "the single pane gets the full unit rect",
+        );
         for d in [
             PaneDirection::Up,
             PaneDirection::Down,
             PaneDirection::Left,
             PaneDirection::Right,
         ] {
-            assert_eq!(pane_in_direction(&state, &root, p, d, |_| 0).unwrap(), None,);
+            assert_eq!(resolve(&mut app, root, p, d), None);
         }
     }
 
     #[test]
     fn two_by_two_grid_picks_geometric_neighbor() {
-        let mut state = LayoutCellState::default();
-        let tl = pane(1);
-        let tr = pane(2);
-        let bl = pane(3);
-        let br = pane(4);
-        let (root, cell_tl) = state.new_workspace_layout(tl);
-        let cell_tr = state.new_pane(tr, None);
-        let cell_bl = state.new_pane(bl, None);
-        let cell_br = state.new_pane(br, None);
-        state
-            .split_cell(cell_tl, cell_tr, Side::After, SplitOrientation::Horizontal)
-            .unwrap();
-        state
-            .split_cell(cell_tl, cell_bl, Side::After, SplitOrientation::Vertical)
-            .unwrap();
-        state
-            .split_cell(cell_tr, cell_br, Side::After, SplitOrientation::Vertical)
-            .unwrap();
+        let mut app = new_app();
+        let (ws, p1) = create_workspace(&mut app);
+        let p2 = split(&mut app, p1, SplitOrientation::Horizontal);
+        let p3 = split(&mut app, p1, SplitOrientation::Vertical);
+        let p4 = split(&mut app, p2, SplitOrientation::Vertical);
+        let root = root_of(&app, ws);
 
-        assert_eq!(
-            pane_in_direction(&state, &root, tl, PaneDirection::Right, |_| 0).unwrap(),
-            Some(tr),
-        );
-        assert_eq!(
-            pane_in_direction(&state, &root, tl, PaneDirection::Down, |_| 0).unwrap(),
-            Some(bl),
-        );
-        assert_eq!(
-            pane_in_direction(&state, &root, br, PaneDirection::Left, |_| 0).unwrap(),
-            Some(bl),
-        );
-        assert_eq!(
-            pane_in_direction(&state, &root, br, PaneDirection::Up, |_| 0).unwrap(),
-            Some(tr),
-        );
+        let bounds = bounds_of(&mut app, root);
+        let rect = |e: Entity| bounds.iter().find(|(p, _)| *p == e).unwrap().1;
+        let (tl, tr, bl, br) = (p1, p2, p3, p4);
+        assert!(rect(tl).x < rect(tr).x && rect(tl).y < rect(bl).y);
+        assert!(rect(br).x > rect(bl).x && rect(br).y > rect(tr).y);
+
+        assert_eq!(resolve(&mut app, root, tl, PaneDirection::Right), Some(tr));
+        assert_eq!(resolve(&mut app, root, tl, PaneDirection::Down), Some(bl));
+        assert_eq!(resolve(&mut app, root, br, PaneDirection::Left), Some(bl));
+        assert_eq!(resolve(&mut app, root, br, PaneDirection::Up), Some(tr));
     }
 
     #[test]
     fn deep_horizontal_split_keeps_immediate_neighbor() {
-        let mut state = LayoutCellState::default();
-        let first = pane(1);
-        let (root, mut current_cell) = state.new_workspace_layout(first);
+        let mut app = new_app();
+        let (ws, first) = create_workspace(&mut app);
         let mut current_pane = first;
         let mut second_last_pane = first;
-        for n in 2..=21_u32 {
+        for _ in 2..=21_u32 {
             second_last_pane = current_pane;
-            let next_pane = pane(n);
-            let next_cell = state.new_pane(next_pane, None);
-            state
-                .split_cell(
-                    current_cell,
-                    next_cell,
-                    Side::After,
-                    SplitOrientation::Horizontal,
-                )
-                .unwrap();
-            current_cell = next_cell;
-            current_pane = next_pane;
+            current_pane = split(&mut app, current_pane, SplitOrientation::Horizontal);
         }
+        let root = root_of(&app, ws);
         assert_eq!(
-            pane_in_direction(&state, &root, current_pane, PaneDirection::Left, |_| 0).unwrap(),
+            resolve(&mut app, root, current_pane, PaneDirection::Left),
             Some(second_last_pane),
         );
     }
 
     #[test]
     fn tiebreak_prefers_most_recent_active_point() {
-        let mut state = LayoutCellState::default();
-        let tl = pane(1);
-        let r = pane(2);
-        let bl = pane(3);
-        let (root, cell_tl) = state.new_workspace_layout(tl);
-        let cell_r = state.new_pane(r, None);
-        let cell_bl = state.new_pane(bl, None);
-        state
-            .split_cell(cell_tl, cell_r, Side::After, SplitOrientation::Horizontal)
-            .unwrap();
-        state
-            .split_cell(cell_tl, cell_bl, Side::After, SplitOrientation::Vertical)
-            .unwrap();
+        let mut app = new_app();
+        let (ws, tl) = create_workspace(&mut app);
+        let r = split(&mut app, tl, SplitOrientation::Horizontal);
+        let bl = split(&mut app, tl, SplitOrientation::Vertical);
+        let root = root_of(&app, ws);
 
-        let scores_tl_higher = |p: Entity| {
+        let scores_tl_higher = move |p: Entity| {
             if p == tl {
                 2u64
             } else if p == bl {
@@ -305,12 +344,12 @@ mod tests {
             }
         };
         assert_eq!(
-            pane_in_direction(&state, &root, r, PaneDirection::Left, scores_tl_higher).unwrap(),
+            resolve_scored(&mut app, root, r, PaneDirection::Left, scores_tl_higher),
             Some(tl),
             "tl has higher score so wins tiebreak",
         );
 
-        let scores_bl_higher = |p: Entity| {
+        let scores_bl_higher = move |p: Entity| {
             if p == bl {
                 2u64
             } else if p == tl {
@@ -320,7 +359,7 @@ mod tests {
             }
         };
         assert_eq!(
-            pane_in_direction(&state, &root, r, PaneDirection::Left, scores_bl_higher).unwrap(),
+            resolve_scored(&mut app, root, r, PaneDirection::Left, scores_bl_higher),
             Some(bl),
         );
     }

@@ -13,8 +13,8 @@ const TERMINAL_PLACEHOLDER: &str = "";
 /// Placeholder shown for a browser/extension surface with no webview title yet.
 const WEB_PLACEHOLDER: &str = "";
 
-/// Per-rebuild inputs for `tab_label`, built once in `rebuild_workspace_ui` and
-/// threaded through the cell-tree builder.
+/// Per-refresh inputs for `tab_label`, built once per `refresh_pane_tabs` run
+/// and threaded through the per-pane tab rebuild.
 pub(crate) struct LabelCtx {
     pub(crate) home: Option<PathBuf>,
     pub(crate) max_chars: usize,

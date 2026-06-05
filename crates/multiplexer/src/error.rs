@@ -4,8 +4,6 @@
 use bevy::ecs::entity::Entity;
 use thiserror::Error;
 
-use crate::cells::CellId;
-
 /// Domain errors returned by multiplexer operations.
 #[derive(Error, Debug, Clone)]
 pub enum MultiplexerError {
@@ -25,21 +23,6 @@ pub enum MultiplexerError {
 
     #[error("pane entity not found: {0:?}")]
     PaneNotFound(Entity),
-
-    #[error("cell not found: {0}")]
-    CellNotFound(CellId),
-
-    #[error("cell mapping not found for pane: {0:?}")]
-    CellForPaneNotFound(Entity),
-
-    #[error("cannot close the last pane under root: cell {0}")]
-    CannotCloseLastPane(CellId),
-
-    #[error("invalid node type: cell {0}")]
-    InvalidCellType(CellId),
-
-    #[error("split target equals new_cell: {0}")]
-    SplitTargetEqualsNewCell(CellId),
 
     #[error("cannot close the last pane in workspace {0:?}")]
     CannotCloseLastPaneInWorkspace(Entity),

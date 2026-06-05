@@ -4,25 +4,15 @@
 //! UI walker — no layout, no `ComputedNode` updates, no resize-pass work.
 
 use crate::configs::OzmuxConfigsResource;
-use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
-use crate::theme;
-use crate::ui::layout::build_cell_recursive;
-use crate::ui::registry::SurfaceEntityRegistry;
-use crate::ui::tab_label::LabelCtx;
 use crate::ui::terminal::resolve_pane_workspace;
-use crate::ui::web_title::WebTitle;
-use crate::ui::{
-    HomeDir, HostSurfaceEntity, PaneDimOverlay, StructuralNode, SurfaceHostNode,
-    TerminalSurfaceMarker, WorkspaceUiDirty, WorkspaceUiRoot,
-};
+use crate::ui::{PaneDimOverlay, TerminalSurfaceMarker, WorkspaceUiRoot};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, AttachedWorkspace, Cell, Cwd, LayoutCells, PaneMarker, SurfaceKind,
-    SurfaceMarker, WorkspaceMarker, WorkspaceUiSubtree,
+    ActivePane, AttachedWorkspace, OwningWorkspace, PaneMarker, SurfaceOf, WorkspaceUiSubtree,
 };
 
 pub struct OzmuxWorkspaceUiPlugin;
@@ -30,52 +20,37 @@ pub struct OzmuxWorkspaceUiPlugin;
 impl Plugin for OzmuxWorkspaceUiPlugin {
     fn build(&self, app: &mut App) {
         order_surface_pipeline(app);
-        app.add_systems(
-            Update,
-            flag_chrome_dirty_on_surface_change.in_set(OzmuxSystems::ChromeInvalidate),
-        )
-        .add_systems(
-            Update,
-            rebuild_workspace_ui.in_set(OzmuxSystems::WorkspaceUi),
-        )
-        .add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
-        .add_systems(
-            Update,
-            sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
-        )
-        .add_systems(
-            Update,
-            sync_terminal_dim_on_mount.after(OzmuxSystems::SetupSurface),
-        )
-        .add_systems(PostUpdate, sync_active_workspace.before(UiSystems::Prepare));
+        app.add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
+            .add_systems(
+                Update,
+                sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
+            )
+            .add_systems(
+                Update,
+                sync_terminal_dim_on_mount.after(OzmuxSystems::SetupSurface),
+            )
+            .add_systems(PostUpdate, sync_active_workspace.before(UiSystems::Prepare));
     }
 }
 
 /// Orders the per-frame surface pipeline so each stage sees the previous
 /// stage's committed `Commands` — Bevy inserts an `ApplyDeferred` sync point on
 /// each ordering edge: control-bridge drain ([`ExtensionControlSet::Drain`]) →
-/// workspace-UI rebuild ([`OzmuxSystems::WorkspaceUi`]) → surface setup
+/// chrome build ([`OzmuxSystems::BuildChrome`]) → surface setup
 /// ([`OzmuxSystems::SetupSurface`], which attaches terminals/webviews).
 ///
-/// Without this, unordered stages race nondeterministically:
-/// - the rebuild can run before the split's deferred pane/`ActiveSurface`/
-///   `ChildOf` commands flush → a pane with no surface tab, no host, no webview
-///   (sticky: the one-shot `Changed<LayoutCells>` is already consumed);
-/// - surface setup can queue a bundle insert onto a host the rebuild/prune is
-///   about to despawn → an insert-after-despawn panic.
-///
-/// `prune_registry_on_surface_removal` is ordered before `WorkspaceUi` separately
-/// (in `OzmuxUiPlugin`), so host despawns are committed before both the rebuild
-/// and surface setup observe them.
+/// Without this, unordered stages race nondeterministically: chrome can run
+/// before the split's deferred pane / `ActiveSurface` / `ChildOf` commands
+/// flush, and surface setup can queue a bundle insert onto a surface before its
+/// pane's slot exists.
 fn order_surface_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            OzmuxSystems::ChromeInvalidate
+            OzmuxSystems::BuildChrome
                 .after(ExtensionControlSet::Drain)
                 .after(OzmuxSystems::Input),
-            OzmuxSystems::WorkspaceUi.after(OzmuxSystems::ChromeInvalidate),
-            OzmuxSystems::SetupSurface.after(OzmuxSystems::WorkspaceUi),
+            OzmuxSystems::SetupSurface.after(OzmuxSystems::BuildChrome),
         ),
     );
 }
@@ -106,188 +81,23 @@ fn sync_active_workspace(
     }
 }
 
-/// Rebuilds the UI subtree of every Workspace whose `LayoutCells` changed
-/// since the last run. Native Bevy `Changed<LayoutCells>` replaces the
-/// old epoch-comparison gate. The rebuild walks `layout.cells` and
-/// replaces every `StructuralNode` descendant of the workspace's
-/// `WorkspaceUiSubtree` root — Surface hosts are preserved via
-/// `SurfaceEntityRegistry` and re-parented. Pruning of stale registry
-/// entries is handled by `prune_registry_on_surface_removal` driven by
-/// `RemovedComponents<SurfaceMarker>`.
-fn rebuild_workspace_ui(
-    mut commands: Commands,
-    mut registry: ResMut<SurfaceEntityRegistry>,
-    workspaces: Query<
-        (
-            Entity,
-            &LayoutCells,
-            &WorkspaceUiSubtree,
-            Option<&ActivePane>,
-            Has<AttachedWorkspace>,
-        ),
-        (
-            With<WorkspaceMarker>,
-            Or<(Changed<LayoutCells>, With<WorkspaceUiDirty>)>,
-        ),
-    >,
-    structurals: Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
-    surface_hosts: Query<(Entity, &SurfaceHostNode)>,
-    children: Query<&Children>,
-    surfaces: Query<(&SurfaceKind, &Name, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
-    active_surfaces: Query<&ActiveSurface, With<PaneMarker>>,
-    ui_font: Option<Res<TerminalUiFont>>,
-    configs: Option<Res<OzmuxConfigsResource>>,
-    home_dir: Option<Res<HomeDir>>,
-) {
-    let ui_font_handle = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
-
-    let veil: Option<Color> = match configs.as_deref() {
-        Some(cfg) if cfg.inactive_pane.enabled => {
-            let (r, g, b) = cfg.inactive_pane.rgb();
-            Some(Color::srgb_u8(r, g, b).with_alpha(cfg.inactive_pane.opacity))
-        }
-        _ => None,
-    };
-    let label_ctx = LabelCtx {
-        home: home_dir.and_then(|h| h.0.clone()),
-        max_chars: theme::TAB_LABEL_MAX_CHARS,
-    };
-
-    for (workspace_entity, layout, subtree, active_pane, _is_attached) in workspaces.iter() {
-        let active_pane = active_pane.map(|a| a.0);
-        let workspace_veil = if active_pane.is_some() { veil } else { None };
-        let active_pane = active_pane.unwrap_or(Entity::PLACEHOLDER);
-        descend_and_detach_hosts(&mut commands, subtree.0, &children, &surface_hosts);
-        descend_and_despawn_structural(&mut commands, subtree.0, &children, &structurals);
-
-        let root_cell_id = layout.root;
-        match layout.cells.cell(&root_cell_id) {
-            Ok(Cell::Root(root)) => {
-                build_cell_recursive(
-                    &mut commands,
-                    subtree.0,
-                    &layout.cells,
-                    &root.child,
-                    &mut registry,
-                    workspace_entity,
-                    &ui_font_handle,
-                    &children,
-                    &surfaces,
-                    &active_surfaces,
-                    active_pane,
-                    workspace_veil,
-                    &label_ctx,
-                );
-            }
-            Ok(_) => tracing::warn!(target: "ozmux_gui::ui", "root_cell is not Cell::Root"),
-            Err(err) => tracing::warn!(target: "ozmux_gui::ui", ?err, "root_cell missing"),
-        }
-        // NOTE: must remove the marker after rebuilding, or `With<WorkspaceUiDirty>`
-        // keeps matching and the workspace rebuilds every frame. No-op when the
-        // rebuild was triggered by `Changed<LayoutCells>` (marker absent).
-        commands
-            .entity(workspace_entity)
-            .remove::<WorkspaceUiDirty>();
-    }
-}
-
-/// Flags a workspace `WorkspaceUiDirty` when one of its panes gains a surface
-/// (`Added<SurfaceMarker>`), switches its active surface
-/// (`Changed<ActiveSurface>`), a surface reports a new working directory
-/// (`Changed<Cwd>`, via OSC 7), or a browser/extension surface reports a new
-/// page title (`Changed<WebTitle>`) — in-pane changes that do not mutate
-/// `LayoutCells` and so would otherwise not trigger `rebuild_workspace_ui`.
-/// Covers both the `@md` control-bridge path and the in-app shortcuts via a
-/// single UI-layer hook, keeping the multiplexer crate free of UI concerns.
-/// Ordered after the drain / input and before `WorkspaceUi` so the marker is
-/// visible to the rebuild the same frame. The split case already changes
-/// `LayoutCells`; a redundant flag there is harmless.
-fn flag_chrome_dirty_on_surface_change(
-    mut commands: Commands,
-    added_surfaces: Query<Entity, Added<SurfaceMarker>>,
-    switched_panes: Query<Entity, (With<PaneMarker>, Changed<ActiveSurface>)>,
-    changed_cwd: Query<Entity, (With<SurfaceMarker>, Changed<Cwd>)>,
-    changed_web_title: Query<Entity, (With<SurfaceMarker>, Changed<WebTitle>)>,
-    child_of: Query<&ChildOf>,
-) {
-    for surface in added_surfaces
-        .iter()
-        .chain(changed_cwd.iter())
-        .chain(changed_web_title.iter())
-    {
-        if let Some((_pane, workspace)) = resolve_pane_workspace(surface, &child_of) {
-            commands.entity(workspace).insert(WorkspaceUiDirty);
-        }
-    }
-    for pane in switched_panes.iter() {
-        if let Ok(pane_parent) = child_of.get(pane) {
-            commands
-                .entity(pane_parent.parent())
-                .insert(WorkspaceUiDirty);
-        }
-    }
-}
-
-fn descend_and_detach_hosts(
-    commands: &mut Commands,
-    root: Entity,
-    children: &Query<&Children>,
-    surface_hosts: &Query<(Entity, &SurfaceHostNode)>,
-) {
-    let mut stack = vec![root];
-    while let Some(e) = stack.pop() {
-        if surface_hosts.get(e).is_ok() {
-            commands.entity(e).remove::<ChildOf>();
-            continue;
-        }
-        if let Ok(children) = children.get(e) {
-            for c in children.iter() {
-                stack.push(c);
-            }
-        }
-    }
-}
-
-fn descend_and_despawn_structural(
-    commands: &mut Commands,
-    root: Entity,
-    children: &Query<&Children>,
-    structurals: &Query<(Entity, Option<&ChildOf>), With<StructuralNode>>,
-) {
-    let mut to_despawn = vec![];
-    let mut stack = vec![root];
-    while let Some(e) = stack.pop() {
-        if let Ok(children) = children.get(e) {
-            for c in children.iter() {
-                stack.push(c);
-            }
-        }
-        if structurals.get(e).is_ok() && e != root {
-            to_despawn.push(e);
-        }
-    }
-    for e in to_despawn {
-        commands.entity(e).try_despawn();
-    }
-}
-
 /// Flips each pane's dim veil when its workspace's `ActivePane` changes
-/// (focus moves between panes without a layout rebuild). For every workspace
-/// whose `ActivePane` changed, sets each `PaneDimOverlay` belonging to that
-/// workspace to `Hidden` iff its pane is the new active pane, else `Visible`.
-/// Pane→workspace is resolved via `ChildOf`; using `MultiplexerCommands` here
-/// would conflict on its `&mut ActivePane`.
+/// (focus moves between panes). For every workspace whose `ActivePane`
+/// changed, sets each `PaneDimOverlay` belonging to that workspace to
+/// `Hidden` iff its pane is the new active pane, else `Visible`. Pane→
+/// workspace is resolved via `OwningWorkspace`; using `MultiplexerCommands`
+/// here would conflict on its `&mut ActivePane`.
 fn sync_pane_dim(
     mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
     changed_workspaces: Query<(Entity, &ActivePane), Changed<ActivePane>>,
-    panes: Query<&ChildOf, With<PaneMarker>>,
+    panes: Query<&OwningWorkspace, With<PaneMarker>>,
 ) {
     for (workspace, active) in changed_workspaces.iter() {
         for (overlay, mut visibility) in overlays.iter_mut() {
-            let Ok(child_of) = panes.get(overlay.pane) else {
+            let Ok(owning) = panes.get(overlay.pane) else {
                 continue;
             };
-            if child_of.parent() != workspace {
+            if owning.0 != workspace {
                 continue;
             }
             let want = if overlay.pane == active.0 {
@@ -317,20 +127,22 @@ fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
 fn sync_terminal_dim_on_focus(
     mut commands: Commands,
     changed_workspaces: Query<(Entity, &ActivePane), Changed<ActivePane>>,
-    hosts: Query<
-        (Entity, &HostSurfaceEntity),
+    surfaces: Query<
+        Entity,
         (
             With<TerminalSurfaceMarker>,
             With<MaterialNode<TerminalUiMaterial>>,
         ),
     >,
-    child_of: Query<&ChildOf>,
+    owners: Query<&SurfaceOf>,
+    pane_workspaces: Query<&OwningWorkspace, With<PaneMarker>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
     for (workspace, active) in changed_workspaces.iter() {
-        for (host, host_surface) in hosts.iter() {
-            let Some((pane, host_workspace)) = resolve_pane_workspace(host_surface.0, &child_of)
+        for surface in surfaces.iter() {
+            let Some((pane, host_workspace)) =
+                resolve_pane_workspace(surface, &owners, &pane_workspaces)
             else {
                 continue;
             };
@@ -338,7 +150,7 @@ fn sync_terminal_dim_on_focus(
                 continue;
             }
             let want = if pane == active.0 { 1.0 } else { dim_factor };
-            commands.entity(host).insert(PaneDim(want));
+            commands.entity(surface).insert(PaneDim(want));
         }
     }
 }
@@ -351,19 +163,21 @@ fn sync_terminal_dim_on_focus(
 fn sync_terminal_dim_on_mount(
     mut commands: Commands,
     newly_mounted: Query<
-        (Entity, &HostSurfaceEntity),
+        Entity,
         (
             With<TerminalSurfaceMarker>,
             Added<MaterialNode<TerminalUiMaterial>>,
         ),
     >,
     active_panes: Query<&ActivePane>,
-    child_of: Query<&ChildOf>,
+    owners: Query<&SurfaceOf>,
+    pane_workspaces: Query<&OwningWorkspace, With<PaneMarker>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
-    for (host, host_surface) in newly_mounted.iter() {
-        let Some((pane, workspace)) = resolve_pane_workspace(host_surface.0, &child_of) else {
+    for surface in newly_mounted.iter() {
+        let Some((pane, workspace)) = resolve_pane_workspace(surface, &owners, &pane_workspaces)
+        else {
             continue;
         };
         let is_active = active_panes
@@ -371,7 +185,7 @@ fn sync_terminal_dim_on_mount(
             .map(|a| a.0 == pane)
             .unwrap_or(true);
         let want = if is_active { 1.0 } else { dim_factor };
-        commands.entity(host).insert(PaneDim(want));
+        commands.entity(surface).insert(PaneDim(want));
     }
 }
 
@@ -409,25 +223,23 @@ mod tests {
     }
 
     #[test]
-    fn workspace_ui_runs_after_control_drain_so_deferred_commands_are_visible() {
+    fn chrome_runs_after_control_drain_so_deferred_commands_are_visible() {
         // Regression for the intermittent dark/empty extension pane: the `@memo`
-        // split mutates `LayoutCells` immediately but wires the new pane's
-        // `ActiveSurface` / `ChildOf` through deferred `Commands`.
-        // `rebuild_workspace_ui` (in `OzmuxSystems::WorkspaceUi`) must run after the
-        // control-bridge drain (`ExtensionControlSet::Drain`) so the inserted
-        // `ApplyDeferred` flushes those commands before the rebuild reads the
-        // layout. This adds the real `OzmuxWorkspaceUiPlugin` (which wires the
-        // ordering) and proves a WorkspaceUi-set system observes a Drain-set
-        // system's deferred spawn within the same frame.
+        // split spawns the new pane via deferred `Commands`. The chrome-build
+        // stage (`OzmuxSystems::BuildChrome`) must run after the control-bridge
+        // drain (`ExtensionControlSet::Drain`) so the inserted `ApplyDeferred`
+        // flushes those commands before chrome reads the new pane. This adds the
+        // real `OzmuxWorkspaceUiPlugin` (which wires the ordering) and proves a
+        // BuildChrome-set system observes a Drain-set system's deferred spawn
+        // within the same frame.
         #[derive(Resource, Default)]
-        struct RebuildSaw(Option<bool>);
+        struct ChromeSaw(Option<bool>);
         #[derive(Component)]
         struct DrainSpawned;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .init_resource::<SurfaceEntityRegistry>()
-            .init_resource::<RebuildSaw>()
+            .init_resource::<ChromeSaw>()
             .add_plugins(OzmuxWorkspaceUiPlugin);
         app.add_systems(
             Update,
@@ -436,20 +248,20 @@ mod tests {
                     commands.spawn(DrainSpawned);
                 })
                 .in_set(ExtensionControlSet::Drain),
-                (|q: Query<(), With<DrainSpawned>>, mut saw: ResMut<RebuildSaw>| {
+                (|q: Query<(), With<DrainSpawned>>, mut saw: ResMut<ChromeSaw>| {
                     saw.0 = Some(!q.is_empty());
                 })
-                .in_set(OzmuxSystems::WorkspaceUi),
+                .in_set(OzmuxSystems::BuildChrome),
             ),
         );
 
         app.update();
 
         assert_eq!(
-            app.world().resource::<RebuildSaw>().0,
+            app.world().resource::<ChromeSaw>().0,
             Some(true),
-            "a WorkspaceUi-set system must observe the control drain's deferred \
-             spawn within the same frame; WorkspaceUi must be ordered after \
+            "a BuildChrome-set system must observe the control drain's deferred \
+             spawn within the same frame; BuildChrome must be ordered after \
              ExtensionControlSet::Drain (inserting an ApplyDeferred sync point)"
         );
     }
@@ -590,7 +402,8 @@ mod tests {
     }
 
     #[test]
-    fn in_pane_surface_add_triggers_rebuild_via_workspace_ui_dirty() {
+    fn in_pane_surface_switch_slots_new_surface() {
+        use crate::ui::Slotted;
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind};
 
@@ -613,9 +426,8 @@ mod tests {
                 .unwrap()
                 .expect("bootstrap workspace + active pane");
 
-        // Add an in-pane surface WITHOUT touching LayoutCells. The only path
-        // that can drive a rebuild here is flag_chrome_dirty_on_surface_change
-        // setting WorkspaceUiDirty from Added<SurfaceMarker>.
+        // Add an in-pane surface, then make it active. The slot/park system
+        // must slot the new surface (Node + Slotted) into the pane.
         let added = app
             .world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
@@ -623,22 +435,27 @@ mod tests {
             })
             .unwrap();
         app.world_mut().flush();
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_surface(pane, added).unwrap();
+            })
+            .unwrap();
         app.update();
         app.update();
 
         assert!(
-            app.world()
-                .resource::<SurfaceEntityRegistry>()
-                .get(added)
-                .is_some(),
-            "adding an in-pane surface (no LayoutCells change) must trigger a \
-             WorkspaceUiDirty rebuild; build_pane proves it ran by spawning a host \
-             for the new surface"
+            app.world().get::<Slotted>(added).is_some(),
+            "the newly-activated surface must be slotted (carry Slotted)"
+        );
+        assert!(
+            app.world().get::<Node>(added).is_some(),
+            "the slotted surface must be decorated with a Node"
         );
     }
 
     #[test]
     fn inactive_surface_within_active_workspace_parks_under_workspace_entity() {
+        use crate::ui::Slotted;
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind};
 
@@ -663,11 +480,10 @@ mod tests {
                 .unwrap()
                 .expect("bootstrap workspace + pane + first_surface");
 
-        let first_host = app
-            .world()
-            .resource::<crate::ui::registry::SurfaceEntityRegistry>()
-            .get(first_surface)
-            .expect("first surface must have a host after initial rebuild");
+        assert!(
+            app.world().get::<Slotted>(first_surface).is_some(),
+            "first surface must be slotted after initial chrome build"
+        );
 
         let second_surface = app
             .world_mut()
@@ -682,19 +498,21 @@ mod tests {
                 mux.set_active_surface(pane, second_surface).unwrap();
             })
             .unwrap();
-
-        app.world_mut()
-            .entity_mut(workspace)
-            .get_mut::<LayoutCells>()
-            .expect("LayoutCells")
-            .set_changed();
+        app.update();
         app.update();
 
-        let first_host_parent = app.world().get::<ChildOf>(first_host).map(|c| c.parent());
+        let first_parent = app
+            .world()
+            .get::<ChildOf>(first_surface)
+            .map(|c| c.parent());
         assert_eq!(
-            first_host_parent,
+            first_parent,
             Some(workspace),
-            "inactive surface host must be parked under the Workspace entity (non-Node, walker-skipped)"
+            "inactive surface must be parked under the Workspace entity (non-Node, walker-skipped)"
+        );
+        assert!(
+            app.world().get::<Slotted>(first_surface).is_none(),
+            "parked surface must no longer carry Slotted"
         );
     }
 
@@ -739,60 +557,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn per_workspace_rebuild_only_touches_changed_workspace() {
-        let (mut app, _guard) = make_test_app_v2();
-        app.update();
-        app.update();
-
-        // Spawn a second workspace (workspace B) with a subtree, not attached.
-        // Workspace B has no LayoutCells, so Changed<LayoutCells> never fires for it.
-        let (_workspace_b, subtree_b) = {
-            let world = app.world_mut();
-            let subtree = world.spawn(Node::default()).id();
-            let entity = world
-                .spawn((WorkspaceMarker, WorkspaceUiSubtree(subtree), Name::new("b")))
-                .id();
-            world.entity_mut(subtree).insert(ChildOf(entity));
-            (entity, subtree)
-        };
-        app.update();
-        app.update();
-
-        let children_before: Vec<Entity> = app
-            .world()
-            .get::<Children>(subtree_b)
-            .map(|c| c.iter().collect())
-            .unwrap_or_default();
-
-        // Mark workspace A's LayoutCells as changed to trigger a rebuild on A only.
-        // Workspace B has no LayoutCells, so the Changed<LayoutCells> filter
-        // will not include it.
-        {
-            let world = app.world_mut();
-            let workspace_a = world
-                .query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>()
-                .single(world)
-                .expect("attached workspace A");
-            world
-                .entity_mut(workspace_a)
-                .get_mut::<LayoutCells>()
-                .expect("LayoutCells on workspace A")
-                .set_changed();
-        }
-        app.update();
-
-        let children_after: Vec<Entity> = app
-            .world()
-            .get::<Children>(subtree_b)
-            .map(|c| c.iter().collect())
-            .unwrap_or_default();
-        assert_eq!(
-            children_before, children_after,
-            "Workspace B's subtree children must not change when only Workspace A's LayoutCells changed",
-        );
     }
 
     #[test]
@@ -859,7 +623,7 @@ mod tests {
             .trigger(crate::action::workspace::NewWorkspaceActionEvent {
                 workspace: bootstrap_workspace,
             });
-        // One tick for commands to flush + rebuild_workspace_ui to run, one for
+        // One tick for commands to flush + chrome to build, one for
         // PostUpdate sync_active_workspace to react.
         app.update();
         app.update();
@@ -900,41 +664,6 @@ mod tests {
                 .parent(),
             bootstrap_workspace,
             "old workspace's subtree must be parked under its workspace entity",
-        );
-    }
-
-    #[test]
-    fn web_title_change_flags_workspace_dirty() {
-        use super::*;
-        let mut world = World::new();
-        let workspace = world.spawn_empty().id();
-        let pane = world.spawn(ChildOf(workspace)).id();
-        let surface = world.spawn((SurfaceMarker, ChildOf(pane))).id();
-
-        let mut sched = Schedule::default();
-        sched.add_systems(flag_chrome_dirty_on_surface_change);
-
-        // Run 1: Added<SurfaceMarker> sets the flag; clear it to isolate WebTitle.
-        sched.run(&mut world);
-        world.entity_mut(workspace).remove::<WorkspaceUiDirty>();
-
-        // Run 2: the only newly-changed input is WebTitle.
-        world.entity_mut(surface).insert(WebTitle("x".into()));
-        sched.run(&mut world);
-
-        assert!(
-            world.get::<WorkspaceUiDirty>(workspace).is_some(),
-            "Changed<WebTitle> must flag the owning workspace dirty"
-        );
-
-        // Run 3: a subsequent (changed, not added) title must re-flag, proving
-        // the arm reacts to updates — not just the first insert (Added).
-        world.entity_mut(workspace).remove::<WorkspaceUiDirty>();
-        world.entity_mut(surface).insert(WebTitle("y".into()));
-        sched.run(&mut world);
-        assert!(
-            world.get::<WorkspaceUiDirty>(workspace).is_some(),
-            "a later WebTitle change (page navigation) must re-flag the workspace"
         );
     }
 }

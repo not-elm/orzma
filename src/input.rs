@@ -24,7 +24,6 @@ use crate::system_set::OzmuxSystems;
 use crate::ui::copy_mode::{
     CopyModeState, EnterCopyModeActionEvent, dispatch_key as dispatch_copy_mode_key,
 };
-use crate::ui::registry::SurfaceEntityRegistry;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -34,20 +33,35 @@ use ozmux_configs::shortcuts::{
     SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset, WorkspaceOffset,
 };
 use ozmux_multiplexer::{
-    AttachedWorkspace, CycleDirection, MultiplexerCommands, PaneDirection, SplitOrientation,
-    SwapOffset, WorkspaceMarker,
+    ActivePane, ActiveSurface, AttachedWorkspace, CycleDirection, MultiplexerCommands,
+    PaneDirection, SplitOrientation, SwapOffset, WorkspaceMarker,
 };
 use std::collections::HashSet;
 
 /// Resolves the focused surface's entity via the attached workspace →
-/// multiplexer → registry chain.
+/// active pane → active surface chain. The Surface entity *is* its own host,
+/// so the active surface entity is returned directly.
 pub(crate) fn resolve_focused_terminal(
     mux: &MultiplexerCommands,
     attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    registry: &SurfaceEntityRegistry,
 ) -> Option<Entity> {
     let workspace = attached_workspace.iter().next()?;
-    resolve_active_surface_entity(mux, workspace, registry)
+    resolve_active_surface_entity(mux, workspace)
+}
+
+/// Resolves the focused surface's entity using plain read-only `ActivePane` /
+/// `ActiveSurface` queries instead of the full `MultiplexerCommands` SystemParam.
+/// Systems that mutate `Node`/`Children` cannot also hold `MultiplexerCommands`
+/// (its broad `&Node`/`&Children` layout queries alias the mutation — Bevy
+/// B0001), so they resolve the focused terminal through this narrow path.
+pub(crate) fn resolve_focused_terminal_readonly(
+    attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    active_panes: &Query<&ActivePane>,
+    active_surfaces: &Query<&ActiveSurface>,
+) -> Option<Entity> {
+    let workspace = attached_workspace.iter().next()?;
+    let pane = active_panes.get(workspace).ok()?.0;
+    active_surfaces.get(pane).ok().map(|s| s.0)
 }
 
 /// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
@@ -100,7 +114,6 @@ pub(crate) fn dispatch_focused_key(
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
-    registry: Res<SurfaceEntityRegistry>,
     copy_modes: Query<(), With<CopyModeState>>,
 ) {
     // NOTE: when the browser address bar owns focus, the active pane is always a
@@ -145,8 +158,7 @@ pub(crate) fn dispatch_focused_key(
         };
 
         let active_pane = mux.workspaces_active_pane(workspace);
-        let active_surface = active_pane.and_then(|p| mux.panes_active_surface(p));
-        let focused_entity = active_surface.and_then(|a| registry.get(a));
+        let focused_entity = active_pane.and_then(|p| mux.panes_active_surface(p));
 
         if matches!(ev.logical_key, Key::Escape)
             && let Some(entity) = focused_entity
@@ -190,7 +202,7 @@ pub(crate) fn dispatch_focused_key(
                 if ev.repeat {
                     continue;
                 }
-                execute_action(&mut commands, &mux, action, workspace, &registry);
+                execute_action(&mut commands, &mux, action, workspace);
                 continue;
             }
         }
@@ -199,7 +211,6 @@ pub(crate) fn dispatch_focused_key(
             forward_to_active_terminal(
                 &mut commands,
                 &mux,
-                &registry,
                 workspace,
                 tk,
                 shortcut_mods_to_terminal_mods(&mods),
@@ -298,11 +309,10 @@ fn execute_action(
     mux: &MultiplexerCommands,
     action: ShortcutAction,
     workspace: Entity,
-    registry: &SurfaceEntityRegistry,
 ) {
     match &action {
         ShortcutAction::EnterCopyMode => {
-            if let Some(entity) = resolve_active_surface_entity(mux, workspace, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, workspace) {
                 commands.trigger(EnterCopyModeActionEvent { entity });
             }
         }
@@ -326,12 +336,12 @@ fn execute_action(
             });
         }
         ShortcutAction::Copy => {
-            if let Some(entity) = resolve_active_surface_entity(mux, workspace, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, workspace) {
                 commands.trigger(CopyToClipboardActionEvent { entity });
             }
         }
         ShortcutAction::Paste => {
-            if let Some(entity) = resolve_active_surface_entity(mux, workspace, registry) {
+            if let Some(entity) = resolve_active_surface_entity(mux, workspace) {
                 commands.trigger(PasteFromClipboardActionEvent { entity });
             }
         }
@@ -379,17 +389,12 @@ fn execute_action(
 }
 
 /// Resolves the active surface's entity for `workspace` via the
-/// workspace → pane → surface → registry chain. Returns `None` when the
-/// workspace has no active pane/surface, or the surface is not yet
-/// registered (e.g. a Browser Surface with no `TerminalHandle`).
-fn resolve_active_surface_entity(
-    mux: &MultiplexerCommands,
-    workspace: Entity,
-    registry: &SurfaceEntityRegistry,
-) -> Option<Entity> {
+/// workspace → pane → surface chain. The Surface entity *is* its own host,
+/// so the active surface entity is returned directly. Returns `None` when the
+/// workspace has no active pane/surface.
+fn resolve_active_surface_entity(mux: &MultiplexerCommands, workspace: Entity) -> Option<Entity> {
     let pane = mux.workspaces_active_pane(workspace)?;
-    let surface = mux.panes_active_surface(pane)?;
-    registry.get(surface)
+    mux.panes_active_surface(pane)
 }
 
 fn split_orientation(d: SplitDirection) -> SplitOrientation {
@@ -468,7 +473,6 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
 fn forward_to_active_terminal(
     commands: &mut Commands,
     mux: &MultiplexerCommands,
-    registry: &SurfaceEntityRegistry,
     workspace: Entity,
     key: TerminalKey,
     mods: TerminalModifiers,
@@ -476,10 +480,7 @@ fn forward_to_active_terminal(
     let Some(pane) = mux.workspaces_active_pane(workspace) else {
         return;
     };
-    let Some(surface) = mux.panes_active_surface(pane) else {
-        return;
-    };
-    let Some(entity) = registry.get(surface) else {
+    let Some(entity) = mux.panes_active_surface(pane) else {
         return;
     };
     commands.trigger(TerminalKeyInput {
@@ -513,7 +514,6 @@ mod tests {
             .add_systems(Update, dispatch_focused_key.run_if(not(is_ime_composing)));
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
-        app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_plugins(crate::clipboard::ClipboardActionPlugin);
@@ -586,15 +586,14 @@ mod tests {
         cap.0.lock().unwrap().push("paste");
     }
 
-    /// Spawns a registry-registered Terminal Surface entity inside the
-    /// active pane of the only window in the test app, returning its Entity id.
-    /// The entity carries NO `TerminalHandle`, so the `bevy_terminal`
-    /// observer no-ops on the missing component — the test capture
-    /// observer still records the trigger regardless of observer order.
+    /// Resolves the active pane's Surface entity in the only window of the test
+    /// app, returning its Entity id. The surface carries NO `TerminalHandle`,
+    /// so the `bevy_terminal` observer no-ops on the missing component — the
+    /// test capture observer still records the trigger regardless of observer
+    /// order. The Surface entity *is* its own host, so no registry mapping is
+    /// needed.
     fn install_active_terminal_surface(app: &mut App) -> Entity {
-        let surface_entity = app.world_mut().spawn_empty().id();
-        let surface_id = app
-            .world_mut()
+        app.world_mut()
             .run_system_once(
                 |mux: MultiplexerCommands,
                  attached_workspace: Query<
@@ -607,19 +606,13 @@ mod tests {
                 },
             )
             .unwrap()
-            .unwrap();
-        let mut registry = app
-            .world_mut()
-            .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>();
-        registry.insert_for_test(surface_id, surface_entity);
-        surface_entity
+            .unwrap()
     }
 
-    /// Spawns a registry-registered Terminal Surface entity that carries
-    /// a real `TerminalHandle` / `PtyHandle` / `Coalescer` (via
-    /// `TerminalBundle::spawn`). Used by the paste-gate integration tests
-    /// that need to observe `pending_user_input` flipping after the gate
-    /// runs.
+    /// Attaches a real `TerminalHandle` / `PtyHandle` / `Coalescer` (via
+    /// `TerminalBundle::spawn`) onto the active pane's Surface entity. Used by
+    /// the paste-gate integration tests that need to observe
+    /// `pending_user_input` flipping after the gate runs.
     fn install_active_terminal_surface_with_handle(app: &mut App) -> Entity {
         let opts = bevy_terminal::SpawnOptions {
             cols: 10,
@@ -629,27 +622,9 @@ mod tests {
             env: Vec::new(),
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).expect("spawn /bin/sh");
-        let entity = app.world_mut().spawn(bundle).id();
-        let surface_id = app
-            .world_mut()
-            .run_system_once(
-                |mux: MultiplexerCommands,
-                 attached_workspace: Query<
-                    Entity,
-                    (With<WorkspaceMarker>, With<AttachedWorkspace>),
-                >| {
-                    let workspace = attached_workspace.iter().next()?;
-                    let pane = mux.workspaces_active_pane(workspace)?;
-                    mux.panes_active_surface(pane)
-                },
-            )
-            .unwrap()
-            .unwrap();
-        let mut registry = app
-            .world_mut()
-            .resource_mut::<crate::ui::registry::SurfaceEntityRegistry>();
-        registry.insert_for_test(surface_id, entity);
-        entity
+        let surface = install_active_terminal_surface(app);
+        app.world_mut().entity_mut(surface).insert(bundle);
+        surface
     }
 
     #[test]
@@ -854,7 +829,6 @@ mod tests {
             .add_plugins(crate::configs::OzmuxConfigsPlugin)
             .add_plugins(OzmuxShortcutPlugin);
         app.insert_resource(ButtonInput::<KeyCode>::default());
-        app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<crate::input::ime::ImeState>();
         app.insert_resource(crate::clipboard::Clipboard::new());
         app.add_message::<KeyboardInput>();
@@ -901,15 +875,29 @@ mod tests {
 
     #[test]
     fn no_active_terminal_entity_means_no_panic_just_silent_drop() {
+        use ozmux_multiplexer::{ActiveSurface, PaneMarker};
         let (mut app, window_entity) = make_app(true);
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
+
+        // Strip every pane's ActiveSurface so the dispatcher resolves no focused
+        // surface entity — keys must silently drop rather than panic.
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands, panes: Query<Entity, With<PaneMarker>>| {
+                    for pane in panes.iter() {
+                        commands.entity(pane).remove::<ActiveSurface>();
+                    }
+                },
+            )
+            .unwrap();
+        app.world_mut().flush();
 
         press(&mut app, window_entity, Bk::Character("h".into()));
         app.update();
 
         let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
-        assert!(captured.is_empty(), "no registry entry → no trigger");
+        assert!(captured.is_empty(), "no active surface → no trigger");
     }
 
     #[test]
@@ -1238,7 +1226,6 @@ mod tests {
     fn setup_exec_app() -> App {
         let mut app = App::new();
         app.add_plugins(MultiplexerPlugin);
-        app.init_resource::<crate::ui::registry::SurfaceEntityRegistry>();
         app.init_resource::<CapturedActionEvents>();
         app.add_observer(cap_split);
         app.add_observer(cap_new_surface);
@@ -1262,13 +1249,9 @@ mod tests {
 
     fn run_execute_action(app: &mut App, action: ShortcutAction, workspace: Entity) {
         app.world_mut()
-            .run_system_once(
-                move |mut commands: Commands,
-                      mux: MultiplexerCommands,
-                      registry: Res<crate::ui::registry::SurfaceEntityRegistry>| {
-                    execute_action(&mut commands, &mux, action.clone(), workspace, &registry);
-                },
-            )
+            .run_system_once(move |mut commands: Commands, mux: MultiplexerCommands| {
+                execute_action(&mut commands, &mux, action.clone(), workspace);
+            })
             .unwrap();
         app.world_mut().flush();
     }
