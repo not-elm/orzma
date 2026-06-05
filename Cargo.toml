@@ -46,6 +46,7 @@ resolver = "2"
 members = [
   "crates/*",
   "daemon/ozmux_vt",
+  "daemon/ozmux_mux",
 ]
 
 [workspace.package]
@@ -68,6 +69,7 @@ tokio = { version = "1.52" }
 alacritty_terminal = "0.26"
 anyhow = { version = "1" }
 thiserror = { version = "2" }
+slotmap = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 portable-pty = "0.9"
