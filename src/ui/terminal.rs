@@ -10,9 +10,7 @@ use crate::system_set::OzmuxSystems;
 use crate::ui::{TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use bevy_terminal::{
-    Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle,
-};
+use bevy_terminal::{PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
@@ -167,7 +165,6 @@ fn resize_terminals_to_node(
             &ComputedNode,
             &mut TerminalHandle,
             &mut PtyHandle,
-            &mut Coalescer,
             &mut TerminalGrid,
         ),
         Changed<TerminalHandle>,
@@ -182,7 +179,7 @@ fn resize_terminals_to_node(
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    for (computed, mut handle, mut pty, mut coalescer, mut grid) in terminals.iter_mut() {
+    for (computed, mut handle, mut pty, mut grid) in terminals.iter_mut() {
         let (cols, rows) = compute_grid_dims(
             computed.size.x.max(0.0),
             computed.size.y.max(0.0),
@@ -195,7 +192,7 @@ fn resize_terminals_to_node(
         if cur_cols == cols && cur_rows == rows {
             continue;
         }
-        if let Err(e) = handle.resize(&mut pty, &mut coalescer, cols, rows) {
+        if let Err(e) = handle.resize(&mut pty, cols, rows) {
             tracing::warn!(?e, cols, rows, "TerminalHandle::resize failed");
             continue;
         }

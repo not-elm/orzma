@@ -5,7 +5,6 @@
 //! Passing `cols`/`rows` exactly once at construction makes the
 //! PTY-grid mismatch unrepresentable.
 
-use crate::coalescer::Coalescer;
 use crate::handle::TerminalHandle;
 use crate::pty::{PtyHandle, spawn_pty_thread};
 use crate::title::TerminalTitle;
@@ -40,12 +39,11 @@ pub struct SpawnOptions {
     pub env: Vec<(String, String)>,
 }
 
-/// All four Components a working terminal entity needs.
+/// All three Components a working terminal entity needs.
 #[derive(Bundle)]
 pub struct TerminalBundle {
     pub handle: TerminalHandle,
     pub pty: PtyHandle,
-    pub coalescer: Coalescer,
     pub title: TerminalTitle,
 }
 
@@ -96,7 +94,6 @@ impl TerminalBundle {
         Ok(Self {
             handle,
             pty,
-            coalescer: Coalescer::new(),
             title: TerminalTitle::default(),
         })
     }

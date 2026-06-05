@@ -13,7 +13,7 @@ use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
 use bevy::input::keyboard::Key;
-use bevy_terminal::{Coalescer, PtyHandle, SelectionType, TerminalHandle, ViMotion};
+use bevy_terminal::{PtyHandle, SelectionType, TerminalHandle, ViMotion};
 use ozmux_configs::shortcuts::Modifiers;
 
 /// Bevy Plugin: registers the two observers and inserts the global
@@ -129,7 +129,7 @@ pub(crate) fn map_key_to_copy_op(key: &Key, mods: Modifiers) -> Option<CopyOp> {
 /// subsequent events in the same Bevy frame.
 pub(crate) fn dispatch_key(
     commands: &mut Commands,
-    q: &mut Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
+    q: &mut Query<(&mut TerminalHandle, &mut PtyHandle)>,
     clipboard: &mut Clipboard,
     entity: Entity,
     logical_key: Key,
@@ -143,7 +143,7 @@ pub(crate) fn dispatch_key(
     // tests). Missing the handle must not suppress the bypass — doing so
     // would swallow the next key silently.
     let exits = matches!(op, CopyOp::ExitCancel | CopyOp::ExitCopy);
-    let Ok((mut handle, _pty, mut coalescer)) = q.get_mut(entity) else {
+    let Ok((mut handle, _pty)) = q.get_mut(entity) else {
         return exits;
     };
     match op {
@@ -158,15 +158,15 @@ pub(crate) fn dispatch_key(
             }
             commands.trigger(ExitCopyMode { entity });
         }
-        CopyOp::Motion(m) => handle.vi_motion(&mut coalescer, m),
-        CopyOp::ScrollPageUp => handle.scroll_page_up(&mut coalescer),
-        CopyOp::ScrollPageDown => handle.scroll_page_down(&mut coalescer),
+        CopyOp::Motion(m) => handle.vi_motion(m),
+        CopyOp::ScrollPageUp => handle.scroll_page_up(),
+        CopyOp::ScrollPageDown => handle.scroll_page_down(),
         CopyOp::ToggleSelection(ty) => match handle.selection_type() {
-            Some(existing) if existing == ty => handle.selection_clear(&mut coalescer),
+            Some(existing) if existing == ty => handle.selection_clear(),
             Some(_) => {
-                handle.selection_change_type(&mut coalescer, ty);
+                handle.selection_change_type(ty);
             }
-            None => handle.selection_start(&mut coalescer, ty),
+            None => handle.selection_start(ty),
         },
     }
     exits
@@ -177,12 +177,12 @@ pub(crate) fn dispatch_key(
 pub(crate) fn handle_enter_copy_mode_request(
     ev: On<EnterCopyModeActionEvent>,
     mut commands: Commands,
-    mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,
+    mut q: Query<&mut TerminalHandle>,
 ) {
-    let Ok((mut handle, mut coalescer)) = q.get_mut(ev.entity) else {
+    let Ok(mut handle) = q.get_mut(ev.entity) else {
         return;
     };
-    handle.enter_vi_mode(&mut coalescer);
+    handle.enter_vi_mode();
     commands.entity(ev.entity).insert(CopyModeState);
 }
 
@@ -192,13 +192,13 @@ pub(crate) fn handle_enter_copy_mode_request(
 pub(crate) fn handle_exit_copy_mode(
     ev: On<ExitCopyMode>,
     mut commands: Commands,
-    mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,
+    mut q: Query<&mut TerminalHandle>,
 ) {
-    let Ok((mut handle, mut coalescer)) = q.get_mut(ev.entity) else {
+    let Ok(mut handle) = q.get_mut(ev.entity) else {
         return;
     };
-    handle.selection_clear(&mut coalescer);
-    handle.exit_vi_mode(&mut coalescer);
+    handle.selection_clear();
+    handle.exit_vi_mode();
     commands.entity(ev.entity).remove::<CopyModeState>();
 }
 
@@ -213,7 +213,7 @@ mod tests {
     use bevy::input::keyboard::Key as Bk;
     use bevy::prelude::MinimalPlugins;
     use bevy_terminal::{
-        Coalescer, PtyHandle, SelectionType, SpawnOptions, TerminalBundle, TerminalHandle, ViMotion,
+        PtyHandle, SelectionType, SpawnOptions, TerminalBundle, TerminalHandle, ViMotion,
     };
     use ozmux_configs::shortcuts::Modifiers;
     use std::sync::{Arc, Mutex};
@@ -394,7 +394,7 @@ mod tests {
 
         let mut sys = bevy::ecs::system::IntoSystem::into_system(
             move |mut commands: Commands,
-                  mut q: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
+                  mut q: Query<(&mut TerminalHandle, &mut PtyHandle)>,
                   mut clip: ResMut<crate::clipboard::Clipboard>| {
                 dispatch_key(
                     &mut commands,
@@ -426,19 +426,16 @@ mod tests {
         let entity = spawn_terminal_entity(&mut app);
         {
             let mut e = app.world_mut().entity_mut(entity);
-            let (mut h, mut coalescer) = (
-                e.take::<TerminalHandle>().unwrap(),
-                e.take::<Coalescer>().unwrap(),
-            );
-            h.enter_vi_mode(&mut coalescer);
-            h.selection_start(&mut coalescer, SelectionType::Simple);
-            e.insert((h, coalescer));
+            let mut h = e.take::<TerminalHandle>().unwrap();
+            h.enter_vi_mode();
+            h.selection_start(SelectionType::Simple);
+            e.insert(h);
         }
         app.world_mut().entity_mut(entity).insert(CopyModeState);
 
         let mut sys = bevy::ecs::system::IntoSystem::into_system(
             move |mut commands: Commands,
-                  mut q: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
+                  mut q: Query<(&mut TerminalHandle, &mut PtyHandle)>,
                   mut clip: ResMut<crate::clipboard::Clipboard>| {
                 dispatch_key(
                     &mut commands,
@@ -493,12 +490,9 @@ mod tests {
         app.update();
         {
             let mut e = app.world_mut().entity_mut(entity);
-            let (mut h, mut coalescer) = (
-                e.take::<TerminalHandle>().unwrap(),
-                e.take::<Coalescer>().unwrap(),
-            );
-            h.selection_start(&mut coalescer, SelectionType::Simple);
-            e.insert((h, coalescer));
+            let mut h = e.take::<TerminalHandle>().unwrap();
+            h.selection_start(SelectionType::Simple);
+            e.insert(h);
         }
 
         app.world_mut().trigger(ExitCopyMode { entity });

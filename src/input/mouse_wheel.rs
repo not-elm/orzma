@@ -28,7 +28,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_terminal::{
-    CellCoord, Coalescer, PtyHandle, TerminalHandle, WheelAction, WheelConfig, WheelModifiers,
+    CellCoord, PtyHandle, TerminalHandle, WheelAction, WheelConfig, WheelModifiers,
 };
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use ozmux_configs::mouse::FineModifier;
@@ -60,7 +60,7 @@ impl Plugin for MouseWheelInputPlugin {
 fn dispatch_mouse_wheel(
     mut wheel_msgs: MessageReader<MouseWheel>,
     mut accumulator: ResMut<WheelAccumulator>,
-    mut handles: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer)>,
+    mut handles: Query<(&mut TerminalHandle, &mut PtyHandle)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
     mux: ozmux_multiplexer::MultiplexerCommands,
@@ -104,7 +104,7 @@ fn dispatch_mouse_wheel(
     };
     let mods = build_wheel_modifiers(&keys, mouse_cfg.fine_modifier);
     let cursor = cursor_cell(&windows, cell_w_logical, cell_h_logical);
-    let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
+    let Ok((mut handle, mut pty)) = handles.get_mut(entity) else {
         return;
     };
     let action = WheelAction::route(
@@ -114,7 +114,7 @@ fn dispatch_mouse_wheel(
         mods,
         &wheel_config(mouse_cfg),
     );
-    apply_wheel_action(action, &mut handle, &mut pty, &mut coalescer, entity);
+    apply_wheel_action(action, &mut handle, &mut pty, entity);
 }
 
 /// Aggregates a frame's `MouseWheel` events into a single signed
@@ -228,17 +228,16 @@ fn apply_wheel_action(
     action: WheelAction,
     handle: &mut TerminalHandle,
     pty: &mut PtyHandle,
-    coalescer: &mut Coalescer,
     entity: Entity,
 ) {
     match action {
         WheelAction::Noop => {}
         WheelAction::ScrollViewport(delta) => {
-            handle.scroll(coalescer, delta);
+            handle.scroll(delta);
         }
         WheelAction::WriteToPty(bytes) => {
             if !handle.is_at_bottom() {
-                handle.scroll_to_bottom(coalescer);
+                handle.scroll_to_bottom();
             }
             if let Err(e) = handle.write(pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse wheel write failed");

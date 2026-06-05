@@ -256,7 +256,6 @@ fn run_autoscroll_tick(
     handles: &mut Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
     )>,
     copy_modes: &Query<(), With<CopyModeState>>,
 ) {
@@ -295,7 +294,7 @@ fn run_autoscroll_tick(
     let edge_local_x = (cursor_phys.x - (translation.x - half.x)).clamp(0.0, node.size.x);
     let edge_local = Vec2::new(edge_local_x, edge_local_y);
 
-    let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(drag.entity) else {
+    let Ok((mut handle, _pty)) = handles.get_mut(drag.entity) else {
         return;
     };
     let (cols, rows, _) = handle.read_geometry();
@@ -311,12 +310,12 @@ fn run_autoscroll_tick(
         // selection.end = vi_cursor.point. Without the pre-scroll
         // vi_goto, the selection end snaps back to the stale vi cursor
         // before we overwrite it via selection_update_to.
-        handle.vi_goto(&mut coalescer, pt);
-        handle.scroll(&mut coalescer, scroll_delta);
-        handle.selection_update_to(&mut coalescer, pt, side);
+        handle.vi_goto(pt);
+        handle.scroll(scroll_delta);
+        handle.selection_update_to(pt, side);
     } else {
-        handle.scroll(&mut coalescer, scroll_delta);
-        handle.selection_update_to(&mut coalescer, pt, side);
+        handle.scroll(scroll_delta);
+        handle.selection_update_to(pt, side);
     }
 
     state.next_autoscroll_at = Some(now + period);
@@ -373,7 +372,6 @@ fn dispatch_mouse_buttons(
     mut handles: Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
     )>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
@@ -448,7 +446,7 @@ fn dispatch_mouse_buttons(
         }
 
         let (cols, rows) = match handles.get(entity) {
-            Ok((h, _, _)) => {
+            Ok((h, _)) => {
                 let (c, r, _) = h.read_geometry();
                 (c, r)
             }
@@ -514,7 +512,7 @@ fn dispatch_mouse_buttons(
             click_count,
         };
         let modes = match handles.get(entity) {
-            Ok((h, _, _)) => h.current_modes(),
+            Ok((h, _)) => h.current_modes(),
             Err(_) => continue,
         };
         let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
@@ -536,7 +534,7 @@ fn dispatch_mouse_buttons(
     // per cell crossing per frame.
     if let Some(drag_entity) = state.drag.as_ref().map(|d| d.entity) {
         let pane_geometry = hosts.get(drag_entity).ok().and_then(|(_, node, xf)| {
-            handles.get(drag_entity).ok().map(|(h, _, _)| {
+            handles.get(drag_entity).ok().map(|(h, _)| {
                 let (cols, rows, _) = h.read_geometry();
                 (*node, *xf, cols, rows)
             })
@@ -549,7 +547,7 @@ fn dispatch_mouse_buttons(
             pane_geometry,
         ) {
             let modes = match handles.get(drag_entity) {
-                Ok((h, _, _)) => h.current_modes(),
+                Ok((h, _)) => h.current_modes(),
                 Err(_) => return,
             };
             let evt = bevy_terminal::ButtonEvent {
@@ -607,7 +605,7 @@ fn dispatch_mouse_buttons(
     //    is not falsely flagged stale.
     if let Some(drag) = state.drag.as_ref() {
         match handles.get(drag.entity) {
-            Ok((handle, _, _)) if should_drop_stale_drag(drag, handle) => {
+            Ok((handle, _)) if should_drop_stale_drag(drag, handle) => {
                 state.drag = None;
                 state.next_autoscroll_at = None;
             }
@@ -624,7 +622,7 @@ fn dispatch_mouse_buttons(
     //    mid-drag pane resize doesn't leave us pointing past the new
     //    bottom-right.
     if let Some(drag) = state.drag.as_mut()
-        && let Ok((handle, _, _)) = handles.get(drag.entity)
+        && let Ok((handle, _)) = handles.get(drag.entity)
     {
         let (cols, rows, _) = handle.read_geometry();
         drag.anchor_cell.col = drag.anchor_cell.col.min(cols as u32).max(1);
@@ -654,11 +652,10 @@ fn apply_action(
     handles: &mut Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
     )>,
     copy_modes: &Query<(), With<CopyModeState>>,
 ) {
-    let Ok((mut handle, mut pty, mut coalescer)) = handles.get_mut(entity) else {
+    let Ok((mut handle, mut pty)) = handles.get_mut(entity) else {
         return;
     };
 
@@ -687,7 +684,7 @@ fn apply_action(
             }
         }
         ButtonAction::ClearAndWriteToPty(bytes) => {
-            handle.selection_clear(&mut coalescer);
+            handle.selection_clear();
             if let Err(e) = handle.write(&mut pty, &bytes) {
                 tracing::warn!(?e, ?entity, "mouse-button forwarded press PTY write failed");
             }
@@ -696,7 +693,7 @@ fn apply_action(
             // Clear any prior selection on the focused pane so the
             // click does not leave a stale highlight visible (spec §2,
             // brainstorm Q5).
-            handle.selection_clear(&mut coalescer);
+            handle.selection_clear();
             state.drag = Some(ActiveDrag {
                 entity,
                 anchor_cell: cell,
@@ -710,9 +707,9 @@ fn apply_action(
         ButtonAction::StartLocalSelection { ty, cell, side } => {
             let pt = to_viewport_point(cell);
             if in_copy_mode {
-                handle.vi_goto(&mut coalescer, pt);
+                handle.vi_goto(pt);
             }
-            handle.selection_start_at(&mut coalescer, pt, side, ty);
+            handle.selection_start_at(pt, side, ty);
             // Immediate-selection types (Semantic, Lines, Block) are born
             // already-started — the press itself materialized the
             // selection.
@@ -739,15 +736,15 @@ fn apply_action(
                     }
                     let anchor_pt = to_viewport_point(drag.anchor_cell);
                     if in_copy_mode {
-                        handle.vi_goto(&mut coalescer, anchor_pt);
+                        handle.vi_goto(anchor_pt);
                     }
-                    handle.selection_start_at(&mut coalescer, anchor_pt, anchor_side, ty);
+                    handle.selection_start_at(anchor_pt, anchor_side, ty);
                     drag.phase = DragPhase::Active;
                 }
                 if in_copy_mode {
-                    handle.vi_goto(&mut coalescer, pt);
+                    handle.vi_goto(pt);
                 }
-                handle.selection_update_to(&mut coalescer, pt, side);
+                handle.selection_update_to(pt, side);
             }
             // No active or armed drag → silently ignore. Drag events
             // should only be synthesized when state.drag.is_some();
@@ -755,7 +752,7 @@ fn apply_action(
             // elsewhere.
         }
         ButtonAction::ClearLocalSelection => {
-            handle.selection_clear(&mut coalescer);
+            handle.selection_clear();
         }
     }
 }
@@ -1106,15 +1103,11 @@ mod tests {
         // Seed a prior selection so ArmDrag's selection_clear is observable.
         app.world_mut()
             .run_system_once(
-                move |mut handles: Query<(
-                    &mut bevy_terminal::TerminalHandle,
-                    &mut bevy_terminal::Coalescer,
-                )>| {
-                    let (mut handle, mut coalescer) = handles.get_mut(entity).unwrap();
+                move |mut handles: Query<&mut bevy_terminal::TerminalHandle>| {
+                    let mut handle = handles.get_mut(entity).unwrap();
                     let anchor =
                         bevy_terminal::Point::new(bevy_terminal::Line(2), bevy_terminal::Column(3));
                     handle.selection_start_at(
-                        &mut coalescer,
                         anchor,
                         bevy_terminal::Side::Left,
                         bevy_terminal::SelectionType::Simple,
@@ -1133,7 +1126,6 @@ mod tests {
                       mut handles: Query<(
                     &mut bevy_terminal::TerminalHandle,
                     &mut bevy_terminal::PtyHandle,
-                    &mut bevy_terminal::Coalescer,
                 )>,
                       copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
@@ -1215,7 +1207,6 @@ mod tests {
                       mut handles: Query<(
                     &mut bevy_terminal::TerminalHandle,
                     &mut bevy_terminal::PtyHandle,
-                    &mut bevy_terminal::Coalescer,
                 )>,
                       copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
@@ -1388,7 +1379,6 @@ mod tests {
                       mut handles: Query<(
                     &mut bevy_terminal::TerminalHandle,
                     &mut bevy_terminal::PtyHandle,
-                    &mut bevy_terminal::Coalescer,
                 )>,
                       copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
@@ -1448,7 +1438,6 @@ mod tests {
                  handles: Query<(
                     &mut bevy_terminal::TerminalHandle,
                     &mut bevy_terminal::PtyHandle,
-                    &mut bevy_terminal::Coalescer,
                 )>| {
                     if let Some(drag) = state.drag.as_ref()
                         && handles.get(drag.entity).is_err()

@@ -107,7 +107,6 @@ pub(crate) fn dispatch_focused_key(
     mut handles: Query<(
         &mut bevy_terminal::TerminalHandle,
         &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
     )>,
     mux: MultiplexerCommands,
     windows: Query<&Window>,
@@ -163,10 +162,10 @@ pub(crate) fn dispatch_focused_key(
         if matches!(ev.logical_key, Key::Escape)
             && let Some(entity) = focused_entity
             && copy_modes.get(entity).is_err()
-            && let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(entity)
+            && let Ok((mut handle, _pty)) = handles.get_mut(entity)
             && !handle.is_at_bottom()
         {
-            handle.scroll_to_bottom(&mut coalescer);
+            handle.scroll_to_bottom();
             continue;
         }
 

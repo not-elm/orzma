@@ -6,12 +6,11 @@
 //! the chunk-drain system classifies damage and passes a verdict in.
 
 use crate::vt::damage::DamageVerdict;
-use bevy::ecs::component::Component;
 use std::cmp::min;
 use std::time::{Duration, Instant};
 
 /// Coalescer state. One instance per bridge task.
-#[derive(Debug, Default, Component)]
+#[derive(Debug, Default)]
 pub struct Coalescer {
     /// Arrival time of the first chunk that opened the current coalesce
     /// window. Anchors the `MAX_CAP` hard-flush deadline. Set only by the

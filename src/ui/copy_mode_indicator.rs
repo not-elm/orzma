@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(indicator_count, 1, "exactly one chip after 10 ticks");
     }
 
-    use bevy_terminal::{Coalescer, TerminalHandle};
+    use bevy_terminal::TerminalHandle;
 
     #[test]
     fn refresh_shows_when_copy_mode_state_inserted() {
@@ -282,10 +282,9 @@ mod tests {
             let mut handle = entity
                 .take::<TerminalHandle>()
                 .expect("TerminalHandle on host");
-            let mut coalescer = entity.take::<Coalescer>().expect("Coalescer on host");
-            handle.enter_vi_mode(&mut coalescer);
-            handle.scroll_page_up(&mut coalescer);
-            entity.insert((handle, coalescer));
+            handle.enter_vi_mode();
+            handle.scroll_page_up();
+            entity.insert(handle);
             entity.insert(crate::ui::copy_mode::CopyModeState);
         }
         app.update();

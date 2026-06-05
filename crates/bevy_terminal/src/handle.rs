@@ -86,6 +86,7 @@ pub struct TerminalHandle {
     term: Term<TermListener>,
     parser: Processor,
     hyperlinks: HyperlinkInterner,
+    coalescer: Coalescer,
     prev_cursor: Option<Cursor>,
     prev_vi_cursor: Option<ViCursor>,
     prev_selection: Option<SelectionRange>,
@@ -120,6 +121,7 @@ impl TerminalHandle {
             term,
             parser: Processor::new(),
             hyperlinks: HyperlinkInterner::new(),
+            coalescer: Coalescer::new(),
             prev_cursor: None,
             prev_vi_cursor: None,
             prev_selection: None,
@@ -184,18 +186,12 @@ impl TerminalHandle {
     ///   never reach the renderer until the next genuine chunk —
     ///   `check_deadline_flush` only fires when the coalescer is
     ///   armed or the bootstrap rescue triggers.
-    pub fn resize(
-        &mut self,
-        pty: &mut PtyHandle,
-        coalescer: &mut Coalescer,
-        cols: u16,
-        rows: u16,
-    ) -> anyhow::Result<()> {
+    pub fn resize(&mut self, pty: &mut PtyHandle, cols: u16, rows: u16) -> anyhow::Result<()> {
         let dim = LocalDim::new(cols, rows);
         self.term.resize(dim);
         self.row_hashes.clear();
         pty.resize(cols, rows)?;
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
         Ok(())
     }
 
@@ -209,15 +205,15 @@ impl TerminalHandle {
     /// The Full damage produced by `Term::scroll_display` is staged
     /// and the coalescer is armed so the new viewport reaches the
     /// renderer even when the shell is idle.
-    pub fn scroll(&mut self, coalescer: &mut Coalescer, delta: i32) {
+    pub fn scroll(&mut self, delta: i32) {
         self.term.scroll_display(Scroll::Delta(delta));
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Snaps the viewport to the live tail and arms an emit.
-    pub fn scroll_to_bottom(&mut self, coalescer: &mut Coalescer) {
+    pub fn scroll_to_bottom(&mut self) {
         self.term.scroll_display(Scroll::Bottom);
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Returns true when the viewport is pinned to the live tail
@@ -240,23 +236,23 @@ impl TerminalHandle {
     /// damage emit so the renderer observes the new mode (`Term::toggle_vi_mode`
     /// itself does NOT damage the grid; without this the snapshot carrying
     /// the new vi_cursor would never reach the renderer).
-    pub fn enter_vi_mode(&mut self, coalescer: &mut Coalescer) {
+    pub fn enter_vi_mode(&mut self) {
         if !self.term.mode().contains(TermMode::VI) {
             self.term.toggle_vi_mode();
         }
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Exits vi mode and snaps the viewport to the live tail. Idempotent.
     /// Schedules a Full damage emit so the renderer receives a frame with
     /// `vi_cursor: None`.
-    pub fn exit_vi_mode(&mut self, coalescer: &mut Coalescer) {
+    pub fn exit_vi_mode(&mut self) {
         if self.term.mode().contains(TermMode::VI) {
             self.term.toggle_vi_mode();
         }
         self.term
             .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Drives `Term::vi_motion(motion)`. Alacritty re-computes the
@@ -264,29 +260,25 @@ impl TerminalHandle {
     /// so callers do not need to re-issue `selection_*` after motion.
     /// Schedules a Full damage emit because vi-cursor moves are not
     /// part of alacritty's `Term::damage()` (see is_noop_emit docs).
-    pub fn vi_motion(
-        &mut self,
-        coalescer: &mut Coalescer,
-        motion: alacritty_terminal::vi_mode::ViMotion,
-    ) {
+    pub fn vi_motion(&mut self, motion: alacritty_terminal::vi_mode::ViMotion) {
         self.term.vi_motion(motion);
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Scrolls the viewport one page up (`Scroll::PageUp`). Alacritty
     /// clamps the vi cursor into the new viewport automatically. Stages
     /// a Full damage emit.
-    pub fn scroll_page_up(&mut self, coalescer: &mut Coalescer) {
+    pub fn scroll_page_up(&mut self) {
         self.term
             .scroll_display(alacritty_terminal::grid::Scroll::PageUp);
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Scrolls the viewport one page down (`Scroll::PageDown`).
-    pub fn scroll_page_down(&mut self, coalescer: &mut Coalescer) {
+    pub fn scroll_page_down(&mut self) {
         self.term
             .scroll_display(alacritty_terminal::grid::Scroll::PageDown);
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Start a selection of `ty` anchored at `viewport_point` with
@@ -303,7 +295,6 @@ impl TerminalHandle {
     /// `selection.rs:271` and the early-return at `:332`).
     pub fn selection_start_at(
         &mut self,
-        coalescer: &mut Coalescer,
         viewport_point: alacritty_terminal::index::Point,
         side: alacritty_terminal::index::Side,
         ty: alacritty_terminal::selection::SelectionType,
@@ -319,7 +310,7 @@ impl TerminalHandle {
         sel.update(anchor, opposite);
         self.term.selection = Some(sel);
         self.selection_anchor = Some(anchor);
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Extend the active selection's moving end to `viewport_point` /
@@ -330,7 +321,6 @@ impl TerminalHandle {
     /// Bevy glue may still emit drag events for one frame after that.
     pub fn selection_update_to(
         &mut self,
-        coalescer: &mut Coalescer,
         viewport_point: alacritty_terminal::index::Point,
         side: alacritty_terminal::index::Side,
     ) {
@@ -342,7 +332,7 @@ impl TerminalHandle {
         if let Some(sel) = self.term.selection.as_mut() {
             sel.update(point, side);
         }
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Jump the vi cursor to `viewport_point`. Wraps
@@ -355,11 +345,7 @@ impl TerminalHandle {
     /// recompute on viewport changes (`scroll_display` →
     /// `vi_mode_recompute_selection` at `term/mod.rs:402` → `:872`)
     /// does not snap the selection end back to a stale vi cursor.
-    pub fn vi_goto(
-        &mut self,
-        coalescer: &mut Coalescer,
-        viewport_point: alacritty_terminal::index::Point,
-    ) {
+    pub fn vi_goto(&mut self, viewport_point: alacritty_terminal::index::Point) {
         if !self
             .term
             .mode()
@@ -370,7 +356,7 @@ impl TerminalHandle {
         let line = viewport_row_to_line(&self.term, viewport_point.line.0);
         let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
         self.term.vi_goto_point(point);
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Starts a selection of the given type at the current vi cursor.
@@ -381,11 +367,7 @@ impl TerminalHandle {
     /// from `to_range` when start and end coincide, so
     /// `selection_to_string` would yield `None`. See spec § 5 and
     /// `alacritty_terminal/selection.rs:124,193,332`.
-    pub fn selection_start(
-        &mut self,
-        coalescer: &mut Coalescer,
-        ty: alacritty_terminal::selection::SelectionType,
-    ) {
+    pub fn selection_start(&mut self, ty: alacritty_terminal::selection::SelectionType) {
         let anchor = self.term.vi_mode_cursor.point;
         let mut sel = alacritty_terminal::selection::Selection::new(
             ty,
@@ -395,15 +377,15 @@ impl TerminalHandle {
         sel.update(anchor, alacritty_terminal::index::Side::Right);
         self.term.selection = Some(sel);
         self.selection_anchor = Some(anchor);
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Drops the active selection and stages a Full damage emit so the
     /// renderer's next frame carries `selection: None`.
-    pub fn selection_clear(&mut self, coalescer: &mut Coalescer) {
+    pub fn selection_clear(&mut self) {
         self.term.selection = None;
         self.selection_anchor = None;
-        self.stage_full_damage_and_arm(coalescer);
+        self.stage_full_damage_and_arm();
     }
 
     /// Reads the active selection as a UTF-8 string via
@@ -430,7 +412,6 @@ impl TerminalHandle {
     /// fall back to `selection_start`.
     pub fn selection_change_type(
         &mut self,
-        coalescer: &mut Coalescer,
         ty: alacritty_terminal::selection::SelectionType,
     ) -> bool {
         let Some(anchor) = self.selection_anchor else {
@@ -444,8 +425,8 @@ impl TerminalHandle {
         );
         sel.update(cursor, alacritty_terminal::index::Side::Right);
         self.term.selection = Some(sel);
-        // anchor stays as-is — type change preserves it
-        self.stage_full_damage_and_arm(coalescer);
+        // NOTE: anchor stays as-is — type change preserves it
+        self.stage_full_damage_and_arm();
         true
     }
 
@@ -454,11 +435,11 @@ impl TerminalHandle {
     /// deadline-driven emit. Used by `resize` / `scroll` /
     /// `scroll_to_bottom` to wake the bridge when no PTY chunks are
     /// in flight.
-    fn stage_full_damage_and_arm(&mut self, coalescer: &mut Coalescer) {
+    fn stage_full_damage_and_arm(&mut self) {
         let mut scratch = std::mem::take(&mut self.scratch_dirty);
         self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
         self.scratch_dirty = scratch;
-        coalescer.arm_or_extend(std::time::Instant::now());
+        self.coalescer.arm_or_extend(std::time::Instant::now());
     }
 
     /// Reads the current cols / rows / cursor.
@@ -493,6 +474,12 @@ impl TerminalHandle {
         self.pending_user_input
     }
 
+    /// Returns the next flush deadline from the internal coalescer, or
+    /// `None` when the coalescer is disarmed.
+    pub(crate) fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.coalescer.next_deadline()
+    }
+
     /// Returns the current scroll offset and history length for the
     /// copy-mode indicator's `[offset/total]` chip.
     pub fn vi_indicator_snapshot(&self) -> ViIndicatorSnapshot {
@@ -515,22 +502,28 @@ impl TerminalHandle {
     ///   captured.
     /// - On `AtMostOneRow` immediate-flush, `pending_user_input` is
     ///   cleared to prevent double-flushing on the next chunk.
-    pub(crate) fn ingest_chunk(&mut self, chunk: &[u8], coalescer: &Coalescer) -> bool {
+    pub(crate) fn ingest_chunk(&mut self, chunk: &[u8]) -> bool {
         let pre_advance_mode = *self.term.mode();
         self.advance(chunk);
-        if !coalescer.is_armed() && self.window_open_mode.is_none() {
+        if !self.coalescer.is_armed() && self.window_open_mode.is_none() {
             self.window_open_mode = Some(pre_advance_mode);
         }
         let mut scratch = std::mem::take(&mut self.scratch_dirty);
         let dirty = DirtyRows::collect(&mut self.term, &mut scratch);
         self.scratch_dirty = scratch;
         let verdict = DamageVerdict::classify_damage(&dirty, self.cursor_changed());
-        let flush =
-            coalescer.should_flush_immediately(self.first_emit, &verdict, self.pending_user_input);
+        let flush = self.coalescer.should_flush_immediately(
+            self.first_emit,
+            &verdict,
+            self.pending_user_input,
+        );
         if flush && self.pending_user_input && matches!(verdict, DamageVerdict::AtMostOneRow) {
             self.pending_user_input = false;
         }
         self.pending_damage = Some(dirty);
+        if !flush {
+            self.coalescer.arm_or_extend(std::time::Instant::now());
+        }
         flush
     }
 
@@ -601,14 +594,9 @@ impl TerminalHandle {
 
     /// Emit a frame for the damage stashed on `self.pending_damage`.
     /// Disarms the coalescer.
-    pub(crate) fn emit(
-        &mut self,
-        commands: &mut Commands,
-        entity: Entity,
-        coalescer: &mut Coalescer,
-    ) {
+    pub(crate) fn emit(&mut self, commands: &mut Commands, entity: Entity) {
         let Some(mut dirty) = self.pending_damage.take() else {
-            self.abort_emit_with_no_damage(coalescer);
+            self.abort_emit_with_no_damage();
             return;
         };
 
@@ -627,7 +615,7 @@ impl TerminalHandle {
             curr_vi_cursor,
             curr_selection,
         ) {
-            self.finalize_emit(coalescer);
+            self.finalize_emit();
             return;
         }
 
@@ -644,14 +632,14 @@ impl TerminalHandle {
         self.prev_cursor = Some(curr_cursor);
         self.prev_vi_cursor = curr_vi_cursor;
         self.prev_selection = curr_selection;
-        self.finalize_emit(coalescer);
+        self.finalize_emit();
     }
 
     /// Cleanup path taken when `emit` is invoked with no staged
     /// damage. Disarms the coalescer and discards any captured
     /// window-open mode so the next chunk re-captures fresh.
-    fn abort_emit_with_no_damage(&mut self, coalescer: &mut Coalescer) {
-        coalescer.disarm();
+    fn abort_emit_with_no_damage(&mut self) {
+        self.coalescer.disarm();
         self.window_open_mode = None;
     }
 
@@ -827,9 +815,9 @@ impl TerminalHandle {
     /// Resets alacritty's per-cycle damage tracker and disarms the
     /// coalescer. Called at the end of every emit (both the noop-skip
     /// and the normal-end path).
-    fn finalize_emit(&mut self, coalescer: &mut Coalescer) {
+    fn finalize_emit(&mut self) {
         self.term.reset_damage();
-        coalescer.disarm();
+        self.coalescer.disarm();
     }
 }
 
@@ -1005,9 +993,8 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
         assert!(!h.term.mode().contains(TermMode::VI));
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         assert!(h.term.mode().contains(TermMode::VI));
     }
 
@@ -1021,10 +1008,9 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         let was_vi = h.term.mode().contains(TermMode::VI);
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         assert!(
             was_vi && h.term.mode().contains(TermMode::VI),
             "second enter_vi_mode must leave VI bit set, not toggle it off"
@@ -1042,10 +1028,9 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         let before = h.term.vi_mode_cursor.point.line.0;
-        h.vi_motion(&mut coalescer, ViMotion::Down);
+        h.vi_motion(ViMotion::Down);
         let after = h.term.vi_mode_cursor.point.line.0;
         assert_eq!(after, before + 1, "ViMotion::Down advances by 1 line");
     }
@@ -1060,7 +1045,6 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
         >::new();
@@ -1068,7 +1052,7 @@ mod tests {
             parser.advance(&mut h.term, b"x\r\n");
         }
         assert_eq!(h.term.grid().display_offset(), 0);
-        h.scroll_page_up(&mut coalescer);
+        h.scroll_page_up();
         assert!(
             h.term.grid().display_offset() > 0,
             "PageUp must grow display_offset"
@@ -1086,7 +1070,6 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
         >::new();
@@ -1094,9 +1077,9 @@ mod tests {
             parser.advance(&mut h.term, b"x\r\n");
         }
         h.term.scroll_display(Scroll::Top);
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         assert!(h.term.grid().display_offset() > 0);
-        h.exit_vi_mode(&mut coalescer);
+        h.exit_vi_mode();
         assert!(!h.term.mode().contains(TermMode::VI));
         assert_eq!(
             h.term.grid().display_offset(),
@@ -1115,20 +1098,16 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
         // Put "X" at the cursor cell so selection_to_string yields a non-empty string.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
         >::new();
         parser.advance(&mut h.term, b"X");
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         // After enter_vi_mode, vi_mode_cursor sits on the live cursor — column 1 (after "X").
         // Move it left to the X cell.
-        h.vi_motion(&mut coalescer, alacritty_terminal::vi_mode::ViMotion::Left);
-        h.selection_start(
-            &mut coalescer,
-            alacritty_terminal::selection::SelectionType::Simple,
-        );
+        h.vi_motion(alacritty_terminal::vi_mode::ViMotion::Left);
+        h.selection_start(alacritty_terminal::selection::SelectionType::Simple);
         let s = h.selection_to_string().expect("non-empty 1-cell selection");
         assert!(
             s.contains('X'),
@@ -1146,14 +1125,10 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
-        h.enter_vi_mode(&mut coalescer);
-        h.selection_start(
-            &mut coalescer,
-            alacritty_terminal::selection::SelectionType::Simple,
-        );
+        h.enter_vi_mode();
+        h.selection_start(alacritty_terminal::selection::SelectionType::Simple);
         assert!(h.term.selection.is_some());
-        h.selection_clear(&mut coalescer);
+        h.selection_clear();
         assert!(h.term.selection.is_none());
     }
 
@@ -1180,13 +1155,9 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         assert!(h.selection_type().is_none());
-        h.selection_start(
-            &mut coalescer,
-            alacritty_terminal::selection::SelectionType::Lines,
-        );
+        h.selection_start(alacritty_terminal::selection::SelectionType::Lines);
         assert!(matches!(
             h.selection_type(),
             Some(alacritty_terminal::selection::SelectionType::Lines)
@@ -1204,26 +1175,22 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
         // Push some content so selection_to_string is meaningful.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
         >::new();
         parser.advance(&mut h.term, b"abcdefghij\r\nklmnopqrst\r\n");
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         // Place vi cursor on row 0 column 2 ('c').
         h.term.vi_mode_cursor.point = alacritty_terminal::index::Point::new(
             alacritty_terminal::index::Line(0),
             alacritty_terminal::index::Column(2),
         );
-        h.selection_start(
-            &mut coalescer,
-            alacritty_terminal::selection::SelectionType::Simple,
-        );
+        h.selection_start(alacritty_terminal::selection::SelectionType::Simple);
         // Extend to row 1 column 7 ('r').
-        h.vi_motion(&mut coalescer, ViMotion::Down);
+        h.vi_motion(ViMotion::Down);
         for _ in 0..5 {
-            h.vi_motion(&mut coalescer, ViMotion::Right);
+            h.vi_motion(ViMotion::Right);
         }
         let chars_before = h
             .selection_to_string()
@@ -1236,10 +1203,7 @@ mod tests {
         // Switch to Line type. Anchor (row 0 col 2) must be preserved;
         // vi cursor (row 1 col 7) becomes the new end.
         assert!(
-            h.selection_change_type(
-                &mut coalescer,
-                alacritty_terminal::selection::SelectionType::Lines,
-            ),
+            h.selection_change_type(alacritty_terminal::selection::SelectionType::Lines,),
             "selection_change_type must report success when a selection is active",
         );
         let s_after = h
@@ -1269,7 +1233,6 @@ mod tests {
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let mut h = bundle.handle;
-        let mut coalescer = bundle.coalescer;
 
         let snap0 = h.vi_indicator_snapshot();
         assert_eq!(snap0.scroll_offset, 0, "fresh terminal at live tail");
@@ -1281,8 +1244,8 @@ mod tests {
             payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
         }
         h.advance(&payload);
-        h.enter_vi_mode(&mut coalescer);
-        h.scroll_page_up(&mut coalescer);
+        h.enter_vi_mode();
+        h.scroll_page_up();
 
         let snap1 = h.vi_indicator_snapshot();
         assert!(
@@ -1362,14 +1325,10 @@ mod tests {
             env: Vec::new(),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn");
-        let TerminalBundle {
-            mut handle,
-            mut coalescer,
-            ..
-        } = bundle;
+        let TerminalBundle { mut handle, .. } = bundle;
 
         let point = Point::new(Line(5), Column(10));
-        handle.selection_start_at(&mut coalescer, point, Side::Left, SelectionType::Simple);
+        handle.selection_start_at(point, Side::Left, SelectionType::Simple);
 
         assert_eq!(handle.selection_type(), Some(SelectionType::Simple));
         assert!(handle.selection_to_string().is_some());
@@ -1388,14 +1347,9 @@ mod tests {
             cwd: None,
             env: Vec::new(),
         };
-        let TerminalBundle {
-            mut handle,
-            mut coalescer,
-            ..
-        } = TerminalBundle::spawn(opts).expect("spawn");
+        let TerminalBundle { mut handle, .. } = TerminalBundle::spawn(opts).expect("spawn");
 
         handle.selection_start_at(
-            &mut coalescer,
             Point::new(Line(0), Column(0)),
             Side::Left,
             SelectionType::Block,
@@ -1416,13 +1370,9 @@ mod tests {
             control_tx: ctrl_tx.clone(),
         };
         let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
-        let mut coalescer = Coalescer::default();
-        h.enter_vi_mode(&mut coalescer);
+        h.enter_vi_mode();
         assert!(
-            !h.selection_change_type(
-                &mut coalescer,
-                alacritty_terminal::selection::SelectionType::Lines,
-            ),
+            !h.selection_change_type(alacritty_terminal::selection::SelectionType::Lines,),
             "selection_change_type must return false when no selection anchor is stored",
         );
         assert!(
@@ -1444,19 +1394,14 @@ mod tests {
             cwd: None,
             env: Vec::new(),
         };
-        let TerminalBundle {
-            mut handle,
-            mut coalescer,
-            ..
-        } = TerminalBundle::spawn(opts).expect("spawn");
+        let TerminalBundle { mut handle, .. } = TerminalBundle::spawn(opts).expect("spawn");
 
         handle.selection_start_at(
-            &mut coalescer,
             Point::new(Line(0), Column(0)),
             Side::Left,
             SelectionType::Simple,
         );
-        handle.selection_update_to(&mut coalescer, Point::new(Line(0), Column(10)), Side::Right);
+        handle.selection_update_to(Point::new(Line(0), Column(10)), Side::Right);
 
         // The selection now spans cols 0..=10 on row 0.
         let s = handle.selection_to_string().unwrap();
@@ -1482,15 +1427,11 @@ mod tests {
             cwd: None,
             env: Vec::new(),
         };
-        let TerminalBundle {
-            mut handle,
-            mut coalescer,
-            ..
-        } = TerminalBundle::spawn(opts).expect("spawn");
+        let TerminalBundle { mut handle, .. } = TerminalBundle::spawn(opts).expect("spawn");
 
         // No selection_start_at — update_to must not panic and must
         // leave Term::selection as None.
-        handle.selection_update_to(&mut coalescer, Point::new(Line(0), Column(5)), Side::Right);
+        handle.selection_update_to(Point::new(Line(0), Column(5)), Side::Right);
         assert!(handle.selection_type().is_none());
     }
 
@@ -1506,14 +1447,10 @@ mod tests {
             cwd: None,
             env: Vec::new(),
         };
-        let TerminalBundle {
-            mut handle,
-            mut coalescer,
-            ..
-        } = TerminalBundle::spawn(opts).expect("spawn");
+        let TerminalBundle { mut handle, .. } = TerminalBundle::spawn(opts).expect("spawn");
 
-        handle.enter_vi_mode(&mut coalescer);
-        handle.vi_goto(&mut coalescer, Point::new(Line(5), Column(12)));
+        handle.enter_vi_mode();
+        handle.vi_goto(Point::new(Line(5), Column(12)));
 
         // vi_goto in vi mode must not panic and must keep vi mode active.
         // Direct cursor verification belongs in alacritty's internal tests;
@@ -1538,15 +1475,11 @@ mod tests {
             cwd: None,
             env: Vec::new(),
         };
-        let TerminalBundle {
-            mut handle,
-            mut coalescer,
-            ..
-        } = TerminalBundle::spawn(opts).expect("spawn");
+        let TerminalBundle { mut handle, .. } = TerminalBundle::spawn(opts).expect("spawn");
 
         // Not in vi mode. vi_goto must not panic and must leave the
         // mode set unchanged (still NOT containing VI).
-        handle.vi_goto(&mut coalescer, Point::new(Line(2), Column(3)));
+        handle.vi_goto(Point::new(Line(2), Column(3)));
         assert!(
             !handle
                 .current_modes()
