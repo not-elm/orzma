@@ -147,6 +147,11 @@ fn process_pty_chunks(
             });
         }
     }
+    // NOTE: VtEvents (incl. ModeChanged) are drained AFTER the per-chunk frame
+    // triggers, so a mode change now lands after its frame (the pre-extraction
+    // emit triggered TerminalModeChanged before the frame). Harmless today —
+    // TerminalModeChanged has no observers — but a future consumer relying on
+    // mode-before-frame ordering must move the drain ahead of the emit loop.
     let events = handle.vt.drain_events();
     if !events.is_empty() {
         par_commands.command_scope(|mut commands| {
