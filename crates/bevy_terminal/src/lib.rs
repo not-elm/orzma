@@ -7,7 +7,6 @@ mod bundle;
 mod buttons;
 mod events;
 mod handle;
-mod mouse_encode;
 mod plugin;
 mod pty;
 mod title;
@@ -24,8 +23,8 @@ pub use events::{
     TerminalModeChanged, TerminalTitleChanged,
 };
 pub use handle::TerminalHandle;
-pub use mouse_encode::ProtocolModifiers;
 pub use ozmux_vt::input::{TerminalKey, TerminalModifiers};
+pub use ozmux_vt::mouse::ProtocolModifiers;
 pub use ozmux_vt::vt::ViIndicatorSnapshot;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;

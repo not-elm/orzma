@@ -44,7 +44,7 @@ pub struct ProtocolModifiers {
 /// `cb_base` is the raw button code: 0/1/2 = L/M/R press, 64/65 = wheel
 /// up/down. Caller is responsible for setting `motion = true` for drag
 /// and for wheel reports (xterm treats wheel as a motion-bit press).
-pub(crate) fn encode_protocol_event(
+pub fn encode_protocol_event(
     modes: TermMode,
     cb_base: u8,
     cell: CellCoord,

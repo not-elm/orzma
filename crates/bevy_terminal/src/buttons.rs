@@ -9,10 +9,10 @@
 //! See `docs/superpowers/specs/2026-05-27-mouse-selection-design.md`
 //! for the full decision table.
 
-use crate::mouse_encode::{CellCoord, ProtocolModifiers, encode_protocol_event};
 use alacritty_terminal::index::Side;
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
+use ozmux_vt::mouse::{CellCoord, ProtocolModifiers, encode_protocol_event};
 
 /// Discrete event kinds the router understands. Press/Release are
 /// transitions on a single button; Drag is "motion while a button is

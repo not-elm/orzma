@@ -21,8 +21,8 @@
 //! means (this matches alacritty: in mouse mode the multiplier is
 //! forced to 1).
 
-use crate::mouse_encode::{ProtocolModifiers, encode_protocol_event};
 use alacritty_terminal::term::TermMode;
+use ozmux_vt::mouse::{ProtocolModifiers, encode_protocol_event};
 
 /// Configuration for wheel routing. Mirrors the `[mouse]` config block.
 #[derive(Clone, Debug)]
@@ -46,7 +46,7 @@ impl Default for WheelConfig {
     }
 }
 
-pub use crate::mouse_encode::CellCoord;
+pub use ozmux_vt::mouse::CellCoord;
 
 /// Wheel direction. Horizontal wheels are out of scope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

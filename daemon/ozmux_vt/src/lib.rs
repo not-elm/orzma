@@ -7,5 +7,6 @@ pub mod color;
 pub mod event;
 pub mod frame;
 pub mod input;
+pub mod mouse;
 pub mod osc7;
 pub mod vt;
