@@ -9,6 +9,7 @@ use crate::id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
 use crate::surface::{Surface, SurfaceKind};
 use crate::tree::{LayoutNode, Pane, Side, Split, SplitOrientation};
 use slotmap::SlotMap;
+use std::path::PathBuf;
 
 /// Hard floor on a leaf pane's cell count along the left-right axis.
 const MIN_PANE_COLS: u16 = 10;
@@ -17,7 +18,6 @@ const MIN_PANE_COLS: u16 = 10;
 const MIN_PANE_ROWS: u16 = 3;
 
 struct Session {
-    #[expect(dead_code, reason = "read in Task 8 workspace selection/close")]
     workspaces: Vec<WorkspaceId>,
     active: WorkspaceId,
 }
@@ -25,9 +25,11 @@ struct Session {
 struct Workspace {
     root: NodeId,
     active_pane: PaneId,
-    #[expect(dead_code, reason = "read in Task 8 rename")]
     name: String,
-    #[expect(dead_code, reason = "read in Task 8 workspace ordering")]
+    #[expect(
+        dead_code,
+        reason = "used as a creation-order key; queried by future workspace-list API"
+    )]
     created_at: u32,
     size: Option<(u16, u16)>,
 }
@@ -532,6 +534,226 @@ impl Mux {
         Ok(events)
     }
 
+    /// Creates a workspace in the active session, seeding one terminal pane and
+    /// surface. Makes the new workspace active.
+    ///
+    /// Returns `[WorkspaceCreated, PaneCreated, WorkspaceSelected, ActivePaneChanged]`.
+    pub fn new_workspace(&mut self) -> MuxResult<Vec<MuxEvent>> {
+        let session = self.active_session;
+        let surface = self.surfaces.insert(Surface {
+            kind: SurfaceKind::Terminal,
+            cwd: None,
+        });
+        let pane = self.panes.insert(Pane {
+            surfaces: vec![surface],
+            active_surface: surface,
+            parent: None,
+        });
+        let created_at = self.name_counter;
+        self.name_counter += 1;
+        let workspace = self.workspaces.insert(Workspace {
+            root: NodeId::Pane(pane),
+            active_pane: pane,
+            name: format!("{created_at}"),
+            created_at,
+            size: None,
+        });
+        self.sessions[session].workspaces.push(workspace);
+        self.sessions[session].active = workspace;
+        Ok(vec![
+            MuxEvent::WorkspaceCreated { session, workspace },
+            MuxEvent::PaneCreated {
+                pane,
+                workspace,
+                surface_kind: SurfaceKind::Terminal,
+            },
+            MuxEvent::WorkspaceSelected { session, workspace },
+            MuxEvent::ActivePaneChanged { workspace, pane },
+        ])
+    }
+
+    /// Selects an existing workspace as the active session's active workspace.
+    ///
+    /// Returns `[WorkspaceSelected]`, or `[]` if already active. Errors
+    /// `WorkspaceNotFound` for unknown ids.
+    pub fn select_workspace(&mut self, workspace: WorkspaceId) -> MuxResult<Vec<MuxEvent>> {
+        self.workspace(workspace)?;
+        let session = self.active_session;
+        if self.sessions[session].active == workspace {
+            return Ok(vec![]);
+        }
+        self.sessions[session].active = workspace;
+        Ok(vec![MuxEvent::WorkspaceSelected { session, workspace }])
+    }
+
+    /// Renames a workspace. Emits `WorkspaceRenamed` only when the name
+    /// actually changes (port of `commands::rename_workspace` changed-only).
+    pub fn rename_workspace(
+        &mut self,
+        workspace: WorkspaceId,
+        name: String,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        self.workspace(workspace)?;
+        if self.workspaces[workspace].name == name {
+            return Ok(vec![]);
+        }
+        self.workspaces[workspace].name = name.clone();
+        Ok(vec![MuxEvent::WorkspaceRenamed { workspace, name }])
+    }
+
+    /// Destroys a workspace and all its panes and surfaces (cascade). If the
+    /// destroyed workspace was the session's active workspace, the session
+    /// re-points to another workspace (the previous one in the vec) if one
+    /// exists; otherwise a fresh workspace is auto-created, keeping the session
+    /// always valid.
+    ///
+    /// Emits `PaneClosed` per pane, `SurfaceClosed` per surface of that pane,
+    /// then `WorkspaceDestroyed`. If the active pointer had to change a
+    /// `WorkspaceSelected` is appended. If a replacement was auto-created, a
+    /// full `new_workspace` event sequence is prepended.
+    pub fn close_workspace(&mut self, workspace: WorkspaceId) -> MuxResult<Vec<MuxEvent>> {
+        self.workspace(workspace)?;
+        let session = self.active_session;
+
+        let panes = self.ordered_panes(workspace)?;
+        let mut events: Vec<MuxEvent> = Vec::new();
+        for pane in &panes {
+            let surfaces = self.panes[*pane].surfaces.clone();
+            events.push(MuxEvent::PaneClosed { pane: *pane });
+            for surface in surfaces {
+                events.push(MuxEvent::SurfaceClosed { surface });
+                self.surfaces.remove(surface);
+            }
+            let parent = self.panes[*pane].parent;
+            if let Some(NodeId::Split(s)) = parent {
+                self.splits.remove(s);
+            }
+            self.panes.remove(*pane);
+        }
+        self.workspaces.remove(workspace);
+        let sess = &mut self.sessions[session];
+        sess.workspaces.retain(|w| *w != workspace);
+
+        events.push(MuxEvent::WorkspaceDestroyed { workspace });
+
+        let was_active = sess.active == workspace;
+        if !was_active {
+            return Ok(events);
+        }
+
+        if let Some(&remaining) = self.sessions[session].workspaces.last() {
+            self.sessions[session].active = remaining;
+            events.push(MuxEvent::WorkspaceSelected {
+                session,
+                workspace: remaining,
+            });
+        } else {
+            // NOTE: The session must always have at least one workspace; auto-create
+            // when the last one is closed to keep the invariant without erroring.
+            let mut replacement = self.new_workspace()?;
+            replacement.append(&mut events);
+            return Ok(replacement);
+        }
+        Ok(events)
+    }
+
+    /// Adds a surface to a pane without changing the active surface.
+    ///
+    /// Returns `[SurfaceSpawned]`.
+    pub fn spawn_surface(&mut self, pane: PaneId, kind: SurfaceKind) -> MuxResult<Vec<MuxEvent>> {
+        self.pane(pane)?;
+        let surface = self.surfaces.insert(Surface {
+            kind: kind.clone(),
+            cwd: None,
+        });
+        self.panes[pane].surfaces.push(surface);
+        Ok(vec![MuxEvent::SurfaceSpawned {
+            pane,
+            surface,
+            kind,
+        }])
+    }
+
+    /// Moves a surface into a new pane created by splitting its current pane.
+    ///
+    /// Errors `CannotRemoveLastSurface` if the source pane has only one surface.
+    pub fn break_surface_to_pane(
+        &mut self,
+        surface: SurfaceId,
+        orientation: SplitOrientation,
+        side: Side,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        let source_pane = self.pane_of_surface(surface)?;
+        if self.panes[source_pane].surfaces.len() < 2 {
+            return Err(MuxError::CannotRemoveLastSurface(source_pane));
+        }
+
+        let mut events = self.split_pane_empty(source_pane, orientation, side)?;
+
+        let new_pane = match events[0] {
+            MuxEvent::PaneCreated { pane, .. } => pane,
+            _ => unreachable!("split_pane_empty first event must be PaneCreated"),
+        };
+
+        let old_bootstrap = self.panes[new_pane].surfaces[0];
+        self.surfaces.remove(old_bootstrap);
+        self.panes[new_pane].surfaces.clear();
+        self.panes[new_pane].surfaces.push(surface);
+        self.panes[new_pane].active_surface = surface;
+
+        self.panes[source_pane].surfaces.retain(|s| *s != surface);
+        let src_active = self.panes[source_pane].active_surface;
+        if src_active == surface {
+            let new_active = self.panes[source_pane].surfaces[0];
+            self.panes[source_pane].active_surface = new_active;
+            events.push(MuxEvent::ActiveSurfaceChanged {
+                pane: source_pane,
+                surface: new_active,
+            });
+        }
+
+        Ok(events)
+    }
+
+    /// Removes a surface from its pane (re-points `active_surface` if needed).
+    ///
+    /// Errors `SurfaceNotFound` if unknown, or `CannotRemoveLastSurface` if the
+    /// pane has only one surface.
+    pub fn close_surface(&mut self, surface: SurfaceId) -> MuxResult<Vec<MuxEvent>> {
+        let pane = self.pane_of_surface(surface)?;
+        if self.panes[pane].surfaces.len() < 2 {
+            return Err(MuxError::CannotRemoveLastSurface(pane));
+        }
+        self.panes[pane].surfaces.retain(|s| *s != surface);
+        let was_active = self.panes[pane].active_surface == surface;
+        self.surfaces.remove(surface);
+        let mut events = vec![MuxEvent::SurfaceClosed { surface }];
+        if was_active {
+            let new_active = self.panes[pane].surfaces[0];
+            self.panes[pane].active_surface = new_active;
+            events.push(MuxEvent::ActiveSurfaceChanged {
+                pane,
+                surface: new_active,
+            });
+        }
+        Ok(events)
+    }
+
+    /// Sets a surface's working directory. Emits `SurfaceCwdChanged` only
+    /// when the cwd actually changes.
+    pub fn set_surface_cwd(
+        &mut self,
+        surface: SurfaceId,
+        cwd: PathBuf,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        self.surface(surface)?;
+        if self.surfaces[surface].cwd.as_ref() == Some(&cwd) {
+            return Ok(vec![]);
+        }
+        self.surfaces[surface].cwd = Some(cwd.clone());
+        Ok(vec![MuxEvent::SurfaceCwdChanged { surface, cwd }])
+    }
+
     fn walk_bounds(&self, node: NodeId, bounds: Rect, out: &mut Vec<(PaneId, Rect)>) {
         match node {
             NodeId::Pane(p) => out.push((p, bounds)),
@@ -595,6 +817,69 @@ impl Mux {
                 }
             }
         }
+    }
+
+    fn pane_of_surface(&self, surface: SurfaceId) -> MuxResult<PaneId> {
+        self.surface(surface)?;
+        self.panes
+            .iter()
+            .find(|(_, p)| p.surfaces.contains(&surface))
+            .map(|(id, _)| id)
+            .ok_or(MuxError::SurfaceNotFound(surface))
+    }
+
+    fn split_pane_empty(
+        &mut self,
+        pane: PaneId,
+        orientation: SplitOrientation,
+        side: Side,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        let workspace = self.owning_workspace_of_pane(pane)?;
+        let old_parent = self.pane(pane)?.parent;
+
+        let bootstrap_surface = self.surfaces.insert(Surface {
+            kind: SurfaceKind::Terminal,
+            cwd: None,
+        });
+        let new_pane = self.panes.insert(Pane {
+            surfaces: vec![bootstrap_surface],
+            active_surface: bootstrap_surface,
+            parent: None,
+        });
+
+        let (first, second) = match side {
+            Side::Before => (NodeId::Pane(new_pane), NodeId::Pane(pane)),
+            Side::After => (NodeId::Pane(pane), NodeId::Pane(new_pane)),
+        };
+        let split = self
+            .splits
+            .insert(Split::new(orientation, 0.5, first, second, old_parent));
+        let split_node = NodeId::Split(split);
+
+        self.panes[pane].parent = Some(split_node);
+        self.panes[new_pane].parent = Some(split_node);
+        self.rewrite_child_pointer(workspace, old_parent, NodeId::Pane(pane), split_node);
+
+        self.workspaces[workspace].active_pane = new_pane;
+
+        let (cols, rows) = self.node_cell_extent(split_node);
+        let subtree = self.build_layout_node(split_node, cols, rows);
+        Ok(vec![
+            MuxEvent::PaneCreated {
+                pane: new_pane,
+                workspace,
+                surface_kind: SurfaceKind::Terminal,
+            },
+            MuxEvent::LayoutChanged {
+                workspace,
+                root: NodeId::Pane(pane),
+                subtree,
+            },
+            MuxEvent::ActivePaneChanged {
+                workspace,
+                pane: new_pane,
+            },
+        ])
     }
 
     fn workspace(&self, id: WorkspaceId) -> MuxResult<&Workspace> {
@@ -1643,5 +1928,259 @@ mod tests {
             vec![],
             "re-setting the same size emits nothing"
         );
+    }
+
+    #[test]
+    fn create_workspace_spawns_root_pane_surface_tree() {
+        let mut mux = Mux::new();
+        let events = mux.new_workspace().unwrap();
+
+        let (session, workspace) = match events[0] {
+            MuxEvent::WorkspaceCreated { session, workspace } => (session, workspace),
+            _ => panic!("first event must be WorkspaceCreated"),
+        };
+        let pane = match events[1] {
+            MuxEvent::PaneCreated {
+                pane,
+                workspace: ws,
+                ref surface_kind,
+            } => {
+                assert_eq!(ws, workspace);
+                assert!(matches!(surface_kind, SurfaceKind::Terminal));
+                pane
+            }
+            _ => panic!("second event must be PaneCreated"),
+        };
+        assert_eq!(
+            events[2],
+            MuxEvent::WorkspaceSelected { session, workspace },
+        );
+        assert_eq!(events[3], MuxEvent::ActivePaneChanged { workspace, pane },);
+
+        assert_eq!(mux.active_workspace(), workspace);
+        assert_eq!(mux.active_pane(workspace).unwrap(), pane);
+        let surfaces = mux.surfaces(pane).unwrap();
+        assert_eq!(surfaces.len(), 1);
+        assert!(matches!(
+            mux.surface_kind(surfaces[0]).unwrap(),
+            SurfaceKind::Terminal
+        ));
+    }
+
+    #[test]
+    fn rename_workspace_mutates_name_and_only_fires_changed_on_actual_change() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+
+        let events = mux.rename_workspace(ws, "new-name".to_string()).unwrap();
+        assert_eq!(
+            events,
+            vec![MuxEvent::WorkspaceRenamed {
+                workspace: ws,
+                name: "new-name".to_string(),
+            }],
+            "rename to a new name emits WorkspaceRenamed"
+        );
+
+        let no_change = mux.rename_workspace(ws, "new-name".to_string()).unwrap();
+        assert_eq!(no_change, vec![], "rename to same name emits nothing");
+    }
+
+    #[test]
+    fn close_workspace_despawns_workspace_and_descendants() {
+        let mut mux = Mux::new();
+        let evs = mux.new_workspace().unwrap();
+        let second_ws = match evs[0] {
+            MuxEvent::WorkspaceCreated { workspace, .. } => workspace,
+            _ => panic!("WorkspaceCreated expected"),
+        };
+        let second_pane = mux.active_pane(second_ws).unwrap();
+        let second_surface = mux.active_surface(second_pane).unwrap();
+
+        mux.close_workspace(second_ws).unwrap();
+
+        assert!(
+            matches!(
+                mux.workspace(second_ws),
+                Err(MuxError::WorkspaceNotFound(id)) if id == second_ws
+            ),
+            "workspace slotmap entry removed"
+        );
+        assert_eq!(
+            mux.pane(second_pane),
+            Err(MuxError::PaneNotFound(second_pane)),
+            "pane cascade-removed"
+        );
+        assert_eq!(
+            mux.surface(second_surface),
+            Err(MuxError::SurfaceNotFound(second_surface)),
+            "surface cascade-removed"
+        );
+    }
+
+    #[test]
+    fn add_surface_spawns_surface_child_of_pane() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let original_active = mux.active_surface(pane).unwrap();
+
+        let events = mux.spawn_surface(pane, SurfaceKind::Terminal).unwrap();
+        let new_surface = match events[0] {
+            MuxEvent::SurfaceSpawned {
+                surface,
+                pane: p,
+                ref kind,
+            } => {
+                assert_eq!(p, pane);
+                assert!(matches!(kind, SurfaceKind::Terminal));
+                surface
+            }
+            _ => panic!("SurfaceSpawned expected"),
+        };
+
+        assert!(
+            mux.surfaces(pane).unwrap().contains(&new_surface),
+            "new surface appears in pane's surfaces"
+        );
+        assert_eq!(
+            mux.active_surface(pane).unwrap(),
+            original_active,
+            "active surface unchanged"
+        );
+    }
+
+    #[test]
+    fn add_surface_stamps_surfaceof_and_appears_in_surfaces() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let original = mux.active_surface(pane).unwrap();
+
+        mux.spawn_surface(pane, SurfaceKind::Terminal).unwrap();
+
+        let surfaces = mux.surfaces(pane).unwrap();
+        assert!(
+            surfaces.contains(&original),
+            "original surface still present"
+        );
+        assert_eq!(surfaces.len(), 2, "pane has two surfaces after spawn");
+    }
+
+    #[test]
+    fn break_surface_to_pane_creates_new_pane_with_moved_surface() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let source_pane = mux.active_pane(ws).unwrap();
+
+        mux.spawn_surface(source_pane, SurfaceKind::Terminal)
+            .unwrap();
+        let second_surface = mux.surfaces(source_pane).unwrap()[1];
+
+        let events = mux
+            .break_surface_to_pane(second_surface, SplitOrientation::Horizontal, Side::After)
+            .unwrap();
+
+        let new_pane = match events[0] {
+            MuxEvent::PaneCreated { pane, .. } => pane,
+            _ => panic!("first event must be PaneCreated"),
+        };
+
+        assert_eq!(
+            mux.surfaces(new_pane).unwrap(),
+            vec![second_surface],
+            "moved surface is sole surface of new pane"
+        );
+        assert_eq!(
+            mux.active_surface(new_pane).unwrap(),
+            second_surface,
+            "new pane's active_surface is the moved surface"
+        );
+        assert!(mux.pane(source_pane).is_ok(), "source pane still exists");
+        assert!(
+            !mux.surfaces(source_pane).unwrap().contains(&second_surface),
+            "moved surface removed from source pane"
+        );
+    }
+
+    #[test]
+    fn break_surface_to_pane_returns_error_when_source_pane_has_only_one_surface() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let surface = mux.active_surface(pane).unwrap();
+
+        let result = mux.break_surface_to_pane(surface, SplitOrientation::Horizontal, Side::After);
+        assert!(
+            matches!(result, Err(MuxError::CannotRemoveLastSurface(_))),
+            "expected CannotRemoveLastSurface, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn close_surface_removes_surface_and_repoints_active() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let s1 = mux.active_surface(pane).unwrap();
+        mux.spawn_surface(pane, SurfaceKind::Terminal).unwrap();
+        let s2 = mux.surfaces(pane).unwrap()[1];
+
+        mux.set_active_surface(pane, s2).unwrap();
+        let events = mux.close_surface(s2).unwrap();
+
+        assert_eq!(
+            mux.surface(s2),
+            Err(MuxError::SurfaceNotFound(s2)),
+            "closed surface removed from slotmap"
+        );
+        assert_eq!(
+            mux.active_surface(pane).unwrap(),
+            s1,
+            "active re-pointed to s1"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MuxEvent::SurfaceClosed { surface } if *surface == s2))
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, MuxEvent::ActiveSurfaceChanged { pane: p, surface } if *p == pane && *surface == s1))
+        );
+    }
+
+    #[test]
+    fn close_surface_last_surface_errors() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let surface = mux.active_surface(pane).unwrap();
+
+        assert_eq!(
+            mux.close_surface(surface),
+            Err(MuxError::CannotRemoveLastSurface(pane))
+        );
+    }
+
+    #[test]
+    fn set_surface_cwd_changed_only() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let surface = mux.active_surface(pane).unwrap();
+
+        let path = PathBuf::from("/home/user");
+        let events = mux.set_surface_cwd(surface, path.clone()).unwrap();
+        assert_eq!(
+            events,
+            vec![MuxEvent::SurfaceCwdChanged {
+                surface,
+                cwd: path.clone(),
+            }],
+            "first set emits SurfaceCwdChanged"
+        );
+
+        let no_change = mux.set_surface_cwd(surface, path).unwrap();
+        assert_eq!(no_change, vec![], "same cwd emits nothing");
     }
 }
