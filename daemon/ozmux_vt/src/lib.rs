@@ -4,6 +4,7 @@
 
 pub mod coalescer;
 pub mod color;
+pub mod event;
 pub mod frame;
 pub mod osc7;
 pub mod vt;

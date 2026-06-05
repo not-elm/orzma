@@ -1602,10 +1602,8 @@ dependencies = [
  "crossbeam-channel",
  "gethostname",
  "ozmux_vt",
- "percent-encoding",
  "portable-pty",
  "tracing",
- "unicode-width",
  "vte",
 ]
 
