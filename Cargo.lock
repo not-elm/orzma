@@ -1602,7 +1602,6 @@ dependencies = [
  "crossbeam-channel",
  "gethostname",
  "ozmux_vt",
- "portable-pty",
  "tracing",
  "vte",
 ]
@@ -4689,9 +4688,11 @@ name = "ozmux_vt"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "anyhow",
  "crossbeam-channel",
  "gethostname",
  "percent-encoding",
+ "portable-pty",
  "rmp-serde",
  "serde",
  "tracing",

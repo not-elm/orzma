@@ -6,11 +6,10 @@
 //! PTY-grid mismatch unrepresentable.
 
 use crate::handle::TerminalHandle;
-use crate::pty::{PtyHandle, spawn_pty_thread};
+use crate::pty::PtyHandle;
 use crate::title::TerminalTitle;
 use bevy::ecs::bundle::Bundle;
-use crossbeam_channel::unbounded;
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use ozmux_vt::pty::Pty;
 use std::path::PathBuf;
 
 /// Spawn parameters consumed exactly once by `TerminalBundle::spawn`.
@@ -51,36 +50,15 @@ impl TerminalBundle {
     /// matching the same cols/rows, and returns the fully wired
     /// bundle.
     pub fn spawn(opts: SpawnOptions) -> anyhow::Result<Self> {
-        let pty_pair = native_pty_system().openpty(PtySize {
-            rows: opts.rows,
-            cols: opts.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-
-        let mut cmd = CommandBuilder::new(&opts.shell);
-        if let Some(cwd) = opts.cwd.as_ref() {
-            cmd.cwd(cwd);
-        }
-        for (k, v) in &opts.env {
-            cmd.env(k, v);
-        }
-
-        let child = pty_pair.slave.spawn_command(cmd)?;
-        let child_killer = child.clone_killer();
-        drop(pty_pair.slave);
-
-        let reader = pty_pair.master.try_clone_reader()?;
-        let writer = pty_pair.master.take_writer()?;
-
-        let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
-        let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
-
-        spawn_pty_thread(reader, child, chunk_tx, exit_tx);
+        let pty = PtyHandle(Pty::spawn(
+            opts.cols,
+            opts.rows,
+            &opts.shell,
+            opts.cwd.as_deref(),
+            &opts.env,
+        )?);
 
         let handle = TerminalHandle::new(opts.cols, opts.rows);
-
-        let pty = PtyHandle::new(pty_pair.master, writer, chunk_rx, exit_rx, child_killer);
 
         Ok(Self {
             handle,
