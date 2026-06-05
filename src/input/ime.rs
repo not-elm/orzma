@@ -247,7 +247,7 @@ pub(crate) fn ime_policy_system(
 /// text to the attached terminal.
 ///
 /// Modifiers are forced to `TerminalModifiers::default()` on commit:
-/// `crates/bevy_terminal/src/input_codec.rs::encode_key` converts
+/// `ozmux_vt::input::encode_key` converts
 /// `Text("a")` to control byte `0x01` when `ctrl` is held, which would
 /// silently corrupt a single-ASCII-letter IME commit (e.g., the
 /// macOS Character Viewer emoji path).
@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(
             captured[0].modifiers,
             TerminalModifiers::default(),
-            "modifiers MUST be default — see input_codec.rs::encode_key ctrl path",
+            "modifiers MUST be default — see ozmux_vt::input::encode_key ctrl path",
         );
     }
 

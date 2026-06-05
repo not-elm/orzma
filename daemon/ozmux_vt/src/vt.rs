@@ -525,7 +525,7 @@ impl Vt {
     }
 
     /// True iff `TermMode::APP_CURSOR` (DECCKM) is set on the inner term.
-    /// Used by `input_codec::encode_key` to choose between `ESC [ A/B/C/D`
+    /// Used by `ozmux_vt::input::encode_key` to choose between `ESC [ A/B/C/D`
     /// and `ESC O A/B/C/D` for arrow keys.
     pub fn is_app_cursor_keys(&self) -> bool {
         self.term.mode().contains(TermMode::APP_CURSOR)
