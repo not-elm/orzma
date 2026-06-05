@@ -108,9 +108,10 @@ impl Pty {
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        // SIGHUP the child so the blocking reader thread's read() returns
-        // EOF and exits cleanly. portable-pty's ChildKiller makes this
-        // idempotent — kill() on an already-exited child is a no-op.
+        // NOTE: SIGHUP the child so the blocking reader thread's read()
+        // returns EOF and exits cleanly — otherwise the OS thread leaks.
+        // portable-pty's ChildKiller makes this idempotent (kill() on an
+        // already-exited child is a no-op).
         let _ = self.child_killer.kill();
     }
 }
