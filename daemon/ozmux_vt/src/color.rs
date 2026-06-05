@@ -221,4 +221,12 @@ mod tests {
             RgbaColor::srgb(255, 0, 0)
         );
     }
+
+    #[test]
+    fn dim_black_maps_to_ansi_black() {
+        assert_eq!(
+            acolor_to_rgba(AColor::Named(NamedColor::DimBlack)),
+            RgbaColor::srgb(0, 0, 0)
+        );
+    }
 }
