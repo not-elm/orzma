@@ -10,7 +10,6 @@ use crate::pty::{PtyHandle, spawn_pty_thread};
 use crate::title::TerminalTitle;
 use bevy::ecs::bundle::Bundle;
 use crossbeam_channel::unbounded;
-use ozmux_vt::vt::listener::{ControlFrame, TermListener};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::path::PathBuf;
 
@@ -76,18 +75,10 @@ impl TerminalBundle {
 
         let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
         let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
-        let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
-        let (control_tx, control_rx) = unbounded::<ControlFrame>();
 
         spawn_pty_thread(reader, child, chunk_tx, exit_tx);
 
-        let listener = TermListener {
-            reply_tx,
-            control_tx: control_tx.clone(),
-        };
-        let handle = TerminalHandle::new(
-            opts.cols, opts.rows, listener, reply_rx, control_rx, control_tx,
-        );
+        let handle = TerminalHandle::new(opts.cols, opts.rows);
 
         let pty = PtyHandle::new(pty_pair.master, writer, chunk_rx, exit_rx, child_killer);
 

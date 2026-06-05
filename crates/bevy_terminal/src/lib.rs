@@ -24,8 +24,9 @@ pub use events::{
     TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir, TerminalKey,
     TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
-pub use handle::{TerminalHandle, ViIndicatorSnapshot};
+pub use handle::TerminalHandle;
 pub use mouse_encode::ProtocolModifiers;
+pub use ozmux_vt::vt::ViIndicatorSnapshot;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::{TerminalTitle, sanitize_title};

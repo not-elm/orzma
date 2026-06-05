@@ -301,6 +301,13 @@ impl Vt {
         self.pending_user_input = true;
     }
 
+    /// Returns the current value of the `pending_user_input` flag.
+    /// Exposed so cross-crate integration tests can confirm a PTY write
+    /// took place without reading from the PTY master.
+    pub fn pending_user_input(&self) -> bool {
+        self.pending_user_input
+    }
+
     /// Resizes the alacritty grid and stages Full damage.
     ///
     /// # Invariants
