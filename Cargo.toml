@@ -45,6 +45,7 @@ workspace = true
 resolver = "2"
 members = [
   "crates/*",
+  "daemon/ozmux_vt",
 ]
 
 [workspace.package]
