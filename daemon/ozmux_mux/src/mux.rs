@@ -746,6 +746,14 @@ impl Mux {
         Ok(events)
     }
 
+    /// Serializes a workspace's tree to the wire `LayoutNode`, resolving each
+    /// pane's cell size from the workspace's logical size (0 when unset).
+    pub fn workspace_layout(&self, workspace: WorkspaceId) -> MuxResult<LayoutNode> {
+        let ws = self.workspace(workspace)?;
+        let (cols, rows) = ws.size.unwrap_or((0, 0));
+        Ok(self.build_layout_node(ws.root, cols, rows))
+    }
+
     /// Sets a surface's working directory. Emits `SurfaceCwdChanged` only
     /// when the cwd actually changes.
     pub fn set_surface_cwd(
@@ -2225,6 +2233,25 @@ mod tests {
             mux.close_surface(surface),
             Err(MuxError::CannotRemoveLastSurface(pane))
         );
+    }
+
+    #[test]
+    fn workspace_layout_serde_round_trips() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        mux.split_pane(
+            pane,
+            SplitOrientation::Horizontal,
+            Side::After,
+            SurfaceKind::Terminal,
+        )
+        .unwrap();
+        mux.set_workspace_size(ws, 80, 24).unwrap();
+        let layout = mux.workspace_layout(ws).unwrap();
+        let json = serde_json::to_string(&layout).unwrap();
+        let back: LayoutNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(layout, back);
     }
 
     #[test]

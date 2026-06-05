@@ -11,3 +11,12 @@ pub mod id;
 pub mod mux;
 pub mod surface;
 pub mod tree;
+
+pub use direction::{CycleDirection, PaneDirection, SwapOffset};
+pub use error::{MuxError, MuxResult};
+pub use event::MuxEvent;
+pub use geometry::Rect;
+pub use id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
+pub use mux::Mux;
+pub use surface::{BrowserProfile, Surface, SurfaceKind};
+pub use tree::{LayoutNode, Pane, Side, Split, SplitOrientation};
