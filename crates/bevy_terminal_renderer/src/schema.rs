@@ -1,3 +1,6 @@
+//! Public schema re-exports: wire DTOs from `ozmux_vt` plus renderer-local
+//! grid, frame-event, and hover types.
+
 mod frame;
 mod grid;
 mod hover;
