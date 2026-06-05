@@ -701,6 +701,13 @@ impl Mux {
         self.panes[new_pane].surfaces.push(surface);
         self.panes[new_pane].active_surface = surface;
 
+        // NOTE: split_pane_empty stamps PaneCreated with the bootstrap's
+        // Terminal kind; correct it to the MOVED surface's kind so subscribers
+        // initialize the right surface type (Extension/Browser, not Terminal).
+        if let MuxEvent::PaneCreated { surface_kind, .. } = &mut events[0] {
+            *surface_kind = self.surfaces[surface].kind.clone();
+        }
+
         self.panes[source_pane].surfaces.retain(|s| *s != surface);
         let src_active = self.panes[source_pane].active_surface;
         if src_active == surface {
@@ -1989,6 +1996,7 @@ mod tests {
     #[test]
     fn close_workspace_despawns_workspace_and_descendants() {
         let mut mux = Mux::new();
+        let first_ws = mux.active_workspace();
         let evs = mux.new_workspace().unwrap();
         let second_ws = match evs[0] {
             MuxEvent::WorkspaceCreated { workspace, .. } => workspace,
@@ -2016,6 +2024,63 @@ mod tests {
             Err(MuxError::SurfaceNotFound(second_surface)),
             "surface cascade-removed"
         );
+        assert_eq!(
+            mux.active_workspace(),
+            first_ws,
+            "active re-points to the remaining workspace after closing the active one"
+        );
+    }
+
+    #[test]
+    fn select_workspace_changes_active_and_is_changed_only() {
+        let mut mux = Mux::new();
+        let first_ws = mux.active_workspace();
+        let evs = mux.new_workspace().unwrap();
+        let second_ws = match evs[0] {
+            MuxEvent::WorkspaceCreated { workspace, .. } => workspace,
+            _ => panic!("WorkspaceCreated expected"),
+        };
+        // new_workspace already made second_ws active.
+        let noop = mux.select_workspace(second_ws).unwrap();
+        assert_eq!(
+            noop,
+            vec![],
+            "selecting the already-active workspace emits nothing"
+        );
+        let changed = mux.select_workspace(first_ws).unwrap();
+        assert!(
+            changed.iter().any(
+                |e| matches!(e, MuxEvent::WorkspaceSelected { workspace, .. } if *workspace == first_ws)
+            ),
+            "selecting a different workspace emits WorkspaceSelected"
+        );
+        assert_eq!(mux.active_workspace(), first_ws);
+    }
+
+    #[test]
+    fn break_surface_to_pane_preserves_moved_surface_kind() {
+        use std::path::PathBuf;
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let ext = SurfaceKind::Extension {
+            entry: PathBuf::from("index.html"),
+        };
+        let spawn = mux.spawn_surface(pane, ext.clone()).unwrap();
+        let ext_surface = match spawn[0] {
+            MuxEvent::SurfaceSpawned { surface, .. } => surface,
+            _ => panic!("SurfaceSpawned expected"),
+        };
+        let events = mux
+            .break_surface_to_pane(ext_surface, SplitOrientation::Horizontal, Side::After)
+            .unwrap();
+        match &events[0] {
+            MuxEvent::PaneCreated { surface_kind, .. } => assert_eq!(
+                *surface_kind, ext,
+                "PaneCreated carries the MOVED surface's kind, not Terminal"
+            ),
+            _ => panic!("PaneCreated expected first"),
+        }
     }
 
     #[test]
