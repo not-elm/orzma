@@ -760,6 +760,11 @@ impl Mux {
         Ok(events)
     }
 
+    /// The workspace's display name.
+    pub fn workspace_name(&self, workspace: WorkspaceId) -> MuxResult<&str> {
+        Ok(&self.workspace(workspace)?.name)
+    }
+
     /// Serializes a workspace's tree to the wire `LayoutNode`, resolving each
     /// pane's cell size from the workspace's logical size (0 when unset).
     pub fn workspace_layout(&self, workspace: WorkspaceId) -> MuxResult<LayoutNode> {
