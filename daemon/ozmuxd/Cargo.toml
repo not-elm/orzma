@@ -1,0 +1,19 @@
+[package]
+name = "ozmuxd"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "ozmuxd"
+path = "src/main.rs"
+
+[dependencies]
+ozmux_mux = { path = "../ozmux_mux" }
+ozmux_proto = { path = "../ozmux_proto" }
+crossbeam-channel = "0.5"
+
+[lints]
+workspace = true

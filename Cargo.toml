@@ -48,6 +48,7 @@ members = [
   "daemon/ozmux_vt",
   "daemon/ozmux_mux",
   "daemon/ozmux_proto",
+  "daemon/ozmuxd",
 ]
 
 [workspace.package]
