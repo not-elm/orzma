@@ -5,9 +5,8 @@
 //! rebuild systems.
 
 use crate::components::{
-    ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, OwningWorkspace, PaneMarker,
-    SurfaceKind, SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions,
-    WorkspaceMarker,
+    ActivePane, ActiveSurface, AttachedWorkspace, OwningWorkspace, PaneMarker, SurfaceKind,
+    SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
 };
 #[cfg(test)]
 use crate::components::{SplitNode, WorkspaceUiSubtree};
@@ -67,27 +66,8 @@ pub struct MultiplexerCommands<'w, 's> {
     counter: ResMut<'w, WorkspaceNameCounter>,
     mux: ResMut<'w, MuxState>,
     mirror_read: MirrorReadCtx<'w, 's>,
-    workspaces: Query<
-        'w,
-        's,
-        (
-            &'static mut ActivePane,
-            &'static mut Name,
-            Option<&'static mut WorkspaceDimensions>,
-        ),
-        With<WorkspaceMarker>,
-    >,
-    panes: Query<
-        'w,
-        's,
-        (
-            &'static mut ActiveSurface,
-            &'static mut CopyMode,
-            &'static ChildOf,
-            &'static OwningWorkspace,
-        ),
-        With<PaneMarker>,
-    >,
+    workspaces: Query<'w, 's, &'static ActivePane, With<WorkspaceMarker>>,
+    panes: Query<'w, 's, (&'static ActiveSurface, &'static OwningWorkspace), With<PaneMarker>>,
     panes_owned: Query<'w, 's, (Entity, &'static OwningWorkspace), With<PaneMarker>>,
     surface_owner: Query<'w, 's, &'static SurfaceOf, With<SurfaceMarker>>,
     pane_surfaces: Query<'w, 's, &'static Surfaces, With<PaneMarker>>,
@@ -456,7 +436,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 
     /// The Pane's owning Workspace, read from its `OwningWorkspace` back-pointer.
     pub fn workspace_of_pane(&self, pane: Entity) -> Option<Entity> {
-        self.panes.get(pane).ok().map(|(_, _, _, owner)| owner.0)
+        self.panes.get(pane).ok().map(|(_, owner)| owner.0)
     }
 
     /// The Pane that owns this Surface, via the `SurfaceOf` relationship.
@@ -466,15 +446,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 
     /// Read the Workspace's `ActivePane` pointer.
     pub fn workspaces_active_pane(&self, workspace: Entity) -> Option<Entity> {
-        self.workspaces
-            .get(workspace)
-            .ok()
-            .map(|(active, _, _)| active.0)
+        self.workspaces.get(workspace).ok().map(|active| active.0)
     }
 
     /// Read the Pane's `ActiveSurface` pointer.
     pub fn panes_active_surface(&self, pane: Entity) -> Option<Entity> {
-        self.panes.get(pane).ok().map(|(active, _, _, _)| active.0)
+        self.panes.get(pane).ok().map(|(active, _)| active.0)
     }
 
     /// Iterate the Pane entities owned by the given Workspace (via `OwningWorkspace`).
