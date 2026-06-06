@@ -22,7 +22,7 @@ anyhow = { workspace = true, optional = true }
 [features]
 default = ["engine"]
 engine = ["dep:alacritty_terminal", "dep:vte", "dep:crossbeam-channel", "dep:unicode-width", "dep:percent-encoding", "dep:gethostname", "dep:tracing"]
-pty = ["dep:portable-pty", "dep:anyhow"]
+pty = ["dep:portable-pty", "dep:anyhow", "dep:crossbeam-channel"]
 
 [dev-dependencies]
 rmp-serde = "1"

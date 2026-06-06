@@ -4697,6 +4697,7 @@ name = "ozmux_proto"
 version = "0.1.0"
 dependencies = [
  "ozmux_mux",
+ "ozmux_vt",
  "serde",
  "serde_json",
 ]
