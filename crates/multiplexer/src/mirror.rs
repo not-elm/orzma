@@ -854,6 +854,10 @@ pub(crate) fn lift(state: &MuxState, err: MuxError) -> MultiplexerError {
                 .unwrap_or(Entity::PLACEHOLDER),
         ),
         MuxError::MissingParentCell => MultiplexerError::MissingParentCell,
+        // NOTE: SessionNotFound only arises from the read queries
+        // (sessions/workspaces/snapshot), never on the MultiplexerCommands
+        // mutation path that feeds `lift`; this arm exists for exhaustiveness.
+        MuxError::SessionNotFound(_) => MultiplexerError::MissingParentCell,
     }
 }
 

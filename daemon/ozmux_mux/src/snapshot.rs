@@ -62,7 +62,7 @@ mod tests {
     use super::*;
     use crate::mux::Mux;
     use crate::surface::SurfaceKind;
-    use crate::tree::{LayoutNode, Side, SplitOrientation, collect_node_ids};
+    use crate::tree::{Side, SplitOrientation, collect_node_ids};
     use std::collections::HashSet;
 
     #[test]
