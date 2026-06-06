@@ -7,12 +7,13 @@ use crate::components::{
     ActivePane, ActiveSurface, BrowserProfile, CopyMode, OwningWorkspace, PaneMarker, SplitNode,
     SurfaceKind, SurfaceMarker, SurfaceOf, WorkspaceMarker, WorkspaceUiSubtree,
 };
+use crate::error::{MultiplexerError, MultiplexerResult};
 use crate::layout::{
     SplitOrientation, child_flex, pane_frame_node, set_child_grow, split_node_bundle, split_ratio,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use ozmux_mux::{LayoutNode, MuxEvent, NodeId, PaneId, SplitId, SurfaceId, WorkspaceId};
+use ozmux_mux::{LayoutNode, MuxError, MuxEvent, NodeId, PaneId, SplitId, SurfaceId, WorkspaceId};
 use slotmap::SecondaryMap;
 use std::collections::HashSet;
 
@@ -55,9 +56,32 @@ pub struct MirrorReadCtx<'w, 's> {
     child_of: Query<'w, 's, &'static ChildOf>,
     nodes: Query<'w, 's, &'static Node>,
     node_ids: Query<'w, 's, (Option<&'static MuxPaneId>, Option<&'static MuxSplitId>)>,
+    ws_ids: Query<'w, 's, &'static MuxWorkspaceId>,
+    surface_ids: Query<'w, 's, &'static MuxSurfaceId>,
 }
 
 impl MirrorReadCtx<'_, '_> {
+    /// The `WorkspaceId` an entity maps to, or `None`.
+    #[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+    pub(crate) fn workspace_id_of(&self, ent: Entity) -> Option<WorkspaceId> {
+        self.ws_ids.get(ent).ok().map(|w| w.0)
+    }
+
+    /// The `PaneId` an entity maps to, or `None`.
+    #[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+    pub(crate) fn pane_id_of(&self, ent: Entity) -> Option<PaneId> {
+        match self.node_ids.get(ent).ok()? {
+            (Some(p), _) => Some(p.0),
+            _ => None,
+        }
+    }
+
+    /// The `SurfaceId` an entity maps to, or `None`.
+    #[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+    pub(crate) fn surface_id_of(&self, ent: Entity) -> Option<SurfaceId> {
+        self.surface_ids.get(ent).ok().map(|s| s.0)
+    }
+
     /// The `NodeId` an existing layout entity maps to (pane or split), or
     /// `None` if it carries neither marker.
     fn node_id_of(&self, ent: Entity) -> Option<NodeId> {
@@ -721,6 +745,94 @@ pub fn mirror_matches(world: &World, state: &MuxState) -> Result<(), Mismatch> {
     }
 
     Ok(())
+}
+
+/// Translates a `MuxError` (id-addressed) to a `MultiplexerError` (Entity-addressed)
+/// by looking up each id in the reverse maps. Ids absent from the maps yield
+/// `Entity::PLACEHOLDER` so the lifted error is always constructible.
+pub(crate) fn lift(state: &MuxState, err: MuxError) -> MultiplexerError {
+    match err {
+        MuxError::WorkspaceNotFound(ws) => MultiplexerError::WorkspaceNotFound(
+            state
+                .workspaces
+                .get(ws)
+                .copied()
+                .unwrap_or(Entity::PLACEHOLDER),
+        ),
+        MuxError::PaneNotFound(pane) => MultiplexerError::PaneNotFound(
+            state
+                .panes
+                .get(pane)
+                .copied()
+                .unwrap_or(Entity::PLACEHOLDER),
+        ),
+        MuxError::SurfaceNotFound(surface) => MultiplexerError::SurfaceNotFound(
+            state
+                .surfaces
+                .get(surface)
+                .copied()
+                .unwrap_or(Entity::PLACEHOLDER),
+        ),
+        MuxError::CannotCloseLastPaneInWorkspace(ws) => {
+            MultiplexerError::CannotCloseLastPaneInWorkspace(
+                state
+                    .workspaces
+                    .get(ws)
+                    .copied()
+                    .unwrap_or(Entity::PLACEHOLDER),
+            )
+        }
+        MuxError::CannotRemoveLastSurface(pane) => MultiplexerError::CannotRemoveLastSurface(
+            state
+                .panes
+                .get(pane)
+                .copied()
+                .unwrap_or(Entity::PLACEHOLDER),
+        ),
+        MuxError::MissingParentCell => MultiplexerError::MissingParentCell,
+    }
+}
+
+/// Extracts the `PaneId` from the first `PaneCreated` event in `events`, or `None`.
+#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+pub(crate) fn created_pane_id(events: &[MuxEvent]) -> Option<PaneId> {
+    events.iter().find_map(|e| match e {
+        MuxEvent::PaneCreated { pane, .. } => Some(*pane),
+        _ => None,
+    })
+}
+
+/// Extracts the `WorkspaceId` from the first `WorkspaceCreated` event in `events`, or `None`.
+#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+pub(crate) fn created_workspace_id(events: &[MuxEvent]) -> Option<WorkspaceId> {
+    events.iter().find_map(|e| match e {
+        MuxEvent::WorkspaceCreated { workspace, .. } => Some(*workspace),
+        _ => None,
+    })
+}
+
+/// Extracts the `SurfaceId` from the first `SurfaceSpawned` event in `events`, or `None`.
+#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+pub(crate) fn single_spawned_surface_id(events: &[MuxEvent]) -> Option<SurfaceId> {
+    events.iter().find_map(|e| match e {
+        MuxEvent::SurfaceSpawned { surface, .. } => Some(*surface),
+        _ => None,
+    })
+}
+
+/// Returns the active (seed) surface of `pane` from `state.mux`, or `None`.
+#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+pub(crate) fn seed_surface_of(state: &MuxState, pane: PaneId) -> Option<SurfaceId> {
+    state.mux.active_surface(pane).ok()
+}
+
+/// Translates a `MuxResult` into a `MultiplexerResult`, lifting any error via `lift`.
+#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+pub(crate) fn lift_result<T>(
+    state: &MuxState,
+    result: Result<T, MuxError>,
+) -> MultiplexerResult<T> {
+    result.map_err(|e| lift(state, e))
 }
 
 /// Debug-only: every reverse-map entry resolves to a live entity carrying the
@@ -2223,6 +2335,77 @@ mod tests {
         });
 
         assert_layout_equiv(&mut oracle, &mut mux_app);
+    }
+
+    #[test]
+    fn created_pane_id_finds_pane_created_and_no_surface_for_split() {
+        let mut mux = ozmux_mux::Mux::new();
+        let ws = mux.active_workspace();
+        let p = mux.active_pane(ws).unwrap();
+        let events = mux
+            .split_pane(
+                p,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap();
+        assert!(created_pane_id(&events).is_some());
+        assert!(
+            single_spawned_surface_id(&events).is_none(),
+            "split emits no SurfaceSpawned"
+        );
+    }
+
+    #[test]
+    fn single_spawned_surface_id_finds_add_surface() {
+        let mut mux = ozmux_mux::Mux::new();
+        let ws = mux.active_workspace();
+        let p = mux.active_pane(ws).unwrap();
+        let events = mux
+            .spawn_surface(p, ozmux_mux::SurfaceKind::Terminal)
+            .unwrap();
+        assert!(single_spawned_surface_id(&events).is_some());
+    }
+
+    #[test]
+    fn lift_maps_pane_not_found() {
+        let mut mux = ozmux_mux::Mux::new();
+        let ws = mux.active_workspace();
+        let p = mux.active_pane(ws).unwrap();
+        // Split to get two panes, then close the new pane to get a live PaneId.
+        // Now close the original pane (only one left after the new one is closed)
+        // by first splitting and then closing both — simplest: just try closing
+        // the only pane directly to get CannotCloseLastPaneInWorkspace, but we
+        // need PaneNotFound. Use a separate Mux to generate a stale PaneId.
+        let mut mux2 = ozmux_mux::Mux::new();
+        let ws2 = mux2.active_workspace();
+        let p2 = mux2.active_pane(ws2).unwrap();
+        // Split to get a second pane, close the second to get its stale id in mux.
+        let events = mux2
+            .split_pane(
+                p2,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap();
+        let new_pane = match events[0] {
+            ozmux_mux::MuxEvent::PaneCreated { pane, .. } => pane,
+            _ => panic!("first event must be PaneCreated"),
+        };
+        // Close the new pane in mux2 — now new_pane is stale in mux2.
+        mux2.close_pane(new_pane).unwrap();
+        // new_pane is now stale in mux2. Try surfaces(new_pane) → PaneNotFound.
+        let err = mux2.surfaces(new_pane).unwrap_err();
+        assert!(matches!(err, ozmux_mux::MuxError::PaneNotFound(_)));
+        // Lift using mux (where new_pane was never registered in state.panes).
+        let state = MuxState::new(mux);
+        let lifted = lift(&state, err);
+        assert!(
+            matches!(lifted, crate::error::MultiplexerError::PaneNotFound(_)),
+            "lifted error must be MultiplexerError::PaneNotFound, got: {lifted:?}"
+        );
     }
 
     #[test]
