@@ -4,6 +4,7 @@
 use crate::id::{NodeId, PaneId, SplitId, SurfaceId};
 use crate::surface::SurfaceKind;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// Split axis.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Serialize, Deserialize)]
@@ -116,6 +117,22 @@ pub enum LayoutNode {
         /// Resolved rows.
         rows: u16,
     },
+}
+
+/// Collects every `NodeId` (splits and panes) referenced by a layout subtree.
+pub fn collect_node_ids(node: &LayoutNode, out: &mut HashSet<NodeId>) {
+    match node {
+        LayoutNode::Split {
+            id, first, second, ..
+        } => {
+            out.insert(NodeId::Split(*id));
+            collect_node_ids(first, out);
+            collect_node_ids(second, out);
+        }
+        LayoutNode::Pane { id, .. } => {
+            out.insert(NodeId::Pane(*id));
+        }
+    }
 }
 
 #[cfg(test)]

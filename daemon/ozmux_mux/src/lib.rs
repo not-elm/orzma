@@ -9,6 +9,7 @@ pub mod event;
 pub mod geometry;
 pub mod id;
 pub mod mux;
+pub mod snapshot;
 pub mod surface;
 pub mod tree;
 
@@ -18,5 +19,6 @@ pub use event::{MuxEvent, SurfaceEntry};
 pub use geometry::Rect;
 pub use id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
 pub use mux::Mux;
+pub use snapshot::{PaneSnapshot, SessionSnapshot, SurfaceState, WorkspaceSnapshot};
 pub use surface::{BrowserProfile, Surface, SurfaceKind};
-pub use tree::{LayoutNode, Pane, Side, Split, SplitOrientation};
+pub use tree::{LayoutNode, Pane, Side, Split, SplitOrientation, collect_node_ids};

@@ -6,9 +6,10 @@ use crate::error::{MuxError, MuxResult};
 use crate::event::{MuxEvent, SurfaceEntry};
 use crate::geometry::{Rect, split_cells};
 use crate::id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
+use crate::snapshot::{PaneSnapshot, SessionSnapshot, SurfaceState, WorkspaceSnapshot};
 use crate::surface::{Surface, SurfaceKind};
 use crate::tree::{LayoutNode, Pane, Side, Split, SplitOrientation};
-use slotmap::SlotMap;
+use slotmap::{Key, SlotMap};
 use std::path::PathBuf;
 
 /// Hard floor on a leaf pane's cell count along the left-right axis.
@@ -813,6 +814,87 @@ impl Mux {
         }
         self.surfaces[surface].cwd = Some(cwd.clone());
         Ok(vec![MuxEvent::SurfaceCwdChanged { surface, cwd }])
+    }
+
+    /// Returns all session ids in creation order.
+    pub fn sessions(&self) -> Vec<SessionId> {
+        // NOTE: SlotMap iteration order is not guaranteed to match insertion
+        // order. The active session is the only session created by `new()`, and
+        // subsequent sessions are not yet created by any public API. To ensure
+        // deterministic ordering across all future callers, we collect and sort
+        // by each key's raw index bits — the lowest-index slot was inserted
+        // first when no removals have occurred (the current invariant).
+        let mut ids: Vec<SessionId> = self.sessions.keys().collect();
+        ids.sort_by_key(|id| id.data().as_ffi());
+        ids
+    }
+
+    /// Returns `session`'s workspace ids in creation order.
+    pub fn workspaces(&self, session: SessionId) -> MuxResult<Vec<WorkspaceId>> {
+        Ok(self
+            .sessions
+            .get(session)
+            .ok_or(MuxError::SessionNotFound(session))?
+            .workspaces
+            .clone())
+    }
+
+    /// Snapshots `session`'s full state for cold-attach.
+    ///
+    /// The returned `SessionSnapshot` can be serialized to initialize a
+    /// remote mirror, which then applies subsequent `MuxEvent` deltas.
+    pub fn snapshot(&self, session: SessionId) -> MuxResult<SessionSnapshot> {
+        let sess = self
+            .sessions
+            .get(session)
+            .ok_or(MuxError::SessionNotFound(session))?;
+        let active_workspace = Some(sess.active);
+        let workspace_ids = sess.workspaces.clone();
+
+        let mut workspaces = Vec::with_capacity(workspace_ids.len());
+        for ws_id in workspace_ids {
+            let ws = self.workspace(ws_id)?;
+            let name = ws.name.clone();
+            let size = ws.size;
+            let active_pane = Some(ws.active_pane);
+            let layout = self.workspace_layout(ws_id)?;
+
+            let ordered = self.ordered_panes(ws_id)?;
+            let mut panes = Vec::with_capacity(ordered.len());
+            for pane_id in ordered {
+                let pane = &self.panes[pane_id];
+                let active_surface = Some(pane.active_surface);
+                let surfaces = self
+                    .pane_surface_entries(pane_id)
+                    .into_iter()
+                    .map(|e| SurfaceState {
+                        surface: e.surface,
+                        kind: e.kind,
+                        cwd: e.cwd,
+                    })
+                    .collect();
+                panes.push(PaneSnapshot {
+                    pane: pane_id,
+                    surfaces,
+                    active_surface,
+                });
+            }
+
+            workspaces.push(WorkspaceSnapshot {
+                workspace: ws_id,
+                name,
+                layout,
+                size,
+                active_pane,
+                panes,
+            });
+        }
+
+        Ok(SessionSnapshot {
+            session,
+            active_workspace,
+            workspaces,
+        })
     }
 
     fn walk_bounds(&self, node: NodeId, bounds: Rect, out: &mut Vec<(PaneId, Rect)>) {

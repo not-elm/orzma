@@ -2,12 +2,14 @@
 //! matching the lean `ozmux_vt` sibling. Only variants that the API
 //! actually constructs are kept.
 
-use crate::id::{PaneId, SurfaceId, WorkspaceId};
+use crate::id::{PaneId, SessionId, SurfaceId, WorkspaceId};
 use std::fmt;
 
 /// Errors returned by `crate::mux::Mux` operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MuxError {
+    /// No such session (or a stale id).
+    SessionNotFound(SessionId),
     /// No such workspace (or a stale id).
     WorkspaceNotFound(WorkspaceId),
     /// No such pane (or a stale id).
@@ -25,6 +27,7 @@ pub enum MuxError {
 impl fmt::Display for MuxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            MuxError::SessionNotFound(s) => write!(f, "session not found: {s:?}"),
             MuxError::WorkspaceNotFound(w) => write!(f, "workspace not found: {w:?}"),
             MuxError::PaneNotFound(p) => write!(f, "pane not found: {p:?}"),
             MuxError::SurfaceNotFound(s) => write!(f, "surface not found: {s:?}"),
