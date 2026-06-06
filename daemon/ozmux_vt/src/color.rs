@@ -7,7 +7,11 @@
 //!
 //! Default fg / bg (`AColor::Named(Foreground | Background)`) maps to
 //! white / black sentinels (provisional until theme support is added).
+//!
+//! `RgbaColor` (struct + impl) is always compiled; the alacritty import and all
+//! conversion helpers are gated behind the `engine` feature.
 
+#[cfg(feature = "engine")]
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};
 use serde::{Deserialize, Serialize};
 
@@ -38,9 +42,11 @@ impl RgbaColor {
 }
 
 /// Channel ramp for the 6×6×6 cube portion of the xterm 256 palette.
+#[cfg(feature = "engine")]
 const CUBE_RAMP: [u8; 6] = [0, 95, 135, 175, 215, 255];
 
 /// 16 named ANSI base colors as xterm defaults (R, G, B tuples).
+#[cfg(feature = "engine")]
 const ANSI_16: [(u8, u8, u8); 16] = [
     (0, 0, 0),
     (205, 0, 0),
@@ -61,6 +67,7 @@ const ANSI_16: [(u8, u8, u8); 16] = [
 ];
 
 /// Converts an alacritty `AColor` to `RgbaColor`.
+#[cfg(feature = "engine")]
 pub fn acolor_to_rgba(c: AColor) -> RgbaColor {
     match c {
         AColor::Spec(rgb) => RgbaColor::srgb(rgb.r, rgb.g, rgb.b),
@@ -69,6 +76,7 @@ pub fn acolor_to_rgba(c: AColor) -> RgbaColor {
     }
 }
 
+#[cfg(feature = "engine")]
 fn named_color_to_rgba(named: NamedColor) -> RgbaColor {
     match named {
         NamedColor::Foreground => RgbaColor::WHITE,
@@ -103,6 +111,7 @@ fn named_color_to_rgba(named: NamedColor) -> RgbaColor {
     }
 }
 
+#[cfg(feature = "engine")]
 fn palette_index_to_rgba(i: u8) -> RgbaColor {
     let i = i as usize;
     if i < 16 {
@@ -123,8 +132,10 @@ fn palette_index_to_rgba(i: u8) -> RgbaColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "engine")]
     use alacritty_terminal::vte::ansi::Rgb;
 
+    #[cfg(feature = "engine")]
     #[test]
     fn spec_maps_to_srgb() {
         assert_eq!(
@@ -137,11 +148,13 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn indexed_0_is_black() {
         assert_eq!(acolor_to_rgba(AColor::Indexed(0)), RgbaColor::srgb(0, 0, 0));
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn indexed_15_is_bright_white() {
         assert_eq!(
@@ -150,6 +163,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn indexed_16_starts_cube_at_origin() {
         assert_eq!(
@@ -158,6 +172,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn indexed_231_ends_cube_at_white() {
         assert_eq!(
@@ -166,6 +181,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn indexed_232_starts_grayscale_at_8() {
         assert_eq!(
@@ -174,6 +190,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn indexed_255_ends_grayscale_at_238() {
         assert_eq!(
@@ -182,6 +199,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn named_foreground_is_white_sentinel() {
         assert_eq!(
@@ -190,6 +208,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn named_background_is_black_sentinel() {
         assert_eq!(
@@ -198,6 +217,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn dim_red_maps_to_regular_red_not_white() {
         assert_eq!(
@@ -206,6 +226,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn dim_white_maps_to_ansi_white() {
         assert_eq!(
@@ -214,6 +235,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn named_bright_red_maps_to_ansi_index_9() {
         assert_eq!(
@@ -222,6 +244,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn dim_black_maps_to_ansi_black() {
         assert_eq!(
