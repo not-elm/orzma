@@ -1,0 +1,9 @@
+[package]
+name = "ozmux_proto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ozmux_mux = { path = "../ozmux_mux" }
+serde = { workspace = true }
+serde_json = { workspace = true }

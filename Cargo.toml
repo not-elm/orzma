@@ -47,6 +47,7 @@ members = [
   "crates/*",
   "daemon/ozmux_vt",
   "daemon/ozmux_mux",
+  "daemon/ozmux_proto",
 ]
 
 [workspace.package]
