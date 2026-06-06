@@ -7,6 +7,7 @@
 
 use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
+use crate::ui::chrome::PaneChrome;
 use crate::ui::{TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
@@ -15,7 +16,7 @@ use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 use ozmux_extension_host::terminal_env;
-use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneMarker, SurfaceOf};
+use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneDimensions, PaneMarker, SurfaceOf};
 
 pub struct OzmuxTerminalUiPlugin;
 
@@ -27,9 +28,8 @@ impl Plugin for OzmuxTerminalUiPlugin {
         )
         .add_systems(
             PostUpdate,
-            resize_terminals_to_node
+            resize_terminals_from_dimensions
                 .after(UiSystems::Layout)
-                .before(UiSystems::PostLayout)
                 .before(TerminalMaterialSystems::UpdateMaterial),
         );
         app.add_observer(on_terminal_current_dir);
@@ -128,47 +128,39 @@ pub(crate) fn resolve_pane_workspace(
     Some((pane, workspace))
 }
 
-/// Computes grid dimensions for a host node, reserving `max_overflow_phys`
-/// on the right so the WGSL right-strip handler has room to paint the
-/// rightmost cell's bbox overflow without clipping. Height is not
-/// reserved — line_height already accommodates descender headroom.
+/// Resizes each Terminal Surface's PTY / VT grid to its Mux-resolved
+/// `PaneDimensions` (cols, rows − chrome_rows), making terminal sizing
+/// drift-free. `PaneDimensions` is the single authoritative source for pane
+/// cell counts; reading it directly avoids the pixel-flooring drift of the
+/// old `ComputedNode`-based path.
 ///
-/// Always returns `(cols, rows)` ≥ `(1, 1)`; degenerate inputs collapse
-/// to a 1x1 grid rather than producing zero-sized buffers.
-fn compute_grid_dims(
-    node_phys_w: f32,
-    node_phys_h: f32,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    max_overflow_phys: f32,
-) -> (u16, u16) {
-    let usable_w = (node_phys_w - max_overflow_phys).max(0.0);
-    let cols = ((usable_w / cell_w_phys).floor() as u16).max(1);
-    let rows = ((node_phys_h / cell_h_phys).floor() as u16).max(1);
-    (cols, rows)
-}
-
-/// Resizes each Terminal Surface's PTY / VT grid to match its host UI
-/// node's pixel extents so the shader's `grid_size * cell_size_px` always
-/// fills the entire pane. Idempotent — no-op when cols/rows are unchanged.
+/// chrome_rows = number of pane rows consumed by the tab bar. The tab bar's
+/// actual rendered height is read from its `ComputedNode` (after
+/// `UiSystems::Layout`) and converted to rows via `ceil(tab_h / cell_h)`.
 ///
-/// Runs in `PostUpdate` after `UiSystems::Layout` so `ComputedNode.size`
-/// reflects the current frame's layout. Also writes the new `cols`/`rows`
-/// directly into `TerminalGrid` so the renderer's `update_terminal_material`
-/// (also `PostUpdate`) can rebuild the uniform in the same tick — without
-/// this short-circuit the new dimensions would only reach the shader after
-/// the next `FrameSnapshot` round-trip through alacritty + observers,
-/// adding a visible 1-frame lag at the pane edge during drag.
-fn resize_terminals_to_node(
-    mut terminals: Query<
-        (
-            &ComputedNode,
-            &mut TerminalHandle,
-            &mut PtyHandle,
-            &mut TerminalGrid,
-        ),
-        Changed<TerminalHandle>,
-    >,
+/// Runs in `PostUpdate` after `UiSystems::Layout` so the tab bar
+/// `ComputedNode` is current. Also writes the new `cols`/`rows` directly
+/// into `TerminalGrid` so the renderer's `update_terminal_material` (also
+/// `PostUpdate`) can rebuild the uniform in the same tick — without this
+/// short-circuit the new dimensions would only reach the shader after the
+/// next `FrameSnapshot` round-trip through alacritty + observers, adding a
+/// visible 1-frame lag at the pane edge during drag.
+///
+/// Columns are taken directly from `PaneDimensions.cols`.
+/// NOTE: The pane node width is `cols × floor(advance_phys)` px; the
+/// rightmost cell's glyph bbox overflow paints under the next pane's left
+/// edge / the overlay divider. This is acceptable — the old px-based
+/// `max_overflow_phys` reservation was only needed for the flexbox-measured
+/// path. Revisit in T7 smoke if rightmost-glyph clipping is visible.
+fn resize_terminals_from_dimensions(
+    mut terminals: Query<(
+        &SurfaceOf,
+        &mut TerminalHandle,
+        &mut PtyHandle,
+        &mut TerminalGrid,
+    )>,
+    panes: Query<(&PaneDimensions, &PaneChrome), With<PaneMarker>>,
+    tab_bar_nodes: Query<&ComputedNode>,
     metrics: Res<TerminalCellMetricsResource>,
 ) {
     // NOTE: Cell pitch is font-derived physical px; DPR is already baked into
@@ -176,17 +168,23 @@ fn resize_terminals_to_node(
     //       On the first frame after startup (or after a DPR change), the
     //       Resource holds previous-frame values — accepted Tier 1 trade-off,
     //       see `docs/plans/2026-05-25-bevy-font-render-design.md` Tier 2 #11.
-    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    for (computed, mut handle, mut pty, mut grid) in terminals.iter_mut() {
-        let (cols, rows) = compute_grid_dims(
-            computed.size.x.max(0.0),
-            computed.size.y.max(0.0),
-            cell_w_phys,
-            cell_h_phys,
-            metrics.metrics.max_overflow_phys,
-        );
+    for (surface_of, mut handle, mut pty, mut grid) in terminals.iter_mut() {
+        let Ok((dim, chrome)) = panes.get(surface_of.0) else {
+            continue;
+        };
+
+        let chrome_rows: u16 = tab_bar_nodes
+            .get(chrome.tab_bar_entity())
+            .map(|tab_node| {
+                let tab_h = tab_node.size.y.max(0.0);
+                (tab_h / cell_h_phys).ceil() as u16
+            })
+            .unwrap_or(1);
+
+        let cols = dim.cols.max(1);
+        let rows = dim.rows.saturating_sub(chrome_rows).max(1);
 
         let (cur_cols, cur_rows, _) = handle.read_geometry();
         if cur_cols == cols && cur_rows == rows {
@@ -241,23 +239,6 @@ mod tests {
             .init_asset::<TerminalUiMaterial>()
             .init_asset::<ShaderStorageBuffer>();
         app
-    }
-
-    #[test]
-    fn compute_grid_dims_reserves_max_overflow_for_cols() {
-        // Cell pitch 10, node width 100, overflow 4 → cols = (100−4)/10 = 9.
-        // Without the reservation: cols = 100/10 = 10. Asserting cols == 9
-        // catches both a sign-flip and a use-wrong-field regression.
-        let (cols, rows) = compute_grid_dims(100.0, 50.0, 10.0, 10.0, 4.0);
-        assert_eq!(cols, 9, "cols should be (100 − 4) / 10 = 9");
-        assert_eq!(rows, 5, "rows should be 50 / 10 = 5 (height not affected)");
-    }
-
-    #[test]
-    fn compute_grid_dims_floor_to_minimum_one() {
-        // Degenerate input: overflow exceeds node width.
-        let (cols, _) = compute_grid_dims(3.0, 20.0, 10.0, 10.0, 5.0);
-        assert_eq!(cols, 1, "cols must stay >= 1 even when usable width is 0");
     }
 
     #[test]

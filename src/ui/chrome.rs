@@ -47,6 +47,14 @@ pub(crate) struct PaneChrome {
     surface_slot: Entity,
 }
 
+impl PaneChrome {
+    /// Returns the tab-bar row entity so callers can read its `ComputedNode`
+    /// height to derive the chrome row count for terminal PTY sizing.
+    pub(crate) fn tab_bar_entity(&self) -> Entity {
+        self.tab_bar
+    }
+}
+
 /// Builds the tab bar + surface slot for each newly-added Pane exactly once,
 /// recording the handles in `PaneChrome`. Runs in `OzmuxSystems::BuildChrome`,
 /// after the structural `ApplyDeferred`, so the Pane entity (and its own
