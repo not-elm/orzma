@@ -7,7 +7,7 @@ use crate::components::{
     ActivePane, ActiveSurface, BrowserProfile, CopyMode, OwningWorkspace, PaneMarker, SplitNode,
     SurfaceKind, SurfaceMarker, SurfaceOf, WorkspaceMarker, WorkspaceUiSubtree,
 };
-use crate::error::{MultiplexerError, MultiplexerResult};
+use crate::error::MultiplexerError;
 use crate::layout::{
     SplitOrientation, child_flex, pane_frame_node, set_child_grow, split_node_bundle, split_ratio,
 };
@@ -151,6 +151,23 @@ impl MuxState {
     /// may not be flushed yet, but the reverse map is updated immediately).
     pub(crate) fn surface_id_of_entity(&self, entity: Entity) -> Option<SurfaceId> {
         self.surfaces
+            .iter()
+            .find(|&(_, e)| *e == entity)
+            .map(|(id, _)| id)
+    }
+
+    /// The `PaneId` mapped to `entity`, via the immediate reverse map (resolves
+    /// even before the deferred `MuxPaneId` component is flushed). `None` if unmapped.
+    pub(crate) fn pane_id_of_entity(&self, entity: Entity) -> Option<PaneId> {
+        self.panes
+            .iter()
+            .find(|&(_, e)| *e == entity)
+            .map(|(id, _)| id)
+    }
+
+    /// The `WorkspaceId` mapped to `entity`, via the immediate reverse map. `None` if unmapped.
+    pub(crate) fn workspace_id_of_entity(&self, entity: Entity) -> Option<WorkspaceId> {
+        self.workspaces
             .iter()
             .find(|&(_, e)| *e == entity)
             .map(|(id, _)| id)
@@ -851,18 +868,6 @@ pub(crate) fn seed_surface_of(state: &MuxState, pane: PaneId) -> Option<SurfaceI
     state.mux.active_surface(pane).ok()
 }
 
-/// Translates a `MuxResult` into a `MultiplexerResult`, lifting any error via `lift`.
-#[expect(
-    dead_code,
-    reason = "available for future Plan 2b-2 callers; not yet consumed"
-)]
-pub(crate) fn lift_result<T>(
-    state: &MuxState,
-    result: Result<T, MuxError>,
-) -> MultiplexerResult<T> {
-    result.map_err(|e| lift(state, e))
-}
-
 /// Debug-only: after each frame's command flush, assert the ECS mirror matches
 /// the authoritative `Mux`. Catches apply-handler drift on real usage at zero
 /// release-build cost (gated on `debug_assertions`).
@@ -1193,286 +1198,6 @@ mod tests {
     use crate::plugin::MultiplexerPlugin;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// Checks that two apps produce structurally equivalent layout trees for
-    /// all workspaces. Panics with a clear message on any mismatch.
-    ///
-    /// Walks `WorkspaceMarker` entities in each app, matches them in creation
-    /// order via `WorkspaceUiSubtree`, and compares the subtree recursively:
-    /// - At a `SplitNode`: same orientation, and the ratio (normalized from
-    ///   `flex_grow` pair) matches within 1e-4.
-    /// - At a `PaneMarker` leaf: same active-surface `SurfaceKind` discriminant
-    ///   and same total surface count.
-    /// - The workspace's `ActivePane` entity maps to the same tree position.
-    pub(crate) fn assert_layout_equiv(oracle: &mut App, mux_app: &mut App) {
-        let oracle_workspaces = collect_workspaces(oracle.world_mut());
-        let mux_workspaces = collect_workspaces(mux_app.world_mut());
-
-        assert_eq!(
-            oracle_workspaces.len(),
-            mux_workspaces.len(),
-            "workspace count mismatch: oracle={} mux={}",
-            oracle_workspaces.len(),
-            mux_workspaces.len(),
-        );
-
-        for (i, (o_ws, m_ws)) in oracle_workspaces
-            .iter()
-            .zip(mux_workspaces.iter())
-            .enumerate()
-        {
-            let oracle_world = oracle.world();
-            let mux_world = mux_app.world();
-
-            let o_container = oracle_world
-                .get::<WorkspaceUiSubtree>(*o_ws)
-                .unwrap_or_else(|| panic!("oracle workspace[{i}] missing WorkspaceUiSubtree"))
-                .0;
-            let m_container = mux_world
-                .get::<WorkspaceUiSubtree>(*m_ws)
-                .unwrap_or_else(|| panic!("mux workspace[{i}] missing WorkspaceUiSubtree"))
-                .0;
-
-            let o_top = first_child(oracle_world, o_container)
-                .unwrap_or_else(|| panic!("oracle workspace[{i}] container has no children"));
-            let m_top = first_child(mux_world, m_container)
-                .unwrap_or_else(|| panic!("mux workspace[{i}] container has no children"));
-
-            let mut oracle_active_pos: Option<Vec<usize>> = None;
-            let mut mux_active_pos: Option<Vec<usize>> = None;
-            let o_active = oracle_world.get::<ActivePane>(*o_ws).map(|a| a.0);
-            let m_active = mux_world.get::<ActivePane>(*m_ws).map(|a| a.0);
-
-            compare_nodes(
-                oracle_world,
-                o_top,
-                mux_world,
-                m_top,
-                &[],
-                i,
-                o_active,
-                m_active,
-                &mut oracle_active_pos,
-                &mut mux_active_pos,
-            );
-
-            assert_eq!(
-                oracle_active_pos, mux_active_pos,
-                "workspace[{i}] ActivePane tree position mismatch: oracle={oracle_active_pos:?} mux={mux_active_pos:?}",
-            );
-        }
-    }
-
-    /// Collects all `WorkspaceMarker` entities sorted by entity index (creation-order
-    /// proxy; adequate for single-workspace tests).
-    fn collect_workspaces(world: &mut World) -> Vec<Entity> {
-        let mut q = world.query_filtered::<Entity, With<WorkspaceMarker>>();
-        let mut v: Vec<Entity> = q.iter(world).collect();
-        v.sort_by_key(|e| e.index());
-        v
-    }
-
-    fn first_child(world: &World, parent: Entity) -> Option<Entity> {
-        world.get::<Children>(parent).and_then(|c| c.iter().next())
-    }
-
-    /// Recursive structural comparison of two layout subtree nodes across worlds.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "recursive tree walker with full context"
-    )]
-    fn compare_nodes(
-        o_world: &World,
-        o_ent: Entity,
-        m_world: &World,
-        m_ent: Entity,
-        path: &[usize],
-        ws_idx: usize,
-        o_active: Option<Entity>,
-        m_active: Option<Entity>,
-        oracle_active_pos: &mut Option<Vec<usize>>,
-        mux_active_pos: &mut Option<Vec<usize>>,
-    ) {
-        let o_is_pane = o_world.get::<PaneMarker>(o_ent).is_some();
-        let m_is_pane = m_world.get::<PaneMarker>(m_ent).is_some();
-        let o_is_split = o_world.get::<SplitNode>(o_ent).is_some();
-        let m_is_split = m_world.get::<SplitNode>(m_ent).is_some();
-
-        assert_eq!(
-            o_is_pane, m_is_pane,
-            "ws[{ws_idx}] path {path:?}: pane marker mismatch (oracle={o_is_pane} mux={m_is_pane})",
-        );
-        assert_eq!(
-            o_is_split, m_is_split,
-            "ws[{ws_idx}] path {path:?}: split marker mismatch (oracle={o_is_split} mux={m_is_split})",
-        );
-
-        if o_is_pane {
-            if o_active == Some(o_ent) {
-                *oracle_active_pos = Some(path.to_vec());
-            }
-            if m_active == Some(m_ent) {
-                *mux_active_pos = Some(path.to_vec());
-            }
-
-            let o_active_surf = o_world
-                .get::<ActiveSurface>(o_ent)
-                .unwrap_or_else(|| {
-                    panic!("ws[{ws_idx}] path {path:?}: oracle pane missing ActiveSurface")
-                })
-                .0;
-            let m_active_surf = m_world
-                .get::<ActiveSurface>(m_ent)
-                .unwrap_or_else(|| {
-                    panic!("ws[{ws_idx}] path {path:?}: mux pane missing ActiveSurface")
-                })
-                .0;
-
-            let o_kind = o_world
-                .get::<SurfaceKind>(o_active_surf)
-                .unwrap_or_else(|| {
-                    panic!("ws[{ws_idx}] path {path:?}: oracle active surface missing SurfaceKind")
-                });
-            let m_kind = m_world
-                .get::<SurfaceKind>(m_active_surf)
-                .unwrap_or_else(|| {
-                    panic!("ws[{ws_idx}] path {path:?}: mux active surface missing SurfaceKind")
-                });
-
-            assert!(
-                surface_kind_discriminant_eq(o_kind, m_kind),
-                "ws[{ws_idx}] path {path:?}: active surface kind mismatch: oracle={o_kind:?} mux={m_kind:?}",
-            );
-
-            let o_node = o_world
-                .get::<Node>(o_ent)
-                .unwrap_or_else(|| panic!("ws[{ws_idx}] path {path:?}: oracle pane missing Node"));
-            let m_node = m_world
-                .get::<Node>(m_ent)
-                .unwrap_or_else(|| panic!("ws[{ws_idx}] path {path:?}: mux pane missing Node"));
-            assert_eq!(
-                o_node.flex_direction, m_node.flex_direction,
-                "ws[{ws_idx}] path {path:?}: pane flex_direction mismatch",
-            );
-            assert_eq!(
-                o_node.padding, m_node.padding,
-                "ws[{ws_idx}] path {path:?}: pane padding mismatch",
-            );
-
-            let o_surf_count = o_world
-                .get::<crate::components::Surfaces>(o_ent)
-                .map(|s| s.iter().count())
-                .unwrap_or(0);
-            let m_surf_count = m_world
-                .get::<crate::components::Surfaces>(m_ent)
-                .map(|s| s.iter().count())
-                .unwrap_or(0);
-
-            assert_eq!(
-                o_surf_count, m_surf_count,
-                "ws[{ws_idx}] path {path:?}: surface count mismatch: oracle={o_surf_count} mux={m_surf_count}",
-            );
-        } else if o_is_split {
-            let o_split = o_world.get::<SplitNode>(o_ent).expect("oracle split node");
-            let m_split = m_world.get::<SplitNode>(m_ent).expect("mux split node");
-
-            assert_eq!(
-                o_split.orientation, m_split.orientation,
-                "ws[{ws_idx}] path {path:?}: split orientation mismatch",
-            );
-
-            let o_kids: Vec<Entity> = o_world
-                .get::<Children>(o_ent)
-                .map(|c| c.iter().collect())
-                .unwrap_or_default();
-            let m_kids: Vec<Entity> = m_world
-                .get::<Children>(m_ent)
-                .map(|c| c.iter().collect())
-                .unwrap_or_default();
-
-            assert_eq!(
-                o_kids.len(),
-                2,
-                "ws[{ws_idx}] path {path:?}: oracle split must have 2 children, got {}",
-                o_kids.len(),
-            );
-            assert_eq!(
-                m_kids.len(),
-                2,
-                "ws[{ws_idx}] path {path:?}: mux split must have 2 children, got {}",
-                m_kids.len(),
-            );
-
-            let o_lhs_grow = o_world
-                .get::<Node>(o_kids[0])
-                .map(|n| n.flex_grow)
-                .unwrap_or(0.0);
-            let o_rhs_grow = o_world
-                .get::<Node>(o_kids[1])
-                .map(|n| n.flex_grow)
-                .unwrap_or(0.0);
-            let m_lhs_grow = m_world
-                .get::<Node>(m_kids[0])
-                .map(|n| n.flex_grow)
-                .unwrap_or(0.0);
-            let m_rhs_grow = m_world
-                .get::<Node>(m_kids[1])
-                .map(|n| n.flex_grow)
-                .unwrap_or(0.0);
-
-            let o_ratio = split_ratio(o_lhs_grow, o_rhs_grow);
-            let m_ratio = split_ratio(m_lhs_grow, m_rhs_grow);
-
-            assert!(
-                (o_ratio - m_ratio).abs() < 1e-4,
-                "ws[{ws_idx}] path {path:?}: split ratio mismatch: oracle={o_ratio} mux={m_ratio}",
-            );
-
-            let mut first_path = path.to_vec();
-            first_path.push(0);
-            let mut second_path = path.to_vec();
-            second_path.push(1);
-
-            compare_nodes(
-                o_world,
-                o_kids[0],
-                m_world,
-                m_kids[0],
-                &first_path,
-                ws_idx,
-                o_active,
-                m_active,
-                oracle_active_pos,
-                mux_active_pos,
-            );
-            compare_nodes(
-                o_world,
-                o_kids[1],
-                m_world,
-                m_kids[1],
-                &second_path,
-                ws_idx,
-                o_active,
-                m_active,
-                oracle_active_pos,
-                mux_active_pos,
-            );
-        } else {
-            panic!(
-                "ws[{ws_idx}] path {path:?}: entity is neither PaneMarker nor SplitNode (oracle={o_ent:?} mux={m_ent:?})",
-            );
-        }
-    }
-
-    /// True when two `SurfaceKind` values have the same discriminant.
-    fn surface_kind_discriminant_eq(a: &SurfaceKind, b: &SurfaceKind) -> bool {
-        matches!(
-            (a, b),
-            (SurfaceKind::Terminal, SurfaceKind::Terminal)
-                | (SurfaceKind::Extension { .. }, SurfaceKind::Extension { .. })
-                | (SurfaceKind::Browser { .. }, SurfaceKind::Browser { .. })
-        )
-    }
-
     #[test]
     fn materialized_bootstrap_has_expected_tree() {
         // The plugin inserts MuxState(Mux::new()) + materializes it at Startup.
@@ -1630,14 +1355,6 @@ mod tests {
     }
 
     fn make_mux_app() -> App {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(MultiplexerPlugin);
-        app.update();
-        app
-    }
-
-    fn make_oracle_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(MultiplexerPlugin);
@@ -1906,45 +1623,6 @@ mod tests {
         run_mux_op(&mut mux_app, |m| {
             let ws = m.active_workspace();
             m.close_workspace(ws).unwrap()
-        });
-    }
-
-    /// The oracle app's single (bootstrap) pane entity.
-    fn oracle_only_pane(app: &mut App) -> Entity {
-        app.world_mut()
-            .query_filtered::<Entity, With<PaneMarker>>()
-            .iter(app.world())
-            .next()
-            .expect("oracle pane must exist")
-    }
-
-    /// Oracle-side `split_pane` on the only pane, then settle.
-    fn oracle_split_only_pane(
-        app: &mut App,
-        side: crate::layout::Side,
-        orientation: SplitOrientation,
-    ) {
-        let target = oracle_only_pane(app);
-        app.world_mut()
-            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.split_pane(target, side, orientation).unwrap();
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.update();
-    }
-
-    /// Mux-side `split_pane` on the active pane, applied via the mirror.
-    fn mux_split_active_pane(
-        app: &mut App,
-        orientation: ozmux_mux::SplitOrientation,
-        side: ozmux_mux::Side,
-    ) {
-        run_mux_op(app, |m| {
-            let ws = m.active_workspace();
-            let pane = m.active_pane(ws).unwrap();
-            m.split_pane(pane, orientation, side, ozmux_mux::SurfaceKind::Terminal)
-                .unwrap()
         });
     }
 
@@ -2378,47 +2056,40 @@ mod tests {
     }
 
     #[test]
-    fn navigate_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn navigate_left_moves_active_pane_to_geometric_neighbor() {
+        // Horizontal split → p0 (left) and p1 (right). After the split p1 is
+        // active. Navigate Left: the active pane must become p0, and the mirror
+        // must still be consistent.
+        let mut app = make_mux_app();
 
-        // Horizontal split → p0 (left) and p1 (right). Active is p1 after split.
-        // Navigate Left: both apps should land on p0.
-        let oracle_p0 = oracle_only_pane(&mut oracle);
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-        );
-
-        // Oracle: navigate means setting active to the geometric Left neighbor of
-        // the current active pane (p1). In a 2-pane horizontal split that is p0.
-        oracle
-            .world_mut()
-            .run_system_once(
-                move |mut mux: crate::commands::MultiplexerCommands,
-                      ws_q: Query<Entity, With<WorkspaceMarker>>| {
-                    let ws = ws_q.iter().next().expect("workspace must exist");
-                    mux.set_active_pane(ws, oracle_p0).unwrap();
-                },
+        let p0 = only_pane(&mut app);
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let active = m.active_pane(ws).unwrap();
+            m.split_pane(
+                active,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
             )
-            .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+            .unwrap()
+        });
 
-        // Mux: navigate Left from the active pane (p1) → resolves to p0.
-        run_mux_op(&mut mux_app, |m| {
+        // p1 (the new pane) is now active; navigate Left should land on p0.
+        run_mux_op(&mut app, |m| {
             let ws = m.active_workspace();
             let active = m.active_pane(ws).unwrap();
             m.navigate(active, ozmux_mux::PaneDirection::Left).unwrap()
         });
 
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        let ws = active_workspace(&mut app);
+        assert_eq!(
+            app.world().get::<ActivePane>(ws).map(|a| a.0),
+            Some(p0),
+            "navigate Left must land on p0 (the left pane)"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
     }
 
     #[test]

@@ -183,8 +183,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// Uses `set_if_neq` semantics (the Mux already deduplicates no-op renames).
     pub fn rename_workspace(&mut self, workspace: Entity, name: String) -> MultiplexerResult<()> {
         let id = self
-            .mirror_read
-            .workspace_id_of(workspace)
+            .resolve_workspace(workspace)
             .ok_or(MultiplexerError::WorkspaceNotFound(workspace))?;
         let events = self
             .mux
@@ -201,7 +200,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// resolved pane sizes), then inserts or updates the `WorkspaceDimensions`
     /// component so the GUI keeps the cached cols/rows in sync.
     pub fn set_workspace_dimensions(&mut self, workspace: Entity, cols: u16, rows: u16) {
-        let Some(id) = self.mirror_read.workspace_id_of(workspace) else {
+        let Some(id) = self.resolve_workspace(workspace) else {
             return;
         };
         if let Ok(events) = self.mux.mux.set_workspace_size(id, cols, rows) {
@@ -218,8 +217,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// unused — the Mux derives the workspace from the pane's parent chain.
     pub fn set_active_pane(&mut self, _workspace: Entity, pane: Entity) -> MultiplexerResult<()> {
         let id = self
-            .mirror_read
-            .pane_id_of(pane)
+            .resolve_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
         let events = self
             .mux
@@ -236,17 +234,10 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// resulting events to keep the ECS mirror in sync.
     pub fn set_active_surface(&mut self, pane: Entity, surface: Entity) -> MultiplexerResult<()> {
         let pid = self
-            .mirror_read
-            .pane_id_of(pane)
+            .resolve_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
-        // NOTE: use the MuxState reverse map instead of the ECS query here so
-        // that a surface spawned in the same deferred-command batch (e.g.
-        // add_surface → set_active_surface in the same system) resolves
-        // correctly before its MuxSurfaceId component is flushed.
         let sid = self
-            .mux
-            .surface_id_of_entity(surface)
-            .or_else(|| self.mirror_read.surface_id_of(surface))
+            .resolve_surface(surface)
             .ok_or(MultiplexerError::SurfaceNotFound(surface))?;
         let events = self
             .mux
@@ -271,8 +262,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         kind: SurfaceKind,
     ) -> MultiplexerResult<SplitOutcome> {
         let target = self
-            .mirror_read
-            .pane_id_of(target_pane)
+            .resolve_pane(target_pane)
             .ok_or(MultiplexerError::PaneNotFound(target_pane))?;
         let events = self
             .mux
@@ -312,8 +302,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// repoints `ActivePane` to the survivor if the closed pane was active.
     pub fn close_pane(&mut self, pane: Entity) -> MultiplexerResult<()> {
         let id = self
-            .mirror_read
-            .pane_id_of(pane)
+            .resolve_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
         let events = self
             .mux
@@ -334,15 +323,13 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         offset: SwapOffset,
     ) -> MultiplexerResult<SwapOutcome> {
         let id = self
-            .mirror_read
-            .pane_id_of(pane)
+            .resolve_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
         let ws_ent = self
             .workspace_of_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
         let ws_id = self
-            .mirror_read
-            .workspace_id_of(ws_ent)
+            .resolve_workspace(ws_ent)
             .ok_or(MultiplexerError::WorkspaceNotFound(ws_ent))?;
         let ordered = self.mux.mux.ordered_panes(ws_id).unwrap_or_default();
         let other_id = pane_neighbor(&ordered, id, offset);
@@ -366,8 +353,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// `ActiveSurface` — call `set_active_surface` separately if needed.
     pub fn add_surface(&mut self, pane: Entity, kind: SurfaceKind) -> Entity {
         let id = self
-            .mirror_read
-            .pane_id_of(pane)
+            .resolve_pane(pane)
             .expect("add_surface: pane must be mapped");
         let events = self
             .mux
@@ -392,8 +378,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         orientation: SplitOrientation,
     ) -> MultiplexerResult<Entity> {
         let sid = self
-            .mirror_read
-            .surface_id_of(surface)
+            .resolve_surface(surface)
             .ok_or(MultiplexerError::SurfaceNotFound(surface))?;
         // NOTE: Mux arg order is (surface, ORIENTATION, SIDE) — reversed vs this
         // method's (surface, side, orientation).
@@ -423,7 +408,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// Surfaces), then applies the resulting events to the ECS mirror.
     /// Silently returns if `workspace` is not a known Mux workspace.
     pub fn close_workspace(&mut self, workspace: Entity) {
-        let Some(id) = self.mirror_read.workspace_id_of(workspace) else {
+        let Some(id) = self.resolve_workspace(workspace) else {
             return;
         };
         let Ok(events) = self.mux.mux.close_workspace(id) else {
@@ -440,8 +425,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// moves `AttachedWorkspace` separately.
     pub fn select_workspace(&mut self, workspace: Entity) -> MultiplexerResult<()> {
         let id = self
-            .mirror_read
-            .workspace_id_of(workspace)
+            .resolve_workspace(workspace)
             .ok_or(MultiplexerError::WorkspaceNotFound(workspace))?;
         let events = self
             .mux
@@ -464,8 +448,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         amount: u16,
     ) -> MultiplexerResult<ResizePaneOutcome> {
         let id = self
-            .mirror_read
-            .pane_id_of(pane)
+            .resolve_pane(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
         let events = self
             .mux
@@ -520,6 +503,31 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .get(pane)
             .into_iter()
             .flat_map(|s| s.iter())
+    }
+
+    /// Resolves a pane `Entity` to its `PaneId` via the immediate reverse map
+    /// first (so a pane spawned earlier in the same deferred-command batch resolves
+    /// before its `MuxPaneId` component flushes), then the ECS query.
+    fn resolve_pane(&self, pane: Entity) -> Option<ozmux_mux::PaneId> {
+        self.mux
+            .pane_id_of_entity(pane)
+            .or_else(|| self.mirror_read.pane_id_of(pane))
+    }
+
+    /// Resolves a workspace `Entity` to its `WorkspaceId` via the immediate
+    /// reverse map first, then the ECS query.
+    fn resolve_workspace(&self, workspace: Entity) -> Option<ozmux_mux::WorkspaceId> {
+        self.mux
+            .workspace_id_of_entity(workspace)
+            .or_else(|| self.mirror_read.workspace_id_of(workspace))
+    }
+
+    /// Resolves a surface `Entity` to its `SurfaceId` via the immediate
+    /// reverse map first, then the ECS query.
+    fn resolve_surface(&self, surface: Entity) -> Option<ozmux_mux::SurfaceId> {
+        self.mux
+            .surface_id_of_entity(surface)
+            .or_else(|| self.mirror_read.surface_id_of(surface))
     }
 
     /// Inserts a `Split` node into the target's layout slot, reparents the
@@ -1443,6 +1451,43 @@ mod tests {
         assert!(
             world.get_entity(parked).is_err(),
             "parked surface cascade-despawned via Surfaces(linked_spawn)"
+        );
+    }
+
+    #[test]
+    fn same_batch_add_surface_and_set_active_pane_resolve_via_reverse_map() {
+        // split_pane returns a new pane entity whose MuxPaneId component is
+        // deferred (not yet flushed). A second run_system_once that calls
+        // add_surface and set_active_pane on that entity WITHOUT a flush in
+        // between must still succeed — resolved via the immediate reverse map.
+        // Before Fix 1a-1c, pane_id_of returned None (component not flushed),
+        // causing add_surface to panic and set_active_pane to return PaneNotFound.
+        let mut world = make_world();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        world.flush();
+        let p2 = world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(outcome.pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split_pane must succeed")
+            })
+            .unwrap();
+        // NOTE: intentionally no world.flush() here — p2's MuxPaneId component is
+        // not yet committed to the ECS, so only the reverse map can resolve it.
+        world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                let _s = mux.add_surface(p2, SurfaceKind::Terminal);
+                mux.set_active_pane(outcome.workspace, p2)
+                    .expect("set_active_pane must succeed without prior flush");
+            })
+            .expect("run_system_once must succeed");
+        world.flush();
+        let state = world.resource::<MuxState>();
+        let result = crate::mirror::mirror_matches(&world, state);
+        assert!(
+            result.is_ok(),
+            "mirror_matches after same-batch ops: {result:?}"
         );
     }
 }
