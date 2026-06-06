@@ -1,9 +1,7 @@
-//! Focus-pane shortcut action. Resolves the adjacent pane via the entity-tree
-//! layout and promotes it to `ActivePane` on the workspace.
+//! Focus-pane shortcut action. Moves pane focus via the Mux's geometric
+//! navigation and promotes the neighbor to `ActivePane` on the workspace.
 use bevy::prelude::*;
-use ozmux_multiplexer::{
-    LayoutTree, MultiplexerCommands, PaneDirection, WorkspaceUiSubtree, pane_in_direction,
-};
+use ozmux_multiplexer::{MultiplexerCommands, PaneDirection};
 
 /// Registers the `apply_focus_pane` observer for `FocusPaneActionEvent`.
 pub struct FocusPaneActionPlugin;
@@ -23,12 +21,7 @@ pub struct FocusPaneActionEvent {
     pub direction: PaneDirection,
 }
 
-fn apply_focus_pane(
-    trigger: On<FocusPaneActionEvent>,
-    mut mux: MultiplexerCommands,
-    tree: LayoutTree,
-    subtrees: Query<&WorkspaceUiSubtree>,
-) {
+fn apply_focus_pane(trigger: On<FocusPaneActionEvent>, mut mux: MultiplexerCommands) {
     let event = trigger.event();
     let workspace = event.workspace;
     let direction = event.direction;
@@ -38,22 +31,8 @@ fn apply_focus_pane(
         return;
     };
 
-    let Ok(subtree) = subtrees.get(workspace) else {
-        tracing::debug!(target: "ozmux_gui::commands", "FocusPane: no WorkspaceUiSubtree on workspace {workspace:?}");
-        return;
-    };
-    let root = subtree.0;
-
-    match pane_in_direction(&tree, root, from, direction, |_| 0) {
-        Ok(Some(target)) => {
-            if let Err(e) = mux.set_active_pane(workspace, target) {
-                tracing::debug!(target: "ozmux_gui::commands", "FocusPane: set_active_pane failed: {e:?}");
-            }
-        }
-        Ok(None) => {}
-        Err(e) => {
-            tracing::debug!(target: "ozmux_gui::commands", "FocusPane: pane_in_direction error: {e:?}");
-        }
+    if let Err(e) = mux.navigate(from, direction) {
+        tracing::debug!(target: "ozmux_gui::commands", "FocusPane: navigate failed: {e:?}");
     }
 }
 

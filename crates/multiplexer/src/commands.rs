@@ -406,6 +406,23 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(())
     }
 
+    /// Moves the active pane to `pane`'s neighbor in `direction` via the Mux's
+    /// geometric navigation (applies `ActivePaneChanged`; no-op if no neighbor).
+    pub fn navigate(&mut self, pane: Entity, direction: PaneDirection) -> MultiplexerResult<()> {
+        let id = self
+            .resolve_pane(pane)
+            .ok_or(MultiplexerError::PaneNotFound(pane))?;
+        let events = self
+            .mux
+            .mux
+            .navigate(id, ecs_direction_to_mux(direction))
+            .map_err(|e| crate::mirror::lift(&self.mux, e))?;
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+        }
+        Ok(())
+    }
+
     /// Resize the split that controls `pane`'s extent in the given
     /// direction by `amount` cells through the Mux. Returns `NoOp` when
     /// the workspace has no size set or there is no matching ancestor split.
