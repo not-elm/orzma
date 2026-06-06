@@ -8,6 +8,7 @@ mod configs;
 mod extension_manager;
 mod extension_render;
 mod font;
+mod geometry_feed;
 mod input;
 mod multiplexer;
 mod system_set;
@@ -19,6 +20,7 @@ use crate::browser_render::OzmuxBrowserRenderPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::extension_manager::ExtensionManagerPlugin;
 use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
+use crate::geometry_feed::GeometryFeedPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
@@ -79,5 +81,6 @@ fn main() {
             ExtensionManagerPlugin::new(endpoints),
             OzmuxActionPlugin,
         ))
+        .add_plugins(GeometryFeedPlugin)
         .run();
 }
