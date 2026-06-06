@@ -4,9 +4,10 @@
 
 use crate::geometry::Rect;
 use crate::id::PaneId;
+use serde::{Deserialize, Serialize};
 
 /// Cardinal direction for pane-focus movement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PaneDirection {
     /// Move focus toward the top of the workspace.
     Up,
@@ -54,7 +55,7 @@ impl PaneDirection {
 
 /// Cycle direction for operations that traverse the depth-first leaf order
 /// (`cycle_pane`).
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CycleDirection {
     /// Move to the next pane in DFS order (wraps at end).
     Next,
@@ -64,7 +65,7 @@ pub enum CycleDirection {
 
 /// Direction of a `swap_pane` operation in the depth-first leaf traversal of
 /// the layout tree.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SwapOffset {
     /// Swap with the previous pane (wraps around at the start).
     Prev,
@@ -147,4 +148,30 @@ fn find_in_direction(
         return Some(p);
     }
     pick_best(panes, from, me, direction, direction.wrap_edge(), &score)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CycleDirection, PaneDirection, SwapOffset};
+
+    #[test]
+    fn direction_enums_serde_round_trip() {
+        for d in [
+            PaneDirection::Up,
+            PaneDirection::Down,
+            PaneDirection::Left,
+            PaneDirection::Right,
+        ] {
+            let j = serde_json::to_string(&d).unwrap();
+            assert_eq!(d, serde_json::from_str::<PaneDirection>(&j).unwrap());
+        }
+        assert_eq!(
+            SwapOffset::Next,
+            serde_json::from_str(&serde_json::to_string(&SwapOffset::Next).unwrap()).unwrap()
+        );
+        assert_eq!(
+            CycleDirection::Prev,
+            serde_json::from_str(&serde_json::to_string(&CycleDirection::Prev).unwrap()).unwrap()
+        );
+    }
 }

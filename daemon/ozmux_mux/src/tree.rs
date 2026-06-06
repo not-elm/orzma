@@ -15,7 +15,7 @@ pub enum SplitOrientation {
 }
 
 /// Which side of a target a newly inserted sibling lands on.
-#[derive(Clone, Copy, Debug, Default, Hash, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Side {
     /// Before the target (left/top).
     Before,
