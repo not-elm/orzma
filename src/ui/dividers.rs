@@ -141,6 +141,11 @@ fn sync_split_dividers(
                 SplitDivider {
                     split: split_entity,
                 },
+                // NOTE: dividers are absolute-positioned in `WorkspaceUiRoot`'s
+                // coordinate space, which must stay anchored at the window
+                // origin (0,0): it is the first child of the Column `UiRoot` and
+                // the status bar appends BELOW it. Never insert a preceding
+                // sibling under `UiRoot`, or every divider shifts.
                 ChildOf(root),
             ));
         }

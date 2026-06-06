@@ -26,7 +26,7 @@ pub use components::{
 };
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};
-pub use layout::{Side, SplitOrientation, split_ratio};
+pub use layout::{Side, SplitOrientation};
 pub use mirror::{
     MultiplexerStartupSet, MuxPaneId, MuxSplitId, MuxState, MuxSurfaceId, MuxWorkspaceId,
 };

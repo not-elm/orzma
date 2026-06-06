@@ -25,17 +25,6 @@ pub enum Side {
     After,
 }
 
-/// Normalize a `(lhs_weight, rhs_weight)` pair to a `[0, 1]` ratio (the lhs
-/// fraction). Returns `0.5` when both are zero.
-pub fn split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
-    let total = lhs_weight + rhs_weight;
-    if total == 0.0 {
-        0.5
-    } else {
-        lhs_weight / total
-    }
-}
-
 /// The `Node` + `SplitNode` pair for a split container at `orientation`.
 ///
 /// Both axes are `Val::Auto` so taffy fits the container to the sum of its
