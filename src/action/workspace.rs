@@ -154,17 +154,16 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxWorkspaceActionPlugin);
+        app.update();
         let workspace = app
             .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_workspace(Some("default".into()))
-            })
-            .unwrap()
-            .workspace;
-        app.world_mut().flush();
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(app.world())
+            .next()
+            .expect("Mux-seeded workspace must exist after Startup");
         app.world_mut()
             .entity_mut(workspace)
-            .insert(AttachedWorkspace);
+            .insert((Name::new("default"), AttachedWorkspace));
         (app, workspace)
     }
 

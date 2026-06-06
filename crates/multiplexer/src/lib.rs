@@ -28,7 +28,9 @@ pub use components::{
 pub use direction::{CycleDirection, PaneDirection, pane_in_direction};
 pub use error::{MultiplexerError, MultiplexerResult};
 pub use layout::{LayoutTree, Rect, Side, SplitOrientation, split_ratio};
-pub use mirror::{MuxPaneId, MuxSplitId, MuxState, MuxSurfaceId, MuxWorkspaceId};
+pub use mirror::{
+    MultiplexerStartupSet, MuxPaneId, MuxSplitId, MuxState, MuxSurfaceId, MuxWorkspaceId,
+};
 pub use plugin::MultiplexerPlugin;
 pub use resize::ResizePaneOutcome;
 pub use swap::{SwapOffset, SwapOutcome};

@@ -12,6 +12,7 @@ use crate::components::{
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
 use crate::layout::{LayoutTree, Side, SplitOrientation};
+use crate::mirror::{MirrorReadCtx, MuxState, apply_event, created_workspace_id};
 use crate::resize::{ResizePaneOutcome, resize_split_for_pane};
 use crate::swap::{SwapOffset, SwapOutcome};
 use bevy::ecs::system::SystemParam;
@@ -58,6 +59,8 @@ impl WorkspaceNameCounter {
 pub struct MultiplexerCommands<'w, 's> {
     commands: Commands<'w, 's>,
     counter: ResMut<'w, WorkspaceNameCounter>,
+    mux: ResMut<'w, MuxState>,
+    mirror_read: MirrorReadCtx<'w, 's>,
     workspaces: Query<
         'w,
         's,
@@ -155,19 +158,53 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         }
     }
 
-    /// Mints a workspace via `create_workspace`, attaches `AttachedWorkspace` +
-    /// `WorkspaceCreatedAt`, auto-named `"workspace{n}"`.
-    ///
-    /// The layout-root node (stored in `WorkspaceUiSubtree`) is spawned inside
-    /// `create_workspace`.
+    /// Mints a workspace via `create_workspace` AND through the authoritative
+    /// Mux, attaches `AttachedWorkspace` + `WorkspaceCreatedAt`, auto-named
+    /// `"workspace{n}"`. The layout-root node (stored in `WorkspaceUiSubtree`)
+    /// is spawned by `apply_event` when it processes the `WorkspaceCreated` event.
     pub fn spawn_attached_workspace(&mut self) -> Entity {
+        let events = self
+            .mux
+            .mux
+            .new_workspace()
+            .expect("new_workspace must succeed");
+        let new_id =
+            created_workspace_id(&events).expect("new_workspace must emit WorkspaceCreated");
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+        }
         let n = self.counter.next();
-        let WorkspaceCreated { workspace, .. } =
-            self.create_workspace(Some(format!("workspace{n}")));
+        let _ = self
+            .mux
+            .mux
+            .rename_workspace(new_id, format!("workspace{n}"));
+        let ws_ent = self.mux.workspaces[new_id];
+        self.commands
+            .entity(ws_ent)
+            .insert(Name::new(format!("workspace{n}")));
+        self.attach_workspace_named(ws_ent, n);
+        ws_ent
+    }
+
+    /// Attaches GUI state to the Mux-seeded initial workspace (renames it
+    /// `"workspace1"` through the Mux so the Mux and ECS agree). Called once
+    /// at bootstrap, after `materialize_mux_snapshot` has realized the tree.
+    pub fn attach_initial_workspace(&mut self) -> Entity {
+        let id = self.mux.mux.active_workspace();
+        let _ = self.mux.mux.rename_workspace(id, "workspace1".to_string());
+        let ws_ent = self.mux.workspaces[id];
+        self.commands.entity(ws_ent).insert(Name::new("workspace1"));
+        let n = self.counter.next();
+        self.attach_workspace_named(ws_ent, n);
+        ws_ent
+    }
+
+    /// Applies the GUI-attach state (`AttachedWorkspace` + `WorkspaceCreatedAt(n)`)
+    /// to a workspace entity already present in the ECS mirror.
+    fn attach_workspace_named(&mut self, workspace: Entity, n: u32) {
         self.commands
             .entity(workspace)
             .insert((AttachedWorkspace, WorkspaceCreatedAt(n)));
-        workspace
     }
 
     /// Mutate the Workspace's `Name` component. Uses `set_if_neq` so a
@@ -513,6 +550,8 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::WorkspaceMarker;
+    use crate::mirror::MuxState;
     use crate::plugin::MultiplexerPlugin;
     use bevy::ecs::system::RunSystemOnce;
 
@@ -540,6 +579,39 @@ mod tests {
         res.0.extend(query.iter());
     }
 
+    /// Builds an App with `MultiplexerPlugin` (which inserts `MuxState` and runs the
+    /// Startup materialize), ticks once so Startup fires, and returns the App plus
+    /// the Mux-seeded initial workspace entity.
+    #[allow(dead_code)]
+    pub(crate) fn mux_backed_app() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.update();
+        let ws = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(app.world())
+            .next()
+            .expect("initial workspace must exist after Startup");
+        (app, ws)
+    }
+
+    /// Builds a `World` pre-loaded with `WorkspaceNameCounter` and a materialized
+    /// `MuxState`, so that `run_system_once` with `MultiplexerCommands` succeeds.
+    fn make_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        world.insert_resource(MuxState::new(ozmux_mux::Mux::new()));
+        world
+            .run_system_once(|mut commands: Commands, mut state: ResMut<MuxState>| {
+                state.materialize_snapshot(&mut commands);
+            })
+            .unwrap();
+        world.flush();
+        world
+    }
+
     /// Builds a minimal `App` with capture systems for change-detection assertions.
     fn make_change_detection_app() -> App {
         let mut app = App::new();
@@ -559,6 +631,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(MultiplexerPlugin);
+        app.update();
 
         let workspace = app
             .world_mut()
@@ -595,6 +668,7 @@ mod tests {
     #[test]
     fn add_and_remove_surface_flag_changed_children_on_pane() {
         let mut app = make_change_detection_app();
+        app.update();
 
         let outcome = app
             .world_mut()
@@ -641,6 +715,7 @@ mod tests {
     #[test]
     fn set_active_surface_flags_changed_only_on_real_change() {
         let mut app = make_change_detection_app();
+        app.update();
 
         let outcome = app
             .world_mut()
@@ -695,8 +770,7 @@ mod tests {
 
     #[test]
     fn create_workspace_spawns_root_pane_surface_tree() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_workspace(Some("test".into()))
@@ -718,7 +792,6 @@ mod tests {
             .expect("subtree")
             .0;
 
-        // Layout-root node's single child is the pane.
         let root_kids: Vec<Entity> = world
             .get::<Children>(root)
             .map(|c| c.iter().collect())
@@ -756,8 +829,7 @@ mod tests {
 
     #[test]
     fn workspace_of_pane_uses_owning_workspace_not_childof() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -781,8 +853,7 @@ mod tests {
 
     #[test]
     fn rename_workspace_mutates_name_and_only_fires_changed_on_actual_change() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| {
                 mux.create_workspace(Some("before".into()))
@@ -804,8 +875,7 @@ mod tests {
 
     #[test]
     fn set_workspace_dimensions_inserts_or_updates_component() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -826,8 +896,7 @@ mod tests {
 
     #[test]
     fn set_active_pane_updates_active_pane_pointer() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -855,8 +924,7 @@ mod tests {
 
     #[test]
     fn set_active_surface_updates_active_surface_pointer() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -883,8 +951,7 @@ mod tests {
 
     #[test]
     fn split_pane_inserts_split_reparents_target_and_sets_grows() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -932,8 +999,7 @@ mod tests {
 
     #[test]
     fn split_pane_before_orders_new_then_target() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -960,8 +1026,7 @@ mod tests {
 
     #[test]
     fn close_pane_promotes_sibling_into_slot_and_despawns_split() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1001,8 +1066,7 @@ mod tests {
 
     #[test]
     fn close_last_pane_errors() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1018,8 +1082,7 @@ mod tests {
 
     #[test]
     fn swap_pane_swaps_positions_and_slot_grows() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1050,11 +1113,8 @@ mod tests {
         world.flush();
 
         assert_eq!(result, SwapOutcome::Swapped { other_pane: other });
-        // Positions swapped: split children are now [other, outcome.pane].
         let kids: Vec<Entity> = world.get::<Children>(split).unwrap().iter().collect();
         assert_eq!(kids, vec![other, outcome.pane]);
-        // Slot-pinning: slot A (index 0) keeps grow 3.0 (now holding `other`),
-        // slot B (index 1) keeps grow 1.0 (now holding outcome.pane).
         assert_eq!(
             world.get::<Node>(other).unwrap().flex_grow,
             3.0,
@@ -1069,8 +1129,7 @@ mod tests {
 
     #[test]
     fn swap_pane_single_pane_is_noop() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1085,8 +1144,7 @@ mod tests {
 
     #[test]
     fn add_surface_spawns_surface_child_of_pane() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1106,8 +1164,7 @@ mod tests {
 
     #[test]
     fn close_workspace_despawns_workspace_and_descendants() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1132,8 +1189,7 @@ mod tests {
 
     #[test]
     fn break_surface_to_pane_creates_new_pane_with_moved_surface() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1165,8 +1221,7 @@ mod tests {
 
     #[test]
     fn break_surface_to_pane_returns_error_when_source_pane_has_only_one_surface() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1188,8 +1243,7 @@ mod tests {
     #[test]
     fn split_pane_with_surface_seeds_extension_surface() {
         use std::path::PathBuf;
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1244,8 +1298,7 @@ mod tests {
 
     #[test]
     fn workspaces_active_pane_returns_bootstrap_pane() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1259,8 +1312,7 @@ mod tests {
 
     #[test]
     fn panes_active_surface_returns_bootstrap_surface() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1272,8 +1324,7 @@ mod tests {
 
     #[test]
     fn resize_pane_returns_noop_without_workspace_dimensions() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1287,8 +1338,7 @@ mod tests {
 
     #[test]
     fn resize_pane_returns_noop_for_single_pane_workspace() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1308,8 +1358,7 @@ mod tests {
 
     #[test]
     fn add_surface_stamps_surfaceof_and_appears_in_surfaces() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -1335,8 +1384,7 @@ mod tests {
 
     #[test]
     fn closing_pane_despawns_parked_surface_via_linked_spawn() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();

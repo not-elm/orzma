@@ -17,6 +17,19 @@ use ozmux_mux::{LayoutNode, MuxError, MuxEvent, NodeId, PaneId, SplitId, Surface
 use slotmap::SecondaryMap;
 use std::collections::HashSet;
 
+/// Startup ordering seam: `Materialize` builds the ECS mirror from `MuxState`
+/// before app-side bootstrap attaches the initial workspace.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MultiplexerStartupSet {
+    /// Realizes the Mux's initial tree into the ECS mirror.
+    Materialize,
+}
+
+/// Startup system: realizes `MuxState`'s current tree into the ECS mirror.
+pub(crate) fn materialize_mux_snapshot(mut commands: Commands, mut state: ResMut<MuxState>) {
+    state.materialize_snapshot(&mut commands);
+}
+
 /// Authoritative `Mux` plus the reverse maps (`MuxId` → `Entity`). Forward
 /// lookup (`Entity` → `MuxId`) is the `Mux*Id` components below.
 #[derive(Resource)]
@@ -806,7 +819,6 @@ pub(crate) fn created_pane_id(events: &[MuxEvent]) -> Option<PaneId> {
 }
 
 /// Extracts the `WorkspaceId` from the first `WorkspaceCreated` event in `events`, or `None`.
-#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
 pub(crate) fn created_workspace_id(events: &[MuxEvent]) -> Option<WorkspaceId> {
     events.iter().find_map(|e| match e {
         MuxEvent::WorkspaceCreated { workspace, .. } => Some(*workspace),
@@ -1382,39 +1394,10 @@ mod tests {
 
     #[test]
     fn materialize_matches_create_workspace_bootstrap() {
-        // Oracle app: MultiplexerPlugin + create_workspace.
-        // NOTE: Mux::new() names its initial workspace "0" (created_at=0); match that name.
-        let mut oracle = App::new();
-        oracle.add_plugins(MinimalPlugins);
-        oracle.add_plugins(MultiplexerPlugin);
-
-        oracle
-            .world_mut()
-            .run_system_once(|mut mux: crate::commands::MultiplexerCommands| {
-                mux.create_workspace(Some("0".to_owned()));
-            })
-            .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
-
-        // Mux app: insert MuxState and run materialize_snapshot.
-        let mut mux_app = App::new();
-        mux_app.add_plugins(MinimalPlugins);
-        mux_app.add_plugins(MultiplexerPlugin);
-
-        mux_app
-            .world_mut()
-            .insert_resource(MuxState::new(ozmux_mux::Mux::new()));
-
-        mux_app
-            .world_mut()
-            .run_system_once(|mut commands: Commands, mut state: ResMut<MuxState>| {
-                state.materialize_snapshot(&mut commands);
-            })
-            .unwrap();
-        mux_app.world_mut().flush();
-        mux_app.update();
-
+        // Both apps use MultiplexerPlugin, which now auto-materializes via Startup.
+        // Oracle and Mux apps both start from the same Mux::new() baseline.
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
         assert_layout_equiv(&mut oracle, &mut mux_app);
     }
 
@@ -1423,30 +1406,11 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(MultiplexerPlugin);
-
-        app.world_mut()
-            .insert_resource(MuxState::new(ozmux_mux::Mux::new()));
-
-        app.world_mut()
-            .run_system_once(|mut commands: Commands, mut state: ResMut<MuxState>| {
-                state.materialize_snapshot(&mut commands);
-            })
-            .unwrap();
-        app.world_mut().flush();
         app.update();
-
-        let state = app.world().resource::<MuxState>();
-        // NOTE: MuxState must be cloned out first to avoid a shared borrow on
-        // world while also passing world — we borrow state fields directly.
-        let ws = state.mux.active_workspace();
-        let ws_ent = state.workspaces[ws];
-        let _ = (ws, ws_ent);
 
         let result = {
             let world = app.world();
             let s = world.resource::<MuxState>();
-            // SAFETY: split borrow — we read state then immediately pass both
-            // immutable refs; Rust allows two shared borrows of different fields.
             mirror_matches_with(world, s)
         };
         assert!(result.is_ok(), "mirror_matches failed: {result:?}");
@@ -1468,14 +1432,9 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(MultiplexerPlugin);
+        // NOTE: override the plugin-inserted MuxState with the pre-split Mux so
+        // Startup's materialize_mux_snapshot realizes the split tree.
         app.world_mut().insert_resource(MuxState::new(mux));
-
-        app.world_mut()
-            .run_system_once(|mut commands: Commands, mut state: ResMut<MuxState>| {
-                state.materialize_snapshot(&mut commands);
-            })
-            .unwrap();
-        app.world_mut().flush();
         app.update();
 
         // Find a SplitNode entity and corrupt its first child's flex_grow.
@@ -1554,14 +1513,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(MultiplexerPlugin);
-        app.world_mut()
-            .insert_resource(MuxState::new(ozmux_mux::Mux::new()));
-        app.world_mut()
-            .run_system_once(|mut commands: Commands, mut state: ResMut<MuxState>| {
-                state.materialize_snapshot(&mut commands);
-            })
-            .unwrap();
-        app.world_mut().flush();
         app.update();
         app
     }
@@ -1570,12 +1521,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(MultiplexerPlugin);
-        app.world_mut()
-            .run_system_once(|mut mux: crate::commands::MultiplexerCommands| {
-                mux.create_workspace(Some("0".to_owned()));
-            })
-            .unwrap();
-        app.world_mut().flush();
         app.update();
         app
     }
@@ -1585,11 +1530,11 @@ mod tests {
         let mut oracle = make_oracle_app();
         let mut mux_app = make_mux_app();
 
-        // Oracle: spawn a second attached workspace.
+        // Oracle: spawn a second workspace (matching the Mux's naming).
         oracle
             .world_mut()
             .run_system_once(|mut mux: crate::commands::MultiplexerCommands| {
-                mux.create_workspace(Some("1".to_owned()));
+                mux.create_workspace(Some("default".to_owned()));
             })
             .unwrap();
         oracle.world_mut().flush();

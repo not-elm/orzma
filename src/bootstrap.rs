@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
-use ozmux_multiplexer::MultiplexerCommands;
+use ozmux_multiplexer::{MultiplexerCommands, MultiplexerStartupSet};
 
 /// Bevy Plugin that registers the `bootstrap` system in the `Startup`
 /// schedule.
@@ -13,12 +13,15 @@ pub struct OzmuxBootstrapPlugin;
 
 impl Plugin for OzmuxBootstrapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (bootstrap, insert_initial_cursor_icon));
+        app.add_systems(
+            Startup,
+            (bootstrap, insert_initial_cursor_icon).after(MultiplexerStartupSet::Materialize),
+        );
     }
 }
 
 pub(crate) fn bootstrap(mut mux: MultiplexerCommands) {
-    let _ = mux.spawn_attached_workspace();
+    let _ = mux.attach_initial_workspace();
 }
 
 /// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
