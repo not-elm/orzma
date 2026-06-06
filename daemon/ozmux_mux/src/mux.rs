@@ -422,8 +422,8 @@ impl Mux {
         Ok(events)
     }
 
-    /// Store the workspace's terminal size. Emits a `PaneResized` for every
-    /// pane whose resolved cell size changed.
+    /// Store the workspace's terminal size. Emits `WorkspaceResized` followed by
+    /// a `PaneResized` for every pane whose resolved cell size changed.
     pub fn set_workspace_size(
         &mut self,
         workspace: WorkspaceId,
@@ -435,7 +435,11 @@ impl Mux {
         self.workspaces[workspace].size = Some((cols, rows));
         let after = self.resolve_sizes(workspace, cols, rows)?;
 
-        let mut events = Vec::new();
+        let mut events = vec![MuxEvent::WorkspaceResized {
+            workspace,
+            cols,
+            rows,
+        }];
         for (pane, (c, r)) in after {
             let changed = before
                 .iter()
@@ -731,6 +735,15 @@ impl Mux {
             *active_surface = self.panes[new_pane].active_surface;
         }
 
+        // NOTE: split_pane_empty builds LayoutChanged while new_pane still holds
+        // the bootstrap Terminal surface; the moved surface may have a different
+        // kind. Patch the new_pane leaf in the LayoutChanged subtree to match the
+        // corrected PaneCreated surface kind so the wire is self-consistent.
+        let moved_kind = self.surfaces[surface].kind.clone();
+        if let MuxEvent::LayoutChanged { subtree, .. } = &mut events[1] {
+            patch_pane_kind_in_layout(subtree, new_pane, &moved_kind);
+        }
+
         self.panes[source_pane].surfaces.retain(|s| *s != surface);
         let src_active = self.panes[source_pane].active_surface;
         if src_active == surface {
@@ -816,7 +829,10 @@ impl Mux {
         Ok(vec![MuxEvent::SurfaceCwdChanged { surface, cwd }])
     }
 
-    /// Returns all session ids in creation order.
+    /// Returns all session ids sorted by insertion order.
+    ///
+    /// Order is stable only because no public API removes sessions; if session
+    /// removal is ever added, callers must not rely on index-based ordering.
     pub fn sessions(&self) -> Vec<SessionId> {
         // NOTE: SlotMap iteration order is not guaranteed to match insertion
         // order. The active session is the only session created by `new()`, and
@@ -1311,6 +1327,25 @@ impl Mux {
                 }
             })
             .collect()
+    }
+}
+
+/// Recursively walk `node` and set `surface_kind` on the `Pane` leaf with the
+/// given `id`. Used by `break_surface_to_pane` to patch the `LayoutChanged`
+/// subtree produced by `split_pane_empty` (which was built with the bootstrap
+/// Terminal surface kind) to reflect the moved surface's actual kind.
+fn patch_pane_kind_in_layout(node: &mut LayoutNode, target: PaneId, kind: &SurfaceKind) {
+    match node {
+        LayoutNode::Pane {
+            id, surface_kind, ..
+        } if *id == target => {
+            *surface_kind = kind.clone();
+        }
+        LayoutNode::Pane { .. } => {}
+        LayoutNode::Split { first, second, .. } => {
+            patch_pane_kind_in_layout(first, target, kind);
+            patch_pane_kind_in_layout(second, target, kind);
+        }
     }
 }
 
@@ -2082,10 +2117,16 @@ mod tests {
             rows: 40,
         }));
 
-        assert_eq!(
-            mux.set_workspace_size(ws, 120, 40).unwrap(),
-            vec![],
-            "re-setting the same size emits nothing"
+        let re_events = mux.set_workspace_size(ws, 120, 40).unwrap();
+        assert!(
+            !re_events
+                .iter()
+                .any(|e| matches!(e, MuxEvent::PaneResized { .. })),
+            "re-setting the same size emits no PaneResized"
+        );
+        assert!(
+            re_events.iter().any(|e| matches!(e, MuxEvent::WorkspaceResized { workspace: w, cols: 120, rows: 40 } if *w == ws)),
+            "WorkspaceResized is always emitted"
         );
     }
 

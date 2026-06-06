@@ -356,6 +356,10 @@ pub fn apply_event(
         | MuxEvent::WorkspaceSelected { .. }
         | MuxEvent::SurfaceCwdChanged { .. } => {}
 
+        // NOTE: the ECS app derives workspace size from the window/OS feed, not
+        // from this event. WorkspaceResized is consumed here for exhaustiveness.
+        MuxEvent::WorkspaceResized { .. } => {}
+
         // NOTE: PaneCreated (processed first) already reparents the surface via
         // `SurfaceOf(pane_ent)`, which Bevy's relationship system uses to update
         // the source pane's Surfaces collection automatically. SurfaceMoved is

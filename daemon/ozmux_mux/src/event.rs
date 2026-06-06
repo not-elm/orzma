@@ -102,6 +102,15 @@ pub enum MuxEvent {
         /// The new first-child fraction.
         ratio: f32,
     },
+    /// A workspace's total terminal size changed.
+    WorkspaceResized {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// New total columns.
+        cols: u16,
+        /// New total rows.
+        rows: u16,
+    },
     /// A pane's resolved cell size changed.
     PaneResized {
         /// The pane.

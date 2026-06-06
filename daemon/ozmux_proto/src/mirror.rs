@@ -81,6 +81,25 @@ impl ClientMirror {
                     active_surface: Some(*active_surface),
                 };
                 if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
+                    // NOTE: when the workspace's pane list is empty, this is the
+                    // workspace's root pane (created by new_workspace). new_workspace
+                    // emits no LayoutChanged, so we must establish the root layout here.
+                    // A split's PaneCreated arrives on a non-empty workspace and is
+                    // positioned by the subsequent LayoutChanged — do not overwrite there.
+                    if ws.panes.is_empty() {
+                        let surface_kind = surfaces
+                            .iter()
+                            .find(|e| e.surface == *active_surface)
+                            .or_else(|| surfaces.first())
+                            .map(|e| e.kind.clone())
+                            .unwrap_or(ozmux_mux::SurfaceKind::Terminal);
+                        ws.layout = LayoutNode::Pane {
+                            id: *pane,
+                            surface_kind,
+                            cols: 0,
+                            rows: 0,
+                        };
+                    }
                     ws.panes.push(pane_snap);
                 }
             }
@@ -117,6 +136,16 @@ impl ClientMirror {
             MuxEvent::LayoutRatioChanged { split, ratio } => {
                 for ws in &mut self.session.workspaces {
                     set_split_ratio(&mut ws.layout, *split, *ratio);
+                }
+            }
+
+            MuxEvent::WorkspaceResized {
+                workspace,
+                cols,
+                rows,
+            } => {
+                if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
+                    ws.size = Some((*cols, *rows));
                 }
             }
 
@@ -247,6 +276,9 @@ fn try_replace_child(child: &mut Box<LayoutNode>, target: NodeId, sub: LayoutNod
 }
 
 /// Replace a split's ratio in the tree (recurse until the `SplitId` matches).
+///
+/// Clamps the ratio to `[0, 1]` and rescues `NaN` to `0.5`, matching
+/// `Mux`'s `Split::set_ratio` behaviour.
 fn set_split_ratio(tree: &mut LayoutNode, target: SplitId, ratio: f32) {
     if let LayoutNode::Split {
         id,
@@ -257,7 +289,11 @@ fn set_split_ratio(tree: &mut LayoutNode, target: SplitId, ratio: f32) {
     } = tree
     {
         if *id == target {
-            *r = ratio;
+            *r = if ratio.is_finite() {
+                ratio.clamp(0.0, 1.0)
+            } else {
+                0.5
+            };
         } else {
             set_split_ratio(first, target, ratio);
             set_split_ratio(second, target, ratio);
@@ -499,6 +535,119 @@ mod tests {
             mirror_snap, mux_snap,
             "nested + root collapse reconstruction diverged from Mux"
         );
+    }
+
+    #[test]
+    fn post_attach_workspace_and_resize_reconstructs() {
+        // Exercises the three wire self-sufficiency bugs.
+        // Fix 1: new_workspace root-pane layout not established.
+        // Fix 2: workspace size not on the wire.
+        // Fix 3: break_surface_to_pane LayoutChanged subtree has stale surface_kind.
+        let mut mux = Mux::new();
+        let session = mux.sessions()[0];
+
+        let ws0 = mux.active_workspace();
+        mux.set_workspace_size(ws0, 120, 40).unwrap();
+        let pane0 = mux.active_pane(ws0).unwrap();
+
+        // Build pane0 with two surfaces so break_surface_to_pane has a source.
+        mux.spawn_surface(pane0, SurfaceKind::Terminal).unwrap();
+        let extra_surface = {
+            let s = mux.surfaces(pane0).unwrap();
+            *s.last().unwrap()
+        };
+
+        // Cold-attach snapshot — ws0 is already stable.
+        let snap0 = mux.snapshot(session).unwrap();
+        let mut delta_events: Vec<MuxEvent> = Vec::new();
+
+        // Fix 1: new_workspace creates ws1 post-snapshot.
+        let nw_evs = mux.new_workspace().unwrap();
+        let ws1 = match &nw_evs[0] {
+            MuxEvent::WorkspaceCreated { workspace, .. } => *workspace,
+            _ => panic!("expected WorkspaceCreated"),
+        };
+        delta_events.extend(nw_evs);
+
+        // Fix 2: set size on the post-snapshot workspace.
+        delta_events.extend(mux.set_workspace_size(ws1, 80, 24).unwrap());
+
+        // Fix 1 consequence: split the post-snapshot workspace so LayoutChanged
+        // must match the real pane id (not a PaneId::default() placeholder).
+        let pane_ws1 = mux.active_pane(ws1).unwrap();
+        let split_evs = mux
+            .split_pane(
+                pane_ws1,
+                SplitOrientation::Horizontal,
+                Side::After,
+                SurfaceKind::Terminal,
+            )
+            .unwrap();
+        delta_events.extend(split_evs);
+
+        // Fix 3: break a Terminal surface out of pane0; both PaneCreated and
+        // LayoutChanged's subtree must carry Terminal kind.
+        // TODO: Fix 3 coverage for non-Terminal surfaces requires constructing an
+        // Extension/Browser surface, which needs infra not available in this unit
+        // test. The patch in mux.rs ensures the LayoutChanged subtree's surface_kind
+        // matches PaneCreated's for all kinds; Terminal is covered here.
+        delta_events.extend(mux.select_workspace(ws0).unwrap());
+        let break_evs = mux
+            .break_surface_to_pane(extra_surface, SplitOrientation::Vertical, Side::After)
+            .unwrap();
+        // Assert that the LayoutChanged subtree's new_pane leaf carries the same
+        // surface_kind as the PaneCreated event (Fix 3 invariant).
+        let pane_created_kind = match &break_evs[0] {
+            MuxEvent::PaneCreated { surfaces, .. } => surfaces[0].kind.clone(),
+            _ => panic!("break_evs[0] must be PaneCreated"),
+        };
+        let layout_changed_new_pane_kind = {
+            let new_pane_id = match &break_evs[0] {
+                MuxEvent::PaneCreated { pane, .. } => *pane,
+                _ => panic!("break_evs[0] must be PaneCreated"),
+            };
+            match &break_evs[1] {
+                MuxEvent::LayoutChanged { subtree, .. } => {
+                    find_pane_kind_in_layout(subtree, new_pane_id)
+                        .expect("new_pane must appear in LayoutChanged subtree")
+                }
+                _ => panic!("break_evs[1] must be LayoutChanged"),
+            }
+        };
+        assert_eq!(
+            pane_created_kind, layout_changed_new_pane_kind,
+            "Fix 3: LayoutChanged subtree surface_kind must match PaneCreated"
+        );
+        delta_events.extend(break_evs);
+
+        // Apply all delta events to the mirror.
+        let mut mirror = ClientMirror::from_snapshot(snap0);
+        for ev in &delta_events {
+            mirror.apply_event(ev);
+        }
+
+        let mirror_snap = normalize_snapshot(mirror.to_snapshot());
+        let mux_snap = normalize_snapshot(mux.snapshot(session).unwrap());
+        assert_eq!(
+            mirror_snap, mux_snap,
+            "post-attach workspace + resize reconstruction diverged from Mux"
+        );
+    }
+
+    fn find_pane_kind_in_layout(
+        node: &ozmux_mux::LayoutNode,
+        target: ozmux_mux::PaneId,
+    ) -> Option<ozmux_mux::SurfaceKind> {
+        match node {
+            ozmux_mux::LayoutNode::Pane {
+                id, surface_kind, ..
+            } if *id == target => Some(surface_kind.clone()),
+            ozmux_mux::LayoutNode::Pane { .. } => None,
+            ozmux_mux::LayoutNode::Split { first, second, .. } => {
+                find_pane_kind_in_layout(first, target)
+                    .or_else(|| find_pane_kind_in_layout(second, target))
+            }
+        }
     }
 
     #[test]
