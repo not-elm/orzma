@@ -174,8 +174,7 @@ impl Mux {
     /// under a fresh `Split` (ratio `0.5`) that takes `pane`'s old layout slot.
     /// The new pane becomes the workspace's active pane.
     ///
-    /// Port of `layout::split_in_tree` + `commands::split_pane`. Returns
-    /// `[PaneCreated, LayoutChanged{root: Pane(pane)}, ActivePaneChanged]`.
+    /// Returns `[PaneCreated, LayoutChanged{root: Pane(pane)}, ActivePaneChanged]`.
     pub fn split_pane(
         &mut self,
         pane: PaneId,
@@ -238,8 +237,7 @@ impl Mux {
     /// pane, its parent split, and its surfaces. Errors if `pane` is the
     /// workspace's only pane.
     ///
-    /// Port of `layout::close_in_tree` + `commands::close_pane`. Emits
-    /// `[PaneClosed, SurfaceClosed*, (LayoutChanged | WorkspaceRootChanged),
+    /// Emits `[PaneClosed, SurfaceClosed*, (LayoutChanged | WorkspaceRootChanged),
     /// ActivePaneChanged?]`.
     pub fn close_pane(&mut self, pane: PaneId) -> MuxResult<Vec<MuxEvent>> {
         let workspace = self.owning_workspace_of_pane(pane)?;
@@ -370,8 +368,7 @@ impl Mux {
     /// SLOT's ratio (slot-pinned, since ratios live on the split slots).
     /// `[]` (no-op) for a single-pane workspace.
     ///
-    /// Port of `layout::swap_in_tree` + `commands::swap_pane`. Emits a
-    /// `LayoutChanged` for each affected slot.
+    /// Emits a `LayoutChanged` for each affected slot.
     pub fn swap_pane(&mut self, pane: PaneId, offset: SwapOffset) -> MuxResult<Vec<MuxEvent>> {
         let workspace = self.owning_workspace_of_pane(pane)?;
         let ordered = self.ordered_panes(workspace)?;
@@ -458,8 +455,7 @@ impl Mux {
     /// `amount` cells, clamped by descendant min-cell floors. `[]` (no-op)
     /// when the workspace has no size or no matching ancestor split.
     ///
-    /// Port of `resize::resize_split_for_pane`. Emits
-    /// `[LayoutRatioChanged, PaneResized*]`.
+    /// Emits `[LayoutRatioChanged, PaneResized*]`.
     pub fn resize_pane(
         &mut self,
         pane: PaneId,

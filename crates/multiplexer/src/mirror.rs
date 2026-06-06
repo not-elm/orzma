@@ -175,7 +175,7 @@ impl MuxState {
 
     /// Realizes the Mux's current tree (active session's workspace, layout tree,
     /// surfaces) into the ECS, recording every reverse map + WorkspaceUiSubtree +
-    /// ChildOf exactly as create_workspace/split_in_tree would.
+    /// ChildOf, matching the ECS composition `apply_event` produces.
     pub fn materialize_snapshot(&mut self, commands: &mut Commands) {
         let ws = self.mux.active_workspace();
         let name = self.mux.workspace_name(ws).unwrap_or("default").to_owned();
@@ -646,7 +646,7 @@ fn spawn_workspace(
     (ws_ent, container)
 }
 
-/// Spawns a pane entity with the exact bundle `create_workspace`/`split_pane_inner` uses.
+/// Spawns a pane entity with the exact bundle the mirror's pane composition uses.
 /// `ActiveSurface` is NOT set here — the caller sets it after surfaces exist.
 /// `ChildOf` is also set by the caller.
 fn spawn_pane(
