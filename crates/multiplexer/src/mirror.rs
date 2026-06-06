@@ -137,6 +137,25 @@ impl MuxState {
         }
     }
 
+    /// Creates a `MuxState` backed by a freshly-created `Mux`, with empty
+    /// reverse maps. Convenience for tests that need a live `MuxState`
+    /// resource without importing `ozmux_mux` directly.
+    pub fn with_new_mux() -> Self {
+        Self::new(ozmux_mux::Mux::new())
+    }
+
+    /// Looks up the `SurfaceId` for `entity` using the reverse map.
+    ///
+    /// Prefer this over the `MirrorReadCtx` ECS query when the surface was
+    /// spawned in the same deferred command batch (the `MuxSurfaceId` component
+    /// may not be flushed yet, but the reverse map is updated immediately).
+    pub(crate) fn surface_id_of_entity(&self, entity: Entity) -> Option<SurfaceId> {
+        self.surfaces
+            .iter()
+            .find(|&(_, e)| *e == entity)
+            .map(|(id, _)| id)
+    }
+
     /// Realizes the Mux's current tree (active session's workspace, layout tree,
     /// surfaces) into the ECS, recording every reverse map + WorkspaceUiSubtree +
     /// ChildOf exactly as create_workspace/split_in_tree would.
@@ -844,6 +863,18 @@ pub(crate) fn lift_result<T>(
     result.map_err(|e| lift(state, e))
 }
 
+/// Debug-only: after each frame's command flush, assert the ECS mirror matches
+/// the authoritative `Mux`. Catches apply-handler drift on real usage at zero
+/// release-build cost (gated on `debug_assertions`).
+#[cfg(debug_assertions)]
+pub(crate) fn assert_mirror_consistent(world: &World) {
+    if let Some(state) = world.get_resource::<MuxState>()
+        && let Err(m) = mirror_matches(world, state)
+    {
+        panic!("mux mirror drift: {m:?}");
+    }
+}
+
 /// Debug-only: every reverse-map entry resolves to a live entity carrying the
 /// matching `Mux*Id`, catching unmap leaks after despawns.
 #[cfg(debug_assertions)]
@@ -1541,7 +1572,6 @@ mod tests {
             .get_mut::<Node>(first_child)
             .expect("first child must have Node")
             .flex_grow = 999.0;
-        app.update();
 
         let result = {
             let world = app.world();

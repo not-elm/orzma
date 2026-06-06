@@ -25,5 +25,7 @@ impl Plugin for MultiplexerPlugin {
             Startup,
             materialize_mux_snapshot.in_set(MultiplexerStartupSet::Materialize),
         );
+        #[cfg(debug_assertions)]
+        app.add_systems(PostUpdate, crate::mirror::assert_mirror_consistent);
     }
 }

@@ -277,8 +277,19 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::bounded;
     use ozmux_multiplexer::{
-        MultiplexerCommands, SurfaceKind, SurfaceMarker, WorkspaceNameCounter,
+        MultiplexerCommands, MuxState, SurfaceKind, SurfaceMarker, WorkspaceNameCounter,
     };
+
+    /// Builds a `World` with `WorkspaceNameCounter` and a fresh `MuxState`, so
+    /// that `run_system_once` with `MultiplexerCommands` succeeds. The Mux-seeded
+    /// initial workspace is NOT materialized here (no Startup system); tests that
+    /// call `create_workspace` get a second workspace (the seeded one stays unmaterialized).
+    fn make_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        world.insert_resource(MuxState::with_new_mux());
+        world
+    }
 
     fn split_request(pane_bits: u64) -> ControlRequest {
         ControlRequest {
@@ -336,8 +347,7 @@ mod tests {
 
     #[test]
     fn handles_split_and_creates_browser_pane_without_extension_components() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -385,8 +395,7 @@ mod tests {
 
     #[test]
     fn handles_split_and_creates_extension_pane() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -436,8 +445,7 @@ mod tests {
 
     #[test]
     fn unknown_pane_bits_yield_pane_not_found() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -461,8 +469,7 @@ mod tests {
 
     #[test]
     fn handles_add_surface_on_existing_pane() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -499,8 +506,7 @@ mod tests {
 
     #[test]
     fn handles_activate_repoints_active_surface() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -539,8 +545,7 @@ mod tests {
 
     #[test]
     fn terminal_split_with_cwd_seeds_cwd_component() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -598,8 +603,7 @@ mod tests {
 
     #[test]
     fn browser_split_with_cwd_seeds_cwd_component() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let created = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
@@ -659,8 +663,7 @@ mod tests {
 
     #[test]
     fn activate_rejects_surface_not_in_pane() {
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
+        let mut world = make_world();
         let first = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();

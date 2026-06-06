@@ -1493,6 +1493,10 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.add_message::<CursorMoved>();
         app.add_systems(Update, dispatch_mouse_buttons);
+        // NOTE: run once so Startup (materialize_mux_snapshot) fires before any
+        // MultiplexerCommands calls; otherwise a later app.update() would re-materialize
+        // the Mux-seeded workspace, duplicating ECS entities and corrupting reverse maps.
+        app.update();
 
         // Two-pane workspace: original (terminal) is re-focused after the split,
         // so the test starts with the terminal pane active.

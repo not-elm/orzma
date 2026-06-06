@@ -101,6 +101,10 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
         app.add_systems(Update, drive_tab_clicks);
+        // NOTE: run once so Startup (materialize_mux_snapshot) fires before any
+        // MultiplexerCommands calls; otherwise a later app.update() would re-materialize
+        // the Mux-seeded workspace, duplicating ECS entities and corrupting reverse maps.
+        app.update();
 
         let (workspace, pane, first) = app
             .world_mut()
@@ -190,6 +194,10 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
         app.add_systems(Update, drive_tab_clicks);
+        // NOTE: run once so Startup (materialize_mux_snapshot) fires before any
+        // MultiplexerCommands calls; otherwise a later app.update() would re-materialize
+        // the Mux-seeded workspace, duplicating ECS entities and corrupting reverse maps.
+        app.update();
 
         let (workspace, original_pane) = app
             .world_mut()

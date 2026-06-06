@@ -468,6 +468,10 @@ mod tests {
             .add_plugins(MultiplexerPlugin);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
+        // NOTE: run once so Startup (materialize_mux_snapshot) fires before any
+        // MultiplexerCommands calls; otherwise a later app.update() would re-materialize
+        // the Mux-seeded workspace, duplicating ECS entities and corrupting reverse maps.
+        app.update();
 
         let (workspace, terminal_pane) = app
             .world_mut()

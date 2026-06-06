@@ -239,9 +239,14 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .mirror_read
             .pane_id_of(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
+        // NOTE: use the MuxState reverse map instead of the ECS query here so
+        // that a surface spawned in the same deferred-command batch (e.g.
+        // add_surface → set_active_surface in the same system) resolves
+        // correctly before its MuxSurfaceId component is flushed.
         let sid = self
-            .mirror_read
-            .surface_id_of(surface)
+            .mux
+            .surface_id_of_entity(surface)
+            .or_else(|| self.mirror_read.surface_id_of(surface))
             .ok_or(MultiplexerError::SurfaceNotFound(surface))?;
         let events = self
             .mux
