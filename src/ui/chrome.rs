@@ -76,11 +76,9 @@ fn build_pane_chrome(
             .spawn((
                 Node {
                     flex_grow: 1.0,
-                    border: UiRect::all(Val::Px(theme::PANE_BORDER_PX)),
                     width: Val::Percent(100.0),
                     ..default()
                 },
-                BorderColor::all(palette::BORDER),
                 ChildOf(pane),
             ))
             .id();

@@ -33,8 +33,6 @@ pub const SURFACE_BROWSER: Color = Color::srgb(0.094, 0.149, 0.220);
 /// `SurfaceKind::Extension` placeholder background.
 pub const SURFACE_EXTENSION: Color = Color::srgb(0.094, 0.180, 0.110);
 
-/// Pane border thickness.
-pub const PANE_BORDER_PX: f32 = 1.0;
 /// Generic padding inside elements (status bar segments).
 pub const ELEMENT_PADDING_PX: f32 = 6.0;
 /// Horizontal padding inside a single tab.
