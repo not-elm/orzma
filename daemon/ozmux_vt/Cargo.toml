@@ -22,7 +22,9 @@ anyhow = { workspace = true, optional = true }
 [features]
 default = ["engine"]
 engine = ["dep:alacritty_terminal", "dep:vte", "dep:crossbeam-channel", "dep:unicode-width", "dep:percent-encoding", "dep:gethostname", "dep:tracing"]
-pty = ["dep:portable-pty", "dep:anyhow", "dep:crossbeam-channel"]
+# NOTE: a PTY is useless without the VT engine to drain it, so `pty` implies
+# `engine` (which also provides crossbeam-channel that pty.rs uses).
+pty = ["engine", "dep:portable-pty", "dep:anyhow"]
 
 [dev-dependencies]
 rmp-serde = "1"

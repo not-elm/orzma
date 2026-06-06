@@ -131,6 +131,9 @@ fn palette_index_to_rgba(i: u8) -> RgbaColor {
 
 #[cfg(test)]
 mod tests {
+    // NOTE: every test here is engine-gated; gate the glob too so it isn't
+    // flagged unused under --no-default-features (DTO-only) builds.
+    #[cfg(feature = "engine")]
     use super::*;
     #[cfg(feature = "engine")]
     use alacritty_terminal::vte::ansi::Rgb;
