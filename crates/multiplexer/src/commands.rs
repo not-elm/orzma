@@ -13,7 +13,7 @@ use crate::components::{
 use crate::components::{SplitNode, WorkspaceUiSubtree};
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
-use crate::layout::{LayoutTree, Side, SplitOrientation};
+use crate::layout::{Side, SplitOrientation};
 use crate::mirror::{
     MirrorReadCtx, MuxState, apply_event, created_pane_id, created_workspace_id,
     ecs_direction_to_mux, ecs_orientation_to_mux, ecs_side_to_mux, ecs_surface_kind_to_mux,
@@ -91,18 +91,6 @@ pub struct MultiplexerCommands<'w, 's> {
     panes_owned: Query<'w, 's, (Entity, &'static OwningWorkspace), With<PaneMarker>>,
     surface_owner: Query<'w, 's, &'static SurfaceOf, With<SurfaceMarker>>,
     pane_surfaces: Query<'w, 's, &'static Surfaces, With<PaneMarker>>,
-    // NOTE: these three fields and `tree` below are only read by `split_pane_inner`
-    // (scheduled for removal in Plan 2b-3). The `#[allow]` is required because
-    // `#[expect(dead_code)]` does not fire for fields the `SystemParam` derive
-    // macro touches internally, leaving `#[expect]` unfulfilled.
-    #[allow(dead_code)]
-    children: Query<'w, 's, &'static Children>,
-    #[allow(dead_code)]
-    child_of: Query<'w, 's, &'static ChildOf>,
-    #[allow(dead_code)]
-    layout_nodes: Query<'w, 's, &'static Node>,
-    #[expect(dead_code, reason = "removed with split_pane_inner in Plan 2b-3")]
-    tree: LayoutTree<'w, 's>,
 }
 
 impl<'w, 's> MultiplexerCommands<'w, 's> {
@@ -528,53 +516,6 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         self.mux
             .surface_id_of_entity(surface)
             .or_else(|| self.mirror_read.surface_id_of(surface))
-    }
-
-    /// Inserts a `Split` node into the target's layout slot, reparents the
-    /// target and `new_pane` under it, and promotes `new_pane` to `ActivePane`.
-    /// Does not spawn a bootstrap surface; callers are responsible for attaching
-    /// one. Returns `(new_pane, workspace)`.
-    #[expect(
-        dead_code,
-        reason = "removed in Plan 2b-3 when ECS split helpers are retired"
-    )]
-    fn split_pane_inner(
-        &mut self,
-        target_pane: Entity,
-        side: Side,
-        orientation: SplitOrientation,
-    ) -> MultiplexerResult<(Entity, Entity)> {
-        let workspace = self
-            .workspace_of_pane(target_pane)
-            .ok_or(MultiplexerError::PaneNotFound(target_pane))?;
-
-        let pane_node = crate::layout::pane_frame_node();
-        let new_pane = self
-            .commands
-            .spawn((
-                PaneMarker,
-                OwningWorkspace(workspace),
-                CopyMode::default(),
-                pane_node,
-                Name::new("pane: split"),
-            ))
-            .id();
-
-        crate::layout::split_in_tree(
-            &mut self.commands,
-            target_pane,
-            new_pane,
-            side,
-            orientation,
-            &self.child_of,
-            &self.children,
-            &self.layout_nodes,
-        );
-
-        if let Ok((mut active_pane, _, _)) = self.workspaces.get_mut(workspace) {
-            active_pane.0 = new_pane;
-        }
-        Ok((new_pane, workspace))
     }
 }
 

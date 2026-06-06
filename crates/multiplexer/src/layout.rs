@@ -258,53 +258,6 @@ pub(crate) fn set_child_grow(commands: &mut Commands, child: Entity, grow: f32) 
         });
 }
 
-/// Insert a `Split` into `target`'s current layout slot, reparenting `target`
-/// under it alongside `new_pane`. Reuses `target` (and its whole subtree)
-/// untouched. `target`'s old slot `flex_grow` transfers to the new split;
-/// the two children get equal `1.0` grows. Children are ordered per `side`.
-///
-/// Reads `target`'s parent + child index + grow via the passed queries, then
-/// queues the structural commands. Caller must have already spawned
-/// `new_pane` (with its `Node`) but NOT yet parented it.
-pub(crate) fn split_in_tree(
-    commands: &mut Commands,
-    target: Entity,
-    new_pane: Entity,
-    side: Side,
-    orientation: SplitOrientation,
-    child_of: &Query<&ChildOf>,
-    children: &Query<&Children>,
-    nodes: &Query<&Node>,
-) {
-    let parent = child_of
-        .get(target)
-        .map(|c| c.parent())
-        .expect("target has a parent slot");
-    let index = children
-        .get(parent)
-        .ok()
-        .and_then(|kids| kids.iter().position(|e| e == target))
-        .unwrap_or(0);
-    let target_grow = nodes.get(target).map(|n| n.flex_grow).unwrap_or(1.0);
-
-    let (mut split_node, split_marker) = split_node_bundle(orientation);
-    let split_cf = child_flex(target_grow);
-    split_node.flex_grow = split_cf.flex_grow;
-    split_node.flex_basis = split_cf.flex_basis;
-    let split = commands.spawn((split_node, split_marker)).id();
-
-    set_child_grow(commands, target, 1.0);
-    set_child_grow(commands, new_pane, 1.0);
-
-    let (first, second) = match side {
-        Side::Before => (new_pane, target),
-        Side::After => (target, new_pane),
-    };
-    commands.entity(split).add_children(&[first, second]);
-
-    commands.entity(parent).insert_children(index, &[split]);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
