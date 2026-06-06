@@ -2035,4 +2035,202 @@ mod tests {
 
         assert_layout_equiv(&mut oracle, &mut mux_app);
     }
+
+    #[test]
+    fn focus_pane_equiv() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // Split to 2 panes (active becomes p1 on both sides after the split).
+        let oracle_p0 = oracle_only_pane(&mut oracle);
+        oracle_split_only_pane(
+            &mut oracle,
+            crate::layout::Side::After,
+            SplitOrientation::Horizontal,
+        );
+        mux_split_active_pane(
+            &mut mux_app,
+            ozmux_mux::SplitOrientation::Horizontal,
+            ozmux_mux::Side::After,
+        );
+
+        // Focus the non-active pane (p0) on both sides.
+        oracle
+            .world_mut()
+            .run_system_once(
+                move |mut mux: crate::commands::MultiplexerCommands,
+                      ws_q: Query<Entity, With<WorkspaceMarker>>| {
+                    let ws = ws_q.iter().next().expect("workspace must exist");
+                    mux.set_active_pane(ws, oracle_p0).unwrap();
+                },
+            )
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let p0 = m.ordered_panes(ws).unwrap()[0];
+            m.focus_pane(p0).unwrap()
+        });
+
+        assert_layout_equiv(&mut oracle, &mut mux_app);
+    }
+
+    #[test]
+    fn navigate_equiv() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // Horizontal split → p0 (left) and p1 (right). Active is p1 after split.
+        // Navigate Left: both apps should land on p0.
+        let oracle_p0 = oracle_only_pane(&mut oracle);
+        oracle_split_only_pane(
+            &mut oracle,
+            crate::layout::Side::After,
+            SplitOrientation::Horizontal,
+        );
+        mux_split_active_pane(
+            &mut mux_app,
+            ozmux_mux::SplitOrientation::Horizontal,
+            ozmux_mux::Side::After,
+        );
+
+        // Oracle: navigate means setting active to the geometric Left neighbor of
+        // the current active pane (p1). In a 2-pane horizontal split that is p0.
+        oracle
+            .world_mut()
+            .run_system_once(
+                move |mut mux: crate::commands::MultiplexerCommands,
+                      ws_q: Query<Entity, With<WorkspaceMarker>>| {
+                    let ws = ws_q.iter().next().expect("workspace must exist");
+                    mux.set_active_pane(ws, oracle_p0).unwrap();
+                },
+            )
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        // Mux: navigate Left from the active pane (p1) → resolves to p0.
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let active = m.active_pane(ws).unwrap();
+            m.navigate(active, ozmux_mux::PaneDirection::Left).unwrap()
+        });
+
+        assert_layout_equiv(&mut oracle, &mut mux_app);
+    }
+
+    #[test]
+    fn resize_ratio_equiv() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // 2-pane horizontal split on both sides.
+        let oracle_p0 = oracle_only_pane(&mut oracle);
+        oracle_split_only_pane(
+            &mut oracle,
+            crate::layout::Side::After,
+            SplitOrientation::Horizontal,
+        );
+        mux_split_active_pane(
+            &mut mux_app,
+            ozmux_mux::SplitOrientation::Horizontal,
+            ozmux_mux::Side::After,
+        );
+
+        // Set workspace size on both so resize has a cell budget.
+        oracle
+            .world_mut()
+            .run_system_once(
+                |mut mux: crate::commands::MultiplexerCommands,
+                 ws_q: Query<Entity, With<WorkspaceMarker>>| {
+                    let ws = ws_q.iter().next().expect("workspace must exist");
+                    mux.set_workspace_dimensions(ws, 80, 24);
+                },
+            )
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            m.set_workspace_size(ws, 80, 24).unwrap()
+        });
+
+        // Resize p0 to the Right (grow left half) by 10 cells on both.
+        oracle
+            .world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.resize_pane(oracle_p0, crate::direction::PaneDirection::Right, 10)
+                    .unwrap();
+            })
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let p0 = m.ordered_panes(ws).unwrap()[0];
+            m.resize_pane(p0, ozmux_mux::PaneDirection::Right, 10)
+                .unwrap()
+        });
+
+        assert_layout_equiv(&mut oracle, &mut mux_app);
+    }
+
+    #[test]
+    fn multi_step_sequence_stays_consistent() {
+        let mut app = make_mux_app();
+
+        // Step 1: split p0 → p1 (p1 becomes active).
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let p0 = m.active_pane(ws).unwrap();
+            m.split_pane(
+                p0,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+
+        // Step 2: split p1 → p2 (p2 becomes active).
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let p1 = m.active_pane(ws).unwrap();
+            m.split_pane(
+                p1,
+                ozmux_mux::SplitOrientation::Vertical,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+
+        // Step 3: close the middle pane (p1, ordered index 1). Active is p2
+        // (index 2); close_pane on p1 promotes p2 (or p0) and collapses the
+        // inner split without reaching the root.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let p1 = m.ordered_panes(ws).unwrap()[1];
+            m.close_pane(p1).unwrap()
+        });
+
+        // Step 4: swap the two remaining panes.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let first = m.ordered_panes(ws).unwrap()[0];
+            m.swap_pane(first, ozmux_mux::SwapOffset::Next).unwrap()
+        });
+
+        // Step 5: close down to the root (close the active pane so only 1
+        // pane remains, exercising WorkspaceRootChanged).
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let active = m.active_pane(ws).unwrap();
+            m.close_pane(active).unwrap()
+        });
+    }
 }
