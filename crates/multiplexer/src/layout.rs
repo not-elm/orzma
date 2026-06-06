@@ -164,8 +164,8 @@ impl LayoutTree<'_, '_> {
 }
 
 /// Compute each Pane leaf's normalized rectangle by walking the entity tree
-/// from `root`. DFS first-child-first order (matches `ordered_panes`). Splits
-/// partition their rect by the two children's `flex_grow` ratio.
+/// from `root`. DFS first-child-first order. Splits partition their rect by
+/// the two children's `flex_grow` ratio.
 pub(crate) fn pane_bounds(tree: &LayoutTree, root: Entity) -> Vec<(Entity, Rect)> {
     let mut out = Vec::new();
     walk_bounds(
@@ -303,29 +303,6 @@ pub(crate) fn split_in_tree(
     commands.entity(split).add_children(&[first, second]);
 
     commands.entity(parent).insert_children(index, &[split]);
-}
-
-/// Collect every Pane leaf reachable from `root`, in DFS first-child-first
-/// order. Mirrors the old `ordered_pane_cells` ordering.
-pub(crate) fn ordered_panes(
-    root: Entity,
-    children: &Query<&Children>,
-    panes: &Query<(), With<PaneMarker>>,
-) -> Vec<Entity> {
-    let mut out = Vec::new();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if panes.get(node).is_ok() {
-            out.push(node);
-            continue;
-        }
-        if let Ok(kids) = children.get(node) {
-            for child in kids.iter().rev() {
-                stack.push(child);
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! ECS-native multiplexer for ozmux. Workspace, Pane, and Surface are Bevy
 //! entities related by `ChildOf`. All mutations route through the
-//! `MultiplexerCommands` SystemParam; the only observers handle dangling
-//! `Entity` references when a child entity is despawned.
+//! `MultiplexerCommands` SystemParam; active-pane and active-surface repointing
+//! after despawns is handled authoritatively by `apply_event` in `mirror`.
 //!
 //! No typed IDs (`WorkspaceId` / `PaneId` / `SurfaceId`) — every reference
 //! is a Bevy `Entity`. Each entity also carries `Name` (from
@@ -13,7 +13,6 @@ pub mod direction;
 pub mod error;
 pub mod layout;
 pub mod mirror;
-pub mod observers;
 pub mod plugin;
 pub mod resize;
 pub mod swap;

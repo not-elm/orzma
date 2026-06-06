@@ -2234,6 +2234,114 @@ mod tests {
     }
 
     #[test]
+    fn nested_close_active_pane_matches_mux_choice() {
+        // Build tree [p0, [p1(active), p2]]:
+        //   - bootstrap gives p0 (the only pane);
+        //   - split p0 After/Horizontal → [p0, p1]; p1 becomes active;
+        //   - split p1 After/Vertical   → [p0, [p1, p2]]; p2 becomes active;
+        //   - focus p1 so the active pane IS the inner-left pane;
+        //   - close p1 (the active one in the nested split).
+        //
+        // The Mux's `close_pane` repoints the active to `leftmost_pane(sibling)`:
+        // sibling of p1 in its split is p2 → survivor = p2.
+        //
+        // The old observer walked the DFS-ordered leaf list [p0, p1, p2] and
+        // picked the first leaf != dying (p0), which conflicts with the Mux's
+        // choice. This test asserts ECS ActivePane == Mux's choice after the
+        // close, exercising the exact divergence path.
+        let mut app = make_mux_app();
+
+        let p0 = only_pane(&mut app);
+
+        // Split p0 After/Horizontal → [p0, p1]; p1 is now active.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let active = m.active_pane(ws).unwrap();
+            m.split_pane(
+                active,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+
+        let p1 = {
+            let ws = active_workspace(&mut app);
+            app.world().get::<ActivePane>(ws).unwrap().0
+        };
+        assert_ne!(p0, p1, "p1 is a new pane distinct from p0");
+
+        // Split p1 After/Vertical → [p0, [p1, p2]]; p2 is now active.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let active = m.active_pane(ws).unwrap();
+            m.split_pane(
+                active,
+                ozmux_mux::SplitOrientation::Vertical,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+
+        // Focus p1 so the active pane is the inner-left one.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let ordered = m.ordered_panes(ws).unwrap();
+            // DFS order after splits: [p0, p1, p2]. p1 is index 1.
+            m.focus_pane(ordered[1]).unwrap()
+        });
+
+        let ws = active_workspace(&mut app);
+        assert_eq!(
+            app.world().get::<ActivePane>(ws).map(|a| a.0),
+            Some(p1),
+            "p1 must be active before the close"
+        );
+
+        // Close p1 (the active pane). Mux picks its sibling in the inner split
+        // (p2) via leftmost_pane. The old observer would have picked p0 (DFS
+        // first != dying), causing a divergence.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let active = m.active_pane(ws).unwrap();
+            m.close_pane(active).unwrap()
+        });
+
+        // Read what the Mux chose.
+        let ws_ent = active_workspace(&mut app);
+        let state = app.world().resource::<MuxState>();
+        let mux_active_id = state.mux.active_pane(state.mux.active_workspace()).unwrap();
+        let mux_active_ent = state.panes[mux_active_id];
+
+        let ecs_active_ent = app.world().get::<ActivePane>(ws_ent).map(|a| a.0);
+        assert_eq!(
+            ecs_active_ent,
+            Some(mux_active_ent),
+            "ECS ActivePane must match the Mux's choice after nested-close; \
+             Mux chose {mux_active_ent:?}, ECS has {ecs_active_ent:?}"
+        );
+
+        let result = mirror_matches(app.world(), state);
+        assert!(
+            result.is_ok(),
+            "mirror_matches must hold after nested close: {result:?}"
+        );
+
+        // Additionally verify p2 (sibling-leftmost) is the survivor, not p0.
+        assert_ne!(
+            mux_active_ent, p0,
+            "Mux must not pick p0 (DFS-first) as survivor; \
+             it must pick the direct sibling (p2)"
+        );
+        assert_ne!(
+            mux_active_ent, p1,
+            "closed pane p1 must not be the active pane"
+        );
+    }
+
+    #[test]
     fn multi_step_sequence_stays_consistent() {
         let mut app = make_mux_app();
 
