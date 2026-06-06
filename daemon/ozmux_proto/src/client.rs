@@ -52,6 +52,12 @@ impl<R: BufRead, W: Write> Client<R, W> {
                     "expected Welcome, got Event",
                 ));
             }
+            ServerMessage::Frame { .. } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unexpected Frame before Welcome",
+                ));
+            }
         };
         Ok(Self {
             reader,
@@ -69,6 +75,9 @@ impl<R: BufRead, W: Write> Client<R, W> {
     /// it is returned. `Ok(None)` at clean EOF.
     pub fn poll(&mut self) -> io::Result<Option<ServerMessage>> {
         let msg = read_message::<_, ServerMessage>(&mut self.reader)?;
+        // NOTE: ServerMessage::Frame is passed through to the caller as-is and
+        // is NOT applied to the mirror — Frame carries VT pixel data, not mux
+        // state, so folding it here would corrupt the mirror.
         if let Some(ServerMessage::Event(ref ev)) = msg {
             self.mirror.apply_event(ev);
         }

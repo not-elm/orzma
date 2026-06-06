@@ -4,6 +4,7 @@ use ozmux_mux::{
     MuxEvent, PaneDirection, PaneId, SessionSnapshot, Side, SplitOrientation, SurfaceId,
     SurfaceKind, WorkspaceId,
 };
+use ozmux_vt::frame::Frame;
 use serde::{Deserialize, Serialize};
 
 /// A message from a client to the daemon.
@@ -66,6 +67,13 @@ pub enum ClientMessage {
         /// New row count.
         rows: u16,
     },
+    /// Pre-encoded input bytes for a surface (client→daemon).
+    Input {
+        /// The target surface.
+        surface: SurfaceId,
+        /// Encoded input bytes (keys/mouse via ozmux_vt::input/mouse).
+        bytes: Vec<u8>,
+    },
 }
 
 /// A message from the daemon to a client.
@@ -80,6 +88,13 @@ pub enum ServerMessage {
     },
     /// A state-change delta.
     Event(MuxEvent),
+    /// A terminal frame (snapshot or delta) for a surface (daemon→client).
+    Frame {
+        /// The surface this frame belongs to.
+        surface: SurfaceId,
+        /// The VT frame.
+        frame: Frame,
+    },
     /// A rejected command.
     Error {
         /// Human-readable reason.

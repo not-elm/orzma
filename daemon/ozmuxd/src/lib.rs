@@ -188,6 +188,8 @@ impl Server {
             // a post-attach Hello is a client bug — ignore rather than error to
             // avoid a feedback loop if the client retransmits on reconnect.
             ClientMessage::Hello { .. } => return,
+            // NOTE: Input→PTY wiring is Plan 4b-2; ignored until then.
+            ClientMessage::Input { .. } => return,
         };
         match result {
             Ok(events) => broadcast(clients, &events),

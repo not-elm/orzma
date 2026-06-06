@@ -212,7 +212,7 @@ pub struct FrameDelta {
 }
 
 /// The return type of a frame emit — either a full snapshot or an incremental delta.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Frame {
     /// Full viewport snapshot.
     Snapshot(FrameSnapshot),
