@@ -4,7 +4,6 @@
 //! and the read-only `LayoutTree` query view.
 
 use crate::components::{PaneMarker, SplitNode};
-use crate::error::{MultiplexerError, MultiplexerResult};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{FlexDirection, UiRect, Val};
@@ -306,88 +305,6 @@ pub(crate) fn split_in_tree(
     commands.entity(parent).insert_children(index, &[split]);
 }
 
-/// Outcome of `close_in_tree`: the survivor pane that should become active if
-/// the closed pane was active.
-pub(crate) struct CloseResult {
-    /// A representative leaf pane in the promoted survivor subtree.
-    pub survivor_pane: Entity,
-}
-
-/// Promote `pane`'s sibling into the grandparent slot, then despawn `pane`
-/// and its parent split. Returns the leftmost leaf of the survivor subtree
-/// (for `ActivePane` repointing). Errors if `pane` is the workspace's only
-/// pane (its parent is the layout-root node, not a `Split`).
-///
-/// Ordering (load-bearing — see spec §Structural operations): the sibling is
-/// reparented to the grandparent (at the split's old index, inheriting the
-/// split's grow) BEFORE the split is despawned, so the recursive despawn does
-/// not take the survivor's subtree.
-pub(crate) fn close_in_tree(
-    commands: &mut Commands,
-    workspace: Entity,
-    pane: Entity,
-    child_of: &Query<&ChildOf>,
-    children: &Query<&Children>,
-    nodes: &Query<&Node>,
-    splits: &Query<&SplitNode>,
-    panes: &Query<(), With<PaneMarker>>,
-) -> MultiplexerResult<CloseResult> {
-    let split = child_of
-        .get(pane)
-        .map(|c| c.parent())
-        .map_err(|_| MultiplexerError::PaneNotFound(pane))?;
-    if splits.get(split).is_err() {
-        return Err(MultiplexerError::CannotCloseLastPaneInWorkspace(workspace));
-    }
-    let kids: Vec<Entity> = children
-        .get(split)
-        .map(|c| c.iter().collect())
-        .unwrap_or_default();
-    let sibling = *kids
-        .iter()
-        .find(|&&e| e != pane)
-        .ok_or(MultiplexerError::PaneNotFound(pane))?;
-    let grandparent = child_of
-        .get(split)
-        .map(|c| c.parent())
-        .map_err(|_| MultiplexerError::MissingParentCell)?;
-    let split_index = children
-        .get(grandparent)
-        .ok()
-        .and_then(|gk| gk.iter().position(|e| e == split))
-        .unwrap_or(0);
-    let split_grow = nodes.get(split).map(|n| n.flex_grow).unwrap_or(1.0);
-
-    commands
-        .entity(grandparent)
-        .insert_children(split_index, &[sibling]);
-    set_child_grow(commands, sibling, split_grow);
-
-    commands.entity(pane).despawn();
-    commands.entity(split).despawn();
-
-    let survivor_pane = leftmost_pane(sibling, children, panes);
-    Ok(CloseResult { survivor_pane })
-}
-
-/// Walk down lhs-first to the first Pane leaf under `start`.
-pub(crate) fn leftmost_pane(
-    start: Entity,
-    children: &Query<&Children>,
-    panes: &Query<(), With<PaneMarker>>,
-) -> Entity {
-    let mut cur = start;
-    loop {
-        if panes.get(cur).is_ok() {
-            return cur;
-        }
-        match children.get(cur).ok().and_then(|k| k.iter().next()) {
-            Some(first) => cur = first,
-            None => return cur,
-        }
-    }
-}
-
 /// Collect every Pane leaf reachable from `root`, in DFS first-child-first
 /// order. Mirrors the old `ordered_pane_cells` ordering.
 pub(crate) fn ordered_panes(
@@ -409,41 +326,6 @@ pub(crate) fn ordered_panes(
         }
     }
     out
-}
-
-/// Swap two panes' layout positions, swapping their slot `flex_grow` so each
-/// SLOT keeps its proportion (slot-pinning). `a` and `b` must both be Pane
-/// leaves currently in the tree.
-pub(crate) fn swap_in_tree(
-    commands: &mut Commands,
-    a: Entity,
-    b: Entity,
-    child_of: &Query<&ChildOf>,
-    children: &Query<&Children>,
-    nodes: &Query<&Node>,
-) {
-    if a == b {
-        return;
-    }
-    let pa = child_of.get(a).map(|c| c.parent()).expect("a has parent");
-    let pb = child_of.get(b).map(|c| c.parent()).expect("b has parent");
-    let ia = children
-        .get(pa)
-        .ok()
-        .and_then(|k| k.iter().position(|e| e == a))
-        .unwrap_or(0);
-    let ib = children
-        .get(pb)
-        .ok()
-        .and_then(|k| k.iter().position(|e| e == b))
-        .unwrap_or(0);
-    let ga = nodes.get(a).map(|n| n.flex_grow).unwrap_or(1.0);
-    let gb = nodes.get(b).map(|n| n.flex_grow).unwrap_or(1.0);
-
-    commands.entity(pb).insert_children(ib, &[a]);
-    commands.entity(pa).insert_children(ia, &[b]);
-    set_child_grow(commands, a, gb);
-    set_child_grow(commands, b, ga);
 }
 
 #[cfg(test)]

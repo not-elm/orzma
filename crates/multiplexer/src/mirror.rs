@@ -80,7 +80,6 @@ impl MirrorReadCtx<'_, '_> {
     }
 
     /// The `PaneId` an entity maps to, or `None`.
-    #[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
     pub(crate) fn pane_id_of(&self, ent: Entity) -> Option<PaneId> {
         match self.node_ids.get(ent).ok()? {
             (Some(p), _) => Some(p.0),
@@ -1006,6 +1005,55 @@ fn mux_orientation_to_ecs(o: ozmux_mux::SplitOrientation) -> SplitOrientation {
     }
 }
 
+/// Converts the ECS `crate::layout::SplitOrientation` to `ozmux_mux::SplitOrientation`.
+pub(crate) fn ecs_orientation_to_mux(o: SplitOrientation) -> ozmux_mux::SplitOrientation {
+    match o {
+        SplitOrientation::Horizontal => ozmux_mux::SplitOrientation::Horizontal,
+        SplitOrientation::Vertical => ozmux_mux::SplitOrientation::Vertical,
+    }
+}
+
+/// Converts the ECS `crate::layout::Side` to `ozmux_mux::Side`.
+pub(crate) fn ecs_side_to_mux(s: crate::layout::Side) -> ozmux_mux::Side {
+    match s {
+        crate::layout::Side::Before => ozmux_mux::Side::Before,
+        crate::layout::Side::After => ozmux_mux::Side::After,
+    }
+}
+
+/// Converts the ECS `crate::components::SurfaceKind` to `ozmux_mux::SurfaceKind`.
+pub(crate) fn ecs_surface_kind_to_mux(k: SurfaceKind) -> ozmux_mux::SurfaceKind {
+    match k {
+        SurfaceKind::Terminal => ozmux_mux::SurfaceKind::Terminal,
+        SurfaceKind::Extension { entry } => ozmux_mux::SurfaceKind::Extension { entry },
+        SurfaceKind::Browser {
+            initial_url,
+            profile,
+        } => ozmux_mux::SurfaceKind::Browser {
+            initial_url,
+            profile: ecs_browser_profile_to_mux(profile),
+        },
+    }
+}
+
+/// Converts the ECS `crate::components::BrowserProfile` to `ozmux_mux::BrowserProfile`.
+fn ecs_browser_profile_to_mux(p: crate::components::BrowserProfile) -> ozmux_mux::BrowserProfile {
+    match p {
+        crate::components::BrowserProfile::Named { name } => {
+            ozmux_mux::BrowserProfile::Named { name }
+        }
+        crate::components::BrowserProfile::Incognito => ozmux_mux::BrowserProfile::Incognito,
+    }
+}
+
+/// Converts the ECS `crate::swap::SwapOffset` to `ozmux_mux::SwapOffset`.
+pub(crate) fn ecs_swap_offset_to_mux(o: crate::swap::SwapOffset) -> ozmux_mux::SwapOffset {
+    match o {
+        crate::swap::SwapOffset::Prev => ozmux_mux::SwapOffset::Prev,
+        crate::swap::SwapOffset::Next => ozmux_mux::SwapOffset::Next,
+    }
+}
+
 /// Converts a `ozmux_mux::SurfaceKind` to the ECS `crate::components::SurfaceKind`.
 fn mux_surface_kind_to_ecs(k: ozmux_mux::SurfaceKind) -> SurfaceKind {
     match k {
@@ -1559,6 +1607,37 @@ mod tests {
         app
     }
 
+    /// The only pane entity in a freshly-made single-pane app.
+    fn only_pane(app: &mut App) -> Entity {
+        app.world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .next()
+            .expect("only pane must exist")
+    }
+
+    /// The active workspace entity (bootstrap or most-recently-created).
+    fn active_workspace(app: &mut App) -> Entity {
+        app.world_mut()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(app.world())
+            .next()
+            .expect("active workspace must exist")
+    }
+
+    /// The first (and only) split entity directly under the workspace's layout-root container.
+    fn split_under_workspace_root(app: &App, ws: Entity) -> Entity {
+        let container = app
+            .world()
+            .get::<WorkspaceUiSubtree>(ws)
+            .expect("workspace must have WorkspaceUiSubtree")
+            .0;
+        app.world()
+            .get::<Children>(container)
+            .and_then(|c| c.iter().next())
+            .expect("container must have a child split")
+    }
+
     #[test]
     fn new_workspace_creates_ecs_tree_and_mirror_matches() {
         // Drive create_workspace once (now Mux-backed), assert the resulting ECS
@@ -1834,309 +1913,351 @@ mod tests {
     }
 
     #[test]
-    fn split_after_horizontal_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn split_after_horizontal_creates_two_pane_split() {
+        // Both oracle and mux sides now go through MultiplexerCommands → Mux;
+        // assert the resulting ECS tree directly and that mirror_matches holds.
+        let mut app = make_mux_app();
 
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-        );
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
-    }
-
-    #[test]
-    fn split_before_vertical_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
-
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::Before,
-            SplitOrientation::Vertical,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Vertical,
-            ozmux_mux::Side::Before,
-        );
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
-    }
-
-    #[test]
-    fn split_after_vertical_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
-
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Vertical,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Vertical,
-            ozmux_mux::Side::After,
-        );
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
-    }
-
-    #[test]
-    fn split_before_horizontal_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
-
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::Before,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::Before,
-        );
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
-    }
-
-    #[test]
-    fn close_pane_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
-
-        // Split into two panes (the new pane becomes active on both sides).
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-        );
-
-        // Three-pane tree so closing one promotes a sibling WITHOUT reaching
-        // the root (exercises LayoutChanged, not WorkspaceRootChanged).
-        let oracle_active = oracle
-            .world_mut()
-            .query_filtered::<(Entity, &ActivePane), With<WorkspaceMarker>>()
-            .iter(oracle.world())
-            .next()
-            .map(|(_, a)| a.0)
-            .expect("oracle active pane");
-        oracle
+        let p0 = only_pane(&mut app);
+        let p1 = app
             .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
                 mux.split_pane(
-                    oracle_active,
+                    p0,
                     crate::layout::Side::After,
+                    SplitOrientation::Horizontal,
+                )
+                .unwrap()
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let pane_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(pane_count, 2, "after split: 2 panes");
+
+        let ws = active_workspace(&mut app);
+        let split_ent = split_under_workspace_root(&app, ws);
+        assert_eq!(
+            app.world().get::<SplitNode>(split_ent).unwrap().orientation,
+            SplitOrientation::Horizontal,
+            "horizontal split"
+        );
+        let kids: Vec<Entity> = app
+            .world()
+            .get::<Children>(split_ent)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(kids, vec![p0, p1], "After: p0 first, new pane second");
+        assert_eq!(
+            app.world().get::<ActivePane>(ws).map(|a| a.0),
+            Some(p1),
+            "new pane is active"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
+    }
+
+    #[test]
+    fn split_before_vertical_creates_two_pane_split() {
+        let mut app = make_mux_app();
+
+        let p0 = only_pane(&mut app);
+        let p1 = app
+            .world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(
+                    p0,
+                    crate::layout::Side::Before,
                     SplitOrientation::Vertical,
                 )
-                .unwrap();
+                .unwrap()
             })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Vertical,
-            ozmux_mux::Side::After,
+        app.world_mut().flush();
+        app.update();
+
+        let pane_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(pane_count, 2, "after split: 2 panes");
+
+        let ws = active_workspace(&mut app);
+        let split_ent = split_under_workspace_root(&app, ws);
+        assert_eq!(
+            app.world().get::<SplitNode>(split_ent).unwrap().orientation,
+            SplitOrientation::Vertical,
+            "vertical split"
         );
-
-        // Close the active (newest) pane on both sides.
-        let oracle_to_close = oracle
-            .world_mut()
-            .query_filtered::<&ActivePane, With<WorkspaceMarker>>()
-            .iter(oracle.world())
-            .next()
-            .map(|a| a.0)
-            .expect("oracle active pane to close");
-        oracle
-            .world_mut()
-            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.close_pane(oracle_to_close).unwrap();
-            })
-            .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
-
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let pane = m.active_pane(ws).unwrap();
-            m.close_pane(pane).unwrap()
-        });
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        let kids: Vec<Entity> = app
+            .world()
+            .get::<Children>(split_ent)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(kids, vec![p1, p0], "Before: new pane first, p0 second");
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
     }
 
     #[test]
-    fn close_to_root_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn split_after_vertical_creates_two_pane_split() {
+        let mut app = make_mux_app();
 
-        // Two-pane workspace.
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-        );
-
-        // Close the active (new) pane: the sibling collapses to the root
-        // (WorkspaceRootChanged).
-        let oracle_to_close = oracle
-            .world_mut()
-            .query_filtered::<&ActivePane, With<WorkspaceMarker>>()
-            .iter(oracle.world())
-            .next()
-            .map(|a| a.0)
-            .expect("oracle active pane to close");
-        oracle
-            .world_mut()
-            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.close_pane(oracle_to_close).unwrap();
-            })
-            .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
-
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let pane = m.active_pane(ws).unwrap();
-            m.close_pane(pane).unwrap()
-        });
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
-    }
-
-    #[test]
-    fn swap_pane_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
-
-        // Two-pane workspace.
-        let oracle_first = oracle_only_pane(&mut oracle);
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-        );
-
-        // Swap the first pane with its next neighbor on both sides.
-        oracle
-            .world_mut()
-            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.swap_pane(oracle_first, crate::swap::SwapOffset::Next)
-                    .unwrap();
-            })
-            .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
-
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let first = m.ordered_panes(ws).unwrap()[0];
-            m.swap_pane(first, ozmux_mux::SwapOffset::Next).unwrap()
-        });
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
-    }
-
-    #[test]
-    fn swap_cross_parent_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
-
-        // Build a 3-pane tree: S( S2(p0, p2), p1 ).
-        // DFS order: [p0, p2, p1]. p2 (under S2) and p1 (under S) are
-        // DFS-adjacent but in different parent splits — swapping them
-        // exercises the 2-LayoutChanged cross-parent path.
-
-        // Step 1: split p0 horizontally After → S(p0, p1).
-        let oracle_p0 = oracle_only_pane(&mut oracle);
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-        );
-
-        // Step 2: split p0 vertically After → S( S2(p0, p2), p1 ).
-        // Oracle: split the original p0 entity.
-        let oracle_p2 = oracle
+        let p0 = only_pane(&mut app);
+        let p1 = app
             .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
                 mux.split_pane(
-                    oracle_p0,
+                    p0,
                     crate::layout::Side::After,
                     SplitOrientation::Vertical,
                 )
                 .unwrap()
             })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        // Mux: active pane after step 1 is p1 (index 1). p0 is index 0.
-        // Split p0 (ordered index 0) vertically After.
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let p0_id = m.ordered_panes(ws).unwrap()[0];
-            m.split_pane(
-                p0_id,
-                ozmux_mux::SplitOrientation::Vertical,
-                ozmux_mux::Side::After,
-                ozmux_mux::SurfaceKind::Terminal,
-            )
-            .unwrap()
-        });
+        let ws = active_workspace(&mut app);
+        let split_ent = split_under_workspace_root(&app, ws);
+        assert_eq!(
+            app.world().get::<SplitNode>(split_ent).unwrap().orientation,
+            SplitOrientation::Vertical,
+        );
+        let kids: Vec<Entity> = app
+            .world()
+            .get::<Children>(split_ent)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(kids, vec![p0, p1], "After: p0 first, new pane second");
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
+    }
 
-        // Confirm DFS order is [p0, p2, p1] (p2 at index 1, p1 at index 2).
-        // Swap p2 with its Next neighbor (p1) — cross-parent swap.
+    #[test]
+    fn split_before_horizontal_creates_two_pane_split() {
+        let mut app = make_mux_app();
 
-        // Oracle: swap p2 (oracle_p2) with Next.
-        oracle
+        let p0 = only_pane(&mut app);
+        let p1 = app
             .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.swap_pane(oracle_p2, crate::swap::SwapOffset::Next)
+                mux.split_pane(
+                    p0,
+                    crate::layout::Side::Before,
+                    SplitOrientation::Horizontal,
+                )
+                .unwrap()
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let ws = active_workspace(&mut app);
+        let split_ent = split_under_workspace_root(&app, ws);
+        assert_eq!(
+            app.world().get::<SplitNode>(split_ent).unwrap().orientation,
+            SplitOrientation::Horizontal,
+        );
+        let kids: Vec<Entity> = app
+            .world()
+            .get::<Children>(split_ent)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(kids, vec![p1, p0], "Before: new pane first, p0 second");
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
+    }
+
+    #[test]
+    fn close_pane_reduces_pane_count_and_mirror_matches() {
+        // Three-pane tree → close the newest pane → 2 panes remain (exercises
+        // LayoutChanged, not WorkspaceRootChanged). mirror_matches must hold.
+        let mut app = make_mux_app();
+
+        let p0 = only_pane(&mut app);
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Horizontal)
                     .unwrap();
             })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        // Mux: p2 is at ordered index 1 after the second split.
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let p2_id = m.ordered_panes(ws).unwrap()[1];
-            m.swap_pane(p2_id, ozmux_mux::SwapOffset::Next).unwrap()
-        });
+        let p2 = {
+            let ws = active_workspace(&mut app);
+            app.world().get::<ActivePane>(ws).unwrap().0
+        };
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(p2, crate::layout::Side::After, SplitOrientation::Vertical)
+                    .unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
 
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        let to_close = {
+            let ws = active_workspace(&mut app);
+            app.world().get::<ActivePane>(ws).unwrap().0
+        };
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.close_pane(to_close).unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let pane_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(pane_count, 2, "2 panes remain after close");
+        assert!(
+            app.world_mut().get_entity(to_close).is_err(),
+            "closed pane despawned"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
+    }
+
+    #[test]
+    fn close_to_root_reduces_to_single_pane_and_mirror_matches() {
+        // Two-pane workspace → close the active pane → 1 pane remains
+        // (exercises WorkspaceRootChanged). mirror_matches must hold.
+        let mut app = make_mux_app();
+
+        let p0 = only_pane(&mut app);
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Horizontal)
+                    .unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let to_close = {
+            let ws = active_workspace(&mut app);
+            app.world().get::<ActivePane>(ws).unwrap().0
+        };
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.close_pane(to_close).unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let pane_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(pane_count, 1, "only p0 remains after close");
+        let ws = active_workspace(&mut app);
+        assert_eq!(
+            app.world().get::<ActivePane>(ws).map(|a| a.0),
+            Some(p0),
+            "p0 is active after close"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
+    }
+
+    #[test]
+    fn swap_pane_reorders_children_and_mirror_matches() {
+        // Two-pane horizontal split: p0 (first), p1 (second / active).
+        // Swap p0 Next → p1 first, p0 second. mirror_matches must hold.
+        let mut app = make_mux_app();
+
+        let p0 = only_pane(&mut app);
+        let p1 = app
+            .world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Horizontal)
+                    .unwrap()
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.swap_pane(p0, crate::swap::SwapOffset::Next).unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let ws = active_workspace(&mut app);
+        let split_ent = split_under_workspace_root(&app, ws);
+        let kids: Vec<Entity> = app
+            .world()
+            .get::<Children>(split_ent)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(
+            kids,
+            vec![p1, p0],
+            "after swap: p1 first, p0 second"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
+    }
+
+    #[test]
+    fn swap_cross_parent_reorders_and_mirror_matches() {
+        // Build tree S( S2(p0, p2), p1 ). DFS: [p0, p2, p1].
+        // Swap p2 (index 1) with its Next neighbor p1 (index 2) — cross-parent.
+        // mirror_matches must hold after the swap.
+        let mut app = make_mux_app();
+
+        let p0 = only_pane(&mut app);
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Horizontal)
+                    .unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let p2 = app
+            .world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Vertical)
+                    .unwrap()
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.swap_pane(p2, crate::swap::SwapOffset::Next).unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        let pane_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(pane_count, 3, "3 panes still present after cross-parent swap");
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches after cross-parent swap");
     }
 
     #[test]
@@ -2193,44 +2314,45 @@ mod tests {
     }
 
     #[test]
-    fn focus_pane_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn focus_pane_sets_active_pane_and_mirror_matches() {
+        // Split to 2 panes (p1 becomes active after the split). Then focus p0;
+        // assert ActivePane = p0 and mirror_matches holds.
+        let mut app = make_mux_app();
 
-        // Split to 2 panes (active becomes p1 on both sides after the split).
-        let oracle_p0 = oracle_only_pane(&mut oracle);
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-        );
+        let p0 = only_pane(&mut app);
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Horizontal)
+                    .unwrap();
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
 
-        // Focus the non-active pane (p0) on both sides.
-        oracle
-            .world_mut()
+        let ws = active_workspace(&mut app);
+        let p1 = app.world().get::<ActivePane>(ws).unwrap().0;
+        assert_ne!(p0, p1, "p1 is active after split");
+
+        app.world_mut()
             .run_system_once(
                 move |mut mux: crate::commands::MultiplexerCommands,
                       ws_q: Query<Entity, With<WorkspaceMarker>>| {
                     let ws = ws_q.iter().next().expect("workspace must exist");
-                    mux.set_active_pane(ws, oracle_p0).unwrap();
+                    mux.set_active_pane(ws, p0).unwrap();
                 },
             )
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let p0 = m.ordered_panes(ws).unwrap()[0];
-            m.focus_pane(p0).unwrap()
-        });
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        let ws = active_workspace(&mut app);
+        assert_eq!(
+            app.world().get::<ActivePane>(ws).map(|a| a.0),
+            Some(p0),
+            "p0 is active after focus"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
     }
 
     #[test]
