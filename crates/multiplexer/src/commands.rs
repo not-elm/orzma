@@ -582,7 +582,7 @@ mod tests {
     /// Builds an App with `MultiplexerPlugin` (which inserts `MuxState` and runs the
     /// Startup materialize), ticks once so Startup fires, and returns the App plus
     /// the Mux-seeded initial workspace entity.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 3-6")]
     pub(crate) fn mux_backed_app() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)

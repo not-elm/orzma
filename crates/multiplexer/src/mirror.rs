@@ -1393,12 +1393,52 @@ mod tests {
     }
 
     #[test]
-    fn materialize_matches_create_workspace_bootstrap() {
-        // Both apps use MultiplexerPlugin, which now auto-materializes via Startup.
-        // Oracle and Mux apps both start from the same Mux::new() baseline.
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+    fn materialized_bootstrap_has_expected_tree() {
+        // The plugin inserts MuxState(Mux::new()) + materializes it at Startup.
+        // Assert the bootstrap mirror DIRECTLY (not vs an oracle — once the flip
+        // lands, an oracle built from MultiplexerCommands would be Mux-driven too,
+        // making such a comparison a tautology): exactly one workspace/pane/surface
+        // with the active pointers + subtree wired, and mirror_matches holds.
+        let mut app = make_mux_app();
+        let ws_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(app.world())
+            .count();
+        let pane_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .count();
+        let surf_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            (ws_count, pane_count, surf_count),
+            (1, 1, 1),
+            "materialized bootstrap = one workspace/pane/surface"
+        );
+        let ws = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(app.world())
+            .next()
+            .expect("bootstrap workspace");
+        assert!(
+            app.world().get::<ActivePane>(ws).is_some(),
+            "workspace has ActivePane"
+        );
+        assert!(
+            app.world().get::<WorkspaceUiSubtree>(ws).is_some(),
+            "workspace has WorkspaceUiSubtree"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "bootstrap mirror is consistent"
+        );
     }
 
     #[test]
