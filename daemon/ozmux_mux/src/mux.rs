@@ -741,6 +741,15 @@ impl Mux {
             });
         }
 
+        // NOTE: PaneCreated (already in events[0]) adds `surface` to `new_pane`'s
+        // manifest; SurfaceMoved tells consumers to remove it from `source_pane`.
+        // Emit after PaneCreated so apply-order never double-counts the surface.
+        events.push(MuxEvent::SurfaceMoved {
+            surface,
+            from_pane: source_pane,
+            to_pane: new_pane,
+        });
+
         Ok(events)
     }
 
@@ -2185,8 +2194,9 @@ mod tests {
         let events = mux
             .break_surface_to_pane(ext_surface, SplitOrientation::Horizontal, Side::After)
             .unwrap();
-        match &events[0] {
+        let new_pane = match &events[0] {
             MuxEvent::PaneCreated {
+                pane: new_pane,
                 surfaces,
                 active_surface,
                 ..
@@ -2200,8 +2210,30 @@ mod tests {
                     surfaces[0].surface, *active_surface,
                     "the moved surface is the active surface"
                 );
+                *new_pane
             }
             _ => panic!("PaneCreated expected first"),
+        };
+        let surface_moved = events
+            .iter()
+            .find(|e| matches!(e, MuxEvent::SurfaceMoved { .. }));
+        match surface_moved {
+            Some(MuxEvent::SurfaceMoved {
+                surface,
+                from_pane,
+                to_pane,
+            }) => {
+                assert_eq!(
+                    *surface, ext_surface,
+                    "SurfaceMoved names the moved surface"
+                );
+                assert_eq!(*from_pane, pane, "SurfaceMoved names the source pane");
+                assert_eq!(
+                    *to_pane, new_pane,
+                    "SurfaceMoved names the destination pane"
+                );
+            }
+            _ => panic!("SurfaceMoved expected in event list"),
         }
     }
 
@@ -2288,6 +2320,31 @@ mod tests {
             !mux.surfaces(source_pane).unwrap().contains(&second_surface),
             "moved surface removed from source pane"
         );
+
+        let surface_moved = events
+            .iter()
+            .find(|e| matches!(e, MuxEvent::SurfaceMoved { .. }));
+        match surface_moved {
+            Some(MuxEvent::SurfaceMoved {
+                surface,
+                from_pane,
+                to_pane,
+            }) => {
+                assert_eq!(
+                    *surface, second_surface,
+                    "SurfaceMoved names the moved surface"
+                );
+                assert_eq!(
+                    *from_pane, source_pane,
+                    "SurfaceMoved names the source pane"
+                );
+                assert_eq!(
+                    *to_pane, new_pane,
+                    "SurfaceMoved names the destination pane"
+                );
+            }
+            _ => panic!("SurfaceMoved expected in event list"),
+        }
     }
 
     #[test]

@@ -356,6 +356,12 @@ pub fn apply_event(
         | MuxEvent::WorkspaceSelected { .. }
         | MuxEvent::SurfaceCwdChanged { .. } => {}
 
+        // NOTE: PaneCreated (processed first) already reparents the surface via
+        // `SurfaceOf(pane_ent)`, which Bevy's relationship system uses to update
+        // the source pane's Surfaces collection automatically. SurfaceMoved is
+        // consumed here for exhaustiveness; no additional ECS mutation is needed.
+        MuxEvent::SurfaceMoved { .. } => {}
+
         MuxEvent::LayoutChanged {
             workspace,
             root,

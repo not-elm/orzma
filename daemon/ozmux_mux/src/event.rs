@@ -139,6 +139,19 @@ pub enum MuxEvent {
         /// The new working directory.
         cwd: PathBuf,
     },
+    /// A surface was moved from one pane to another (break-to-pane).
+    ///
+    /// `PaneCreated` (emitted first) adds the surface to `to_pane`'s manifest.
+    /// `SurfaceMoved` (emitted after) tells consumers to remove it from `from_pane`.
+    /// Apply them in emission order so a consumer never double-counts.
+    SurfaceMoved {
+        /// The moved surface.
+        surface: SurfaceId,
+        /// Source pane (the surface left here).
+        from_pane: PaneId,
+        /// Destination pane (the surface now lives here).
+        to_pane: PaneId,
+    },
 }
 
 #[cfg(test)]
