@@ -265,10 +265,32 @@ pub fn apply_event(
         }
 
         MuxEvent::WorkspaceDestroyed { workspace } => {
+            // NOTE: the Mux emits no per-split event, so unmap the whole layout
+            // subtree (splits + panes) here or their reverse-map entries leak
+            // (the entities cascade-despawn with the workspace, but the maps would
+            // keep stale ids). Panes/surfaces are usually already unmapped by the
+            // preceding PaneClosed/SurfaceClosed events; these removes are idempotent.
+            if let Some(container) = state.layout_roots.get(*workspace).copied()
+                && let Ok(kids) = read.children.get(container)
+                && let Some(top) = kids.iter().next()
+            {
+                let mut nodes = Vec::new();
+                read.capture_subtree(top, &mut nodes);
+                for (_ent, id) in nodes {
+                    match id {
+                        NodeId::Pane(p) => {
+                            state.panes.remove(p);
+                        }
+                        NodeId::Split(s) => {
+                            state.splits.remove(s);
+                        }
+                    }
+                }
+            }
+            state.layout_roots.remove(*workspace);
             if let Some(ent) = state.workspaces.remove(*workspace) {
                 commands.entity(ent).despawn();
             }
-            state.layout_roots.remove(*workspace);
         }
 
         // NOTE: GUI-side concerns (Plan 2b-2) or size-flow events — no ECS mirror
@@ -1636,6 +1658,30 @@ mod tests {
             .count();
         assert_eq!(oracle_count, 1, "oracle workspace count after close");
         assert_eq!(mux_count, 1, "mux workspace count after close");
+    }
+
+    #[test]
+    fn close_workspace_with_splits_unmaps_splits() {
+        // A workspace closed while it contains a Split must unmap that split from
+        // state.splits — the Mux emits no per-split event. run_mux_op asserts
+        // assert_no_map_leaks, so a leaked split entry fails here (it did pre-fix).
+        let mut mux_app = make_mux_app();
+        run_mux_op(&mut mux_app, |m| m.new_workspace().unwrap());
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let p = m.active_pane(ws).unwrap();
+            m.split_pane(
+                p,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            m.close_workspace(ws).unwrap()
+        });
     }
 
     /// The oracle app's single (bootstrap) pane entity.
