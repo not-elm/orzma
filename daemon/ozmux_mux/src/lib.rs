@@ -14,7 +14,7 @@ pub mod tree;
 
 pub use direction::{CycleDirection, PaneDirection, SwapOffset};
 pub use error::{MuxError, MuxResult};
-pub use event::MuxEvent;
+pub use event::{MuxEvent, SurfaceEntry};
 pub use geometry::Rect;
 pub use id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
 pub use mux::Mux;

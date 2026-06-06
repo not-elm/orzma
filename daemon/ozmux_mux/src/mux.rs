@@ -3,7 +3,7 @@
 
 use crate::direction::{CycleDirection, PaneDirection, SwapOffset};
 use crate::error::{MuxError, MuxResult};
-use crate::event::MuxEvent;
+use crate::event::{MuxEvent, SurfaceEntry};
 use crate::geometry::{Rect, split_cells};
 use crate::id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
 use crate::surface::{Surface, SurfaceKind};
@@ -216,7 +216,8 @@ impl Mux {
             MuxEvent::PaneCreated {
                 pane: new_pane,
                 workspace,
-                surface_kind,
+                surfaces: self.pane_surface_entries(new_pane),
+                active_surface: self.panes[new_pane].active_surface,
             },
             // NOTE: `root` is the *replaced* node (the old pane slot), NOT the
             // new split — the consumer uses it as a find-and-replace key to
@@ -565,7 +566,8 @@ impl Mux {
             MuxEvent::PaneCreated {
                 pane,
                 workspace,
-                surface_kind: SurfaceKind::Terminal,
+                surfaces: self.pane_surface_entries(pane),
+                active_surface: self.panes[pane].active_surface,
             },
             MuxEvent::WorkspaceSelected { session, workspace },
             MuxEvent::ActivePaneChanged { workspace, pane },
@@ -715,11 +717,17 @@ impl Mux {
         self.panes[new_pane].surfaces.push(surface);
         self.panes[new_pane].active_surface = surface;
 
-        // NOTE: split_pane_empty stamps PaneCreated with the bootstrap's
-        // Terminal kind; correct it to the MOVED surface's kind so subscribers
-        // initialize the right surface type (Extension/Browser, not Terminal).
-        if let MuxEvent::PaneCreated { surface_kind, .. } = &mut events[0] {
-            *surface_kind = self.surfaces[surface].kind.clone();
+        // NOTE: split_pane_empty stamps PaneCreated with the bootstrap surface
+        // (Terminal kind, empty cwd); correct the manifest to the MOVED surface
+        // so subscribers initialize the right surface type and id.
+        if let MuxEvent::PaneCreated {
+            surfaces,
+            active_surface,
+            ..
+        } = &mut events[0]
+        {
+            *surfaces = self.pane_surface_entries(new_pane);
+            *active_surface = self.panes[new_pane].active_surface;
         }
 
         self.panes[source_pane].surfaces.retain(|s| *s != surface);
@@ -912,7 +920,8 @@ impl Mux {
             MuxEvent::PaneCreated {
                 pane: new_pane,
                 workspace,
-                surface_kind: SurfaceKind::Terminal,
+                surfaces: self.pane_surface_entries(new_pane),
+                active_surface: self.panes[new_pane].active_surface,
             },
             MuxEvent::LayoutChanged {
                 workspace,
@@ -1196,6 +1205,21 @@ impl Mux {
             }
         }
         max_d
+    }
+
+    fn pane_surface_entries(&self, pane: PaneId) -> Vec<SurfaceEntry> {
+        self.panes[pane]
+            .surfaces
+            .iter()
+            .map(|&sid| {
+                let s = &self.surfaces[sid];
+                SurfaceEntry {
+                    surface: sid,
+                    kind: s.kind.clone(),
+                    cwd: s.cwd.clone().unwrap_or_default(),
+                }
+            })
+            .collect()
     }
 }
 
@@ -1985,15 +2009,17 @@ mod tests {
             } => (session, workspace),
             _ => panic!("first event must be WorkspaceCreated"),
         };
-        let pane = match events[1] {
+        let pane = match &events[1] {
             MuxEvent::PaneCreated {
                 pane,
                 workspace: ws,
-                ref surface_kind,
+                surfaces,
+                ..
             } => {
-                assert_eq!(ws, workspace);
-                assert!(matches!(surface_kind, SurfaceKind::Terminal));
-                pane
+                assert_eq!(*ws, workspace);
+                assert_eq!(surfaces.len(), 1);
+                assert!(matches!(surfaces[0].kind, SurfaceKind::Terminal));
+                *pane
             }
             _ => panic!("second event must be PaneCreated"),
         };
@@ -2160,10 +2186,21 @@ mod tests {
             .break_surface_to_pane(ext_surface, SplitOrientation::Horizontal, Side::After)
             .unwrap();
         match &events[0] {
-            MuxEvent::PaneCreated { surface_kind, .. } => assert_eq!(
-                *surface_kind, ext,
-                "PaneCreated carries the MOVED surface's kind, not Terminal"
-            ),
+            MuxEvent::PaneCreated {
+                surfaces,
+                active_surface,
+                ..
+            } => {
+                assert_eq!(surfaces.len(), 1, "PaneCreated carries exactly one surface");
+                assert_eq!(
+                    surfaces[0].kind, ext,
+                    "PaneCreated carries the MOVED surface's kind, not Terminal"
+                );
+                assert_eq!(
+                    surfaces[0].surface, *active_surface,
+                    "the moved surface is the active surface"
+                );
+            }
             _ => panic!("PaneCreated expected first"),
         }
     }

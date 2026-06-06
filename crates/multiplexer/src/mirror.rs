@@ -12,7 +12,9 @@ use crate::error::MultiplexerError;
 use crate::layout::{SplitOrientation, pane_frame_node, split_node_bundle};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use ozmux_mux::{LayoutNode, MuxError, MuxEvent, NodeId, PaneId, SplitId, SurfaceId, WorkspaceId};
+use ozmux_mux::{
+    LayoutNode, MuxError, MuxEvent, NodeId, PaneId, SplitId, SurfaceEntry, SurfaceId, WorkspaceId,
+};
 use slotmap::SecondaryMap;
 use std::collections::{HashMap, HashSet};
 
@@ -225,7 +227,8 @@ pub fn apply_event(
         MuxEvent::PaneCreated {
             pane,
             workspace,
-            surface_kind,
+            surfaces,
+            active_surface,
         } => {
             let ws_ent = state.workspaces[*workspace];
             let pane_ent = spawn_pane(commands, state, *pane, ws_ent, 1.0);
@@ -240,23 +243,11 @@ pub fn apply_event(
                 commands.entity(pane_ent).insert(ChildOf(container));
             }
 
-            // NOTE: query surfaces from the Mux AFTER the mutation so the list
-            // already includes any surfaces carried by this new pane (e.g. a
-            // moved surface from break_surface_to_pane uses the existing
-            // SurfaceId; detect reuse by checking state.surfaces).
-            let surface_ids = state
-                .mux
-                .surfaces(*pane)
-                .expect("PaneCreated: pane surfaces must be readable");
-            let active_surface_id = state
-                .mux
-                .active_surface(*pane)
-                .expect("PaneCreated: active surface must exist");
-
-            let _ = surface_kind;
-
             let mut active_surface_ent = None;
-            for sid in &surface_ids {
+            for SurfaceEntry {
+                surface: sid, kind, ..
+            } in surfaces
+            {
                 let surf_ent = if state.surfaces.contains_key(*sid) {
                     let ent = state.surfaces[*sid];
                     commands
@@ -264,13 +255,9 @@ pub fn apply_event(
                         .insert((ChildOf(pane_ent), SurfaceOf(pane_ent)));
                     ent
                 } else {
-                    let sk = state
-                        .mux
-                        .surface_kind(*sid)
-                        .expect("PaneCreated: surface kind must be readable");
-                    spawn_surface(commands, state, *sid, pane_ent, sk)
+                    spawn_surface(commands, state, *sid, pane_ent, kind.clone())
                 };
-                if *sid == active_surface_id {
+                if sid == active_surface {
                     active_surface_ent = Some(surf_ent);
                 }
             }
@@ -539,9 +526,21 @@ fn realize_subtree(
     }
 }
 
-/// Spawns a brand-new pane plus its surfaces (querying the `Mux` for the
-/// surface list), reusing any already-mapped surface entity (e.g. a moved
-/// surface) and spawning the rest. Sets `ActiveSurface`.
+/// Spawns a brand-new pane plus its surfaces (querying the live `Mux` for the
+/// surface list), reusing any already-mapped surface entity and spawning the
+/// rest. Sets `ActiveSurface`.
+///
+/// In the in-process Bevy path every new pane is introduced by a `PaneCreated`
+/// event (handled by `apply_event`) BEFORE any `LayoutChanged` that references
+/// it, so `realize_subtree` always finds the pane already mapped and returns
+/// early — this function is the ECS-only fallback for subtrees that somehow
+/// appear without a preceding `PaneCreated` (not reachable on the normal wire
+/// path).
+// NOTE: the wire path (Plan 3 remote client) never reaches this function for
+// a brand-new pane: PaneCreated always precedes LayoutChanged and carries the
+// full surface manifest, so apply_event's PaneCreated arm inserts the pane
+// into state.panes before realize_subtree is called. This Mux-bridge path
+// exists only as a safeguard for edge cases inside the in-process app.
 fn realize_new_pane(
     commands: &mut Commands,
     state: &mut MuxState,

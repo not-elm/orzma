@@ -8,6 +8,17 @@ use crate::tree::LayoutNode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// One surface in a pane's creation manifest (self-sufficient for the wire).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceEntry {
+    /// The surface.
+    pub surface: SurfaceId,
+    /// Its kind.
+    pub kind: SurfaceKind,
+    /// Its working directory.
+    pub cwd: PathBuf,
+}
+
 /// A single state-change notification.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MuxEvent {
@@ -44,14 +55,16 @@ pub enum MuxEvent {
         /// The new name.
         name: String,
     },
-    /// A pane was created (with its initial surface kind).
+    /// A pane was created with its full surface manifest.
     PaneCreated {
         /// The new pane.
         pane: PaneId,
         /// Owning workspace.
         workspace: WorkspaceId,
-        /// The pane's initial surface kind.
-        surface_kind: SurfaceKind,
+        /// All surfaces the pane is created with (creation order).
+        surfaces: Vec<SurfaceEntry>,
+        /// The pane's initially-active surface.
+        active_surface: SurfaceId,
     },
     /// A pane was closed.
     PaneClosed {
