@@ -794,7 +794,10 @@ pub(crate) fn lift(state: &MuxState, err: MuxError) -> MultiplexerError {
 }
 
 /// Extracts the `PaneId` from the first `PaneCreated` event in `events`, or `None`.
-#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")
+)]
 pub(crate) fn created_pane_id(events: &[MuxEvent]) -> Option<PaneId> {
     events.iter().find_map(|e| match e {
         MuxEvent::PaneCreated { pane, .. } => Some(*pane),
@@ -812,7 +815,10 @@ pub(crate) fn created_workspace_id(events: &[MuxEvent]) -> Option<WorkspaceId> {
 }
 
 /// Extracts the `SurfaceId` from the first `SurfaceSpawned` event in `events`, or `None`.
-#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")
+)]
 pub(crate) fn single_spawned_surface_id(events: &[MuxEvent]) -> Option<SurfaceId> {
     events.iter().find_map(|e| match e {
         MuxEvent::SurfaceSpawned { surface, .. } => Some(*surface),
@@ -2370,14 +2376,9 @@ mod tests {
 
     #[test]
     fn lift_maps_pane_not_found() {
-        let mut mux = ozmux_mux::Mux::new();
-        let ws = mux.active_workspace();
-        let p = mux.active_pane(ws).unwrap();
-        // Split to get two panes, then close the new pane to get a live PaneId.
-        // Now close the original pane (only one left after the new one is closed)
-        // by first splitting and then closing both — simplest: just try closing
-        // the only pane directly to get CannotCloseLastPaneInWorkspace, but we
-        // need PaneNotFound. Use a separate Mux to generate a stale PaneId.
+        // `mux` stays at its initial state; a separate `mux2` generates a stale
+        // PaneId that is not registered in `mux`'s reverse maps.
+        let mux = ozmux_mux::Mux::new();
         let mut mux2 = ozmux_mux::Mux::new();
         let ws2 = mux2.active_workspace();
         let p2 = mux2.active_pane(ws2).unwrap();
