@@ -4,6 +4,8 @@
 
 mod codec;
 mod message;
+pub mod mirror;
 
 pub use codec::{MAX_LINE_BYTES, PROTOCOL_VERSION, read_message, write_message};
 pub use message::{ClientMessage, ServerMessage};
+pub use mirror::ClientMirror;

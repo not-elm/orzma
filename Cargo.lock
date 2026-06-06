@@ -4693,6 +4693,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_proto"
+version = "0.1.0"
+dependencies = [
+ "ozmux_mux",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ozmux_vt"
 version = "0.1.0"
 dependencies = [

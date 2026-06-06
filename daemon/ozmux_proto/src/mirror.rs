@@ -1,0 +1,475 @@
+//! Passive client-side mirror: rebuilds one session's state from a
+//! `SessionSnapshot` + a `MuxEvent` stream, with NO `Mux` reference.
+//! DTO-backed — it updates `SessionSnapshot`-shaped state in place and
+//! derives layout liveness from its own tree via `ozmux_mux::collect_node_ids`.
+
+use ozmux_mux::{
+    LayoutNode, MuxEvent, NodeId, PaneId, PaneSnapshot, SessionSnapshot, SplitId, SurfaceState,
+    WorkspaceId, WorkspaceSnapshot, collect_node_ids,
+};
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+/// Client-side reconstruction of one session's state from a cold-attach
+/// snapshot followed by a `MuxEvent` delta stream.
+pub struct ClientMirror {
+    session: SessionSnapshot,
+}
+
+impl ClientMirror {
+    /// Builds a mirror from a cold-attach snapshot.
+    pub fn from_snapshot(snapshot: SessionSnapshot) -> Self {
+        Self { session: snapshot }
+    }
+
+    /// Applies one delta event (no `Mux` reference required).
+    pub fn apply_event(&mut self, event: &MuxEvent) {
+        match event {
+            MuxEvent::SessionCreated { .. } => {}
+
+            MuxEvent::WorkspaceCreated {
+                workspace, name, ..
+            } => {
+                let placeholder_pane_id = PaneId::default();
+                self.session.workspaces.push(WorkspaceSnapshot {
+                    workspace: *workspace,
+                    name: name.clone(),
+                    layout: LayoutNode::Pane {
+                        id: placeholder_pane_id,
+                        surface_kind: ozmux_mux::SurfaceKind::Terminal,
+                        cols: 0,
+                        rows: 0,
+                    },
+                    size: None,
+                    active_pane: None,
+                    panes: Vec::new(),
+                });
+            }
+
+            MuxEvent::WorkspaceDestroyed { workspace } => {
+                self.session
+                    .workspaces
+                    .retain(|ws| ws.workspace != *workspace);
+            }
+
+            MuxEvent::WorkspaceSelected { workspace, .. } => {
+                self.session.active_workspace = Some(*workspace);
+            }
+
+            MuxEvent::WorkspaceRenamed { workspace, name } => {
+                if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
+                    ws.name = name.clone();
+                }
+            }
+
+            MuxEvent::PaneCreated {
+                pane,
+                workspace,
+                surfaces,
+                active_surface,
+            } => {
+                let pane_snap = PaneSnapshot {
+                    pane: *pane,
+                    surfaces: surfaces
+                        .iter()
+                        .map(|e| SurfaceState {
+                            surface: e.surface,
+                            kind: e.kind.clone(),
+                            cwd: e.cwd.clone(),
+                        })
+                        .collect(),
+                    active_surface: Some(*active_surface),
+                };
+                if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
+                    ws.panes.push(pane_snap);
+                }
+            }
+
+            MuxEvent::PaneClosed { pane } => {
+                for ws in &mut self.session.workspaces {
+                    ws.panes.retain(|p| p.pane != *pane);
+                }
+            }
+
+            MuxEvent::ActivePaneChanged { workspace, pane } => {
+                if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
+                    ws.active_pane = Some(*pane);
+                }
+            }
+
+            MuxEvent::LayoutChanged {
+                workspace,
+                root,
+                subtree,
+            } => {
+                if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
+                    apply_layout_changed(ws, *root, subtree.clone());
+                }
+            }
+
+            MuxEvent::WorkspaceRootChanged { workspace, root } => {
+                if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
+                    ws.layout = root.clone();
+                    prune_panes(ws);
+                }
+            }
+
+            MuxEvent::LayoutRatioChanged { split, ratio } => {
+                for ws in &mut self.session.workspaces {
+                    set_split_ratio(&mut ws.layout, *split, *ratio);
+                }
+            }
+
+            MuxEvent::PaneResized { pane, cols, rows } => {
+                for ws in &mut self.session.workspaces {
+                    set_pane_size(&mut ws.layout, *pane, *cols, *rows);
+                }
+            }
+
+            MuxEvent::SurfaceSpawned {
+                pane,
+                surface,
+                kind,
+            } => {
+                if let Some(pane_snap) = find_pane_mut(&mut self.session.workspaces, *pane) {
+                    pane_snap.surfaces.push(SurfaceState {
+                        surface: *surface,
+                        kind: kind.clone(),
+                        cwd: PathBuf::new(),
+                    });
+                }
+            }
+
+            MuxEvent::SurfaceClosed { surface } => {
+                for ws in &mut self.session.workspaces {
+                    for pane_snap in &mut ws.panes {
+                        pane_snap.surfaces.retain(|s| s.surface != *surface);
+                    }
+                }
+            }
+
+            MuxEvent::ActiveSurfaceChanged { pane, surface } => {
+                if let Some(pane_snap) = find_pane_mut(&mut self.session.workspaces, *pane) {
+                    pane_snap.active_surface = Some(*surface);
+                }
+            }
+
+            MuxEvent::SurfaceCwdChanged { surface, cwd } => {
+                for ws in &mut self.session.workspaces {
+                    for pane_snap in &mut ws.panes {
+                        for surf in &mut pane_snap.surfaces {
+                            if surf.surface == *surface {
+                                surf.cwd = cwd.clone();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // NOTE: `PaneCreated` (emitted first) already adds `surface` to `to_pane`'s
+            // manifest; `SurfaceMoved` removes it from `from_pane`. Apply in emission order.
+            MuxEvent::SurfaceMoved {
+                surface,
+                from_pane,
+                to_pane: _,
+            } => {
+                if let Some(pane_snap) = find_pane_mut(&mut self.session.workspaces, *from_pane) {
+                    pane_snap.surfaces.retain(|s| s.surface != *surface);
+                }
+            }
+        }
+    }
+
+    /// Returns the current reconstructed snapshot for comparison.
+    pub fn to_snapshot(&self) -> SessionSnapshot {
+        self.session.clone()
+    }
+}
+
+fn find_workspace_mut(
+    workspaces: &mut [WorkspaceSnapshot],
+    id: WorkspaceId,
+) -> Option<&mut WorkspaceSnapshot> {
+    workspaces.iter_mut().find(|ws| ws.workspace == id)
+}
+
+fn find_pane_mut(workspaces: &mut [WorkspaceSnapshot], id: PaneId) -> Option<&mut PaneSnapshot> {
+    for ws in workspaces {
+        if let Some(p) = ws.panes.iter_mut().find(|p| p.pane == id) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Recursively find the node matching `target` in `tree`'s children and
+/// replace it with `sub`. Returns `true` if a replacement was made.
+/// Does NOT replace the root itself — callers handle the root case separately.
+fn replace_node(tree: &mut LayoutNode, target: NodeId, sub: LayoutNode) -> bool {
+    match tree {
+        LayoutNode::Split { first, second, .. } => {
+            if try_replace_child(first, target, sub.clone()) {
+                return true;
+            }
+            if try_replace_child(second, target, sub) {
+                return true;
+            }
+            false
+        }
+        LayoutNode::Pane { .. } => false,
+    }
+}
+
+/// Replace `child` (a `Box<LayoutNode>`) if its root matches `target`.
+fn try_replace_child(child: &mut Box<LayoutNode>, target: NodeId, sub: LayoutNode) -> bool {
+    let matches = match (child.as_ref(), target) {
+        (LayoutNode::Split { id, .. }, NodeId::Split(tid)) => *id == tid,
+        (LayoutNode::Pane { id, .. }, NodeId::Pane(tid)) => *id == tid,
+        _ => false,
+    };
+    if matches {
+        **child = sub;
+        return true;
+    }
+    // Recurse.
+    match child.as_mut() {
+        LayoutNode::Split { first, second, .. } => {
+            if try_replace_child(first, target, sub.clone()) {
+                return true;
+            }
+            if try_replace_child(second, target, sub) {
+                return true;
+            }
+            false
+        }
+        LayoutNode::Pane { .. } => false,
+    }
+}
+
+/// Replace a split's ratio in the tree (recurse until the `SplitId` matches).
+fn set_split_ratio(tree: &mut LayoutNode, target: SplitId, ratio: f32) {
+    if let LayoutNode::Split {
+        id,
+        ratio: r,
+        first,
+        second,
+        ..
+    } = tree
+    {
+        if *id == target {
+            *r = ratio;
+        } else {
+            set_split_ratio(first, target, ratio);
+            set_split_ratio(second, target, ratio);
+        }
+    }
+}
+
+/// Update a leaf pane's resolved size in the tree.
+fn set_pane_size(tree: &mut LayoutNode, target: PaneId, cols: u16, rows: u16) {
+    match tree {
+        LayoutNode::Pane {
+            id,
+            cols: c,
+            rows: r,
+            ..
+        } => {
+            if *id == target {
+                *c = cols;
+                *r = rows;
+            }
+        }
+        LayoutNode::Split { first, second, .. } => {
+            set_pane_size(first, target, cols, rows);
+            set_pane_size(second, target, cols, rows);
+        }
+    }
+}
+
+/// Remove panes from a workspace's pane list if they are no longer in the
+/// layout tree (checked via `collect_node_ids`).
+fn prune_panes(ws: &mut WorkspaceSnapshot) {
+    let mut live_ids = HashSet::new();
+    collect_node_ids(&ws.layout, &mut live_ids);
+    ws.panes
+        .retain(|p| live_ids.contains(&NodeId::Pane(p.pane)));
+}
+
+/// Applies `replace_node` at the workspace root level, falling back to
+/// replacing the whole layout when the root itself matches.
+pub(crate) fn apply_layout_changed(
+    ws: &mut WorkspaceSnapshot,
+    target: NodeId,
+    subtree: LayoutNode,
+) {
+    let root_matches = match (&ws.layout, target) {
+        (LayoutNode::Split { id, .. }, NodeId::Split(tid)) => *id == tid,
+        (LayoutNode::Pane { id, .. }, NodeId::Pane(tid)) => *id == tid,
+        _ => false,
+    };
+    if root_matches {
+        ws.layout = subtree;
+    } else {
+        replace_node(&mut ws.layout, target, subtree);
+    }
+    prune_panes(ws);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::{PROTOCOL_VERSION, read_message, write_message};
+    use crate::message::ServerMessage;
+    use ozmux_mux::{Mux, PaneDirection, Side, SplitOrientation, SurfaceKind, SwapOffset};
+    use std::io::Cursor;
+
+    fn id_key<T: serde::Serialize>(id: &T) -> String {
+        serde_json::to_string(id).unwrap_or_default()
+    }
+
+    fn normalize_snapshot(mut snap: SessionSnapshot) -> SessionSnapshot {
+        snap.workspaces
+            .sort_by(|a, b| id_key(&a.workspace).cmp(&id_key(&b.workspace)));
+        for ws in &mut snap.workspaces {
+            ws.panes
+                .sort_by(|a, b| id_key(&a.pane).cmp(&id_key(&b.pane)));
+            for pane in &mut ws.panes {
+                pane.surfaces
+                    .sort_by(|a, b| id_key(&a.surface).cmp(&id_key(&b.surface)));
+            }
+        }
+        snap
+    }
+
+    #[test]
+    fn snapshot_plus_events_reconstructs_mux() {
+        let mut mux = Mux::new();
+        let session = mux.sessions()[0];
+
+        let ws0 = mux.active_workspace();
+        let pane0 = mux.active_pane(ws0).unwrap();
+
+        let mut events: Vec<MuxEvent> = Vec::new();
+
+        // Set workspace size so PaneResized events fire.
+        events.extend(mux.set_workspace_size(ws0, 120, 40).unwrap());
+
+        // Split the initial pane horizontally → [pane0 | pane1].
+        let split1_events = mux
+            .split_pane(
+                pane0,
+                SplitOrientation::Horizontal,
+                Side::After,
+                SurfaceKind::Terminal,
+            )
+            .unwrap();
+        let pane1 = match &split1_events[0] {
+            MuxEvent::PaneCreated { pane, .. } => *pane,
+            _ => panic!("expected PaneCreated"),
+        };
+        events.extend(split1_events);
+
+        // Spawn an extra surface on pane0 so break_surface_to_pane has a
+        // multi-surface source.
+        events.extend(mux.spawn_surface(pane0, SurfaceKind::Terminal).unwrap());
+        let extra_surface = {
+            let last_ev = events.last().unwrap();
+            match last_ev {
+                MuxEvent::SurfaceSpawned { surface, .. } => *surface,
+                _ => panic!("expected SurfaceSpawned"),
+            }
+        };
+
+        // Take a snapshot AFTER the initial setup is complete — the mirror
+        // starts from here and replays only the subsequent delta events.
+        let snap0 = mux.snapshot(session).unwrap();
+        let mut delta_events: Vec<MuxEvent> = Vec::new();
+
+        // new_workspace → creates ws1.
+        let nw_evs = mux.new_workspace().unwrap();
+        let ws1 = match &nw_evs[0] {
+            MuxEvent::WorkspaceCreated { workspace, .. } => *workspace,
+            _ => panic!("expected WorkspaceCreated"),
+        };
+        delta_events.extend(nw_evs);
+
+        // rename ws1.
+        delta_events.extend(mux.rename_workspace(ws1, "renamed".to_string()).unwrap());
+
+        // select back to ws0.
+        delta_events.extend(mux.select_workspace(ws0).unwrap());
+
+        // break_surface_to_pane: move extra_surface out of pane0 into a new pane.
+        let break_evs = mux
+            .break_surface_to_pane(extra_surface, SplitOrientation::Vertical, Side::After)
+            .unwrap();
+        delta_events.extend(break_evs);
+
+        // swap pane0 with its neighbor.
+        let swap_evs = mux.swap_pane(pane0, SwapOffset::Next).unwrap();
+        delta_events.extend(swap_evs);
+
+        // resize pane0.
+        let resize_evs = mux.resize_pane(pane0, PaneDirection::Right, 5).unwrap();
+        delta_events.extend(resize_evs);
+
+        // Spawn an extra surface on pane1 so we can exercise close_surface.
+        let spawn_evs = mux.spawn_surface(pane1, SurfaceKind::Terminal).unwrap();
+        let extra_pane1_surface = match &spawn_evs[0] {
+            MuxEvent::SurfaceSpawned { surface, .. } => *surface,
+            _ => panic!("expected SurfaceSpawned"),
+        };
+        delta_events.extend(spawn_evs);
+
+        // Close the extra surface.
+        delta_events.extend(mux.close_surface(extra_pane1_surface).unwrap());
+
+        // Set active surface on pane1 to its remaining surface (no-op if already active).
+        let pane1_first_surface = mux.surfaces(pane1).unwrap()[0];
+        delta_events.extend(mux.set_active_surface(pane1, pane1_first_surface).unwrap());
+
+        // Close ws1 (destroying it + its panes).
+        delta_events.extend(mux.close_workspace(ws1).unwrap());
+
+        // Apply all delta events to the mirror.
+        let mut mirror = ClientMirror::from_snapshot(snap0);
+        for ev in &delta_events {
+            mirror.apply_event(ev);
+        }
+
+        let mirror_snap = normalize_snapshot(mirror.to_snapshot());
+        let mux_snap = normalize_snapshot(mux.snapshot(session).unwrap());
+        assert_eq!(
+            mirror_snap, mux_snap,
+            "mirror reconstruction diverged from Mux"
+        );
+    }
+
+    #[test]
+    fn welcome_codec_round_trip() {
+        let mut mux = Mux::new();
+        let session = mux.sessions()[0];
+        let ws = mux.active_workspace();
+        mux.set_workspace_size(ws, 80, 24).unwrap();
+        let pane = mux.active_pane(ws).unwrap();
+        mux.split_pane(
+            pane,
+            SplitOrientation::Horizontal,
+            Side::After,
+            SurfaceKind::Terminal,
+        )
+        .unwrap();
+        let snap = mux.snapshot(session).unwrap();
+
+        let msg = ServerMessage::Welcome {
+            protocol_version: PROTOCOL_VERSION,
+            snapshot: snap,
+        };
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_message(&mut buf, &msg).unwrap();
+        let mut cursor = Cursor::new(buf);
+        let decoded: Option<ServerMessage> = read_message(&mut cursor).unwrap();
+        assert_eq!(decoded, Some(msg), "Welcome round-trip failed");
+    }
+}
