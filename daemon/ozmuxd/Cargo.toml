@@ -15,5 +15,13 @@ ozmux_mux = { path = "../ozmux_mux" }
 ozmux_proto = { path = "../ozmux_proto" }
 crossbeam-channel = "0.5"
 
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[dev-dependencies]
+ozmux_proto = { path = "../ozmux_proto" }
+ozmux_mux = { path = "../ozmux_mux" }
+
 [lints]
 workspace = true
