@@ -4,18 +4,19 @@
 //! builds this as library code; the source-of-truth flip is Plan 2b-2.
 
 use crate::components::{
-    ActivePane, ActiveSurface, BrowserProfile, CopyMode, OwningWorkspace, PaneMarker, SplitNode,
-    SurfaceKind, SurfaceMarker, SurfaceOf, WorkspaceMarker, WorkspaceUiSubtree,
+    ActivePane, ActiveSurface, BrowserProfile, CopyMode, OwningWorkspace, PaneDimensions,
+    PaneMarker, SplitNode, SurfaceKind, SurfaceMarker, SurfaceOf, WorkspaceMarker,
+    WorkspaceUiSubtree,
 };
 use crate::error::MultiplexerError;
 use crate::layout::{
-    SplitOrientation, child_flex, pane_frame_node, set_child_grow, split_node_bundle, split_ratio,
+    SplitOrientation, child_flex, pane_frame_node, set_child_grow, split_node_bundle,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use ozmux_mux::{LayoutNode, MuxError, MuxEvent, NodeId, PaneId, SplitId, SurfaceId, WorkspaceId};
 use slotmap::SecondaryMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Startup ordering seam: `Materialize` builds the ECS mirror from `MuxState`
 /// before app-side bootstrap attaches the initial workspace.
@@ -363,11 +364,19 @@ pub fn apply_event(
             }
         }
 
+        MuxEvent::PaneResized { pane, cols, rows } => {
+            if let Some(&ent) = state.panes.get(*pane) {
+                commands.entity(ent).insert(PaneDimensions {
+                    cols: *cols,
+                    rows: *rows,
+                });
+            }
+        }
+
         // NOTE: GUI-side concerns (Plan 2b-2) or size-flow events — no ECS mirror
         // mutation needed at this layer.
         MuxEvent::SessionCreated { .. }
         | MuxEvent::WorkspaceSelected { .. }
-        | MuxEvent::PaneResized { .. }
         | MuxEvent::SurfaceCwdChanged { .. } => {}
 
         MuxEvent::LayoutChanged {
@@ -769,7 +778,20 @@ pub fn mirror_matches(world: &World, state: &MuxState) -> Result<(), Mismatch> {
         .workspace_layout(ws)
         .map_err(|e| Mismatch(format!("workspace_layout failed: {e:?}")))?;
 
-    check_node(world, state, top_ent, &layout, "")?;
+    let expected_cells: Option<HashMap<PaneId, (u16, u16)>> = state
+        .mux
+        .workspace_size(ws)
+        .ok()
+        .flatten()
+        .and_then(|(cols, rows)| {
+            state
+                .mux
+                .resolve_sizes(ws, cols, rows)
+                .ok()
+                .map(|v| v.into_iter().collect())
+        });
+
+    check_node(world, state, top_ent, &layout, "", &expected_cells)?;
 
     let active_pane_id = state
         .mux
@@ -925,6 +947,7 @@ fn check_node(
     ecs_ent: Entity,
     mux_node: &LayoutNode,
     path: &str,
+    expected_cells: &Option<HashMap<PaneId, (u16, u16)>>,
 ) -> Result<(), Mismatch> {
     match mux_node {
         LayoutNode::Pane { id, .. } => {
@@ -956,12 +979,23 @@ fn check_node(
                     "path {path:?}: state.panes[{id:?}]={mapped_ent:?} but walked to {ecs_ent:?}"
                 )));
             }
+            if let Some(cells) = expected_cells
+                && let Some(&(cols, rows)) = cells.get(id)
+            {
+                let actual = world.get::<PaneDimensions>(ecs_ent).copied();
+                let expected = Some(PaneDimensions { cols, rows });
+                if actual != expected {
+                    return Err(Mismatch(format!(
+                        "path {path:?}: PaneDimensions mismatch: ECS={actual:?} expected={expected:?}"
+                    )));
+                }
+            }
             Ok(())
         }
         LayoutNode::Split {
             id,
             orientation,
-            ratio,
+            ratio: _,
             first,
             second,
         } => {
@@ -1009,23 +1043,23 @@ fn check_node(
                     kids.len()
                 )));
             }
-            let lhs_grow = world
-                .get::<Node>(kids[0])
-                .map(|n| n.flex_grow)
-                .unwrap_or(0.0);
-            let rhs_grow = world
-                .get::<Node>(kids[1])
-                .map(|n| n.flex_grow)
-                .unwrap_or(0.0);
-            let ecs_ratio = split_ratio(lhs_grow, rhs_grow);
-            if (ecs_ratio - ratio).abs() > 1e-4 {
-                return Err(Mismatch(format!(
-                    "path {path:?}: split ratio mismatch: ECS={ecs_ratio} mux={ratio}"
-                )));
-            }
 
-            check_node(world, state, kids[0], first, &format!("{path}/0"))?;
-            check_node(world, state, kids[1], second, &format!("{path}/1"))?;
+            check_node(
+                world,
+                state,
+                kids[0],
+                first,
+                &format!("{path}/0"),
+                expected_cells,
+            )?;
+            check_node(
+                world,
+                state,
+                kids[1],
+                second,
+                &format!("{path}/1"),
+                expected_cells,
+            )?;
             Ok(())
         }
     }
@@ -1263,40 +1297,42 @@ mod tests {
     }
 
     #[test]
-    fn mirror_matches_fails_on_corrupted_ratio() {
-        let mut mux = ozmux_mux::Mux::new();
-        let ws = mux.active_workspace();
-        let p = mux.active_pane(ws).unwrap();
-        mux.split_pane(
-            p,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-            ozmux_mux::SurfaceKind::Terminal,
-        )
-        .unwrap();
+    fn mirror_matches_fails_on_corrupted_pane_dimensions() {
+        let mut app = make_mux_app();
 
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(MultiplexerPlugin);
-        // NOTE: override the plugin-inserted MuxState with the pre-split Mux so
-        // Startup's materialize_mux_snapshot realizes the split tree.
-        app.world_mut().insert_resource(MuxState::new(mux));
-        app.update();
+        // Split first, then set workspace size via run_mux_op so PaneResized
+        // events flow through apply_event and PaneDimensions gets stamped.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let p = m.active_pane(ws).unwrap();
+            m.split_pane(
+                p,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            m.set_workspace_size(ws, 80, 24).unwrap()
+        });
 
-        // Find a SplitNode entity and corrupt its first child's flex_grow.
-        let split_ent = {
-            let mut q = app.world_mut().query_filtered::<Entity, With<SplitNode>>();
-            q.iter(app.world()).next().expect("split entity must exist")
+        let baseline = {
+            let world = app.world();
+            let s = world.resource::<MuxState>();
+            mirror_matches_with(world, s)
         };
-        let first_child = app
-            .world()
-            .get::<Children>(split_ent)
-            .and_then(|c| c.iter().next())
-            .expect("split must have children");
+        assert!(baseline.is_ok(), "baseline should pass before corruption");
+
+        // Corrupt one pane's PaneDimensions to a wrong value.
+        let pane_ent = {
+            let mut q = app.world_mut().query_filtered::<Entity, With<PaneMarker>>();
+            q.iter(app.world()).next().expect("pane entity must exist")
+        };
         app.world_mut()
-            .get_mut::<Node>(first_child)
-            .expect("first child must have Node")
-            .flex_grow = 999.0;
+            .entity_mut(pane_ent)
+            .insert(PaneDimensions { cols: 1, rows: 1 });
 
         let result = {
             let world = app.world();
@@ -1305,7 +1341,89 @@ mod tests {
         };
         assert!(
             result.is_err(),
-            "mirror_matches should detect corrupted flex_grow"
+            "mirror_matches should detect corrupted PaneDimensions"
+        );
+    }
+
+    #[test]
+    fn pane_resized_writes_pane_dimensions_and_mirror_matches() {
+        let mut app = make_mux_app();
+
+        // Set workspace size via run_mux_op to trigger PaneResized events.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            m.set_workspace_size(ws, 80, 24).unwrap()
+        });
+
+        // Assert the single pane has PaneDimensions == Mux's resolved cells.
+        let pane_ent = only_pane(&mut app);
+        let dims = app
+            .world()
+            .get::<PaneDimensions>(pane_ent)
+            .copied()
+            .expect("PaneDimensions must be present after set_workspace_size");
+        assert_eq!(
+            (dims.cols, dims.rows),
+            (80, 24),
+            "single pane fills the workspace"
+        );
+
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after set_workspace_size"
+        );
+    }
+
+    #[test]
+    fn pane_resized_after_split_matches_resolve_sizes() {
+        let mut app = make_mux_app();
+
+        // Split first, then set workspace size.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let p = m.active_pane(ws).unwrap();
+            m.split_pane(
+                p,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            m.set_workspace_size(ws, 80, 24).unwrap()
+        });
+
+        // Verify each pane's PaneDimensions matches the Mux's resolved cells.
+        let (expected_cells, pane_entities): (Vec<_>, Vec<_>) = {
+            let state = app.world().resource::<MuxState>();
+            let ws = state.mux.active_workspace();
+            let cells = state.mux.resolve_sizes(ws, 80, 24).unwrap();
+            cells
+                .into_iter()
+                .map(|(pid, (c, r))| ((c, r), state.panes[pid]))
+                .unzip()
+        };
+
+        for (ent, expected) in pane_entities.iter().zip(expected_cells.iter()) {
+            let dims = app
+                .world()
+                .get::<PaneDimensions>(*ent)
+                .copied()
+                .expect("PaneDimensions must be on every pane after set_workspace_size");
+            assert_eq!(
+                (dims.cols, dims.rows),
+                *expected,
+                "pane {ent:?} dimensions must match resolve_sizes"
+            );
+        }
+
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after split + set_workspace_size"
         );
     }
 

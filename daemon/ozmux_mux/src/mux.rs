@@ -756,6 +756,11 @@ impl Mux {
         Ok(events)
     }
 
+    /// The workspace's stored terminal size, or `None` if not yet set.
+    pub fn workspace_size(&self, workspace: WorkspaceId) -> MuxResult<Option<(u16, u16)>> {
+        Ok(self.workspace(workspace)?.size)
+    }
+
     /// The workspace's display name.
     pub fn workspace_name(&self, workspace: WorkspaceId) -> MuxResult<&str> {
         Ok(&self.workspace(workspace)?.name)
