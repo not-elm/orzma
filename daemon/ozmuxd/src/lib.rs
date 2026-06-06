@@ -10,19 +10,19 @@ pub use transport::{ServerHandle, default_socket_path};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ozmux_mux::{Mux, MuxEvent, SessionId, SessionSnapshot, Side, SurfaceKind};
 use ozmux_proto::{ClientMessage, ServerMessage};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Identifies a connected client within the daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ClientId(pub u64);
+pub(crate) struct ClientId(pub u64);
 
 /// Per-client outbound queue depth; a client that backs up past this is
 /// disconnected. NEVER drop individual events — `ClientMirror` is a gapless
 /// in-order fold, so a dropped event is permanent divergence.
-pub const CLIENT_QUEUE_DEPTH: usize = 1024;
+pub(crate) const CLIENT_QUEUE_DEPTH: usize = 1024;
 
 /// The single mailbox the central loop consumes — the only serialization point.
-pub enum LoopMsg {
+pub(crate) enum LoopMsg {
     /// A connection finished its read of `Hello`; register + send `Welcome`.
     Attach {
         /// The client being attached.
@@ -33,6 +33,9 @@ pub enum LoopMsg {
         viewport: (u16, u16),
         /// Protocol version the client claims.
         protocol_version: u32,
+        /// Closes the underlying connection so the reader thread unblocks on evict
+        /// or shutdown. `None` in unit tests that drive the loop with in-memory channels.
+        disconnect: Option<Box<dyn FnOnce() + Send>>,
     },
     /// A decoded command from a client.
     ClientFrame(ClientId, ClientMessage),
@@ -47,6 +50,14 @@ pub enum LoopMsg {
     Shutdown,
 }
 
+/// A connected client's outbound channel plus a teardown hook that closes its
+/// underlying connection (so the reader thread unblocks). The hook is `None`
+/// in unit tests that drive the loop with in-memory channels.
+struct ClientConn {
+    tx: Sender<ServerMessage>,
+    disconnect: Option<Box<dyn FnOnce() + Send>>,
+}
+
 /// The daemon server: owns the Mux + the active session (not yet listening — see `transport`, P4a T3).
 pub struct Server {
     mux: Mux,
@@ -54,7 +65,7 @@ pub struct Server {
 }
 
 /// A running central loop: the `LoopMsg` sender + the loop thread.
-pub struct LoopHandle {
+pub(crate) struct LoopHandle {
     tx: Sender<LoopMsg>,
     join: Option<std::thread::JoinHandle<()>>,
 }
@@ -68,7 +79,7 @@ impl Server {
     }
 
     /// Spawns the central loop on its own thread; returns a handle.
-    pub fn spawn_loop(self) -> LoopHandle {
+    pub(crate) fn spawn_loop(self) -> LoopHandle {
         let (tx, rx) = unbounded::<LoopMsg>();
         let join = std::thread::spawn(move || self.run(rx));
         LoopHandle {
@@ -78,7 +89,7 @@ impl Server {
     }
 
     fn run(mut self, rx: Receiver<LoopMsg>) {
-        let mut clients: HashMap<ClientId, Sender<ServerMessage>> = HashMap::new();
+        let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
         while let Ok(msg) = rx.recv() {
             match msg {
                 LoopMsg::Attach {
@@ -86,6 +97,7 @@ impl Server {
                     writer,
                     viewport,
                     protocol_version,
+                    disconnect,
                 } => {
                     if protocol_version != ozmux_proto::PROTOCOL_VERSION {
                         let _ = writer.try_send(ServerMessage::Error {
@@ -111,7 +123,13 @@ impl Server {
                     {
                         continue;
                     }
-                    clients.insert(client_id, writer);
+                    clients.insert(
+                        client_id,
+                        ClientConn {
+                            tx: writer,
+                            disconnect,
+                        },
+                    );
                     let ws = self.mux.active_workspace();
                     if let Ok(events) = self.mux.set_workspace_size(ws, viewport.0, viewport.1) {
                         broadcast(&mut clients, &events);
@@ -119,21 +137,32 @@ impl Server {
                 }
                 LoopMsg::ClientFrame(cid, cmd) => self.apply_command(&mut clients, cid, cmd),
                 LoopMsg::Disconnect(cid) => {
-                    clients.remove(&cid);
+                    if let Some(conn) = clients.remove(&cid)
+                        && let Some(d) = conn.disconnect
+                    {
+                        d();
+                    }
                 }
                 LoopMsg::Snapshot { reply } => {
                     if let Ok(s) = self.mux.snapshot(self.session) {
                         let _ = reply.send(s);
                     }
                 }
-                LoopMsg::Shutdown => return,
+                LoopMsg::Shutdown => {
+                    for (_, conn) in clients.drain() {
+                        if let Some(d) = conn.disconnect {
+                            d();
+                        }
+                    }
+                    return;
+                }
             }
         }
     }
 
     fn apply_command(
         &mut self,
-        clients: &mut HashMap<ClientId, Sender<ServerMessage>>,
+        clients: &mut HashMap<ClientId, ClientConn>,
         cid: ClientId,
         cmd: ClientMessage,
     ) {
@@ -163,8 +192,8 @@ impl Server {
         match result {
             Ok(events) => broadcast(clients, &events),
             Err(e) => {
-                if let Some(w) = clients.get(&cid) {
-                    let _ = w.try_send(ServerMessage::Error {
+                if let Some(conn) = clients.get(&cid) {
+                    let _ = conn.tx.try_send(ServerMessage::Error {
                         message: format!("{e:?}"),
                     });
                 }
@@ -182,12 +211,13 @@ impl Default for Server {
 
 impl LoopHandle {
     /// Sends a message to the central loop.
-    pub fn send(&self, msg: LoopMsg) {
+    #[cfg(test)]
+    fn send(&self, msg: LoopMsg) {
         let _ = self.tx.send(msg);
     }
 
     /// Clones the `LoopMsg` sender (for the transport's accept/reader threads).
-    pub fn sender(&self) -> Sender<LoopMsg> {
+    pub(crate) fn sender(&self) -> Sender<LoopMsg> {
         self.tx.clone()
     }
 }
@@ -204,20 +234,24 @@ impl Drop for LoopHandle {
 /// Broadcasts each event to every client; a client whose bounded queue is full
 /// (or closed) is dropped (disconnect-on-overflow — never skip an event for a
 /// still-connected client).
-fn broadcast(clients: &mut HashMap<ClientId, Sender<ServerMessage>>, events: &[MuxEvent]) {
-    let mut dead: Vec<ClientId> = Vec::new();
+fn broadcast(clients: &mut HashMap<ClientId, ClientConn>, events: &[MuxEvent]) {
+    let mut dead: HashSet<ClientId> = HashSet::new();
     for ev in events {
-        for (cid, w) in clients.iter() {
+        for (cid, conn) in clients.iter() {
             if dead.contains(cid) {
                 continue;
             }
-            if w.try_send(ServerMessage::Event(ev.clone())).is_err() {
-                dead.push(*cid);
+            if conn.tx.try_send(ServerMessage::Event(ev.clone())).is_err() {
+                dead.insert(*cid);
             }
         }
     }
     for cid in dead {
-        clients.remove(&cid);
+        if let Some(conn) = clients.remove(&cid)
+            && let Some(d) = conn.disconnect
+        {
+            d();
+        }
     }
 }
 
@@ -226,6 +260,8 @@ mod tests {
     use super::*;
     use crossbeam_channel::{bounded, unbounded};
     use ozmux_mux::{PaneId, SplitOrientation};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     fn dummy_event(tag: u32) -> MuxEvent {
@@ -236,16 +272,23 @@ mod tests {
         }
     }
 
+    fn conn(tx: crossbeam_channel::Sender<ServerMessage>) -> ClientConn {
+        ClientConn {
+            tx,
+            disconnect: None,
+        }
+    }
+
     #[test]
     fn broadcast_drops_overflowing_client_but_keeps_others() {
-        let mut clients: HashMap<ClientId, Sender<ServerMessage>> = HashMap::new();
+        let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
         let (full_tx, _full_rx) = bounded::<ServerMessage>(1);
         full_tx
             .try_send(ServerMessage::Event(dummy_event(0)))
             .unwrap();
         let (live_tx, live_rx) = bounded::<ServerMessage>(8);
-        clients.insert(ClientId(1), full_tx);
-        clients.insert(ClientId(2), live_tx);
+        clients.insert(ClientId(1), conn(full_tx));
+        clients.insert(ClientId(2), conn(live_tx));
 
         broadcast(&mut clients, &[dummy_event(1)]);
 
@@ -265,9 +308,9 @@ mod tests {
 
     #[test]
     fn broadcast_skips_later_events_for_an_overflowed_client() {
-        let mut clients: HashMap<ClientId, Sender<ServerMessage>> = HashMap::new();
+        let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
         let (tx, rx) = bounded::<ServerMessage>(2);
-        clients.insert(ClientId(1), tx);
+        clients.insert(ClientId(1), conn(tx));
 
         broadcast(
             &mut clients,
@@ -291,16 +334,65 @@ mod tests {
     }
 
     #[test]
+    fn broadcast_overflow_invokes_disconnect_hook() {
+        let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
+        let (full_tx, _full_rx) = bounded::<ServerMessage>(1);
+        full_tx
+            .try_send(ServerMessage::Event(dummy_event(0)))
+            .unwrap();
+        let torn_down = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&torn_down);
+        clients.insert(
+            ClientId(1),
+            ClientConn {
+                tx: full_tx,
+                disconnect: Some(Box::new(move || flag.store(true, Ordering::SeqCst))),
+            },
+        );
+
+        broadcast(&mut clients, &[dummy_event(1)]);
+
+        assert!(
+            torn_down.load(Ordering::SeqCst),
+            "overflow evict must invoke the disconnect hook"
+        );
+    }
+
+    #[test]
+    fn shutdown_invokes_disconnect_hooks() {
+        let handle = Server::new().spawn_loop();
+        let torn_down = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&torn_down);
+        let (w_tx, _w_rx) = unbounded::<ServerMessage>();
+        handle.send(LoopMsg::Attach {
+            client_id: ClientId(99),
+            writer: w_tx,
+            viewport: (80, 24),
+            protocol_version: ozmux_proto::PROTOCOL_VERSION,
+            disconnect: Some(Box::new(move || flag.store(true, Ordering::SeqCst))),
+        });
+        // Drain the Welcome so Attach is processed before we shut down.
+        std::thread::sleep(Duration::from_millis(50));
+        handle.send(LoopMsg::Shutdown);
+        // Give the loop a moment to process Shutdown.
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            torn_down.load(Ordering::SeqCst),
+            "Shutdown must invoke the disconnect hook for each attached client"
+        );
+    }
+
+    #[test]
     #[ignore = "stress probe for the within-broadcast overflow gap; concurrent, run on demand \
                 with --ignored. Pre-fix this reports a nonzero gap count; post-fix it is always 0."]
     fn broadcast_overflow_never_delivers_out_of_order_under_concurrent_drain() {
         let mut total_gaps = 0u64;
         for _round in 0..2000 {
-            let mut clients: HashMap<ClientId, Sender<ServerMessage>> = HashMap::new();
+            let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
             let (tx, rx) = bounded::<ServerMessage>(2);
             tx.try_send(ServerMessage::Event(dummy_event(0))).unwrap();
             tx.try_send(ServerMessage::Event(dummy_event(0))).unwrap();
-            clients.insert(ClientId(1), tx);
+            clients.insert(ClientId(1), conn(tx));
 
             let drainer = std::thread::spawn(move || {
                 let mut seq = Vec::new();
@@ -336,6 +428,7 @@ mod tests {
             writer: w_tx,
             viewport: (80, 24),
             protocol_version: ozmux_proto::PROTOCOL_VERSION,
+            disconnect: None,
         });
 
         let welcome = w_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -377,6 +470,7 @@ mod tests {
             writer: w_tx,
             viewport: (80, 24),
             protocol_version: ozmux_proto::PROTOCOL_VERSION + 1,
+            disconnect: None,
         });
 
         let msg = w_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -399,6 +493,7 @@ mod tests {
             writer: w_tx,
             viewport: (80, 24),
             protocol_version: ozmux_proto::PROTOCOL_VERSION,
+            disconnect: None,
         });
 
         let welcome = w_rx.recv_timeout(Duration::from_secs(1)).unwrap();

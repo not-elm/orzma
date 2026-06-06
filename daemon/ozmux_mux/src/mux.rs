@@ -431,15 +431,18 @@ impl Mux {
         rows: u16,
     ) -> MuxResult<Vec<MuxEvent>> {
         let before = self.resolved_sizes_or_empty(workspace);
-        self.workspace(workspace)?;
+        let prev_size = self.workspace(workspace)?.size;
         self.workspaces[workspace].size = Some((cols, rows));
         let after = self.resolve_sizes(workspace, cols, rows)?;
 
-        let mut events = vec![MuxEvent::WorkspaceResized {
-            workspace,
-            cols,
-            rows,
-        }];
+        let mut events = Vec::new();
+        if prev_size != Some((cols, rows)) {
+            events.push(MuxEvent::WorkspaceResized {
+                workspace,
+                cols,
+                rows,
+            });
+        }
         for (pane, (c, r)) in after {
             let changed = before
                 .iter()
@@ -2125,8 +2128,18 @@ mod tests {
             "re-setting the same size emits no PaneResized"
         );
         assert!(
-            re_events.iter().any(|e| matches!(e, MuxEvent::WorkspaceResized { workspace: w, cols: 120, rows: 40 } if *w == ws)),
-            "WorkspaceResized is always emitted"
+            !re_events
+                .iter()
+                .any(|e| matches!(e, MuxEvent::WorkspaceResized { .. })),
+            "re-setting the same size emits no WorkspaceResized"
+        );
+
+        let changed_events = mux.set_workspace_size(ws, 100, 30).unwrap();
+        assert!(
+            changed_events
+                .iter()
+                .any(|e| matches!(e, MuxEvent::WorkspaceResized { workspace: w, cols: 100, rows: 30 } if *w == ws)),
+            "a new size emits WorkspaceResized"
         );
     }
 

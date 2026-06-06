@@ -52,7 +52,11 @@ impl Server {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let _ = std::fs::remove_file(path);
+        if let Err(e) = std::fs::remove_file(path)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            return Err(e);
+        }
 
         let listener = UnixListener::bind(path)?;
         listener.set_nonblocking(true)?;
@@ -121,6 +125,7 @@ fn run_accept(
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(ACCEPT_POLL);
             }
+            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
     }
@@ -128,7 +133,9 @@ fn run_accept(
 
 fn spawn_conn(stream: UnixStream, client_id: ClientId, loop_tx: Sender<LoopMsg>) -> io::Result<()> {
     stream.set_nonblocking(false)?;
-    let mut reader = BufReader::new(stream.try_clone()?);
+    let reader_stream = stream.try_clone()?;
+    let teardown_stream = stream.try_clone()?;
+    let mut reader = BufReader::new(reader_stream);
     let mut writer = stream;
 
     let (out_tx, out_rx) = bounded::<ServerMessage>(CLIENT_QUEUE_DEPTH);
@@ -153,6 +160,9 @@ fn spawn_conn(stream: UnixStream, client_id: ClientId, loop_tx: Sender<LoopMsg>)
                         writer: out_tx,
                         viewport,
                         protocol_version,
+                        disconnect: Some(Box::new(move || {
+                            let _ = teardown_stream.shutdown(std::net::Shutdown::Both);
+                        })),
                     })
                     .is_err()
                 {

@@ -43,22 +43,29 @@ fn connect(path: &std::path::Path, viewport: (u16, u16)) -> ItClient {
     };
     // NOTE: set_read_timeout after the stream is created but before Client::connect
     // so the blocking Hello/Welcome exchange completes within the timeout window
-    // (server sends Welcome immediately on Attach, well within 150ms).
+    // (server sends Welcome immediately on Attach, well within 300ms).
     stream
-        .set_read_timeout(Some(Duration::from_millis(150)))
+        .set_read_timeout(Some(Duration::from_millis(300)))
         .unwrap();
     let reader = BufReader::new(stream.try_clone().unwrap());
     Client::connect(reader, stream, viewport).unwrap()
 }
 
-/// Drains all currently-available events into the client mirror until a poll
-/// times out (quiescent). A timeout surfaces as an Err from read_message.
+/// Drains all currently-available events into the client mirror until the read
+/// times out (quiescent). Panics on any unexpected protocol error so a real
+/// bug surfaces rather than being silently swallowed as a quiescent stop.
 fn drain(c: &mut ItClient) {
     loop {
         match c.poll() {
             Ok(Some(_)) => continue,
             Ok(None) => break,
-            Err(_) => break,
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                break;
+            }
+            Err(e) => panic!("unexpected protocol error during drain: {e}"),
         }
     }
 }
@@ -90,7 +97,7 @@ fn command_broadcast_reconstructs_server_snapshot() {
             orientation: SplitOrientation::Horizontal,
         })
         .unwrap();
-    std::thread::sleep(Duration::from_millis(50));
+    std::thread::sleep(Duration::from_millis(200));
     drain(&mut client);
 
     let server_snap = server.snapshot().expect("server snapshot");
@@ -113,7 +120,7 @@ fn two_clients_converge() {
         orientation: SplitOrientation::Vertical,
     })
     .unwrap();
-    std::thread::sleep(Duration::from_millis(50));
+    std::thread::sleep(Duration::from_millis(200));
     drain(&mut c1);
     drain(&mut c2);
 
@@ -162,7 +169,7 @@ fn disconnect_survives() {
     let mut c2 = connect(&path, (80, 24));
     drain(&mut c2);
     drop(c1);
-    std::thread::sleep(Duration::from_millis(50));
+    std::thread::sleep(Duration::from_millis(200));
 
     // c2 still works after c1 disconnected.
     let pane = c2.mirror().to_snapshot().workspaces[0].active_pane.unwrap();
@@ -171,7 +178,7 @@ fn disconnect_survives() {
         direction: PaneDirection::Right,
     })
     .unwrap();
-    std::thread::sleep(Duration::from_millis(50));
+    std::thread::sleep(Duration::from_millis(200));
     drain(&mut c2);
     assert_eq!(c2.mirror().to_snapshot(), server.snapshot().unwrap());
     drop(server);
