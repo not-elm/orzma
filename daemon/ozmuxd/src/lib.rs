@@ -3,6 +3,10 @@
 //! resulting `MuxEvent`s to every attached client. Control plane only
 //! (frame streaming is Plan 4b; UDS transport is `transport` / P4a T3).
 
+mod transport;
+
+pub use transport::{ServerHandle, default_socket_path};
+
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ozmux_mux::{Mux, MuxEvent, SessionId, SessionSnapshot, Side, SurfaceKind};
 use ozmux_proto::{ClientMessage, ServerMessage};
