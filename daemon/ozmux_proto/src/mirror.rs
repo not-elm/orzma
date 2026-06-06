@@ -446,6 +446,62 @@ mod tests {
     }
 
     #[test]
+    fn nested_and_root_collapse_reconstructs_mux() {
+        // Exercises the two reconstruction paths the main round-trip test does
+        // NOT: a nested-split `LayoutChanged` collapse (replace_node recursion +
+        // prune_panes dropping the closed pane) and a collapse-to-root
+        // `WorkspaceRootChanged`.
+        let mut mux = Mux::new();
+        let session = mux.sessions()[0];
+        let ws0 = mux.active_workspace();
+        mux.set_workspace_size(ws0, 120, 40).unwrap();
+        let pane0 = mux.active_pane(ws0).unwrap();
+
+        // Build a nested tree: split p0 → p1, then split p1 → p2.
+        // Tree: Split( p0, Split( p1, p2 ) ).
+        let split1 = mux
+            .split_pane(
+                pane0,
+                SplitOrientation::Horizontal,
+                Side::After,
+                SurfaceKind::Terminal,
+            )
+            .unwrap();
+        let pane1 = match &split1[0] {
+            MuxEvent::PaneCreated { pane, .. } => *pane,
+            _ => panic!("expected PaneCreated"),
+        };
+        mux.split_pane(
+            pane1,
+            SplitOrientation::Vertical,
+            Side::After,
+            SurfaceKind::Terminal,
+        )
+        .unwrap();
+
+        // Cold-attach snapshot taken at the 3-pane state; replay collapses.
+        let snap0 = mux.snapshot(session).unwrap();
+        let mut delta_events: Vec<MuxEvent> = Vec::new();
+
+        // Close p1 → collapses the INNER split (nested LayoutChanged).
+        delta_events.extend(mux.close_pane(pane1).unwrap());
+        // Close p0 → collapses to the workspace root (WorkspaceRootChanged).
+        delta_events.extend(mux.close_pane(pane0).unwrap());
+
+        let mut mirror = ClientMirror::from_snapshot(snap0);
+        for ev in &delta_events {
+            mirror.apply_event(ev);
+        }
+
+        let mirror_snap = normalize_snapshot(mirror.to_snapshot());
+        let mux_snap = normalize_snapshot(mux.snapshot(session).unwrap());
+        assert_eq!(
+            mirror_snap, mux_snap,
+            "nested + root collapse reconstruction diverged from Mux"
+        );
+    }
+
+    #[test]
     fn welcome_codec_round_trip() {
         let mut mux = Mux::new();
         let session = mux.sessions()[0];
