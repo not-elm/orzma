@@ -1,12 +1,12 @@
 //! Structural types and arithmetic for the entity-based layout tree.
-//! Owns `SplitOrientation`, `Side`, `Rect`, `split_ratio`, `normalized_grows`,
-//! spawn-bundle helpers (`child_flex`, `split_node_bundle`, `pane_frame_node`),
-//! `set_child_grow`, and the read-only `LayoutTree` query view.
+//! Owns `SplitOrientation`, `Side`, `Rect`, `split_ratio`, spawn-bundle
+//! helpers (`split_node_bundle`, `pane_frame_node`), and the read-only
+//! `LayoutTree` query view.
 
 use crate::components::{PaneMarker, SplitNode};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy::ui::{FlexDirection, UiRect, Val};
+use bevy::ui::{FlexDirection, Val};
 
 /// Split axis.
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
@@ -40,19 +40,6 @@ pub struct Rect {
     pub h: f32,
 }
 
-/// Normalize a split's two child weights so they are never *both* zero
-/// (which would flex-collapse the subtree to zero size). `(0.0, 0.0)` →
-/// `(1.0, 1.0)`; any pair with at least one nonzero passes through. This is
-/// the single chokepoint for the never-both-zero invariant for split-child
-/// `flex_grow` writes.
-pub(crate) fn normalized_grows(lhs: f32, rhs: f32) -> (f32, f32) {
-    if lhs == 0.0 && rhs == 0.0 {
-        (1.0, 1.0)
-    } else {
-        (lhs, rhs)
-    }
-}
-
 /// Normalize a `(lhs_weight, rhs_weight)` pair to a `[0, 1]` ratio (the lhs
 /// fraction). Returns `0.5` when both are zero.
 pub fn split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
@@ -64,45 +51,43 @@ pub fn split_ratio(lhs_weight: f32, rhs_weight: f32) -> f32 {
     }
 }
 
-/// `Node` props that make an entity a flex *child* occupying `grow` share of
-/// its parent's main axis with a zero basis (so equal grows split evenly).
-/// Merge these onto a Pane/Split node when it becomes a layout child.
-pub(crate) fn child_flex(grow: f32) -> Node {
-    Node {
-        flex_grow: grow,
-        flex_basis: Val::Px(0.0),
-        width: Val::Percent(100.0),
-        height: Val::Percent(100.0),
-        ..default()
-    }
-}
-
 /// The `Node` + `SplitNode` pair for a split container at `orientation`.
-/// The caller merges in `child_flex(..)` when this split is itself a child.
+///
+/// Both axes are `Val::Auto` so taffy fits the container to the sum of its
+/// fixed-px children (pane leaves sized by `size_pane_leaves` each frame).
+/// The top-level split is the only child of the 100 %/100 % layout-root
+/// container, which anchors the whole tile tree to the viewport. Nested
+/// splits compose correctly because each child's px size is Mux-determined
+/// and the children always sum to the parent's slot.
 pub(crate) fn split_node_bundle(orientation: SplitOrientation) -> (Node, SplitNode) {
     let flex_direction = match orientation {
         SplitOrientation::Horizontal => FlexDirection::Row,
         SplitOrientation::Vertical => FlexDirection::Column,
     };
+    // NOTE: Val::Auto lets taffy derive both axes from the fixed-px children.
+    // A Horizontal split's width = sum(children widths), height = children
+    // height; a Vertical split's height = sum(children heights), width =
+    // children width.  This is correct because the Mux guarantees children
+    // cells sum exactly to the parent slot.
     (
         Node {
             flex_direction,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
+            width: Val::Auto,
+            height: Val::Auto,
             ..default()
         },
         SplitNode { orientation },
     )
 }
 
-/// The `Node` for a Pane frame (flex column; 1px padding for the border the
-/// GUI chrome draws in a later plan). Caller merges in `child_flex(..)`.
+/// The `Node` for a Pane frame (flex column; width/height are overwritten each
+/// frame by the `size_pane_leaves` render system to the Mux-resolved cell rect
+/// in logical px).
 pub(crate) fn pane_frame_node() -> Node {
     Node {
         flex_direction: FlexDirection::Column,
         width: Val::Percent(100.0),
         height: Val::Percent(100.0),
-        padding: UiRect::all(Val::Px(1.0)),
         ..default()
     }
 }
@@ -232,32 +217,9 @@ fn walk_bounds(tree: &LayoutTree, node: Entity, bounds: Rect, out: &mut Vec<(Ent
     }
 }
 
-/// Set a layout child's `flex_grow` (with zero basis) without disturbing its
-/// other `Node` fields. Used by split / resize / close / swap.
-pub(crate) fn set_child_grow(commands: &mut Commands, child: Entity, grow: f32) {
-    commands
-        .entity(child)
-        .entry::<Node>()
-        .and_modify(move |mut n| {
-            n.flex_grow = grow;
-            n.flex_basis = Val::Px(0.0);
-        });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn normalized_grows_clamps_double_zero_to_one_one() {
-        assert_eq!(normalized_grows(0.0, 0.0), (1.0, 1.0));
-    }
-
-    #[test]
-    fn normalized_grows_passes_through_nonzero() {
-        assert_eq!(normalized_grows(0.25, 0.75), (0.25, 0.75));
-        assert_eq!(normalized_grows(3.0, 0.0), (3.0, 0.0));
-    }
 
     #[test]
     fn split_node_bundle_sets_flex_direction_from_orientation() {
@@ -269,9 +231,13 @@ mod tests {
     }
 
     #[test]
-    fn child_flex_uses_zero_basis() {
-        let n = child_flex(0.5);
-        assert_eq!(n.flex_grow, 0.5);
-        assert_eq!(n.flex_basis, Val::Px(0.0));
+    fn split_node_bundle_uses_auto_sizing() {
+        let (node, _) = split_node_bundle(SplitOrientation::Horizontal);
+        assert_eq!(node.width, Val::Auto, "split container width must be Auto");
+        assert_eq!(
+            node.height,
+            Val::Auto,
+            "split container height must be Auto"
+        );
     }
 }

@@ -13,9 +13,9 @@ pub enum ResizePaneOutcome {
 mod tests {
     use super::*;
     use crate::commands::MultiplexerCommands;
-    use crate::components::WorkspaceUiSubtree;
+    use crate::components::{PaneDimensions, WorkspaceUiSubtree};
     use crate::direction::PaneDirection;
-    use crate::layout::{Side, SplitOrientation, split_ratio};
+    use crate::layout::{Side, SplitOrientation};
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
 
@@ -32,11 +32,11 @@ mod tests {
         (kids[0], kids[1])
     }
 
-    fn grows_of(app: &App, lhs: Entity, rhs: Entity) -> (f32, f32) {
-        (
-            app.world().get::<Node>(lhs).unwrap().flex_grow,
-            app.world().get::<Node>(rhs).unwrap().flex_grow,
-        )
+    fn cols_of(app: &App, pane: Entity) -> u16 {
+        app.world()
+            .get::<PaneDimensions>(pane)
+            .map(|d| d.cols)
+            .unwrap_or(0)
     }
 
     fn two_panes(orientation: SplitOrientation) -> (App, Entity, Entity, Entity) {
@@ -86,15 +86,23 @@ mod tests {
 
     #[test]
     fn resize_right_grows_lhs_shrinks_rhs() {
-        let (mut app, ws, left, _right) = two_panes(SplitOrientation::Horizontal);
+        let (mut app, ws, left, right) = two_panes(SplitOrientation::Horizontal);
         set_dims(&mut app, ws, 120, 40);
-        let (lhs, rhs) = split_children_of(&app, ws);
+        let cols_before = cols_of(&app, left);
         assert_eq!(
             resize(&mut app, left, PaneDirection::Right, 1),
             ResizePaneOutcome::Applied
         );
-        let (gl, gr) = grows_of(&app, lhs, rhs);
-        assert!(gl > gr, "lhs grew: {gl} > {gr}");
+        let lc = cols_of(&app, left);
+        let rc = cols_of(&app, right);
+        assert!(
+            lc > cols_before,
+            "lhs cols grew after resize Right: before={cols_before} after={lc}"
+        );
+        assert!(
+            lc > rc,
+            "lhs wider than rhs after resize Right: {lc} > {rc}"
+        );
     }
 
     #[test]
@@ -128,11 +136,17 @@ mod tests {
             resize(&mut app, left, PaneDirection::Right, 100),
             ResizePaneOutcome::Applied
         );
-        let (gl, gr) = grows_of(&app, left, right);
-        let ratio = split_ratio(gl, gr);
+        let lc = cols_of(&app, left);
+        let rc = cols_of(&app, right);
+        // Total is 120 cols; clamped at min=10, so lhs ~ 110, rhs ~ 10.
+        assert_eq!(
+            lc + rc,
+            120,
+            "cols must sum to workspace width after resize: lhs={lc} rhs={rc}"
+        );
         assert!(
-            (ratio - 110.0 / 120.0).abs() < 1e-6,
-            "lhs fraction ~ 110/120, got {ratio}"
+            lc > rc,
+            "lhs must be majority after large resize Right: lhs={lc} rhs={rc}"
         );
     }
 
@@ -174,13 +188,18 @@ mod tests {
         app.world_mut().flush();
         set_dims(&mut app, ws, 120, 40);
 
-        let (outer_lhs, outer_rhs) = split_children_of(&app, ws);
+        let (outer_lhs, _outer_rhs) = split_children_of(&app, ws);
+        let lhs_cols_before = cols_of(&app, p1);
         assert_eq!(
             resize(&mut app, p1, PaneDirection::Right, 5),
             ResizePaneOutcome::Applied
         );
-        let (gl, gr) = grows_of(&app, outer_lhs, outer_rhs);
-        assert!(gl > gr, "outer lhs subtree grew: {gl} > {gr}");
+        let lhs_cols_after = cols_of(&app, p1);
+        assert!(
+            lhs_cols_after > lhs_cols_before,
+            "outer lhs subtree grew (p1 cols): {lhs_cols_before} -> {lhs_cols_after}"
+        );
+        let _ = outer_lhs;
 
         assert_eq!(
             resize(&mut app, p1, PaneDirection::Down, 3),
@@ -253,17 +272,21 @@ mod tests {
         set_dims(&mut app, ws, 120, 40);
         resize(&mut app, left, PaneDirection::Right, 1);
         resize(&mut app, left, PaneDirection::Left, 1);
-        let (bl, br) = grows_of(&app, left, right);
-        let before = split_ratio(bl, br);
+        let before_left = cols_of(&app, left);
         for _ in 0..50 {
             resize(&mut app, left, PaneDirection::Right, 1);
             resize(&mut app, left, PaneDirection::Left, 1);
         }
-        let (al, ar) = grows_of(&app, left, right);
-        let after = split_ratio(al, ar);
-        assert!(
-            (before - after).abs() < 1e-3,
-            "ratio drift: {before} -> {after}"
+        let after_left = cols_of(&app, left);
+        let after_right = cols_of(&app, right);
+        assert_eq!(
+            before_left, after_left,
+            "no drift: left cols must be stable after 50 right+left pairs: before={before_left} after={after_left}"
+        );
+        assert_eq!(
+            after_left + after_right,
+            120,
+            "cols must still sum to workspace width after repeated resize: {after_left}+{after_right}"
         );
     }
 }

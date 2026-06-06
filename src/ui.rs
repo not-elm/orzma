@@ -12,6 +12,7 @@
 //! walker-skipped park).
 
 use crate::ui::chrome::OzmuxChromePlugin;
+use crate::ui::pane_layout::PaneLayoutPlugin;
 use crate::ui::root::OzmuxUiRootPlugin;
 use crate::ui::terminal::OzmuxTerminalUiPlugin;
 use crate::ui::workspace::OzmuxWorkspaceUiPlugin;
@@ -23,6 +24,7 @@ pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
 pub mod palette;
+pub(crate) mod pane_layout;
 pub mod root;
 pub mod status_bar;
 pub mod status_bar_sync;
@@ -183,6 +185,7 @@ impl Plugin for OzmuxUiPlugin {
                 OzmuxChromePlugin,
                 OzmuxTerminalUiPlugin,
                 web_title::WebTitlePlugin,
+                PaneLayoutPlugin,
             ))
             .add_systems(
                 Update,

@@ -783,7 +783,8 @@ mod tests {
         );
         assert_eq!(
             world.get::<Node>(outcome.pane).map(|n| n.flex_grow),
-            Some(1.0)
+            Some(0.0),
+            "pane leaf uses fixed-px layout; flex_grow must be 0"
         );
         assert_eq!(
             world.get::<ActiveSurface>(outcome.pane).map(|a| a.0),
@@ -951,18 +952,22 @@ mod tests {
             world.get::<SplitNode>(split).unwrap().orientation,
             SplitOrientation::Horizontal
         );
-        assert_eq!(world.get::<Node>(split).map(|n| n.flex_grow), Some(1.0));
+        assert_eq!(
+            world.get::<Node>(split).map(|n| n.flex_grow),
+            Some(0.0),
+            "split container uses fixed-px layout; flex_grow must be 0"
+        );
         let kids: Vec<Entity> = world.get::<Children>(split).unwrap().iter().collect();
         assert_eq!(kids, vec![outcome.pane, new_pane]);
         assert_eq!(
             world.get::<Node>(outcome.pane).map(|n| n.flex_grow),
-            Some(0.5),
-            "Mux seeds a 0.5/0.5 ratio; each child gets flex_grow=0.5"
+            Some(0.0),
+            "pane leaf uses fixed-px layout; flex_grow must be 0"
         );
         assert_eq!(
             world.get::<Node>(new_pane).map(|n| n.flex_grow),
-            Some(0.5),
-            "Mux seeds a 0.5/0.5 ratio; each child gets flex_grow=0.5"
+            Some(0.0),
+            "pane leaf uses fixed-px layout; flex_grow must be 0"
         );
         assert_eq!(
             world.get::<OwningWorkspace>(new_pane).map(|o| o.0),
@@ -1036,7 +1041,8 @@ mod tests {
         assert_eq!(root_kids, vec![outcome.pane]);
         assert_eq!(
             world.get::<Node>(outcome.pane).map(|n| n.flex_grow),
-            Some(1.0)
+            Some(0.0),
+            "promoted pane uses fixed-px layout; flex_grow must be 0"
         );
         assert!(world.get_entity(outcome.surface).is_ok());
         assert_eq!(

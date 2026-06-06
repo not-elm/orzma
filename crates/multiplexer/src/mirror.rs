@@ -9,9 +9,7 @@ use crate::components::{
     WorkspaceUiSubtree,
 };
 use crate::error::MultiplexerError;
-use crate::layout::{
-    SplitOrientation, child_flex, pane_frame_node, set_child_grow, split_node_bundle,
-};
+use crate::layout::{SplitOrientation, pane_frame_node, split_node_bundle};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use ozmux_mux::{LayoutNode, MuxError, MuxEvent, NodeId, PaneId, SplitId, SurfaceId, WorkspaceId};
@@ -320,14 +318,9 @@ pub fn apply_event(
             commands.entity(pane_ent).insert(ActiveSurface(surf_ent));
         }
 
-        MuxEvent::LayoutRatioChanged { split, ratio } => {
-            let split_ent = state.splits[*split];
-            if let Ok(kids) = read.children.get(split_ent) {
-                let mut it = kids.iter();
-                if let (Some(lhs), Some(rhs)) = (it.next(), it.next()) {
-                    set_split_grows_from_ratio(commands, lhs, rhs, *ratio);
-                }
-            }
+        MuxEvent::LayoutRatioChanged { .. } => {
+            // Ratio changes are now expressed via PaneResized → PaneDimensions
+            // → size_pane_leaves (fixed-px layout).  No flex_grow updates needed.
         }
 
         MuxEvent::WorkspaceRenamed { workspace, name } => {
@@ -515,7 +508,6 @@ fn realize_subtree(
     match node {
         LayoutNode::Pane { id, .. } => {
             if let Some(&pane_ent) = state.panes.get(*id) {
-                set_child_grow(commands, pane_ent, grow);
                 pane_ent
             } else {
                 realize_new_pane(commands, state, *id, ws_ent, grow)
@@ -529,7 +521,6 @@ fn realize_subtree(
             second,
         } => {
             let split_ent = if let Some(&split_ent) = state.splits.get(*id) {
-                set_child_grow(commands, split_ent, grow);
                 split_ent
             } else {
                 spawn_split(commands, state, *id, *orientation, grow)
@@ -608,15 +599,6 @@ fn collect_live_node_ids(node: &LayoutNode, live: &mut HashSet<NodeId>) {
     }
 }
 
-/// Sets the two children of a split's `Node.flex_grow` from a ratio,
-/// matching the `set_child_grow` convention (`flex_basis = Px(0.0)`).
-fn set_split_grows_from_ratio(commands: &mut Commands, lhs: Entity, rhs: Entity, ratio: f32) {
-    use crate::layout::{normalized_grows, set_child_grow};
-    let (l, r) = normalized_grows(ratio, 1.0 - ratio);
-    set_child_grow(commands, lhs, l);
-    set_child_grow(commands, rhs, r);
-}
-
 /// Spawns the workspace entity + layout-root container and records the reverse maps.
 /// Returns `(workspace_entity, container_entity)`.
 fn spawn_workspace(
@@ -658,17 +640,21 @@ fn spawn_workspace(
 /// Spawns a pane entity with the exact bundle the mirror's pane composition uses.
 /// `ActiveSurface` is NOT set here — the caller sets it after surfaces exist.
 /// `ChildOf` is also set by the caller.
+///
+/// `flex_grow` and `flex_shrink` are 0 so taffy respects the explicit px size
+/// that `size_pane_leaves` writes each frame. The `grow` argument is kept for
+/// call-site compatibility but no longer applied to the pane node.
 fn spawn_pane(
     commands: &mut Commands,
     state: &mut MuxState,
     pane: PaneId,
     ws_ent: Entity,
-    grow: f32,
+    _grow: f32,
 ) -> Entity {
     let mut pane_node = pane_frame_node();
-    let cf = child_flex(grow);
-    pane_node.flex_grow = cf.flex_grow;
-    pane_node.flex_basis = cf.flex_basis;
+    pane_node.flex_grow = 0.0;
+    pane_node.flex_shrink = 0.0;
+    pane_node.flex_basis = Val::Auto;
 
     let ent = commands
         .spawn((
@@ -712,20 +698,23 @@ fn spawn_surface(
     ent
 }
 
-/// Spawns a split entity merging `split_node_bundle` + `child_flex(grow)` fields
+/// Spawns a split entity merging `split_node_bundle` + fixed-px child settings
 /// + `MuxSplitId`. `ChildOf` is set by the caller.
+///
+/// Split containers use `flex_grow=0`/`flex_shrink=0`; their size is derived
+/// by taffy from their fixed-px pane-leaf descendants. The `grow` argument is
+/// kept for call-site compatibility but no longer applied to the split node.
 fn spawn_split(
     commands: &mut Commands,
     state: &mut MuxState,
     split: SplitId,
     orientation: ozmux_mux::SplitOrientation,
-    grow: f32,
+    _grow: f32,
 ) -> Entity {
     let ecs_orientation = mux_orientation_to_ecs(orientation);
     let (mut node, split_component) = split_node_bundle(ecs_orientation);
-    let cf = child_flex(grow);
-    node.flex_grow = cf.flex_grow;
-    node.flex_basis = cf.flex_basis;
+    node.flex_grow = 0.0;
+    node.flex_shrink = 0.0;
 
     let ent = commands
         .spawn((
@@ -1228,7 +1217,6 @@ fn realize_layout_node(
 mod tests {
     use super::*;
     use crate::components::{ActiveSurface, SplitNode, SurfaceKind, WorkspaceMarker};
-    use crate::layout::split_ratio;
     use crate::plugin::MultiplexerPlugin;
     use bevy::ecs::system::RunSystemOnce;
 
@@ -2213,16 +2201,17 @@ mod tests {
     #[test]
     fn resize_pane_moves_split_ratio_off_center() {
         // 2-pane horizontal split: set workspace size, resize p0 Right by 10 cells.
-        // Assert: the split's children have different flex_grow values (ratio shifted
-        // from the initial 0.5/0.5), and mirror_matches holds.
+        // Assert: p0's PaneDimensions cols grew and is larger than p1's, and
+        // mirror_matches holds.
         let mut app = make_mux_app();
 
         let p0 = only_pane(&mut app);
         let ws = active_workspace(&mut app);
-        app.world_mut()
+        let p1 = app
+            .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
                 mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Horizontal)
-                    .unwrap();
+                    .unwrap()
             })
             .unwrap();
         app.world_mut().flush();
@@ -2235,6 +2224,12 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
         app.update();
+
+        let p0_cols_before = app
+            .world()
+            .get::<PaneDimensions>(p0)
+            .map(|d| d.cols)
+            .unwrap_or(0);
 
         let outcome = app
             .world_mut()
@@ -2252,32 +2247,25 @@ mod tests {
             "resize must apply for a 2-pane split with workspace size set"
         );
 
-        let split_ent = split_under_workspace_root(&app, ws);
-        let kids: Vec<Entity> = app
+        let p0_cols = app
             .world()
-            .get::<Children>(split_ent)
-            .map(|c| c.iter().collect())
-            .unwrap_or_default();
-        assert_eq!(kids.len(), 2, "split must have 2 children");
-        let lhs_grow = app
+            .get::<PaneDimensions>(p0)
+            .map(|d| d.cols)
+            .unwrap_or(0);
+        let p1_cols = app
             .world()
-            .get::<Node>(kids[0])
-            .map(|n| n.flex_grow)
-            .unwrap_or(0.0);
-        let rhs_grow = app
-            .world()
-            .get::<Node>(kids[1])
-            .map(|n| n.flex_grow)
-            .unwrap_or(0.0);
-        let ratio = split_ratio(lhs_grow, rhs_grow);
+            .get::<PaneDimensions>(p1)
+            .map(|d| d.cols)
+            .unwrap_or(0);
         assert!(
-            (ratio - 0.5).abs() > 1e-4,
-            "ratio must be off 0.5 after resize; got ratio={ratio}"
+            p0_cols > p0_cols_before,
+            "p0 cols must grow after resize Right: before={p0_cols_before} after={p0_cols}"
         );
         assert!(
-            lhs_grow > rhs_grow,
-            "lhs must be bigger after resize Right: lhs={lhs_grow} rhs={rhs_grow}"
+            p0_cols > p1_cols,
+            "p0 must be wider than p1 after resize Right: p0={p0_cols} p1={p1_cols}"
         );
+
         let s = app.world().resource::<MuxState>();
         assert!(
             mirror_matches(app.world(), s).is_ok(),
