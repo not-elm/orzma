@@ -1,7 +1,7 @@
 //! Structural types and arithmetic for the entity-based layout tree.
 //! Owns `SplitOrientation`, `Side`, `Rect`, `split_ratio`, `normalized_grows`,
 //! spawn-bundle helpers (`child_flex`, `split_node_bundle`, `pane_frame_node`),
-//! and the read-only `LayoutTree` query view.
+//! `set_child_grow`, and the read-only `LayoutTree` query view.
 
 use crate::components::{PaneMarker, SplitNode};
 use bevy::ecs::system::SystemParam;
@@ -232,20 +232,6 @@ fn walk_bounds(tree: &LayoutTree, node: Entity, bounds: Rect, out: &mut Vec<(Ent
     }
 }
 
-/// Set both children of a split, enforcing the never-both-zero invariant
-/// (`set_child_grow` for each; `normalized_grows` maps `(0,0)→(1,1)`).
-pub(crate) fn set_split_grows(
-    commands: &mut Commands,
-    lhs: Entity,
-    rhs: Entity,
-    lhs_grow: f32,
-    rhs_grow: f32,
-) {
-    let (l, r) = normalized_grows(lhs_grow, rhs_grow);
-    set_child_grow(commands, lhs, l);
-    set_child_grow(commands, rhs, r);
-}
-
 /// Set a layout child's `flex_grow` (with zero basis) without disturbing its
 /// other `Node` fields. Used by split / resize / close / swap.
 pub(crate) fn set_child_grow(commands: &mut Commands, child: Entity, grow: f32) {
@@ -263,12 +249,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn set_split_grows_clamps_double_zero_to_one_one() {
+    fn normalized_grows_clamps_double_zero_to_one_one() {
         assert_eq!(normalized_grows(0.0, 0.0), (1.0, 1.0));
     }
 
     #[test]
-    fn set_split_grows_passes_through_nonzero() {
+    fn normalized_grows_passes_through_nonzero() {
         assert_eq!(normalized_grows(0.25, 0.75), (0.25, 0.75));
         assert_eq!(normalized_grows(3.0, 0.0), (3.0, 0.0));
     }
