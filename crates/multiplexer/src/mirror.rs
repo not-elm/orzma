@@ -216,13 +216,10 @@ pub fn apply_event(
     event: &MuxEvent,
 ) {
     match event {
-        MuxEvent::WorkspaceCreated { workspace, .. } => {
-            let name = state
-                .mux
-                .workspace_name(*workspace)
-                .unwrap_or("default")
-                .to_owned();
-            spawn_workspace(commands, state, *workspace, &name);
+        MuxEvent::WorkspaceCreated {
+            workspace, name, ..
+        } => {
+            spawn_workspace(commands, state, *workspace, name);
         }
 
         MuxEvent::PaneCreated {

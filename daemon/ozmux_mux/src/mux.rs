@@ -557,7 +557,11 @@ impl Mux {
         self.sessions[session].workspaces.push(workspace);
         self.sessions[session].active = workspace;
         Ok(vec![
-            MuxEvent::WorkspaceCreated { session, workspace },
+            MuxEvent::WorkspaceCreated {
+                session,
+                workspace,
+                name: format!("{created_at}"),
+            },
             MuxEvent::PaneCreated {
                 pane,
                 workspace,
@@ -1976,7 +1980,9 @@ mod tests {
         let events = mux.new_workspace().unwrap();
 
         let (session, workspace) = match events[0] {
-            MuxEvent::WorkspaceCreated { session, workspace } => (session, workspace),
+            MuxEvent::WorkspaceCreated {
+                session, workspace, ..
+            } => (session, workspace),
             _ => panic!("first event must be WorkspaceCreated"),
         };
         let pane = match events[1] {

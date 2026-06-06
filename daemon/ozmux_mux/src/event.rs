@@ -22,6 +22,8 @@ pub enum MuxEvent {
         session: SessionId,
         /// The new workspace.
         workspace: WorkspaceId,
+        /// The workspace's name.
+        name: String,
     },
     /// A workspace was destroyed.
     WorkspaceDestroyed {
