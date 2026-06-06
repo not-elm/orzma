@@ -1,6 +1,5 @@
 //! Structural types and spawn-bundle helpers for the entity-based layout tree.
-//! Owns `SplitOrientation`, `Side`, `split_ratio`, `split_node_bundle`, and
-//! `pane_frame_node`.
+//! Owns `SplitOrientation`, `Side`, `split_node_bundle`, and `pane_frame_node`.
 
 use crate::components::SplitNode;
 use bevy::prelude::*;

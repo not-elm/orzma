@@ -119,10 +119,18 @@ fn sync_split_dividers(
 
         if let Some(div) = existing {
             if let Ok((_, _, mut node)) = dividers.get_mut(div) {
-                node.left = left;
-                node.top = top;
-                node.width = width;
-                node.height = height;
+                if node.left != left {
+                    node.left = left;
+                }
+                if node.top != top {
+                    node.top = top;
+                }
+                if node.width != width {
+                    node.width = width;
+                }
+                if node.height != height {
+                    node.height = height;
+                }
             }
         } else {
             commands.spawn((

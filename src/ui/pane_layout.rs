@@ -28,22 +28,42 @@ impl Plugin for PaneLayoutPlugin {
 /// dividing by `scale_factor` yields logical pixels, which is what `Val::Px`
 /// expects.  Uses `floor(advance_phys)` to match the renderer's cell pitch
 /// (see `src/ui/terminal.rs`).
+///
+/// Runs on ALL panes every frame (no `Changed` filter) so that a DPR or cell-
+/// metrics change re-sizes every pane even when `PaneDimensions` did not change.
+/// A set-if-neq guard on each field avoids marking `Node` dirty on frames where
+/// nothing has actually changed.
 pub(crate) fn size_pane_leaves(
-    mut panes: Query<(&PaneDimensions, &mut Node), (With<PaneMarker>, Changed<PaneDimensions>)>,
+    mut panes: Query<(&PaneDimensions, &mut Node), With<PaneMarker>>,
     metrics: Res<TerminalCellMetricsResource>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
-    let scale = window.scale_factor().max(1.0);
+    let raw_scale = window.scale_factor();
+    let scale = if raw_scale.is_finite() && raw_scale > 0.0 {
+        raw_scale
+    } else {
+        1.0
+    };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / scale;
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
     for (dim, mut node) in panes.iter_mut() {
-        node.width = Val::Px(f32::from(dim.cols) * cell_w);
-        node.height = Val::Px(f32::from(dim.rows) * cell_h);
-        node.flex_grow = 0.0;
-        node.flex_shrink = 0.0;
+        let target_w = Val::Px(f32::from(dim.cols) * cell_w);
+        let target_h = Val::Px(f32::from(dim.rows) * cell_h);
+        if node.width != target_w {
+            node.width = target_w;
+        }
+        if node.height != target_h {
+            node.height = target_h;
+        }
+        if node.flex_grow != 0.0 {
+            node.flex_grow = 0.0;
+        }
+        if node.flex_shrink != 0.0 {
+            node.flex_shrink = 0.0;
+        }
     }
 }
 

@@ -506,12 +506,17 @@ fn realize_subtree(
     grow: f32,
 ) -> Entity {
     match node {
-        LayoutNode::Pane { id, .. } => {
-            if let Some(&pane_ent) = state.panes.get(*id) {
+        LayoutNode::Pane { id, cols, rows, .. } => {
+            let pane_ent = if let Some(&pane_ent) = state.panes.get(*id) {
                 pane_ent
             } else {
                 realize_new_pane(commands, state, *id, ws_ent, grow)
-            }
+            };
+            commands.entity(pane_ent).insert(PaneDimensions {
+                cols: *cols,
+                rows: *rows,
+            });
+            pane_ent
         }
         LayoutNode::Split {
             id,
@@ -1158,9 +1163,16 @@ fn realize_layout_node(
 ) -> Entity {
     match node {
         LayoutNode::Pane {
-            id, surface_kind, ..
+            id,
+            surface_kind,
+            cols,
+            rows,
         } => {
             let pane_ent = spawn_pane(commands, state, *id, ws_ent, grow);
+            commands.entity(pane_ent).insert(PaneDimensions {
+                cols: *cols,
+                rows: *rows,
+            });
 
             let surface_ids = state
                 .mux
@@ -1412,6 +1424,66 @@ mod tests {
         assert!(
             mirror_matches(app.world(), s).is_ok(),
             "mirror_matches after split + set_workspace_size"
+        );
+    }
+
+    #[test]
+    fn split_alone_sets_pane_dimensions_without_set_workspace_size() {
+        // Regression for the Fix-1 critical bug: before the fix, realize_subtree
+        // discarded cols/rows from LayoutNode::Pane, so the new pane (and the
+        // resized sibling) never received PaneDimensions unless set_workspace_size
+        // was called AFTER the split. This test deliberately does NOT call
+        // set_workspace_size after the split; the cells carried in LayoutChanged
+        // alone must stamp PaneDimensions and satisfy mirror_matches.
+        let mut app = make_mux_app();
+
+        // Establish a known workspace size BEFORE the split.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            m.set_workspace_size(ws, 80, 24).unwrap()
+        });
+
+        // Split WITHOUT calling set_workspace_size afterwards.
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let p = m.active_pane(ws).unwrap();
+            m.split_pane(
+                p,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+
+        // Every pane must have PaneDimensions matching resolve_sizes(80,24).
+        let (expected_cells, pane_entities): (Vec<_>, Vec<_>) = {
+            let state = app.world().resource::<MuxState>();
+            let ws = state.mux.active_workspace();
+            let cells = state.mux.resolve_sizes(ws, 80, 24).unwrap();
+            cells
+                .into_iter()
+                .map(|(pid, (c, r))| ((c, r), state.panes[pid]))
+                .unzip()
+        };
+
+        for (ent, expected) in pane_entities.iter().zip(expected_cells.iter()) {
+            let dims = app
+                .world()
+                .get::<PaneDimensions>(*ent)
+                .copied()
+                .expect("PaneDimensions must be set by LayoutChanged cells alone (no second set_workspace_size)");
+            assert_eq!(
+                (dims.cols, dims.rows),
+                *expected,
+                "pane {ent:?}: split-path PaneDimensions must match resolve_sizes"
+            );
+        }
+
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after split-only (no set_workspace_size after split)"
         );
     }
 
