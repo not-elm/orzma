@@ -208,7 +208,10 @@ fn broadcast(clients: &mut HashMap<ClientId, Sender<ServerMessage>>, events: &[M
     let mut dead: Vec<ClientId> = Vec::new();
     for ev in events {
         for (cid, w) in clients.iter() {
-            if w.try_send(ServerMessage::Event(ev.clone())).is_err() && !dead.contains(cid) {
+            if dead.contains(cid) {
+                continue;
+            }
+            if w.try_send(ServerMessage::Event(ev.clone())).is_err() {
                 dead.push(*cid);
             }
         }
@@ -221,9 +224,108 @@ fn broadcast(clients: &mut HashMap<ClientId, Sender<ServerMessage>>, events: &[M
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam_channel::unbounded;
-    use ozmux_mux::SplitOrientation;
+    use crossbeam_channel::{bounded, unbounded};
+    use ozmux_mux::{PaneId, SplitOrientation};
     use std::time::Duration;
+
+    fn dummy_event(tag: u32) -> MuxEvent {
+        MuxEvent::PaneResized {
+            pane: PaneId::default(),
+            cols: tag as u16,
+            rows: 0,
+        }
+    }
+
+    #[test]
+    fn broadcast_drops_overflowing_client_but_keeps_others() {
+        let mut clients: HashMap<ClientId, Sender<ServerMessage>> = HashMap::new();
+        let (full_tx, _full_rx) = bounded::<ServerMessage>(1);
+        full_tx
+            .try_send(ServerMessage::Event(dummy_event(0)))
+            .unwrap();
+        let (live_tx, live_rx) = bounded::<ServerMessage>(8);
+        clients.insert(ClientId(1), full_tx);
+        clients.insert(ClientId(2), live_tx);
+
+        broadcast(&mut clients, &[dummy_event(1)]);
+
+        assert!(
+            !clients.contains_key(&ClientId(1)),
+            "overflowed client dropped"
+        );
+        assert!(
+            clients.contains_key(&ClientId(2)),
+            "healthy client retained"
+        );
+        assert!(
+            live_rx.try_recv().is_ok(),
+            "healthy client received the event"
+        );
+    }
+
+    #[test]
+    fn broadcast_skips_later_events_for_an_overflowed_client() {
+        let mut clients: HashMap<ClientId, Sender<ServerMessage>> = HashMap::new();
+        let (tx, rx) = bounded::<ServerMessage>(2);
+        clients.insert(ClientId(1), tx);
+
+        broadcast(
+            &mut clients,
+            &[dummy_event(1), dummy_event(2), dummy_event(3)],
+        );
+
+        assert!(
+            !clients.contains_key(&ClientId(1)),
+            "overflowed client dropped"
+        );
+        let mut delivered = Vec::new();
+        while let Ok(ServerMessage::Event(MuxEvent::PaneResized { cols, .. })) = rx.try_recv() {
+            delivered.push(cols);
+        }
+        assert_eq!(
+            delivered,
+            vec![1, 2],
+            "after overflow on event 3, no later event is delivered to the dropped client \
+             (gapless invariant: a client that misses any event receives nothing more)"
+        );
+    }
+
+    #[test]
+    #[ignore = "stress probe for the within-broadcast overflow gap; concurrent, run on demand \
+                with --ignored. Pre-fix this reports a nonzero gap count; post-fix it is always 0."]
+    fn broadcast_overflow_never_delivers_out_of_order_under_concurrent_drain() {
+        let mut total_gaps = 0u64;
+        for _round in 0..2000 {
+            let mut clients: HashMap<ClientId, Sender<ServerMessage>> = HashMap::new();
+            let (tx, rx) = bounded::<ServerMessage>(2);
+            tx.try_send(ServerMessage::Event(dummy_event(0))).unwrap();
+            tx.try_send(ServerMessage::Event(dummy_event(0))).unwrap();
+            clients.insert(ClientId(1), tx);
+
+            let drainer = std::thread::spawn(move || {
+                let mut seq = Vec::new();
+                while let Ok(ServerMessage::Event(MuxEvent::PaneResized { cols, .. })) =
+                    rx.recv_timeout(Duration::from_millis(50))
+                {
+                    if cols != 0 {
+                        seq.push(cols);
+                    }
+                }
+                seq
+            });
+
+            let many: Vec<MuxEvent> = (1..=20).map(dummy_event).collect();
+            broadcast(&mut clients, &many);
+            let seq = drainer.join().unwrap();
+            if seq.windows(2).any(|w| w[1] > w[0] + 1) {
+                total_gaps += 1;
+            }
+        }
+        assert_eq!(
+            total_gaps, 0,
+            "a dropped client received event N+k after missing N (silent mirror corruption)"
+        );
+    }
 
     #[test]
     fn attach_then_split_broadcasts_and_snapshot_matches() {
