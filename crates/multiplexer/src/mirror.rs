@@ -271,7 +271,7 @@ pub fn apply_event(
             state.layout_roots.remove(*workspace);
         }
 
-        // GUI-side concerns (Plan 2b-2) or size-flow events — no ECS mirror
+        // NOTE: GUI-side concerns (Plan 2b-2) or size-flow events — no ECS mirror
         // mutation needed at this layer.
         MuxEvent::SessionCreated { .. }
         | MuxEvent::WorkspaceSelected { .. }
@@ -298,6 +298,7 @@ pub fn apply_event(
                 commands,
                 state,
                 read,
+                *workspace,
                 ws_ent,
                 slot_ent,
                 parent,
@@ -316,7 +317,7 @@ pub fn apply_event(
                 .and_then(|kids| kids.iter().next())
                 .expect("WorkspaceRootChanged: layout-root container must have a child");
             replace_slot(
-                commands, state, read, ws_ent, slot_ent, container, 1.0, root,
+                commands, state, read, *workspace, ws_ent, slot_ent, container, 1.0, root,
             );
         }
     }
@@ -343,6 +344,7 @@ fn replace_slot(
     commands: &mut Commands,
     state: &mut MuxState,
     read: &MirrorReadCtx,
+    ws: WorkspaceId,
     ws_ent: Entity,
     slot_ent: Entity,
     parent: Entity,
@@ -352,15 +354,35 @@ fn replace_slot(
     let mut old_nodes = Vec::new();
     read.capture_subtree(slot_ent, &mut old_nodes);
 
-    let mut live = HashSet::new();
-    collect_live_node_ids(subtree, &mut live);
+    // NOTE: the stale sweep keys off the Mux's CURRENT full tree, not this
+    // event's `subtree`. A sibling LayoutChanged in the same batch (e.g. a
+    // cross-parent swap) can move an old node to another slot; `capture_subtree`
+    // reads the pre-flush ECS where it still appears under this slot. Despawning
+    // by event-subtree alone would delete that moved-but-live node. Only nodes
+    // the Mux no longer has anywhere (e.g. close's collapsed split) are swept.
+    let mut mux_live = HashSet::new();
+    if let Ok(layout) = state.mux.workspace_layout(ws) {
+        collect_live_node_ids(&layout, &mut mux_live);
+    }
 
     let new_root = realize_subtree(commands, state, ws_ent, subtree, inherited_grow);
-    commands.entity(new_root).insert(ChildOf(parent));
-    set_child_grow(commands, new_root, inherited_grow);
+    // NOTE: use position-aware insertion so the new root lands at exactly the
+    // slot's original index in the parent's Children list. Plain `ChildOf`
+    // insertion would APPEND, corrupting first/second ordering when the replaced
+    // slot was the first child of a multi-child parent.
+    let slot_index = read
+        .children
+        .get(parent)
+        .ok()
+        .and_then(|kids| kids.iter().position(|e| e == slot_ent));
+    if let Some(idx) = slot_index {
+        commands.entity(parent).insert_children(idx, &[new_root]);
+    } else {
+        commands.entity(new_root).insert(ChildOf(parent));
+    }
 
     for (ent, id) in old_nodes {
-        if live.contains(&id) {
+        if mux_live.contains(&id) {
             continue;
         }
         match id {
@@ -1379,6 +1401,13 @@ mod tests {
             mirror_matches(world, s)
         };
         assert!(result.is_ok(), "mirror_matches after op: {result:?}");
+
+        #[cfg(debug_assertions)]
+        {
+            let world = app.world();
+            let s = world.resource::<MuxState>();
+            assert_no_map_leaks(world, s);
+        }
     }
 
     fn make_mux_app() -> App {
@@ -1872,6 +1901,83 @@ mod tests {
             let ws = m.active_workspace();
             let first = m.ordered_panes(ws).unwrap()[0];
             m.swap_pane(first, ozmux_mux::SwapOffset::Next).unwrap()
+        });
+
+        assert_layout_equiv(&mut oracle, &mut mux_app);
+    }
+
+    #[test]
+    fn swap_cross_parent_equiv() {
+        let mut oracle = make_oracle_app();
+        let mut mux_app = make_mux_app();
+
+        // Build a 3-pane tree: S( S2(p0, p2), p1 ).
+        // DFS order: [p0, p2, p1]. p2 (under S2) and p1 (under S) are
+        // DFS-adjacent but in different parent splits — swapping them
+        // exercises the 2-LayoutChanged cross-parent path.
+
+        // Step 1: split p0 horizontally After → S(p0, p1).
+        let oracle_p0 = oracle_only_pane(&mut oracle);
+        oracle_split_only_pane(
+            &mut oracle,
+            crate::layout::Side::After,
+            SplitOrientation::Horizontal,
+        );
+        mux_split_active_pane(
+            &mut mux_app,
+            ozmux_mux::SplitOrientation::Horizontal,
+            ozmux_mux::Side::After,
+        );
+
+        // Step 2: split p0 vertically After → S( S2(p0, p2), p1 ).
+        // Oracle: split the original p0 entity.
+        let oracle_p2 = oracle
+            .world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.split_pane(
+                    oracle_p0,
+                    crate::layout::Side::After,
+                    SplitOrientation::Vertical,
+                )
+                .unwrap()
+            })
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        // Mux: active pane after step 1 is p1 (index 1). p0 is index 0.
+        // Split p0 (ordered index 0) vertically After.
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let p0_id = m.ordered_panes(ws).unwrap()[0];
+            m.split_pane(
+                p0_id,
+                ozmux_mux::SplitOrientation::Vertical,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+            )
+            .unwrap()
+        });
+
+        // Confirm DFS order is [p0, p2, p1] (p2 at index 1, p1 at index 2).
+        // Swap p2 with its Next neighbor (p1) — cross-parent swap.
+
+        // Oracle: swap p2 (oracle_p2) with Next.
+        oracle
+            .world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.swap_pane(oracle_p2, crate::swap::SwapOffset::Next)
+                    .unwrap();
+            })
+            .unwrap();
+        oracle.world_mut().flush();
+        oracle.update();
+
+        // Mux: p2 is at ordered index 1 after the second split.
+        run_mux_op(&mut mux_app, |m| {
+            let ws = m.active_workspace();
+            let p2_id = m.ordered_panes(ws).unwrap()[1];
+            m.swap_pane(p2_id, ozmux_mux::SwapOffset::Next).unwrap()
         });
 
         assert_layout_equiv(&mut oracle, &mut mux_app);
