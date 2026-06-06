@@ -75,7 +75,6 @@ pub struct MirrorReadCtx<'w, 's> {
 
 impl MirrorReadCtx<'_, '_> {
     /// The `WorkspaceId` an entity maps to, or `None`.
-    #[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
     pub(crate) fn workspace_id_of(&self, ent: Entity) -> Option<WorkspaceId> {
         self.ws_ids.get(ent).ok().map(|w| w.0)
     }
@@ -807,10 +806,6 @@ pub(crate) fn lift(state: &MuxState, err: MuxError) -> MultiplexerError {
 }
 
 /// Extracts the `PaneId` from the first `PaneCreated` event in `events`, or `None`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")
-)]
 pub(crate) fn created_pane_id(events: &[MuxEvent]) -> Option<PaneId> {
     events.iter().find_map(|e| match e {
         MuxEvent::PaneCreated { pane, .. } => Some(*pane),
@@ -839,7 +834,6 @@ pub(crate) fn single_spawned_surface_id(events: &[MuxEvent]) -> Option<SurfaceId
 }
 
 /// Returns the active (seed) surface of `pane` from `state.mux`, or `None`.
-#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
 pub(crate) fn seed_surface_of(state: &MuxState, pane: PaneId) -> Option<SurfaceId> {
     state.mux.active_surface(pane).ok()
 }
@@ -1566,25 +1560,46 @@ mod tests {
     }
 
     #[test]
-    fn new_workspace_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn new_workspace_creates_ecs_tree_and_mirror_matches() {
+        // Drive create_workspace once (now Mux-backed), assert the resulting ECS
+        // tree directly and that mirror_matches holds. The oracle-vs-mux comparison
+        // would be a tautology after the flip (both sides go through Mux).
+        let mut app = make_mux_app();
 
-        // Oracle: spawn a second workspace (matching the Mux's naming).
-        oracle
-            .world_mut()
+        app.world_mut()
             .run_system_once(|mut mux: crate::commands::MultiplexerCommands| {
                 mux.create_workspace(Some("default".to_owned()));
             })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        // Mux: new_workspace emits [WorkspaceCreated, PaneCreated,
-        // WorkspaceSelected, ActivePaneChanged]; apply all.
-        run_mux_op(&mut mux_app, |m| m.new_workspace().unwrap());
+        let ws_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(app.world())
+            .count();
+        let pane_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .count();
+        let surf_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<SurfaceMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            (ws_count, pane_count, surf_count),
+            (2, 2, 2),
+            "after create_workspace: 2 workspaces, 2 panes, 2 surfaces"
+        );
 
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after create_workspace"
+        );
     }
 
     #[test]
@@ -1668,13 +1683,13 @@ mod tests {
     }
 
     #[test]
-    fn rename_workspace_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn rename_workspace_updates_name_in_ecs_and_mux() {
+        // Drive rename_workspace through MultiplexerCommands (now Mux-backed) and
+        // assert the ECS Name and the Mux's own name both read back "renamed".
+        // The oracle-vs-mux comparison would be a tautology after the flip.
+        let mut app = make_mux_app();
 
-        // Oracle: rename.
-        oracle
-            .world_mut()
+        app.world_mut()
             .run_system_once(
                 |mut mux: crate::commands::MultiplexerCommands,
                  ws_q: Query<Entity, With<WorkspaceMarker>>| {
@@ -1683,84 +1698,76 @@ mod tests {
                 },
             )
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        // Mux: rename.
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            m.rename_workspace(ws, "renamed".to_owned()).unwrap()
-        });
-
-        // Just check names match (assert_layout_equiv does not check names).
-        let oracle_name = oracle
+        let ecs_name = app
             .world_mut()
             .query_filtered::<&Name, With<WorkspaceMarker>>()
-            .iter(oracle.world())
+            .iter(app.world())
             .next()
             .map(|n| n.as_str().to_owned())
             .unwrap();
-        let mux_name = mux_app
-            .world_mut()
-            .query_filtered::<&Name, With<WorkspaceMarker>>()
-            .iter(mux_app.world())
-            .next()
-            .map(|n| n.as_str().to_owned())
-            .unwrap();
-        assert_eq!(oracle_name, "renamed");
-        assert_eq!(mux_name, "renamed");
+        assert_eq!(ecs_name, "renamed", "ECS Name updated by rename");
+
+        let state = app.world().resource::<MuxState>();
+        let ws_id = state.mux.active_workspace();
+        let mux_name = state.mux.workspace_name(ws_id).unwrap_or("");
+        assert_eq!(mux_name, "renamed", "Mux name updated by rename");
+
+        assert!(
+            mirror_matches(app.world(), state).is_ok(),
+            "mirror_matches after rename_workspace"
+        );
     }
 
     #[test]
-    fn close_workspace_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn close_workspace_reduces_counts_and_mirror_matches() {
+        // Drive create_workspace + close_workspace through MultiplexerCommands
+        // (now Mux-backed) and assert the ECS tree directly plus mirror_matches.
+        // The oracle-vs-mux comparison would be a tautology after the flip.
+        let mut app = make_mux_app();
 
-        // Both start with 1 workspace. Create a second so we can close the first.
-        oracle
+        // Create a second workspace so we have one to close.
+        let second_ws = app
             .world_mut()
             .run_system_once(|mut mux: crate::commands::MultiplexerCommands| {
-                mux.create_workspace(Some("1".to_owned()));
+                let out = mux.create_workspace(Some("second".to_owned()));
+                out.workspace
             })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        run_mux_op(&mut mux_app, |m| m.new_workspace().unwrap());
-
-        // Now close the second workspace on both sides to get back to one.
-        oracle
+        // Confirm we have 2 workspaces before the close.
+        let ws_before = app
             .world_mut()
-            .run_system_once(
-                |mut mux: crate::commands::MultiplexerCommands,
-                 ws_q: Query<Entity, With<WorkspaceMarker>>| {
-                    // close the last (most recently added) workspace by Name "1"
-                    let ws = ws_q.iter().find(|_| true).expect("workspace must exist");
-                    mux.close_workspace(ws);
-                },
-            )
+            .query_filtered::<Entity, With<WorkspaceMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(ws_before, 2, "two workspaces before close");
+
+        // Close the second workspace through MultiplexerCommands.
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.close_workspace(second_ws);
+            })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            m.close_workspace(ws).unwrap()
-        });
-
-        // Both should have exactly one workspace.
-        let oracle_count = oracle
+        let ws_after = app
             .world_mut()
             .query_filtered::<Entity, With<WorkspaceMarker>>()
-            .iter(oracle.world())
+            .iter(app.world())
             .count();
-        let mux_count = mux_app
-            .world_mut()
-            .query_filtered::<Entity, With<WorkspaceMarker>>()
-            .iter(mux_app.world())
-            .count();
-        assert_eq!(oracle_count, 1, "oracle workspace count after close");
-        assert_eq!(mux_count, 1, "mux workspace count after close");
+        assert_eq!(ws_after, 1, "one workspace remains after close");
+
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after close_workspace"
+        );
     }
 
     #[test]

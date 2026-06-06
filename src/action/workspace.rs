@@ -89,6 +89,7 @@ fn apply_new_workspace(
 
 fn apply_focus_workspace(
     trigger: On<FocusWorkspaceActionEvent>,
+    mut mux: MultiplexerCommands,
     mut commands: Commands,
     workspaces: Query<(Entity, Option<&WorkspaceCreatedAt>), With<WorkspaceMarker>>,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
@@ -138,6 +139,7 @@ fn apply_focus_workspace(
         .entity(current_entity)
         .remove::<AttachedWorkspace>();
     commands.entity(target_entity).insert(AttachedWorkspace);
+    let _ = mux.select_workspace(target_entity);
 }
 
 #[cfg(test)]

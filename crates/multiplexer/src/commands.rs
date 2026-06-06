@@ -12,7 +12,9 @@ use crate::components::{
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
 use crate::layout::{LayoutTree, Side, SplitOrientation};
-use crate::mirror::{MirrorReadCtx, MuxState, apply_event, created_workspace_id};
+use crate::mirror::{
+    MirrorReadCtx, MuxState, apply_event, created_pane_id, created_workspace_id, seed_surface_of,
+};
 use crate::resize::{ResizePaneOutcome, resize_split_for_pane};
 use crate::swap::{SwapOffset, SwapOutcome};
 use bevy::ecs::system::SystemParam;
@@ -95,66 +97,27 @@ pub struct MultiplexerCommands<'w, 's> {
 }
 
 impl<'w, 's> MultiplexerCommands<'w, 's> {
-    /// Spawn a Workspace with a layout-root node holding one bootstrap Pane
-    /// (one bootstrap Terminal Surface as its child).
+    /// Spawns a new Workspace through the Mux (the authoritative source of
+    /// truth), applies the resulting events to the ECS mirror, then renames
+    /// the workspace to `name` (defaulting to `"default"`).
     pub fn create_workspace(&mut self, name: Option<String>) -> WorkspaceCreated {
         let name = name.unwrap_or_else(|| "default".to_string());
-
-        let workspace = self
-            .commands
-            .spawn((WorkspaceMarker, Name::new(name.clone())))
-            .id();
-
-        let root = self
-            .commands
-            .spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    ..default()
-                },
-                Name::new(format!("layout-root: {name}")),
-            ))
-            .id();
-
-        let surface = self
-            .commands
-            .spawn((
-                SurfaceMarker,
-                SurfaceKind::Terminal,
-                Name::new(format!("surface: {name}#0")),
-            ))
-            .id();
-
-        let mut pane_node = crate::layout::pane_frame_node();
-        let cf = crate::layout::child_flex(1.0);
-        pane_node.flex_grow = cf.flex_grow;
-        pane_node.flex_basis = cf.flex_basis;
-        let pane = self
-            .commands
-            .spawn((
-                PaneMarker,
-                OwningWorkspace(workspace),
-                ActiveSurface(surface),
-                CopyMode::default(),
-                pane_node,
-                Name::new(format!("pane: {name}#0")),
-            ))
-            .id();
-
-        self.commands
-            .entity(workspace)
-            .insert((ActivePane(pane), WorkspaceUiSubtree(root)));
-        self.commands.entity(root).insert(ChildOf(workspace));
-        self.commands.entity(pane).insert(ChildOf(root));
-        self.commands
-            .entity(surface)
-            .insert((ChildOf(pane), SurfaceOf(pane)));
-
+        let events = self.mux.mux.new_workspace().expect("new_workspace");
+        let ws_id = created_workspace_id(&events).expect("WorkspaceCreated");
+        let pane_id = created_pane_id(&events).expect("PaneCreated");
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+        }
+        let _ = self.mux.mux.rename_workspace(ws_id, name.clone());
+        let ws_ent = self.mux.workspaces[ws_id];
+        self.commands.entity(ws_ent).insert(Name::new(name));
+        let pane_ent = self.mux.panes[pane_id];
+        let seed = seed_surface_of(&self.mux, pane_id).expect("seed surface");
+        let surface_ent = self.mux.surfaces[seed];
         WorkspaceCreated {
-            workspace,
-            pane,
-            surface,
+            workspace: ws_ent,
+            pane: pane_ent,
+            surface: surface_ent,
         }
     }
 
@@ -207,14 +170,21 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .insert((AttachedWorkspace, WorkspaceCreatedAt(n)));
     }
 
-    /// Mutate the Workspace's `Name` component. Uses `set_if_neq` so a
-    /// no-op rename does not flag `Changed<Name>`.
+    /// Renames the Workspace through the Mux, then applies the resulting events.
+    /// Uses `set_if_neq` semantics (the Mux already deduplicates no-op renames).
     pub fn rename_workspace(&mut self, workspace: Entity, name: String) -> MultiplexerResult<()> {
-        let (_, mut current_name, _) = self
-            .workspaces
-            .get_mut(workspace)
-            .map_err(|_| MultiplexerError::WorkspaceNotFound(workspace))?;
-        current_name.set_if_neq(Name::new(name));
+        let id = self
+            .mirror_read
+            .workspace_id_of(workspace)
+            .ok_or(MultiplexerError::WorkspaceNotFound(workspace))?;
+        let events = self
+            .mux
+            .mux
+            .rename_workspace(id, name)
+            .map_err(|e| crate::mirror::lift(&self.mux, e))?;
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+        }
         Ok(())
     }
 
@@ -425,10 +395,39 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         self.commands.entity(entity).insert(bundle);
     }
 
-    /// Close a Workspace entirely. Cascading `ChildOf` despawn removes all
-    /// Pane and Surface descendants.
+    /// Closes the Workspace through the Mux (cascade removes all Panes and
+    /// Surfaces), then applies the resulting events to the ECS mirror.
+    /// Silently returns if `workspace` is not a known Mux workspace.
     pub fn close_workspace(&mut self, workspace: Entity) {
-        self.commands.entity(workspace).despawn();
+        let Some(id) = self.mirror_read.workspace_id_of(workspace) else {
+            return;
+        };
+        let Ok(events) = self.mux.mux.close_workspace(id) else {
+            return;
+        };
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+        }
+    }
+
+    /// Sets the Mux's active workspace to `workspace`, keeping the Mux's
+    /// active-workspace pointer in sync with the GUI's `AttachedWorkspace`.
+    /// `WorkspaceSelected` is handled as a no-op in `apply_event`; the GUI
+    /// moves `AttachedWorkspace` separately.
+    pub fn select_workspace(&mut self, workspace: Entity) -> MultiplexerResult<()> {
+        let id = self
+            .mirror_read
+            .workspace_id_of(workspace)
+            .ok_or(MultiplexerError::WorkspaceNotFound(workspace))?;
+        let events = self
+            .mux
+            .mux
+            .select_workspace(id)
+            .map_err(|e| crate::mirror::lift(&self.mux, e))?;
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+        }
+        Ok(())
     }
 
     /// Resize the split that controls `pane`'s extent in the given
