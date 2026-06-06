@@ -316,12 +316,14 @@ mod tests {
 
     #[test]
     fn resize_clamps_at_min_cells_when_shrinking_subtree_is_at_floor() {
-        let (mut app, ws, left, right) = two_panes(SplitOrientation::Horizontal);
+        let (mut app, ws, left, _right) = two_panes(SplitOrientation::Horizontal);
         set_dims(&mut app, ws, 120, 40);
-        // Push the rhs to its 10-col floor (110/10 of 120) so a Right resize has
-        // no shrink budget left.
-        app.world_mut().get_mut::<Node>(left).unwrap().flex_grow = 110.0;
-        app.world_mut().get_mut::<Node>(right).unwrap().flex_grow = 10.0;
+        // Push the rhs to its 10-col floor via repeated resize_pane Right calls
+        // (110 cells of growth = 100 steps of 1). Once at the floor, any further
+        // Right resize has no shrink budget left in the Mux.
+        for _ in 0..100 {
+            resize(&mut app, left, PaneDirection::Right, 1);
+        }
         assert_eq!(
             resize(&mut app, left, PaneDirection::Right, 5),
             ResizePaneOutcome::NoOp

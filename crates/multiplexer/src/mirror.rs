@@ -88,7 +88,6 @@ impl MirrorReadCtx<'_, '_> {
     }
 
     /// The `SurfaceId` an entity maps to, or `None`.
-    #[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
     pub(crate) fn surface_id_of(&self, ent: Entity) -> Option<SurfaceId> {
         self.surface_ids.get(ent).ok().map(|s| s.0)
     }
@@ -821,10 +820,6 @@ pub(crate) fn created_workspace_id(events: &[MuxEvent]) -> Option<WorkspaceId> {
 }
 
 /// Extracts the `SurfaceId` from the first `SurfaceSpawned` event in `events`, or `None`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")
-)]
 pub(crate) fn single_spawned_surface_id(events: &[MuxEvent]) -> Option<SurfaceId> {
     events.iter().find_map(|e| match e {
         MuxEvent::SurfaceSpawned { surface, .. } => Some(*surface),
@@ -838,7 +833,10 @@ pub(crate) fn seed_surface_of(state: &MuxState, pane: PaneId) -> Option<SurfaceI
 }
 
 /// Translates a `MuxResult` into a `MultiplexerResult`, lifting any error via `lift`.
-#[expect(dead_code, reason = "consumed by the authority flip in P2b2 Tasks 2-5")]
+#[expect(
+    dead_code,
+    reason = "available for future Plan 2b-2 callers; not yet consumed"
+)]
 pub(crate) fn lift_result<T>(
     state: &MuxState,
     result: Result<T, MuxError>,
@@ -1051,6 +1049,16 @@ pub(crate) fn ecs_swap_offset_to_mux(o: crate::swap::SwapOffset) -> ozmux_mux::S
     match o {
         crate::swap::SwapOffset::Prev => ozmux_mux::SwapOffset::Prev,
         crate::swap::SwapOffset::Next => ozmux_mux::SwapOffset::Next,
+    }
+}
+
+/// Converts the ECS `crate::direction::PaneDirection` to `ozmux_mux::PaneDirection`.
+pub(crate) fn ecs_direction_to_mux(d: crate::direction::PaneDirection) -> ozmux_mux::PaneDirection {
+    match d {
+        crate::direction::PaneDirection::Up => ozmux_mux::PaneDirection::Up,
+        crate::direction::PaneDirection::Down => ozmux_mux::PaneDirection::Down,
+        crate::direction::PaneDirection::Left => ozmux_mux::PaneDirection::Left,
+        crate::direction::PaneDirection::Right => ozmux_mux::PaneDirection::Right,
     }
 }
 
@@ -1682,83 +1690,81 @@ mod tests {
     }
 
     #[test]
-    fn add_surface_equiv_active_unchanged() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn add_surface_active_unchanged() {
+        // add_surface adds a second surface but must NOT change the active surface.
+        // Assert: surface count increased to 2, active is still the bootstrap, mirror_matches.
+        let mut app = make_mux_app();
 
-        // Oracle: add_surface, active must stay on the original surface.
-        oracle
+        let pane = only_pane(&mut app);
+        let original_active = app
+            .world()
+            .get::<ActiveSurface>(pane)
+            .expect("pane must have ActiveSurface")
+            .0;
+
+        let second = app
             .world_mut()
-            .run_system_once(
-                |mut mux: crate::commands::MultiplexerCommands,
-                 panes_q: Query<Entity, With<PaneMarker>>| {
-                    let pane = panes_q.iter().next().expect("pane must exist");
-                    mux.add_surface(pane, SurfaceKind::Terminal);
-                },
-            )
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.add_surface(pane, SurfaceKind::Terminal)
+            })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        // Mux: spawn_surface emits [SurfaceSpawned].
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let pane = m.active_pane(ws).unwrap();
-            m.spawn_surface(pane, ozmux_mux::SurfaceKind::Terminal)
-                .unwrap()
-        });
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        let surf_count = app
+            .world()
+            .get::<crate::components::Surfaces>(pane)
+            .map(|s| s.iter().count())
+            .unwrap_or(0);
+        assert_eq!(surf_count, 2, "pane now has 2 surfaces");
+        assert_ne!(second, original_active, "second surface is a new entity");
+        assert_eq!(
+            app.world().get::<ActiveSurface>(pane).map(|a| a.0),
+            Some(original_active),
+            "active surface unchanged after add_surface"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after add_surface"
+        );
     }
 
     #[test]
-    fn set_active_surface_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn set_active_surface_switches_active() {
+        // add_surface then set_active_surface: active must change to the new surface.
+        // Assert: ActiveSurface on the pane is now the second surface, mirror_matches.
+        let mut app = make_mux_app();
 
-        // Both sides: add a second surface, then activate it.
-        // Oracle.
-        let oracle_second_surface = oracle
+        let pane = only_pane(&mut app);
+
+        let second = app
             .world_mut()
-            .run_system_once(
-                |mut mux: crate::commands::MultiplexerCommands,
-                 panes_q: Query<Entity, With<PaneMarker>>| {
-                    let pane = panes_q.iter().next().expect("pane must exist");
-                    mux.add_surface(pane, SurfaceKind::Terminal)
-                },
-            )
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.add_surface(pane, SurfaceKind::Terminal)
+            })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
-        oracle
-            .world_mut()
-            .run_system_once(
-                move |mut mux: crate::commands::MultiplexerCommands,
-                      panes_q: Query<Entity, With<PaneMarker>>| {
-                    let pane = panes_q.iter().next().expect("pane must exist");
-                    mux.set_active_surface(pane, oracle_second_surface).unwrap();
-                },
-            )
+        app.world_mut().flush();
+        app.update();
+
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.set_active_surface(pane, second).unwrap();
+            })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        // Mux: spawn + activate.
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let pane = m.active_pane(ws).unwrap();
-            m.spawn_surface(pane, ozmux_mux::SurfaceKind::Terminal)
-                .unwrap()
-        });
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let pane = m.active_pane(ws).unwrap();
-            let surfs = m.surfaces(pane).unwrap();
-            let second = surfs[1];
-            m.set_active_surface(pane, second).unwrap()
-        });
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        assert_eq!(
+            app.world().get::<ActiveSurface>(pane).map(|a| a.0),
+            Some(second),
+            "active surface switched to second after set_active_surface"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after set_active_surface"
+        );
     }
 
     #[test]
@@ -1922,12 +1928,8 @@ mod tests {
         let p1 = app
             .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.split_pane(
-                    p0,
-                    crate::layout::Side::After,
-                    SplitOrientation::Horizontal,
-                )
-                .unwrap()
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Horizontal)
+                    .unwrap()
             })
             .unwrap();
         app.world_mut().flush();
@@ -1970,12 +1972,8 @@ mod tests {
         let p1 = app
             .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.split_pane(
-                    p0,
-                    crate::layout::Side::Before,
-                    SplitOrientation::Vertical,
-                )
-                .unwrap()
+                mux.split_pane(p0, crate::layout::Side::Before, SplitOrientation::Vertical)
+                    .unwrap()
             })
             .unwrap();
         app.world_mut().flush();
@@ -2013,12 +2011,8 @@ mod tests {
         let p1 = app
             .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.split_pane(
-                    p0,
-                    crate::layout::Side::After,
-                    SplitOrientation::Vertical,
-                )
-                .unwrap()
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Vertical)
+                    .unwrap()
             })
             .unwrap();
         app.world_mut().flush();
@@ -2206,11 +2200,7 @@ mod tests {
             .get::<Children>(split_ent)
             .map(|c| c.iter().collect())
             .unwrap_or_default();
-        assert_eq!(
-            kids,
-            vec![p1, p0],
-            "after swap: p1 first, p0 second"
-        );
+        assert_eq!(kids, vec![p1, p0], "after swap: p1 first, p0 second");
         let s = app.world().resource::<MuxState>();
         assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches");
     }
@@ -2255,62 +2245,64 @@ mod tests {
             .query_filtered::<Entity, With<PaneMarker>>()
             .iter(app.world())
             .count();
-        assert_eq!(pane_count, 3, "3 panes still present after cross-parent swap");
+        assert_eq!(
+            pane_count, 3,
+            "3 panes still present after cross-parent swap"
+        );
         let s = app.world().resource::<MuxState>();
-        assert!(mirror_matches(app.world(), s).is_ok(), "mirror_matches after cross-parent swap");
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after cross-parent swap"
+        );
     }
 
     #[test]
-    fn break_surface_to_pane_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn break_surface_to_pane_creates_new_pane_with_moved_surface() {
+        // Give the bootstrap pane a second surface, then break it into a new pane.
+        // Assert: 2 panes exist, the new pane holds the moved surface as its
+        // active surface, and mirror_matches holds.
+        let mut app = make_mux_app();
 
-        // Give the only pane a second surface on both sides.
-        let oracle_pane = oracle_only_pane(&mut oracle);
-        let oracle_second = oracle
+        let pane = only_pane(&mut app);
+        let second = app
             .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.add_surface(oracle_pane, SurfaceKind::Terminal)
+                mux.add_surface(pane, SurfaceKind::Terminal)
             })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let pane = m.active_pane(ws).unwrap();
-            m.spawn_surface(pane, ozmux_mux::SurfaceKind::Terminal)
-                .unwrap()
-        });
+        app.world_mut().flush();
+        app.update();
 
-        // Break the second surface into a new pane on both sides.
-        oracle
+        let new_pane = app
             .world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
                 mux.break_surface_to_pane(
-                    oracle_second,
+                    second,
                     crate::layout::Side::After,
                     SplitOrientation::Horizontal,
                 )
-                .unwrap();
+                .unwrap()
             })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let pane = m.active_pane(ws).unwrap();
-            let surfs = m.surfaces(pane).unwrap();
-            let second = surfs[1];
-            m.break_surface_to_pane(
-                second,
-                ozmux_mux::SplitOrientation::Horizontal,
-                ozmux_mux::Side::After,
-            )
-            .unwrap()
-        });
-
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        let pane_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<PaneMarker>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(pane_count, 2, "break creates a second pane");
+        assert_eq!(
+            app.world().get::<ActiveSurface>(new_pane).map(|a| a.0),
+            Some(second),
+            "new pane's active surface is the moved surface"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after break_surface_to_pane"
+        );
     }
 
     #[test]
@@ -2400,61 +2392,78 @@ mod tests {
     }
 
     #[test]
-    fn resize_ratio_equiv() {
-        let mut oracle = make_oracle_app();
-        let mut mux_app = make_mux_app();
+    fn resize_pane_moves_split_ratio_off_center() {
+        // 2-pane horizontal split: set workspace size, resize p0 Right by 10 cells.
+        // Assert: the split's children have different flex_grow values (ratio shifted
+        // from the initial 0.5/0.5), and mirror_matches holds.
+        let mut app = make_mux_app();
 
-        // 2-pane horizontal split on both sides.
-        let oracle_p0 = oracle_only_pane(&mut oracle);
-        oracle_split_only_pane(
-            &mut oracle,
-            crate::layout::Side::After,
-            SplitOrientation::Horizontal,
-        );
-        mux_split_active_pane(
-            &mut mux_app,
-            ozmux_mux::SplitOrientation::Horizontal,
-            ozmux_mux::Side::After,
-        );
-
-        // Set workspace size on both so resize has a cell budget.
-        oracle
-            .world_mut()
-            .run_system_once(
-                |mut mux: crate::commands::MultiplexerCommands,
-                 ws_q: Query<Entity, With<WorkspaceMarker>>| {
-                    let ws = ws_q.iter().next().expect("workspace must exist");
-                    mux.set_workspace_dimensions(ws, 80, 24);
-                },
-            )
-            .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
-
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            m.set_workspace_size(ws, 80, 24).unwrap()
-        });
-
-        // Resize p0 to the Right (grow left half) by 10 cells on both.
-        oracle
-            .world_mut()
+        let p0 = only_pane(&mut app);
+        let ws = active_workspace(&mut app);
+        app.world_mut()
             .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
-                mux.resize_pane(oracle_p0, crate::direction::PaneDirection::Right, 10)
+                mux.split_pane(p0, crate::layout::Side::After, SplitOrientation::Horizontal)
                     .unwrap();
             })
             .unwrap();
-        oracle.world_mut().flush();
-        oracle.update();
+        app.world_mut().flush();
+        app.update();
 
-        run_mux_op(&mut mux_app, |m| {
-            let ws = m.active_workspace();
-            let p0 = m.ordered_panes(ws).unwrap()[0];
-            m.resize_pane(p0, ozmux_mux::PaneDirection::Right, 10)
-                .unwrap()
-        });
+        app.world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.set_workspace_dimensions(ws, 80, 24);
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
 
-        assert_layout_equiv(&mut oracle, &mut mux_app);
+        let outcome = app
+            .world_mut()
+            .run_system_once(move |mut mux: crate::commands::MultiplexerCommands| {
+                mux.resize_pane(p0, crate::direction::PaneDirection::Right, 10)
+                    .unwrap()
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        assert_eq!(
+            outcome,
+            crate::resize::ResizePaneOutcome::Applied,
+            "resize must apply for a 2-pane split with workspace size set"
+        );
+
+        let split_ent = split_under_workspace_root(&app, ws);
+        let kids: Vec<Entity> = app
+            .world()
+            .get::<Children>(split_ent)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        assert_eq!(kids.len(), 2, "split must have 2 children");
+        let lhs_grow = app
+            .world()
+            .get::<Node>(kids[0])
+            .map(|n| n.flex_grow)
+            .unwrap_or(0.0);
+        let rhs_grow = app
+            .world()
+            .get::<Node>(kids[1])
+            .map(|n| n.flex_grow)
+            .unwrap_or(0.0);
+        let ratio = split_ratio(lhs_grow, rhs_grow);
+        assert!(
+            (ratio - 0.5).abs() > 1e-4,
+            "ratio must be off 0.5 after resize; got ratio={ratio}"
+        );
+        assert!(
+            lhs_grow > rhs_grow,
+            "lhs must be bigger after resize Right: lhs={lhs_grow} rhs={rhs_grow}"
+        );
+        let s = app.world().resource::<MuxState>();
+        assert!(
+            mirror_matches(app.world(), s).is_ok(),
+            "mirror_matches after resize_pane"
+        );
     }
 
     #[test]

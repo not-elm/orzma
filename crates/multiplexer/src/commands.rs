@@ -16,10 +16,10 @@ use crate::error::{MultiplexerError, MultiplexerResult};
 use crate::layout::{LayoutTree, Side, SplitOrientation};
 use crate::mirror::{
     MirrorReadCtx, MuxState, apply_event, created_pane_id, created_workspace_id,
-    ecs_orientation_to_mux, ecs_side_to_mux, ecs_surface_kind_to_mux, ecs_swap_offset_to_mux,
-    seed_surface_of,
+    ecs_direction_to_mux, ecs_orientation_to_mux, ecs_side_to_mux, ecs_surface_kind_to_mux,
+    ecs_swap_offset_to_mux, seed_surface_of, single_spawned_surface_id,
 };
-use crate::resize::{ResizePaneOutcome, resize_split_for_pane};
+use crate::resize::ResizePaneOutcome;
 use crate::swap::{SwapOffset, SwapOutcome};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -91,9 +91,17 @@ pub struct MultiplexerCommands<'w, 's> {
     panes_owned: Query<'w, 's, (Entity, &'static OwningWorkspace), With<PaneMarker>>,
     surface_owner: Query<'w, 's, &'static SurfaceOf, With<SurfaceMarker>>,
     pane_surfaces: Query<'w, 's, &'static Surfaces, With<PaneMarker>>,
+    // NOTE: these three fields and `tree` below are only read by `split_pane_inner`
+    // (scheduled for removal in Plan 2b-3). The `#[allow]` is required because
+    // `#[expect(dead_code)]` does not fire for fields the `SystemParam` derive
+    // macro touches internally, leaving `#[expect]` unfulfilled.
+    #[allow(dead_code)]
     children: Query<'w, 's, &'static Children>,
+    #[allow(dead_code)]
     child_of: Query<'w, 's, &'static ChildOf>,
+    #[allow(dead_code)]
     layout_nodes: Query<'w, 's, &'static Node>,
+    #[expect(dead_code, reason = "removed with split_pane_inner in Plan 2b-3")]
     tree: LayoutTree<'w, 's>,
 }
 
@@ -189,26 +197,26 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(())
     }
 
-    /// Set the Workspace's cached dimensions. Inserts the component on
-    /// first call; subsequent calls update in place via `set_if_neq`.
+    /// Sets the Workspace's terminal dimensions through the Mux (to update
+    /// resolved pane sizes), then inserts or updates the `WorkspaceDimensions`
+    /// component so the GUI keeps the cached cols/rows in sync.
     pub fn set_workspace_dimensions(&mut self, workspace: Entity, cols: u16, rows: u16) {
-        let new = WorkspaceDimensions { cols, rows };
-        if let Ok((_, _, dims)) = self.workspaces.get_mut(workspace)
-            && let Some(mut dims) = dims
-        {
-            dims.set_if_neq(new);
+        let Some(id) = self.mirror_read.workspace_id_of(workspace) else {
             return;
+        };
+        if let Ok(events) = self.mux.mux.set_workspace_size(id, cols, rows) {
+            for ev in &events {
+                apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+            }
         }
-        self.commands.entity(workspace).insert(new);
+        self.commands
+            .entity(workspace)
+            .insert(WorkspaceDimensions { cols, rows });
     }
 
     /// Update the active pane through the Mux. The `_workspace` argument is
     /// unused — the Mux derives the workspace from the pane's parent chain.
-    pub fn set_active_pane(
-        &mut self,
-        _workspace: Entity,
-        pane: Entity,
-    ) -> MultiplexerResult<()> {
+    pub fn set_active_pane(&mut self, _workspace: Entity, pane: Entity) -> MultiplexerResult<()> {
         let id = self
             .mirror_read
             .pane_id_of(pane)
@@ -224,13 +232,25 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(())
     }
 
-    /// Update the Pane's `ActiveSurface` pointer.
+    /// Update the Pane's active surface through the Mux, then applies the
+    /// resulting events to keep the ECS mirror in sync.
     pub fn set_active_surface(&mut self, pane: Entity, surface: Entity) -> MultiplexerResult<()> {
-        let (mut active_surface, _, _, _) = self
-            .panes
-            .get_mut(pane)
-            .map_err(|_| MultiplexerError::PaneNotFound(pane))?;
-        active_surface.set_if_neq(ActiveSurface(surface));
+        let pid = self
+            .mirror_read
+            .pane_id_of(pane)
+            .ok_or(MultiplexerError::PaneNotFound(pane))?;
+        let sid = self
+            .mirror_read
+            .surface_id_of(surface)
+            .ok_or(MultiplexerError::SurfaceNotFound(surface))?;
+        let events = self
+            .mux
+            .mux
+            .set_active_surface(pid, sid)
+            .map_err(|e| crate::mirror::lift(&self.mux, e))?;
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+        }
         Ok(())
     }
 
@@ -337,52 +357,55 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         })
     }
 
-    /// Spawn a new Surface as a child of `pane`. Does NOT change
+    /// Spawn a new Surface as a child of `pane` through the Mux. Does NOT change
     /// `ActiveSurface` — call `set_active_surface` separately if needed.
     pub fn add_surface(&mut self, pane: Entity, kind: SurfaceKind) -> Entity {
-        let surface = self
-            .commands
-            .spawn((SurfaceMarker, kind, Name::new("surface")))
-            .id();
-        self.commands
-            .entity(surface)
-            .insert((ChildOf(pane), SurfaceOf(pane)));
-        surface
+        let id = self
+            .mirror_read
+            .pane_id_of(pane)
+            .expect("add_surface: pane must be mapped");
+        let events = self
+            .mux
+            .mux
+            .spawn_surface(id, ecs_surface_kind_to_mux(kind))
+            .expect("spawn_surface");
+        let sid = single_spawned_surface_id(&events).expect("spawn_surface emits SurfaceSpawned");
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
+        }
+        self.mux.surfaces[sid]
     }
 
     /// Split the surface's owning Pane and move the surface into the
     /// freshly-created Pane (where it becomes the only surface). The new
-    /// Pane becomes the workspace's `ActivePane`. Caller must ensure the
-    /// source Pane has at least 2 surfaces, else this returns
-    /// `CannotRemoveLastSurface`.
+    /// Pane becomes the workspace's `ActivePane`. Returns
+    /// `CannotRemoveLastSurface` if the source Pane has only one surface.
     pub fn break_surface_to_pane(
         &mut self,
         surface: Entity,
         side: Side,
         orientation: SplitOrientation,
     ) -> MultiplexerResult<Entity> {
-        let source_pane = self
-            .pane_of_surface(surface)
+        let sid = self
+            .mirror_read
+            .surface_id_of(surface)
             .ok_or(MultiplexerError::SurfaceNotFound(surface))?;
-
-        let surface_count = self.surfaces_of_pane(source_pane).count();
-        if surface_count < 2 {
-            return Err(MultiplexerError::CannotRemoveLastSurface(source_pane));
+        // NOTE: Mux arg order is (surface, ORIENTATION, SIDE) — reversed vs this
+        // method's (surface, side, orientation).
+        let events = self
+            .mux
+            .mux
+            .break_surface_to_pane(
+                sid,
+                ecs_orientation_to_mux(orientation),
+                ecs_side_to_mux(side),
+            )
+            .map_err(|e| crate::mirror::lift(&self.mux, e))?;
+        let new_pane_id = created_pane_id(&events).expect("break emits PaneCreated");
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
         }
-
-        // NOTE: split_pane_inner avoids spawning a bootstrap surface; otherwise
-        //       the deferred `ChildOf` insertion would race with the immediate
-        //       reparent below, leaving the bootstrap entity orphaned.
-        let (new_pane, _) = self.split_pane_inner(source_pane, side, orientation)?;
-
-        self.commands
-            .entity(surface)
-            .insert((ChildOf(new_pane), SurfaceOf(new_pane)));
-        self.commands
-            .entity(new_pane)
-            .insert(ActiveSurface(surface));
-
-        Ok(new_pane)
+        Ok(self.mux.panes[new_pane_id])
     }
 
     /// Inserts `bundle` on an entity the multiplexer spawned. The caller must
@@ -427,36 +450,32 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     }
 
     /// Resize the split that controls `pane`'s extent in the given
-    /// direction by `amount` cells. See `resize::resize_split_for_pane`
-    /// for the underlying weight-based algorithm. Requires that
-    /// `WorkspaceDimensions` has been set; returns `NoOp` if not.
+    /// direction by `amount` cells through the Mux. Returns `NoOp` when
+    /// the workspace has no size set or there is no matching ancestor split.
     pub fn resize_pane(
         &mut self,
         pane: Entity,
         direction: PaneDirection,
         amount: u16,
     ) -> MultiplexerResult<ResizePaneOutcome> {
-        let workspace = self
-            .workspace_of_pane(pane)
+        let id = self
+            .mirror_read
+            .pane_id_of(pane)
             .ok_or(MultiplexerError::PaneNotFound(pane))?;
-        let (cols, rows) = self
-            .workspaces
-            .get(workspace)
-            .ok()
-            .and_then(|(_, _, dims)| dims.map(|d| (d.cols, d.rows)))
-            .unwrap_or((0, 0));
-        if cols == 0 || rows == 0 {
-            return Ok(ResizePaneOutcome::NoOp);
+        let events = self
+            .mux
+            .mux
+            .resize_pane(id, ecs_direction_to_mux(direction), amount)
+            .map_err(|e| crate::mirror::lift(&self.mux, e))?;
+        let applied = !events.is_empty();
+        for ev in &events {
+            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
         }
-        Ok(resize_split_for_pane(
-            &mut self.commands,
-            &self.tree,
-            pane,
-            direction,
-            amount,
-            cols,
-            rows,
-        ))
+        Ok(if applied {
+            ResizePaneOutcome::Applied
+        } else {
+            ResizePaneOutcome::NoOp
+        })
     }
 
     /// The Pane's owning Workspace, read from its `OwningWorkspace` back-pointer.
@@ -502,6 +521,10 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// target and `new_pane` under it, and promotes `new_pane` to `ActivePane`.
     /// Does not spawn a bootstrap surface; callers are responsible for attaching
     /// one. Returns `(new_pane, workspace)`.
+    #[expect(
+        dead_code,
+        reason = "removed in Plan 2b-3 when ECS split helpers are retired"
+    )]
     fn split_pane_inner(
         &mut self,
         target_pane: Entity,
@@ -951,14 +974,13 @@ mod tests {
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
+        world.flush();
         let other_surface = world
-            .spawn((
-                SurfaceMarker,
-                SurfaceKind::Terminal,
-                Name::new("other"),
-                ChildOf(outcome.pane),
-            ))
-            .id();
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
+            })
+            .unwrap();
+        world.flush();
 
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
