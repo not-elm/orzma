@@ -311,6 +311,46 @@ mod tests {
     }
 
     #[test]
+    fn create_workspace_named_round_trips() {
+        let msg = ClientMessage::CreateWorkspace {
+            name: Some("proj".into()),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_message(&mut buf, &msg).unwrap();
+        let mut cur = IoCursor::new(buf);
+        assert_eq!(
+            read_message::<_, ClientMessage>(&mut cur).unwrap(),
+            Some(msg)
+        );
+    }
+
+    #[test]
+    fn create_workspace_unnamed_round_trips() {
+        let msg = ClientMessage::CreateWorkspace { name: None };
+        let mut buf: Vec<u8> = Vec::new();
+        write_message(&mut buf, &msg).unwrap();
+        let mut cur = IoCursor::new(buf);
+        assert_eq!(
+            read_message::<_, ClientMessage>(&mut cur).unwrap(),
+            Some(msg)
+        );
+    }
+
+    #[test]
+    fn select_workspace_round_trips() {
+        let msg = ClientMessage::SelectWorkspace {
+            workspace: WorkspaceId::default(),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_message(&mut buf, &msg).unwrap();
+        let mut cur = IoCursor::new(buf);
+        assert_eq!(
+            read_message::<_, ClientMessage>(&mut cur).unwrap(),
+            Some(msg)
+        );
+    }
+
+    #[test]
     fn surface_spawned_with_cwd_round_trips() {
         let msg = ServerMessage::Events(vec![MuxEvent::SurfaceSpawned {
             pane: PaneId::default(),

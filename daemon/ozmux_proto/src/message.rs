@@ -91,6 +91,16 @@ pub enum ClientMessage {
         /// Encoded input bytes (keys/mouse via ozmux_vt::input/mouse).
         bytes: Vec<u8>,
     },
+    /// Create a workspace in the active session (optionally named).
+    CreateWorkspace {
+        /// Optional explicit name; daemon assigns an auto-name when `None`.
+        name: Option<String>,
+    },
+    /// Switch the active session's active workspace.
+    SelectWorkspace {
+        /// The workspace to make active.
+        workspace: WorkspaceId,
+    },
 }
 
 /// A message from the daemon to a client.

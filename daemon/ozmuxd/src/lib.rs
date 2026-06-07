@@ -312,6 +312,24 @@ impl Server {
             ClientMessage::SetActiveSurface { pane, surface } => {
                 self.mux.set_active_surface(pane, surface)
             }
+            ClientMessage::CreateWorkspace { name } => match self.mux.new_workspace() {
+                Ok(mut events) => {
+                    if let Some(name) = name {
+                        let ws = events.iter().find_map(|e| match e {
+                            MuxEvent::WorkspaceCreated { workspace, .. } => Some(*workspace),
+                            _ => None,
+                        });
+                        if let Some(ws) = ws
+                            && let Ok(mut rename_events) = self.mux.rename_workspace(ws, name)
+                        {
+                            events.append(&mut rename_events);
+                        }
+                    }
+                    Ok(events)
+                }
+                Err(e) => Err(e),
+            },
+            ClientMessage::SelectWorkspace { workspace } => self.mux.select_workspace(workspace),
         };
         match result {
             Ok(events) => {
