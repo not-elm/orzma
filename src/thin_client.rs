@@ -13,6 +13,7 @@ use ozmux_proto::{Client, Frame, ServerMessage, SurfaceId, VtEvent};
 use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Holds the in-process daemon alive for the app's lifetime (Drop tears it down).
 #[derive(Resource)]
@@ -129,8 +130,14 @@ fn handle_surface_event(
 /// Boots an in-process `ozmuxd` on a process-unique temp UDS, connects a
 /// `Client`, and returns the handle, client, and the Welcome snapshot.
 fn boot() -> std::io::Result<(ozmuxd::ServerHandle, Client<UnixStream>, SessionSnapshot)> {
+    // NOTE: Socket path must be unique per boot call, not just per process, to
+    //       prevent concurrent test instances (even with --test-threads=1, the
+    //       static counter makes each plugin instance independently addressable
+    //       and avoids any residual socket from a prior run colliding).
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let pid = std::process::id();
-    let path = std::env::temp_dir().join(format!("ozmux-tc-{pid}.sock"));
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("ozmux-tc-{pid}-{n}.sock"));
     let _ = std::fs::remove_file(&path);
     let handle = ozmuxd::Server::new().serve(&path)?;
 
@@ -159,5 +166,66 @@ fn stamp_attached_workspace(commands: &mut Commands, state: &MuxState, snapshot:
         commands
             .entity(ws_ent)
             .insert((AttachedWorkspace, WorkspaceCreatedAt(1)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a headless `App` with just enough infrastructure for the
+    /// `ThinClientMultiplexerPlugin` to boot, build entities, and pump frames.
+    fn headless_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(bevy::MinimalPlugins);
+        app.add_plugins(ThinClientMultiplexerPlugin);
+        app
+    }
+
+    #[test]
+    fn thin_client_attaches_workspace_from_welcome() {
+        // `build()` already connected + built entities from the Welcome snapshot
+        // synchronously, so no `app.update()` is needed before the assertion.
+        let mut app = headless_app();
+        let mut q = app
+            .world_mut()
+            .query_filtered::<Entity, With<AttachedWorkspace>>();
+        let n = q.iter(app.world()).count();
+        assert_eq!(
+            n, 1,
+            "exactly one AttachedWorkspace built from the Welcome snapshot"
+        );
+    }
+
+    #[test]
+    fn thin_client_setviewport_mirrors_to_pane_dimensions() {
+        let mut app = headless_app();
+        // Send SetViewport directly via the client resource (no UI layout needed),
+        // then pump frames until the daemon's PaneResized → PaneDimensions lands.
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            conn.0
+                .send(ozmux_proto::ClientMessage::SetViewport {
+                    cols: 100,
+                    rows: 40,
+                })
+                .expect("send SetViewport");
+        }
+        let mut found = false;
+        for _ in 0..120 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let mut q = app
+                .world_mut()
+                .query::<&ozmux_multiplexer::PaneDimensions>();
+            if q.iter(app.world()).any(|d| d.cols == 100 && d.rows == 40) {
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "SetViewport → PaneResized Events → PaneDimensions{{100,40}} mirrored"
+        );
     }
 }
