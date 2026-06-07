@@ -134,13 +134,20 @@ fn create_workspace_named_emits_created_and_renamed() {
         "expected WorkspaceRenamed{{name=proj}} in Events batch after CreateWorkspace{{name:Some}}"
     );
 
-    // Sanity: the mirror now has one more workspace than before.
+    // The mirror now has one more workspace than before, AND the create+rename
+    // batch folds to the renamed workspace at the Client level (not just the
+    // events arriving): a single Events batch [WorkspaceCreated, .., WorkspaceRenamed]
+    // must fold so the new workspace carries the name "proj".
     drain(&mut client);
-    let after_ws_count = client.mirror().to_snapshot().workspaces.len();
+    let after_snap = client.mirror().to_snapshot();
     assert_eq!(
-        after_ws_count,
+        after_snap.workspaces.len(),
         before_ws_count + 1,
         "mirror should gain exactly one workspace"
+    );
+    assert!(
+        after_snap.workspaces.iter().any(|ws| ws.name == "proj"),
+        "the create+rename batch must fold to a workspace named \"proj\" at the Client level"
     );
 }
 

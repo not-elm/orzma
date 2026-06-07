@@ -377,10 +377,15 @@ impl Server {
                         }
                     }
                 }
-                MuxEvent::SurfaceSpawned { surface, kind, .. }
-                    if *kind == SurfaceKind::Terminal =>
-                {
-                    self.spawn_surface(surfaces, clients, *surface, None, loop_tx);
+                MuxEvent::SurfaceSpawned {
+                    surface, kind, cwd, ..
+                } if *kind == SurfaceKind::Terminal => {
+                    let cwd = if cwd.as_os_str().is_empty() {
+                        None
+                    } else {
+                        Some(cwd.as_path())
+                    };
+                    self.spawn_surface(surfaces, clients, *surface, cwd, loop_tx);
                 }
                 MuxEvent::SurfaceClosed { surface } => {
                     kill_surface(surfaces, *surface);
