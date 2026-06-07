@@ -15,6 +15,7 @@ ozmux_mux = { path = "../ozmux_mux" }
 ozmux_proto = { path = "../ozmux_proto" }
 ozmux_vt = { path = "../ozmux_vt", features = ["pty"] }
 crossbeam-channel = "0.5"
+tracing = { workspace = true }
 
 [dev-dependencies]
 ozmux_proto = { path = "../ozmux_proto" }

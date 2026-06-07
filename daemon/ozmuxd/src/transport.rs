@@ -2,7 +2,7 @@
 //! a reader/writer thread pair per connection feeding the central LoopMsg loop.
 
 use crate::{CLIENT_QUEUE_DEPTH, ClientId, LoopHandle, LoopMsg, Server};
-use crossbeam_channel::{Sender, bounded};
+use crossbeam_channel::{Sender, bounded, unbounded};
 use ozmux_mux::SessionSnapshot;
 use ozmux_proto::{ClientMessage, ServerMessage, read_message, write_message};
 use std::io::{self, BufReader};
@@ -139,11 +139,19 @@ fn spawn_conn(stream: UnixStream, client_id: ClientId, loop_tx: Sender<LoopMsg>)
     let mut writer = stream;
 
     let (out_tx, out_rx) = bounded::<ServerMessage>(CLIENT_QUEUE_DEPTH);
+    let (frame_tx, frame_rx) = unbounded::<ServerMessage>();
 
     std::thread::spawn(move || {
-        while let Ok(msg) = out_rx.recv() {
-            if write_message(&mut writer, &msg).is_err() {
-                break;
+        loop {
+            crossbeam_channel::select_biased! {
+                recv(out_rx) -> msg => match msg {
+                    Ok(m) => if write_message(&mut writer, &m).is_err() { break },
+                    Err(_) => break,
+                },
+                recv(frame_rx) -> msg => match msg {
+                    Ok(m) => if write_message(&mut writer, &m).is_err() { break },
+                    Err(_) => break,
+                },
             }
         }
     });
@@ -158,6 +166,7 @@ fn spawn_conn(stream: UnixStream, client_id: ClientId, loop_tx: Sender<LoopMsg>)
                     .send(LoopMsg::Attach {
                         client_id,
                         writer: out_tx,
+                        frame_writer: frame_tx,
                         viewport,
                         protocol_version,
                         disconnect: Some(Box::new(move || {
