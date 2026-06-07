@@ -273,6 +273,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
                 ecs_orientation_to_mux(orientation),
                 ecs_side_to_mux(side),
                 ecs_surface_kind_to_mux(kind),
+                None,
             )
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
         let new_pane_id = created_pane_id(&events).expect("split_pane emits PaneCreated");
@@ -368,7 +369,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         let events = self
             .mux
             .mux
-            .spawn_surface(id, ecs_surface_kind_to_mux(kind))
+            .spawn_surface(id, ecs_surface_kind_to_mux(kind), None)
             .expect("spawn_surface");
         let sid = single_spawned_surface_id(&events).expect("spawn_surface emits SurfaceSpawned");
         apply_events(

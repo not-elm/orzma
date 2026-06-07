@@ -97,6 +97,7 @@ fn command_broadcast_reconstructs_server_snapshot() {
             orientation: SplitOrientation::Horizontal,
             side: Side::After,
             kind: SurfaceKind::Terminal,
+            cwd: None,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(200));
@@ -122,6 +123,7 @@ fn two_clients_converge() {
         orientation: SplitOrientation::Vertical,
         side: Side::After,
         kind: SurfaceKind::Terminal,
+        cwd: None,
     })
     .unwrap();
     std::thread::sleep(Duration::from_millis(200));

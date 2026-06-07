@@ -8,7 +8,6 @@ use ozmux_mux::{
     WorkspaceId, WorkspaceSnapshot, collect_node_ids,
 };
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 /// Client-side reconstruction of one session's state from a cold-attach
 /// snapshot followed by a `MuxEvent` delta stream.
@@ -211,12 +210,13 @@ impl ClientMirror {
                 pane,
                 surface,
                 kind,
+                cwd,
             } => {
                 if let Some(pane_snap) = find_pane_mut(&mut self.session.workspaces, *pane) {
                     pane_snap.surfaces.push(SurfaceState {
                         surface: *surface,
                         kind: kind.clone(),
-                        cwd: PathBuf::new(),
+                        cwd: cwd.clone(),
                     });
                 }
             }
@@ -440,6 +440,7 @@ mod tests {
                 SplitOrientation::Horizontal,
                 Side::After,
                 SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
         let pane1 = match &split1_events[0] {
@@ -450,7 +451,10 @@ mod tests {
 
         // Spawn an extra surface on pane0 so break_surface_to_pane has a
         // multi-surface source.
-        events.extend(mux.spawn_surface(pane0, SurfaceKind::Terminal).unwrap());
+        events.extend(
+            mux.spawn_surface(pane0, SurfaceKind::Terminal, None)
+                .unwrap(),
+        );
         let extra_surface = {
             let last_ev = events.last().unwrap();
             match last_ev {
@@ -493,7 +497,9 @@ mod tests {
         delta_events.extend(resize_evs);
 
         // Spawn an extra surface on pane1 so we can exercise close_surface.
-        let spawn_evs = mux.spawn_surface(pane1, SurfaceKind::Terminal).unwrap();
+        let spawn_evs = mux
+            .spawn_surface(pane1, SurfaceKind::Terminal, None)
+            .unwrap();
         let extra_pane1_surface = match &spawn_evs[0] {
             MuxEvent::SurfaceSpawned { surface, .. } => *surface,
             _ => panic!("expected SurfaceSpawned"),
@@ -544,6 +550,7 @@ mod tests {
                 SplitOrientation::Horizontal,
                 Side::After,
                 SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
         let pane1 = match &split1[0] {
@@ -555,6 +562,7 @@ mod tests {
             SplitOrientation::Vertical,
             Side::After,
             SurfaceKind::Terminal,
+            None,
         )
         .unwrap();
 
@@ -594,7 +602,8 @@ mod tests {
         let pane0 = mux.active_pane(ws0).unwrap();
 
         // Build pane0 with two surfaces so break_surface_to_pane has a source.
-        mux.spawn_surface(pane0, SurfaceKind::Terminal).unwrap();
+        mux.spawn_surface(pane0, SurfaceKind::Terminal, None)
+            .unwrap();
         let extra_surface = {
             let s = mux.surfaces(pane0).unwrap();
             *s.last().unwrap()
@@ -624,6 +633,7 @@ mod tests {
                 SplitOrientation::Horizontal,
                 Side::After,
                 SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
         delta_events.extend(split_evs);
@@ -705,6 +715,7 @@ mod tests {
             SplitOrientation::Horizontal,
             Side::After,
             SurfaceKind::Terminal,
+            None,
         )
         .unwrap();
         let snap = mux.snapshot(session).unwrap();
@@ -740,6 +751,7 @@ mod tests {
                 SplitOrientation::Horizontal,
                 Side::After,
                 SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
         let _p1 = match &split1_events[0] {
@@ -754,6 +766,7 @@ mod tests {
                 SplitOrientation::Vertical,
                 Side::After,
                 SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
         let p2 = match &split2_events[0] {

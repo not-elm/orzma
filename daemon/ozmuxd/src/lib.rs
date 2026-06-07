@@ -286,11 +286,14 @@ impl Server {
                 orientation,
                 side,
                 kind,
-            } => self.mux.split_pane(pane, orientation, side, kind),
+                cwd,
+            } => self.mux.split_pane(pane, orientation, side, kind, cwd),
             ClientMessage::Close { pane } => self.mux.close_pane(pane),
             ClientMessage::Navigate { pane, direction } => self.mux.navigate(pane, direction),
             ClientMessage::SetActivePane { pane, .. } => self.mux.focus_pane(pane),
-            ClientMessage::SpawnSurface { pane, kind } => self.mux.spawn_surface(pane, kind),
+            ClientMessage::SpawnSurface { pane, kind, cwd } => {
+                self.mux.spawn_surface(pane, kind, cwd)
+            }
             ClientMessage::BreakSurfaceToPane {
                 surface,
                 orientation,
@@ -679,6 +682,7 @@ mod tests {
                 orientation: SplitOrientation::Horizontal,
                 side: Side::After,
                 kind: SurfaceKind::Terminal,
+                cwd: None,
             },
         ));
         while let Ok(ServerMessage::Events(batch)) = w_rx.recv_timeout(Duration::from_millis(150)) {
@@ -746,6 +750,7 @@ mod tests {
                 orientation: SplitOrientation::Vertical,
                 side: Side::After,
                 kind: SurfaceKind::Terminal,
+                cwd: None,
             },
         ));
 

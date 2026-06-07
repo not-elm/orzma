@@ -4,7 +4,7 @@
 //! builds this as library code; the source-of-truth flip is Plan 2b-2.
 
 use crate::components::{
-    ActivePane, ActiveSurface, BrowserProfile, CopyMode, OwningWorkspace, PaneDimensions,
+    ActivePane, ActiveSurface, BrowserProfile, CopyMode, Cwd, OwningWorkspace, PaneDimensions,
     PaneMarker, SplitNode, SurfaceKind, SurfaceMarker, SurfaceOf, WorkspaceMarker,
     WorkspaceUiSubtree,
 };
@@ -279,7 +279,9 @@ pub fn apply_event(
 
             let mut active_surface_ent = None;
             for SurfaceEntry {
-                surface: sid, kind, ..
+                surface: sid,
+                kind,
+                cwd,
             } in surfaces
             {
                 let surf_ent = if state.surfaces.contains_key(*sid) {
@@ -291,6 +293,9 @@ pub fn apply_event(
                 } else {
                     spawn_surface(commands, state, *sid, pane_ent, kind.clone())
                 };
+                if !cwd.as_os_str().is_empty() {
+                    commands.entity(surf_ent).try_insert(Cwd(cwd.clone()));
+                }
                 if sid == active_surface {
                     active_surface_ent = Some(surf_ent);
                 }
@@ -305,9 +310,13 @@ pub fn apply_event(
             pane,
             surface,
             kind,
+            cwd,
         } => {
             let pane_ent = state.panes[*pane];
-            spawn_surface(commands, state, *surface, pane_ent, kind.clone());
+            let surf_ent = spawn_surface(commands, state, *surface, pane_ent, kind.clone());
+            if !cwd.as_os_str().is_empty() {
+                commands.entity(surf_ent).try_insert(Cwd(cwd.clone()));
+            }
         }
 
         MuxEvent::SurfaceClosed { surface } => {
@@ -384,11 +393,17 @@ pub fn apply_event(
             }
         }
 
+        MuxEvent::SurfaceCwdChanged { surface, cwd } => {
+            if !cwd.as_os_str().is_empty()
+                && let Some(&ent) = state.surfaces.get(*surface)
+            {
+                commands.entity(ent).try_insert(Cwd(cwd.clone()));
+            }
+        }
+
         // NOTE: GUI-side concerns (Plan 2b-2) or size-flow events — no ECS mirror
         // mutation needed at this layer.
-        MuxEvent::SessionCreated { .. }
-        | MuxEvent::WorkspaceSelected { .. }
-        | MuxEvent::SurfaceCwdChanged { .. } => {}
+        MuxEvent::SessionCreated { .. } | MuxEvent::WorkspaceSelected { .. } => {}
 
         // NOTE: the ECS app derives workspace size from the window/OS feed, not
         // from this event. WorkspaceResized is consumed here for exhaustiveness.
@@ -1317,6 +1332,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -1395,6 +1411,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -1459,6 +1476,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -1801,6 +1819,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -2255,6 +2274,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -2362,6 +2382,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
         assert!(created_pane_id(&events).is_some());
@@ -2377,7 +2398,7 @@ mod tests {
         let ws = mux.active_workspace();
         let p = mux.active_pane(ws).unwrap();
         let events = mux
-            .spawn_surface(p, ozmux_mux::SurfaceKind::Terminal)
+            .spawn_surface(p, ozmux_mux::SurfaceKind::Terminal, None)
             .unwrap();
         assert!(single_spawned_surface_id(&events).is_some());
     }
@@ -2397,6 +2418,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
         let new_pane = match events[0] {
@@ -2446,6 +2468,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -2465,6 +2488,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Vertical,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -2538,6 +2562,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Horizontal,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -2551,6 +2576,7 @@ mod tests {
                 ozmux_mux::SplitOrientation::Vertical,
                 ozmux_mux::Side::After,
                 ozmux_mux::SurfaceKind::Terminal,
+                None,
             )
             .unwrap()
         });
@@ -2578,5 +2604,103 @@ mod tests {
             let active = m.active_pane(ws).unwrap();
             m.close_pane(active).unwrap()
         });
+    }
+
+    #[test]
+    fn surface_cwd_changed_inserts_cwd_component() {
+        use std::path::PathBuf;
+        let mut app = make_mux_app();
+
+        let surf_ent = {
+            let state = app.world().resource::<MuxState>();
+            let ws = state.mux.active_workspace();
+            let pane = state.mux.active_pane(ws).unwrap();
+            let sid = state.mux.active_surface(pane).unwrap();
+            state.surfaces[sid]
+        };
+
+        let cwd = PathBuf::from("/cwd-test");
+        let sid = {
+            let state = app.world().resource::<MuxState>();
+            let ws = state.mux.active_workspace();
+            let pane = state.mux.active_pane(ws).unwrap();
+            state.mux.active_surface(pane).unwrap()
+        };
+
+        run_mux_op(&mut app, |m| m.set_surface_cwd(sid, cwd.clone()).unwrap());
+
+        let stored = app.world().get::<Cwd>(surf_ent);
+        assert_eq!(
+            stored.map(|c| &c.0),
+            Some(&cwd),
+            "SurfaceCwdChanged must insert Cwd component on the surface entity"
+        );
+    }
+
+    #[test]
+    fn spawn_surface_with_cwd_inserts_cwd_component() {
+        use std::path::PathBuf;
+        let mut app = make_mux_app();
+
+        let cwd = PathBuf::from("/spawn-cwd");
+        let pane_id = {
+            let state = app.world().resource::<MuxState>();
+            let ws = state.mux.active_workspace();
+            state.mux.active_pane(ws).unwrap()
+        };
+
+        run_mux_op(&mut app, |m| {
+            m.spawn_surface(pane_id, ozmux_mux::SurfaceKind::Terminal, Some(cwd.clone()))
+                .unwrap()
+        });
+
+        let new_surf_ent = {
+            let state = app.world().resource::<MuxState>();
+            let pane_surfs = state.mux.surfaces(pane_id).unwrap();
+            state.surfaces[*pane_surfs.last().unwrap()]
+        };
+
+        let stored = app.world().get::<Cwd>(new_surf_ent);
+        assert_eq!(
+            stored.map(|c| &c.0),
+            Some(&cwd),
+            "SurfaceSpawned with cwd must insert Cwd component on the spawned surface entity"
+        );
+    }
+
+    #[test]
+    fn split_pane_with_cwd_inserts_cwd_component_on_new_surface() {
+        use std::path::PathBuf;
+        let mut app = make_mux_app();
+
+        let cwd = PathBuf::from("/split-cwd");
+
+        run_mux_op(&mut app, |m| {
+            let ws = m.active_workspace();
+            let p = m.active_pane(ws).unwrap();
+            m.split_pane(
+                p,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+                Some(cwd.clone()),
+            )
+            .unwrap()
+        });
+
+        let new_surf_ent = {
+            let state = app.world().resource::<MuxState>();
+            let ws = state.mux.active_workspace();
+            let new_pane = state.mux.active_pane(ws).unwrap();
+            let sid = state.mux.active_surface(new_pane).unwrap();
+            state.surfaces[sid]
+        };
+
+        let stored = app.world().get::<Cwd>(new_surf_ent);
+        assert_eq!(
+            stored.map(|c| &c.0),
+            Some(&cwd),
+            "PaneCreated with cwd must insert Cwd component on the new surface entity"
+        );
     }
 }

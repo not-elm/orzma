@@ -15,7 +15,7 @@ pub struct SurfaceEntry {
     pub surface: SurfaceId,
     /// Its kind.
     pub kind: SurfaceKind,
-    /// Its working directory.
+    /// Its working directory; empty means no cwd was seeded.
     pub cwd: PathBuf,
 }
 
@@ -128,6 +128,8 @@ pub enum MuxEvent {
         surface: SurfaceId,
         /// The surface's kind.
         kind: SurfaceKind,
+        /// The surface's initial working directory (empty = no cwd seeded).
+        cwd: PathBuf,
     },
     /// A surface was removed.
     SurfaceClosed {

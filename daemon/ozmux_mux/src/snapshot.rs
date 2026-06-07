@@ -77,6 +77,7 @@ mod tests {
             SplitOrientation::Horizontal,
             Side::After,
             SurfaceKind::Terminal,
+            None,
         )
         .unwrap();
 
@@ -110,6 +111,7 @@ mod tests {
             SplitOrientation::Horizontal,
             Side::After,
             SurfaceKind::Terminal,
+            None,
         )
         .unwrap();
 

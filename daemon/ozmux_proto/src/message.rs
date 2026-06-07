@@ -7,6 +7,7 @@ use ozmux_mux::{
 use ozmux_vt::event::VtEvent;
 use ozmux_vt::frame::Frame;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// A message from a client to the daemon.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -29,6 +30,8 @@ pub enum ClientMessage {
         side: Side,
         /// The new pane's initial surface kind.
         kind: SurfaceKind,
+        /// Working directory for the new surface (None = inherit/default).
+        cwd: Option<PathBuf>,
     },
     /// Set the active surface within a pane.
     SetActiveSurface {
@@ -62,6 +65,8 @@ pub enum ClientMessage {
         pane: PaneId,
         /// Kind of surface to spawn.
         kind: SurfaceKind,
+        /// Working directory for the new surface (None = inherit/default).
+        cwd: Option<PathBuf>,
     },
     /// Break a surface out into a new pane.
     BreakSurfaceToPane {

@@ -228,6 +228,7 @@ fn split_uses_wire_side_and_kind() {
             orientation: SplitOrientation::Vertical,
             side: Side::Before,
             kind: SurfaceKind::Terminal,
+            cwd: None,
         })
         .unwrap();
 
@@ -271,6 +272,7 @@ fn set_active_surface_changes_active() {
         .send(ClientMessage::SpawnSurface {
             pane,
             kind: SurfaceKind::Terminal,
+            cwd: None,
         })
         .unwrap();
 

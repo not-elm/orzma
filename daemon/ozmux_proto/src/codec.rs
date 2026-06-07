@@ -65,6 +65,7 @@ mod tests {
     use ozmux_vt::event::VtEvent;
     use ozmux_vt::frame::{Cursor, Frame, FrameDelta, FrameSnapshot, Row, Run, SnapshotReason};
     use std::io::Cursor as IoCursor;
+    use std::path::PathBuf;
 
     #[test]
     fn client_messages_round_trip() {
@@ -78,6 +79,7 @@ mod tests {
                 orientation: SplitOrientation::Horizontal,
                 side: Side::After,
                 kind: SurfaceKind::Terminal,
+                cwd: None,
             },
             ClientMessage::SetActiveSurface {
                 pane: PaneId::default(),
@@ -97,6 +99,7 @@ mod tests {
             ClientMessage::SpawnSurface {
                 pane: PaneId::default(),
                 kind: SurfaceKind::Terminal,
+                cwd: None,
             },
             ClientMessage::BreakSurfaceToPane {
                 surface: SurfaceId::default(),
@@ -266,6 +269,57 @@ mod tests {
             "payload must exceed the old 1 MiB cap, got {}",
             buf.len()
         );
+        let mut cur = IoCursor::new(buf);
+        assert_eq!(
+            read_message::<_, ServerMessage>(&mut cur).unwrap(),
+            Some(msg)
+        );
+    }
+
+    #[test]
+    fn spawn_surface_with_cwd_round_trips() {
+        let msg = ClientMessage::SpawnSurface {
+            pane: PaneId::default(),
+            kind: SurfaceKind::Terminal,
+            cwd: Some(PathBuf::from("/tmp")),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_message(&mut buf, &msg).unwrap();
+        let mut cur = IoCursor::new(buf);
+        assert_eq!(
+            read_message::<_, ClientMessage>(&mut cur).unwrap(),
+            Some(msg)
+        );
+    }
+
+    #[test]
+    fn split_with_cwd_round_trips() {
+        let msg = ClientMessage::Split {
+            pane: PaneId::default(),
+            orientation: SplitOrientation::Horizontal,
+            side: Side::After,
+            kind: SurfaceKind::Terminal,
+            cwd: Some(PathBuf::from("/home/user/project")),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_message(&mut buf, &msg).unwrap();
+        let mut cur = IoCursor::new(buf);
+        assert_eq!(
+            read_message::<_, ClientMessage>(&mut cur).unwrap(),
+            Some(msg)
+        );
+    }
+
+    #[test]
+    fn surface_spawned_with_cwd_round_trips() {
+        let msg = ServerMessage::Events(vec![MuxEvent::SurfaceSpawned {
+            pane: PaneId::default(),
+            surface: SurfaceId::default(),
+            kind: SurfaceKind::Terminal,
+            cwd: PathBuf::from("/x"),
+        }]);
+        let mut buf: Vec<u8> = Vec::new();
+        write_message(&mut buf, &msg).unwrap();
         let mut cur = IoCursor::new(buf);
         assert_eq!(
             read_message::<_, ServerMessage>(&mut cur).unwrap(),

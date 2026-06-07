@@ -208,6 +208,7 @@ fn closing_a_surface_keeps_the_server_responsive() {
             orientation: SplitOrientation::Horizontal,
             side: Side::After,
             kind: SurfaceKind::Terminal,
+            cwd: None,
         })
         .unwrap();
 

@@ -182,13 +182,14 @@ impl Mux {
         orientation: SplitOrientation,
         side: Side,
         surface_kind: SurfaceKind,
+        cwd: Option<PathBuf>,
     ) -> MuxResult<Vec<MuxEvent>> {
         let workspace = self.owning_workspace_of_pane(pane)?;
         let old_parent = self.pane(pane)?.parent;
 
         let surface = self.surfaces.insert(Surface {
             kind: surface_kind.clone(),
-            cwd: None,
+            cwd,
         });
         let new_pane = self.panes.insert(Pane {
             surfaces: vec![surface],
@@ -684,17 +685,23 @@ impl Mux {
     /// Adds a surface to a pane without changing the active surface.
     ///
     /// Returns `[SurfaceSpawned]`.
-    pub fn spawn_surface(&mut self, pane: PaneId, kind: SurfaceKind) -> MuxResult<Vec<MuxEvent>> {
+    pub fn spawn_surface(
+        &mut self,
+        pane: PaneId,
+        kind: SurfaceKind,
+        cwd: Option<PathBuf>,
+    ) -> MuxResult<Vec<MuxEvent>> {
         self.pane(pane)?;
         let surface = self.surfaces.insert(Surface {
             kind: kind.clone(),
-            cwd: None,
+            cwd: cwd.clone(),
         });
         self.panes[pane].surfaces.push(surface);
         Ok(vec![MuxEvent::SurfaceSpawned {
             pane,
             surface,
             kind,
+            cwd: cwd.unwrap_or_default(),
         }])
     }
 
@@ -1418,7 +1425,7 @@ mod tests {
 
     fn split_after(mux: &mut Mux, pane: PaneId, orientation: SplitOrientation) -> PaneId {
         let events = mux
-            .split_pane(pane, orientation, Side::After, SurfaceKind::Terminal)
+            .split_pane(pane, orientation, Side::After, SurfaceKind::Terminal, None)
             .unwrap();
         match events[0] {
             MuxEvent::PaneCreated { pane, .. } => pane,
@@ -1445,6 +1452,7 @@ mod tests {
                 SplitOrientation::Horizontal,
                 Side::After,
                 SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
 
@@ -1508,6 +1516,7 @@ mod tests {
                 SplitOrientation::Vertical,
                 Side::Before,
                 SurfaceKind::Terminal,
+                None,
             )
             .unwrap();
         let new_pane = match events[0] {
@@ -2254,6 +2263,7 @@ mod tests {
             SplitOrientation::Horizontal,
             Side::After,
             SurfaceKind::Terminal,
+            None,
         )
         .unwrap();
         let panes = mux.ordered_panes(ws1).unwrap();
@@ -2263,6 +2273,7 @@ mod tests {
             SplitOrientation::Vertical,
             Side::After,
             SurfaceKind::Terminal,
+            None,
         )
         .unwrap();
         mux.split_pane(
@@ -2270,6 +2281,7 @@ mod tests {
             SplitOrientation::Vertical,
             Side::After,
             SurfaceKind::Terminal,
+            None,
         )
         .unwrap();
         assert_eq!(mux.ordered_panes(ws1).unwrap().len(), 4);
@@ -2322,7 +2334,7 @@ mod tests {
         let ext = SurfaceKind::Extension {
             entry: PathBuf::from("index.html"),
         };
-        let spawn = mux.spawn_surface(pane, ext.clone()).unwrap();
+        let spawn = mux.spawn_surface(pane, ext.clone(), None).unwrap();
         let ext_surface = match spawn[0] {
             MuxEvent::SurfaceSpawned { surface, .. } => surface,
             _ => panic!("SurfaceSpawned expected"),
@@ -2380,12 +2392,15 @@ mod tests {
         let pane = mux.active_pane(ws).unwrap();
         let original_active = mux.active_surface(pane).unwrap();
 
-        let events = mux.spawn_surface(pane, SurfaceKind::Terminal).unwrap();
+        let events = mux
+            .spawn_surface(pane, SurfaceKind::Terminal, None)
+            .unwrap();
         let new_surface = match events[0] {
             MuxEvent::SurfaceSpawned {
                 surface,
                 pane: p,
                 ref kind,
+                ..
             } => {
                 assert_eq!(p, pane);
                 assert!(matches!(kind, SurfaceKind::Terminal));
@@ -2412,7 +2427,8 @@ mod tests {
         let pane = mux.active_pane(ws).unwrap();
         let original = mux.active_surface(pane).unwrap();
 
-        mux.spawn_surface(pane, SurfaceKind::Terminal).unwrap();
+        mux.spawn_surface(pane, SurfaceKind::Terminal, None)
+            .unwrap();
 
         let surfaces = mux.surfaces(pane).unwrap();
         assert!(
@@ -2428,7 +2444,7 @@ mod tests {
         let ws = mux.active_workspace();
         let source_pane = mux.active_pane(ws).unwrap();
 
-        mux.spawn_surface(source_pane, SurfaceKind::Terminal)
+        mux.spawn_surface(source_pane, SurfaceKind::Terminal, None)
             .unwrap();
         let second_surface = mux.surfaces(source_pane).unwrap()[1];
 
@@ -2503,7 +2519,8 @@ mod tests {
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let s1 = mux.active_surface(pane).unwrap();
-        mux.spawn_surface(pane, SurfaceKind::Terminal).unwrap();
+        mux.spawn_surface(pane, SurfaceKind::Terminal, None)
+            .unwrap();
         let s2 = mux.surfaces(pane).unwrap()[1];
 
         mux.set_active_surface(pane, s2).unwrap();
@@ -2552,6 +2569,7 @@ mod tests {
             SplitOrientation::Horizontal,
             Side::After,
             SurfaceKind::Terminal,
+            None,
         )
         .unwrap();
         mux.set_workspace_size(ws, 80, 24).unwrap();
@@ -2581,5 +2599,62 @@ mod tests {
 
         let no_change = mux.set_surface_cwd(surface, path).unwrap();
         assert_eq!(no_change, vec![], "same cwd emits nothing");
+    }
+
+    #[test]
+    fn spawn_surface_with_cwd_seeds_surface_and_event() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let cwd = PathBuf::from("/tmp");
+
+        let events = mux
+            .spawn_surface(pane, SurfaceKind::Terminal, Some(cwd.clone()))
+            .unwrap();
+
+        let (spawned_surface, event_cwd) = match &events[0] {
+            MuxEvent::SurfaceSpawned {
+                surface, cwd: ec, ..
+            } => (*surface, ec.clone()),
+            _ => panic!("expected SurfaceSpawned"),
+        };
+        assert_eq!(
+            event_cwd, cwd,
+            "SurfaceSpawned.cwd must equal the seeded cwd"
+        );
+
+        let stored = &mux.surfaces[spawned_surface];
+        assert_eq!(
+            stored.cwd,
+            Some(cwd),
+            "Surface.cwd must be seeded from spawn_surface argument"
+        );
+    }
+
+    #[test]
+    fn split_pane_with_cwd_seeds_surface_and_pane_created_entry() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let cwd = PathBuf::from("/workdir");
+
+        let events = mux
+            .split_pane(
+                pane,
+                SplitOrientation::Horizontal,
+                Side::After,
+                SurfaceKind::Terminal,
+                Some(cwd.clone()),
+            )
+            .unwrap();
+
+        let surface_entry_cwd = match &events[0] {
+            MuxEvent::PaneCreated { surfaces, .. } => surfaces[0].cwd.clone(),
+            _ => panic!("expected PaneCreated"),
+        };
+        assert_eq!(
+            surface_entry_cwd, cwd,
+            "PaneCreated SurfaceEntry.cwd must equal the seeded cwd"
+        );
     }
 }
