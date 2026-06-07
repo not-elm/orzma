@@ -12,7 +12,9 @@ use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::{Query, ResMut};
-use bevy_terminal::{PtyHandle, TerminalHandle};
+#[cfg(not(feature = "thin-client"))]
+use bevy_terminal::PtyHandle;
+use bevy_terminal::TerminalHandle;
 
 /// Resource wrapping a lazily-initialized `arboard::Clipboard`.
 ///
@@ -220,6 +222,7 @@ fn on_copy_to_clipboard(
 /// and writes it to the target terminal's PTY, wrapping in bracketed
 /// paste markers when the terminal has bracketed paste enabled. No-ops
 /// on an empty clipboard or a missing `TerminalHandle`.
+#[cfg(not(feature = "thin-client"))]
 fn on_paste_from_clipboard(
     ev: On<PasteFromClipboardActionEvent>,
     mut clipboard: ResMut<Clipboard>,
@@ -242,7 +245,32 @@ fn on_paste_from_clipboard(
     }
 }
 
-#[cfg(test)]
+#[cfg(feature = "thin-client")]
+fn on_paste_from_clipboard(
+    ev: On<PasteFromClipboardActionEvent>,
+    mut conn: bevy::ecs::system::NonSendMut<crate::thin_client::ThinClientConn>,
+    mut clipboard: ResMut<Clipboard>,
+    grids: Query<&bevy_terminal_renderer::prelude::TerminalGrid>,
+    surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
+) {
+    let Some(text) = clipboard.read().filter(|t| !t.is_empty()) else {
+        return;
+    };
+    let bracketed = grids
+        .get(ev.entity)
+        .map(|g| g.modes.iter().any(|m| m == "bracketed-paste"))
+        .unwrap_or(false);
+    let Ok(surface) = surface_ids.get(ev.entity).map(|c| c.0) else {
+        return;
+    };
+    let bytes = build_paste_bytes(&text, bracketed);
+    crate::thin_client::send_cmd(
+        &mut conn,
+        ozmux_proto::ClientMessage::Input { surface, bytes },
+    );
+}
+
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
 

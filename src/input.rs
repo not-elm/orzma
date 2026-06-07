@@ -17,8 +17,9 @@ use crate::action::swap_pane::SwapPaneActionEvent;
 use crate::action::workspace::{
     FocusWorkspaceActionEvent, FocusWorkspaceTarget, NewWorkspaceActionEvent,
 };
+use crate::clipboard::PasteFromClipboardActionEvent;
 #[cfg(not(feature = "thin-client"))]
-use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
+use crate::clipboard::{Clipboard, CopyToClipboardActionEvent};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::ime::ImeState;
 use crate::input::ime::read_ime_events;
@@ -284,7 +285,18 @@ pub(crate) fn dispatch_focused_key(
                 if ev.repeat {
                     continue;
                 }
-                fire_action_event(&mut commands, &action, workspace);
+                if !fire_action_event(&mut commands, &action, workspace)
+                    && matches!(action, ShortcutAction::Paste)
+                    && let Some(surface_ent) = resolve_focused_terminal_readonly(
+                        &attached_workspace,
+                        &active_panes,
+                        &active_surfaces,
+                    )
+                {
+                    commands.trigger(PasteFromClipboardActionEvent {
+                        entity: surface_ent,
+                    });
+                }
                 continue;
             }
         }
