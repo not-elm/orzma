@@ -1,7 +1,9 @@
 //! Focus-surface shortcut action: cycles the active pane's focused
 //! surface when a `FocusSurfaceActionEvent` fires.
 use bevy::prelude::*;
-use ozmux_multiplexer::{CycleDirection, MultiplexerCommands};
+use ozmux_multiplexer::CycleDirection;
+#[cfg(not(feature = "thin-client"))]
+use ozmux_multiplexer::MultiplexerCommands;
 
 /// Registers the `apply_focus_surface` observer.
 pub struct FocusSurfaceActionPlugin;
@@ -21,43 +23,57 @@ pub struct FocusSurfaceActionEvent {
     pub direction: CycleDirection,
 }
 
-fn apply_focus_surface(trigger: On<FocusSurfaceActionEvent>, mut mux: MultiplexerCommands) {
-    let FocusSurfaceActionEvent {
-        workspace,
-        direction,
-    } = trigger.event();
-    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "FocusSurface: workspace vanished");
-        return;
-    };
-    let Some(active_surface) = mux.panes_active_surface(active_pane) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?active_pane, "FocusSurface: pane vanished");
-        return;
-    };
+fn apply_focus_surface(
+    trigger: On<FocusSurfaceActionEvent>,
+    #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
+    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
+) {
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let FocusSurfaceActionEvent {
+            workspace,
+            direction,
+        } = trigger.event();
+        let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+            tracing::warn!(target: "ozmux_gui::commands", ?workspace, "FocusSurface: workspace vanished");
+            return;
+        };
+        let Some(active_surface) = mux.panes_active_surface(active_pane) else {
+            tracing::warn!(target: "ozmux_gui::commands", ?active_pane, "FocusSurface: pane vanished");
+            return;
+        };
 
-    let surfaces: Vec<Entity> = mux.surfaces_of_pane(active_pane).collect();
-    if surfaces.len() < 2 {
-        return;
+        let surfaces: Vec<Entity> = mux.surfaces_of_pane(active_pane).collect();
+        if surfaces.len() < 2 {
+            return;
+        }
+
+        let i = surfaces
+            .iter()
+            .position(|a| *a == active_surface)
+            .unwrap_or(0);
+        let len = surfaces.len() as isize;
+        let delta: isize = match *direction {
+            CycleDirection::Next => 1,
+            CycleDirection::Prev => -1,
+        };
+        let j = ((i as isize + delta).rem_euclid(len)) as usize;
+        let target = surfaces[j];
+
+        if let Err(err) = mux.set_active_surface(active_pane, target) {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusSurface failed");
+        }
     }
-
-    let i = surfaces
-        .iter()
-        .position(|a| *a == active_surface)
-        .unwrap_or(0);
-    let len = surfaces.len() as isize;
-    let delta: isize = match *direction {
-        CycleDirection::Next => 1,
-        CycleDirection::Prev => -1,
-    };
-    let j = ((i as isize + delta).rem_euclid(len)) as usize;
-    let target = surfaces[j];
-
-    if let Err(err) = mux.set_active_surface(active_pane, target) {
-        tracing::warn!(target: "ozmux_gui::commands", ?err, "FocusSurface failed");
+    #[cfg(feature = "thin-client")]
+    {
+        // TODO(T5): send ClientMessage::FocusSurface over the wire.
+        let _ = &trigger;
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

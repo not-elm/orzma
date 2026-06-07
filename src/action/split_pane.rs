@@ -1,7 +1,9 @@
 //! Split-pane shortcut action: splits the active pane along an orientation
 //! when a `SplitPaneActionEvent` is triggered.
 use bevy::prelude::*;
-use ozmux_multiplexer::{Cwd, MultiplexerCommands, Side, SplitOrientation, SurfaceKind};
+use ozmux_multiplexer::{Cwd, SplitOrientation};
+#[cfg(not(feature = "thin-client"))]
+use ozmux_multiplexer::{MultiplexerCommands, Side, SurfaceKind};
 
 /// Registers the `apply_split` observer for `SplitPaneActionEvent`.
 pub struct SplitPaneActionPlugin;
@@ -26,37 +28,48 @@ pub struct SplitPaneActionEvent {
 // rust.md ordering exception).
 fn apply_split(
     trigger: On<SplitPaneActionEvent>,
-    mut mux: MultiplexerCommands,
+    #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
+    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
     mut commands: Commands,
     cwds: Query<&Cwd>,
 ) {
-    let SplitPaneActionEvent {
-        workspace,
-        orientation,
-    } = trigger.event();
-    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "Split: workspace vanished");
-        return;
-    };
-    let seed = mux
-        .panes_active_surface(active_pane)
-        .and_then(|s| cwds.get(s).ok().cloned());
-    match mux.split_pane_with_surface(
-        active_pane,
-        Side::After,
-        *orientation,
-        SurfaceKind::Terminal,
-    ) {
-        Ok(outcome) => {
-            if let Some(cwd) = seed {
-                commands.entity(outcome.surface).insert(cwd);
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let SplitPaneActionEvent {
+            workspace,
+            orientation,
+        } = trigger.event();
+        let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+            tracing::warn!(target: "ozmux_gui::commands", ?workspace, "Split: workspace vanished");
+            return;
+        };
+        let seed = mux
+            .panes_active_surface(active_pane)
+            .and_then(|s| cwds.get(s).ok().cloned());
+        match mux.split_pane_with_surface(
+            active_pane,
+            Side::After,
+            *orientation,
+            SurfaceKind::Terminal,
+        ) {
+            Ok(outcome) => {
+                if let Some(cwd) = seed {
+                    commands.entity(outcome.surface).insert(cwd);
+                }
             }
+            Err(e) => tracing::warn!(target: "ozmux_gui::commands", ?e, "split_pane failed"),
         }
-        Err(e) => tracing::warn!(target: "ozmux_gui::commands", ?e, "split_pane failed"),
+    }
+    #[cfg(feature = "thin-client")]
+    {
+        // TODO(T5): send ClientMessage::Split over the wire.
+        let _ = (&trigger, &mut commands, &cwds);
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

@@ -1,6 +1,7 @@
 //! Close-pane shortcut action: closes the active pane when a
 //! `ClosePaneActionEvent` fires.
 use bevy::prelude::*;
+#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::MultiplexerCommands;
 
 /// Registers the `apply_close_pane` observer.
@@ -19,18 +20,32 @@ pub struct ClosePaneActionEvent {
     pub workspace: Entity,
 }
 
-fn apply_close_pane(trigger: On<ClosePaneActionEvent>, mut mux: MultiplexerCommands) {
-    let ClosePaneActionEvent { workspace } = trigger.event();
-    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "ClosePane: workspace vanished");
-        return;
-    };
-    if let Err(err) = mux.close_pane(active_pane) {
-        tracing::warn!(target: "ozmux_gui::commands", ?err, "ClosePane failed");
+fn apply_close_pane(
+    trigger: On<ClosePaneActionEvent>,
+    #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
+    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
+) {
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let ClosePaneActionEvent { workspace } = trigger.event();
+        let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+            tracing::warn!(target: "ozmux_gui::commands", ?workspace, "ClosePane: workspace vanished");
+            return;
+        };
+        if let Err(err) = mux.close_pane(active_pane) {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "ClosePane failed");
+        }
+    }
+    #[cfg(feature = "thin-client")]
+    {
+        // TODO(T5): send ClientMessage::ClosePane over the wire.
+        let _ = &trigger;
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

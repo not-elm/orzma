@@ -1,6 +1,5 @@
 //! ozmux Bevy GUI entry point.
 
-#[cfg(not(feature = "thin-client"))]
 mod action;
 mod bootstrap;
 mod browser_render;
@@ -19,7 +18,6 @@ mod theme;
 mod thin_client;
 mod ui;
 
-#[cfg(not(feature = "thin-client"))]
 use crate::action::OzmuxActionPlugin;
 use crate::browser_render::OzmuxBrowserRenderPlugin;
 use crate::clipboard::ClipboardActionPlugin;
@@ -104,8 +102,6 @@ fn main() {
         ExtensionManagerPlugin::new(endpoints),
     ));
 
-    // Action plugin is local-only (all shortcuts dispatch through MultiplexerCommands).
-    #[cfg(not(feature = "thin-client"))]
     app.add_plugins(OzmuxActionPlugin);
 
     app.add_plugins(GeometryFeedPlugin);

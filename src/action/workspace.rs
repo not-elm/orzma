@@ -8,9 +8,9 @@
 //! observer's commands before the next queued trigger runs).
 
 use bevy::prelude::*;
-use ozmux_multiplexer::{
-    AttachedWorkspace, MultiplexerCommands, WorkspaceCreatedAt, WorkspaceMarker,
-};
+#[cfg(not(feature = "thin-client"))]
+use ozmux_multiplexer::MultiplexerCommands;
+use ozmux_multiplexer::{AttachedWorkspace, WorkspaceCreatedAt, WorkspaceMarker};
 
 /// Bevy Plugin that registers the workspace-action observers.
 pub struct OzmuxWorkspaceActionPlugin;
@@ -56,93 +56,115 @@ pub enum FocusWorkspaceTarget {
 
 fn apply_new_workspace(
     _trigger: On<NewWorkspaceActionEvent>,
-    mut mux: MultiplexerCommands,
+    #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
+    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
     mut commands: Commands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
 ) {
-    match attached_workspace.single() {
-        Ok(previous_attached) => {
-            tracing::debug!(
-                target: "ozmux_gui::action",
-                ?previous_attached,
-                "apply_new_workspace: queued AttachedWorkspace remove from previous"
-            );
-            commands
-                .entity(previous_attached)
-                .remove::<AttachedWorkspace>();
+    #[cfg(not(feature = "thin-client"))]
+    {
+        match attached_workspace.single() {
+            Ok(previous_attached) => {
+                tracing::debug!(
+                    target: "ozmux_gui::action",
+                    ?previous_attached,
+                    "apply_new_workspace: queued AttachedWorkspace remove from previous"
+                );
+                commands
+                    .entity(previous_attached)
+                    .remove::<AttachedWorkspace>();
+            }
+            Err(err) => {
+                tracing::debug!(
+                    target: "ozmux_gui::action",
+                    ?err,
+                    "apply_new_workspace: no single previously-attached workspace (skipping remove)"
+                );
+            }
         }
-        Err(err) => {
-            tracing::debug!(
-                target: "ozmux_gui::action",
-                ?err,
-                "apply_new_workspace: no single previously-attached workspace (skipping remove)"
-            );
-        }
+        let new_workspace = mux.spawn_attached_workspace();
+        tracing::debug!(
+            target: "ozmux_gui::action",
+            ?new_workspace,
+            "apply_new_workspace: queued spawn of new attached workspace"
+        );
     }
-    let new_workspace = mux.spawn_attached_workspace();
-    tracing::debug!(
-        target: "ozmux_gui::action",
-        ?new_workspace,
-        "apply_new_workspace: queued spawn of new attached workspace"
-    );
+    #[cfg(feature = "thin-client")]
+    {
+        // TODO(T5): send ClientMessage::NewWorkspace over the wire.
+        let _ = (&mut commands, &attached_workspace);
+    }
 }
 
 fn apply_focus_workspace(
     trigger: On<FocusWorkspaceActionEvent>,
-    mut mux: MultiplexerCommands,
+    #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
+    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
     mut commands: Commands,
     workspaces: Query<(Entity, Option<&WorkspaceCreatedAt>), With<WorkspaceMarker>>,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
 ) {
-    let mut pairs: Vec<(Entity, u32)> = workspaces
-        .iter()
-        .map(|(e, created)| (e, created.map(|c| c.0).unwrap_or(u32::MAX)))
-        .collect();
-    if pairs.len() < 2 {
-        return;
-    }
-    pairs.sort_by_key(|(_, c)| *c);
-    let entries: Vec<Entity> = pairs.into_iter().map(|(e, _)| e).collect();
-
-    let Ok(current_entity) = attached_workspace.single() else {
-        return;
-    };
-    let Some(current_idx) = entries.iter().position(|e| *e == current_entity) else {
-        return;
-    };
-
-    let target_idx = match trigger.event().target {
-        FocusWorkspaceTarget::Next => (current_idx + 1) % entries.len(),
-        FocusWorkspaceTarget::Prev => current_idx.checked_sub(1).unwrap_or(entries.len() - 1),
-        FocusWorkspaceTarget::Last => {
-            tracing::debug!(
-                target: "ozmux_gui::action",
-                "FocusWorkspace::Last not yet implemented"
-            );
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let mut pairs: Vec<(Entity, u32)> = workspaces
+            .iter()
+            .map(|(e, created)| (e, created.map(|c| c.0).unwrap_or(u32::MAX)))
+            .collect();
+        if pairs.len() < 2 {
             return;
         }
-        FocusWorkspaceTarget::Number(index) => {
-            let i = index as usize;
-            if i >= entries.len() {
+        pairs.sort_by_key(|(_, c)| *c);
+        let entries: Vec<Entity> = pairs.into_iter().map(|(e, _)| e).collect();
+
+        let Ok(current_entity) = attached_workspace.single() else {
+            return;
+        };
+        let Some(current_idx) = entries.iter().position(|e| *e == current_entity) else {
+            return;
+        };
+
+        let target_idx = match trigger.event().target {
+            FocusWorkspaceTarget::Next => (current_idx + 1) % entries.len(),
+            FocusWorkspaceTarget::Prev => current_idx.checked_sub(1).unwrap_or(entries.len() - 1),
+            FocusWorkspaceTarget::Last => {
+                tracing::debug!(
+                    target: "ozmux_gui::action",
+                    "FocusWorkspace::Last not yet implemented"
+                );
                 return;
             }
-            i
+            FocusWorkspaceTarget::Number(index) => {
+                let i = index as usize;
+                if i >= entries.len() {
+                    return;
+                }
+                i
+            }
+        };
+
+        let target_entity = entries[target_idx];
+        if target_entity == current_entity {
+            return;
         }
-    };
 
-    let target_entity = entries[target_idx];
-    if target_entity == current_entity {
-        return;
+        commands
+            .entity(current_entity)
+            .remove::<AttachedWorkspace>();
+        commands.entity(target_entity).insert(AttachedWorkspace);
+        let _ = mux.select_workspace(target_entity);
     }
-
-    commands
-        .entity(current_entity)
-        .remove::<AttachedWorkspace>();
-    commands.entity(target_entity).insert(AttachedWorkspace);
-    let _ = mux.select_workspace(target_entity);
+    #[cfg(feature = "thin-client")]
+    {
+        // TODO(T5): send ClientMessage::FocusWorkspace over the wire.
+        let _ = (&trigger, &mut commands, &workspaces, &attached_workspace);
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

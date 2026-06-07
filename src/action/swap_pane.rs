@@ -1,7 +1,9 @@
 //! Swap-pane shortcut action: swaps the active pane with a sibling when a
 //! `SwapPaneActionEvent` fires.
 use bevy::prelude::*;
-use ozmux_multiplexer::{MultiplexerCommands, SwapOffset};
+#[cfg(not(feature = "thin-client"))]
+use ozmux_multiplexer::MultiplexerCommands;
+use ozmux_multiplexer::SwapOffset;
 
 /// Registers the `apply_swap_pane` observer.
 pub struct SwapPaneActionPlugin;
@@ -21,18 +23,32 @@ pub struct SwapPaneActionEvent {
     pub offset: SwapOffset,
 }
 
-fn apply_swap_pane(trigger: On<SwapPaneActionEvent>, mut mux: MultiplexerCommands) {
-    let SwapPaneActionEvent { workspace, offset } = trigger.event();
-    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "SwapPane: workspace vanished");
-        return;
-    };
-    if let Err(err) = mux.swap_pane(active_pane, *offset) {
-        tracing::warn!(target: "ozmux_gui::commands", ?err, "swap_pane failed");
+fn apply_swap_pane(
+    trigger: On<SwapPaneActionEvent>,
+    #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
+    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
+) {
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let SwapPaneActionEvent { workspace, offset } = trigger.event();
+        let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+            tracing::warn!(target: "ozmux_gui::commands", ?workspace, "SwapPane: workspace vanished");
+            return;
+        };
+        if let Err(err) = mux.swap_pane(active_pane, *offset) {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "swap_pane failed");
+        }
+    }
+    #[cfg(feature = "thin-client")]
+    {
+        // TODO(T5): send ClientMessage::SwapPane over the wire.
+        let _ = &trigger;
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

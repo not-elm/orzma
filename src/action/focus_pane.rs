@@ -1,7 +1,9 @@
 //! Focus-pane shortcut action. Moves pane focus via the Mux's geometric
 //! navigation and promotes the neighbor to `ActivePane` on the workspace.
 use bevy::prelude::*;
-use ozmux_multiplexer::{MultiplexerCommands, PaneDirection};
+#[cfg(not(feature = "thin-client"))]
+use ozmux_multiplexer::MultiplexerCommands;
+use ozmux_multiplexer::PaneDirection;
 
 /// Registers the `apply_focus_pane` observer for `FocusPaneActionEvent`.
 pub struct FocusPaneActionPlugin;
@@ -21,22 +23,36 @@ pub struct FocusPaneActionEvent {
     pub direction: PaneDirection,
 }
 
-fn apply_focus_pane(trigger: On<FocusPaneActionEvent>, mut mux: MultiplexerCommands) {
-    let event = trigger.event();
-    let workspace = event.workspace;
-    let direction = event.direction;
+fn apply_focus_pane(
+    trigger: On<FocusPaneActionEvent>,
+    #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
+    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
+) {
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let event = trigger.event();
+        let workspace = event.workspace;
+        let direction = event.direction;
 
-    let Some(from) = mux.workspaces_active_pane(workspace) else {
-        tracing::debug!(target: "ozmux_gui::commands", "FocusPane: no active pane on workspace {workspace:?}");
-        return;
-    };
+        let Some(from) = mux.workspaces_active_pane(workspace) else {
+            tracing::debug!(target: "ozmux_gui::commands", "FocusPane: no active pane on workspace {workspace:?}");
+            return;
+        };
 
-    if let Err(e) = mux.navigate(from, direction) {
-        tracing::debug!(target: "ozmux_gui::commands", "FocusPane: navigate failed: {e:?}");
+        if let Err(e) = mux.navigate(from, direction) {
+            tracing::debug!(target: "ozmux_gui::commands", "FocusPane: navigate failed: {e:?}");
+        }
+    }
+    #[cfg(feature = "thin-client")]
+    {
+        // TODO(T5): send ClientMessage::FocusPane over the wire.
+        let _ = &trigger;
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

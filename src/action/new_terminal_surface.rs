@@ -1,7 +1,9 @@
 //! New-terminal-surface shortcut action: adds a Terminal Surface to the
 //! active pane and focuses it when a `NewTerminalSurfaceActionEvent` fires.
 use bevy::prelude::*;
-use ozmux_multiplexer::{Cwd, MultiplexerCommands, SurfaceKind};
+use ozmux_multiplexer::Cwd;
+#[cfg(not(feature = "thin-client"))]
+use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind};
 
 /// Registers the `apply_new_terminal_surface` observer.
 pub struct NewTerminalSurfaceActionPlugin;
@@ -24,28 +26,39 @@ pub struct NewTerminalSurfaceActionEvent {
 // `commands` inserts its `Cwd` (sanctioned rust.md ordering exception).
 fn apply_new_terminal_surface(
     trigger: On<NewTerminalSurfaceActionEvent>,
-    mut mux: MultiplexerCommands,
+    #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
+    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
     mut commands: Commands,
     cwds: Query<&Cwd>,
 ) {
-    let NewTerminalSurfaceActionEvent { workspace } = trigger.event();
-    let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
-        tracing::warn!(target: "ozmux_gui::commands", ?workspace, "NewSurface: workspace vanished");
-        return;
-    };
-    let seed = mux
-        .panes_active_surface(active_pane)
-        .and_then(|s| cwds.get(s).ok().cloned());
-    let new_surface = mux.add_surface(active_pane, SurfaceKind::Terminal);
-    if let Some(cwd) = seed {
-        commands.entity(new_surface).insert(cwd);
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let NewTerminalSurfaceActionEvent { workspace } = trigger.event();
+        let Some(active_pane) = mux.workspaces_active_pane(*workspace) else {
+            tracing::warn!(target: "ozmux_gui::commands", ?workspace, "NewSurface: workspace vanished");
+            return;
+        };
+        let seed = mux
+            .panes_active_surface(active_pane)
+            .and_then(|s| cwds.get(s).ok().cloned());
+        let new_surface = mux.add_surface(active_pane, SurfaceKind::Terminal);
+        if let Some(cwd) = seed {
+            commands.entity(new_surface).insert(cwd);
+        }
+        if let Err(err) = mux.set_active_surface(active_pane, new_surface) {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "NewSurface: set_active_surface failed");
+        }
     }
-    if let Err(err) = mux.set_active_surface(active_pane, new_surface) {
-        tracing::warn!(target: "ozmux_gui::commands", ?err, "NewSurface: set_active_surface failed");
+    #[cfg(feature = "thin-client")]
+    {
+        // TODO(T5): send ClientMessage::NewSurface over the wire.
+        let _ = (&trigger, &mut commands, &cwds);
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
