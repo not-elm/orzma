@@ -174,9 +174,12 @@ impl MuxState {
         Self::new(ozmux_mux::Mux::new())
     }
 
-    /// Builds a `MuxState` whose fold is seeded from `snapshot`. Used by the
-    /// thin-client build (no local Mux) and, indirectly, by the local materialize.
+    /// Builds a `MuxState` whose fold is seeded from `snapshot`. This is the
+    /// thin-client cold-attach constructor: the thin-client build has no local
+    /// Mux, so it seeds from a snapshot received over the wire. The default
+    /// build uses `new(mux)` + `materialize_snapshot` instead.
     /// Reverse maps start empty; `build_from_snapshot` fills them.
+    #[cfg(feature = "thin-client")]
     pub fn from_snapshot(snapshot: SessionSnapshot) -> Self {
         Self {
             #[cfg(not(feature = "thin-client"))]
@@ -2851,6 +2854,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "thin-client")]
     #[test]
     fn build_from_snapshot_rebuilds_tree_with_nonactive_surfaces() {
         let mut mux = ozmux_mux::Mux::new();

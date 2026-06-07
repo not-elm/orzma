@@ -30,6 +30,34 @@ impl Plugin for GeometryFeedPlugin {
     }
 }
 
+/// Computes the workspace viewport in cells from its laid-out node, returning
+/// `(workspace_entity, cols, rows)` — or `None` when nothing changed (the
+/// `WorkspaceDimensions` change-guard) or the layout isn't ready.
+fn compute_viewport(
+    workspace_ui_root: &Query<&ComputedNode, With<WorkspaceUiRoot>>,
+    attached: &Query<(Entity, Option<&WorkspaceDimensions>), With<AttachedWorkspace>>,
+    metrics: &Res<TerminalCellMetricsResource>,
+) -> Option<(Entity, u16, u16)> {
+    let computed = workspace_ui_root.single().ok()?;
+    let (workspace, current_dims) = attached.single().ok()?;
+    let phys_w = computed.size.x.max(0.0);
+    let phys_h = computed.size.y.max(0.0);
+    if phys_w == 0.0 || phys_h == 0.0 {
+        return None;
+    }
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cols = ((phys_w / cell_w).floor() as u16).max(1);
+    let rows = ((phys_h / cell_h).floor() as u16).max(1);
+    if let Some(dims) = current_dims
+        && dims.cols == cols
+        && dims.rows == rows
+    {
+        return None;
+    }
+    Some((workspace, cols, rows))
+}
+
 /// Measures the `WorkspaceUiRoot` node (window-driven, 100 % of the available
 /// window area), converts the physical-pixel size to a cell grid using the
 /// floored physical cell pitch from `TerminalCellMetricsResource`, and calls
@@ -46,31 +74,10 @@ fn feed_workspace_dimensions(
     attached: Query<(Entity, Option<&WorkspaceDimensions>), With<AttachedWorkspace>>,
     metrics: Res<TerminalCellMetricsResource>,
 ) {
-    let Ok(computed) = workspace_ui_root.single() else {
+    let Some((workspace, cols, rows)) = compute_viewport(&workspace_ui_root, &attached, &metrics)
+    else {
         return;
     };
-    let Ok((workspace, current_dims)) = attached.single() else {
-        return;
-    };
-
-    let phys_w = computed.size.x.max(0.0);
-    let phys_h = computed.size.y.max(0.0);
-    if phys_w == 0.0 || phys_h == 0.0 {
-        return;
-    }
-
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let cols = ((phys_w / cell_w).floor() as u16).max(1);
-    let rows = ((phys_h / cell_h).floor() as u16).max(1);
-
-    if let Some(dims) = current_dims
-        && dims.cols == cols
-        && dims.rows == rows
-    {
-        return;
-    }
-
     mux.set_workspace_dimensions(workspace, cols, rows);
 }
 
@@ -85,31 +92,10 @@ fn feed_workspace_dimensions(
     attached: Query<(Entity, Option<&WorkspaceDimensions>), With<AttachedWorkspace>>,
     metrics: Res<TerminalCellMetricsResource>,
 ) {
-    let Ok(computed) = workspace_ui_root.single() else {
+    let Some((workspace, cols, rows)) = compute_viewport(&workspace_ui_root, &attached, &metrics)
+    else {
         return;
     };
-    let Ok((workspace, current_dims)) = attached.single() else {
-        return;
-    };
-
-    let phys_w = computed.size.x.max(0.0);
-    let phys_h = computed.size.y.max(0.0);
-    if phys_w == 0.0 || phys_h == 0.0 {
-        return;
-    }
-
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let cols = ((phys_w / cell_w).floor() as u16).max(1);
-    let rows = ((phys_h / cell_h).floor() as u16).max(1);
-
-    if let Some(dims) = current_dims
-        && dims.cols == cols
-        && dims.rows == rows
-    {
-        return;
-    }
-
     if let Err(e) = conn
         .0
         .send(ozmux_proto::ClientMessage::SetViewport { cols, rows })

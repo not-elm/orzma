@@ -64,18 +64,22 @@ fn main() {
         cef_plugin(endpoints.clone()),
     ));
 
-    // Local-only plugins (PTY, mux write-path, bootstrap).
+    // Local-only plugins (PTY, mux write-path).
     #[cfg(not(feature = "thin-client"))]
     app.add_plugins((
         TerminalHandlePlugin,
         MultiplexerPlugin,
         OzmuxLayoutLogPlugin,
-        OzmuxBootstrapPlugin,
     ));
 
     // Thin-client plugin (wire read-path + in-process daemon).
     #[cfg(feature = "thin-client")]
     app.add_plugins(thin_client::ThinClientMultiplexerPlugin);
+
+    // Bootstrap is shared: the local build registers mux-seed + cursor; the
+    // thin-client build registers cursor only (workspace is seeded by
+    // ThinClientMultiplexerPlugin).
+    app.add_plugins(OzmuxBootstrapPlugin);
 
     // Shared plugins (render, UI, input, configs, font, shortcuts, etc.).
     app.add_plugins((
@@ -99,13 +103,6 @@ fn main() {
         ImeOverlayPlugin,
         ExtensionManagerPlugin::new(endpoints),
     ));
-
-    // OzmuxBootstrapPlugin is shared in both builds but registers different
-    // systems: local build boots via MultiplexerCommands; thin-client just
-    // inserts the initial cursor icon (the workspace is seeded by
-    // ThinClientMultiplexerPlugin).
-    #[cfg(feature = "thin-client")]
-    app.add_plugins(OzmuxBootstrapPlugin);
 
     // Action plugin is local-only (all shortcuts dispatch through MultiplexerCommands).
     #[cfg(not(feature = "thin-client"))]

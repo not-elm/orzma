@@ -19,7 +19,9 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
-use bevy::window::{CursorIcon, Ime, PrimaryWindow, SystemCursorIcon};
+#[cfg(not(feature = "thin-client"))]
+use bevy::window::Ime;
+use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
 use ozmux_multiplexer::SurfaceKind;
@@ -49,14 +51,14 @@ impl Plugin for OzmuxBrowserRenderPlugin {
                     drive_nav_buttons,
                     sync_nav_button_enabled,
                     nav_button_hover_cursor.after(crate::input::InputPhase::Hover),
-                    focus_address_bar_on_click,
-                    apply_ime_to_address_bar,
                 ),
             );
         #[cfg(not(feature = "thin-client"))]
         app.add_systems(
             Update,
             (
+                focus_address_bar_on_click,
+                apply_ime_to_address_bar,
                 focus_address_bar_on_cmd_l.before(crate::input::dispatch_focused_key),
                 blur_address_bar_on_focus_leave
                     .after(crate::input::InputPhase::Dispatch)
@@ -466,6 +468,7 @@ fn browser_address_editor(
 /// `ime_policy_system`); on commit the text is inserted here. CJK input into the
 /// URL/search bar would otherwise be lost, since `read_ime_events` forwards
 /// commits to the active terminal, which a browser pane has none of.
+#[cfg(not(feature = "thin-client"))]
 fn apply_ime_to_address_bar(
     mut events: MessageReader<Ime>,
     focus: Res<AddressBarFocus>,
@@ -487,6 +490,7 @@ fn apply_ime_to_address_bar(
 }
 
 /// Clicking the address bar focuses it (seeding the buffer from the current URL).
+#[cfg(not(feature = "thin-client"))]
 fn focus_address_bar_on_click(
     mut focus: ResMut<AddressBarFocus>,
     clicked: Query<(&Interaction, &AddrBarText), Changed<Interaction>>,
@@ -577,6 +581,7 @@ fn blur_address_bar_on_focus_leave(
 }
 
 /// Returns the byte offset in `e.buffer` for the character at `idx`.
+#[cfg(not(feature = "thin-client"))]
 fn char_byte(e: &AddressEdit, idx: usize) -> usize {
     e.buffer
         .char_indices()
@@ -600,6 +605,7 @@ fn insert_char(e: &mut AddressEdit, c: char) {
 }
 
 /// Inserts `s` at the caret position and advances the caret by `s.chars().count()`.
+#[cfg(not(feature = "thin-client"))]
 fn insert_str(e: &mut AddressEdit, s: &str) {
     let at = char_byte(e, e.caret);
     e.buffer.insert_str(at, s);
