@@ -13,10 +13,9 @@ pub mod path_prefix;
 pub mod protocol;
 pub mod scheme;
 
-pub use bridge::{
-    ControlExtension, ExtensionControlPlugin, ExtensionControlSet, apply_control_request,
-    terminal_env,
-};
+pub use bridge::{ControlExtension, ExtensionControlPlugin, terminal_env};
+#[cfg(not(feature = "thin-client"))]
+pub use bridge::{ExtensionControlSet, apply_control_request};
 pub use command::{CommandExtension, CommandExtensionConfig};
 pub use control::{
     ActivateParams, AddSurfaceParams, ControlError, ControlOp, ControlOrientation,

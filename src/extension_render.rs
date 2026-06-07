@@ -400,7 +400,7 @@ fn log_webview_load_error(load: On<LoadError>) {
     );
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::asset::AssetPlugin;

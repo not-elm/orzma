@@ -11,6 +11,10 @@ publish.workspace = true
 # Pulls the bevy_cef_core path-dep + the ozmux-ext:// scheme handler.
 # Off by default so the core builds/tests with std + crossbeam only.
 cef = ["dep:bevy_cef_core"]
+# Gates out the MultiplexerCommands write path (drain_control_requests and
+# its helpers). Enabled transitively by the root thin-client feature so the
+# extension-host compiles when ozmux_multiplexer/thin-client is active.
+thin-client = ["ozmux_multiplexer/thin-client"]
 
 [dependencies]
 # Bridges the host lifecycle thread's events to the (future) ECS drain.

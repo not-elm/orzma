@@ -5,23 +5,38 @@
 //! exactly once. Failures mark the entity with `TerminalSpawnFailed` so the
 //! system does not retry on subsequent frames.
 
+#[cfg(not(feature = "thin-client"))]
 use crate::extension_manager::ExtensionRegistry;
 use crate::system_set::OzmuxSystems;
+#[cfg(not(feature = "thin-client"))]
+use crate::ui::TerminalSpawnFailed;
+use crate::ui::TerminalSurfaceMarker;
+#[cfg(not(feature = "thin-client"))]
 use crate::ui::chrome::PaneChrome;
-use crate::ui::{TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
+#[cfg(not(feature = "thin-client"))]
 use bevy::ui::UiSystems;
+#[cfg(feature = "thin-client")]
+use bevy_terminal::TerminalCurrentDir;
+#[cfg(not(feature = "thin-client"))]
 use bevy_terminal::{PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle};
+#[cfg(not(feature = "thin-client"))]
 use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
+#[cfg(not(feature = "thin-client"))]
+use bevy_terminal_renderer::material::TerminalMaterialSystems;
+use bevy_terminal_renderer::material::TerminalUiMaterial;
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
+#[cfg(not(feature = "thin-client"))]
 use ozmux_extension_host::terminal_env;
-use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneDimensions, PaneMarker, SurfaceOf};
+#[cfg(not(feature = "thin-client"))]
+use ozmux_multiplexer::PaneDimensions;
+use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneMarker, SurfaceOf};
 
 pub struct OzmuxTerminalUiPlugin;
 
 impl Plugin for OzmuxTerminalUiPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(not(feature = "thin-client"))]
         app.add_systems(
             Update,
             finish_terminal_setup.in_set(OzmuxSystems::SetupSurface),
@@ -32,7 +47,29 @@ impl Plugin for OzmuxTerminalUiPlugin {
                 .after(UiSystems::Layout)
                 .before(TerminalMaterialSystems::UpdateMaterial),
         );
+        #[cfg(feature = "thin-client")]
+        app.add_systems(
+            Update,
+            attach_render_to_surfaces.in_set(OzmuxSystems::SetupSurface),
+        );
         app.add_observer(on_terminal_current_dir);
+    }
+}
+
+/// Thin-client render setup: attaches a `TerminalRenderBundle` to each terminal
+/// surface entity that lacks one. The PTY is managed by the daemon; the GUI
+/// only needs the render grid + material to display frames from the wire.
+#[cfg(feature = "thin-client")]
+fn attach_render_to_surfaces(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<TerminalUiMaterial>>,
+    surfaces: Query<Entity, (With<TerminalSurfaceMarker>, Without<TerminalGrid>)>,
+) {
+    for surface in &surfaces {
+        let material = materials.add(TerminalUiMaterial::default());
+        commands
+            .entity(surface)
+            .insert(TerminalRenderBundle::new(material));
     }
 }
 
@@ -49,6 +86,7 @@ impl Plugin for OzmuxTerminalUiPlugin {
 /// `SurfaceOf` / `OwningWorkspace` relationships: surface → Pane → Workspace.
 /// If the chain cannot be resolved (or no extension launched) the env is
 /// empty — the terminal still works, just without `@<cmd>` support.
+#[cfg(not(feature = "thin-client"))]
 fn finish_terminal_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -104,6 +142,7 @@ fn finish_terminal_setup(
 /// it is an absolute, existing directory, else `$HOME` (else `/`). `is_absolute`
 /// is load-bearing — `Path::is_dir` resolves a relative path against ozmux's
 /// own process cwd.
+#[cfg(not(feature = "thin-client"))]
 fn resolve_spawn_cwd(cwd: Option<std::path::PathBuf>) -> std::path::PathBuf {
     cwd.filter(|p| p.is_absolute() && p.is_dir())
         .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
@@ -152,6 +191,7 @@ pub(crate) fn resolve_pane_workspace(
 /// edge / the overlay divider. This is acceptable — the old px-based
 /// `max_overflow_phys` reservation was only needed for the flexbox-measured
 /// path. Revisit in T7 smoke if rightmost-glyph clipping is visible.
+#[cfg(not(feature = "thin-client"))]
 fn resize_terminals_from_dimensions(
     mut terminals: Query<(
         &SurfaceOf,
@@ -219,7 +259,7 @@ fn on_terminal_current_dir(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::asset::AssetPlugin;

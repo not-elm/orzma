@@ -6,28 +6,44 @@
 //! State is owned by the `MouseSelectionState` resource — see spec
 //! §6.
 
+#[cfg(not(feature = "thin-client"))]
 use crate::configs::OzmuxConfigsResource;
+#[cfg(not(feature = "thin-client"))]
+use crate::input::InputPhase;
+#[cfg(not(feature = "thin-client"))]
+use crate::input::current_modifiers;
+#[cfg(not(feature = "thin-client"))]
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
-use crate::input::{InputPhase, current_modifiers};
 use crate::ui::Slotted;
+#[cfg(not(feature = "thin-client"))]
 use crate::ui::copy_mode::CopyModeState;
+#[cfg(not(feature = "thin-client"))]
 use bevy::input::ButtonState;
+#[cfg(not(feature = "thin-client"))]
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
+#[cfg(not(feature = "thin-client"))]
 use bevy::window::{CursorMoved, PrimaryWindow};
-use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType, Side};
+use bevy_terminal::Side;
+#[cfg(not(feature = "thin-client"))]
+use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType};
+#[cfg(not(feature = "thin-client"))]
 use std::time::Instant;
 
 /// Per-frame state for the mouse-selection system.
 #[derive(Resource, Default)]
 pub(crate) struct MouseSelectionState {
+    #[cfg(not(feature = "thin-client"))]
     drag: Option<ActiveDrag>,
+    #[cfg(not(feature = "thin-client"))]
     last_click: Option<LastClick>,
     /// Next allowed autoscroll tick. `None` outside autoscroll.
+    #[cfg(not(feature = "thin-client"))]
     next_autoscroll_at: Option<Instant>,
 }
 
+#[cfg(not(feature = "thin-client"))]
 #[derive(Clone)]
 struct ActiveDrag {
     entity: Entity,
@@ -39,6 +55,7 @@ struct ActiveDrag {
     phase: DragPhase,
 }
 
+#[cfg(not(feature = "thin-client"))]
 impl ActiveDrag {
     /// Returns `true` once the selection has been materialized
     /// (`selection_start_at` has run). The Armed phase represents a
@@ -49,6 +66,7 @@ impl ActiveDrag {
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 #[derive(Clone)]
 enum DragPhase {
     /// Press has armed a drag; no inter-cell motion has occurred yet.
@@ -65,6 +83,7 @@ enum DragPhase {
     Active,
 }
 
+#[cfg(not(feature = "thin-client"))]
 struct LastClick {
     entity: Entity,
     cell: CellCoord,
@@ -79,8 +98,9 @@ pub(crate) struct MouseButtonsInputPlugin;
 
 impl Plugin for MouseButtonsInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<MouseSelectionState>()
-            .add_systems(Update, dispatch_mouse_buttons.in_set(InputPhase::Dispatch));
+        app.init_resource::<MouseSelectionState>();
+        #[cfg(not(feature = "thin-client"))]
+        app.add_systems(Update, dispatch_mouse_buttons.in_set(InputPhase::Dispatch));
     }
 }
 
@@ -149,6 +169,7 @@ pub(crate) fn cell_at_local(
 ///   - 1 if `now - last_click.at >= double_click_timeout`
 ///   - 1 if cursor drift exceeds `click_drift_px`
 ///   - else `(last_click.count % 3) + 1` (triple wraps to 1)
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn next_click_count(
     state: &mut MouseSelectionState,
     cfg: &ozmux_configs::mouse::MouseConfig,
@@ -193,6 +214,7 @@ pub(crate) fn next_click_count(
 ///
 /// Cross-workspace clicks (where the surface belongs to a pane in a
 /// different workspace) are rejected per the spec §10 edge cases.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn try_click_to_focus(
     mux: &mut ozmux_multiplexer::MultiplexerCommands,
     attached_workspace: Entity,
@@ -220,6 +242,7 @@ pub(crate) fn try_click_to_focus(
 /// Drag-scroll tick period in ms, given distance past the pane edge in
 /// cells. Linear-step decay from `autoscroll_base_period_ms` floored at
 /// `autoscroll_min_period_ms`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn autoscroll_period_ms(
     cfg: &ozmux_configs::mouse::MouseConfig,
     distance_cells: u32,
@@ -236,6 +259,7 @@ pub(crate) fn autoscroll_period_ms(
 /// Only fires for `DragPhase::Active` drags — an `Armed` drag legitimately
 /// has no `Term::selection` because the selection has not been
 /// materialized yet, and the absence is not a wipe signal.
+#[cfg(not(feature = "thin-client"))]
 fn should_drop_stale_drag(drag: &ActiveDrag, handle: &bevy_terminal::TerminalHandle) -> bool {
     drag.is_active() && handle.selection_type().is_none()
 }
@@ -243,6 +267,7 @@ fn should_drop_stale_drag(drag: &ActiveDrag, handle: &bevy_terminal::TerminalHan
 /// Runs a single autoscroll tick if conditions are met. Called once per
 /// frame from the end-of-frame guard section. Updates `next_autoscroll_at`
 /// and performs the scroll+selection-update.
+#[cfg(not(feature = "thin-client"))]
 fn run_autoscroll_tick(
     state: &mut MouseSelectionState,
     drag: &ActiveDrag,
@@ -331,6 +356,7 @@ fn run_autoscroll_tick(
 /// The drag stays anchored to the original pane — out-of-pane cursor
 /// positions clamp to the pane edge so a cursor that wanders into
 /// another pane still extends the original selection.
+#[cfg(not(feature = "thin-client"))]
 fn synthesize_drag_cell(
     state: &mut MouseSelectionState,
     cursor_phys: Vec2,
@@ -364,6 +390,7 @@ fn synthesize_drag_cell(
 /// press/release through `ButtonAction::route`, and pre-routes
 /// click-to-focus per spec §6 step 4. Drag-state tracking + autoscroll
 /// (Tasks 19-20) are layered on later.
+#[cfg(not(feature = "thin-client"))]
 fn dispatch_mouse_buttons(
     mut state: ResMut<MouseSelectionState>,
     mut mux: ozmux_multiplexer::MultiplexerCommands,
@@ -635,6 +662,7 @@ fn dispatch_mouse_buttons(
 /// `Point` suitable for `selection_start_at` / `selection_update_to` /
 /// `vi_goto`. Both callers (apply_action's local-selection branches
 /// and run_autoscroll_tick) must use the same conversion.
+#[cfg(not(feature = "thin-client"))]
 fn to_viewport_point(cell: CellCoord) -> Point {
     Point::new(Line((cell.row as i32) - 1), Column((cell.col as usize) - 1))
 }
@@ -643,6 +671,7 @@ fn to_viewport_point(cell: CellCoord) -> Point {
 /// `TerminalHandle`. In copy mode, `vi_goto` is issued before any
 /// selection mutation so the vi cursor tracks the moving end of the
 /// selection (see `bevy_terminal::TerminalHandle::vi_goto` docs).
+#[cfg(not(feature = "thin-client"))]
 fn apply_action(
     state: &mut MouseSelectionState,
     event_kind: bevy_terminal::ButtonEventKind,
@@ -757,7 +786,7 @@ fn apply_action(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
 

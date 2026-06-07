@@ -12,8 +12,12 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
+#[cfg(not(feature = "thin-client"))]
 use bevy::input::keyboard::Key;
-use bevy_terminal::{PtyHandle, SelectionType, TerminalHandle, ViMotion};
+use bevy_terminal::TerminalHandle;
+#[cfg(not(feature = "thin-client"))]
+use bevy_terminal::{PtyHandle, SelectionType, ViMotion};
+#[cfg(not(feature = "thin-client"))]
 use ozmux_configs::shortcuts::Modifiers;
 
 /// Bevy Plugin: registers the two observers and inserts the global
@@ -51,6 +55,7 @@ pub struct ExitCopyMode {
 }
 
 /// Outcome of `map_key_to_copy_op` — what the dispatcher should do.
+#[cfg(not(feature = "thin-client"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyOp {
     /// `q` / `Esc` — leave copy mode, drop any selection.
@@ -77,6 +82,7 @@ pub enum CopyOp {
 /// rely on it. Without this gate, Cmd+V would trigger
 /// `ToggleSelection(Simple)` while in copy mode instead of falling
 /// through to the paste pipeline.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn map_key_to_copy_op(key: &Key, mods: Modifiers) -> Option<CopyOp> {
     match key {
         Key::Escape => return Some(CopyOp::ExitCancel),
@@ -127,6 +133,7 @@ pub(crate) fn map_key_to_copy_op(key: &Key, mods: Modifiers) -> Option<CopyOp> {
 /// Returns `true` when the op caused copy mode to exit (`ExitCancel` or
 /// `ExitCopy`), so the caller can bypass the copy-mode gate for
 /// subsequent events in the same Bevy frame.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn dispatch_key(
     commands: &mut Commands,
     q: &mut Query<(&mut TerminalHandle, &mut PtyHandle)>,
@@ -202,7 +209,7 @@ pub(crate) fn handle_exit_copy_mode(
     commands.entity(ev.entity).remove::<CopyModeState>();
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::app::App;

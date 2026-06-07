@@ -2,13 +2,17 @@
 //! requests each frame, resolves `OZMUX_PANE_ID` entity bits, and applies the
 //! requested op via `MultiplexerCommands`. Depends on `bevy` + `ozmux_multiplexer`.
 
-use crate::command::{CommandExtension, CommandExtensionConfig, Responder};
+#[cfg(not(feature = "thin-client"))]
+use crate::command::Responder;
+use crate::command::{CommandExtension, CommandExtensionConfig};
+#[cfg(not(feature = "thin-client"))]
 use crate::control::{
     ActivateParams, AddSurfaceParams, ControlError, ControlOp, ControlOrientation, ControlReply,
     ControlRequest, ControlResponse, ControlSide, SplitParams, SurfaceKindSpec,
 };
 use crate::path_prefix::extension_path_prefix;
 use bevy::prelude::*;
+#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::{
     BrowserProfile, Cwd, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, Side,
     SplitOrientation, SurfaceKind,
@@ -56,6 +60,7 @@ impl Plugin for ExtensionControlPlugin {
             }
             Err(e) => eprintln!("ozmux: failed to launch command extension: {e}"),
         }
+        #[cfg(not(feature = "thin-client"))]
         app.add_systems(
             Update,
             drain_control_requests
@@ -108,6 +113,7 @@ pub fn terminal_env(
     env
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn drain_control_requests(ext: Res<ControlExtension>, mut mux: MultiplexerCommands) {
     while let Ok((req, responder)) = ext.0.control_requests().try_recv() {
         apply_control_request(&mut mux, req, responder);
@@ -118,6 +124,7 @@ fn drain_control_requests(ext: Res<ControlExtension>, mut mux: MultiplexerComman
 /// extension via `responder`. Shared by the single-extension
 /// `drain_control_requests` and the multi-extension manager's drain, so every
 /// extension's control socket applies ops through the same path.
+#[cfg(not(feature = "thin-client"))]
 pub fn apply_control_request(
     mux: &mut MultiplexerCommands,
     req: ControlRequest,
@@ -134,6 +141,7 @@ pub fn apply_control_request(
     });
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn resolve_pane(mux: &MultiplexerCommands, pane_bits: u64) -> Result<Entity, ControlError> {
     Entity::try_from_bits(pane_bits)
         .filter(|e| mux.workspace_of_pane(*e).is_some())
@@ -143,6 +151,7 @@ fn resolve_pane(mux: &MultiplexerCommands, pane_bits: u64) -> Result<Entity, Con
         })
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn stamp_extension_surface(
     mux: &mut MultiplexerCommands,
     surface: Entity,
@@ -159,6 +168,7 @@ fn stamp_extension_surface(
 /// the optional owning-extension name and whether the kind is an extension
 /// (only extension surfaces are stamped with `ExtensionSurfaceId` /
 /// `OwningExtension`). Shared by `handle_split` and `handle_add_surface`.
+#[cfg(not(feature = "thin-client"))]
 fn surface_kind_from_spec(kind: SurfaceKindSpec) -> (SurfaceKind, Option<String>, bool) {
     match kind {
         SurfaceKindSpec::Extension {
@@ -183,6 +193,7 @@ fn surface_kind_from_spec(kind: SurfaceKindSpec) -> (SurfaceKind, Option<String>
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn handle_split(
     mux: &mut MultiplexerCommands,
     pane_bits: u64,
@@ -217,6 +228,7 @@ fn handle_split(
     })
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn handle_add_surface(
     mux: &mut MultiplexerCommands,
     pane_bits: u64,
@@ -237,6 +249,7 @@ fn handle_add_surface(
     })
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn handle_activate(
     mux: &mut MultiplexerCommands,
     pane_bits: u64,
@@ -271,7 +284,7 @@ fn handle_activate(
     Ok(ControlReply::Activate)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

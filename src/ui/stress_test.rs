@@ -4,7 +4,7 @@
 //! `hidden_stash` per the spec: if this test panics, the upstream taffy
 //! fixes (PRs #13990 / #16780 / #17596) do not cover our usage pattern.
 
-#![cfg(test)]
+#![cfg(all(test, not(feature = "thin-client")))]
 
 use crate::bootstrap::OzmuxBootstrapPlugin;
 use crate::configs::OzmuxConfigsPlugin;

@@ -154,7 +154,7 @@ fn hide_indicator_on_copy_mode_exit(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::app::App;

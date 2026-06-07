@@ -50,6 +50,7 @@ pub(crate) struct PaneChrome {
 impl PaneChrome {
     /// Returns the tab-bar row entity so callers can read its `ComputedNode`
     /// height to derive the chrome row count for terminal PTY sizing.
+    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn tab_bar_entity(&self) -> Entity {
         self.tab_bar
     }

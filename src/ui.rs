@@ -139,7 +139,24 @@ pub(crate) struct BrowserNavButton {
 /// Pane) selecting it activates. Read by `drive_tab_clicks` / `tab_hover_cursor`.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct TabButton {
+    // NOTE: written by `build_tab` in both builds, but only READ by the
+    // local-only `drive_tab_clicks` click router; under thin-client the fields
+    // are write-only, so the dead-code lint must be silenced for that config.
+    #[cfg_attr(
+        feature = "thin-client",
+        expect(
+            dead_code,
+            reason = "click router is local-only; fields write-only under thin-client"
+        )
+    )]
     pub(crate) pane: Entity,
+    #[cfg_attr(
+        feature = "thin-client",
+        expect(
+            dead_code,
+            reason = "click router is local-only; fields write-only under thin-client"
+        )
+    )]
     pub(crate) surface: Entity,
 }
 
@@ -150,6 +167,7 @@ pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
 
 /// Records that `TerminalBundle::spawn` failed for this host, so
 /// `finish_terminal_setup` will not retry on subsequent frames.
+#[cfg(not(feature = "thin-client"))]
 #[derive(Component)]
 pub struct TerminalSpawnFailed;
 
@@ -197,7 +215,7 @@ impl Plugin for OzmuxUiPlugin {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use crate::action::OzmuxActionPlugin;

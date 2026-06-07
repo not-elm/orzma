@@ -8,10 +8,13 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use ozmux_configs::path::{SystemEnv, extensions_dir};
+#[cfg(not(feature = "thin-client"))]
+use ozmux_extension_host::ExtensionControlSet;
+#[cfg(not(feature = "thin-client"))]
+use ozmux_extension_host::apply_control_request;
 use ozmux_extension_host::host::{EndpointRegistry, ExtensionEndpoints, LifecycleEvent};
-use ozmux_extension_host::{
-    CommandExtension, CommandExtensionConfig, ExtensionControlSet, Manifest, apply_control_request,
-};
+use ozmux_extension_host::{CommandExtension, CommandExtensionConfig, Manifest};
+#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::MultiplexerCommands;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -79,13 +82,12 @@ impl Plugin for ExtensionManagerPlugin {
             extensions,
             endpoints,
         });
+        #[cfg(not(feature = "thin-client"))]
         app.add_systems(
             Update,
-            (
-                drain_all_control_requests.in_set(ExtensionControlSet::Drain),
-                publish_ready_endpoints,
-            ),
+            drain_all_control_requests.in_set(ExtensionControlSet::Drain),
         );
+        app.add_systems(Update, publish_ready_endpoints);
     }
 }
 
@@ -156,6 +158,7 @@ fn discover_extensions(roots: &[PathBuf]) -> Vec<DiscoveredExtension> {
     found
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn drain_all_control_requests(registry: Res<ExtensionRegistry>, mut mux: MultiplexerCommands) {
     for ext in registry.extensions.values() {
         while let Ok((req, responder)) = ext.control_requests().try_recv() {

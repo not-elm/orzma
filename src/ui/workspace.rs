@@ -10,6 +10,7 @@ use crate::ui::{PaneDimOverlay, TerminalSurfaceMarker, WorkspaceUiRoot};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
+#[cfg(not(feature = "thin-client"))]
 use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
     ActivePane, AttachedWorkspace, OwningWorkspace, PaneMarker, SurfaceOf, WorkspaceUiSubtree,
@@ -46,12 +47,14 @@ impl Plugin for OzmuxWorkspaceUiPlugin {
 fn order_surface_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
-        (
-            OzmuxSystems::BuildChrome
-                .after(ExtensionControlSet::Drain)
-                .after(OzmuxSystems::Input),
-            OzmuxSystems::SetupSurface.after(OzmuxSystems::BuildChrome),
-        ),
+        OzmuxSystems::SetupSurface.after(OzmuxSystems::BuildChrome),
+    );
+    #[cfg(not(feature = "thin-client"))]
+    app.configure_sets(
+        Update,
+        (OzmuxSystems::BuildChrome
+            .after(ExtensionControlSet::Drain)
+            .after(OzmuxSystems::Input),),
     );
 }
 
@@ -189,7 +192,7 @@ fn sync_terminal_dim_on_mount(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use crate::action::OzmuxActionPlugin;

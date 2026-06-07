@@ -6,23 +6,41 @@
 //! the attached terminal), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
+#[cfg(not(feature = "thin-client"))]
 use crate::ui::AddressBarFocus;
+#[cfg(not(feature = "thin-client"))]
 use crate::ui::TerminalSurfaceMarker;
+#[cfg(not(feature = "thin-client"))]
 use crate::ui::copy_mode::CopyModeState;
-use bevy::app::{App, Plugin, Update};
+#[cfg(not(feature = "thin-client"))]
+use bevy::app::Update;
+use bevy::app::{App, Plugin};
+#[cfg(not(feature = "thin-client"))]
 use bevy::ecs::message::MessageReader;
+#[cfg(not(feature = "thin-client"))]
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
+#[cfg(not(feature = "thin-client"))]
 use bevy::ecs::schedule::IntoScheduleConfigs;
+#[cfg(not(feature = "thin-client"))]
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
+#[cfg(not(feature = "thin-client"))]
 use bevy::math::Vec2;
+#[cfg(not(feature = "thin-client"))]
 use bevy::prelude::Entity;
+#[cfg(not(feature = "thin-client"))]
 use bevy::ui::{ComputedNode, UiGlobalTransform};
+#[cfg(not(feature = "thin-client"))]
 use bevy::window::{Ime, PrimaryWindow, Window};
+#[cfg(not(feature = "thin-client"))]
 use bevy_cef::prelude::FocusedWebview;
+#[cfg(not(feature = "thin-client"))]
 use bevy_terminal::{TerminalKey, TerminalModifiers};
+#[cfg(not(feature = "thin-client"))]
 use bevy_terminal_renderer::TerminalCellMetricsResource;
+#[cfg(not(feature = "thin-client"))]
 use bevy_terminal_renderer::prelude::TerminalGrid;
+#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
@@ -34,8 +52,9 @@ pub struct ImePlugin;
 
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ImeState>()
-            .add_systems(Update, (ime_policy_system, read_ime_events).chain());
+        app.init_resource::<ImeState>();
+        #[cfg(not(feature = "thin-client"))]
+        app.add_systems(Update, (ime_policy_system, read_ime_events).chain());
     }
 }
 
@@ -62,6 +81,7 @@ impl Composition {
     /// represents a clause-selection range (macOS IME during clause
     /// conversion, etc.) and is rendered as a hollow block over the
     /// span by `position_ime_overlay`.
+    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn try_new(text: String, raw_caret: Option<(usize, usize)>) -> Option<Self> {
         if text.is_empty() {
             return None;
@@ -101,12 +121,13 @@ impl Composition {
 pub(crate) struct ImeState(Option<Composition>);
 
 impl ImeState {
-    pub(crate) fn is_composing(&self) -> bool {
-        self.0.is_some()
-    }
-
     pub(crate) fn composition(&self) -> Option<&Composition> {
         self.0.as_ref()
+    }
+
+    #[cfg(not(feature = "thin-client"))]
+    pub(crate) fn is_composing(&self) -> bool {
+        self.0.is_some()
     }
 }
 
@@ -117,6 +138,7 @@ impl ImeState {
 /// Keeping this pure makes the state transitions unit-testable without
 /// a Bevy `App` harness; the Bevy system in `read_ime_events` is a thin
 /// wrapper around this.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
     match event {
         Ime::Enabled { .. } => None,
@@ -146,6 +168,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// window — computed from the attached terminal's `UiGlobalTransform`
 /// translation + `TerminalGrid.cursor` × cell pitch, then divided by
 /// the window scale factor.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn ime_policy_system(
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
@@ -251,6 +274,7 @@ pub(crate) fn ime_policy_system(
 /// `Text("a")` to control byte `0x01` when `ctrl` is held, which would
 /// silently corrupt a single-ASCII-letter IME commit (e.g., the
 /// macOS Character Viewer emoji path).
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn read_ime_events(
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
@@ -278,7 +302,7 @@ pub(crate) fn read_ime_events(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::app::{App, Update};

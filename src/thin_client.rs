@@ -16,7 +16,12 @@ use std::os::unix::net::UnixStream;
 
 /// Holds the in-process daemon alive for the app's lifetime (Drop tears it down).
 #[derive(Resource)]
-pub(crate) struct ThinDaemon(pub(crate) ozmuxd::ServerHandle);
+pub(crate) struct ThinDaemon(
+    // NOTE: held only for its Drop (RAII teardown of the in-process daemon); the
+    // field is never read, so the dead-code lint must be silenced explicitly.
+    #[expect(dead_code, reason = "RAII guard: kept alive for Drop, never read")]
+    pub(crate)  ozmuxd::ServerHandle,
+);
 
 /// The wire client. NonSend because `Client` holds a `Box<dyn FnOnce()+Send>`
 /// shutdown hook (not `Sync`), and is only touched by the main-thread pump.
@@ -115,11 +120,8 @@ fn handle_surface_event(
     let Some(_ent) = state.surface_entity(surface) else {
         return;
     };
-    match event {
-        VtEvent::TitleChanged(_title) => {
-            // TODO: 4c-1b-2 wire tab-title from page title
-        }
-        _ => {}
+    if let VtEvent::TitleChanged(_title) = event {
+        // TODO: 4c-1b-2 wire tab-title from page title
     }
     let _ = commands;
 }

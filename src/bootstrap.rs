@@ -5,6 +5,7 @@
 
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
+#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::{MultiplexerCommands, MultiplexerStartupSet};
 
 /// Bevy Plugin that registers the `bootstrap` system in the `Startup`
@@ -13,13 +14,17 @@ pub struct OzmuxBootstrapPlugin;
 
 impl Plugin for OzmuxBootstrapPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(not(feature = "thin-client"))]
         app.add_systems(
             Startup,
             (bootstrap, insert_initial_cursor_icon).after(MultiplexerStartupSet::Materialize),
         );
+        #[cfg(feature = "thin-client")]
+        app.add_systems(Startup, insert_initial_cursor_icon);
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn bootstrap(mut mux: MultiplexerCommands) {
     let _ = mux.attach_initial_workspace();
 }
@@ -40,7 +45,7 @@ fn insert_initial_cursor_icon(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use ozmux_multiplexer::{

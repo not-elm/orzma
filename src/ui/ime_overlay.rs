@@ -8,7 +8,9 @@
 
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
-use crate::input::{resolve_focused_terminal, resolve_focused_terminal_readonly};
+#[cfg(not(feature = "thin-client"))]
+use crate::input::resolve_focused_terminal;
+use crate::input::resolve_focused_terminal_readonly;
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -28,11 +30,12 @@ use bevy::window::{PrimaryWindow, Window};
 use bevy_terminal_renderer::CellMetrics;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::TerminalFontInitSet;
+#[cfg(not(feature = "thin-client"))]
 use bevy_terminal_renderer::material::TerminalMaterialSystems;
 use bevy_terminal_renderer::prelude::TerminalGrid;
-use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, AttachedWorkspace, MultiplexerCommands, WorkspaceMarker,
-};
+#[cfg(not(feature = "thin-client"))]
+use ozmux_multiplexer::MultiplexerCommands;
+use ozmux_multiplexer::{ActivePane, ActiveSurface, AttachedWorkspace, WorkspaceMarker};
 use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -64,12 +67,11 @@ impl Plugin for ImeOverlayPlugin {
         // drag it lags overlay placement by one frame, which is also
         // the same cosmetic latency the caret-bar `left` calc already
         // had.
-        .add_systems(
+        .add_systems(PostUpdate, position_ime_overlay.before(UiSystems::Content));
+        #[cfg(not(feature = "thin-client"))]
+        app.add_systems(
             PostUpdate,
-            (
-                position_ime_overlay.before(UiSystems::Content),
-                suppress_terminal_cursor_during_ime.before(TerminalMaterialSystems::UpdateMaterial),
-            ),
+            suppress_terminal_cursor_during_ime.before(TerminalMaterialSystems::UpdateMaterial),
         );
     }
 }
@@ -319,6 +321,7 @@ pub(crate) fn position_ime_overlay(
 /// active (e.g., race window between focus loss and `Ime::Disabled`),
 /// every grid gets `suppress_cursor = false`. The safe default is
 /// "show cursors" rather than blanket-hide.
+#[cfg(not(feature = "thin-client"))]
 fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
     mux: MultiplexerCommands,

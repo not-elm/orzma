@@ -46,6 +46,7 @@ pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
 /// Validates `uri` against the scheme allowlist and hands it to the
 /// OS default opener via `open::that_detached`. Disallowed URIs are
 /// dropped with a debug log; opener errors are warned.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn try_open_uri(uri: &str) {
     if !is_allowed(uri) {
         debug!("hyperlink: dropping disallowed uri {}", uri);
@@ -60,6 +61,7 @@ pub(crate) fn try_open_uri(uri: &str) {
 /// a `Press + Left + modifier_held` event arrives on a linked cell;
 /// otherwise `None`. Centralizes the interception decision so
 /// `dispatch_mouse_buttons` only has to check the return value.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn should_open_at(
     grid: &bevy_terminal_renderer::schema::TerminalGrid,
     row: u16,
@@ -77,10 +79,12 @@ pub(crate) fn should_open_at(
     grid.hyperlink_at(row, col).map(|(_id, uri)| uri.clone())
 }
 
+#[cfg(not(feature = "thin-client"))]
 const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
 
 /// Parses an RFC 3986 scheme: first byte ALPHA, continuation
 /// ALPHA / DIGIT / `+` / `-` / `.`. Returns `None` for malformed input.
+#[cfg(not(feature = "thin-client"))]
 fn scheme_of(uri: &str) -> Option<&str> {
     let (scheme, _) = uri.split_once(':')?;
     let mut bytes = scheme.bytes();
@@ -96,6 +100,7 @@ fn scheme_of(uri: &str) -> Option<&str> {
 
 /// Returns `true` when `uri` carries a scheme on the v1 allowlist
 /// (`http`, `https`, `mailto`, `ftp`), case-insensitive.
+#[cfg(not(feature = "thin-client"))]
 fn is_allowed(uri: &str) -> bool {
     scheme_of(uri)
         .map(|s| s.to_ascii_lowercase())
@@ -254,7 +259,7 @@ fn cursor_decision(target: HoverTarget) -> Option<SystemCursorIcon> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
 

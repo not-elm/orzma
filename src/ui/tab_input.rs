@@ -6,6 +6,7 @@ use crate::input::InputPhase;
 use crate::ui::TabButton;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
+#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 
 /// Wires tab intersurface: `drive_tab_clicks` (click → focus pane + switch
@@ -15,26 +16,16 @@ pub(crate) struct TabInteractionPlugin;
 
 impl Plugin for TabInteractionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                // NOTE: drive_tab_clicks mutates `Workspace::active_pane`, which
-                // dispatch_focused_key (InputPhase::FocusedKey) reads to route
-                // keystrokes, and which the chrome-rebuild / dim systems (run
-                // after OzmuxSystems::Input) react to. It MUST live in
-                // InputPhase::Dispatch so that focus change is visible the same
-                // frame — see the OzmuxSystems::Input invariant in system_set.rs
-                // and the matching placement of dispatch_mouse_buttons.
-                drive_tab_clicks.in_set(InputPhase::Dispatch),
-                tab_hover_cursor.after(InputPhase::Hover),
-            ),
-        );
+        #[cfg(not(feature = "thin-client"))]
+        app.add_systems(Update, drive_tab_clicks.in_set(InputPhase::Dispatch));
+        app.add_systems(Update, tab_hover_cursor.after(InputPhase::Hover));
     }
 }
 
 /// Routes a left-press on a tab to a focus + surface switch: focuses the tab's
 /// pane (`set_active_pane`) and makes the tab's surface active
 /// (`set_active_surface`). Mirrors `crate::browser_render::drive_nav_buttons`.
+#[cfg(not(feature = "thin-client"))]
 fn drive_tab_clicks(
     mut mux: MultiplexerCommands,
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
@@ -83,7 +74,7 @@ fn tab_hover_cursor(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

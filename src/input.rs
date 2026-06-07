@@ -7,40 +7,62 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
+#[cfg(not(feature = "thin-client"))]
 use crate::action::close_pane::ClosePaneActionEvent;
+#[cfg(not(feature = "thin-client"))]
 use crate::action::close_surface::CloseSurfaceActionEvent;
+#[cfg(not(feature = "thin-client"))]
 use crate::action::focus_pane::FocusPaneActionEvent;
+#[cfg(not(feature = "thin-client"))]
 use crate::action::focus_surface::FocusSurfaceActionEvent;
+#[cfg(not(feature = "thin-client"))]
 use crate::action::new_terminal_surface::NewTerminalSurfaceActionEvent;
+#[cfg(not(feature = "thin-client"))]
 use crate::action::split_pane::SplitPaneActionEvent;
+#[cfg(not(feature = "thin-client"))]
 use crate::action::swap_pane::SwapPaneActionEvent;
+#[cfg(not(feature = "thin-client"))]
 use crate::action::workspace::{
     FocusWorkspaceActionEvent, FocusWorkspaceTarget, NewWorkspaceActionEvent,
 };
+#[cfg(not(feature = "thin-client"))]
 use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
+#[cfg(not(feature = "thin-client"))]
 use crate::configs::OzmuxConfigsResource;
-use crate::input::ime::{ImeState, read_ime_events};
+#[cfg(not(feature = "thin-client"))]
+use crate::input::ime::ImeState;
+#[cfg(not(feature = "thin-client"))]
+use crate::input::ime::read_ime_events;
 use crate::system_set::OzmuxSystems;
+#[cfg(not(feature = "thin-client"))]
 use crate::ui::copy_mode::{
     CopyModeState, EnterCopyModeActionEvent, dispatch_key as dispatch_copy_mode_key,
 };
+#[cfg(not(feature = "thin-client"))]
 use bevy::input::ButtonState;
+#[cfg(not(feature = "thin-client"))]
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+#[cfg(not(feature = "thin-client"))]
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+use ozmux_configs::shortcuts::Modifiers;
+#[cfg(not(feature = "thin-client"))]
 use ozmux_configs::shortcuts::{
-    Direction as ConfigDirection, KeyChord, Modifiers, ShortcutAction, SplitDirection,
+    Direction as ConfigDirection, KeyChord, ShortcutAction, SplitDirection,
     SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset, WorkspaceOffset,
 };
+use ozmux_multiplexer::{ActivePane, ActiveSurface, AttachedWorkspace, WorkspaceMarker};
+#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, AttachedWorkspace, CycleDirection, MultiplexerCommands,
-    PaneDirection, SplitOrientation, SwapOffset, WorkspaceMarker,
+    CycleDirection, MultiplexerCommands, PaneDirection, SplitOrientation, SwapOffset,
 };
+#[cfg(not(feature = "thin-client"))]
 use std::collections::HashSet;
 
 /// Resolves the focused surface's entity via the attached workspace →
 /// active pane → active surface chain. The Surface entity *is* its own host,
 /// so the active surface entity is returned directly.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn resolve_focused_terminal(
     mux: &MultiplexerCommands,
     attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
@@ -89,8 +111,9 @@ impl Plugin for OzmuxShortcutPlugin {
             )
                 .chain()
                 .in_set(OzmuxSystems::Input),
-        )
-        .add_systems(
+        );
+        #[cfg(not(feature = "thin-client"))]
+        app.add_systems(
             Update,
             dispatch_focused_key
                 .run_if(not(is_ime_composing))
@@ -100,6 +123,7 @@ impl Plugin for OzmuxShortcutPlugin {
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn dispatch_focused_key(
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
@@ -227,6 +251,7 @@ pub(crate) fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn is_modifier_only_key(key: &Key) -> bool {
     matches!(
         key,
@@ -242,6 +267,7 @@ fn is_modifier_only_key(key: &Key) -> bool {
     )
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
     use ozmux_configs::shortcuts::Key as CKey;
     Some(match key {
@@ -303,6 +329,7 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 /// actions target the active Terminal Surface; workspace and pane/surface
 /// actions target `workspace`; not-yet-implemented variants fall through to a
 /// `tracing::debug!` log.
+#[cfg(not(feature = "thin-client"))]
 fn execute_action(
     commands: &mut Commands,
     mux: &MultiplexerCommands,
@@ -391,11 +418,13 @@ fn execute_action(
 /// workspace → pane → surface chain. The Surface entity *is* its own host,
 /// so the active surface entity is returned directly. Returns `None` when the
 /// workspace has no active pane/surface.
+#[cfg(not(feature = "thin-client"))]
 fn resolve_active_surface_entity(mux: &MultiplexerCommands, workspace: Entity) -> Option<Entity> {
     let pane = mux.workspaces_active_pane(workspace)?;
     mux.panes_active_surface(pane)
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn split_orientation(d: SplitDirection) -> SplitOrientation {
     match d {
         SplitDirection::Horizontal => SplitOrientation::Horizontal,
@@ -403,6 +432,7 @@ fn split_orientation(d: SplitDirection) -> SplitOrientation {
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn focus_direction(d: ConfigDirection) -> PaneDirection {
     match d {
         ConfigDirection::Up => PaneDirection::Up,
@@ -412,6 +442,7 @@ fn focus_direction(d: ConfigDirection) -> PaneDirection {
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn swap_offset(o: ConfigSwapOffset) -> SwapOffset {
     match o {
         ConfigSwapOffset::Prev => SwapOffset::Prev,
@@ -419,6 +450,7 @@ fn swap_offset(o: ConfigSwapOffset) -> SwapOffset {
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
     match o {
         ConfigSurfaceOffset::Next => Some(CycleDirection::Next),
@@ -431,6 +463,7 @@ fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
 /// `bevy_terminal` codec accepts. Returns `None` for keys the terminal
 /// does not consume (F-keys, modifier-only keys, etc. — those keys are
 /// silently dropped).
+#[cfg(not(feature = "thin-client"))]
 fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
     Some(match key {
         Key::Character(s) => TerminalKey::Text(s.to_string()),
@@ -455,6 +488,7 @@ fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
 /// Converts shortcut-layer `Modifiers` into the `TerminalModifiers` carried
 /// on the `TerminalKeyInput` EntityEvent. MVP only reads `ctrl` on the
 /// receiving side; the other fields are forwarded for future use.
+#[cfg(not(feature = "thin-client"))]
 fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
     TerminalModifiers {
         ctrl: m.ctrl,
@@ -469,6 +503,7 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
 /// active pane/surface yet, or when the target entity has no
 /// `TerminalHandle` (e.g. Browser Surface) — the `bevy_terminal`
 /// observer handles that case by also no-op'ing.
+#[cfg(not(feature = "thin-client"))]
 fn forward_to_active_terminal(
     commands: &mut Commands,
     mux: &MultiplexerCommands,
@@ -489,11 +524,12 @@ fn forward_to_active_terminal(
     });
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn is_ime_composing(ime_state: Res<ImeState>) -> bool {
     ime_state.is_composing()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use crate::configs::OzmuxConfigsResource;

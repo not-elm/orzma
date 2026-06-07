@@ -1,5 +1,6 @@
 //! ozmux Bevy GUI entry point.
 
+#[cfg(not(feature = "thin-client"))]
 mod action;
 mod bootstrap;
 mod browser_render;
@@ -10,6 +11,7 @@ mod extension_render;
 mod font;
 mod geometry_feed;
 mod input;
+#[cfg(not(feature = "thin-client"))]
 mod multiplexer;
 mod system_set;
 mod theme;
@@ -17,6 +19,7 @@ mod theme;
 mod thin_client;
 mod ui;
 
+#[cfg(not(feature = "thin-client"))]
 use crate::action::OzmuxActionPlugin;
 use crate::browser_render::OzmuxBrowserRenderPlugin;
 use crate::clipboard::ClipboardActionPlugin;
@@ -27,6 +30,7 @@ use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
 use bevy::prelude::*;
+#[cfg(not(feature = "thin-client"))]
 use bevy_terminal::TerminalHandlePlugin;
 use bevy_terminal_renderer::TerminalRendererPlugin;
 use bootstrap::OzmuxBootstrapPlugin;
@@ -34,8 +38,10 @@ use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
+#[cfg(not(feature = "thin-client"))]
 use multiplexer::log::OzmuxLayoutLogPlugin;
 use ozmux_extension_host::host::EndpointRegistry;
+#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::MultiplexerPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
@@ -45,44 +51,66 @@ use ui::{
 
 fn main() {
     let endpoints = EndpointRegistry::default();
-    App::new()
-        .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "ozmux".to_string(),
-                    ime_enabled: true,
-                    ..default()
-                }),
+    let mut app = App::new();
+    app.add_plugins((
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "ozmux".to_string(),
+                ime_enabled: true,
                 ..default()
             }),
-            cef_plugin(endpoints.clone()),
-        ))
-        .add_plugins((
-            TerminalHandlePlugin,
-            TerminalRendererPlugin,
-            MultiplexerPlugin,
-            OzmuxConfigsPlugin,
-            FontBridgePlugin,
-            OzmuxLayoutLogPlugin,
-            OzmuxBootstrapPlugin,
-            OzmuxShortcutPlugin,
-            OzmuxUiPlugin,
-            OzmuxExtensionRenderPlugin,
-            OzmuxBrowserRenderPlugin,
-            CopyModePlugin,
-            ClipboardActionPlugin,
-            CopyModeIndicatorPlugin,
-            TabInteractionPlugin,
-        ))
-        .add_plugins((
-            MouseWheelInputPlugin,
-            MouseButtonsInputPlugin,
-            HyperlinkInputPlugin,
-            ImePlugin,
-            ImeOverlayPlugin,
-            ExtensionManagerPlugin::new(endpoints),
-            OzmuxActionPlugin,
-        ))
-        .add_plugins(GeometryFeedPlugin)
-        .run();
+            ..default()
+        }),
+        cef_plugin(endpoints.clone()),
+    ));
+
+    // Local-only plugins (PTY, mux write-path, bootstrap).
+    #[cfg(not(feature = "thin-client"))]
+    app.add_plugins((
+        TerminalHandlePlugin,
+        MultiplexerPlugin,
+        OzmuxLayoutLogPlugin,
+        OzmuxBootstrapPlugin,
+    ));
+
+    // Thin-client plugin (wire read-path + in-process daemon).
+    #[cfg(feature = "thin-client")]
+    app.add_plugins(thin_client::ThinClientMultiplexerPlugin);
+
+    // Shared plugins (render, UI, input, configs, font, shortcuts, etc.).
+    app.add_plugins((
+        TerminalRendererPlugin,
+        OzmuxConfigsPlugin,
+        FontBridgePlugin,
+        OzmuxShortcutPlugin,
+        OzmuxUiPlugin,
+        OzmuxExtensionRenderPlugin,
+        OzmuxBrowserRenderPlugin,
+        CopyModePlugin,
+        ClipboardActionPlugin,
+        CopyModeIndicatorPlugin,
+        TabInteractionPlugin,
+    ));
+    app.add_plugins((
+        MouseWheelInputPlugin,
+        MouseButtonsInputPlugin,
+        HyperlinkInputPlugin,
+        ImePlugin,
+        ImeOverlayPlugin,
+        ExtensionManagerPlugin::new(endpoints),
+    ));
+
+    // OzmuxBootstrapPlugin is shared in both builds but registers different
+    // systems: local build boots via MultiplexerCommands; thin-client just
+    // inserts the initial cursor icon (the workspace is seeded by
+    // ThinClientMultiplexerPlugin).
+    #[cfg(feature = "thin-client")]
+    app.add_plugins(OzmuxBootstrapPlugin);
+
+    // Action plugin is local-only (all shortcuts dispatch through MultiplexerCommands).
+    #[cfg(not(feature = "thin-client"))]
+    app.add_plugins(OzmuxActionPlugin);
+
+    app.add_plugins(GeometryFeedPlugin);
+    app.run();
 }

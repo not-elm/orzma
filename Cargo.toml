@@ -21,7 +21,7 @@ debug = []
 # are compiled out of ozmux_multiplexer. The root binary still compiles (T6 wires
 # the app systems), but main.rs is NOT yet adapted in T3 — root --features
 # thin-client will fail until T6.
-thin-client = ["ozmux_multiplexer/thin-client", "dep:ozmuxd", "dep:ozmux_proto"]
+thin-client = ["ozmux_multiplexer/thin-client", "ozmux_extension_host/thin-client", "dep:ozmuxd", "dep:ozmux_proto"]
 
 [dependencies]
 ab_glyph = "0.2"
