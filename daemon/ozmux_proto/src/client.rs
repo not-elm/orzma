@@ -18,8 +18,14 @@ pub struct Client<W: Write> {
     writer: W,
     rx: Receiver<io::Result<ServerMessage>>,
     mirror: ClientMirror,
-    // NOTE: the handle prevents the reader thread from being silently detached;
-    // dropping `Client` drops `rx`, the thread's `send` then errors, and it exits.
+    // NOTE: the reader thread exits when `read_message` RETURNS after `rx` is
+    // dropped — i.e. on the next message or EOF. With a read-timeout on the
+    // stream (the daemon tests set one) it wakes each timeout and notices; on a
+    // no-timeout stream it blocks in `read` indefinitely and a dropped `Client`
+    // does NOT unblock it. TODO(4c-1): when the app attaches over a no-timeout
+    // UnixStream, shut the reader fd down on drop (`Shutdown::Read`) so the
+    // blocked read returns EOF and the thread exits — else detach/reattach leaks
+    // a thread per cycle.
     _reader: std::thread::JoinHandle<()>,
 }
 
