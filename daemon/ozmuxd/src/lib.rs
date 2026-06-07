@@ -205,6 +205,11 @@ impl Server {
                         let _ = h.input_tx.send(bytes);
                     }
                 }
+                LoopMsg::ClientFrame(_cid, ClientMessage::Scroll { surface, delta }) => {
+                    if let Some(h) = surfaces.get(&surface) {
+                        let _ = h.ctl_tx.send(DriverCtl::Scroll { delta });
+                    }
+                }
                 LoopMsg::ClientFrame(cid, cmd) => {
                     let (evicted, events) = self.apply_command(&mut clients, cid, cmd);
                     for dead_cid in evicted {
@@ -309,6 +314,8 @@ impl Server {
             ClientMessage::Hello { .. } => return (vec![], vec![]),
             // NOTE: Input is handled directly in the run loop before apply_command.
             ClientMessage::Input { .. } => return (vec![], vec![]),
+            // NOTE: Scroll is handled directly in the run loop (routed to the driver's ctl_tx) before apply_command.
+            ClientMessage::Scroll { .. } => return (vec![], vec![]),
             ClientMessage::SetActiveSurface { pane, surface } => {
                 self.mux.set_active_surface(pane, surface)
             }
@@ -557,6 +564,49 @@ mod tests {
         }
     }
 
+    fn frame_contains(frame: &ozmux_vt::frame::Frame, needle: &str) -> bool {
+        use ozmux_vt::frame::{Frame, FrameDelta, FrameSnapshot};
+        match frame {
+            Frame::Snapshot(FrameSnapshot { rows_data, .. }) => rows_data
+                .iter()
+                .any(|r| r.runs.iter().any(|run| run.text.contains(needle))),
+            Frame::Delta(FrameDelta { dirty_rows, .. }) => dirty_rows
+                .iter()
+                .any(|dr| dr.runs.iter().any(|run| run.text.contains(needle))),
+        }
+    }
+
+    fn frame_display_offset(frame: &ozmux_vt::frame::Frame) -> u32 {
+        use ozmux_vt::frame::Frame;
+        match frame {
+            Frame::Snapshot(s) => s.display_offset,
+            Frame::Delta(d) => d.display_offset,
+        }
+    }
+
+    fn poll_frame_until<F>(
+        frame_rx: &crossbeam_channel::Receiver<ServerMessage>,
+        dur: Duration,
+        pred: F,
+    ) -> bool
+    where
+        F: Fn(&ozmux_vt::frame::Frame) -> bool,
+    {
+        let deadline = std::time::Instant::now() + dur;
+        while std::time::Instant::now() < deadline {
+            match frame_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(ServerMessage::Frame { frame, .. }) => {
+                    if pred(&frame) {
+                        return true;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        false
+    }
+
     #[test]
     fn broadcast_drops_overflowing_client_but_keeps_others() {
         let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
@@ -711,6 +761,64 @@ mod tests {
         handle.send(LoopMsg::Snapshot { reply: s_tx });
         let server_snap = s_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(mirror.to_snapshot(), server_snap);
+    }
+
+    #[test]
+    fn scroll_wire_path_moves_display_offset() {
+        let handle = Server::new().spawn_loop();
+        let (w_tx, w_rx) = unbounded::<ServerMessage>();
+        let (f_tx, f_rx) = unbounded::<ServerMessage>();
+        handle.send(LoopMsg::Attach {
+            client_id: ClientId(1),
+            writer: w_tx,
+            frame_writer: f_tx,
+            viewport: (80, 24),
+            protocol_version: ozmux_proto::PROTOCOL_VERSION,
+            disconnect: None,
+        });
+
+        let welcome = w_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let surface = match welcome {
+            ServerMessage::Welcome { snapshot, .. } => snapshot
+                .workspaces
+                .iter()
+                .flat_map(|ws| ws.panes.iter())
+                .flat_map(|p| p.surfaces.iter())
+                .find(|s| s.kind == SurfaceKind::Terminal)
+                .map(|s| s.surface)
+                .expect("a Terminal surface in the welcome snapshot"),
+            other => panic!("expected Welcome, got {other:?}"),
+        };
+
+        handle.send(LoopMsg::ClientFrame(
+            ClientId(1),
+            ClientMessage::Input {
+                surface,
+                bytes: b"for i in $(seq 1 50); do echo SCROLLLINE$i; done\n".to_vec(),
+            },
+        ));
+
+        let saw_scrollback = poll_frame_until(&f_rx, Duration::from_secs(10), |frame| {
+            frame_contains(frame, "SCROLLLINE50")
+        });
+        assert!(
+            saw_scrollback,
+            "shell output SCROLLLINE50 must appear in a frame within 10 s"
+        );
+        while f_rx.try_recv().is_ok() {}
+
+        handle.send(LoopMsg::ClientFrame(
+            ClientId(1),
+            ClientMessage::Scroll { surface, delta: 5 },
+        ));
+
+        let moved = poll_frame_until(&f_rx, Duration::from_secs(5), |frame| {
+            frame_display_offset(frame) > 0
+        });
+        assert!(
+            moved,
+            "a frame with display_offset > 0 must arrive after the Scroll wire message"
+        );
     }
 
     #[test]

@@ -43,6 +43,11 @@ pub(crate) enum DriverCtl {
         /// New row count.
         rows: u16,
     },
+    /// Scroll the VT viewport by `delta` rows (positive = into history).
+    Scroll {
+        /// Signed row delta (positive scrolls back into history).
+        delta: i32,
+    },
     /// Stop the driver.
     Shutdown,
 }
@@ -152,6 +157,12 @@ fn run_driver(
                 Ok(DriverCtl::Resize { cols, rows }) => {
                     vt.resize(cols, rows);
                     let _ = pty.resize(cols, rows);
+                }
+                Ok(DriverCtl::Scroll { delta }) => {
+                    vt.scroll(delta);
+                    if let Some(f) = vt.emit() {
+                        fan_out(&mut clients, surface, &f);
+                    }
                 }
                 Ok(DriverCtl::Shutdown) | Err(_) => break,
             },
@@ -446,6 +457,102 @@ mod tests {
             "second retry within the interval is throttled (clock unchanged)"
         );
         assert!(clients[&ClientId(1)].lagged, "still Full → still lagged");
+    }
+
+    #[test]
+    fn scroll_ctl_moves_display_offset() {
+        let pty = Pty::spawn(80, 24, "/bin/sh", None, &[]).unwrap();
+        let mut vt = Vt::new(80, 24);
+        // Feed enough lines to build scrollback (more than the 24-row viewport).
+        let now = std::time::Instant::now();
+        for i in 0..40u32 {
+            let line = format!("LINE{i:03}\r\n");
+            vt.on_output(line.as_bytes(), now);
+        }
+        // Consume pending damage so emit() can be called cleanly.
+        let _ = vt.emit();
+
+        // Confirm no scrollback yet in offset (we're at the live tail).
+        vt.scroll(5);
+        let frame = vt
+            .emit()
+            .expect("scroll must stage damage and emit a frame");
+        let offset = match &frame {
+            Frame::Snapshot(s) => s.display_offset,
+            Frame::Delta(d) => d.display_offset,
+        };
+        assert!(
+            offset > 0,
+            "display_offset must be > 0 after scrolling into history (got {offset})"
+        );
+        drop(pty);
+    }
+
+    #[test]
+    fn scroll_ctl_routed_via_driver() {
+        let pty = Pty::spawn(80, 24, "/bin/sh", None, &[]).unwrap();
+        let vt = Vt::new(80, 24);
+        let (input_tx, ctl_tx, _join) =
+            spawn_driver(SurfaceId::default(), pty, vt, dummy_loop_tx());
+        let (frame_tx, frame_rx) = unbounded();
+        ctl_tx
+            .send(DriverCtl::AddClient {
+                id: ClientId(1),
+                frame_tx,
+            })
+            .unwrap();
+        // Wait for the bootstrap snapshot.
+        let _ = frame_rx.recv_timeout(Duration::from_secs(3));
+        // Produce scrollback by printing more lines than the viewport rows.
+        input_tx
+            .send(b"for i in $(seq 1 50); do echo SCROLLLINE$i; done\n".to_vec())
+            .unwrap();
+        // Allow generous time for the shell to produce output and scrollback.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut saw_scrollline = false;
+        while Instant::now() < deadline {
+            if let Ok(ServerMessage::Frame { frame, .. }) =
+                frame_rx.recv_timeout(Duration::from_millis(200))
+            {
+                if frame_contains(&frame, "SCROLLLINE50") {
+                    saw_scrollline = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_scrollline,
+            "shell output SCROLLLINE50 must appear in a frame within 10 s"
+        );
+        // Drain remaining frames.
+        std::thread::sleep(Duration::from_millis(300));
+        while frame_rx.try_recv().is_ok() {}
+        // Send the Scroll control message.
+        ctl_tx.send(DriverCtl::Scroll { delta: 5 }).unwrap();
+        // Poll for a frame with display_offset > 0.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut got_offset = false;
+        while Instant::now() < deadline {
+            match frame_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(ServerMessage::Frame { frame, .. }) => {
+                    let offset = match &frame {
+                        Frame::Snapshot(s) => s.display_offset,
+                        Frame::Delta(d) => d.display_offset,
+                    };
+                    if offset > 0 {
+                        got_offset = true;
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        assert!(
+            got_offset,
+            "a frame with display_offset > 0 must arrive after DriverCtl::Scroll"
+        );
+        ctl_tx.send(DriverCtl::Shutdown).unwrap();
     }
 
     #[test]

@@ -101,6 +101,13 @@ pub enum ClientMessage {
         /// The workspace to make active.
         workspace: WorkspaceId,
     },
+    /// Scroll a surface's viewport (positive delta = back into scrollback history, negative = toward the live tail).
+    Scroll {
+        /// The target surface.
+        surface: SurfaceId,
+        /// Signed row delta (positive scrolls back into history).
+        delta: i32,
+    },
 }
 
 /// A message from the daemon to a client.

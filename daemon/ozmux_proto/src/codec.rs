@@ -114,6 +114,10 @@ mod tests {
                 surface: SurfaceId::default(),
                 bytes: vec![1, 2, 3],
             },
+            ClientMessage::Scroll {
+                surface: SurfaceId::default(),
+                delta: 3,
+            },
         ];
 
         let mut buf: Vec<u8> = Vec::new();
@@ -340,6 +344,21 @@ mod tests {
     fn select_workspace_round_trips() {
         let msg = ClientMessage::SelectWorkspace {
             workspace: WorkspaceId::default(),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_message(&mut buf, &msg).unwrap();
+        let mut cur = IoCursor::new(buf);
+        assert_eq!(
+            read_message::<_, ClientMessage>(&mut cur).unwrap(),
+            Some(msg)
+        );
+    }
+
+    #[test]
+    fn scroll_round_trips() {
+        let msg = ClientMessage::Scroll {
+            surface: SurfaceId::default(),
+            delta: 3,
         };
         let mut buf: Vec<u8> = Vec::new();
         write_message(&mut buf, &msg).unwrap();
