@@ -483,11 +483,18 @@ fn broadcast_messages(
     evicted
 }
 
-/// Broadcasts each event to every client; a client whose bounded queue is full
-/// (or closed) is dropped (disconnect-on-overflow — never skip an event for a
-/// still-connected client). Returns the ids of clients that were evicted.
+/// Broadcasts a batch of events to every client as one `Events` message; a
+/// client whose bounded queue is full (or closed) is dropped
+/// (disconnect-on-overflow — never skip an event for a still-connected
+/// client). Returns the ids of clients that were evicted.
 fn broadcast(clients: &mut HashMap<ClientId, ClientConn>, events: &[MuxEvent]) -> Vec<ClientId> {
-    broadcast_messages(clients, events.iter().cloned().map(ServerMessage::Event))
+    if events.is_empty() {
+        return Vec::new();
+    }
+    broadcast_messages(
+        clients,
+        std::iter::once(ServerMessage::Events(events.to_vec())),
+    )
 }
 
 fn kill_surface(surfaces: &mut HashMap<SurfaceId, SurfaceHandle>, surface: SurfaceId) {
@@ -516,6 +523,10 @@ mod tests {
         }
     }
 
+    fn is_prefill(ev: &MuxEvent) -> bool {
+        matches!(ev, MuxEvent::PaneResized { cols: 0, .. })
+    }
+
     fn conn(tx: crossbeam_channel::Sender<ServerMessage>) -> ClientConn {
         let (frame_tx, _) = unbounded();
         ClientConn {
@@ -530,7 +541,7 @@ mod tests {
         let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
         let (full_tx, _full_rx) = bounded::<ServerMessage>(1);
         full_tx
-            .try_send(ServerMessage::Event(dummy_event(0)))
+            .try_send(ServerMessage::Events(vec![dummy_event(0)]))
             .unwrap();
         let (live_tx, live_rx) = bounded::<ServerMessage>(8);
         clients.insert(ClientId(1), conn(full_tx));
@@ -547,16 +558,18 @@ mod tests {
             "healthy client retained"
         );
         assert!(
-            live_rx.try_recv().is_ok(),
-            "healthy client received the event"
+            matches!(live_rx.try_recv(), Ok(ServerMessage::Events(batch)) if batch.len() == 1),
+            "healthy client received one Events batch of len 1"
         );
         assert!(evicted.contains(&ClientId(1)), "evicted list includes id 1");
     }
 
     #[test]
-    fn broadcast_skips_later_events_for_an_overflowed_client() {
+    fn broadcast_evicts_client_whose_queue_is_full() {
         let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
-        let (tx, rx) = bounded::<ServerMessage>(2);
+        let (tx, rx) = bounded::<ServerMessage>(1);
+        tx.try_send(ServerMessage::Events(vec![dummy_event(0)]))
+            .unwrap();
         clients.insert(ClientId(1), conn(tx));
 
         broadcast(
@@ -568,14 +581,13 @@ mod tests {
             !clients.contains_key(&ClientId(1)),
             "overflowed client dropped"
         );
-        let mut delivered = Vec::new();
-        while let Ok(ServerMessage::Event(MuxEvent::PaneResized { cols, .. })) = rx.try_recv() {
-            delivered.push(cols);
+        let mut count = 0;
+        while rx.try_recv().is_ok() {
+            count += 1;
         }
         assert_eq!(
-            delivered,
-            vec![1, 2],
-            "after overflow on event 3, no later event is delivered to the dropped client \
+            count, 1,
+            "only the pre-fill message is in the queue; the batch was rejected whole \
              (gapless invariant: a client that misses any event receives nothing more)"
         );
     }
@@ -585,7 +597,7 @@ mod tests {
         let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
         let (full_tx, _full_rx) = bounded::<ServerMessage>(1);
         full_tx
-            .try_send(ServerMessage::Event(dummy_event(0)))
+            .try_send(ServerMessage::Events(vec![dummy_event(0)]))
             .unwrap();
         let torn_down = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&torn_down);
@@ -656,8 +668,8 @@ mod tests {
             other => panic!("expected Welcome, got {other:?}"),
         };
         let mut mirror = ozmux_proto::ClientMirror::from_snapshot(snapshot);
-        while let Ok(ServerMessage::Event(ev)) = w_rx.recv_timeout(Duration::from_millis(150)) {
-            mirror.apply_event(&ev);
+        while let Ok(ServerMessage::Events(batch)) = w_rx.recv_timeout(Duration::from_millis(150)) {
+            mirror.apply_events(&batch);
         }
 
         handle.send(LoopMsg::ClientFrame(
@@ -669,8 +681,8 @@ mod tests {
                 kind: SurfaceKind::Terminal,
             },
         ));
-        while let Ok(ServerMessage::Event(ev)) = w_rx.recv_timeout(Duration::from_millis(150)) {
-            mirror.apply_event(&ev);
+        while let Ok(ServerMessage::Events(batch)) = w_rx.recv_timeout(Duration::from_millis(150)) {
+            mirror.apply_events(&batch);
         }
 
         let (s_tx, s_rx) = unbounded();
@@ -744,39 +756,37 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "stress probe for the within-broadcast overflow gap; concurrent, run on demand \
-                with --ignored. Pre-fix this reports a nonzero gap count; post-fix it is always 0."]
-    fn broadcast_overflow_never_delivers_out_of_order_under_concurrent_drain() {
-        let mut total_gaps = 0u64;
+    #[ignore = "stress probe for batch-broadcast atomicity; concurrent, run on demand with \
+                --ignored. A concurrent drainer must only ever observe COMPLETE Events batches."]
+    fn broadcast_concurrent_drainer_only_observes_complete_batches() {
+        const EXPECTED: usize = 20;
+        let mut torn_batches = 0u64;
         for _round in 0..2000 {
             let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
-            let (tx, rx) = bounded::<ServerMessage>(2);
-            tx.try_send(ServerMessage::Event(dummy_event(0))).unwrap();
-            tx.try_send(ServerMessage::Event(dummy_event(0))).unwrap();
+            let (tx, rx) = bounded::<ServerMessage>(1);
+            tx.try_send(ServerMessage::Events(vec![dummy_event(0)]))
+                .unwrap();
             clients.insert(ClientId(1), conn(tx));
 
             let drainer = std::thread::spawn(move || {
-                let mut seq = Vec::new();
-                while let Ok(ServerMessage::Event(MuxEvent::PaneResized { cols, .. })) =
-                    rx.recv_timeout(Duration::from_millis(50))
-                {
-                    if cols != 0 {
-                        seq.push(cols);
+                let mut short = 0u64;
+                while let Ok(msg) = rx.recv_timeout(Duration::from_millis(50)) {
+                    match msg {
+                        ServerMessage::Events(batch) if batch.len() == EXPECTED => {}
+                        ServerMessage::Events(batch) if batch.iter().all(is_prefill) => {}
+                        _ => short += 1,
                     }
                 }
-                seq
+                short
             });
 
-            let many: Vec<MuxEvent> = (1..=20).map(dummy_event).collect();
+            let many: Vec<MuxEvent> = (1..=EXPECTED as u32).map(dummy_event).collect();
             broadcast(&mut clients, &many);
-            let seq = drainer.join().unwrap();
-            if seq.windows(2).any(|w| w[1] > w[0] + 1) {
-                total_gaps += 1;
-            }
+            torn_batches += drainer.join().unwrap();
         }
         assert_eq!(
-            total_gaps, 0,
-            "a dropped client received event N+k after missing N (silent mirror corruption)"
+            torn_batches, 0,
+            "a concurrent drainer observed a torn/short Events batch (regression to per-event sends)"
         );
     }
 }

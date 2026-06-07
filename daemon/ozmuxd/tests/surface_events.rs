@@ -173,10 +173,13 @@ fn daemon_relays_title_then_cwd_then_child_exit() {
 
     // OSC 7 is folded into the Mux and broadcast as SurfaceCwdChanged, NOT as a SurfaceEvent.
     let got_cwd = poll_until(&mut client, Duration::from_secs(8), |msg| {
-        matches!(
-            msg,
-            ServerMessage::Event(ozmux_mux::MuxEvent::SurfaceCwdChanged { .. })
-        )
+        if let ServerMessage::Events(batch) = msg {
+            batch
+                .iter()
+                .any(|e| matches!(e, ozmux_mux::MuxEvent::SurfaceCwdChanged { .. }))
+        } else {
+            false
+        }
     });
     assert!(
         got_cwd,
@@ -318,13 +321,17 @@ fn set_active_surface_changes_active() {
 
     // Poll until ActiveSurfaceChanged arrives.
     let got = poll_until(&mut client, Duration::from_secs(3), |msg| {
-        matches!(
-            msg,
-            ServerMessage::Event(ozmux_mux::MuxEvent::ActiveSurfaceChanged {
-                surface,
-                ..
-            }) if *surface == other_surface
-        )
+        if let ServerMessage::Events(batch) = msg {
+            batch.iter().any(|e| {
+                matches!(
+                    e,
+                    ozmux_mux::MuxEvent::ActiveSurfaceChanged { surface, .. }
+                        if *surface == other_surface
+                )
+            })
+        } else {
+            false
+        }
     });
     assert!(
         got,

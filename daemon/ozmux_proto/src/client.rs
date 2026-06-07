@@ -143,8 +143,8 @@ impl<W: Write> Client<W> {
     }
 
     fn fold(&mut self, msg: ServerMessage) -> ServerMessage {
-        if let ServerMessage::Event(ref ev) = msg {
-            self.mirror.apply_event(ev);
+        if let ServerMessage::Events(ref batch) = msg {
+            self.mirror.apply_events(batch);
         }
         msg
     }

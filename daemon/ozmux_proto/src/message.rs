@@ -98,8 +98,8 @@ pub enum ServerMessage {
         /// Full session state at the moment of attach.
         snapshot: SessionSnapshot,
     },
-    /// A state-change delta.
-    Event(MuxEvent),
+    /// A batch of mux events from one command (folded atomically by the client).
+    Events(Vec<MuxEvent>),
     /// A terminal frame (snapshot or delta) for a surface (daemon→client).
     Frame {
         /// The surface this frame belongs to.
