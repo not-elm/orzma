@@ -88,9 +88,15 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             &self.mirror_read,
             &events,
         );
-        let _ = self.mux.mux.rename_workspace(ws_id, name.clone());
+        if let Ok(rename_events) = self.mux.mux.rename_workspace(ws_id, name) {
+            apply_events(
+                &mut self.commands,
+                &mut self.mux,
+                &self.mirror_read,
+                &rename_events,
+            );
+        }
         let ws_ent = self.mux.workspaces[ws_id];
-        self.commands.entity(ws_ent).insert(Name::new(name));
         let pane_ent = self.mux.panes[pane_id];
         let seed = seed_surface_of(&self.mux, pane_id).expect("seed surface");
         let surface_ent = self.mux.surfaces[seed];
@@ -120,26 +126,35 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             &events,
         );
         let n = self.counter.next();
-        let _ = self
-            .mux
-            .mux
-            .rename_workspace(new_id, format!("workspace{n}"));
+        let ws_name = format!("workspace{n}");
+        if let Ok(rename_events) = self.mux.mux.rename_workspace(new_id, ws_name) {
+            apply_events(
+                &mut self.commands,
+                &mut self.mux,
+                &self.mirror_read,
+                &rename_events,
+            );
+        }
         let ws_ent = self.mux.workspaces[new_id];
-        self.commands
-            .entity(ws_ent)
-            .insert(Name::new(format!("workspace{n}")));
         self.attach_workspace_named(ws_ent, n);
         ws_ent
     }
 
     /// Attaches GUI state to the Mux-seeded initial workspace (renames it
-    /// `"workspace1"` through the Mux so the Mux and ECS agree). Called once
-    /// at bootstrap, after `materialize_mux_snapshot` has realized the tree.
+    /// `"workspace1"` through the Mux so the Mux, ECS, and fold all agree).
+    /// Called once at bootstrap, after `materialize_mux_snapshot` has realized
+    /// the tree.
     pub fn attach_initial_workspace(&mut self) -> Entity {
         let id = self.mux.mux.active_workspace();
-        let _ = self.mux.mux.rename_workspace(id, "workspace1".to_string());
+        if let Ok(rename_events) = self.mux.mux.rename_workspace(id, "workspace1".to_string()) {
+            apply_events(
+                &mut self.commands,
+                &mut self.mux,
+                &self.mirror_read,
+                &rename_events,
+            );
+        }
         let ws_ent = self.mux.workspaces[id];
-        self.commands.entity(ws_ent).insert(Name::new("workspace1"));
         let n = self.counter.next();
         self.attach_workspace_named(ws_ent, n);
         ws_ent
@@ -656,6 +671,37 @@ mod tests {
             (collect_changed_children, collect_changed_active_surface),
         );
         app
+    }
+
+    #[test]
+    fn spawn_attached_workspace_renames_the_embedded_fold() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MultiplexerPlugin);
+        app.update();
+
+        let workspace = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| mux.spawn_attached_workspace())
+            .unwrap();
+        app.world_mut().flush();
+
+        let state = app.world().resource::<MuxState>();
+        let ws_id = state
+            .workspace_id_of_entity(workspace)
+            .expect("spawned workspace must map to a WorkspaceId");
+        let fold_name = state
+            .fold
+            .to_snapshot()
+            .workspaces
+            .into_iter()
+            .find(|ws| ws.workspace == ws_id)
+            .map(|ws| ws.name)
+            .expect("fold must hold the renamed workspace");
+        assert_eq!(
+            fold_name, "workspace1",
+            "the rename must be folded into the embedded ClientMirror, not discarded",
+        );
     }
 
     #[test]
