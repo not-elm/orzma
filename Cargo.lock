@@ -4726,6 +4726,7 @@ dependencies = [
  "crossbeam-channel",
  "ozmux_mux",
  "ozmux_proto",
+ "ozmux_vt",
 ]
 
 [[package]]

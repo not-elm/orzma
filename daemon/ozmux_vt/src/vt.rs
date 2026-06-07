@@ -569,6 +569,20 @@ impl Vt {
         }
     }
 
+    /// Builds a full-screen snapshot of the current terminal state on demand
+    /// (for a newly-attached client or lag-resync) without disturbing the delta
+    /// stream's tracking state.
+    pub fn force_snapshot(&mut self, reason: SnapshotReason) -> FrameSnapshot {
+        // NOTE: read-mostly — unlike `emit_snapshot`, this does NOT call
+        //       `rebuild_full_row_hashes`, so `row_hashes` (the delta base shared
+        //       with already-attached observers) is left intact; otherwise the next
+        //       `emit()` delta would be computed against a wrong base and corrupt
+        //       their mirrors. Uses the current `frame_seq` without advancing it
+        //       (the next real frame keeps the shared sequence). Interning into the
+        //       shared `hyperlinks` is idempotent.
+        build_snapshot(&self.term, self.frame_seq, reason, &mut self.hyperlinks)
+    }
+
     fn with_channels(
         cols: u16,
         rows: u16,
@@ -1265,6 +1279,21 @@ mod tests {
         assert!(
             !replies.is_empty(),
             "DSR cursor-position query must produce a reply"
+        );
+    }
+
+    #[test]
+    fn force_snapshot_does_not_disturb_delta_stream() {
+        let now = std::time::Instant::now();
+        let mut vt = Vt::new(80, 24);
+        let _ = vt.on_output(b"line1\r\n", now);
+        let _ = vt.emit();
+        let _snap = vt.force_snapshot(SnapshotReason::Reconnect);
+        let _ = vt.on_output(b"line2\r\n", now);
+        let f = vt.emit().expect("a frame after new output");
+        assert!(
+            matches!(f, Frame::Delta(_)),
+            "force_snapshot must leave the delta base intact, got a {f:?}"
         );
     }
 

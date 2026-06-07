@@ -104,6 +104,16 @@ impl Pty {
     pub fn try_recv_exit(&self) -> Result<Option<i32>, TryRecvError> {
         self.exit_rx.try_recv()
     }
+
+    /// The PTY-output chunk receiver, for `select!`-driven drivers (the daemon).
+    pub fn chunk_receiver(&self) -> &Receiver<Vec<u8>> {
+        &self.chunk_rx
+    }
+
+    /// The child-exit one-shot receiver, for `select!`-driven drivers (the daemon).
+    pub fn exit_receiver(&self) -> &Receiver<Option<i32>> {
+        &self.exit_rx
+    }
 }
 
 impl Drop for Pty {
