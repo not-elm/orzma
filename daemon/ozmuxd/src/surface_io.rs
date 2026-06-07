@@ -123,13 +123,19 @@ fn run_driver(
                 }
                 Ok(DriverCtl::Shutdown) | Err(_) => break,
             },
-            default(timeout) => {
-                if let Some(f) = vt.tick(Instant::now()) {
-                    fan_out(&clients, surface, &f);
-                }
-                let _ = vt.drain_events();
-            }
+            default(timeout) => {}
         }
+        // NOTE: run the deadline/bootstrap flush on EVERY iteration, not just the
+        // `default` arm. Under a gapless firehose `chunk_rx` is always ready, so
+        // `select!` never selects `default`; an armed coalescer window would then
+        // stall until output pauses (the screen freezes). `Vt::tick` is a no-op
+        // when nothing is due, so calling it each iteration is cheap. This is the
+        // daemon's equivalent of plugin.rs running `check_deadline_flush` every
+        // Bevy frame.
+        if let Some(f) = vt.tick(Instant::now()) {
+            fan_out(&clients, surface, &f);
+        }
+        let _ = vt.drain_events();
     }
 }
 
@@ -157,6 +163,40 @@ mod tests {
                 .iter()
                 .any(|dr: &DirtyRow| dr.runs.iter().any(|run| run.text.contains(needle))),
         }
+    }
+
+    #[test]
+    fn driver_keeps_emitting_frames_under_sustained_output() {
+        let pty = Pty::spawn(80, 24, "/bin/sh", None, &[]).unwrap();
+        let vt = Vt::new(80, 24);
+        let (input_tx, ctl_tx, _join) = spawn_driver(SurfaceId::default(), pty, vt);
+        let (frame_tx, frame_rx) = unbounded();
+        ctl_tx
+            .send(DriverCtl::AddClient {
+                id: ClientId(1),
+                frame_tx,
+            })
+            .unwrap();
+        let _ = frame_rx.recv_timeout(Duration::from_secs(3));
+        // Truly gapless firehose: `yes` writes back-to-back 4 KiB chunks with
+        // no inter-chunk pause, so the driver's chunk_rx is always ready.
+        input_tx.send(b"yes PUMPPUMPPUMP\n".to_vec()).unwrap();
+        // Drain whatever is already queued so we measure steady-state cadence.
+        std::thread::sleep(Duration::from_millis(50));
+        while frame_rx.try_recv().is_ok() {}
+        let mut frames = 0u32;
+        let window = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < window {
+            if frame_rx.recv_timeout(Duration::from_millis(100)).is_ok() {
+                frames += 1;
+            }
+        }
+        ctl_tx.send(DriverCtl::Shutdown).unwrap();
+        assert!(
+            frames >= 5,
+            "under sustained output frames must keep flowing (got {frames} in 500 ms); \
+             a stall means the coalescer is never ticked while chunks are continuously ready"
+        );
     }
 
     #[test]
