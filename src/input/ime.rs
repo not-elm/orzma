@@ -12,26 +12,26 @@ use crate::ui::AddressBarFocus;
 use crate::ui::TerminalSurfaceMarker;
 #[cfg(not(feature = "thin-client"))]
 use crate::ui::copy_mode::CopyModeState;
-#[cfg(not(feature = "thin-client"))]
 use bevy::app::Update;
 use bevy::app::{App, Plugin};
-#[cfg(not(feature = "thin-client"))]
 use bevy::ecs::message::MessageReader;
-#[cfg(not(feature = "thin-client"))]
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 #[cfg(not(feature = "thin-client"))]
 use bevy::ecs::schedule::IntoScheduleConfigs;
 #[cfg(not(feature = "thin-client"))]
-use bevy::ecs::system::{Commands, Query, Res, ResMut};
+use bevy::ecs::system::Commands;
+#[cfg(not(feature = "thin-client"))]
+use bevy::ecs::system::Res;
+use bevy::ecs::system::{Query, ResMut};
 #[cfg(not(feature = "thin-client"))]
 use bevy::math::Vec2;
-#[cfg(not(feature = "thin-client"))]
 use bevy::prelude::Entity;
 #[cfg(not(feature = "thin-client"))]
 use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::window::Ime;
 #[cfg(not(feature = "thin-client"))]
-use bevy::window::{Ime, PrimaryWindow, Window};
+use bevy::window::{PrimaryWindow, Window};
 #[cfg(not(feature = "thin-client"))]
 use bevy_cef::prelude::FocusedWebview;
 #[cfg(not(feature = "thin-client"))]
@@ -41,7 +41,8 @@ use bevy_terminal_renderer::TerminalCellMetricsResource;
 #[cfg(not(feature = "thin-client"))]
 use bevy_terminal_renderer::prelude::TerminalGrid;
 #[cfg(not(feature = "thin-client"))]
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
+use ozmux_multiplexer::MultiplexerCommands;
+use ozmux_multiplexer::{AttachedWorkspace, WorkspaceMarker};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before
@@ -55,6 +56,8 @@ impl Plugin for ImePlugin {
         app.init_resource::<ImeState>();
         #[cfg(not(feature = "thin-client"))]
         app.add_systems(Update, (ime_policy_system, read_ime_events).chain());
+        #[cfg(feature = "thin-client")]
+        app.add_systems(Update, read_ime_events);
     }
 }
 
@@ -81,7 +84,6 @@ impl Composition {
     /// represents a clause-selection range (macOS IME during clause
     /// conversion, etc.) and is rendered as a hollow block over the
     /// span by `position_ime_overlay`.
-    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn try_new(text: String, raw_caret: Option<(usize, usize)>) -> Option<Self> {
         if text.is_empty() {
             return None;
@@ -125,7 +127,6 @@ impl ImeState {
         self.0.as_ref()
     }
 
-    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn is_composing(&self) -> bool {
         self.0.is_some()
     }
@@ -138,7 +139,6 @@ impl ImeState {
 /// Keeping this pure makes the state transitions unit-testable without
 /// a Bevy `App` harness; the Bevy system in `read_ime_events` is a thin
 /// wrapper around this.
-#[cfg(not(feature = "thin-client"))]
 pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
     match event {
         Ime::Enabled { .. } => None,
@@ -297,6 +297,41 @@ pub(crate) fn read_ime_events(
                 workspace,
                 TerminalKey::Text(commit_text),
                 TerminalModifiers::default(),
+            );
+        }
+    }
+}
+
+/// Thin-client IME handler: drains `Ime` events, mutates `ImeState`, and sends
+/// `Ime::Commit` text to the daemon as `ClientMessage::Input` over the wire.
+#[cfg(feature = "thin-client")]
+pub(crate) fn read_ime_events(
+    mut conn: bevy::ecs::system::NonSendMut<crate::thin_client::ThinClientConn>,
+    mut state: ResMut<ImeState>,
+    mut events: MessageReader<Ime>,
+    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    active_panes: Query<&ozmux_multiplexer::ActivePane>,
+    active_surfaces: Query<&ozmux_multiplexer::ActiveSurface>,
+    surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
+) {
+    for event in events.read() {
+        if let Some(commit_text) = apply_event(&mut state, event) {
+            let Some(surface_ent) = crate::input::resolve_focused_terminal_readonly(
+                &attached_workspace,
+                &active_panes,
+                &active_surfaces,
+            ) else {
+                continue;
+            };
+            let Ok(surf_id) = surface_ids.get(surface_ent).map(|c| c.0) else {
+                continue;
+            };
+            crate::thin_client::send_cmd(
+                &mut conn,
+                ozmux_proto::ClientMessage::Input {
+                    surface: surf_id,
+                    bytes: commit_text.into_bytes(),
+                },
             );
         }
     }

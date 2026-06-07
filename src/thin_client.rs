@@ -28,6 +28,13 @@ pub(crate) struct ThinDaemon(
 /// shutdown hook (not `Sync`), and is only touched by the main-thread pump.
 pub(crate) struct ThinClientConn(pub(crate) Client<UnixStream>);
 
+/// Sends a command to the in-process daemon, logging (not propagating) send errors.
+pub(crate) fn send_cmd(conn: &mut ThinClientConn, msg: ozmux_proto::ClientMessage) {
+    if let Err(e) = conn.0.send(msg) {
+        error!("thin-client: send {e}");
+    }
+}
+
 /// Runs the GUI as a read-only thin client over an in-process `ozmuxd`.
 pub struct ThinClientMultiplexerPlugin;
 
@@ -46,7 +53,10 @@ impl Plugin for ThinClientMultiplexerPlugin {
         app.insert_resource(state);
         app.insert_resource(ThinDaemon(handle));
         app.insert_non_send_resource(ThinClientConn(client));
-        app.add_systems(Update, pump_thin_client);
+        app.add_systems(
+            Update,
+            pump_thin_client.before(crate::system_set::OzmuxSystems::Input),
+        );
         #[cfg(debug_assertions)]
         app.add_systems(Last, debug_assert_ecs_matches_fold);
     }

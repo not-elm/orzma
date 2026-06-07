@@ -7,55 +7,43 @@ pub(crate) mod ime;
 pub(crate) mod mouse_buttons;
 pub(crate) mod mouse_wheel;
 
-#[cfg(not(feature = "thin-client"))]
 use crate::action::close_pane::ClosePaneActionEvent;
-#[cfg(not(feature = "thin-client"))]
 use crate::action::close_surface::CloseSurfaceActionEvent;
-#[cfg(not(feature = "thin-client"))]
 use crate::action::focus_pane::FocusPaneActionEvent;
-#[cfg(not(feature = "thin-client"))]
 use crate::action::focus_surface::FocusSurfaceActionEvent;
-#[cfg(not(feature = "thin-client"))]
 use crate::action::new_terminal_surface::NewTerminalSurfaceActionEvent;
-#[cfg(not(feature = "thin-client"))]
 use crate::action::split_pane::SplitPaneActionEvent;
-#[cfg(not(feature = "thin-client"))]
 use crate::action::swap_pane::SwapPaneActionEvent;
-#[cfg(not(feature = "thin-client"))]
 use crate::action::workspace::{
     FocusWorkspaceActionEvent, FocusWorkspaceTarget, NewWorkspaceActionEvent,
 };
 #[cfg(not(feature = "thin-client"))]
 use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
-#[cfg(not(feature = "thin-client"))]
 use crate::configs::OzmuxConfigsResource;
-#[cfg(not(feature = "thin-client"))]
 use crate::input::ime::ImeState;
-#[cfg(not(feature = "thin-client"))]
 use crate::input::ime::read_ime_events;
 use crate::system_set::OzmuxSystems;
 #[cfg(not(feature = "thin-client"))]
 use crate::ui::copy_mode::{
     CopyModeState, EnterCopyModeActionEvent, dispatch_key as dispatch_copy_mode_key,
 };
-#[cfg(not(feature = "thin-client"))]
 use bevy::input::ButtonState;
-#[cfg(not(feature = "thin-client"))]
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 #[cfg(not(feature = "thin-client"))]
-use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+use bevy_terminal::TerminalKeyInput;
+#[cfg(feature = "thin-client")]
+use bevy_terminal::encode_key;
+use bevy_terminal::{TerminalKey, TerminalModifiers};
 use ozmux_configs::shortcuts::Modifiers;
-#[cfg(not(feature = "thin-client"))]
 use ozmux_configs::shortcuts::{
     Direction as ConfigDirection, KeyChord, ShortcutAction, SplitDirection,
     SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset, WorkspaceOffset,
 };
-use ozmux_multiplexer::{ActivePane, ActiveSurface, AttachedWorkspace, WorkspaceMarker};
 #[cfg(not(feature = "thin-client"))]
-use ozmux_multiplexer::{
-    CycleDirection, MultiplexerCommands, PaneDirection, SplitOrientation, SwapOffset,
-};
+use ozmux_multiplexer::MultiplexerCommands;
+use ozmux_multiplexer::{ActivePane, ActiveSurface, AttachedWorkspace, WorkspaceMarker};
+use ozmux_multiplexer::{CycleDirection, PaneDirection, SplitOrientation, SwapOffset};
 #[cfg(not(feature = "thin-client"))]
 use std::collections::HashSet;
 
@@ -113,6 +101,14 @@ impl Plugin for OzmuxShortcutPlugin {
                 .in_set(OzmuxSystems::Input),
         );
         #[cfg(not(feature = "thin-client"))]
+        app.add_systems(
+            Update,
+            dispatch_focused_key
+                .run_if(not(is_ime_composing))
+                .in_set(InputPhase::FocusedKey)
+                .after(read_ime_events),
+        );
+        #[cfg(feature = "thin-client")]
         app.add_systems(
             Update,
             dispatch_focused_key
@@ -242,6 +238,83 @@ pub(crate) fn dispatch_focused_key(
     }
 }
 
+/// Thin-client keyboard dispatcher: encodes terminal keys to PTY bytes and
+/// sends them as `ClientMessage::Input` over the wire; shortcut chords fire
+/// the shared `crate::action::*` events (the cfg-split observers send them).
+/// Mirrors the local `dispatch_focused_key` minus the LOCAL-only Escape-snap
+/// (the daemon snaps on `Input`) and copy-mode dispatch (deferred to 4c-1c).
+#[cfg(feature = "thin-client")]
+pub(crate) fn dispatch_focused_key(
+    mut conn: bevy::ecs::system::NonSendMut<crate::thin_client::ThinClientConn>,
+    mut commands: Commands,
+    mut events: MessageReader<KeyboardInput>,
+    windows: Query<&Window>,
+    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    active_panes: Query<&ActivePane>,
+    active_surfaces: Query<&ActiveSurface>,
+    surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
+    grids: Query<&bevy_terminal_renderer::prelude::TerminalGrid>,
+    keys: Res<ButtonInput<KeyCode>>,
+    configs: Res<OzmuxConfigsResource>,
+) {
+    let bindings = &configs.shortcuts.bindings;
+    let mods = current_modifiers(&keys);
+    for ev in events.read() {
+        if ev.state != ButtonState::Pressed {
+            continue;
+        }
+        let Ok(win) = windows.get(ev.window) else {
+            continue;
+        };
+        if !win.focused {
+            continue;
+        }
+        let Ok(workspace) = attached_workspace.single() else {
+            continue;
+        };
+        if is_modifier_only_key(&ev.logical_key) {
+            continue;
+        }
+        if let Some(input_key) = bevy_to_configs_key(&ev.logical_key) {
+            let chord = KeyChord {
+                key: input_key,
+                modifiers: mods.clone(),
+            };
+            if let Some(action) = bindings.lookup(&chord) {
+                if ev.repeat {
+                    continue;
+                }
+                fire_action_event(&mut commands, &action, workspace);
+                continue;
+            }
+        }
+        let Some(surface_ent) =
+            resolve_focused_terminal_readonly(&attached_workspace, &active_panes, &active_surfaces)
+        else {
+            continue;
+        };
+        let Ok(surf_id) = surface_ids.get(surface_ent).map(|c| c.0) else {
+            continue;
+        };
+        let app_cursor = grids
+            .get(surface_ent)
+            .map(|g| g.modes.iter().any(|m| m == "app-cursor-keys"))
+            .unwrap_or(false);
+        if let Some(tk) = bevy_to_terminal_key(&ev.logical_key) {
+            let tmods = shortcut_mods_to_terminal_mods(&mods);
+            if let Some(bytes) = encode_key(&tk, &tmods, app_cursor) {
+                crate::thin_client::send_cmd(
+                    &mut conn,
+                    ozmux_proto::ClientMessage::Input {
+                        surface: surf_id,
+                        bytes,
+                    },
+                );
+            }
+        }
+    }
+}
+
 pub(crate) fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
     Modifiers {
         ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
@@ -251,7 +324,6 @@ pub(crate) fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
     }
 }
 
-#[cfg(not(feature = "thin-client"))]
 fn is_modifier_only_key(key: &Key) -> bool {
     matches!(
         key,
@@ -267,7 +339,6 @@ fn is_modifier_only_key(key: &Key) -> bool {
     )
 }
 
-#[cfg(not(feature = "thin-client"))]
 fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
     use ozmux_configs::shortcuts::Key as CKey;
     Some(match key {
@@ -322,6 +393,57 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
     })
 }
 
+/// Fires the action `EntityEvent` for a layout/workspace `ShortcutAction`,
+/// returning `true` when it handled the action. Copy/Paste/EnterCopyMode and
+/// not-yet-implemented variants return `false` (the caller handles or ignores
+/// them). Shared by the local and thin-client dispatchers.
+fn fire_action_event(commands: &mut Commands, action: &ShortcutAction, workspace: Entity) -> bool {
+    match action {
+        ShortcutAction::NewWorkspace => commands.trigger(NewWorkspaceActionEvent { workspace }),
+        ShortcutAction::FocusWorkspace { offset } => commands.trigger(FocusWorkspaceActionEvent {
+            workspace,
+            target: match offset {
+                WorkspaceOffset::Next => FocusWorkspaceTarget::Next,
+                WorkspaceOffset::Prev => FocusWorkspaceTarget::Prev,
+                WorkspaceOffset::Last => FocusWorkspaceTarget::Last,
+            },
+        }),
+        ShortcutAction::FocusWorkspaceNumber { index } => {
+            commands.trigger(FocusWorkspaceActionEvent {
+                workspace,
+                target: FocusWorkspaceTarget::Number(*index),
+            })
+        }
+        ShortcutAction::SplitPane { direction } => commands.trigger(SplitPaneActionEvent {
+            workspace,
+            orientation: split_orientation(direction.clone()),
+        }),
+        ShortcutAction::NewTerminalSurface => {
+            commands.trigger(NewTerminalSurfaceActionEvent { workspace })
+        }
+        ShortcutAction::FocusPane { direction } => commands.trigger(FocusPaneActionEvent {
+            workspace,
+            direction: focus_direction(direction.clone()),
+        }),
+        ShortcutAction::FocusSurface { offset } => {
+            if let Some(direction) = cycle_direction(offset.clone()) {
+                commands.trigger(FocusSurfaceActionEvent {
+                    workspace,
+                    direction,
+                });
+            }
+        }
+        ShortcutAction::SwapPane { offset } => commands.trigger(SwapPaneActionEvent {
+            workspace,
+            offset: swap_offset(offset.clone()),
+        }),
+        ShortcutAction::ClosePane => commands.trigger(ClosePaneActionEvent { workspace }),
+        ShortcutAction::CloseSurface => commands.trigger(CloseSurfaceActionEvent { workspace }),
+        _ => return false,
+    }
+    true
+}
+
 /// Executes a resolved `ShortcutAction` for the given workspace entity by
 /// triggering the matching action `EntityEvent`.
 ///
@@ -336,30 +458,14 @@ fn execute_action(
     action: ShortcutAction,
     workspace: Entity,
 ) {
+    if fire_action_event(commands, &action, workspace) {
+        return;
+    }
     match &action {
         ShortcutAction::EnterCopyMode => {
             if let Some(entity) = resolve_active_surface_entity(mux, workspace) {
                 commands.trigger(EnterCopyModeActionEvent { entity });
             }
-        }
-        ShortcutAction::NewWorkspace => {
-            commands.trigger(NewWorkspaceActionEvent { workspace });
-        }
-        ShortcutAction::FocusWorkspace { offset } => {
-            commands.trigger(FocusWorkspaceActionEvent {
-                workspace,
-                target: match offset {
-                    WorkspaceOffset::Next => FocusWorkspaceTarget::Next,
-                    WorkspaceOffset::Prev => FocusWorkspaceTarget::Prev,
-                    WorkspaceOffset::Last => FocusWorkspaceTarget::Last,
-                },
-            });
-        }
-        ShortcutAction::FocusWorkspaceNumber { index } => {
-            commands.trigger(FocusWorkspaceActionEvent {
-                workspace,
-                target: FocusWorkspaceTarget::Number(*index),
-            });
         }
         ShortcutAction::Copy => {
             if let Some(entity) = resolve_active_surface_entity(mux, workspace) {
@@ -370,41 +476,6 @@ fn execute_action(
             if let Some(entity) = resolve_active_surface_entity(mux, workspace) {
                 commands.trigger(PasteFromClipboardActionEvent { entity });
             }
-        }
-        ShortcutAction::SplitPane { direction } => {
-            commands.trigger(SplitPaneActionEvent {
-                workspace,
-                orientation: split_orientation(direction.clone()),
-            });
-        }
-        ShortcutAction::NewTerminalSurface => {
-            commands.trigger(NewTerminalSurfaceActionEvent { workspace });
-        }
-        ShortcutAction::FocusPane { direction } => {
-            commands.trigger(FocusPaneActionEvent {
-                workspace,
-                direction: focus_direction(direction.clone()),
-            });
-        }
-        ShortcutAction::FocusSurface { offset } => {
-            if let Some(direction) = cycle_direction(offset.clone()) {
-                commands.trigger(FocusSurfaceActionEvent {
-                    workspace,
-                    direction,
-                });
-            }
-        }
-        ShortcutAction::SwapPane { offset } => {
-            commands.trigger(SwapPaneActionEvent {
-                workspace,
-                offset: swap_offset(offset.clone()),
-            });
-        }
-        ShortcutAction::ClosePane => {
-            commands.trigger(ClosePaneActionEvent { workspace });
-        }
-        ShortcutAction::CloseSurface => {
-            commands.trigger(CloseSurfaceActionEvent { workspace });
         }
         other => tracing::debug!(
             target: "ozmux_gui::input",
@@ -424,7 +495,6 @@ fn resolve_active_surface_entity(mux: &MultiplexerCommands, workspace: Entity) -
     mux.panes_active_surface(pane)
 }
 
-#[cfg(not(feature = "thin-client"))]
 fn split_orientation(d: SplitDirection) -> SplitOrientation {
     match d {
         SplitDirection::Horizontal => SplitOrientation::Horizontal,
@@ -432,7 +502,6 @@ fn split_orientation(d: SplitDirection) -> SplitOrientation {
     }
 }
 
-#[cfg(not(feature = "thin-client"))]
 fn focus_direction(d: ConfigDirection) -> PaneDirection {
     match d {
         ConfigDirection::Up => PaneDirection::Up,
@@ -442,7 +511,6 @@ fn focus_direction(d: ConfigDirection) -> PaneDirection {
     }
 }
 
-#[cfg(not(feature = "thin-client"))]
 fn swap_offset(o: ConfigSwapOffset) -> SwapOffset {
     match o {
         ConfigSwapOffset::Prev => SwapOffset::Prev,
@@ -450,7 +518,6 @@ fn swap_offset(o: ConfigSwapOffset) -> SwapOffset {
     }
 }
 
-#[cfg(not(feature = "thin-client"))]
 fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
     match o {
         ConfigSurfaceOffset::Next => Some(CycleDirection::Next),
@@ -463,7 +530,6 @@ fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
 /// `bevy_terminal` codec accepts. Returns `None` for keys the terminal
 /// does not consume (F-keys, modifier-only keys, etc. — those keys are
 /// silently dropped).
-#[cfg(not(feature = "thin-client"))]
 fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
     Some(match key {
         Key::Character(s) => TerminalKey::Text(s.to_string()),
@@ -488,7 +554,6 @@ fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
 /// Converts shortcut-layer `Modifiers` into the `TerminalModifiers` carried
 /// on the `TerminalKeyInput` EntityEvent. MVP only reads `ctrl` on the
 /// receiving side; the other fields are forwarded for future use.
-#[cfg(not(feature = "thin-client"))]
 fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
     TerminalModifiers {
         ctrl: m.ctrl,
@@ -524,7 +589,6 @@ fn forward_to_active_terminal(
     });
 }
 
-#[cfg(not(feature = "thin-client"))]
 fn is_ime_composing(ime_state: Res<ImeState>) -> bool {
     ime_state.is_composing()
 }
