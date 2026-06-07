@@ -9,7 +9,7 @@ use ozmux_multiplexer::{
     AttachedWorkspace, MirrorReadCtx, MuxState, SessionSnapshot, WorkspaceCreatedAt, apply_events,
     build_from_snapshot,
 };
-use ozmux_proto::{Client, Frame, ServerMessage, SurfaceId, VtEvent};
+use ozmux_proto::{Client, Frame, MuxEvent, ServerMessage, SurfaceId, VtEvent};
 use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
@@ -27,6 +27,12 @@ pub(crate) struct ThinDaemon(
 /// The wire client. NonSend because `Client` holds a `Box<dyn FnOnce()+Send>`
 /// shutdown hook (not `Sync`), and is only touched by the main-thread pump.
 pub(crate) struct ThinClientConn(pub(crate) Client<UnixStream>);
+
+/// One-shot focus requests: when a `SpawnSurface` we sent folds back as
+/// `SurfaceSpawned { pane }`, focus the new surface. Keyed by pane; first match
+/// wins (single in-process client — daemon-initiated spawns aren't distinguished).
+#[derive(Resource, Default)]
+pub(crate) struct PendingFocus(pub(crate) std::collections::HashSet<ozmux_proto::PaneId>);
 
 /// Sends a command to the in-process daemon, logging (not propagating) send errors.
 pub(crate) fn send_cmd(conn: &mut ThinClientConn, msg: ozmux_proto::ClientMessage) {
@@ -51,6 +57,7 @@ impl Plugin for ThinClientMultiplexerPlugin {
         }
         queue.apply(app.world_mut());
         app.insert_resource(state);
+        app.init_resource::<PendingFocus>();
         app.insert_resource(ThinDaemon(handle));
         app.insert_non_send_resource(ThinClientConn(client));
         app.add_systems(
@@ -70,7 +77,9 @@ fn pump_thin_client(
     mut conn: NonSendMut<ThinClientConn>,
     mut state: ResMut<MuxState>,
     mut grids: Query<&mut TerminalGrid>,
+    mut pending: ResMut<PendingFocus>,
     read: MirrorReadCtx,
+    attached_q: Query<Entity, With<AttachedWorkspace>>,
 ) {
     let mut budget = 256u32;
     while budget > 0 {
@@ -86,6 +95,30 @@ fn pump_thin_client(
         match msg {
             ServerMessage::Events(batch) => {
                 apply_events(&mut commands, &mut state, &read, &batch);
+                for ev in &batch {
+                    match ev {
+                        MuxEvent::SurfaceSpawned { pane, surface, .. }
+                            if pending.0.remove(pane) =>
+                        {
+                            send_cmd(
+                                &mut conn,
+                                ozmux_proto::ClientMessage::SetActiveSurface {
+                                    pane: *pane,
+                                    surface: *surface,
+                                },
+                            );
+                        }
+                        MuxEvent::WorkspaceSelected { workspace, .. } => {
+                            if let Some(ws_ent) = state.workspace_entity(*workspace) {
+                                for holder in attached_q.iter() {
+                                    commands.entity(holder).remove::<AttachedWorkspace>();
+                                }
+                                commands.entity(ws_ent).insert(AttachedWorkspace);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             ServerMessage::Frame { surface, frame } => {
                 if let Some(ent) = state.surface_entity(surface) {

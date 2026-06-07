@@ -26,9 +26,12 @@ pub struct FocusSurfaceActionEvent {
 fn apply_focus_surface(
     trigger: On<FocusSurfaceActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
+    #[cfg(feature = "thin-client")] query: ozmux_multiplexer::MultiplexerQuery,
+    #[cfg(feature = "thin-client")] pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
+    #[cfg(feature = "thin-client")] surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
 ) {
     #[cfg(not(feature = "thin-client"))]
     {
@@ -68,8 +71,41 @@ fn apply_focus_surface(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::FocusSurface over the wire.
-        let _ = &trigger;
+        let FocusSurfaceActionEvent {
+            workspace,
+            direction,
+        } = trigger.event();
+        let Some(active_pane) = query.workspaces_active_pane(*workspace) else {
+            return;
+        };
+        let Some(active_surface) = query.panes_active_surface(active_pane) else {
+            return;
+        };
+        let surfaces: Vec<Entity> = query.surfaces_of_pane(active_pane).collect();
+        if surfaces.len() < 2 {
+            return;
+        }
+        let i = surfaces
+            .iter()
+            .position(|a| *a == active_surface)
+            .unwrap_or(0);
+        let len = surfaces.len() as isize;
+        let delta: isize = match *direction {
+            CycleDirection::Next => 1,
+            CycleDirection::Prev => -1,
+        };
+        let j = ((i as isize + delta).rem_euclid(len)) as usize;
+        let target = surfaces[j];
+        let Ok(pane) = pane_ids.get(active_pane).map(|c| c.0) else {
+            return;
+        };
+        let Ok(surface) = surface_ids.get(target).map(|c| c.0) else {
+            return;
+        };
+        crate::thin_client::send_cmd(
+            &mut conn,
+            ozmux_proto::ClientMessage::SetActiveSurface { pane, surface },
+        );
     }
 }
 

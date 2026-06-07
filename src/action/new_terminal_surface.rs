@@ -27,10 +27,13 @@ pub struct NewTerminalSurfaceActionEvent {
 fn apply_new_terminal_surface(
     trigger: On<NewTerminalSurfaceActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(not(feature = "thin-client"))] mut commands: Commands,
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
-    mut commands: Commands,
+    #[cfg(feature = "thin-client")] mut pending: ResMut<crate::thin_client::PendingFocus>,
+    #[cfg(feature = "thin-client")] query: ozmux_multiplexer::MultiplexerQuery,
+    #[cfg(feature = "thin-client")] pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
     cwds: Query<&Cwd>,
 ) {
     #[cfg(not(feature = "thin-client"))]
@@ -53,8 +56,26 @@ fn apply_new_terminal_surface(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::NewSurface over the wire.
-        let _ = (&trigger, &mut commands, &cwds);
+        let NewTerminalSurfaceActionEvent { workspace } = trigger.event();
+        let Some(active_pane) = query.workspaces_active_pane(*workspace) else {
+            return;
+        };
+        let Ok(pane) = pane_ids.get(active_pane).map(|c| c.0) else {
+            return;
+        };
+        let cwd = query
+            .panes_active_surface(active_pane)
+            .and_then(|s| cwds.get(s).ok())
+            .map(|c| c.0.clone());
+        crate::thin_client::send_cmd(
+            &mut conn,
+            ozmux_proto::ClientMessage::SpawnSurface {
+                pane,
+                kind: ozmux_proto::SurfaceKind::Terminal,
+                cwd,
+            },
+        );
+        pending.0.insert(pane);
     }
 }
 

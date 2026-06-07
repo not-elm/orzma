@@ -29,10 +29,12 @@ pub struct SplitPaneActionEvent {
 fn apply_split(
     trigger: On<SplitPaneActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(not(feature = "thin-client"))] mut commands: Commands,
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
-    mut commands: Commands,
+    #[cfg(feature = "thin-client")] query: ozmux_multiplexer::MultiplexerQuery,
+    #[cfg(feature = "thin-client")] pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
     cwds: Query<&Cwd>,
 ) {
     #[cfg(not(feature = "thin-client"))]
@@ -64,8 +66,38 @@ fn apply_split(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::Split over the wire.
-        let _ = (&trigger, &mut commands, &cwds);
+        let SplitPaneActionEvent {
+            workspace,
+            orientation,
+        } = trigger.event();
+        let Some(active_pane) = query.workspaces_active_pane(*workspace) else {
+            return;
+        };
+        let Ok(pane) = pane_ids.get(active_pane).map(|c| c.0) else {
+            return;
+        };
+        let cwd = query
+            .panes_active_surface(active_pane)
+            .and_then(|s| cwds.get(s).ok())
+            .map(|c| c.0.clone());
+        crate::thin_client::send_cmd(
+            &mut conn,
+            ozmux_proto::ClientMessage::Split {
+                pane,
+                orientation: split_orientation_to_wire(*orientation),
+                side: ozmux_proto::Side::After,
+                kind: ozmux_proto::SurfaceKind::Terminal,
+                cwd,
+            },
+        );
+    }
+}
+
+#[cfg(feature = "thin-client")]
+fn split_orientation_to_wire(o: SplitOrientation) -> ozmux_proto::SplitOrientation {
+    match o {
+        SplitOrientation::Horizontal => ozmux_proto::SplitOrientation::Horizontal,
+        SplitOrientation::Vertical => ozmux_proto::SplitOrientation::Vertical,
     }
 }
 

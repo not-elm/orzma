@@ -57,11 +57,14 @@ pub enum FocusWorkspaceTarget {
 fn apply_new_workspace(
     _trigger: On<NewWorkspaceActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(not(feature = "thin-client"))] mut commands: Commands,
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
-    mut commands: Commands,
-    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    #[cfg(not(feature = "thin-client"))] attached_workspace: Query<
+        Entity,
+        (With<WorkspaceMarker>, With<AttachedWorkspace>),
+    >,
 ) {
     #[cfg(not(feature = "thin-client"))]
     {
@@ -93,18 +96,21 @@ fn apply_new_workspace(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::NewWorkspace over the wire.
-        let _ = (&mut commands, &attached_workspace);
+        crate::thin_client::send_cmd(
+            &mut conn,
+            ozmux_proto::ClientMessage::CreateWorkspace { name: None },
+        );
     }
 }
 
 fn apply_focus_workspace(
     trigger: On<FocusWorkspaceActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(not(feature = "thin-client"))] mut commands: Commands,
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
-    mut commands: Commands,
+    #[cfg(feature = "thin-client")] workspace_ids: Query<&ozmux_multiplexer::MuxWorkspaceId>,
     workspaces: Query<(Entity, Option<&WorkspaceCreatedAt>), With<WorkspaceMarker>>,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
 ) {
@@ -159,8 +165,44 @@ fn apply_focus_workspace(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::FocusWorkspace over the wire.
-        let _ = (&trigger, &mut commands, &workspaces, &attached_workspace);
+        let mut pairs: Vec<(Entity, u32)> = workspaces
+            .iter()
+            .map(|(e, created)| (e, created.map(|c| c.0).unwrap_or(u32::MAX)))
+            .collect();
+        if pairs.len() < 2 {
+            return;
+        }
+        pairs.sort_by_key(|(_, c)| *c);
+        let entries: Vec<Entity> = pairs.into_iter().map(|(e, _)| e).collect();
+        let Ok(current_entity) = attached_workspace.single() else {
+            return;
+        };
+        let Some(current_idx) = entries.iter().position(|e| *e == current_entity) else {
+            return;
+        };
+        let target_idx = match trigger.event().target {
+            FocusWorkspaceTarget::Next => (current_idx + 1) % entries.len(),
+            FocusWorkspaceTarget::Prev => current_idx.checked_sub(1).unwrap_or(entries.len() - 1),
+            FocusWorkspaceTarget::Last => return,
+            FocusWorkspaceTarget::Number(index) => {
+                let i = index as usize;
+                if i >= entries.len() {
+                    return;
+                }
+                i
+            }
+        };
+        let target_entity = entries[target_idx];
+        if target_entity == current_entity {
+            return;
+        }
+        let Ok(workspace) = workspace_ids.get(target_entity).map(|c| c.0) else {
+            return;
+        };
+        crate::thin_client::send_cmd(
+            &mut conn,
+            ozmux_proto::ClientMessage::SelectWorkspace { workspace },
+        );
     }
 }
 

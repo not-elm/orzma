@@ -26,9 +26,11 @@ pub struct FocusPaneActionEvent {
 fn apply_focus_pane(
     trigger: On<FocusPaneActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
+    #[cfg(feature = "thin-client")] query: ozmux_multiplexer::MultiplexerQuery,
+    #[cfg(feature = "thin-client")] pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
 ) {
     #[cfg(not(feature = "thin-client"))]
     {
@@ -47,8 +49,30 @@ fn apply_focus_pane(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::FocusPane over the wire.
-        let _ = &trigger;
+        let event = trigger.event();
+        let Some(from) = query.workspaces_active_pane(event.workspace) else {
+            return;
+        };
+        let Ok(pane) = pane_ids.get(from).map(|c| c.0) else {
+            return;
+        };
+        crate::thin_client::send_cmd(
+            &mut conn,
+            ozmux_proto::ClientMessage::Navigate {
+                pane,
+                direction: pane_direction_to_wire(event.direction),
+            },
+        );
+    }
+}
+
+#[cfg(feature = "thin-client")]
+fn pane_direction_to_wire(d: PaneDirection) -> ozmux_proto::PaneDirection {
+    match d {
+        PaneDirection::Up => ozmux_proto::PaneDirection::Up,
+        PaneDirection::Down => ozmux_proto::PaneDirection::Down,
+        PaneDirection::Left => ozmux_proto::PaneDirection::Left,
+        PaneDirection::Right => ozmux_proto::PaneDirection::Right,
     }
 }
 

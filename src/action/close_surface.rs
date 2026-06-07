@@ -24,9 +24,11 @@ pub struct CloseSurfaceActionEvent {
 fn apply_close_surface(
     trigger: On<CloseSurfaceActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
+    #[cfg(feature = "thin-client")] query: ozmux_multiplexer::MultiplexerQuery,
+    #[cfg(feature = "thin-client")] pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
 ) {
     #[cfg(not(feature = "thin-client"))]
     {
@@ -56,8 +58,18 @@ fn apply_close_surface(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::CloseSurface over the wire.
-        let _ = &trigger;
+        let CloseSurfaceActionEvent { workspace } = trigger.event();
+        let Some(active_pane) = query.workspaces_active_pane(*workspace) else {
+            return;
+        };
+        // TODO: multi-surface close deferred to Task 16 (matches the local path).
+        if query.surfaces_of_pane(active_pane).count() > 1 {
+            return;
+        }
+        let Ok(pane) = pane_ids.get(active_pane).map(|c| c.0) else {
+            return;
+        };
+        crate::thin_client::send_cmd(&mut conn, ozmux_proto::ClientMessage::Close { pane });
     }
 }
 

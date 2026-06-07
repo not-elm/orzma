@@ -26,9 +26,11 @@ pub struct SwapPaneActionEvent {
 fn apply_swap_pane(
     trigger: On<SwapPaneActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
+    #[cfg(feature = "thin-client")] query: ozmux_multiplexer::MultiplexerQuery,
+    #[cfg(feature = "thin-client")] pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
 ) {
     #[cfg(not(feature = "thin-client"))]
     {
@@ -43,8 +45,28 @@ fn apply_swap_pane(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::SwapPane over the wire.
-        let _ = &trigger;
+        let SwapPaneActionEvent { workspace, offset } = trigger.event();
+        let Some(active_pane) = query.workspaces_active_pane(*workspace) else {
+            return;
+        };
+        let Ok(pane) = pane_ids.get(active_pane).map(|c| c.0) else {
+            return;
+        };
+        crate::thin_client::send_cmd(
+            &mut conn,
+            ozmux_proto::ClientMessage::SwapPane {
+                pane,
+                offset: swap_offset_to_wire(*offset),
+            },
+        );
+    }
+}
+
+#[cfg(feature = "thin-client")]
+fn swap_offset_to_wire(o: SwapOffset) -> ozmux_proto::SwapOffset {
+    match o {
+        SwapOffset::Prev => ozmux_proto::SwapOffset::Prev,
+        SwapOffset::Next => ozmux_proto::SwapOffset::Next,
     }
 }
 

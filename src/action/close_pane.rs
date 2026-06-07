@@ -23,9 +23,11 @@ pub struct ClosePaneActionEvent {
 fn apply_close_pane(
     trigger: On<ClosePaneActionEvent>,
     #[cfg(not(feature = "thin-client"))] mut mux: MultiplexerCommands,
-    #[cfg(feature = "thin-client")] _conn: bevy::ecs::system::NonSendMut<
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
         crate::thin_client::ThinClientConn,
     >,
+    #[cfg(feature = "thin-client")] query: ozmux_multiplexer::MultiplexerQuery,
+    #[cfg(feature = "thin-client")] pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
 ) {
     #[cfg(not(feature = "thin-client"))]
     {
@@ -40,8 +42,14 @@ fn apply_close_pane(
     }
     #[cfg(feature = "thin-client")]
     {
-        // TODO(T5): send ClientMessage::ClosePane over the wire.
-        let _ = &trigger;
+        let ClosePaneActionEvent { workspace } = trigger.event();
+        let Some(active_pane) = query.workspaces_active_pane(*workspace) else {
+            return;
+        };
+        let Ok(pane) = pane_ids.get(active_pane).map(|c| c.0) else {
+            return;
+        };
+        crate::thin_client::send_cmd(&mut conn, ozmux_proto::ClientMessage::Close { pane });
     }
 }
 
