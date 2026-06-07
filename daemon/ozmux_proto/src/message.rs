@@ -2,7 +2,7 @@
 
 use ozmux_mux::{
     MuxEvent, PaneDirection, PaneId, SessionSnapshot, Side, SplitOrientation, SurfaceId,
-    SurfaceKind, WorkspaceId,
+    SurfaceKind, SwapOffset, WorkspaceId,
 };
 use ozmux_vt::event::VtEvent;
 use ozmux_vt::frame::Frame;
@@ -58,6 +58,13 @@ pub enum ClientMessage {
         workspace: WorkspaceId,
         /// The pane to activate.
         pane: PaneId,
+    },
+    /// Swap a pane with its prev/next neighbor in the layout.
+    SwapPane {
+        /// The pane to swap.
+        pane: PaneId,
+        /// Which neighbor to swap with.
+        offset: SwapOffset,
     },
     /// Spawn a surface in a pane.
     SpawnSurface {

@@ -59,7 +59,7 @@ mod tests {
     use crate::message::{ClientMessage, ServerMessage};
     use ozmux_mux::{
         MuxEvent, PaneDirection, PaneId, Side, SplitOrientation, SurfaceId, SurfaceKind,
-        WorkspaceId,
+        SwapOffset, WorkspaceId,
     };
     use ozmux_vt::color::RgbaColor;
     use ozmux_vt::event::VtEvent;
@@ -95,6 +95,10 @@ mod tests {
             ClientMessage::SetActivePane {
                 workspace: WorkspaceId::default(),
                 pane: PaneId::default(),
+            },
+            ClientMessage::SwapPane {
+                pane: PaneId::default(),
+                offset: SwapOffset::Next,
             },
             ClientMessage::SpawnSurface {
                 pane: PaneId::default(),

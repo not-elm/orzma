@@ -2,7 +2,9 @@
 //! reconstructs the daemon state; broadcast, version-mismatch, and disconnect
 //! are exercised end-to-end.
 
-use ozmux_mux::{PaneDirection, Side, SplitOrientation, SurfaceKind};
+use ozmux_mux::{
+    LayoutNode, PaneDirection, PaneId, Side, SplitOrientation, SurfaceKind, SwapOffset,
+};
 use ozmux_proto::{
     Client, ClientMessage, PROTOCOL_VERSION, ServerMessage, read_message, write_message,
 };
@@ -105,6 +107,73 @@ fn command_broadcast_reconstructs_server_snapshot() {
 
     let server_snap = server.snapshot().expect("server snapshot");
     assert_eq!(client.mirror().to_snapshot(), server_snap);
+    drop(server);
+}
+
+fn leaf_panes(node: &LayoutNode, out: &mut Vec<PaneId>) {
+    match node {
+        LayoutNode::Split { first, second, .. } => {
+            leaf_panes(first, out);
+            leaf_panes(second, out);
+        }
+        LayoutNode::Pane { id, .. } => out.push(*id),
+    }
+}
+
+fn dfs_pane_order(layout: &LayoutNode) -> Vec<PaneId> {
+    let mut out = Vec::new();
+    leaf_panes(layout, &mut out);
+    out
+}
+
+#[test]
+fn swap_pane_swaps_neighbor_order() {
+    let path = sock("swap");
+    let server = Server::new().serve(&path).unwrap();
+    let mut client = connect(&path, (80, 24));
+    drain(&mut client);
+
+    let pane_a = client.mirror().to_snapshot().workspaces[0]
+        .active_pane
+        .unwrap();
+    client
+        .send(ClientMessage::Split {
+            pane: pane_a,
+            orientation: SplitOrientation::Horizontal,
+            side: Side::After,
+            kind: SurfaceKind::Terminal,
+            cwd: None,
+        })
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    drain(&mut client);
+
+    let order_before = dfs_pane_order(&client.mirror().to_snapshot().workspaces[0].layout);
+    assert_eq!(order_before.len(), 2, "split produced two leaf panes");
+    assert_eq!(
+        order_before[0], pane_a,
+        "pane_a is first (split side After)"
+    );
+    let pane_b = order_before[1];
+
+    client
+        .send(ClientMessage::SwapPane {
+            pane: pane_a,
+            offset: SwapOffset::Next,
+        })
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    drain(&mut client);
+
+    let order_after = dfs_pane_order(&client.mirror().to_snapshot().workspaces[0].layout);
+    assert_ne!(order_before, order_after, "swap reordered the panes");
+    assert_eq!(
+        order_after,
+        vec![pane_b, pane_a],
+        "SwapPane(Next) reversed the pair"
+    );
+
+    assert_eq!(client.mirror().to_snapshot(), server.snapshot().unwrap());
     drop(server);
 }
 

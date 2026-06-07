@@ -33,6 +33,7 @@ impl ClientMirror {
         ) {
             for ws in &mut self.session.workspaces {
                 prune_panes(ws);
+                reorder_panes_to_layout(ws);
             }
         }
     }
@@ -50,6 +51,7 @@ impl ClientMirror {
         }
         for ws in &mut self.session.workspaces {
             prune_panes(ws);
+            reorder_panes_to_layout(ws);
         }
     }
 
@@ -376,6 +378,33 @@ fn prune_panes(ws: &mut WorkspaceSnapshot) {
     collect_node_ids(&ws.layout, &mut live_ids);
     ws.panes
         .retain(|p| live_ids.contains(&NodeId::Pane(p.pane)));
+}
+
+/// Appends the DFS leaf-pane ids of `node` to `out` (left/top before
+/// right/bottom), matching `Mux::ordered_panes`.
+fn dfs_leaf_panes(node: &LayoutNode, out: &mut Vec<PaneId>) {
+    match node {
+        LayoutNode::Split { first, second, .. } => {
+            dfs_leaf_panes(first, out);
+            dfs_leaf_panes(second, out);
+        }
+        LayoutNode::Pane { id, .. } => out.push(*id),
+    }
+}
+
+/// Reorders `ws.panes` into the layout's DFS leaf order so the mirror's pane
+/// list matches the server's `ordered_panes`-built snapshot. A swap reorders
+/// existing leaves without adding or removing any, so without this the mirror's
+/// pane Vec would diverge from the server purely in order.
+fn reorder_panes_to_layout(ws: &mut WorkspaceSnapshot) {
+    let mut order = Vec::with_capacity(ws.panes.len());
+    dfs_leaf_panes(&ws.layout, &mut order);
+    ws.panes.sort_by_key(|p| {
+        order
+            .iter()
+            .position(|id| *id == p.pane)
+            .unwrap_or(usize::MAX)
+    });
 }
 
 /// Applies `replace_node` at the workspace root level, falling back to

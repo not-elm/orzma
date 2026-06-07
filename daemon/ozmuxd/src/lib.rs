@@ -292,6 +292,7 @@ impl Server {
             ClientMessage::Close { pane } => self.mux.close_pane(pane),
             ClientMessage::Navigate { pane, direction } => self.mux.navigate(pane, direction),
             ClientMessage::SetActivePane { pane, .. } => self.mux.focus_pane(pane),
+            ClientMessage::SwapPane { pane, offset } => self.mux.swap_pane(pane, offset),
             ClientMessage::SpawnSurface { pane, kind, cwd } => {
                 self.mux.spawn_surface(pane, kind, cwd)
             }
