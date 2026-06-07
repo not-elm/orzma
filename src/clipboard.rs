@@ -108,7 +108,7 @@ impl Clipboard {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "thin-client")))]
     pub(crate) fn is_available_for_test(&self) -> bool {
         self.0.is_some()
     }

@@ -1,7 +1,3 @@
-use crate::{
-    glyph::TerminalGlyphPlugin, grid::TerminalGridPlugin, material::TerminalMaterialPlugin,
-    schema::HyperlinkHoverState,
-};
 use bevy::prelude::*;
 
 mod bundle;
@@ -14,6 +10,10 @@ pub mod schema;
 pub use crate::glyph::font::{
     CellMetrics, FONT_SIZE_PX, FontFace, FontLoadError, TerminalCellMetricsResource,
     TerminalFontInitSet, TerminalFontPlugin, TerminalFonts,
+};
+pub use crate::grid::TerminalGridPlugin;
+use crate::{
+    glyph::TerminalGlyphPlugin, material::TerminalMaterialPlugin, schema::HyperlinkHoverState,
 };
 
 pub mod prelude {

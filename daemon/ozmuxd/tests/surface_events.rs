@@ -110,6 +110,102 @@ fn osc_cwd(path: &str) -> Vec<u8> {
     format!("\x1b]7;file://localhost{path}\x07").into_bytes()
 }
 
+/// Scans a `Frame`'s rows/runs for `needle` (both Snapshot.rows_data and Delta.dirty_rows).
+fn frame_contains(frame: &ozmux_vt::frame::Frame, needle: &str) -> bool {
+    use ozmux_vt::frame::{Frame, FrameDelta, FrameSnapshot};
+    match frame {
+        Frame::Snapshot(FrameSnapshot { rows_data, .. }) => rows_data
+            .iter()
+            .any(|r| r.runs.iter().any(|run| run.text.contains(needle))),
+        Frame::Delta(FrameDelta { dirty_rows, .. }) => dirty_rows
+            .iter()
+            .any(|dr| dr.runs.iter().any(|run| run.text.contains(needle))),
+    }
+}
+
+/// THE DEFERRED 4c-1a CHECK: `SpawnSurface { cwd }` must start the new
+/// surface's PTY in that directory. We spawn a second surface in `/tmp`, make it
+/// active, run `pwd`, and assert its frame text reports `/tmp` (or its macOS
+/// `/private/tmp` canonicalization). If the daemon dropped the cwd on the way to
+/// `Pty::spawn`, the new shell inherits the daemon's cwd and this fails loudly.
+#[test]
+fn spawn_surface_starts_pty_in_requested_cwd() {
+    let path = sock("spawn-cwd");
+    let _server = Server::new().serve(&path).unwrap();
+    let mut client = connect(&path, (80, 24));
+    drain(&mut client);
+
+    let snap = client.mirror().to_snapshot();
+    let pane = snap.workspaces[0].active_pane.expect("an active pane");
+
+    client
+        .send(ClientMessage::SpawnSurface {
+            pane,
+            kind: SurfaceKind::Terminal,
+            cwd: Some("/tmp".into()),
+        })
+        .unwrap();
+
+    // Poll until the mirror shows the pane holds 2 surfaces, then capture the new id.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut new_surface = None;
+    while Instant::now() < deadline {
+        match client.poll() {
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(e) => panic!("unexpected poll error: {e}"),
+        }
+        let snap = client.mirror().to_snapshot();
+        let pane_snap = snap.workspaces[0]
+            .panes
+            .iter()
+            .find(|p| p.pane == pane)
+            .expect("original pane still present");
+        if pane_snap.surfaces.len() >= 2 {
+            new_surface = pane_snap
+                .surfaces
+                .iter()
+                .map(|s| s.surface)
+                .find(|s| Some(*s) != pane_snap.active_surface);
+            if new_surface.is_some() {
+                break;
+            }
+        }
+    }
+    let new_surface = new_surface.expect("SpawnSurface must add a second surface to the pane");
+
+    // Route output to the new surface, then ask it for its working directory.
+    client
+        .send(ClientMessage::SetActiveSurface {
+            pane,
+            surface: new_surface,
+        })
+        .unwrap();
+    client
+        .send(ClientMessage::Input {
+            surface: new_surface,
+            bytes: b"pwd\n".to_vec(),
+        })
+        .unwrap();
+
+    // The new surface's frames must report /tmp (macOS symlinks /tmp → /private/tmp).
+    let in_tmp = poll_until(&mut client, Duration::from_secs(8), |msg| {
+        if let ServerMessage::Frame { surface, frame } = msg {
+            *surface == new_surface
+                && (frame_contains(frame, "/tmp") || frame_contains(frame, "/private/tmp"))
+        } else {
+            false
+        }
+    });
+    assert!(
+        in_tmp,
+        "pwd in the SpawnSurface{{cwd:/tmp}} surface never reported /tmp within 8 s — SpawnSurface cwd is not reaching the PTY"
+    );
+}
+
 #[test]
 fn daemon_relays_title_then_cwd_then_child_exit() {
     let path = sock("vt-relay");

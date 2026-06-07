@@ -229,6 +229,7 @@ fn stamp_attached_workspace(commands: &mut Commands, state: &MuxState, snapshot:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozmux_multiplexer::ActiveSurface;
 
     /// Builds a headless `App` with just enough infrastructure for the
     /// `ThinClientMultiplexerPlugin` to boot, build entities, and pump frames.
@@ -283,6 +284,283 @@ mod tests {
         assert!(
             found,
             "SetViewport → PaneResized Events → PaneDimensions{{100,40}} mirrored"
+        );
+    }
+
+    /// Pumps the app, sleeping briefly between frames, until `pred` holds or the
+    /// deadline elapses. Returns whether `pred` ever held. Generous by default
+    /// because each step crosses a real daemon + UDS round-trip.
+    fn pump_until<F>(app: &mut App, deadline: std::time::Duration, mut pred: F) -> bool
+    where
+        F: FnMut(&mut App) -> bool,
+    {
+        let start = std::time::Instant::now();
+        while start.elapsed() < deadline {
+            app.update();
+            if pred(app) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // One last update + check after the loop body, in case the final sleep
+        // pushed us past the deadline before the last pump landed.
+        app.update();
+        pred(app)
+    }
+
+    /// Returns the `(entity, PaneId)` of the single active pane built from the
+    /// Welcome snapshot. Panics if zero or more than one pane exists.
+    fn sole_active_pane(app: &mut App) -> (Entity, ozmux_proto::PaneId) {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<(Entity, &ozmux_multiplexer::MuxPaneId), With<ozmux_multiplexer::PaneMarker>>();
+        let panes: Vec<_> = q.iter(app.world()).map(|(e, id)| (e, id.0)).collect();
+        assert_eq!(panes.len(), 1, "expected exactly one pane from Welcome");
+        panes[0]
+    }
+
+    fn pane_count(app: &mut App) -> usize {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<Entity, With<ozmux_multiplexer::PaneMarker>>();
+        q.iter(app.world()).count()
+    }
+
+    fn workspace_count(app: &mut App) -> usize {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<Entity, With<ozmux_multiplexer::WorkspaceMarker>>();
+        q.iter(app.world()).count()
+    }
+
+    /// (a) A `Split` sent over the wire folds back as `PaneCreated`, growing the
+    /// ECS pane count from 1 to 2.
+    #[test]
+    fn thin_client_split_over_wire_adds_pane() {
+        let mut app = headless_app();
+        assert_eq!(pane_count(&mut app), 1, "one pane from Welcome");
+        let (_, pane) = sole_active_pane(&mut app);
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            conn.0
+                .send(ozmux_proto::ClientMessage::Split {
+                    pane,
+                    orientation: ozmux_proto::SplitOrientation::Horizontal,
+                    side: ozmux_proto::Side::After,
+                    kind: ozmux_proto::SurfaceKind::Terminal,
+                    cwd: None,
+                })
+                .expect("send Split");
+        }
+        let grew = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            pane_count(app) >= 2
+        });
+        assert!(grew, "Split over the wire must fold PaneCreated → 2 panes");
+        assert_eq!(pane_count(&mut app), 2, "exactly two panes after one Split");
+    }
+
+    /// (b) `CreateWorkspace` folds back as `WorkspaceCreated` (a 2nd workspace)
+    /// plus `WorkspaceSelected`, which the pump uses to MOVE the single
+    /// `AttachedWorkspace` marker onto the newly-created workspace.
+    #[test]
+    fn thin_client_create_workspace_restamps_attached() {
+        let mut app = headless_app();
+        assert_eq!(workspace_count(&mut app), 1, "one workspace from Welcome");
+        let original_attached = {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<Entity, With<AttachedWorkspace>>();
+            let attached: Vec<_> = q.iter(app.world()).collect();
+            assert_eq!(attached.len(), 1, "exactly one AttachedWorkspace at boot");
+            attached[0]
+        };
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            conn.0
+                .send(ozmux_proto::ClientMessage::CreateWorkspace { name: None })
+                .expect("send CreateWorkspace");
+        }
+        let grew = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            workspace_count(app) >= 2
+        });
+        assert!(grew, "CreateWorkspace must fold a 2nd WorkspaceMarker");
+        // The pump's WorkspaceSelected handler must move the lone AttachedWorkspace
+        // marker onto a workspace that is NOT the original (the daemon selects the
+        // freshly-created one on CreateWorkspace).
+        let restamped = pump_until(&mut app, std::time::Duration::from_secs(5), |app| {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<Entity, With<AttachedWorkspace>>();
+            let attached: Vec<_> = q.iter(app.world()).collect();
+            attached.len() == 1 && attached[0] != original_attached
+        });
+        assert!(
+            restamped,
+            "pump's WorkspaceSelected re-stamp must move the single AttachedWorkspace to the new workspace"
+        );
+    }
+
+    /// (c) `SpawnSurface` with the pane registered in `PendingFocus`: the pump
+    /// sees the folded `SurfaceSpawned`, sends `SetActiveSurface`, and the
+    /// daemon's `ActiveSurfaceChanged` re-homes the pane's `ActiveSurface` to
+    /// the new surface. Proves the full T5 pending-focus round-trip.
+    #[test]
+    fn thin_client_spawn_surface_pending_focus_changes_active() {
+        let mut app = headless_app();
+        let (pane_ent, pane_id) = sole_active_pane(&mut app);
+        let original_active = app
+            .world()
+            .get::<ActiveSurface>(pane_ent)
+            .expect("pane has ActiveSurface at boot")
+            .0;
+        app.world_mut()
+            .resource_mut::<PendingFocus>()
+            .0
+            .insert(pane_id);
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            conn.0
+                .send(ozmux_proto::ClientMessage::SpawnSurface {
+                    pane: pane_id,
+                    kind: ozmux_proto::SurfaceKind::Terminal,
+                    cwd: None,
+                })
+                .expect("send SpawnSurface");
+        }
+        let focused = pump_until(&mut app, std::time::Duration::from_secs(10), |app| {
+            let two_surfaces = app
+                .world()
+                .get::<ozmux_multiplexer::Surfaces>(pane_ent)
+                .map(|s| s.iter().count())
+                .unwrap_or(0)
+                >= 2;
+            let active_moved = app
+                .world()
+                .get::<ActiveSurface>(pane_ent)
+                .map(|a| a.0 != original_active)
+                .unwrap_or(false);
+            two_surfaces && active_moved
+        });
+        assert!(
+            focused,
+            "PendingFocus + SpawnSurface must yield 2 surfaces AND a moved ActiveSurface (SetActiveSurface round-trip)"
+        );
+        assert!(
+            app.world().get::<ActiveSurface>(pane_ent).unwrap().0 != original_active,
+            "ActiveSurface must point at the newly-spawned surface, not the original"
+        );
+    }
+
+    /// Builds a headless app and attaches a `TerminalGrid` to the sole active
+    /// surface so the pump's `TerminalSnapshot`/`TerminalDelta` triggers (and the
+    /// `ModeChanged` fold) have a grid to land on. The UI layer normally does this
+    /// via `TerminalRenderBundle`; the headless harness must do it by hand.
+    fn headless_app_with_grid() -> (App, ozmux_proto::SurfaceId, Entity) {
+        let mut app = headless_app();
+        app.add_plugins(bevy_terminal_renderer::TerminalGridPlugin);
+        let surface_id = {
+            let snap = app
+                .world()
+                .non_send_resource::<ThinClientConn>()
+                .0
+                .mirror()
+                .to_snapshot();
+            snap.workspaces
+                .iter()
+                .flat_map(|ws| ws.panes.iter())
+                .flat_map(|p| p.surfaces.iter())
+                .find(|s| matches!(s.kind, ozmux_proto::SurfaceKind::Terminal))
+                .expect("a Terminal surface in the Welcome snapshot")
+                .surface
+        };
+        let surface_ent = app
+            .world()
+            .resource::<MuxState>()
+            .surface_entity(surface_id)
+            .expect("surface entity built from Welcome");
+        app.world_mut()
+            .entity_mut(surface_ent)
+            .insert(TerminalGrid::default());
+        (app, surface_id, surface_ent)
+    }
+
+    /// True if any cell text across all rows of the surface's grid joins into a
+    /// row string that contains `needle`.
+    fn grid_contains(app: &App, surface_ent: Entity, needle: &str) -> bool {
+        let Some(grid) = app.world().get::<TerminalGrid>(surface_ent) else {
+            return false;
+        };
+        grid.cells.iter().any(|row| {
+            row.iter()
+                .map(|c| c.text.as_str())
+                .collect::<String>()
+                .contains(needle)
+        })
+    }
+
+    /// (d) Keyboard echo: `Input` over the wire reaches the PTY, the shell echoes
+    /// it, the daemon frames it, the pump triggers a snapshot/delta, and the grid
+    /// observers populate `TerminalGrid.cells` with the echoed text.
+    #[test]
+    fn thin_client_input_echoes_into_grid() {
+        let (mut app, surface_id, surface_ent) = headless_app_with_grid();
+        // Wait for the bootstrap frame so the grid is populated before we type.
+        pump_until(&mut app, std::time::Duration::from_secs(5), |app| {
+            app.world()
+                .get::<TerminalGrid>(surface_ent)
+                .map(|g| !g.cells.is_empty())
+                .unwrap_or(false)
+        });
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            conn.0
+                .send(ozmux_proto::ClientMessage::Input {
+                    surface: surface_id,
+                    bytes: b"printf ZZ\n".to_vec(),
+                })
+                .expect("send Input");
+        }
+        let echoed = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            grid_contains(app, surface_ent, "ZZ")
+        });
+        assert!(
+            echoed,
+            "Input → daemon PTY → frame → pump → TerminalGrid must surface the echoed \"ZZ\""
+        );
+    }
+
+    /// (e) Mode fold: an alt-screen enable sequence (`\x1b[?1049h`) reaches the
+    /// PTY; the daemon emits the mode (in the snapshot's `modes` and as a
+    /// `ModeChanged` SurfaceEvent), and the grid's `modes` ends up carrying
+    /// "alt-screen".
+    #[test]
+    fn thin_client_alt_screen_mode_folds_into_grid() {
+        let (mut app, surface_id, surface_ent) = headless_app_with_grid();
+        pump_until(&mut app, std::time::Duration::from_secs(5), |app| {
+            app.world()
+                .get::<TerminalGrid>(surface_ent)
+                .map(|g| !g.cells.is_empty())
+                .unwrap_or(false)
+        });
+        // `printf '\033[?1049h'` makes the shell emit the alt-screen-enter escape.
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            conn.0
+                .send(ozmux_proto::ClientMessage::Input {
+                    surface: surface_id,
+                    bytes: b"printf '\\033[?1049h'\n".to_vec(),
+                })
+                .expect("send Input");
+        }
+        let alt_screen = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            app.world()
+                .get::<TerminalGrid>(surface_ent)
+                .map(|g| g.modes.iter().any(|m| m == "alt-screen"))
+                .unwrap_or(false)
+        });
+        assert!(
+            alt_screen,
+            "alt-screen-enter escape must fold into TerminalGrid.modes via snapshot/ModeChanged"
         );
     }
 }
