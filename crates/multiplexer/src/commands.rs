@@ -661,7 +661,7 @@ fn pane_neighbor(
     Some(ordered[j])
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use crate::components::WorkspaceMarker;

@@ -1397,7 +1397,7 @@ fn mux_browser_profile_to_ecs(p: ozmux_mux::BrowserProfile) -> BrowserProfile {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use crate::components::{ActiveSurface, SplitNode, SurfaceKind, WorkspaceMarker};
@@ -2853,8 +2853,12 @@ mod tests {
             "PaneCreated with cwd must insert Cwd component on the new surface entity"
         );
     }
+}
 
-    #[cfg(feature = "thin-client")]
+#[cfg(all(test, feature = "thin-client"))]
+mod thin_client_tests {
+    use super::*;
+
     #[test]
     fn build_from_snapshot_rebuilds_tree_with_nonactive_surfaces() {
         let mut mux = ozmux_mux::Mux::new();

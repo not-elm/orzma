@@ -9,7 +9,7 @@ pub enum ResizePaneOutcome {
     NoOp,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "thin-client")))]
 mod tests {
     use super::*;
     use crate::commands::MultiplexerCommands;
