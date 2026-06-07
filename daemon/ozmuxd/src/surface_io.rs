@@ -95,7 +95,19 @@ fn run_driver(
                 }
                 Err(_) => break,
             },
-            recv(exit_rx) -> _ => break,
+            recv(exit_rx) -> _ => {
+                // Drain output the PTY reader buffered before the child exited so
+                // the shell's final output reaches clients instead of being lost:
+                // select! may pick exit_rx while chunk_rx still holds chunks.
+                let now = Instant::now();
+                while let Ok(bytes) = chunk_rx.try_recv() {
+                    vt.on_output(&bytes, now);
+                }
+                if let Some(f) = vt.emit() {
+                    fan_out(&clients, surface, &f);
+                }
+                break;
+            }
             recv(input_rx) -> msg => match msg {
                 Ok(bytes) => {
                     // NOTE: note_user_input BEFORE write_all so a racing emit

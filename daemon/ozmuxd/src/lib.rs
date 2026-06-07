@@ -339,6 +339,13 @@ impl Server {
         surface: SurfaceId,
         cwd: Option<&std::path::Path>,
     ) {
+        // NOTE: a surface has exactly one driver. break_surface_to_pane re-emits
+        // the moved (already-running) surface inside its PaneCreated manifest;
+        // without this guard spawn_surface would overwrite the live SurfaceHandle,
+        // dropping its ctl_tx and killing the user's running shell. Skip if present.
+        if surfaces.contains_key(&surface) {
+            return;
+        }
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let pty = match Pty::spawn(80, 24, &shell, cwd, &[]) {
             Ok(p) => p,
