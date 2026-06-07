@@ -18,28 +18,47 @@ pub struct Client<W: Write> {
     writer: W,
     rx: Receiver<io::Result<ServerMessage>>,
     mirror: ClientMirror,
-    // NOTE: the reader thread exits when `read_message` RETURNS after `rx` is
-    // dropped — i.e. on the next message or EOF. With a read-timeout on the
-    // stream (the daemon tests set one) it wakes each timeout and notices; on a
-    // no-timeout stream it blocks in `read` indefinitely and a dropped `Client`
-    // does NOT unblock it. TODO(4c-1): when the app attaches over a no-timeout
-    // UnixStream, shut the reader fd down on drop (`Shutdown::Read`) so the
-    // blocked read returns EOF and the thread exits — else detach/reattach leaks
-    // a thread per cycle.
+    // NOTE: on a no-timeout stream a dropped Client does NOT unblock the blocked
+    // reader read — callers MUST pass a shutdown closure to connect_with_shutdown
+    // or the reader thread leaks one thread per connect/drop cycle.
     _reader: std::thread::JoinHandle<()>,
+    shutdown: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl<W: Write> Drop for Client<W> {
+    fn drop(&mut self) {
+        if let Some(f) = self.shutdown.take() {
+            f();
+        }
+    }
 }
 
 impl<W: Write> Client<W> {
     /// Connects: sends `Hello{viewport}`, reads the `Welcome` **synchronously**
     /// (before the reader thread starts), builds the mirror, then spawns the
-    /// background reader.
+    /// background reader. Delegates to `connect_with_shutdown` with `None`.
     ///
     /// Errors on EOF before `Welcome`, a protocol-version mismatch, or an
     /// `Error`/unexpected message in place of `Welcome`.
     pub fn connect<R: BufRead + Send + 'static>(
+        reader: R,
+        writer: W,
+        viewport: (u16, u16),
+    ) -> io::Result<Self> {
+        Self::connect_with_shutdown(reader, writer, viewport, None)
+    }
+
+    /// Connects identically to `connect` but also accepts an optional `shutdown`
+    /// closure that is invoked when the `Client` is dropped. Callers on
+    /// no-timeout streams (e.g. the GUI over a real `UnixStream`) pass a closure
+    /// that calls `stream.shutdown(Shutdown::Read)` on a cloned handle so the
+    /// background reader thread's blocked `read` returns EOF and the thread exits
+    /// cleanly rather than leaking per connect/drop cycle.
+    pub fn connect_with_shutdown<R: BufRead + Send + 'static>(
         mut reader: R,
         mut writer: W,
         viewport: (u16, u16),
+        shutdown: Option<Box<dyn FnOnce() + Send>>,
     ) -> io::Result<Self> {
         write_message(
             &mut writer,
@@ -104,6 +123,7 @@ impl<W: Write> Client<W> {
             rx,
             mirror,
             _reader: reader_thread,
+            shutdown,
         })
     }
 
@@ -194,5 +214,37 @@ mod tests {
         .unwrap();
         let reader = BufReader::new(Cursor::new(server_bytes));
         assert!(Client::connect(reader, Vec::<u8>::new(), (80, 24)).is_err());
+    }
+
+    #[test]
+    fn drop_invokes_the_shutdown_hook() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mux = Mux::new();
+        let snapshot = mux.snapshot(mux.sessions()[0]).unwrap();
+        let mut server_bytes = Vec::new();
+        write_message(
+            &mut server_bytes,
+            &ServerMessage::Welcome {
+                protocol_version: PROTOCOL_VERSION,
+                snapshot,
+            },
+        )
+        .unwrap();
+        let reader = BufReader::new(Cursor::new(server_bytes));
+        let flag = Arc::new(AtomicBool::new(false));
+        let f = flag.clone();
+        let client = Client::connect_with_shutdown(
+            reader,
+            Vec::<u8>::new(),
+            (80, 24),
+            Some(Box::new(move || f.store(true, Ordering::SeqCst))),
+        )
+        .unwrap();
+        drop(client);
+        assert!(
+            flag.load(Ordering::SeqCst),
+            "drop must call the shutdown hook"
+        );
     }
 }
