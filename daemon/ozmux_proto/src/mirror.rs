@@ -735,7 +735,12 @@ mod tests {
 
         // Split p0 horizontally → [p0 | p1].
         let split1_events = mux
-            .split_pane(p0, SplitOrientation::Horizontal, Side::After, SurfaceKind::Terminal)
+            .split_pane(
+                p0,
+                SplitOrientation::Horizontal,
+                Side::After,
+                SurfaceKind::Terminal,
+            )
             .unwrap();
         let _p1 = match &split1_events[0] {
             MuxEvent::PaneCreated { pane, .. } => *pane,
@@ -744,7 +749,12 @@ mod tests {
 
         // Split p0 vertically → S( S2(p0, p2), p1 ).
         let split2_events = mux
-            .split_pane(p0, SplitOrientation::Vertical, Side::After, SurfaceKind::Terminal)
+            .split_pane(
+                p0,
+                SplitOrientation::Vertical,
+                Side::After,
+                SurfaceKind::Terminal,
+            )
             .unwrap();
         let p2 = match &split2_events[0] {
             MuxEvent::PaneCreated { pane, .. } => *pane,
@@ -757,7 +767,10 @@ mod tests {
 
         // Swap p2 (DFS index 1) with its Next neighbor p1 (DFS index 2) — cross-parent.
         let swap_events = mux.swap_pane(p2, SwapOffset::Next).unwrap();
-        assert!(!swap_events.is_empty(), "cross-parent swap must emit events");
+        assert!(
+            !swap_events.is_empty(),
+            "cross-parent swap must emit events"
+        );
 
         mirror.apply_events(&swap_events);
         let out = normalize_snapshot(mirror.to_snapshot());
@@ -776,11 +789,23 @@ mod tests {
         let snap = mux.snapshot(session).unwrap();
         let ws = snap.workspaces[0].workspace;
         let mirror = ClientMirror::from_snapshot(snap);
-        assert!(mirror.workspace_layout(ws).is_some(), "layout getter must return Some");
-        assert!(mirror.workspace_root(ws).is_some(), "root getter must return Some");
+        assert!(
+            mirror.workspace_layout(ws).is_some(),
+            "layout getter must return Some"
+        );
+        assert!(
+            mirror.workspace_root(ws).is_some(),
+            "root getter must return Some"
+        );
 
         let fake_ws: ozmux_mux::WorkspaceId = ozmux_mux::WorkspaceId::default();
-        assert!(mirror.workspace_layout(fake_ws).is_none(), "unknown ws returns None");
-        assert!(mirror.workspace_root(fake_ws).is_none(), "unknown ws returns None");
+        assert!(
+            mirror.workspace_layout(fake_ws).is_none(),
+            "unknown ws returns None"
+        );
+        assert!(
+            mirror.workspace_root(fake_ws).is_none(),
+            "unknown ws returns None"
+        );
     }
 }

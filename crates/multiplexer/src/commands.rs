@@ -14,7 +14,7 @@ use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
 use crate::layout::{Side, SplitOrientation};
 use crate::mirror::{
-    MirrorReadCtx, MuxState, apply_event, created_pane_id, created_workspace_id,
+    MirrorReadCtx, MuxState, apply_events, created_pane_id, created_workspace_id,
     ecs_direction_to_mux, ecs_orientation_to_mux, ecs_side_to_mux, ecs_surface_kind_to_mux,
     ecs_swap_offset_to_mux, seed_surface_of, single_spawned_surface_id,
 };
@@ -82,9 +82,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         let events = self.mux.mux.new_workspace().expect("new_workspace");
         let ws_id = created_workspace_id(&events).expect("WorkspaceCreated");
         let pane_id = created_pane_id(&events).expect("PaneCreated");
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         let _ = self.mux.mux.rename_workspace(ws_id, name.clone());
         let ws_ent = self.mux.workspaces[ws_id];
         self.commands.entity(ws_ent).insert(Name::new(name));
@@ -110,9 +113,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .expect("new_workspace must succeed");
         let new_id =
             created_workspace_id(&events).expect("new_workspace must emit WorkspaceCreated");
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         let n = self.counter.next();
         let _ = self
             .mux
@@ -158,9 +164,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .mux
             .rename_workspace(id, name)
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(())
     }
 
@@ -172,9 +181,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             return;
         };
         if let Ok(events) = self.mux.mux.set_workspace_size(id, cols, rows) {
-            for ev in &events {
-                apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-            }
+            apply_events(
+                &mut self.commands,
+                &mut self.mux,
+                &self.mirror_read,
+                &events,
+            );
         }
         self.commands
             .entity(workspace)
@@ -192,9 +204,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .mux
             .focus_pane(id)
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(())
     }
 
@@ -212,9 +227,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .mux
             .set_active_surface(pid, sid)
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(())
     }
 
@@ -243,9 +261,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             )
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
         let new_pane_id = created_pane_id(&events).expect("split_pane emits PaneCreated");
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         let seed = seed_surface_of(&self.mux, new_pane_id).expect("new pane has a seed surface");
         Ok(SplitOutcome {
             pane: self.mux.panes[new_pane_id],
@@ -277,9 +298,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .mux
             .close_pane(id)
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(())
     }
 
@@ -306,9 +330,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .mux
             .swap_pane(id, ecs_swap_offset_to_mux(offset))
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(match other_id {
             Some(o) if !events.is_empty() => SwapOutcome::Swapped {
                 other_pane: self.mux.panes[o],
@@ -329,9 +356,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .spawn_surface(id, ecs_surface_kind_to_mux(kind))
             .expect("spawn_surface");
         let sid = single_spawned_surface_id(&events).expect("spawn_surface emits SurfaceSpawned");
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         self.mux.surfaces[sid]
     }
 
@@ -360,9 +390,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             )
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
         let new_pane_id = created_pane_id(&events).expect("break emits PaneCreated");
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(self.mux.panes[new_pane_id])
     }
 
@@ -382,9 +415,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         let Ok(events) = self.mux.mux.close_workspace(id) else {
             return;
         };
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
     }
 
     /// Sets the Mux's active workspace to `workspace`, keeping the Mux's
@@ -400,9 +436,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .mux
             .select_workspace(id)
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(())
     }
 
@@ -417,9 +456,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .mux
             .navigate(id, ecs_direction_to_mux(direction))
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(())
     }
 
@@ -441,9 +483,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
             .resize_pane(id, ecs_direction_to_mux(direction), amount)
             .map_err(|e| crate::mirror::lift(&self.mux, e))?;
         let applied = !events.is_empty();
-        for ev in &events {
-            apply_event(&mut self.commands, &mut self.mux, &self.mirror_read, ev);
-        }
+        apply_events(
+            &mut self.commands,
+            &mut self.mux,
+            &self.mirror_read,
+            &events,
+        );
         Ok(if applied {
             ResizePaneOutcome::Applied
         } else {

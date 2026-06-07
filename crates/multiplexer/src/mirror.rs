@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use ozmux_mux::{
     LayoutNode, MuxError, MuxEvent, NodeId, PaneId, SplitId, SurfaceEntry, SurfaceId, WorkspaceId,
 };
+use ozmux_proto::ClientMirror;
 use slotmap::SecondaryMap;
 use std::collections::{HashMap, HashSet};
 
@@ -37,6 +38,10 @@ pub(crate) fn materialize_mux_snapshot(mut commands: Commands, mut state: ResMut
 pub struct MuxState {
     /// The Bevy-free multiplexer core (Plan 2b-1: shadow only; 2b-2: authoritative).
     pub mux: ozmux_mux::Mux,
+    /// Mux-free pre-pass fold: kept in lockstep by `apply_events`. Plan 3 reads
+    /// from this instead of `state.mux` so ECS mirroring can eventually cut the
+    /// live-Mux dependency entirely.
+    pub(crate) fold: ClientMirror,
     pub(crate) workspaces: SecondaryMap<WorkspaceId, Entity>,
     pub(crate) panes: SecondaryMap<PaneId, Entity>,
     pub(crate) splits: SecondaryMap<SplitId, Entity>,
@@ -128,8 +133,18 @@ impl MuxState {
     /// Creates a `MuxState` wrapping `mux` with empty reverse maps. Callers
     /// then run `materialize_snapshot` (Task 2) to realize the tree.
     pub fn new(mux: ozmux_mux::Mux) -> Self {
+        // NOTE: seed the Mux-free fold from the same snapshot the ECS materializes
+        // from, so fold + ECS + Mux start identical. `apply_events` keeps the fold
+        // in lockstep on every batch.
+        let fold = mux
+            .sessions()
+            .first()
+            .and_then(|s| mux.snapshot(*s).ok())
+            .map(ClientMirror::from_snapshot)
+            .expect("seed session for the fold");
         Self {
             mux,
+            fold,
             workspaces: SecondaryMap::new(),
             panes: SecondaryMap::new(),
             splits: SecondaryMap::new(),
@@ -194,6 +209,25 @@ impl MuxState {
 
         let active_pane_ent = self.panes[active_pane_id];
         commands.entity(ws_ent).insert(ActivePane(active_pane_ent));
+    }
+}
+
+/// Folds the whole batch into the Mux-free fold (PRE-PASS) so per-event ECS
+/// mirroring reads a post-full-batch tree, then mirrors each event into the ECS.
+///
+// NOTE: the pre-pass is load-bearing. `replace_slot`'s stale-sweep reads the
+// full post-batch tree to keep a cross-parent-swapped node that a SIBLING event
+// in the same batch moved to another slot. Folding per-event inside `apply_event`
+// would lag the fold behind the batch and despawn that live node.
+pub fn apply_events(
+    commands: &mut Commands,
+    state: &mut MuxState,
+    read: &MirrorReadCtx,
+    events: &[MuxEvent],
+) {
+    state.fold.apply_events(events);
+    for ev in events {
+        apply_event(commands, state, read, ev);
     }
 }
 
