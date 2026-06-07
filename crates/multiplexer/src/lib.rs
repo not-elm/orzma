@@ -39,6 +39,7 @@ pub use mirror::{
 };
 #[cfg(all(feature = "thin-client", debug_assertions))]
 pub use mirror::{assert_no_map_leaks, ecs_matches_fold};
+pub use ozmux_mux::SessionSnapshot;
 pub use plugin::MultiplexerPlugin;
 pub use resize::ResizePaneOutcome;
 pub use swap::{SwapOffset, SwapOutcome};

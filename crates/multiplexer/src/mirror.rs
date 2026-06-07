@@ -222,6 +222,11 @@ impl MuxState {
             .map(|(id, _)| id)
     }
 
+    /// The `Entity` mapped to `ws`, via the immediate reverse map.
+    pub fn workspace_entity(&self, ws: WorkspaceId) -> Option<Entity> {
+        self.workspaces.get(ws).copied()
+    }
+
     /// Realizes the Mux's current tree (active session's workspace, layout tree,
     /// surfaces) into the ECS, recording every reverse map + WorkspaceUiSubtree +
     /// ChildOf, matching the ECS composition `apply_event` produces.

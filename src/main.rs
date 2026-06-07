@@ -13,6 +13,8 @@ mod input;
 mod multiplexer;
 mod system_set;
 mod theme;
+#[cfg(feature = "thin-client")]
+mod thin_client;
 mod ui;
 
 use crate::action::OzmuxActionPlugin;
