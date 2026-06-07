@@ -4696,6 +4696,7 @@ dependencies = [
 name = "ozmux_proto"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-channel",
  "ozmux_mux",
  "ozmux_vt",
  "serde",

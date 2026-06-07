@@ -18,7 +18,7 @@ fn sock(name: &str) -> std::path::PathBuf {
     p
 }
 
-type ItClient = Client<BufReader<UnixStream>, UnixStream>;
+type ItClient = Client<UnixStream>;
 
 /// Connects a Client over a real UnixStream (caller splits via try_clone) with a
 /// read timeout so `poll` returns promptly when no event is pending.

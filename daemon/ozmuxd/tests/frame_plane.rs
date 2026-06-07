@@ -9,7 +9,7 @@ use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
-type ItClient = Client<BufReader<UnixStream>, UnixStream>;
+type ItClient = Client<UnixStream>;
 
 /// A unique-per-test socket path under the temp dir (short leaf for sun_path).
 fn sock(name: &str) -> std::path::PathBuf {
