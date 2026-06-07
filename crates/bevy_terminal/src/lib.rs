@@ -23,9 +23,10 @@ pub use events::{
     TerminalModeChanged, TerminalTitleChanged,
 };
 pub use handle::TerminalHandle;
-pub use ozmux_vt::input::{TerminalKey, TerminalModifiers};
+pub use ozmux_vt::input::{TerminalKey, TerminalModifiers, encode_key};
 pub use ozmux_vt::mouse::ProtocolModifiers;
 pub use ozmux_vt::vt::ViIndicatorSnapshot;
+pub use ozmux_vt::vt::mode_diff::modes_from_names;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::{TerminalTitle, sanitize_title};

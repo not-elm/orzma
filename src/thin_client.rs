@@ -4,7 +4,7 @@
 
 use bevy::ecs::world::CommandQueue;
 use bevy::prelude::*;
-use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalSnapshot};
+use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalGrid, TerminalSnapshot};
 use ozmux_multiplexer::{
     AttachedWorkspace, MirrorReadCtx, MuxState, SessionSnapshot, WorkspaceCreatedAt, apply_events,
     build_from_snapshot,
@@ -59,6 +59,7 @@ fn pump_thin_client(
     mut commands: Commands,
     mut conn: NonSendMut<ThinClientConn>,
     mut state: ResMut<MuxState>,
+    mut grids: Query<&mut TerminalGrid>,
     read: MirrorReadCtx,
 ) {
     let mut budget = 256u32;
@@ -92,7 +93,7 @@ fn pump_thin_client(
                 }
             }
             ServerMessage::SurfaceEvent { surface, event } => {
-                handle_surface_event(&mut commands, &state, surface, event);
+                handle_surface_event(&mut grids, &state, surface, event);
             }
             ServerMessage::Welcome { .. } => {}
             ServerMessage::Error { message } => error!("thin-client: server error: {message}"),
@@ -110,21 +111,34 @@ fn debug_assert_ecs_matches_fold(world: &mut World) {
     assert_no_map_leaks(world);
 }
 
-/// Read-path VtEvent re-home: title/bell. Other variants are no-ops in 4c-1b-1
-/// (cwd arrives via Events::SurfaceCwdChanged; the rest are 4c-1b-2 / 4c-1c).
+/// Read-path VtEvent re-home: folds `ModeChanged` into the surface's
+/// `TerminalGrid.modes`. Other variants are no-ops in 4c-1b-1 (cwd arrives via
+/// Events::SurfaceCwdChanged; the rest are 4c-1b-2 / 4c-1c).
 fn handle_surface_event(
-    commands: &mut Commands,
+    grids: &mut Query<&mut TerminalGrid>,
     state: &MuxState,
     surface: SurfaceId,
     event: VtEvent,
 ) {
-    let Some(_ent) = state.surface_entity(surface) else {
+    let Some(ent) = state.surface_entity(surface) else {
         return;
     };
-    if let VtEvent::TitleChanged(_title) = event {
-        // TODO: 4c-1b-2 wire tab-title from page title
+    match event {
+        VtEvent::ModeChanged { added, removed } => {
+            if let Ok(mut grid) = grids.get_mut(ent) {
+                grid.modes.retain(|m| !removed.contains(m));
+                for m in added {
+                    if !grid.modes.contains(&m) {
+                        grid.modes.push(m);
+                    }
+                }
+            }
+        }
+        VtEvent::TitleChanged(_title) => {
+            // TODO: 4c-1b-2 wire tab-title from page title
+        }
+        _ => {}
     }
-    let _ = commands;
 }
 
 /// Boots an in-process `ozmuxd` on a process-unique temp UDS, connects a

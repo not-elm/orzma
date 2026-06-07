@@ -34,7 +34,21 @@ pub(crate) const TRACKED_MODES: &[(TermMode, &str)] = &[
     (TermMode::MOUSE_DRAG, "mouse-btn-event"),
     (TermMode::MOUSE_MOTION, "mouse-any-event"),
     (TermMode::SGR_MOUSE, "mouse-sgr-1006"),
+    (TermMode::ALTERNATE_SCROLL, "alternate-scroll"),
 ];
+
+/// Reconstructs the `TermMode` bitset from the mode NAMES carried on the wire
+/// (`FrameSnapshot.modes` / `VtEvent::ModeChanged`). Inverse of `diff_mode`'s
+/// naming. Unknown names are ignored.
+pub fn modes_from_names(names: &[String]) -> TermMode {
+    let mut modes = TermMode::empty();
+    for name in names {
+        if let Some(&(flag, _)) = TRACKED_MODES.iter().find(|&&(_, n)| n == name) {
+            modes.insert(flag);
+        }
+    }
+    modes
+}
 
 /// Computes the transition between two `TermMode` snapshots.
 pub fn diff_mode(before: TermMode, after: TermMode) -> ModeChange {
@@ -97,5 +111,35 @@ mod tests {
 
         let change = diff_mode(TermMode::empty(), TermMode::MOUSE_MOTION);
         assert_eq!(change.added, vec!["mouse-any-event"]);
+    }
+
+    #[test]
+    fn modes_from_names_round_trips_every_tracked_mode() {
+        for &(flag, name) in TRACKED_MODES {
+            let got = modes_from_names(std::slice::from_ref(&name.to_string()));
+            assert!(got.contains(flag), "{name} -> {flag:?} must round-trip");
+        }
+    }
+
+    #[test]
+    fn tracked_modes_names_every_router_checked_flag() {
+        use alacritty_terminal::term::TermMode;
+        // Every flag the GUI routers / encode_key / paste consult must be NAMED,
+        // else the thin-client can't reconstruct it from FrameSnapshot.modes.
+        for flag in [
+            TermMode::APP_CURSOR,
+            TermMode::BRACKETED_PASTE,
+            TermMode::ALT_SCREEN,
+            TermMode::ALTERNATE_SCROLL,
+            TermMode::SGR_MOUSE,
+            TermMode::MOUSE_REPORT_CLICK,
+            TermMode::MOUSE_DRAG,
+            TermMode::MOUSE_MOTION,
+        ] {
+            assert!(
+                TRACKED_MODES.iter().any(|&(f, _)| f == flag),
+                "{flag:?} must be tracked"
+            );
+        }
     }
 }
