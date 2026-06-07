@@ -4,7 +4,7 @@
 //! are controlled by the central loop via `DriverCtl`.
 
 use crate::ClientId;
-use crossbeam_channel::{Receiver, Sender, select, unbounded};
+use crossbeam_channel::{Receiver, Sender, TrySendError, select, unbounded};
 use ozmux_mux::SurfaceId;
 use ozmux_proto::ServerMessage;
 use ozmux_vt::frame::{Frame, SnapshotReason};
@@ -12,6 +12,14 @@ use ozmux_vt::pty::Pty;
 use ozmux_vt::vt::{OutputAction, Vt};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+/// Per-client frame fan-out state: the outbound sender plus whether the client
+/// has fallen behind (its bounded frame channel overflowed) and needs a snapshot
+/// to catch up.
+struct ClientFrameState {
+    frame_tx: Sender<ServerMessage>,
+    lagged: bool,
+}
 
 /// Control messages from the central loop to a surface driver.
 pub(crate) enum DriverCtl {
@@ -62,7 +70,8 @@ fn run_driver(
     input_rx: Receiver<Vec<u8>>,
     ctl_rx: Receiver<DriverCtl>,
 ) {
-    let mut clients: HashMap<ClientId, Sender<ServerMessage>> = HashMap::new();
+    let mut clients: HashMap<ClientId, ClientFrameState> = HashMap::new();
+    let mut last_resync: Option<Instant> = None;
     // NOTE: clone the receivers out of `pty` before the loop so `select!`
     // can borrow them independently of the mutable `pty` used for
     // `write_all` / `resize`. The underlying crossbeam channels stay alive
@@ -85,7 +94,7 @@ fn run_driver(
                     if matches!(vt.on_output(&bytes, now), OutputAction::EmitNow)
                         && let Some(f) = vt.emit()
                     {
-                        fan_out(&clients, surface, &f);
+                        fan_out(&mut clients, surface, &f);
                     }
                     let replies = vt.drain_replies();
                     if !replies.is_empty() {
@@ -104,7 +113,7 @@ fn run_driver(
                     vt.on_output(&bytes, now);
                 }
                 if let Some(f) = vt.emit() {
-                    fan_out(&clients, surface, &f);
+                    fan_out(&mut clients, surface, &f);
                 }
                 break;
             }
@@ -120,11 +129,13 @@ fn run_driver(
             recv(ctl_rx) -> msg => match msg {
                 Ok(DriverCtl::AddClient { id, frame_tx }) => {
                     let snap = vt.force_snapshot(SnapshotReason::Reconnect);
-                    let _ = frame_tx.send(ServerMessage::Frame {
-                        surface,
-                        frame: Frame::Snapshot(snap),
-                    });
-                    clients.insert(id, frame_tx);
+                    let lagged = frame_tx
+                        .try_send(ServerMessage::Frame {
+                            surface,
+                            frame: Frame::Snapshot(snap),
+                        })
+                        .is_err();
+                    clients.insert(id, ClientFrameState { frame_tx, lagged });
                 }
                 Ok(DriverCtl::RemoveClient { id }) => {
                     clients.remove(&id);
@@ -145,18 +156,83 @@ fn run_driver(
         // daemon's equivalent of plugin.rs running `check_deadline_flush` every
         // Bevy frame.
         if let Some(f) = vt.tick(Instant::now()) {
-            fan_out(&clients, surface, &f);
+            fan_out(&mut clients, surface, &f);
         }
         let _ = vt.drain_events();
+        retry_lagged_clients(&mut clients, &mut last_resync, surface, &mut vt);
     }
 }
 
-fn fan_out(clients: &HashMap<ClientId, Sender<ServerMessage>>, surface: SurfaceId, frame: &Frame) {
-    for tx in clients.values() {
-        let _ = tx.send(ServerMessage::Frame {
+/// Sends `frame` to every caught-up client via non-blocking `try_send`. A client
+/// whose bounded channel is Full is marked `lagged` and the frame dropped (frames
+/// are lossy — never block the driver, never disconnect). A lagged client is
+/// skipped UNLESS `frame` is a full Snapshot, which re-establishes the delta base:
+/// deliver it and clear the lag (reusing the emit's snapshot avoids a separate
+/// force_snapshot). `retry_lagged_clients` catches up the rest.
+fn fan_out(clients: &mut HashMap<ClientId, ClientFrameState>, surface: SurfaceId, frame: &Frame) {
+    let is_snapshot = matches!(frame, Frame::Snapshot(_));
+    for state in clients.values_mut() {
+        if state.lagged && !is_snapshot {
+            continue;
+        }
+        match state.frame_tx.try_send(ServerMessage::Frame {
             surface,
             frame: frame.clone(),
-        });
+        }) {
+            Ok(()) => {
+                if is_snapshot {
+                    state.lagged = false;
+                }
+            }
+            Err(TrySendError::Full(_)) => state.lagged = true,
+            Err(TrySendError::Disconnected(_)) => {}
+        }
+    }
+}
+
+/// The minimum interval between lag-resync snapshot builds. A persistently-Full
+/// client would otherwise force a full-grid `force_snapshot` every loop iteration.
+const RESYNC_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Catches lagged clients up independently of VT output: if any client is lagged
+/// and the throttle allows, builds one `force_snapshot(Lagged)` and `try_send`s it
+/// to each lagged client whose channel now has room (Ok clears the lag). Decoupled
+/// from `emit` so a client that fell behind during a burst still catches up after
+/// the terminal goes idle.
+fn retry_lagged_clients(
+    clients: &mut HashMap<ClientId, ClientFrameState>,
+    last_resync: &mut Option<Instant>,
+    surface: SurfaceId,
+    vt: &mut Vt,
+) {
+    if !clients.values().any(|s| s.lagged) {
+        return;
+    }
+    let now = Instant::now();
+    if let Some(t) = *last_resync
+        && now.duration_since(t) < RESYNC_RETRY_INTERVAL
+    {
+        return;
+    }
+    *last_resync = Some(now);
+    // NOTE: built in the SAME term-instant as the emit path (called at the loop
+    // end, before the next select! can recv a chunk) so the resync snapshot's grid
+    // matches the driver's delta base; force_snapshot leaves row_hashes untouched.
+    let snap = Frame::Snapshot(vt.force_snapshot(SnapshotReason::Lagged));
+    for state in clients.values_mut() {
+        if !state.lagged {
+            continue;
+        }
+        if state
+            .frame_tx
+            .try_send(ServerMessage::Frame {
+                surface,
+                frame: snap.clone(),
+            })
+            .is_ok()
+        {
+            state.lagged = false;
+        }
     }
 }
 

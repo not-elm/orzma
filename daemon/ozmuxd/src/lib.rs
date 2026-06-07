@@ -25,6 +25,10 @@ pub(crate) struct ClientId(pub u64);
 /// is a gapless in-order fold, so a dropped event is permanent divergence.
 pub(crate) const CLIENT_QUEUE_DEPTH: usize = 1024;
 
+/// Bound on a client's in-flight frame queue. Frames are lossy: on overflow the
+/// driver drops + marks the client lagged (vs the control channel which disconnects).
+pub(crate) const FRAME_QUEUE_DEPTH: usize = 16;
+
 /// The single mailbox the central loop consumes — the only serialization point.
 pub(crate) enum LoopMsg {
     /// A connection finished its read of `Hello`; register + send `Welcome`.
