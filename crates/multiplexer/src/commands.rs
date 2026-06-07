@@ -5,25 +5,36 @@
 //! rebuild systems.
 
 use crate::components::{
-    ActivePane, ActiveSurface, AttachedWorkspace, OwningWorkspace, PaneMarker, SurfaceKind,
-    SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
+    ActivePane, ActiveSurface, OwningWorkspace, PaneMarker, SurfaceMarker, SurfaceOf, Surfaces,
+    WorkspaceMarker,
 };
+#[cfg(not(feature = "thin-client"))]
+use crate::components::{AttachedWorkspace, SurfaceKind, WorkspaceCreatedAt, WorkspaceDimensions};
 #[cfg(test)]
 use crate::components::{SplitNode, WorkspaceUiSubtree};
+#[cfg(not(feature = "thin-client"))]
 use crate::direction::PaneDirection;
+#[cfg(not(feature = "thin-client"))]
 use crate::error::{MultiplexerError, MultiplexerResult};
+#[cfg(not(feature = "thin-client"))]
 use crate::layout::{Side, SplitOrientation};
+#[cfg(not(feature = "thin-client"))]
+use crate::mirror::MuxState;
+#[cfg(not(feature = "thin-client"))]
 use crate::mirror::{
-    MirrorReadCtx, MuxState, apply_events, created_pane_id, created_workspace_id,
-    ecs_direction_to_mux, ecs_orientation_to_mux, ecs_side_to_mux, ecs_surface_kind_to_mux,
-    ecs_swap_offset_to_mux, seed_surface_of, single_spawned_surface_id,
+    MirrorReadCtx, apply_events, created_pane_id, created_workspace_id, ecs_direction_to_mux,
+    ecs_orientation_to_mux, ecs_side_to_mux, ecs_surface_kind_to_mux, ecs_swap_offset_to_mux,
+    seed_surface_of, single_spawned_surface_id,
 };
+#[cfg(not(feature = "thin-client"))]
 use crate::resize::ResizePaneOutcome;
+#[cfg(not(feature = "thin-client"))]
 use crate::swap::{SwapOffset, SwapOutcome};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 /// Result of `create_workspace` — the three freshly-spawned entities.
+#[cfg(not(feature = "thin-client"))]
 #[derive(Debug, Clone, Copy)]
 pub struct WorkspaceCreated {
     /// The Workspace entity.
@@ -35,6 +46,7 @@ pub struct WorkspaceCreated {
 }
 
 /// Result of `split_pane_with_surface` — the new pane + its seeded surface.
+#[cfg(not(feature = "thin-client"))]
 #[derive(Debug, Clone, Copy)]
 pub struct SplitOutcome {
     /// The freshly-spawned pane.
@@ -47,9 +59,11 @@ pub struct SplitOutcome {
 /// Each `next()` returns the next 1-based creation-order index (never
 /// reused). Seeds the `"workspace{n}"` auto-name and the `WorkspaceCreatedAt(n)`
 /// component minted by [`MultiplexerCommands::spawn_attached_workspace`].
+#[cfg(not(feature = "thin-client"))]
 #[derive(Resource, Default, Debug)]
 pub struct WorkspaceNameCounter(u32);
 
+#[cfg(not(feature = "thin-client"))]
 impl WorkspaceNameCounter {
     fn next(&mut self) -> u32 {
         self.0 = self.0.saturating_add(1);
@@ -109,6 +123,7 @@ impl MultiplexerQuery<'_, '_> {
 /// SystemParam exposing every mutation on the multiplexer state. Read
 /// helpers (`workspace_of_pane`, `panes_of_workspace`, etc.) are non-mut and
 /// can be called by other systems through the same SystemParam.
+#[cfg(not(feature = "thin-client"))]
 #[derive(SystemParam)]
 pub struct MultiplexerCommands<'w, 's> {
     commands: Commands<'w, 's>,
@@ -122,6 +137,7 @@ pub struct MultiplexerCommands<'w, 's> {
     pane_surfaces: Query<'w, 's, &'static Surfaces, With<PaneMarker>>,
 }
 
+#[cfg(not(feature = "thin-client"))]
 impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// Spawns a new Workspace through the Mux (the authoritative source of
     /// truth), applies the resulting events to the ECS mirror, then renames
@@ -626,6 +642,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 /// Returns the DFS-ordered neighbor of `pane` at `offset` distance in
 /// `ordered`, wrapping around. Returns `None` if there are fewer than 2 panes
 /// (no swap target exists), mirroring the Mux's no-op condition.
+#[cfg(not(feature = "thin-client"))]
 fn pane_neighbor(
     ordered: &[ozmux_mux::PaneId],
     pane: ozmux_mux::PaneId,

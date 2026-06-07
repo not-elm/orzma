@@ -17,9 +17,9 @@ pub mod plugin;
 pub mod resize;
 pub mod swap;
 
-pub use commands::{
-    MultiplexerCommands, MultiplexerQuery, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter,
-};
+pub use commands::MultiplexerQuery;
+#[cfg(not(feature = "thin-client"))]
+pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter};
 pub use components::{
     ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd,
     ExtensionSurfaceId, OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker, SplitNode,
@@ -29,9 +29,16 @@ pub use components::{
 pub use direction::{CycleDirection, PaneDirection};
 pub use error::{MultiplexerError, MultiplexerResult};
 pub use layout::{Side, SplitOrientation};
+#[cfg(all(not(feature = "thin-client"), debug_assertions))]
+pub use mirror::assert_no_map_leaks;
+#[cfg(not(feature = "thin-client"))]
+pub use mirror::mirror_matches;
 pub use mirror::{
-    MultiplexerStartupSet, MuxPaneId, MuxSplitId, MuxState, MuxSurfaceId, MuxWorkspaceId,
+    MirrorReadCtx, Mismatch, MultiplexerStartupSet, MuxPaneId, MuxSplitId, MuxState, MuxSurfaceId,
+    MuxWorkspaceId, apply_events, build_from_snapshot, snapshot_matches_ecs,
 };
+#[cfg(all(feature = "thin-client", debug_assertions))]
+pub use mirror::{assert_no_map_leaks, ecs_matches_fold};
 pub use plugin::MultiplexerPlugin;
 pub use resize::ResizePaneOutcome;
 pub use swap::{SwapOffset, SwapOutcome};

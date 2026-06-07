@@ -4636,6 +4636,8 @@ dependencies = [
  "ozmux_configs",
  "ozmux_extension_host",
  "ozmux_multiplexer",
+ "ozmux_proto",
+ "ozmuxd",
  "serde",
  "serde_json",
  "tempfile",

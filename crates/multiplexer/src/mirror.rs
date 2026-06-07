@@ -8,13 +8,16 @@ use crate::components::{
     PaneMarker, SplitNode, SurfaceKind, SurfaceMarker, SurfaceOf, WorkspaceMarker,
     WorkspaceUiSubtree,
 };
+#[cfg(not(feature = "thin-client"))]
 use crate::error::MultiplexerError;
 use crate::layout::{SplitOrientation, pane_frame_node, split_node_bundle};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+#[cfg(not(feature = "thin-client"))]
+use ozmux_mux::MuxError;
 use ozmux_mux::{
-    LayoutNode, MuxError, MuxEvent, NodeId, PaneId, PaneSnapshot, SessionSnapshot, SplitId,
-    SurfaceEntry, SurfaceId, WorkspaceId,
+    LayoutNode, MuxEvent, NodeId, PaneId, PaneSnapshot, SessionSnapshot, SplitId, SurfaceEntry,
+    SurfaceId, WorkspaceId,
 };
 use ozmux_proto::ClientMirror;
 use slotmap::SecondaryMap;
@@ -29,6 +32,7 @@ pub enum MultiplexerStartupSet {
 }
 
 /// Startup system: realizes `MuxState`'s current tree into the ECS mirror.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn materialize_mux_snapshot(mut commands: Commands, mut state: ResMut<MuxState>) {
     state.materialize_snapshot(&mut commands);
 }
@@ -38,6 +42,8 @@ pub(crate) fn materialize_mux_snapshot(mut commands: Commands, mut state: ResMut
 #[derive(Resource)]
 pub struct MuxState {
     /// The Bevy-free multiplexer core (Plan 2b-1: shadow only; 2b-2: authoritative).
+    /// Absent in the `thin-client` build, which receives layout from the daemon.
+    #[cfg(not(feature = "thin-client"))]
     pub mux: ozmux_mux::Mux,
     /// Mux-free pre-pass fold: kept in lockstep by `apply_events`. Plan 3 reads
     /// from this instead of `state.mux` so ECS mirroring can eventually cut the
@@ -76,17 +82,21 @@ pub struct MirrorReadCtx<'w, 's> {
     child_of: Query<'w, 's, &'static ChildOf>,
     nodes: Query<'w, 's, &'static Node>,
     node_ids: Query<'w, 's, (Option<&'static MuxPaneId>, Option<&'static MuxSplitId>)>,
+    #[cfg(not(feature = "thin-client"))]
     ws_ids: Query<'w, 's, &'static MuxWorkspaceId>,
+    #[cfg(not(feature = "thin-client"))]
     surface_ids: Query<'w, 's, &'static MuxSurfaceId>,
 }
 
 impl MirrorReadCtx<'_, '_> {
     /// The `WorkspaceId` an entity maps to, or `None`.
+    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn workspace_id_of(&self, ent: Entity) -> Option<WorkspaceId> {
         self.ws_ids.get(ent).ok().map(|w| w.0)
     }
 
     /// The `PaneId` an entity maps to, or `None`.
+    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn pane_id_of(&self, ent: Entity) -> Option<PaneId> {
         match self.node_ids.get(ent).ok()? {
             (Some(p), _) => Some(p.0),
@@ -95,6 +105,7 @@ impl MirrorReadCtx<'_, '_> {
     }
 
     /// The `SurfaceId` an entity maps to, or `None`.
+    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn surface_id_of(&self, ent: Entity) -> Option<SurfaceId> {
         self.surface_ids.get(ent).ok().map(|s| s.0)
     }
@@ -133,6 +144,7 @@ impl MirrorReadCtx<'_, '_> {
 impl MuxState {
     /// Creates a `MuxState` wrapping `mux` with empty reverse maps. Callers
     /// then run `materialize_snapshot` (Task 2) to realize the tree.
+    #[cfg(not(feature = "thin-client"))]
     pub fn new(mux: ozmux_mux::Mux) -> Self {
         // NOTE: seed the Mux-free fold from the same snapshot the ECS materializes
         // from, so fold + ECS + Mux start identical. `apply_events` keeps the fold
@@ -157,6 +169,7 @@ impl MuxState {
     /// Creates a `MuxState` backed by a freshly-created `Mux`, with empty
     /// reverse maps. Convenience for tests that need a live `MuxState`
     /// resource without importing `ozmux_mux` directly.
+    #[cfg(not(feature = "thin-client"))]
     pub fn with_new_mux() -> Self {
         Self::new(ozmux_mux::Mux::new())
     }
@@ -166,6 +179,7 @@ impl MuxState {
     /// Reverse maps start empty; `build_from_snapshot` fills them.
     pub fn from_snapshot(snapshot: SessionSnapshot) -> Self {
         Self {
+            #[cfg(not(feature = "thin-client"))]
             mux: ozmux_mux::Mux::new(),
             fold: ClientMirror::from_snapshot(snapshot),
             workspaces: SecondaryMap::new(),
@@ -181,6 +195,7 @@ impl MuxState {
     /// Prefer this over the `MirrorReadCtx` ECS query when the surface was
     /// spawned in the same deferred command batch (the `MuxSurfaceId` component
     /// may not be flushed yet, but the reverse map is updated immediately).
+    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn surface_id_of_entity(&self, entity: Entity) -> Option<SurfaceId> {
         self.surfaces
             .iter()
@@ -190,6 +205,7 @@ impl MuxState {
 
     /// The `PaneId` mapped to `entity`, via the immediate reverse map (resolves
     /// even before the deferred `MuxPaneId` component is flushed). `None` if unmapped.
+    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn pane_id_of_entity(&self, entity: Entity) -> Option<PaneId> {
         self.panes
             .iter()
@@ -198,6 +214,7 @@ impl MuxState {
     }
 
     /// The `WorkspaceId` mapped to `entity`, via the immediate reverse map. `None` if unmapped.
+    #[cfg(not(feature = "thin-client"))]
     pub(crate) fn workspace_id_of_entity(&self, entity: Entity) -> Option<WorkspaceId> {
         self.workspaces
             .iter()
@@ -208,6 +225,7 @@ impl MuxState {
     /// Realizes the Mux's current tree (active session's workspace, layout tree,
     /// surfaces) into the ECS, recording every reverse map + WorkspaceUiSubtree +
     /// ChildOf, matching the ECS composition `apply_event` produces.
+    #[cfg(not(feature = "thin-client"))]
     pub fn materialize_snapshot(&mut self, commands: &mut Commands) {
         let session = self.mux.sessions()[0];
         let snapshot = self
@@ -842,6 +860,72 @@ fn spawn_split(
 #[derive(Debug)]
 pub struct Mismatch(pub String);
 
+/// Compares the ECS entity tree against an authoritative `SessionSnapshot`.
+///
+/// Checks layout structure (node kinds, split orientations, ECS-to-id mapping)
+/// and active-pane pointers. Does not check `PaneDimensions` (size resolution
+/// requires Mux internals not available in the snapshot; the `mirror_matches`
+/// wrapper in the local build does that via `state.mux.resolve_sizes`).
+///
+/// Holds ONLY after a full `Vec<MuxEvent>` batch is applied AND `Commands`
+/// are flushed (events describe the post-mutation state; intermediate states
+/// do not match).
+pub fn snapshot_matches_ecs(
+    world: &World,
+    state: &MuxState,
+    expected: &SessionSnapshot,
+) -> Result<(), Mismatch> {
+    let Some(ws_id) = expected.active_workspace else {
+        return Ok(());
+    };
+    let ws_ent = *state.workspaces.get(ws_id).ok_or_else(|| {
+        Mismatch(format!(
+            "active workspace {ws_id:?} missing from state.workspaces"
+        ))
+    })?;
+
+    let container = world
+        .get::<WorkspaceUiSubtree>(ws_ent)
+        .ok_or_else(|| {
+            Mismatch(format!(
+                "workspace entity {ws_ent:?} missing WorkspaceUiSubtree"
+            ))
+        })?
+        .0;
+
+    let top_ent = world
+        .get::<Children>(container)
+        .and_then(|c| c.iter().next())
+        .ok_or_else(|| Mismatch("layout-root container has no children".to_owned()))?;
+
+    let Some(ws_snap) = expected.workspaces.iter().find(|w| w.workspace == ws_id) else {
+        return Err(Mismatch(format!(
+            "snapshot has no entry for workspace {ws_id:?}"
+        )));
+    };
+
+    check_node(world, state, top_ent, &ws_snap.layout, "", &None)?;
+
+    if let Some(active_pane_id) = ws_snap.active_pane {
+        let expected_active_ent = *state.panes.get(active_pane_id).ok_or_else(|| {
+            Mismatch(format!(
+                "active pane {active_pane_id:?} missing from state.panes"
+            ))
+        })?;
+        let actual_active_ent = world
+            .get::<ActivePane>(ws_ent)
+            .ok_or_else(|| Mismatch(format!("workspace {ws_ent:?} missing ActivePane")))?
+            .0;
+        if actual_active_ent != expected_active_ent {
+            return Err(Mismatch(format!(
+                "ActivePane mismatch: ECS={actual_active_ent:?} expected={expected_active_ent:?}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Walks the ECS layout tree and the `Mux` tree in parallel (via the reverse
 /// maps + `Mux*Id` components) and checks 1:1 correspondence: same kinds,
 /// split orientations, child ratios, and active pointers.
@@ -849,6 +933,7 @@ pub struct Mismatch(pub String);
 /// Holds ONLY after a full `Vec<MuxEvent>` batch is applied AND `Commands`
 /// are flushed (events describe the post-mutation state; intermediate states
 /// do not match).
+#[cfg(not(feature = "thin-client"))]
 pub fn mirror_matches(world: &World, state: &MuxState) -> Result<(), Mismatch> {
     let ws = state.mux.active_workspace();
     let ws_ent = *state.workspaces.get(ws).ok_or_else(|| {
@@ -913,9 +998,39 @@ pub fn mirror_matches(world: &World, state: &MuxState) -> Result<(), Mismatch> {
     Ok(())
 }
 
+/// Debug-only (thin-client): asserts the ECS tree matches the authoritative
+/// daemon fold stored in `state.fold`.
+#[cfg(all(feature = "thin-client", debug_assertions))]
+pub fn ecs_matches_fold(world: &World, state: &MuxState) -> Result<(), Mismatch> {
+    let expected = state.fold.to_snapshot();
+    snapshot_matches_ecs(world, state, &expected)
+}
+
+/// Debug-only (thin-client): asserts every reverse-map entry resolves to a
+/// live entity, catching unmap leaks after despawns.
+#[cfg(all(feature = "thin-client", debug_assertions))]
+pub fn assert_no_map_leaks(world: &World, state: &MuxState) {
+    for (_, &ent) in state.surfaces.iter() {
+        debug_assert!(world.get_entity(ent).is_ok(), "surface map dangling");
+    }
+    for (_, &ent) in state.panes.iter() {
+        debug_assert!(world.get_entity(ent).is_ok(), "pane map dangling");
+    }
+    for (_, &ent) in state.splits.iter() {
+        debug_assert!(world.get_entity(ent).is_ok(), "split map dangling");
+    }
+    for (_, &ent) in state.workspaces.iter() {
+        debug_assert!(world.get_entity(ent).is_ok(), "workspace map dangling");
+    }
+    for (_, &ent) in state.layout_roots.iter() {
+        debug_assert!(world.get_entity(ent).is_ok(), "layout_root map dangling");
+    }
+}
+
 /// Translates a `MuxError` (id-addressed) to a `MultiplexerError` (Entity-addressed)
 /// by looking up each id in the reverse maps. Ids absent from the maps yield
 /// `Entity::PLACEHOLDER` so the lifted error is always constructible.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn lift(state: &MuxState, err: MuxError) -> MultiplexerError {
     match err {
         MuxError::WorkspaceNotFound(ws) => MultiplexerError::WorkspaceNotFound(
@@ -964,6 +1079,7 @@ pub(crate) fn lift(state: &MuxState, err: MuxError) -> MultiplexerError {
 }
 
 /// Extracts the `PaneId` from the first `PaneCreated` event in `events`, or `None`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn created_pane_id(events: &[MuxEvent]) -> Option<PaneId> {
     events.iter().find_map(|e| match e {
         MuxEvent::PaneCreated { pane, .. } => Some(*pane),
@@ -972,6 +1088,7 @@ pub(crate) fn created_pane_id(events: &[MuxEvent]) -> Option<PaneId> {
 }
 
 /// Extracts the `WorkspaceId` from the first `WorkspaceCreated` event in `events`, or `None`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn created_workspace_id(events: &[MuxEvent]) -> Option<WorkspaceId> {
     events.iter().find_map(|e| match e {
         MuxEvent::WorkspaceCreated { workspace, .. } => Some(*workspace),
@@ -980,6 +1097,7 @@ pub(crate) fn created_workspace_id(events: &[MuxEvent]) -> Option<WorkspaceId> {
 }
 
 /// Extracts the `SurfaceId` from the first `SurfaceSpawned` event in `events`, or `None`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn single_spawned_surface_id(events: &[MuxEvent]) -> Option<SurfaceId> {
     events.iter().find_map(|e| match e {
         MuxEvent::SurfaceSpawned { surface, .. } => Some(*surface),
@@ -988,6 +1106,7 @@ pub(crate) fn single_spawned_surface_id(events: &[MuxEvent]) -> Option<SurfaceId
 }
 
 /// Returns the active (seed) surface of `pane` from `state.mux`, or `None`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn seed_surface_of(state: &MuxState, pane: PaneId) -> Option<SurfaceId> {
     state.mux.active_surface(pane).ok()
 }
@@ -995,7 +1114,7 @@ pub(crate) fn seed_surface_of(state: &MuxState, pane: PaneId) -> Option<SurfaceI
 /// Debug-only: after each frame's command flush, assert the ECS mirror matches
 /// the authoritative `Mux`. Catches apply-handler drift on real usage at zero
 /// release-build cost (gated on `debug_assertions`).
-#[cfg(debug_assertions)]
+#[cfg(all(not(feature = "thin-client"), debug_assertions))]
 pub(crate) fn assert_mirror_consistent(world: &World) {
     if let Some(state) = world.get_resource::<MuxState>()
         && let Err(m) = mirror_matches(world, state)
@@ -1006,7 +1125,7 @@ pub(crate) fn assert_mirror_consistent(world: &World) {
 
 /// Debug-only: every reverse-map entry resolves to a live entity carrying the
 /// matching `Mux*Id`, catching unmap leaks after despawns.
-#[cfg(debug_assertions)]
+#[cfg(all(not(feature = "thin-client"), debug_assertions))]
 pub fn assert_no_map_leaks(world: &World, state: &MuxState) {
     for (id, &ent) in &state.panes {
         let found = world.get::<MuxPaneId>(ent).map(|c| c.0);
@@ -1176,6 +1295,7 @@ fn mux_orientation_to_ecs(o: ozmux_mux::SplitOrientation) -> SplitOrientation {
 }
 
 /// Converts the ECS `crate::layout::SplitOrientation` to `ozmux_mux::SplitOrientation`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn ecs_orientation_to_mux(o: SplitOrientation) -> ozmux_mux::SplitOrientation {
     match o {
         SplitOrientation::Horizontal => ozmux_mux::SplitOrientation::Horizontal,
@@ -1184,6 +1304,7 @@ pub(crate) fn ecs_orientation_to_mux(o: SplitOrientation) -> ozmux_mux::SplitOri
 }
 
 /// Converts the ECS `crate::layout::Side` to `ozmux_mux::Side`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn ecs_side_to_mux(s: crate::layout::Side) -> ozmux_mux::Side {
     match s {
         crate::layout::Side::Before => ozmux_mux::Side::Before,
@@ -1192,6 +1313,7 @@ pub(crate) fn ecs_side_to_mux(s: crate::layout::Side) -> ozmux_mux::Side {
 }
 
 /// Converts the ECS `crate::components::SurfaceKind` to `ozmux_mux::SurfaceKind`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn ecs_surface_kind_to_mux(k: SurfaceKind) -> ozmux_mux::SurfaceKind {
     match k {
         SurfaceKind::Terminal => ozmux_mux::SurfaceKind::Terminal,
@@ -1207,6 +1329,7 @@ pub(crate) fn ecs_surface_kind_to_mux(k: SurfaceKind) -> ozmux_mux::SurfaceKind 
 }
 
 /// Converts the ECS `crate::components::BrowserProfile` to `ozmux_mux::BrowserProfile`.
+#[cfg(not(feature = "thin-client"))]
 fn ecs_browser_profile_to_mux(p: crate::components::BrowserProfile) -> ozmux_mux::BrowserProfile {
     match p {
         crate::components::BrowserProfile::Named { name } => {
@@ -1217,6 +1340,7 @@ fn ecs_browser_profile_to_mux(p: crate::components::BrowserProfile) -> ozmux_mux
 }
 
 /// Converts the ECS `crate::swap::SwapOffset` to `ozmux_mux::SwapOffset`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn ecs_swap_offset_to_mux(o: crate::swap::SwapOffset) -> ozmux_mux::SwapOffset {
     match o {
         crate::swap::SwapOffset::Prev => ozmux_mux::SwapOffset::Prev,
@@ -1225,6 +1349,7 @@ pub(crate) fn ecs_swap_offset_to_mux(o: crate::swap::SwapOffset) -> ozmux_mux::S
 }
 
 /// Converts the ECS `crate::direction::PaneDirection` to `ozmux_mux::PaneDirection`.
+#[cfg(not(feature = "thin-client"))]
 pub(crate) fn ecs_direction_to_mux(d: crate::direction::PaneDirection) -> ozmux_mux::PaneDirection {
     match d {
         crate::direction::PaneDirection::Up => ozmux_mux::PaneDirection::Up,
