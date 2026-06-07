@@ -8,9 +8,7 @@
 
 #[cfg(not(feature = "thin-client"))]
 use crate::configs::OzmuxConfigsResource;
-#[cfg(not(feature = "thin-client"))]
 use crate::input::InputPhase;
-#[cfg(not(feature = "thin-client"))]
 use crate::input::current_modifiers;
 #[cfg(not(feature = "thin-client"))]
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
@@ -100,6 +98,8 @@ impl Plugin for MouseButtonsInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseSelectionState>();
         #[cfg(not(feature = "thin-client"))]
+        app.add_systems(Update, dispatch_mouse_buttons.in_set(InputPhase::Dispatch));
+        #[cfg(feature = "thin-client")]
         app.add_systems(Update, dispatch_mouse_buttons.in_set(InputPhase::Dispatch));
     }
 }
@@ -654,6 +654,115 @@ fn dispatch_mouse_buttons(
         let (cols, rows, _) = handle.read_geometry();
         drag.anchor_cell.col = drag.anchor_cell.col.min(cols as u32).max(1);
         drag.anchor_cell.row = drag.anchor_cell.row.min(rows as u32).max(1);
+    }
+}
+
+#[cfg(feature = "thin-client")]
+fn dispatch_mouse_buttons(
+    mut conn: bevy::ecs::system::NonSendMut<crate::thin_client::ThinClientConn>,
+    mut buttons_msg: MessageReader<bevy::input::mouse::MouseButtonInput>,
+    query: ozmux_multiplexer::MultiplexerQuery,
+    keys: Res<ButtonInput<KeyCode>>,
+    configs: Res<crate::configs::OzmuxConfigsResource>,
+    hosts: Query<
+        (Entity, &ComputedNode, &UiGlobalTransform),
+        (With<ozmux_multiplexer::SurfaceMarker>, With<Slotted>),
+    >,
+    grids: Query<&bevy_terminal_renderer::prelude::TerminalGrid>,
+    surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
+    pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
+    workspace_ids: Query<&ozmux_multiplexer::MuxWorkspaceId>,
+    primary_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
+    attached_workspace: Query<
+        Entity,
+        (
+            With<ozmux_multiplexer::WorkspaceMarker>,
+            With<ozmux_multiplexer::AttachedWorkspace>,
+        ),
+    >,
+) {
+    let Ok(window) = primary_window.single() else {
+        buttons_msg.clear();
+        return;
+    };
+    let scale = window.scale_factor();
+    let Some(cursor_logical) = window.cursor_position() else {
+        buttons_msg.clear();
+        return;
+    };
+    let cursor_phys = cursor_logical * scale;
+    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
+
+    let mods = current_modifiers(&keys);
+    let proto_mods = bevy_terminal::ProtocolModifiers {
+        shift: mods.shift,
+        ctrl: mods.ctrl,
+        alt: mods.alt,
+        meta: mods.meta,
+    };
+    let cfg = bevy_terminal::ButtonConfig {
+        max_protocol_events_per_frame: configs.mouse.max_protocol_events_per_frame,
+    };
+
+    for ev in buttons_msg.read() {
+        let bevy_button = match ev.button {
+            bevy::input::mouse::MouseButton::Left => bevy_terminal::MouseButtonKind::Left,
+            bevy::input::mouse::MouseButton::Middle => bevy_terminal::MouseButtonKind::Middle,
+            bevy::input::mouse::MouseButton::Right => bevy_terminal::MouseButtonKind::Right,
+            _ => continue,
+        };
+        let Some((entity, local)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
+            continue;
+        };
+
+        // Click-to-focus: read-only mirror of try_click_to_focus's reject
+        // logic (cross-workspace + already-active). Send SetActivePane when
+        // the press lands on a non-active pane in the attached workspace.
+        if matches!(ev.state, bevy::input::ButtonState::Pressed)
+            && let Ok(attached) = attached_workspace.single()
+            && let Some(target_pane) = query.pane_of_surface(entity)
+            && query.workspace_of_pane(target_pane) == Some(attached)
+            && query.workspaces_active_pane(attached) != Some(target_pane)
+            && let Ok(workspace) = workspace_ids.get(attached).map(|c| c.0)
+            && let Ok(pane) = pane_ids.get(target_pane).map(|c| c.0)
+        {
+            crate::thin_client::send_cmd(
+                &mut conn,
+                ozmux_proto::ClientMessage::SetActivePane { workspace, pane },
+            );
+        }
+
+        // Mouse-protocol forwarding: only when the app enabled mouse mode.
+        let Ok(grid) = grids.get(entity) else {
+            continue;
+        };
+        let (col, row, side) = cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows);
+        let evt = bevy_terminal::ButtonEvent {
+            kind: match ev.state {
+                bevy::input::ButtonState::Pressed => bevy_terminal::ButtonEventKind::Press,
+                bevy::input::ButtonState::Released => bevy_terminal::ButtonEventKind::Release,
+            },
+            button: bevy_button,
+            cell: bevy_terminal::CellCoord { col, row },
+            side,
+            click_count: 1,
+        };
+        let modes = bevy_terminal::modes_from_names(&grid.modes);
+        match bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg) {
+            bevy_terminal::ButtonAction::WriteToPty(bytes)
+            | bevy_terminal::ButtonAction::ClearAndWriteToPty(bytes) => {
+                let Ok(surface) = surface_ids.get(entity).map(|c| c.0) else {
+                    continue;
+                };
+                crate::thin_client::send_cmd(
+                    &mut conn,
+                    ozmux_proto::ClientMessage::Input { surface, bytes },
+                );
+            }
+            _ => {}
+        }
     }
 }
 

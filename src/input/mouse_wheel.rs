@@ -22,20 +22,20 @@
 //! 7. Call `WheelAction::route` once; dispatch the returned
 //!    `WheelAction` to the focused entity's `TerminalHandle`.
 
+use crate::configs::OzmuxConfigsResource;
+use crate::input::InputPhase;
+#[cfg(not(feature = "thin-client"))]
+use crate::ui::copy_mode::CopyModeState;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::KeyCode;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_terminal::{
-    CellCoord, PtyHandle, TerminalHandle, WheelAction, WheelConfig, WheelModifiers,
-};
+use bevy_terminal::{CellCoord, WheelAction, WheelConfig, WheelModifiers};
+#[cfg(not(feature = "thin-client"))]
+use bevy_terminal::{PtyHandle, TerminalHandle};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use ozmux_configs::mouse::FineModifier;
-
-use crate::configs::OzmuxConfigsResource;
-use crate::input::InputPhase;
-use crate::ui::copy_mode::CopyModeState;
 use ozmux_multiplexer::{ActivePane, ActiveSurface};
 
 /// Per-frame accumulator that carries fractional Pixel deltas across
@@ -58,6 +58,7 @@ impl Plugin for MouseWheelInputPlugin {
     }
 }
 
+#[cfg(not(feature = "thin-client"))]
 fn dispatch_mouse_wheel(
     mut wheel_msgs: MessageReader<MouseWheel>,
     mut accumulator: ResMut<WheelAccumulator>,
@@ -121,6 +122,77 @@ fn dispatch_mouse_wheel(
         &wheel_config(mouse_cfg),
     );
     apply_wheel_action(action, &mut handle, &mut pty, entity);
+}
+
+#[cfg(feature = "thin-client")]
+fn dispatch_mouse_wheel(
+    mut wheel_msgs: MessageReader<MouseWheel>,
+    mut accumulator: ResMut<WheelAccumulator>,
+    mut conn: bevy::ecs::system::NonSendMut<crate::thin_client::ThinClientConn>,
+    keys: Res<ButtonInput<KeyCode>>,
+    configs: Res<OzmuxConfigsResource>,
+    attached_workspace: Query<
+        Entity,
+        (
+            With<ozmux_multiplexer::WorkspaceMarker>,
+            With<ozmux_multiplexer::AttachedWorkspace>,
+        ),
+    >,
+    active_panes: Query<&ActivePane>,
+    active_surfaces: Query<&ActiveSurface>,
+    surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
+    grids: Query<&bevy_terminal_renderer::prelude::TerminalGrid>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    metrics: Res<TerminalCellMetricsResource>,
+) {
+    let dpr = windows
+        .iter()
+        .next()
+        .map(|w| w.scale_factor())
+        .unwrap_or(1.0);
+    let cell_w_logical = (metrics.metrics.advance_phys.floor() / dpr).max(1.0);
+    let cell_h_logical = (metrics.metrics.line_height_phys.floor() / dpr).max(1.0);
+
+    let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
+        return;
+    };
+    let Some(entity) = super::resolve_focused_terminal_readonly(
+        &attached_workspace,
+        &active_panes,
+        &active_surfaces,
+    ) else {
+        return;
+    };
+    let mouse_cfg = &configs.mouse;
+    let Some(notches) =
+        consume_notches(&mut accumulator, entity, delta_y, mouse_cfg.cells_per_notch)
+    else {
+        return;
+    };
+    let mods = build_wheel_modifiers(&keys, mouse_cfg.fine_modifier);
+    let cursor = cursor_cell(&windows, cell_w_logical, cell_h_logical);
+    let Ok(grid) = grids.get(entity) else {
+        return;
+    };
+    let Ok(surface) = surface_ids.get(entity).map(|c| c.0) else {
+        return;
+    };
+    let modes = bevy_terminal::modes_from_names(&grid.modes);
+    match WheelAction::route(modes, notches, cursor, mods, &wheel_config(mouse_cfg)) {
+        WheelAction::Noop => {}
+        WheelAction::ScrollViewport(delta) => {
+            crate::thin_client::send_cmd(
+                &mut conn,
+                ozmux_proto::ClientMessage::Scroll { surface, delta },
+            );
+        }
+        WheelAction::WriteToPty(bytes) => {
+            crate::thin_client::send_cmd(
+                &mut conn,
+                ozmux_proto::ClientMessage::Input { surface, bytes },
+            );
+        }
+    }
 }
 
 /// Aggregates a frame's `MouseWheel` events into a single signed
@@ -230,6 +302,7 @@ fn wheel_config(cfg: &ozmux_configs::mouse::MouseConfig) -> WheelConfig {
 /// Applies a router-decided `WheelAction` to the focused terminal —
 /// either scrolls the viewport or writes pre-encoded bytes to the
 /// PTY (snapping to live tail first for the write path).
+#[cfg(not(feature = "thin-client"))]
 fn apply_wheel_action(
     action: WheelAction,
     handle: &mut TerminalHandle,
