@@ -2,7 +2,7 @@
 //! reconstructs the daemon state; broadcast, version-mismatch, and disconnect
 //! are exercised end-to-end.
 
-use ozmux_mux::{PaneDirection, SplitOrientation};
+use ozmux_mux::{PaneDirection, Side, SplitOrientation, SurfaceKind};
 use ozmux_proto::{
     Client, ClientMessage, PROTOCOL_VERSION, ServerMessage, read_message, write_message,
 };
@@ -95,6 +95,8 @@ fn command_broadcast_reconstructs_server_snapshot() {
         .send(ClientMessage::Split {
             pane,
             orientation: SplitOrientation::Horizontal,
+            side: Side::After,
+            kind: SurfaceKind::Terminal,
         })
         .unwrap();
     std::thread::sleep(Duration::from_millis(200));
@@ -118,6 +120,8 @@ fn two_clients_converge() {
     c1.send(ClientMessage::Split {
         pane,
         orientation: SplitOrientation::Vertical,
+        side: Side::After,
+        kind: SurfaceKind::Terminal,
     })
     .unwrap();
     std::thread::sleep(Duration::from_millis(200));

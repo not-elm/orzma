@@ -58,6 +58,12 @@ impl<R: BufRead, W: Write> Client<R, W> {
                     "unexpected Frame before Welcome",
                 ));
             }
+            ServerMessage::SurfaceEvent { .. } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unexpected SurfaceEvent before Welcome",
+                ));
+            }
         };
         Ok(Self {
             reader,

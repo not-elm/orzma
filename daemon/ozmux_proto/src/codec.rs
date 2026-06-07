@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use std::io::{self, Read, Write};
 
 /// The wire protocol version (bumped on any incompatible change).
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Maximum body bytes per message (malformed-frame guard + the eager-allocation
 /// ceiling on read). 8 MiB clears the ~1.83 MB worst-case decorated-TUI snapshot
@@ -62,6 +62,7 @@ mod tests {
         WorkspaceId,
     };
     use ozmux_vt::color::RgbaColor;
+    use ozmux_vt::event::VtEvent;
     use ozmux_vt::frame::{Cursor, Frame, FrameDelta, FrameSnapshot, Row, Run, SnapshotReason};
     use std::io::Cursor as IoCursor;
 
@@ -69,12 +70,18 @@ mod tests {
     fn client_messages_round_trip() {
         let messages = vec![
             ClientMessage::Hello {
-                protocol_version: 2,
+                protocol_version: 3,
                 viewport: (80, 24),
             },
             ClientMessage::Split {
                 pane: PaneId::default(),
                 orientation: SplitOrientation::Horizontal,
+                side: Side::After,
+                kind: SurfaceKind::Terminal,
+            },
+            ClientMessage::SetActiveSurface {
+                pane: PaneId::default(),
+                surface: SurfaceId::default(),
             },
             ClientMessage::Close {
                 pane: PaneId::default(),
@@ -149,6 +156,10 @@ mod tests {
             ServerMessage::Event(MuxEvent::PaneClosed {
                 pane: PaneId::default(),
             }),
+            ServerMessage::SurfaceEvent {
+                surface: SurfaceId::default(),
+                event: VtEvent::TitleChanged(Some("x".into())),
+            },
             ServerMessage::Error {
                 message: "x".into(),
             },

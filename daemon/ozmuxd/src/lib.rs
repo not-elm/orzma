@@ -240,7 +240,7 @@ impl Server {
         cmd: ClientMessage,
     ) -> (Vec<ClientId>, Vec<MuxEvent>) {
         let result = match cmd {
-            ClientMessage::Split { pane, orientation } => {
+            ClientMessage::Split { pane, orientation, .. } => {
                 self.mux
                     .split_pane(pane, orientation, Side::After, SurfaceKind::Terminal)
             }
@@ -263,6 +263,8 @@ impl Server {
             ClientMessage::Hello { .. } => return (vec![], vec![]),
             // NOTE: Input is handled directly in the run loop before apply_command.
             ClientMessage::Input { .. } => return (vec![], vec![]),
+            // TODO: wire side/kind through in Task 4.
+            ClientMessage::SetActiveSurface { .. } => return (vec![], vec![]),
         };
         match result {
             Ok(events) => {
@@ -446,7 +448,7 @@ fn kill_surface(surfaces: &mut HashMap<SurfaceId, SurfaceHandle>, surface: Surfa
 mod tests {
     use super::*;
     use crossbeam_channel::{bounded, unbounded};
-    use ozmux_mux::{PaneId, SplitOrientation};
+    use ozmux_mux::{PaneId, Side, SplitOrientation, SurfaceKind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
@@ -608,6 +610,8 @@ mod tests {
             ClientMessage::Split {
                 pane,
                 orientation: SplitOrientation::Horizontal,
+                side: Side::After,
+                kind: SurfaceKind::Terminal,
             },
         ));
         while let Ok(ServerMessage::Event(ev)) = w_rx.recv_timeout(Duration::from_millis(150)) {
@@ -673,6 +677,8 @@ mod tests {
             ClientMessage::Split {
                 pane,
                 orientation: SplitOrientation::Vertical,
+                side: Side::After,
+                kind: SurfaceKind::Terminal,
             },
         ));
 

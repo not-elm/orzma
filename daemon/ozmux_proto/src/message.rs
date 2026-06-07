@@ -4,6 +4,7 @@ use ozmux_mux::{
     MuxEvent, PaneDirection, PaneId, SessionSnapshot, Side, SplitOrientation, SurfaceId,
     SurfaceKind, WorkspaceId,
 };
+use ozmux_vt::event::VtEvent;
 use ozmux_vt::frame::Frame;
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +23,19 @@ pub enum ClientMessage {
     Split {
         /// The pane to split.
         pane: PaneId,
-        /// Axis for the new split.
+        /// Split axis.
         orientation: SplitOrientation,
+        /// Which side the new pane goes.
+        side: Side,
+        /// The new pane's initial surface kind.
+        kind: SurfaceKind,
+    },
+    /// Set the active surface within a pane.
+    SetActiveSurface {
+        /// The pane.
+        pane: PaneId,
+        /// The surface to activate.
+        surface: SurfaceId,
     },
     /// Close a pane.
     Close {
@@ -94,6 +106,13 @@ pub enum ServerMessage {
         surface: SurfaceId,
         /// The VT frame.
         frame: Frame,
+    },
+    /// A per-surface VT control event (title/cwd/bell/clipboard/mode/child-exit).
+    SurfaceEvent {
+        /// The surface that raised it.
+        surface: SurfaceId,
+        /// The event.
+        event: VtEvent,
     },
     /// A rejected command.
     Error {

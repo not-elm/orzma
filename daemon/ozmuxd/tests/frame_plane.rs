@@ -2,7 +2,7 @@
 //! VT frames over the wire: echo round-trip, resize reflow, and surface-close
 //! lifecycle.
 
-use ozmux_mux::{SplitOrientation, SurfaceId, SurfaceKind};
+use ozmux_mux::{Side, SplitOrientation, SurfaceId, SurfaceKind};
 use ozmux_proto::{Client, ClientMessage, ServerMessage};
 use ozmuxd::Server;
 use std::io::BufReader;
@@ -206,6 +206,8 @@ fn closing_a_surface_keeps_the_server_responsive() {
         .send(ClientMessage::Split {
             pane,
             orientation: SplitOrientation::Horizontal,
+            side: Side::After,
+            kind: SurfaceKind::Terminal,
         })
         .unwrap();
 
