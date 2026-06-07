@@ -22,8 +22,61 @@ impl ClientMirror {
         Self { session: snapshot }
     }
 
-    /// Applies one delta event (no `Mux` reference required).
+    /// Folds one event into the mirror, pruning stale panes after layout changes.
     pub fn apply_event(&mut self, event: &MuxEvent) {
+        self.apply_event_no_prune(event);
+        // NOTE: pruning must happen only after layout-mutating events; pruning after
+        // PaneCreated (split case) would drop the new pane before LayoutChanged adds
+        // it to the tree.
+        if matches!(
+            event,
+            MuxEvent::LayoutChanged { .. } | MuxEvent::WorkspaceRootChanged { .. }
+        ) {
+            for ws in &mut self.session.workspaces {
+                prune_panes(ws);
+            }
+        }
+    }
+
+    /// Folds a whole event batch, deferring pane-pruning to the end.
+    ///
+    /// A cross-parent swap removes a pane from one parent (event i) and
+    /// re-adds it under another (event j > i); per-event pruning would drop
+    /// its `PaneSnapshot` at i and never restore it.  Deferring prune to
+    /// batch-end keeps the manifest for panes that disappear-then-reappear
+    /// within the batch.
+    pub fn apply_events(&mut self, events: &[MuxEvent]) {
+        for ev in events {
+            self.apply_event_no_prune(ev);
+        }
+        for ws in &mut self.session.workspaces {
+            prune_panes(ws);
+        }
+    }
+
+    /// The current layout tree for `ws`, if present (no `to_snapshot` rebuild).
+    pub fn workspace_layout(&self, ws: WorkspaceId) -> Option<&LayoutNode> {
+        self.session
+            .workspaces
+            .iter()
+            .find(|w| w.workspace == ws)
+            .map(|w| &w.layout)
+    }
+
+    /// The root `NodeId` of `ws`'s layout, if present.
+    pub fn workspace_root(&self, ws: WorkspaceId) -> Option<NodeId> {
+        self.workspace_layout(ws).map(|layout| match layout {
+            LayoutNode::Split { id, .. } => NodeId::Split(*id),
+            LayoutNode::Pane { id, .. } => NodeId::Pane(*id),
+        })
+    }
+
+    /// Returns the current reconstructed snapshot for comparison.
+    pub fn to_snapshot(&self) -> SessionSnapshot {
+        self.session.clone()
+    }
+
+    fn apply_event_no_prune(&mut self, event: &MuxEvent) {
         match event {
             MuxEvent::SessionCreated { .. } => {}
 
@@ -122,14 +175,13 @@ impl ClientMirror {
                 subtree,
             } => {
                 if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
-                    apply_layout_changed(ws, *root, subtree.clone());
+                    apply_layout_node(ws, *root, subtree.clone());
                 }
             }
 
             MuxEvent::WorkspaceRootChanged { workspace, root } => {
                 if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
                     ws.layout = root.clone();
-                    prune_panes(ws);
                 }
             }
 
@@ -207,11 +259,6 @@ impl ClientMirror {
                 }
             }
         }
-    }
-
-    /// Returns the current reconstructed snapshot for comparison.
-    pub fn to_snapshot(&self) -> SessionSnapshot {
-        self.session.clone()
     }
 }
 
@@ -332,12 +379,9 @@ fn prune_panes(ws: &mut WorkspaceSnapshot) {
 }
 
 /// Applies `replace_node` at the workspace root level, falling back to
-/// replacing the whole layout when the root itself matches.
-pub(crate) fn apply_layout_changed(
-    ws: &mut WorkspaceSnapshot,
-    target: NodeId,
-    subtree: LayoutNode,
-) {
+/// replacing the whole layout when the root itself matches. Does NOT prune —
+/// callers decide when to call `prune_panes`.
+fn apply_layout_node(ws: &mut WorkspaceSnapshot, target: NodeId, subtree: LayoutNode) {
     let root_matches = match (&ws.layout, target) {
         (LayoutNode::Split { id, .. }, NodeId::Split(tid)) => *id == tid,
         (LayoutNode::Pane { id, .. }, NodeId::Pane(tid)) => *id == tid,
@@ -348,7 +392,6 @@ pub(crate) fn apply_layout_changed(
     } else {
         replace_node(&mut ws.layout, target, subtree);
     }
-    prune_panes(ws);
 }
 
 #[cfg(test)]
@@ -676,5 +719,68 @@ mod tests {
         let mut cursor = Cursor::new(buf);
         let decoded: Option<ServerMessage> = read_message(&mut cursor).unwrap();
         assert_eq!(decoded, Some(msg), "Welcome round-trip failed");
+    }
+
+    #[test]
+    fn apply_events_defers_prune_across_cross_parent_swap() {
+        // Build tree S( S2(p0, p2), p1 ) — DFS order: [p0, p2, p1].
+        // Swap p2 with its Next neighbor p1 — a cross-parent swap.
+        // apply_events must keep all three PaneSnapshots and match the
+        // authoritative post-swap Mux snapshot.
+        let mut mux = Mux::new();
+        let session = mux.sessions()[0];
+        let ws0 = mux.active_workspace();
+        mux.set_workspace_size(ws0, 120, 40).unwrap();
+        let p0 = mux.active_pane(ws0).unwrap();
+
+        // Split p0 horizontally → [p0 | p1].
+        let split1_events = mux
+            .split_pane(p0, SplitOrientation::Horizontal, Side::After, SurfaceKind::Terminal)
+            .unwrap();
+        let _p1 = match &split1_events[0] {
+            MuxEvent::PaneCreated { pane, .. } => *pane,
+            _ => panic!("expected PaneCreated"),
+        };
+
+        // Split p0 vertically → S( S2(p0, p2), p1 ).
+        let split2_events = mux
+            .split_pane(p0, SplitOrientation::Vertical, Side::After, SurfaceKind::Terminal)
+            .unwrap();
+        let p2 = match &split2_events[0] {
+            MuxEvent::PaneCreated { pane, .. } => *pane,
+            _ => panic!("expected PaneCreated"),
+        };
+
+        // Cold-attach snapshot: 3-pane state.
+        let mirror_snap = mux.snapshot(session).unwrap();
+        let mut mirror = ClientMirror::from_snapshot(mirror_snap);
+
+        // Swap p2 (DFS index 1) with its Next neighbor p1 (DFS index 2) — cross-parent.
+        let swap_events = mux.swap_pane(p2, SwapOffset::Next).unwrap();
+        assert!(!swap_events.is_empty(), "cross-parent swap must emit events");
+
+        mirror.apply_events(&swap_events);
+        let out = normalize_snapshot(mirror.to_snapshot());
+        let authoritative = normalize_snapshot(mux.snapshot(session).unwrap());
+
+        assert_eq!(
+            out, authoritative,
+            "apply_events batch fold must equal the Mux post-swap snapshot"
+        );
+    }
+
+    #[test]
+    fn workspace_layout_and_root_getters_work() {
+        let mux = Mux::new();
+        let session = mux.sessions()[0];
+        let snap = mux.snapshot(session).unwrap();
+        let ws = snap.workspaces[0].workspace;
+        let mirror = ClientMirror::from_snapshot(snap);
+        assert!(mirror.workspace_layout(ws).is_some(), "layout getter must return Some");
+        assert!(mirror.workspace_root(ws).is_some(), "root getter must return Some");
+
+        let fake_ws: ozmux_mux::WorkspaceId = ozmux_mux::WorkspaceId::default();
+        assert!(mirror.workspace_layout(fake_ws).is_none(), "unknown ws returns None");
+        assert!(mirror.workspace_root(fake_ws).is_none(), "unknown ws returns None");
     }
 }
