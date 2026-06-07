@@ -80,6 +80,7 @@ fn trigger_vt_event(
                 removed,
             });
         }
+        VtEvent::ChildExit { .. } => {}
     }
 }
 

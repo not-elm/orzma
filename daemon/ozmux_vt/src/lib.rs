@@ -6,7 +6,6 @@
 #[cfg(feature = "engine")]
 pub mod coalescer;
 pub mod color;
-#[cfg(feature = "engine")]
 pub mod event;
 pub mod frame;
 #[cfg(feature = "engine")]
