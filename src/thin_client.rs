@@ -4,10 +4,12 @@
 
 use bevy::ecs::world::CommandQueue;
 use bevy::prelude::*;
+use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalSnapshot};
 use ozmux_multiplexer::{
-    AttachedWorkspace, MuxState, SessionSnapshot, WorkspaceCreatedAt, build_from_snapshot,
+    AttachedWorkspace, MirrorReadCtx, MuxState, SessionSnapshot, WorkspaceCreatedAt, apply_events,
+    build_from_snapshot,
 };
-use ozmux_proto::Client;
+use ozmux_proto::{Client, Frame, ServerMessage, SurfaceId, VtEvent};
 use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
@@ -38,7 +40,88 @@ impl Plugin for ThinClientMultiplexerPlugin {
         app.insert_resource(state);
         app.insert_resource(ThinDaemon(handle));
         app.insert_non_send_resource(ThinClientConn(client));
+        app.add_systems(Update, pump_thin_client);
+        #[cfg(debug_assertions)]
+        app.add_systems(Last, debug_assert_ecs_matches_fold);
     }
+}
+
+/// Drains all available wire messages each frame: control `Events` fold into the
+/// ECS via `apply_events`; `Frame`s become `TerminalSnapshot`/`TerminalDelta`
+/// triggers on the surface entity; `SurfaceEvent`s drive title/bell.
+fn pump_thin_client(
+    mut commands: Commands,
+    mut conn: NonSendMut<ThinClientConn>,
+    mut state: ResMut<MuxState>,
+    read: MirrorReadCtx,
+) {
+    let mut budget = 256u32;
+    while budget > 0 {
+        budget -= 1;
+        let msg = match conn.0.try_poll() {
+            Ok(Some(m)) => m,
+            Ok(None) => break,
+            Err(e) => {
+                error!("thin-client: wire poll error: {e}");
+                break;
+            }
+        };
+        match msg {
+            ServerMessage::Events(batch) => {
+                apply_events(&mut commands, &mut state, &read, &batch);
+            }
+            ServerMessage::Frame { surface, frame } => {
+                if let Some(ent) = state.surface_entity(surface) {
+                    match frame {
+                        Frame::Snapshot(snapshot) => {
+                            commands.trigger(TerminalSnapshot {
+                                entity: ent,
+                                snapshot,
+                            });
+                        }
+                        Frame::Delta(delta) => {
+                            commands.trigger(TerminalDelta { entity: ent, delta });
+                        }
+                    }
+                }
+            }
+            ServerMessage::SurfaceEvent { surface, event } => {
+                handle_surface_event(&mut commands, &state, surface, event);
+            }
+            ServerMessage::Welcome { .. } => {}
+            ServerMessage::Error { message } => error!("thin-client: server error: {message}"),
+        }
+    }
+}
+
+/// Debug-only: assert the ECS tree matches the authoritative fold + no map leaks.
+#[cfg(debug_assertions)]
+fn debug_assert_ecs_matches_fold(world: &mut World) {
+    use ozmux_multiplexer::{assert_no_map_leaks, ecs_matches_fold};
+    if let Err(m) = ecs_matches_fold(world) {
+        panic!("thin-client mirror drift: {m:?}");
+    }
+    assert_no_map_leaks(world);
+}
+
+/// Read-path VtEvent re-home: title/bell. Other variants are no-ops in 4c-1b-1
+/// (cwd arrives via Events::SurfaceCwdChanged; the rest are 4c-1b-2 / 4c-1c).
+fn handle_surface_event(
+    commands: &mut Commands,
+    state: &MuxState,
+    surface: SurfaceId,
+    event: VtEvent,
+) {
+    let Some(_ent) = state.surface_entity(surface) else {
+        return;
+    };
+    match event {
+        VtEvent::TitleChanged(_title) => {
+            // TODO: 4c-1b-2 wire tab-title from page title
+        }
+        _ => {}
+    }
+    let _ = commands;
 }
 
 /// Boots an in-process `ozmuxd` on a process-unique temp UDS, connects a

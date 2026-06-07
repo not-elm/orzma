@@ -227,6 +227,11 @@ impl MuxState {
         self.workspaces.get(ws).copied()
     }
 
+    /// The `Entity` mapped to `surface`, via the immediate reverse map.
+    pub fn surface_entity(&self, surface: SurfaceId) -> Option<Entity> {
+        self.surfaces.get(surface).copied()
+    }
+
     /// Realizes the Mux's current tree (active session's workspace, layout tree,
     /// surfaces) into the ECS, recording every reverse map + WorkspaceUiSubtree +
     /// ChildOf, matching the ECS composition `apply_event` produces.
@@ -1004,9 +1009,10 @@ pub fn mirror_matches(world: &World, state: &MuxState) -> Result<(), Mismatch> {
 }
 
 /// Debug-only (thin-client): asserts the ECS tree matches the authoritative
-/// daemon fold stored in `state.fold`.
+/// daemon fold stored in `MuxState`.
 #[cfg(all(feature = "thin-client", debug_assertions))]
-pub fn ecs_matches_fold(world: &World, state: &MuxState) -> Result<(), Mismatch> {
+pub fn ecs_matches_fold(world: &World) -> Result<(), Mismatch> {
+    let state = world.resource::<MuxState>();
     let expected = state.fold.to_snapshot();
     snapshot_matches_ecs(world, state, &expected)
 }
@@ -1014,7 +1020,8 @@ pub fn ecs_matches_fold(world: &World, state: &MuxState) -> Result<(), Mismatch>
 /// Debug-only (thin-client): asserts every reverse-map entry resolves to a
 /// live entity, catching unmap leaks after despawns.
 #[cfg(all(feature = "thin-client", debug_assertions))]
-pub fn assert_no_map_leaks(world: &World, state: &MuxState) {
+pub fn assert_no_map_leaks(world: &World) {
+    let state = world.resource::<MuxState>();
     for (_, &ent) in state.surfaces.iter() {
         debug_assert!(world.get_entity(ent).is_ok(), "surface map dangling");
     }
