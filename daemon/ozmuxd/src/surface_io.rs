@@ -3,10 +3,11 @@
 //! fans emitted `Frame`s to its own client set. Lifecycle + client membership
 //! are controlled by the central loop via `DriverCtl`.
 
-use crate::ClientId;
+use crate::{ClientId, LoopMsg};
 use crossbeam_channel::{Receiver, Sender, TrySendError, select, unbounded};
 use ozmux_mux::SurfaceId;
 use ozmux_proto::ServerMessage;
+use ozmux_vt::event::VtEvent;
 use ozmux_vt::frame::{Frame, SnapshotReason};
 use ozmux_vt::pty::Pty;
 use ozmux_vt::vt::{OutputAction, Vt};
@@ -52,6 +53,7 @@ pub(crate) fn spawn_driver(
     surface: SurfaceId,
     pty: Pty,
     vt: Vt,
+    loop_tx: Sender<LoopMsg>,
 ) -> (
     Sender<Vec<u8>>,
     Sender<DriverCtl>,
@@ -59,7 +61,7 @@ pub(crate) fn spawn_driver(
 ) {
     let (input_tx, input_rx) = unbounded::<Vec<u8>>();
     let (ctl_tx, ctl_rx) = unbounded::<DriverCtl>();
-    let join = std::thread::spawn(move || run_driver(surface, pty, vt, input_rx, ctl_rx));
+    let join = std::thread::spawn(move || run_driver(surface, pty, vt, input_rx, ctl_rx, loop_tx));
     (input_tx, ctl_tx, join)
 }
 
@@ -69,6 +71,7 @@ fn run_driver(
     mut vt: Vt,
     input_rx: Receiver<Vec<u8>>,
     ctl_rx: Receiver<DriverCtl>,
+    loop_tx: Sender<LoopMsg>,
 ) {
     let mut clients: HashMap<ClientId, ClientFrameState> = HashMap::new();
     let mut last_resync: Option<Instant> = None;
@@ -100,11 +103,11 @@ fn run_driver(
                     if !replies.is_empty() {
                         let _ = pty.write_all(&replies);
                     }
-                    let _ = vt.drain_events();
+                    relay_vt_events(surface, &mut vt, &loop_tx);
                 }
                 Err(_) => break,
             },
-            recv(exit_rx) -> _ => {
+            recv(exit_rx) -> code => {
                 // Drain output the PTY reader buffered before the child exited so
                 // the shell's final output reaches clients instead of being lost:
                 // select! may pick exit_rx while chunk_rx still holds chunks.
@@ -115,6 +118,12 @@ fn run_driver(
                 if let Some(f) = vt.emit() {
                     fan_out(&mut clients, surface, &f);
                 }
+                relay_vt_events(surface, &mut vt, &loop_tx);
+                let exit_code = code.ok().flatten();
+                let _ = loop_tx.send(LoopMsg::SurfaceEvent {
+                    surface,
+                    event: VtEvent::ChildExit { code: exit_code },
+                });
                 break;
             }
             recv(input_rx) -> msg => match msg {
@@ -158,8 +167,15 @@ fn run_driver(
         if let Some(f) = vt.tick(Instant::now()) {
             fan_out(&mut clients, surface, &f);
         }
-        let _ = vt.drain_events();
+        relay_vt_events(surface, &mut vt, &loop_tx);
         retry_lagged_clients(&mut clients, &mut last_resync, surface, &mut vt);
+    }
+}
+
+/// Relays the VT's pending events to the central loop (gapless control path).
+fn relay_vt_events(surface: SurfaceId, vt: &mut Vt, loop_tx: &Sender<LoopMsg>) {
+    for event in vt.drain_events() {
+        let _ = loop_tx.send(LoopMsg::SurfaceEvent { surface, event });
     }
 }
 
@@ -242,6 +258,11 @@ mod tests {
     use crossbeam_channel::{bounded, unbounded};
     use ozmux_vt::frame::{DirtyRow, FrameDelta, FrameSnapshot};
 
+    fn dummy_loop_tx() -> Sender<LoopMsg> {
+        let (tx, _rx) = unbounded::<LoopMsg>();
+        tx
+    }
+
     fn frame_contains(frame: &Frame, needle: &str) -> bool {
         match frame {
             Frame::Snapshot(FrameSnapshot { rows_data, .. }) => rows_data
@@ -257,7 +278,8 @@ mod tests {
     fn driver_keeps_emitting_frames_under_sustained_output() {
         let pty = Pty::spawn(80, 24, "/bin/sh", None, &[]).unwrap();
         let vt = Vt::new(80, 24);
-        let (input_tx, ctl_tx, _join) = spawn_driver(SurfaceId::default(), pty, vt);
+        let (input_tx, ctl_tx, _join) =
+            spawn_driver(SurfaceId::default(), pty, vt, dummy_loop_tx());
         let (frame_tx, frame_rx) = unbounded();
         ctl_tx
             .send(DriverCtl::AddClient {
@@ -291,7 +313,8 @@ mod tests {
     fn driver_echoes_input_to_a_frame() {
         let pty = Pty::spawn(80, 24, "/bin/sh", None, &[]).unwrap();
         let vt = Vt::new(80, 24);
-        let (input_tx, ctl_tx, _join) = spawn_driver(SurfaceId::default(), pty, vt);
+        let (input_tx, ctl_tx, _join) =
+            spawn_driver(SurfaceId::default(), pty, vt, dummy_loop_tx());
         let (frame_tx, frame_rx) = unbounded();
         ctl_tx
             .send(DriverCtl::AddClient {

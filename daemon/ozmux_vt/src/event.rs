@@ -45,7 +45,10 @@ mod tests {
             VtEvent::TitleChanged(None),
             VtEvent::ClipboardStore("c".into()),
             VtEvent::CurrentDir(std::path::PathBuf::from("/tmp")),
-            VtEvent::ModeChanged { added: vec!["a".into()], removed: vec![] },
+            VtEvent::ModeChanged {
+                added: vec!["a".into()],
+                removed: vec![],
+            },
             VtEvent::ChildExit { code: Some(0) },
             VtEvent::ChildExit { code: None },
         ];

@@ -9,7 +9,7 @@ mod transport;
 pub use transport::{ServerHandle, default_socket_path};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use ozmux_mux::{Mux, MuxEvent, SessionId, SessionSnapshot, Side, SurfaceId, SurfaceKind};
+use ozmux_mux::{Mux, MuxEvent, SessionId, SessionSnapshot, SurfaceId, SurfaceKind};
 use ozmux_proto::{ClientMessage, ServerMessage};
 use ozmux_vt::pty::Pty;
 use ozmux_vt::vt::Vt;
@@ -56,6 +56,13 @@ pub(crate) enum LoopMsg {
         /// Channel to send the snapshot back on.
         reply: Sender<SessionSnapshot>,
     },
+    /// A per-surface VT event relayed from a driver (to broadcast or fold into the Mux).
+    SurfaceEvent {
+        /// The surface that raised it.
+        surface: SurfaceId,
+        /// The event.
+        event: ozmux_vt::event::VtEvent,
+    },
     /// Stop the loop.
     Shutdown,
 }
@@ -99,14 +106,15 @@ impl Server {
     /// Spawns the central loop on its own thread; returns a handle.
     pub(crate) fn spawn_loop(self) -> LoopHandle {
         let (tx, rx) = unbounded::<LoopMsg>();
-        let join = std::thread::spawn(move || self.run(rx));
+        let loop_tx = tx.clone();
+        let join = std::thread::spawn(move || self.run(rx, loop_tx));
         LoopHandle {
             tx,
             join: Some(join),
         }
     }
 
-    fn run(mut self, rx: Receiver<LoopMsg>) {
+    fn run(mut self, rx: Receiver<LoopMsg>, loop_tx: Sender<LoopMsg>) {
         let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
         let mut surfaces: HashMap<SurfaceId, SurfaceHandle> = HashMap::new();
 
@@ -120,7 +128,13 @@ impl Server {
                             } else {
                                 Some(surf.cwd.as_path())
                             };
-                            self.spawn_surface(&mut surfaces, &clients, surf.surface, cwd);
+                            self.spawn_surface(
+                                &mut surfaces,
+                                &clients,
+                                surf.surface,
+                                cwd,
+                                &loop_tx,
+                            );
                         }
                     }
                 }
@@ -175,7 +189,7 @@ impl Server {
                                 let _ = h.ctl_tx.send(DriverCtl::RemoveClient { id: cid });
                             }
                         }
-                        self.handle_mux_events(&mut surfaces, &clients, &events);
+                        self.handle_mux_events(&mut surfaces, &clients, &events, &loop_tx);
                     }
                     for h in surfaces.values() {
                         if let Some(conn) = clients.get(&client_id) {
@@ -198,7 +212,7 @@ impl Server {
                             let _ = h.ctl_tx.send(DriverCtl::RemoveClient { id: dead_cid });
                         }
                     }
-                    self.handle_mux_events(&mut surfaces, &clients, &events);
+                    self.handle_mux_events(&mut surfaces, &clients, &events, &loop_tx);
                 }
                 LoopMsg::Disconnect(cid) => {
                     if let Some(conn) = clients.remove(&cid)
@@ -215,6 +229,33 @@ impl Server {
                         let _ = reply.send(s);
                     }
                 }
+                LoopMsg::SurfaceEvent { surface, event } => match event {
+                    ozmux_vt::event::VtEvent::CurrentDir(path) => {
+                        if let Ok(events) = self.mux.set_surface_cwd(surface, path) {
+                            let evicted = broadcast(&mut clients, &events);
+                            for cid in evicted {
+                                for h in surfaces.values() {
+                                    let _ = h.ctl_tx.send(DriverCtl::RemoveClient { id: cid });
+                                }
+                            }
+                            self.handle_mux_events(&mut surfaces, &clients, &events, &loop_tx);
+                        }
+                    }
+                    other => {
+                        let evicted = broadcast_messages(
+                            &mut clients,
+                            std::iter::once(ServerMessage::SurfaceEvent {
+                                surface,
+                                event: other,
+                            }),
+                        );
+                        for cid in evicted {
+                            for h in surfaces.values() {
+                                let _ = h.ctl_tx.send(DriverCtl::RemoveClient { id: cid });
+                            }
+                        }
+                    }
+                },
                 LoopMsg::Shutdown => {
                     for (_, h) in surfaces.drain() {
                         let _ = h.ctl_tx.send(DriverCtl::Shutdown);
@@ -240,10 +281,12 @@ impl Server {
         cmd: ClientMessage,
     ) -> (Vec<ClientId>, Vec<MuxEvent>) {
         let result = match cmd {
-            ClientMessage::Split { pane, orientation, .. } => {
-                self.mux
-                    .split_pane(pane, orientation, Side::After, SurfaceKind::Terminal)
-            }
+            ClientMessage::Split {
+                pane,
+                orientation,
+                side,
+                kind,
+            } => self.mux.split_pane(pane, orientation, side, kind),
             ClientMessage::Close { pane } => self.mux.close_pane(pane),
             ClientMessage::Navigate { pane, direction } => self.mux.navigate(pane, direction),
             ClientMessage::SetActivePane { pane, .. } => self.mux.focus_pane(pane),
@@ -263,8 +306,9 @@ impl Server {
             ClientMessage::Hello { .. } => return (vec![], vec![]),
             // NOTE: Input is handled directly in the run loop before apply_command.
             ClientMessage::Input { .. } => return (vec![], vec![]),
-            // TODO: wire side/kind through in Task 4.
-            ClientMessage::SetActiveSurface { .. } => return (vec![], vec![]),
+            ClientMessage::SetActiveSurface { pane, surface } => {
+                self.mux.set_active_surface(pane, surface)
+            }
         };
         match result {
             Ok(events) => {
@@ -287,6 +331,7 @@ impl Server {
         surfaces: &mut HashMap<SurfaceId, SurfaceHandle>,
         clients: &HashMap<ClientId, ClientConn>,
         events: &[MuxEvent],
+        loop_tx: &Sender<LoopMsg>,
     ) {
         for ev in events {
             match ev {
@@ -300,14 +345,14 @@ impl Server {
                             } else {
                                 Some(e.cwd.as_path())
                             };
-                            self.spawn_surface(surfaces, clients, e.surface, cwd);
+                            self.spawn_surface(surfaces, clients, e.surface, cwd, loop_tx);
                         }
                     }
                 }
                 MuxEvent::SurfaceSpawned { surface, kind, .. }
                     if *kind == SurfaceKind::Terminal =>
                 {
-                    self.spawn_surface(surfaces, clients, *surface, None);
+                    self.spawn_surface(surfaces, clients, *surface, None, loop_tx);
                 }
                 MuxEvent::SurfaceClosed { surface } => {
                     kill_surface(surfaces, *surface);
@@ -344,6 +389,7 @@ impl Server {
         clients: &HashMap<ClientId, ClientConn>,
         surface: SurfaceId,
         cwd: Option<&std::path::Path>,
+        loop_tx: &Sender<LoopMsg>,
     ) {
         // NOTE: a surface has exactly one driver. break_surface_to_pane re-emits
         // the moved (already-running) surface inside its PaneCreated manifest;
@@ -361,7 +407,7 @@ impl Server {
             }
         };
         let vt = Vt::new(80, 24);
-        let (input_tx, ctl_tx, join) = spawn_driver(surface, pty, vt);
+        let (input_tx, ctl_tx, join) = spawn_driver(surface, pty, vt, loop_tx.clone());
         for (id, conn) in clients {
             let _ = ctl_tx.send(DriverCtl::AddClient {
                 id: *id,
@@ -408,17 +454,19 @@ impl Drop for LoopHandle {
     }
 }
 
-/// Broadcasts each event to every client; a client whose bounded queue is full
-/// (or closed) is dropped (disconnect-on-overflow — never skip an event for a
-/// still-connected client). Returns the ids of clients that were evicted.
-fn broadcast(clients: &mut HashMap<ClientId, ClientConn>, events: &[MuxEvent]) -> Vec<ClientId> {
+/// Broadcasts `ServerMessage`s to every client's control channel; a client whose
+/// bounded queue overflows is evicted (gapless invariant). Returns evicted ids.
+fn broadcast_messages(
+    clients: &mut HashMap<ClientId, ClientConn>,
+    msgs: impl IntoIterator<Item = ServerMessage>,
+) -> Vec<ClientId> {
     let mut dead: HashSet<ClientId> = HashSet::new();
-    for ev in events {
+    for msg in msgs {
         for (cid, conn) in clients.iter() {
             if dead.contains(cid) {
                 continue;
             }
-            if conn.tx.try_send(ServerMessage::Event(ev.clone())).is_err() {
+            if conn.tx.try_send(msg.clone()).is_err() {
                 dead.insert(*cid);
             }
         }
@@ -433,6 +481,13 @@ fn broadcast(clients: &mut HashMap<ClientId, ClientConn>, events: &[MuxEvent]) -
         evicted.push(cid);
     }
     evicted
+}
+
+/// Broadcasts each event to every client; a client whose bounded queue is full
+/// (or closed) is dropped (disconnect-on-overflow — never skip an event for a
+/// still-connected client). Returns the ids of clients that were evicted.
+fn broadcast(clients: &mut HashMap<ClientId, ClientConn>, events: &[MuxEvent]) -> Vec<ClientId> {
+    broadcast_messages(clients, events.iter().cloned().map(ServerMessage::Event))
 }
 
 fn kill_surface(surfaces: &mut HashMap<SurfaceId, SurfaceHandle>, surface: SurfaceId) {

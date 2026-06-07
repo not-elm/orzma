@@ -68,26 +68,28 @@ impl<W: Write> Client<W> {
             }
         };
         let (tx, rx) = unbounded::<io::Result<ServerMessage>>();
-        let reader_thread = std::thread::spawn(move || loop {
-            match read_message::<_, ServerMessage>(&mut reader) {
-                Ok(Some(msg)) => {
-                    if tx.send(Ok(msg)).is_err() {
+        let reader_thread = std::thread::spawn(move || {
+            loop {
+                match read_message::<_, ServerMessage>(&mut reader) {
+                    Ok(Some(msg)) => {
+                        if tx.send(Ok(msg)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    // NOTE: a stream read-timeout (tests set 300 ms) surfaces as
+                    // WouldBlock/TimedOut — that is quiescence, not a fatal error;
+                    // retry so the thread keeps listening for the next real message.
+                    Err(ref e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        continue;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
                         break;
                     }
-                }
-                Ok(None) => break,
-                // NOTE: a stream read-timeout (tests set 300 ms) surfaces as
-                // WouldBlock/TimedOut — that is quiescence, not a fatal error;
-                // retry so the thread keeps listening for the next real message.
-                Err(ref e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
-                {
-                    continue;
-                }
-                Err(e) => {
-                    let _ = tx.send(Err(e));
-                    break;
                 }
             }
         });
