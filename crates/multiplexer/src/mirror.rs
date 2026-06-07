@@ -268,7 +268,7 @@ pub fn apply_event(
             let pane_ent = spawn_pane(commands, state, *pane, ws_ent, 1.0);
 
             let is_root = state
-                .mux
+                .fold
                 .workspace_root(*workspace)
                 .map(|r| r == NodeId::Pane(*pane))
                 .unwrap_or(false);
@@ -483,8 +483,8 @@ fn replace_slot(
     // by event-subtree alone would delete that moved-but-live node. Only nodes
     // the Mux no longer has anywhere (e.g. close's collapsed split) are swept.
     let mut mux_live = HashSet::new();
-    if let Ok(layout) = state.mux.workspace_layout(ws) {
-        collect_live_node_ids(&layout, &mut mux_live);
+    if let Some(layout) = state.fold.workspace_layout(ws) {
+        collect_live_node_ids(layout, &mut mux_live);
     }
 
     let new_root = realize_subtree(commands, state, ws_ent, subtree, inherited_grow);
@@ -570,62 +570,25 @@ fn realize_subtree(
     }
 }
 
-/// Spawns a brand-new pane plus its surfaces (querying the live `Mux` for the
-/// surface list), reusing any already-mapped surface entity and spawning the
-/// rest. Sets `ActiveSurface`.
+/// Unreachable on the apply_event (wire) path.
 ///
-/// In the in-process Bevy path every new pane is introduced by a `PaneCreated`
-/// event (handled by `apply_event`) BEFORE any `LayoutChanged` that references
-/// it, so `realize_subtree` always finds the pane already mapped and returns
-/// early — this function is the ECS-only fallback for subtrees that somehow
-/// appear without a preceding `PaneCreated` (not reachable on the normal wire
-/// path).
-// NOTE: the wire path (Plan 3 remote client) never reaches this function for
-// a brand-new pane: PaneCreated always precedes LayoutChanged and carries the
-// full surface manifest, so apply_event's PaneCreated arm inserts the pane
-// into state.panes before realize_subtree is called. This Mux-bridge path
-// exists only as a safeguard for edge cases inside the in-process app.
+/// On the wire path a pane is always realized by its `PaneCreated` arm (which
+/// precedes the `LayoutChanged` that references the pane), so `realize_subtree`
+/// always finds the pane already mapped and returns early. The materialize path
+/// uses `realize_layout_node` instead. Reaching this function means events
+/// arrived out-of-order or are malformed.
 fn realize_new_pane(
-    commands: &mut Commands,
-    state: &mut MuxState,
-    pane: PaneId,
-    ws_ent: Entity,
-    grow: f32,
+    _commands: &mut Commands,
+    _state: &mut MuxState,
+    _pane: PaneId,
+    _ws_ent: Entity,
+    _grow: f32,
 ) -> Entity {
-    let pane_ent = spawn_pane(commands, state, pane, ws_ent, grow);
-
-    let surface_ids = state
-        .mux
-        .surfaces(pane)
-        .expect("realize_new_pane: pane surfaces must be readable");
-    let active_surface_id = state
-        .mux
-        .active_surface(pane)
-        .expect("realize_new_pane: active surface must exist");
-
-    let mut active_surface_ent = None;
-    for sid in &surface_ids {
-        let surf_ent = if let Some(&ent) = state.surfaces.get(*sid) {
-            commands
-                .entity(ent)
-                .insert((ChildOf(pane_ent), SurfaceOf(pane_ent)));
-            ent
-        } else {
-            let sk = state
-                .mux
-                .surface_kind(*sid)
-                .expect("realize_new_pane: surface kind must be readable");
-            spawn_surface(commands, state, *sid, pane_ent, sk)
-        };
-        if *sid == active_surface_id {
-            active_surface_ent = Some(surf_ent);
-        }
-    }
-
-    let active_ent =
-        active_surface_ent.expect("realize_new_pane: active surface entity must exist");
-    commands.entity(pane_ent).insert(ActiveSurface(active_ent));
-    pane_ent
+    // NOTE: on the apply_event (wire) path a pane is always realized by its
+    // PaneCreated arm (which precedes the LayoutChanged referencing it), so
+    // realize_subtree never misses a pane here. The materialize path uses
+    // realize_layout_node instead. Reaching this = malformed/out-of-order events.
+    unreachable!("realize_new_pane on the apply_event path: PaneCreated precedes LayoutChanged");
 }
 
 /// Collects every `NodeId` (splits and panes) present in `node` into `live`.
@@ -1544,17 +1507,16 @@ mod tests {
             op(&mut state.mux)
         };
 
-        // Step 2: apply every event via apply_event in a one-shot system.
+        // Step 2: apply the event batch via apply_events (which pre-folds the
+        // batch into state.fold before the per-event loop).
         // NOTE: Bevy run_system_once requires the closure to be FnMut + Send +
         // Sync; capture events as a local moved into a closure that wraps the
-        // loop to satisfy the system signature constraints.
+        // call to satisfy the system signature constraints.
         app.world_mut()
             .run_system_once({
                 let events = events;
                 move |mut commands: Commands, mut state: ResMut<MuxState>, read: MirrorReadCtx| {
-                    for ev in &events {
-                        apply_event(&mut commands, &mut state, &read, ev);
-                    }
+                    apply_events(&mut commands, &mut state, &read, &events);
                 }
             })
             .unwrap();
