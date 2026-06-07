@@ -13,7 +13,8 @@ use crate::layout::{SplitOrientation, pane_frame_node, split_node_bundle};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use ozmux_mux::{
-    LayoutNode, MuxError, MuxEvent, NodeId, PaneId, SplitId, SurfaceEntry, SurfaceId, WorkspaceId,
+    LayoutNode, MuxError, MuxEvent, NodeId, PaneId, PaneSnapshot, SessionSnapshot, SplitId,
+    SurfaceEntry, SurfaceId, WorkspaceId,
 };
 use ozmux_proto::ClientMirror;
 use slotmap::SecondaryMap;
@@ -160,6 +161,21 @@ impl MuxState {
         Self::new(ozmux_mux::Mux::new())
     }
 
+    /// Builds a `MuxState` whose fold is seeded from `snapshot`. Used by the
+    /// thin-client build (no local Mux) and, indirectly, by the local materialize.
+    /// Reverse maps start empty; `build_from_snapshot` fills them.
+    pub fn from_snapshot(snapshot: SessionSnapshot) -> Self {
+        Self {
+            mux: ozmux_mux::Mux::new(),
+            fold: ClientMirror::from_snapshot(snapshot),
+            workspaces: SecondaryMap::new(),
+            panes: SecondaryMap::new(),
+            splits: SecondaryMap::new(),
+            surfaces: SecondaryMap::new(),
+            layout_roots: SecondaryMap::new(),
+        }
+    }
+
     /// Looks up the `SurfaceId` for `entity` using the reverse map.
     ///
     /// Prefer this over the `MirrorReadCtx` ECS query when the surface was
@@ -193,22 +209,92 @@ impl MuxState {
     /// surfaces) into the ECS, recording every reverse map + WorkspaceUiSubtree +
     /// ChildOf, matching the ECS composition `apply_event` produces.
     pub fn materialize_snapshot(&mut self, commands: &mut Commands) {
-        let ws = self.mux.active_workspace();
-        let name = self.mux.workspace_name(ws).unwrap_or("default").to_owned();
-        let active_pane_id = self.mux.active_pane(ws).expect("active pane must exist");
-
-        let (ws_ent, container) = spawn_workspace(commands, self, ws, &name);
-
-        let layout = self
+        let session = self.mux.sessions()[0];
+        let snapshot = self
             .mux
-            .workspace_layout(ws)
-            .expect("workspace layout must be valid");
+            .snapshot(session)
+            .expect("snapshot the active session");
+        build_from_snapshot(commands, self, &snapshot);
+    }
+}
 
-        let top_ent = realize_layout_node(commands, self, &layout, ws_ent, 1.0);
-        commands.entity(top_ent).insert(ChildOf(container));
+/// Builds the ECS entity tree (+ reverse maps) for the snapshot's active
+/// workspace, sourcing each pane's surfaces from `PaneSnapshot.surfaces`
+/// (kind + cwd), NOT from `LayoutNode` (which carries only the active kind).
+/// Mux-free: the single builder shared by the local materialize and the
+/// thin-client cold-attach.
+pub fn build_from_snapshot(
+    commands: &mut Commands,
+    state: &mut MuxState,
+    snapshot: &SessionSnapshot,
+) {
+    let Some(ws_id) = snapshot.active_workspace else {
+        return;
+    };
+    let Some(ws) = snapshot.workspaces.iter().find(|w| w.workspace == ws_id) else {
+        return;
+    };
+    let panes_by_id: HashMap<PaneId, &PaneSnapshot> =
+        ws.panes.iter().map(|p| (p.pane, p)).collect();
 
-        let active_pane_ent = self.panes[active_pane_id];
+    let (ws_ent, container) = spawn_workspace(commands, state, ws.workspace, &ws.name);
+    let top_ent = realize_snapshot_node(commands, state, &ws.layout, &panes_by_id, ws_ent, 1.0);
+    commands.entity(top_ent).insert(ChildOf(container));
+
+    if let Some(active_pane_id) = ws.active_pane
+        && let Some(&active_pane_ent) = state.panes.get(active_pane_id)
+    {
         commands.entity(ws_ent).insert(ActivePane(active_pane_ent));
+    }
+}
+
+fn realize_snapshot_node(
+    commands: &mut Commands,
+    state: &mut MuxState,
+    node: &LayoutNode,
+    panes_by_id: &HashMap<PaneId, &PaneSnapshot>,
+    ws_ent: Entity,
+    grow: f32,
+) -> Entity {
+    match node {
+        LayoutNode::Pane { id, cols, rows, .. } => {
+            let pane_ent = spawn_pane(commands, state, *id, ws_ent, grow);
+            commands.entity(pane_ent).insert(PaneDimensions {
+                cols: *cols,
+                rows: *rows,
+            });
+            let pane_snap = panes_by_id.get(id).expect("pane snapshot for layout pane");
+            let mut active_surface_ent = None;
+            for surf in &pane_snap.surfaces {
+                let surf_ent =
+                    spawn_surface(commands, state, surf.surface, pane_ent, surf.kind.clone());
+                if !surf.cwd.as_os_str().is_empty() {
+                    commands.entity(surf_ent).try_insert(Cwd(surf.cwd.clone()));
+                }
+                if Some(surf.surface) == pane_snap.active_surface {
+                    active_surface_ent = Some(surf_ent);
+                }
+            }
+            let active_ent = active_surface_ent.expect("active surface entity must exist");
+            commands.entity(pane_ent).insert(ActiveSurface(active_ent));
+            pane_ent
+        }
+        LayoutNode::Split {
+            id,
+            orientation,
+            ratio,
+            first,
+            second,
+        } => {
+            let split_ent = spawn_split(commands, state, *id, *orientation, grow);
+            let first_ent =
+                realize_snapshot_node(commands, state, first, panes_by_id, ws_ent, *ratio);
+            let second_ent =
+                realize_snapshot_node(commands, state, second, panes_by_id, ws_ent, 1.0 - ratio);
+            commands.entity(first_ent).insert(ChildOf(split_ent));
+            commands.entity(second_ent).insert(ChildOf(split_ent));
+            split_ent
+        }
     }
 }
 
@@ -590,8 +676,8 @@ fn realize_subtree(
 /// On the wire path a pane is always realized by its `PaneCreated` arm (which
 /// precedes the `LayoutChanged` that references the pane), so `realize_subtree`
 /// always finds the pane already mapped and returns early. The materialize path
-/// uses `realize_layout_node` instead. Reaching this function means events
-/// arrived out-of-order or are malformed.
+/// uses `build_from_snapshot` / `realize_snapshot_node` instead. Reaching this
+/// function means events arrived out-of-order or are malformed.
 fn realize_new_pane(
     _commands: &mut Commands,
     _state: &mut MuxState,
@@ -602,7 +688,7 @@ fn realize_new_pane(
     // NOTE: on the apply_event (wire) path a pane is always realized by its
     // PaneCreated arm (which precedes the LayoutChanged referencing it), so
     // realize_subtree never misses a pane here. The materialize path uses
-    // realize_layout_node instead. Reaching this = malformed/out-of-order events.
+    // build_from_snapshot instead. Reaching this = malformed/out-of-order events.
     unreachable!("realize_new_pane on the apply_event path: PaneCreated precedes LayoutChanged");
 }
 
@@ -1168,82 +1254,6 @@ fn mux_browser_profile_to_ecs(p: ozmux_mux::BrowserProfile) -> BrowserProfile {
     match p {
         ozmux_mux::BrowserProfile::Named { name } => BrowserProfile::Named { name },
         ozmux_mux::BrowserProfile::Incognito => BrowserProfile::Incognito,
-    }
-}
-
-/// Recursively realizes a `LayoutNode` into ECS entities. Returns the top entity
-/// for the subtree (which the caller wires via `ChildOf`).
-///
-/// `grow` is this node's `flex_grow` relative to its parent split slot.
-/// `ws_ent` is the owning workspace entity (needed for `OwningWorkspace` on panes).
-fn realize_layout_node(
-    commands: &mut Commands,
-    state: &mut MuxState,
-    node: &LayoutNode,
-    ws_ent: Entity,
-    grow: f32,
-) -> Entity {
-    match node {
-        LayoutNode::Pane {
-            id,
-            surface_kind,
-            cols,
-            rows,
-        } => {
-            let pane_ent = spawn_pane(commands, state, *id, ws_ent, grow);
-            commands.entity(pane_ent).insert(PaneDimensions {
-                cols: *cols,
-                rows: *rows,
-            });
-
-            let surface_ids = state
-                .mux
-                .surfaces(*id)
-                .expect("pane surfaces must be readable");
-            let active_surface_id = state
-                .mux
-                .active_surface(*id)
-                .expect("active surface must exist");
-
-            // NOTE: LayoutNode.surface_kind carries only the ACTIVE surface's
-            // kind; using it for non-active surfaces yields the wrong kind. Use
-            // mux.surface_kind() per surface id instead.
-            let _ = surface_kind;
-
-            let mut active_surface_ent = None;
-            for sid in &surface_ids {
-                let sk = state
-                    .mux
-                    .surface_kind(*sid)
-                    .expect("surface kind must be readable");
-                let surf_ent = spawn_surface(commands, state, *sid, pane_ent, sk);
-                if *sid == active_surface_id {
-                    active_surface_ent = Some(surf_ent);
-                }
-            }
-
-            let active_ent = active_surface_ent.expect("active surface entity must exist");
-            commands.entity(pane_ent).insert(ActiveSurface(active_ent));
-
-            pane_ent
-        }
-        LayoutNode::Split {
-            id,
-            orientation,
-            ratio,
-            first,
-            second,
-        } => {
-            let split_ent = spawn_split(commands, state, *id, *orientation, grow);
-
-            let first_ent = realize_layout_node(commands, state, first, ws_ent, *ratio);
-            let second_ent = realize_layout_node(commands, state, second, ws_ent, 1.0 - ratio);
-
-            commands.entity(first_ent).insert(ChildOf(split_ent));
-            commands.entity(second_ent).insert(ChildOf(split_ent));
-
-            split_ent
-        }
     }
 }
 
@@ -2701,6 +2711,38 @@ mod tests {
             stored.map(|c| &c.0),
             Some(&cwd),
             "PaneCreated with cwd must insert Cwd component on the new surface entity"
+        );
+    }
+
+    #[test]
+    fn build_from_snapshot_rebuilds_tree_with_nonactive_surfaces() {
+        let mut mux = ozmux_mux::Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        mux.spawn_surface(pane, ozmux_mux::SurfaceKind::Terminal, None)
+            .unwrap();
+        let session = mux.sessions()[0];
+        let snapshot = mux.snapshot(session).unwrap();
+
+        let mut app = App::new();
+        let mut state = MuxState::from_snapshot(snapshot.clone());
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, app.world());
+            build_from_snapshot(&mut commands, &mut state, &snapshot);
+        }
+        queue.apply(app.world_mut());
+
+        assert_eq!(
+            state.surfaces.len(),
+            2,
+            "both surfaces (active + non-active) mapped"
+        );
+        assert!(state.panes.contains_key(pane), "pane mapped");
+        assert_eq!(
+            state.fold.to_snapshot(),
+            snapshot,
+            "fold seeded from snapshot"
         );
     }
 }
