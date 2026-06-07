@@ -19,7 +19,7 @@ use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
 use bevy::window::{CursorIcon, Ime, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind, WorkspaceMarker};
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerQuery, SurfaceKind, WorkspaceMarker};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
 /// Vimium-style scroll keybindings, injected into each browser page webview as
@@ -498,7 +498,7 @@ fn focus_address_bar_on_click(
 fn focus_address_bar_on_cmd_l(
     keys: Res<ButtonInput<KeyCode>>,
     mut focus: ResMut<AddressBarFocus>,
-    mux: MultiplexerCommands,
+    mux: MultiplexerQuery,
     attached: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     browser_surfaces: Query<(), With<BrowserSurfaceMarker>>,
     mut edits: Query<(&mut AddressEdit, &BrowserToolbarState)>,
@@ -528,7 +528,7 @@ fn focus_address_bar_on_cmd_l(
 }
 
 /// Run condition gating `blur_address_bar_on_focus_leave`: only poll while the
-/// address bar actually owns focus, so its heavy params (`MultiplexerCommands`,
+/// address bar actually owns focus, so its heavy params (`MultiplexerQuery`,
 /// queries) are not fetched on the common unfocused path.
 fn address_bar_is_focused(focus: Res<AddressBarFocus>) -> bool {
     focus.0.is_some()
@@ -540,7 +540,7 @@ fn address_bar_is_focused(focus: Res<AddressBarFocus>) -> bool {
 /// and `dispatch_focused_key`'s guard then suppresses all keyboard input.
 fn blur_address_bar_on_focus_leave(
     mut focus: ResMut<AddressBarFocus>,
-    mux: MultiplexerCommands,
+    mux: MultiplexerQuery,
     attached: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     mouse: Res<ButtonInput<MouseButton>>,
     addr_bars: Query<&Interaction, With<AddrBarText>>,
@@ -548,7 +548,11 @@ fn blur_address_bar_on_focus_leave(
     let Some(focused_surface) = focus.0 else {
         return;
     };
-    let active_surface = crate::input::resolve_focused_terminal(&mux, &attached);
+    let active_surface = attached
+        .iter()
+        .next()
+        .and_then(|ws| mux.workspaces_active_pane(ws))
+        .and_then(|p| mux.panes_active_surface(p));
     let pane_left = active_surface != Some(focused_surface);
     let clicked_outside = mouse.just_pressed(MouseButton::Left)
         && !addr_bars.iter().any(|i| *i == Interaction::Pressed);

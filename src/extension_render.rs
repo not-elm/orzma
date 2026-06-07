@@ -14,7 +14,7 @@ use ozmux_extension_host::HandlersBridge;
 use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
-    AttachedWorkspace, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind,
+    AttachedWorkspace, ExtensionSurfaceId, MultiplexerQuery, OwningExtension, SurfaceKind,
     WorkspaceMarker,
 };
 
@@ -136,7 +136,7 @@ impl Plugin for OzmuxExtensionRenderPlugin {
 /// the address bar can own the keyboard.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
-    mux: MultiplexerCommands,
+    mux: MultiplexerQuery,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     webviews: Query<(), With<WebviewSource>>,
     browser_hosts: Query<&BrowserPageWebview>,
@@ -163,7 +163,7 @@ fn sync_focused_webview(
 /// `BrowserPageWebview` child; when `bar_focused_surface` matches the Surface,
 /// returns `None` to release CEF focus.
 fn active_webview(
-    mux: &MultiplexerCommands,
+    mux: &MultiplexerQuery,
     attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     webviews: &Query<(), With<WebviewSource>>,
     browser_hosts: &Query<&BrowserPageWebview>,
@@ -206,7 +206,7 @@ fn active_webview(
 fn finish_extension_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<WebviewUiMaterial>>,
-    mux: MultiplexerCommands,
+    mux: MultiplexerQuery,
     owners: Query<&OwningExtension>,
     kinds: Query<&SurfaceKind>,
     surfaces: Query<
@@ -262,10 +262,7 @@ fn finish_extension_setup(
 /// Surface: surface → pane via `pane_of_surface`, pane → workspace via
 /// `workspace_of_pane`. Returns `None` until every link exists (e.g. before
 /// the surface is laid out into a pane).
-fn surface_multiplexer_chain(
-    surface: Entity,
-    mux: &MultiplexerCommands,
-) -> Option<(Entity, Entity)> {
+fn surface_multiplexer_chain(surface: Entity, mux: &MultiplexerQuery) -> Option<(Entity, Entity)> {
     let pane = mux.pane_of_surface(surface)?;
     let workspace = mux.workspace_of_pane(pane)?;
     Some((workspace, pane))
@@ -409,7 +406,7 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::image::ImagePlugin;
-    use ozmux_multiplexer::MultiplexerPlugin;
+    use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 
     fn make_test_app() -> App {
         // NOTE: `bevy_cef`'s `UiWebviewPlugin` registers `WebviewUiMaterial`

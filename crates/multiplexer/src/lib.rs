@@ -17,7 +17,9 @@ pub mod plugin;
 pub mod resize;
 pub mod swap;
 
-pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter};
+pub use commands::{
+    MultiplexerCommands, MultiplexerQuery, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter,
+};
 pub use components::{
     ActivePane, ActiveSurface, AttachedWorkspace, BrowserProfile, CopyMode, Cwd,
     ExtensionSurfaceId, OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker, SplitNode,

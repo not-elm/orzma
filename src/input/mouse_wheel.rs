@@ -36,6 +36,7 @@ use ozmux_configs::mouse::FineModifier;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::ui::copy_mode::CopyModeState;
+use ozmux_multiplexer::{ActivePane, ActiveSurface};
 
 /// Per-frame accumulator that carries fractional Pixel deltas across
 /// frames and tracks the entity the residual was earned on (so a focus
@@ -63,7 +64,6 @@ fn dispatch_mouse_wheel(
     mut handles: Query<(&mut TerminalHandle, &mut PtyHandle)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
-    mux: ozmux_multiplexer::MultiplexerCommands,
     copy_modes: Query<(), With<CopyModeState>>,
     attached_workspace: Query<
         Entity,
@@ -72,6 +72,8 @@ fn dispatch_mouse_wheel(
             With<ozmux_multiplexer::AttachedWorkspace>,
         ),
     >,
+    active_panes: Query<&ActivePane>,
+    active_surfaces: Query<&ActiveSurface>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
 ) {
@@ -90,7 +92,11 @@ fn dispatch_mouse_wheel(
     let Some(delta_y) = aggregate_wheel_delta(&mut wheel_msgs, cell_h_logical) else {
         return;
     };
-    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_workspace) else {
+    let Some(entity) = super::resolve_focused_terminal_readonly(
+        &attached_workspace,
+        &active_panes,
+        &active_surfaces,
+    ) else {
         return;
     };
     if copy_modes.get(entity).is_ok() {

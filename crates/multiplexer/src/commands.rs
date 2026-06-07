@@ -57,6 +57,55 @@ impl WorkspaceNameCounter {
     }
 }
 
+/// Read-only ECS queries over the multiplexer entity tree. Available in both
+/// the local and thin-client builds (it never touches the authoritative Mux).
+#[derive(SystemParam)]
+pub struct MultiplexerQuery<'w, 's> {
+    workspaces: Query<'w, 's, &'static ActivePane, With<WorkspaceMarker>>,
+    panes: Query<'w, 's, (&'static ActiveSurface, &'static OwningWorkspace), With<PaneMarker>>,
+    panes_owned: Query<'w, 's, (Entity, &'static OwningWorkspace), With<PaneMarker>>,
+    surface_owner: Query<'w, 's, &'static SurfaceOf, With<SurfaceMarker>>,
+    pane_surfaces: Query<'w, 's, &'static Surfaces, With<PaneMarker>>,
+}
+
+impl MultiplexerQuery<'_, '_> {
+    /// Returns the Pane's owning Workspace, read from its `OwningWorkspace` back-pointer.
+    pub fn workspace_of_pane(&self, pane: Entity) -> Option<Entity> {
+        self.panes.get(pane).ok().map(|(_, owner)| owner.0)
+    }
+
+    /// Returns the Pane that owns this Surface, via the `SurfaceOf` relationship.
+    pub fn pane_of_surface(&self, surface: Entity) -> Option<Entity> {
+        self.surface_owner.get(surface).ok().map(|o| o.0)
+    }
+
+    /// Reads the Workspace's `ActivePane` pointer.
+    pub fn workspaces_active_pane(&self, workspace: Entity) -> Option<Entity> {
+        self.workspaces.get(workspace).ok().map(|active| active.0)
+    }
+
+    /// Reads the Pane's `ActiveSurface` pointer.
+    pub fn panes_active_surface(&self, pane: Entity) -> Option<Entity> {
+        self.panes.get(pane).ok().map(|(active, _)| active.0)
+    }
+
+    /// Iterates the Pane entities owned by the given Workspace (via `OwningWorkspace`).
+    pub fn panes_of_workspace(&self, workspace: Entity) -> impl Iterator<Item = Entity> + '_ {
+        self.panes_owned
+            .iter()
+            .filter(move |(_, owner)| owner.0 == workspace)
+            .map(|(e, _)| e)
+    }
+
+    /// Iterates the Surfaces a Pane owns, via the `Surfaces` collection.
+    pub fn surfaces_of_pane(&self, pane: Entity) -> impl Iterator<Item = Entity> + '_ {
+        self.pane_surfaces
+            .get(pane)
+            .into_iter()
+            .flat_map(|s| s.iter())
+    }
+}
+
 /// SystemParam exposing every mutation on the multiplexer state. Read
 /// helpers (`workspace_of_pane`, `panes_of_workspace`, etc.) are non-mut and
 /// can be called by other systems through the same SystemParam.
