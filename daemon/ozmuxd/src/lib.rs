@@ -14,6 +14,7 @@ use ozmux_proto::{ClientMessage, ServerMessage};
 use ozmux_vt::pty::Pty;
 use ozmux_vt::vt::Vt;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use surface_io::{DriverCtl, spawn_driver};
 
 /// Identifies a connected client within the daemon.
@@ -123,16 +124,11 @@ impl Server {
                 for pane in &ws.panes {
                     for surf in &pane.surfaces {
                         if surf.kind == SurfaceKind::Terminal {
-                            let cwd = if surf.cwd.as_os_str().is_empty() {
-                                None
-                            } else {
-                                Some(surf.cwd.as_path())
-                            };
                             self.spawn_surface(
                                 &mut surfaces,
                                 &clients,
                                 surf.surface,
-                                cwd,
+                                cwd_opt(&surf.cwd),
                                 &loop_tx,
                             );
                         }
@@ -368,24 +364,20 @@ impl Server {
                 } => {
                     for e in manifest {
                         if e.kind == SurfaceKind::Terminal {
-                            let cwd = if e.cwd.as_os_str().is_empty() {
-                                None
-                            } else {
-                                Some(e.cwd.as_path())
-                            };
-                            self.spawn_surface(surfaces, clients, e.surface, cwd, loop_tx);
+                            self.spawn_surface(
+                                surfaces,
+                                clients,
+                                e.surface,
+                                cwd_opt(&e.cwd),
+                                loop_tx,
+                            );
                         }
                     }
                 }
                 MuxEvent::SurfaceSpawned {
                     surface, kind, cwd, ..
                 } if *kind == SurfaceKind::Terminal => {
-                    let cwd = if cwd.as_os_str().is_empty() {
-                        None
-                    } else {
-                        Some(cwd.as_path())
-                    };
-                    self.spawn_surface(surfaces, clients, *surface, cwd, loop_tx);
+                    self.spawn_surface(surfaces, clients, *surface, cwd_opt(cwd), loop_tx);
                 }
                 MuxEvent::SurfaceClosed { surface } => {
                     kill_surface(surfaces, *surface);
@@ -528,6 +520,16 @@ fn broadcast(clients: &mut HashMap<ClientId, ClientConn>, events: &[MuxEvent]) -
         clients,
         std::iter::once(ServerMessage::Events(events.to_vec())),
     )
+}
+
+/// Maps a surface cwd to a spawn argument, treating the empty `PathBuf` (the
+/// wire "no cwd" sentinel) as `None` so the PTY inherits the default directory.
+fn cwd_opt(cwd: &Path) -> Option<&Path> {
+    if cwd.as_os_str().is_empty() {
+        None
+    } else {
+        Some(cwd)
+    }
 }
 
 fn kill_surface(surfaces: &mut HashMap<SurfaceId, SurfaceHandle>, surface: SurfaceId) {

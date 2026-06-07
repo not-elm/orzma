@@ -824,15 +824,17 @@ impl Mux {
         Ok(self.build_layout_node(ws.root, cols, rows))
     }
 
-    /// Sets a surface's working directory. Emits `SurfaceCwdChanged` only
-    /// when the cwd actually changes.
+    /// Sets a surface's working directory. Emits `SurfaceCwdChanged` only when
+    /// the cwd actually changes; an empty path is ignored, since the empty
+    /// `PathBuf` is the wire "no cwd" sentinel and must never enter the event
+    /// stream as a real cwd (consumers treat an empty cwd as "absent").
     pub fn set_surface_cwd(
         &mut self,
         surface: SurfaceId,
         cwd: PathBuf,
     ) -> MuxResult<Vec<MuxEvent>> {
         self.surface(surface)?;
-        if self.surfaces[surface].cwd.as_ref() == Some(&cwd) {
+        if cwd.as_os_str().is_empty() || self.surfaces[surface].cwd.as_ref() == Some(&cwd) {
             return Ok(vec![]);
         }
         self.surfaces[surface].cwd = Some(cwd.clone());
@@ -2599,6 +2601,31 @@ mod tests {
 
         let no_change = mux.set_surface_cwd(surface, path).unwrap();
         assert_eq!(no_change, vec![], "same cwd emits nothing");
+    }
+
+    #[test]
+    fn set_surface_cwd_ignores_empty_path() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let surface = mux.active_surface(pane).unwrap();
+
+        let path = PathBuf::from("/home/user");
+        mux.set_surface_cwd(surface, path.clone()).unwrap();
+
+        let empty = mux.set_surface_cwd(surface, PathBuf::new()).unwrap();
+        assert_eq!(
+            empty,
+            vec![],
+            "empty cwd is the no-cwd sentinel and emits nothing"
+        );
+
+        let again = mux.set_surface_cwd(surface, path).unwrap();
+        assert_eq!(
+            again,
+            vec![],
+            "the empty call must not overwrite the stored cwd"
+        );
     }
 
     #[test]
