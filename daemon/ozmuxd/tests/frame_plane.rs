@@ -260,3 +260,66 @@ fn closing_a_surface_keeps_the_server_responsive() {
         "server became unresponsive after closing the second surface: 'QQ' never appeared"
     );
 }
+
+/// A slow client that never reads its frames is marked lagged and has frames
+/// dropped, but is NOT disconnected. After the flood ends, it catches up via
+/// the resync snapshot path and keeps receiving frames.
+///
+/// The deterministic lag-mark, resync, throttle, and snapshot-reuse cases are
+/// covered by unit tests in `surface_io.rs`; this test exercises the full
+/// socket + driver path. Marked `#[ignore]` because the flood relies on the
+/// kernel socket buffer and bounded frame channel filling up before `slow`
+/// drains them, which is timing-dependent and can be flaky in CI.
+// NOTE: The unit tests `fan_out_marks_full_client_lagged_and_drops`,
+// `retry_catches_up_a_lagged_client_with_room`, `retry_throttles_snapshot_builds`,
+// and `snapshot_reuse_clears_lag_at_emit` in `surface_io.rs` cover the QoS
+// invariants deterministically; use those for regression. Run this test
+// manually with `cargo test -p ozmuxd a_slow_client -- --ignored` on a quiet machine.
+#[test]
+#[ignore]
+fn a_slow_client_lags_but_is_not_disconnected() {
+    let path = sock("qos");
+    let _server = Server::new().serve(&path).unwrap();
+    let mut fast = connect(&path, (80, 24));
+    let mut slow = connect(&path, (80, 24));
+    let surface = first_terminal_surface(&fast);
+
+    assert!(
+        poll_until_frame(&mut fast, Duration::from_secs(3), |s, f| {
+            *s == surface && matches!(f, ozmux_vt::frame::Frame::Snapshot(_))
+        }),
+        "fast: no bootstrap snapshot within 3 s"
+    );
+    assert!(
+        poll_until_frame(&mut slow, Duration::from_secs(3), |s, f| {
+            *s == surface && matches!(f, ozmux_vt::frame::Frame::Snapshot(_))
+        }),
+        "slow: no bootstrap snapshot within 3 s"
+    );
+
+    // Flood: `fast` drains continuously; `slow` does NOT read (socket +
+    // bounded frame channel back up → lagged + dropped).
+    fast.send(ClientMessage::Input {
+        surface,
+        bytes: b"for i in $(seq 1 20000); do echo line$i; done\n".to_vec(),
+    })
+    .unwrap();
+
+    assert!(
+        poll_until_frame(&mut fast, Duration::from_secs(15), |_s, f| {
+            frame_contains(f, "line19000")
+        }),
+        "fast stays healthy through the flood"
+    );
+
+    // `slow` now reads: must still receive frames (NOT disconnected) and
+    // eventually see output or a resync snapshot.
+    let caught_up = poll_until_frame(&mut slow, Duration::from_secs(15), |s, f| {
+        *s == surface
+            && (matches!(f, ozmux_vt::frame::Frame::Snapshot(_)) || frame_contains(f, "line"))
+    });
+    assert!(
+        caught_up,
+        "slow client catches up via lossy drop + resync, not disconnect"
+    );
+}

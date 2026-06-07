@@ -239,7 +239,7 @@ fn retry_lagged_clients(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam_channel::unbounded;
+    use crossbeam_channel::{bounded, unbounded};
     use ozmux_vt::frame::{DirtyRow, FrameDelta, FrameSnapshot};
 
     fn frame_contains(frame: &Frame, needle: &str) -> bool {
@@ -327,5 +327,128 @@ mod tests {
         }
         assert!(saw, "expected the echoed 'ZZ' in a frame within 8 s");
         ctl_tx.send(DriverCtl::Shutdown).unwrap();
+    }
+
+    #[test]
+    fn fan_out_marks_full_client_lagged_and_drops() {
+        let (tx, rx) = bounded::<ServerMessage>(1);
+        let mut vt = Vt::new(80, 24);
+        let _ = vt.on_output(b"hello\r\n", std::time::Instant::now());
+        let frame = vt.emit().expect("a frame after output");
+        tx.try_send(ServerMessage::Error {
+            message: "fill".into(),
+        })
+        .unwrap();
+        let mut clients = HashMap::new();
+        clients.insert(
+            ClientId(1),
+            ClientFrameState {
+                frame_tx: tx,
+                lagged: false,
+            },
+        );
+        fan_out(&mut clients, SurfaceId::default(), &frame);
+        assert!(clients[&ClientId(1)].lagged, "Full → lagged");
+        assert_eq!(
+            rx.len(),
+            1,
+            "the frame was dropped, only the pre-fill remains"
+        );
+    }
+
+    #[test]
+    fn retry_catches_up_a_lagged_client_with_room() {
+        let (tx, rx) = bounded::<ServerMessage>(4);
+        let mut vt = Vt::new(80, 24);
+        let _ = vt.on_output(b"world\r\n", std::time::Instant::now());
+        let _ = vt.emit();
+        let mut clients = HashMap::new();
+        clients.insert(
+            ClientId(1),
+            ClientFrameState {
+                frame_tx: tx,
+                lagged: true,
+            },
+        );
+        let mut last_resync = None;
+        retry_lagged_clients(
+            &mut clients,
+            &mut last_resync,
+            SurfaceId::default(),
+            &mut vt,
+        );
+        assert!(!clients[&ClientId(1)].lagged, "Ok → lag cleared");
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::Frame {
+                frame: Frame::Snapshot(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn retry_throttles_snapshot_builds() {
+        let (tx, _rx) = bounded::<ServerMessage>(1);
+        tx.try_send(ServerMessage::Error {
+            message: "fill".into(),
+        })
+        .unwrap();
+        let mut vt = Vt::new(80, 24);
+        let mut clients = HashMap::new();
+        clients.insert(
+            ClientId(1),
+            ClientFrameState {
+                frame_tx: tx,
+                lagged: true,
+            },
+        );
+        let mut last_resync = None;
+        retry_lagged_clients(
+            &mut clients,
+            &mut last_resync,
+            SurfaceId::default(),
+            &mut vt,
+        );
+        let first = last_resync;
+        assert!(first.is_some(), "first retry stamped the throttle clock");
+        retry_lagged_clients(
+            &mut clients,
+            &mut last_resync,
+            SurfaceId::default(),
+            &mut vt,
+        );
+        assert_eq!(
+            last_resync, first,
+            "second retry within the interval is throttled (clock unchanged)"
+        );
+        assert!(clients[&ClientId(1)].lagged, "still Full → still lagged");
+    }
+
+    #[test]
+    fn snapshot_reuse_clears_lag_at_emit() {
+        let (tx, rx) = bounded::<ServerMessage>(4);
+        let mut vt = Vt::new(80, 24);
+        let snap = Frame::Snapshot(vt.force_snapshot(SnapshotReason::Reconnect));
+        let mut clients = HashMap::new();
+        clients.insert(
+            ClientId(1),
+            ClientFrameState {
+                frame_tx: tx,
+                lagged: true,
+            },
+        );
+        fan_out(&mut clients, SurfaceId::default(), &snap);
+        assert!(
+            !clients[&ClientId(1)].lagged,
+            "Snapshot delivered to a lagged client clears the lag"
+        );
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::Frame {
+                frame: Frame::Snapshot(_),
+                ..
+            }
+        ));
     }
 }
