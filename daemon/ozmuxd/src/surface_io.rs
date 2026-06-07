@@ -136,6 +136,9 @@ fn run_driver(
                     // NOTE: note_user_input BEFORE write_all so a racing emit
                     // cycle cannot miss the flag. Mirrors handle.rs line 37.
                     vt.note_user_input();
+                    if !vt.is_at_bottom() {
+                        vt.scroll_to_bottom();
+                    }
                     let _ = pty.write_all(&bytes);
                 }
                 Err(_) => break,
@@ -551,6 +554,98 @@ mod tests {
         assert!(
             got_offset,
             "a frame with display_offset > 0 must arrive after DriverCtl::Scroll"
+        );
+        ctl_tx.send(DriverCtl::Shutdown).unwrap();
+    }
+
+    #[test]
+    fn input_after_scroll_snaps_to_bottom() {
+        let pty = Pty::spawn(80, 24, "/bin/sh", None, &[]).unwrap();
+        let vt = Vt::new(80, 24);
+        let (input_tx, ctl_tx, _join) =
+            spawn_driver(SurfaceId::default(), pty, vt, dummy_loop_tx());
+        let (frame_tx, frame_rx) = unbounded();
+        ctl_tx
+            .send(DriverCtl::AddClient {
+                id: ClientId(1),
+                frame_tx,
+            })
+            .unwrap();
+        // Wait for the bootstrap snapshot.
+        let _ = frame_rx.recv_timeout(Duration::from_secs(3));
+        // Produce scrollback by printing more lines than the viewport rows.
+        input_tx
+            .send(b"for i in $(seq 1 50); do echo SCROLLLINE$i; done\n".to_vec())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut saw_scrollline = false;
+        while Instant::now() < deadline {
+            if let Ok(ServerMessage::Frame { frame, .. }) =
+                frame_rx.recv_timeout(Duration::from_millis(200))
+            {
+                if frame_contains(&frame, "SCROLLLINE50") {
+                    saw_scrollline = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_scrollline,
+            "shell output SCROLLLINE50 must appear in a frame within 10 s"
+        );
+        // Drain remaining frames so the next poll measures fresh state.
+        std::thread::sleep(Duration::from_millis(300));
+        while frame_rx.try_recv().is_ok() {}
+        // Scroll back into history and confirm we are off the live tail.
+        ctl_tx.send(DriverCtl::Scroll { delta: 5 }).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut got_offset = false;
+        while Instant::now() < deadline {
+            match frame_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(ServerMessage::Frame { frame, .. }) => {
+                    let offset = match &frame {
+                        Frame::Snapshot(s) => s.display_offset,
+                        Frame::Delta(d) => d.display_offset,
+                    };
+                    if offset > 0 {
+                        got_offset = true;
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        assert!(
+            got_offset,
+            "a frame with display_offset > 0 must arrive after DriverCtl::Scroll"
+        );
+        // Drain so the snap-triggered frame is the next one we observe.
+        std::thread::sleep(Duration::from_millis(300));
+        while frame_rx.try_recv().is_ok() {}
+        // Typing while scrolled back must snap the viewport to the live tail.
+        input_tx.send(b"x".to_vec()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut snapped = false;
+        while Instant::now() < deadline {
+            match frame_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(ServerMessage::Frame { frame, .. }) => {
+                    let offset = match &frame {
+                        Frame::Snapshot(s) => s.display_offset,
+                        Frame::Delta(d) => d.display_offset,
+                    };
+                    if offset == 0 {
+                        snapped = true;
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        assert!(
+            snapped,
+            "a frame with display_offset == 0 must arrive after input (snap to live tail)"
         );
         ctl_tx.send(DriverCtl::Shutdown).unwrap();
     }
