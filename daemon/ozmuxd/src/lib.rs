@@ -3,6 +3,7 @@
 //! resulting `MuxEvent`s to every attached client. Control plane only
 //! (frame streaming is Plan 4b; UDS transport is `transport` / P4a T3).
 
+mod surface_io;
 mod transport;
 
 pub use transport::{ServerHandle, default_socket_path};
