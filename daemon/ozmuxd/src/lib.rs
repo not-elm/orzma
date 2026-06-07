@@ -188,12 +188,13 @@ impl Server {
                     }
                 }
                 LoopMsg::ClientFrame(cid, cmd) => {
-                    let evicted = self.apply_command(&mut clients, cid, cmd);
+                    let (evicted, events) = self.apply_command(&mut clients, cid, cmd);
                     for dead_cid in evicted {
                         for h in surfaces.values() {
                             let _ = h.ctl_tx.send(DriverCtl::RemoveClient { id: dead_cid });
                         }
                     }
+                    self.handle_mux_events(&mut surfaces, &clients, &events);
                 }
                 LoopMsg::Disconnect(cid) => {
                     if let Some(conn) = clients.remove(&cid)
@@ -233,7 +234,7 @@ impl Server {
         clients: &mut HashMap<ClientId, ClientConn>,
         cid: ClientId,
         cmd: ClientMessage,
-    ) -> Vec<ClientId> {
+    ) -> (Vec<ClientId>, Vec<MuxEvent>) {
         let result = match cmd {
             ClientMessage::Split { pane, orientation } => {
                 self.mux
@@ -255,19 +256,22 @@ impl Server {
             // NOTE: Hello is consumed at Attach before ClientFrame is queued;
             // a post-attach Hello is a client bug — ignore rather than error to
             // avoid a feedback loop if the client retransmits on reconnect.
-            ClientMessage::Hello { .. } => return vec![],
+            ClientMessage::Hello { .. } => return (vec![], vec![]),
             // NOTE: Input is handled directly in the run loop before apply_command.
-            ClientMessage::Input { .. } => return vec![],
+            ClientMessage::Input { .. } => return (vec![], vec![]),
         };
         match result {
-            Ok(events) => broadcast(clients, &events),
+            Ok(events) => {
+                let evicted = broadcast(clients, &events);
+                (evicted, events)
+            }
             Err(e) => {
                 if let Some(conn) = clients.get(&cid) {
                     let _ = conn.tx.try_send(ServerMessage::Error {
                         message: format!("{e:?}"),
                     });
                 }
-                vec![]
+                (vec![], vec![])
             }
         }
     }
