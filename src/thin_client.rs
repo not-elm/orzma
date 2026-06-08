@@ -14,6 +14,7 @@ use ozmux_proto::{Client, Frame, MuxEvent, ServerMessage, SurfaceId, VtEvent};
 use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Owns the daemon's lifetime relative to the GUI.
@@ -77,16 +78,17 @@ pub(crate) fn selection_type_to_kind(ty: SelectionType) -> ozmux_proto::Selectio
 }
 
 /// Whether the GUI runs an in-process daemon (tests/dev) or attaches to /
-/// spawns a separate `ozmuxd` process (the real app). Defaults to `InProcess`;
-/// Task 3 flips the default to `OutOfProcess` once `attach_or_spawn` is real.
+/// spawns a separate `ozmuxd` process (the real app). Defaults to `OutOfProcess`
+/// (the real app); tests pin `InProcess` explicitly via `headless_app`.
 #[derive(Clone, Copy, Default)]
 pub(crate) enum DaemonMode {
-    #[default]
-    InProcess,
-    #[expect(
+    #[allow(
         dead_code,
-        reason = "constructed once Task 3 flips the default to OutOfProcess"
+        reason = "constructed only by the #[cfg(test)] headless_app harness; \
+                  #[expect] would be unfulfilled in the test build where it IS constructed"
     )]
+    InProcess,
+    #[default]
     OutOfProcess,
 }
 
@@ -293,11 +295,105 @@ fn boot_in_process() -> std::io::Result<(ozmuxd::ServerHandle, Client<UnixStream
     Ok((handle, client, snapshot))
 }
 
-// NOTE: replaced by the real attach-or-spawn in Task 3. Stubbed so Task 2 keeps
-// the default `InProcess` mode working without an unresolved symbol.
+/// Resolves the `ozmuxd` binary to spawn: `OZMUX_DAEMON_BIN` if set, else
+/// `ozmuxd` next to the current executable (in dev `target/debug/ozmuxd` sits
+/// beside `ozmux-gui`; a co-install shares a dir).
+fn daemon_binary_path() -> std::io::Result<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("OZMUX_DAEMON_BIN") {
+        return Ok(std::path::PathBuf::from(p));
+    }
+    let exe = std::env::current_exe()?;
+    let dir = exe.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "current_exe has no parent dir",
+        )
+    })?;
+    Ok(dir.join("ozmuxd"))
+}
+
+/// Spawns a DETACHED `ozmuxd` on `socket_path`. `process_group(0)` (setpgid)
+/// puts it in its own process group so a terminal Ctrl-C does not reach it;
+/// stdio is nulled. The caller decides the child's fate: dropping the returned
+/// `Child` orphans the daemon (no reaping Drop on `std::process::Child`), so it
+/// persists past the GUI; calling `kill`/`wait` reaps it (the tests do this).
+fn spawn_daemon(socket_path: &std::path::Path) -> std::io::Result<std::process::Child> {
+    let bin = daemon_binary_path()?;
+    std::process::Command::new(&bin)
+        .arg(socket_path)
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+}
+
+/// Polls `connect` every 10 ms up to a 2 s deadline (the freshly-spawned daemon
+/// needs a moment to bind). Returns the last error if the deadline elapses.
+fn connect_with_retry(socket_path: &std::path::Path) -> std::io::Result<UnixStream> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match UnixStream::connect(socket_path) {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(e);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+/// Attaches to a running daemon at `default_socket_path()` if present, else
+/// spawns a detached one and connects-with-retry. The shutdown hook closes only
+/// OUR connection on `Client` drop; the daemon survives (detach-on-exit).
 fn attach_or_spawn() -> std::io::Result<(Client<UnixStream>, SessionSnapshot)> {
-    let (_handle, client, snapshot) = boot_in_process()?;
+    attach_or_spawn_at(&ozmuxd::default_socket_path())
+}
+
+/// `attach_or_spawn`, parameterized on the socket path so tests can use a
+/// per-test temp path instead of the shared default. Drops any `Child` we
+/// spawned, orphaning the daemon (the persistence design); the real app never
+/// reaps it.
+fn attach_or_spawn_at(
+    path: &std::path::Path,
+) -> std::io::Result<(Client<UnixStream>, SessionSnapshot)> {
+    let (client, snapshot, _orphaned_child) = attach_or_spawn_at_inner(path)?;
     Ok((client, snapshot))
+}
+
+/// Core of `attach_or_spawn_at`, additionally surfacing the spawned `Child`:
+/// `Some` only when THIS call spawned a fresh daemon, `None` when it attached to
+/// one already running. Production drops the child (orphan); tests reap it on
+/// teardown so no daemon leaks.
+fn attach_or_spawn_at_inner(
+    path: &std::path::Path,
+) -> std::io::Result<(
+    Client<UnixStream>,
+    SessionSnapshot,
+    Option<std::process::Child>,
+)> {
+    let (stream, child) = match UnixStream::connect(path) {
+        Ok(s) => (s, None),
+        Err(_) => {
+            let child = spawn_daemon(path)?;
+            (connect_with_retry(path)?, Some(child))
+        }
+    };
+    let reader = BufReader::new(stream.try_clone()?);
+    let shutdown_handle = stream.try_clone()?;
+    let viewport = (80u16, 24u16);
+    let client = Client::connect_with_shutdown(
+        reader,
+        stream,
+        viewport,
+        Some(Box::new(move || {
+            let _ = shutdown_handle.shutdown(Shutdown::Both);
+        })),
+    )?;
+    let snapshot = client.mirror().to_snapshot();
+    Ok((client, snapshot, child))
 }
 
 /// Stamps the GUI-attach markers on the snapshot's active workspace so the
@@ -923,5 +1019,80 @@ mod tests {
             has_selection,
             "thin apply_action ArmDrag → UpdateLocalSelection must fold into TerminalGrid.selection"
         );
+    }
+
+    /// Resolves the built `ozmuxd` for the out-of-process tests: the test exe is
+    /// under `target/<profile>/deps/`, so `ozmuxd` is two parents up.
+    fn ozmuxd_bin() -> std::path::PathBuf {
+        if let Some(p) = std::env::var_os("OZMUX_DAEMON_BIN") {
+            return std::path::PathBuf::from(p);
+        }
+        let exe = std::env::current_exe().expect("current_exe");
+        let target_dir = exe.parent().unwrap().parent().unwrap();
+        target_dir.join("ozmuxd")
+    }
+
+    fn temp_socket(tag: &str) -> std::path::PathBuf {
+        let pid = std::process::id();
+        std::env::temp_dir().join(format!("ozmux-oop-{tag}-{pid}.sock"))
+    }
+
+    /// Reaps a test-spawned `ozmuxd` on Drop (`kill` + `wait`) so the
+    /// out-of-process tests leave no orphaned daemon. Production never wraps the
+    /// child this way — it drops the bare `Child`, orphaning the daemon.
+    struct DaemonReaper(std::process::Child);
+
+    impl Drop for DaemonReaper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn out_of_process_spawn_then_attach() {
+        let bin = ozmuxd_bin();
+        assert!(bin.exists(), "build ozmuxd first: {}", bin.display());
+        // SAFETY: tests run with --test-threads=1 (single-threaded env mutation).
+        unsafe { std::env::set_var("OZMUX_DAEMON_BIN", &bin) };
+        let path = temp_socket("spawn");
+        let _ = std::fs::remove_file(&path);
+
+        let (client, snapshot, child) = attach_or_spawn_at_inner(&path).expect("spawn + connect");
+        let _reaper = child.map(DaemonReaper);
+        assert!(
+            snapshot.active_workspace.is_some(),
+            "Welcome snapshot must carry the bootstrap workspace"
+        );
+        drop(client);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn out_of_process_attach_to_existing_then_reattach() {
+        let bin = ozmuxd_bin();
+        assert!(bin.exists(), "build ozmuxd first: {}", bin.display());
+        // SAFETY: tests run with --test-threads=1 (single-threaded env mutation).
+        unsafe { std::env::set_var("OZMUX_DAEMON_BIN", &bin) };
+        let path = temp_socket("attach");
+        let _ = std::fs::remove_file(&path);
+
+        let (c1, snap1, child) = attach_or_spawn_at_inner(&path).expect("first: spawn + connect");
+        let _reaper = child.map(DaemonReaper);
+        let panes1 = snap1.workspaces.iter().flat_map(|w| w.panes.iter()).count();
+        let (c2, snap2, child2) = attach_or_spawn_at_inner(&path).expect("second: attach");
+        assert!(child2.is_none(), "second call must ATTACH, not spawn");
+        let panes2 = snap2.workspaces.iter().flat_map(|w| w.panes.iter()).count();
+        assert_eq!(panes1, panes2, "the second client sees the same session");
+        drop(c2);
+        drop(c1);
+        let (c3, snap3, child3) = attach_or_spawn_at_inner(&path).expect("reattach");
+        assert!(child3.is_none(), "reattach must ATTACH, not spawn");
+        assert!(
+            snap3.active_workspace.is_some(),
+            "session survives client disconnect (persistence)"
+        );
+        drop(c3);
+        let _ = std::fs::remove_file(&path);
     }
 }
