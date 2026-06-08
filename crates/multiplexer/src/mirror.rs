@@ -23,6 +23,12 @@ use ozmux_proto::ClientMirror;
 use slotmap::SecondaryMap;
 use std::collections::{HashMap, HashSet};
 
+/// An inconsistency in a daemon-supplied snapshot/event: a reference to an
+/// entity/slot the mirror has not built. Used only across the out-of-process
+/// trust boundary (the trusted local path `.expect()`s these away).
+#[derive(Debug)]
+pub struct MirrorError(pub &'static str);
+
 /// Startup ordering seam: `Materialize` builds the ECS mirror from `MuxState`
 /// before app-side bootstrap attaches the initial workspace.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -249,27 +255,41 @@ impl MuxState {
     }
 }
 
-/// Builds the ECS entity tree (+ reverse maps) for the snapshot's active
-/// workspace, sourcing each pane's surfaces from `PaneSnapshot.surfaces`
-/// (kind + cwd), NOT from `LayoutNode` (which carries only the active kind).
-/// Mux-free: the single builder shared by the local materialize and the
-/// thin-client cold-attach.
+/// Trusted-path builder: panics on an inconsistent snapshot (the in-process
+/// `materialize_snapshot` and tests use this). Wraps `build_from_snapshot_checked`.
 pub fn build_from_snapshot(
     commands: &mut Commands,
     state: &mut MuxState,
     snapshot: &SessionSnapshot,
 ) {
+    build_from_snapshot_checked(commands, state, snapshot)
+        .expect("local mirror: inconsistent session snapshot (trusted path)");
+}
+
+/// Builds the ECS entity tree (+ reverse maps) for the snapshot's active
+/// workspace, sourcing each pane's surfaces from `PaneSnapshot.surfaces`
+/// (kind + cwd), NOT from `LayoutNode` (which carries only the active kind).
+/// Mux-free: the single builder shared by the local materialize and the
+/// thin-client cold-attach.
+///
+/// Fail-closed for the out-of-process trust boundary: returns
+/// `Err(MirrorError)` instead of panicking on an inconsistent snapshot.
+pub fn build_from_snapshot_checked(
+    commands: &mut Commands,
+    state: &mut MuxState,
+    snapshot: &SessionSnapshot,
+) -> Result<(), MirrorError> {
     let Some(ws_id) = snapshot.active_workspace else {
-        return;
+        return Ok(());
     };
     let Some(ws) = snapshot.workspaces.iter().find(|w| w.workspace == ws_id) else {
-        return;
+        return Ok(());
     };
     let panes_by_id: HashMap<PaneId, &PaneSnapshot> =
         ws.panes.iter().map(|p| (p.pane, p)).collect();
 
     let (ws_ent, container) = spawn_workspace(commands, state, ws.workspace, &ws.name);
-    let top_ent = realize_snapshot_node(commands, state, &ws.layout, &panes_by_id, ws_ent, 1.0);
+    let top_ent = realize_snapshot_node(commands, state, &ws.layout, &panes_by_id, ws_ent, 1.0)?;
     commands.entity(top_ent).insert(ChildOf(container));
 
     if let Some(active_pane_id) = ws.active_pane
@@ -277,6 +297,7 @@ pub fn build_from_snapshot(
     {
         commands.entity(ws_ent).insert(ActivePane(active_pane_ent));
     }
+    Ok(())
 }
 
 fn realize_snapshot_node(
@@ -286,7 +307,7 @@ fn realize_snapshot_node(
     panes_by_id: &HashMap<PaneId, &PaneSnapshot>,
     ws_ent: Entity,
     grow: f32,
-) -> Entity {
+) -> Result<Entity, MirrorError> {
     match node {
         LayoutNode::Pane { id, cols, rows, .. } => {
             let pane_ent = spawn_pane(commands, state, *id, ws_ent, grow);
@@ -294,7 +315,9 @@ fn realize_snapshot_node(
                 cols: *cols,
                 rows: *rows,
             });
-            let pane_snap = panes_by_id.get(id).expect("pane snapshot for layout pane");
+            let pane_snap = panes_by_id
+                .get(id)
+                .ok_or(MirrorError("snapshot: pane snapshot for layout pane"))?;
             let mut active_surface_ent = None;
             for surf in &pane_snap.surfaces {
                 let surf_ent =
@@ -306,9 +329,10 @@ fn realize_snapshot_node(
                     active_surface_ent = Some(surf_ent);
                 }
             }
-            let active_ent = active_surface_ent.expect("active surface entity must exist");
+            let active_ent = active_surface_ent
+                .ok_or(MirrorError("snapshot: active surface entity must exist"))?;
             commands.entity(pane_ent).insert(ActiveSurface(active_ent));
-            pane_ent
+            Ok(pane_ent)
         }
         LayoutNode::Split {
             id,
@@ -319,33 +343,50 @@ fn realize_snapshot_node(
         } => {
             let split_ent = spawn_split(commands, state, *id, *orientation, grow);
             let first_ent =
-                realize_snapshot_node(commands, state, first, panes_by_id, ws_ent, *ratio);
+                realize_snapshot_node(commands, state, first, panes_by_id, ws_ent, *ratio)?;
             let second_ent =
-                realize_snapshot_node(commands, state, second, panes_by_id, ws_ent, 1.0 - ratio);
+                realize_snapshot_node(commands, state, second, panes_by_id, ws_ent, 1.0 - ratio)?;
             commands.entity(first_ent).insert(ChildOf(split_ent));
             commands.entity(second_ent).insert(ChildOf(split_ent));
-            split_ent
+            Ok(split_ent)
         }
     }
 }
 
-/// Folds the whole batch into the Mux-free fold (PRE-PASS) so per-event ECS
-/// mirroring reads a post-full-batch tree, then mirrors each event into the ECS.
-///
-// NOTE: the pre-pass is load-bearing. `replace_slot`'s stale-sweep reads the
-// full post-batch tree to keep a cross-parent-swapped node that a SIBLING event
-// in the same batch moved to another slot. Folding per-event inside `apply_event`
-// would lag the fold behind the batch and despawn that live node.
+/// Trusted-path applier: panics on an inconsistent event (the local
+/// `commands.rs` write-path uses this). Wraps `apply_events_checked`.
 pub fn apply_events(
     commands: &mut Commands,
     state: &mut MuxState,
     read: &MirrorReadCtx,
     events: &[MuxEvent],
 ) {
+    apply_events_checked(commands, state, read, events)
+        .expect("local mirror: inconsistent Mux event (trusted path)");
+}
+
+/// Folds the whole batch into the Mux-free fold (PRE-PASS) so per-event ECS
+/// mirroring reads a post-full-batch tree, then mirrors each event into the ECS.
+///
+/// Fail-closed for the out-of-process trust boundary: returns `Err(MirrorError)`
+/// on the first inconsistency. The pre-fold makes a mid-batch skip diverge
+/// `state.fold` from the ECS, so callers must FAIL CLOSED, not continue.
+///
+// NOTE: the pre-pass is load-bearing. `replace_slot`'s stale-sweep reads the
+// full post-batch tree to keep a cross-parent-swapped node that a SIBLING event
+// in the same batch moved to another slot. Folding per-event inside `apply_event`
+// would lag the fold behind the batch and despawn that live node.
+pub fn apply_events_checked(
+    commands: &mut Commands,
+    state: &mut MuxState,
+    read: &MirrorReadCtx,
+    events: &[MuxEvent],
+) -> Result<(), MirrorError> {
     state.fold.apply_events(events);
     for ev in events {
-        apply_event(commands, state, read, ev);
+        apply_event(commands, state, read, ev)?;
     }
+    Ok(())
 }
 
 /// Applies one `MuxEvent` to the ECS mirror.
@@ -367,7 +408,7 @@ pub fn apply_event(
     state: &mut MuxState,
     read: &MirrorReadCtx,
     event: &MuxEvent,
-) {
+) -> Result<(), MirrorError> {
     match event {
         MuxEvent::WorkspaceCreated {
             workspace, name, ..
@@ -381,7 +422,10 @@ pub fn apply_event(
             surfaces,
             active_surface,
         } => {
-            let ws_ent = state.workspaces[*workspace];
+            let &ws_ent = state
+                .workspaces
+                .get(*workspace)
+                .ok_or(MirrorError("PaneCreated: workspace"))?;
             let pane_ent = spawn_pane(commands, state, *pane, ws_ent, 1.0);
 
             let is_root = state
@@ -390,7 +434,10 @@ pub fn apply_event(
                 .map(|r| r == NodeId::Pane(*pane))
                 .unwrap_or(false);
             if is_root {
-                let container = state.layout_roots[*workspace];
+                let &container = state
+                    .layout_roots
+                    .get(*workspace)
+                    .ok_or(MirrorError("PaneCreated: layout root"))?;
                 commands.entity(pane_ent).insert(ChildOf(container));
             }
 
@@ -419,7 +466,7 @@ pub fn apply_event(
             }
 
             let active_ent =
-                active_surface_ent.expect("PaneCreated: active surface entity must exist");
+                active_surface_ent.ok_or(MirrorError("PaneCreated: active surface"))?;
             commands.entity(pane_ent).insert(ActiveSurface(active_ent));
         }
 
@@ -429,7 +476,10 @@ pub fn apply_event(
             kind,
             cwd,
         } => {
-            let pane_ent = state.panes[*pane];
+            let &pane_ent = state
+                .panes
+                .get(*pane)
+                .ok_or(MirrorError("SurfaceSpawned: pane"))?;
             let surf_ent = spawn_surface(commands, state, *surface, pane_ent, kind.clone());
             if !cwd.as_os_str().is_empty() {
                 commands.entity(surf_ent).try_insert(Cwd(cwd.clone()));
@@ -451,14 +501,26 @@ pub fn apply_event(
         }
 
         MuxEvent::ActivePaneChanged { workspace, pane } => {
-            let ws_ent = state.workspaces[*workspace];
-            let pane_ent = state.panes[*pane];
+            let &ws_ent = state
+                .workspaces
+                .get(*workspace)
+                .ok_or(MirrorError("ActivePaneChanged: workspace"))?;
+            let &pane_ent = state
+                .panes
+                .get(*pane)
+                .ok_or(MirrorError("ActivePaneChanged: pane"))?;
             commands.entity(ws_ent).insert(ActivePane(pane_ent));
         }
 
         MuxEvent::ActiveSurfaceChanged { pane, surface } => {
-            let pane_ent = state.panes[*pane];
-            let surf_ent = state.surfaces[*surface];
+            let &pane_ent = state
+                .panes
+                .get(*pane)
+                .ok_or(MirrorError("ActiveSurfaceChanged: pane"))?;
+            let &surf_ent = state
+                .surfaces
+                .get(*surface)
+                .ok_or(MirrorError("ActiveSurfaceChanged: surface"))?;
             commands.entity(pane_ent).insert(ActiveSurface(surf_ent));
         }
 
@@ -468,7 +530,10 @@ pub fn apply_event(
         }
 
         MuxEvent::WorkspaceRenamed { workspace, name } => {
-            let ws_ent = state.workspaces[*workspace];
+            let &ws_ent = state
+                .workspaces
+                .get(*workspace)
+                .ok_or(MirrorError("WorkspaceRenamed: workspace"))?;
             commands.entity(ws_ent).insert(Name::new(name.clone()));
         }
 
@@ -537,16 +602,26 @@ pub fn apply_event(
             root,
             subtree,
         } => {
-            let ws_ent = state.workspaces[*workspace];
+            let &ws_ent = state
+                .workspaces
+                .get(*workspace)
+                .ok_or(MirrorError("LayoutChanged: workspace"))?;
             let slot_ent = match root {
-                NodeId::Pane(p) => state.panes[*p],
-                NodeId::Split(s) => state.splits[*s],
+                NodeId::Pane(p) => *state
+                    .panes
+                    .get(*p)
+                    .ok_or(MirrorError("LayoutChanged: pane slot"))?,
+                NodeId::Split(s) => *state
+                    .splits
+                    .get(*s)
+                    .ok_or(MirrorError("LayoutChanged: split slot"))?,
             };
             let parent = read
                 .child_of
                 .get(slot_ent)
                 .map(|c| c.parent())
-                .expect("LayoutChanged: slot entity must have a parent");
+                .ok()
+                .ok_or(MirrorError("LayoutChanged: slot parent"))?;
             let inherited_grow = read.grow_of(slot_ent);
             replace_slot(
                 commands,
@@ -562,19 +637,26 @@ pub fn apply_event(
         }
 
         MuxEvent::WorkspaceRootChanged { workspace, root } => {
-            let ws_ent = state.workspaces[*workspace];
-            let container = state.layout_roots[*workspace];
+            let &ws_ent = state
+                .workspaces
+                .get(*workspace)
+                .ok_or(MirrorError("WorkspaceRootChanged: workspace"))?;
+            let &container = state
+                .layout_roots
+                .get(*workspace)
+                .ok_or(MirrorError("WorkspaceRootChanged: layout root"))?;
             let slot_ent = read
                 .children
                 .get(container)
                 .ok()
                 .and_then(|kids| kids.iter().next())
-                .expect("WorkspaceRootChanged: layout-root container must have a child");
+                .ok_or(MirrorError("WorkspaceRootChanged: root child"))?;
             replace_slot(
                 commands, state, read, *workspace, ws_ent, slot_ent, container, 1.0, root,
             );
         }
     }
+    Ok(())
 }
 
 /// The shared two-phase find-and-replace: swap the subtree occupying
@@ -2858,6 +2940,86 @@ mod tests {
 #[cfg(all(test, feature = "thin-client"))]
 mod thin_client_tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn build_from_snapshot_checked_errs_on_inconsistent_snapshot() {
+        // A snapshot whose sole pane declares no active surface: realize cannot
+        // resolve the active surface entity, so the checked builder must return
+        // Err (NOT panic).
+        let mux = ozmux_mux::Mux::new();
+        let session = mux.sessions()[0];
+        let mut snapshot = mux.snapshot(session).unwrap();
+        snapshot.workspaces[0].panes[0].active_surface = None;
+
+        let mut app = App::new();
+        let mut state = MuxState::from_snapshot(snapshot.clone());
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let result = {
+            let mut commands = Commands::new(&mut queue, app.world());
+            build_from_snapshot_checked(&mut commands, &mut state, &snapshot)
+        };
+        queue.apply(app.world_mut());
+
+        assert!(
+            result.is_err(),
+            "build_from_snapshot_checked must return Err on an unresolvable active surface, not panic"
+        );
+    }
+
+    #[test]
+    fn apply_events_checked_errs_on_unknown_workspace_event() {
+        // An ActivePaneChanged that references a workspace/pane id from a SECOND
+        // Mux (never built into this state's reverse maps). apply_events_checked
+        // must return Err (NOT panic) — the fail-closed trust-boundary contract.
+        let mux = ozmux_mux::Mux::new();
+        let session = mux.sessions()[0];
+        let snapshot = mux.snapshot(session).unwrap();
+
+        // A second workspace in a foreign Mux yields a slotmap key distinct from
+        // the single-workspace base snapshot (a fresh Mux's FIRST workspace key
+        // would collide with the base's, which IS built into the state).
+        let mut foreign = ozmux_mux::Mux::new();
+        foreign.new_workspace().unwrap();
+        let foreign_ws = foreign.active_workspace();
+        let foreign_pane = foreign.active_pane(foreign_ws).unwrap();
+        let bad_event = MuxEvent::ActivePaneChanged {
+            workspace: foreign_ws,
+            pane: foreign_pane,
+        };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let mut state = MuxState::from_snapshot(snapshot.clone());
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, app.world());
+            build_from_snapshot_checked(&mut commands, &mut state, &snapshot)
+                .expect("base snapshot must build cleanly");
+        }
+        queue.apply(app.world_mut());
+        app.insert_resource(state);
+
+        let result = app
+            .world_mut()
+            .run_system_once(
+                move |mut commands: Commands, mut state: ResMut<MuxState>, read: MirrorReadCtx| {
+                    apply_events_checked(
+                        &mut commands,
+                        &mut state,
+                        &read,
+                        std::slice::from_ref(&bad_event),
+                    )
+                    .is_err()
+                },
+            )
+            .unwrap();
+
+        assert!(
+            result,
+            "apply_events_checked must return Err on an event referencing an unbuilt workspace, not panic"
+        );
+    }
 
     #[test]
     fn build_from_snapshot_rebuilds_tree_with_nonactive_surfaces() {

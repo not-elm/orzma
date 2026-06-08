@@ -34,8 +34,9 @@ pub use mirror::assert_no_map_leaks;
 #[cfg(not(feature = "thin-client"))]
 pub use mirror::mirror_matches;
 pub use mirror::{
-    MirrorReadCtx, Mismatch, MultiplexerStartupSet, MuxPaneId, MuxSplitId, MuxState, MuxSurfaceId,
-    MuxWorkspaceId, apply_events, build_from_snapshot, snapshot_matches_ecs,
+    MirrorError, MirrorReadCtx, Mismatch, MultiplexerStartupSet, MuxPaneId, MuxSplitId, MuxState,
+    MuxSurfaceId, MuxWorkspaceId, apply_events, apply_events_checked, build_from_snapshot,
+    build_from_snapshot_checked, snapshot_matches_ecs,
 };
 #[cfg(all(feature = "thin-client", debug_assertions))]
 pub use mirror::{assert_no_map_leaks, ecs_matches_fold};

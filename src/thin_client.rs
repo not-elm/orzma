@@ -8,8 +8,8 @@ use bevy::window::PrimaryWindow;
 use bevy_terminal::SelectionType;
 use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalGrid, TerminalSnapshot};
 use ozmux_multiplexer::{
-    AttachedWorkspace, MirrorReadCtx, MuxState, SessionSnapshot, WorkspaceCreatedAt, apply_events,
-    build_from_snapshot,
+    AttachedWorkspace, MirrorReadCtx, MuxState, SessionSnapshot, WorkspaceCreatedAt,
+    apply_events_checked, build_from_snapshot_checked,
 };
 use ozmux_proto::{Client, Frame, MuxEvent, ServerMessage, SurfaceId, VtEvent};
 use std::io::BufReader;
@@ -123,7 +123,8 @@ impl Plugin for ThinClientMultiplexerPlugin {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, app.world());
-            build_from_snapshot(&mut commands, &mut state, &snapshot);
+            build_from_snapshot_checked(&mut commands, &mut state, &snapshot)
+                .expect("thin-client: daemon sent an inconsistent session snapshot");
             stamp_attached_workspace(&mut commands, &state, &snapshot);
         }
         queue.apply(app.world_mut());
@@ -177,7 +178,11 @@ fn pump_thin_client(
         };
         match msg {
             ServerMessage::Events(batch) => {
-                apply_events(&mut commands, &mut state, &read, &batch);
+                if apply_events_checked(&mut commands, &mut state, &read, &batch).is_err() {
+                    error!("thin-client: inconsistent daemon event — exiting");
+                    request_clean_exit(&mut commands, &mut exiting, &windows);
+                    break;
+                }
                 for ev in &batch {
                     match ev {
                         MuxEvent::SurfaceSpawned { pane, surface, .. }
