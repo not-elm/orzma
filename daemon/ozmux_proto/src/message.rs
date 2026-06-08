@@ -232,6 +232,8 @@ pub enum ClientMessage {
         /// The operation.
         op: CopyModeOp,
     },
+    /// Ask the daemon to shut down cleanly (used by `ozmuxd --kill`).
+    Shutdown,
 }
 
 /// A message from the daemon to a client.

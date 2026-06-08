@@ -166,7 +166,9 @@ impl Server {
                 } => {
                     if protocol_version != ozmux_proto::PROTOCOL_VERSION {
                         let _ = writer.try_send(ServerMessage::Error {
-                            message: format!("protocol version mismatch: {protocol_version}"),
+                            message: format!(
+                                "protocol version mismatch: {protocol_version} — run `ozmuxd --kill` and relaunch"
+                            ),
                         });
                         continue;
                     }
@@ -227,6 +229,9 @@ impl Server {
                     if let Some(h) = surfaces.get(&surface) {
                         let _ = h.ctl_tx.send(DriverCtl::CopyModeOp { client_id: cid, op });
                     }
+                }
+                LoopMsg::ClientFrame(_cid, ClientMessage::Shutdown) => {
+                    shutdown_requested.store(true, Ordering::SeqCst);
                 }
                 LoopMsg::ClientFrame(cid, cmd) => {
                     let (evicted, events) = self.apply_command(&mut clients, cid, cmd);
@@ -349,6 +354,9 @@ impl Server {
             ClientMessage::Scroll { .. } => return (vec![], vec![]),
             // NOTE: CopyModeOp is routed to the driver's ctl_tx in the run loop before apply_command; unreachable here.
             ClientMessage::CopyModeOp { .. } => return (vec![], vec![]),
+            // NOTE: Shutdown is handled in the run loop before apply_command;
+            // it sets the shutdown flag and never reaches here.
+            ClientMessage::Shutdown => return (vec![], vec![]),
             ClientMessage::SetActiveSurface { pane, surface } => {
                 self.mux.set_active_surface(pane, surface)
             }

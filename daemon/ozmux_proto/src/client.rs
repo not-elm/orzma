@@ -77,7 +77,7 @@ impl<W: Write> Client<W> {
                 if protocol_version != PROTOCOL_VERSION {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "protocol version mismatch",
+                        "protocol version mismatch — a different ozmuxd is already running; run `ozmuxd --kill` and relaunch",
                     ));
                 }
                 ClientMirror::from_snapshot(snapshot)

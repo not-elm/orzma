@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use std::io::{self, Read, Write};
 
 /// The wire protocol version (bumped on any incompatible change).
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Maximum body bytes per message (malformed-frame guard + the eager-allocation
 /// ceiling on read). 8 MiB clears the ~1.83 MB worst-case decorated-TUI snapshot
@@ -145,6 +145,7 @@ mod tests {
                 surface: SurfaceId::default(),
                 op: CopyModeOp::CopySelection,
             },
+            ClientMessage::Shutdown,
         ];
 
         let mut buf: Vec<u8> = Vec::new();
