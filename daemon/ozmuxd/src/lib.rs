@@ -87,6 +87,7 @@ struct ClientConn {
     tx: Sender<ServerMessage>,
     frame_tx: Sender<ServerMessage>,
     disconnect: Option<Box<dyn FnOnce() + Send>>,
+    viewport: (u16, u16),
 }
 
 /// The central loop's handle to a surface's driver thread.
@@ -194,10 +195,11 @@ impl Server {
                         tx: writer,
                         frame_tx: frame_writer,
                         disconnect,
+                        viewport,
                     };
                     clients.insert(client_id, conn);
-                    let ws = self.mux.active_workspace();
-                    if let Ok(events) = self.mux.set_workspace_size(ws, viewport.0, viewport.1) {
+                    let events = self.resize_active_workspace_to_min(&clients);
+                    if !events.is_empty() {
                         let evicted = broadcast(&mut clients, &events);
                         for cid in evicted {
                             for h in surfaces.values() {
@@ -250,6 +252,16 @@ impl Server {
                     }
                     for h in surfaces.values() {
                         let _ = h.ctl_tx.send(DriverCtl::RemoveClient { id: cid });
+                    }
+                    let events = self.resize_active_workspace_to_min(&clients);
+                    if !events.is_empty() {
+                        let evicted = broadcast(&mut clients, &events);
+                        for ev_cid in evicted {
+                            for h in surfaces.values() {
+                                let _ = h.ctl_tx.send(DriverCtl::RemoveClient { id: ev_cid });
+                            }
+                        }
+                        self.handle_mux_events(&mut surfaces, &clients, &events, &loop_tx);
                     }
                 }
                 LoopMsg::Snapshot { reply } => {
@@ -329,6 +341,10 @@ impl Server {
             } => self.mux.split_pane(pane, orientation, side, kind, cwd),
             ClientMessage::Close { pane } => self.mux.close_pane(pane),
             ClientMessage::Navigate { pane, direction } => self.mux.navigate(pane, direction),
+            // NOTE: the wire `workspace` field is intentionally ignored — `focus_pane`
+            // derives the pane's owning workspace and emits `ActivePaneChanged { workspace,
+            // pane }` that every mirror applies correctly, so a cross-client
+            // SelectWorkspace/SetActivePane race yields a valid focus, never corruption.
             ClientMessage::SetActivePane { pane, .. } => self.mux.focus_pane(pane),
             ClientMessage::SwapPane { pane, offset } => self.mux.swap_pane(pane, offset),
             ClientMessage::SpawnSurface { pane, kind, cwd } => {
@@ -340,8 +356,10 @@ impl Server {
                 side,
             } => self.mux.break_surface_to_pane(surface, orientation, side),
             ClientMessage::SetViewport { cols, rows } => {
-                let ws = self.mux.active_workspace();
-                self.mux.set_workspace_size(ws, cols, rows)
+                if let Some(c) = clients.get_mut(&cid) {
+                    c.viewport = (cols, rows);
+                }
+                Ok(self.resize_active_workspace_to_min(clients))
             }
             // NOTE: Hello is consumed at Attach before ClientFrame is queued;
             // a post-attach Hello is a client bug — ignore rather than error to
@@ -372,11 +390,20 @@ impl Server {
                             events.append(&mut rename_events);
                         }
                     }
+                    events.extend(self.resize_active_workspace_to_min(clients));
                     Ok(events)
                 }
                 Err(e) => Err(e),
             },
-            ClientMessage::SelectWorkspace { workspace } => self.mux.select_workspace(workspace),
+            ClientMessage::SelectWorkspace { workspace } => {
+                match self.mux.select_workspace(workspace) {
+                    Ok(mut events) => {
+                        events.extend(self.resize_active_workspace_to_min(clients));
+                        Ok(events)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
         };
         match result {
             Ok(events) => {
@@ -392,6 +419,25 @@ impl Server {
                 (vec![], vec![])
             }
         }
+    }
+
+    /// Sizes the active workspace to the component-wise minimum viewport across
+    /// all attached clients (tmux semantics: the shared grid fits the smallest
+    /// client), clamped to a 1x1 floor. Returns the resulting `MuxEvent`s (incl.
+    /// `PaneResized`) for the caller to broadcast and drive into the surface
+    /// drivers. Returns `[]` when no clients are attached — the grid retains its
+    /// last size (detached-session behavior).
+    fn resize_active_workspace_to_min(
+        &mut self,
+        clients: &HashMap<ClientId, ClientConn>,
+    ) -> Vec<MuxEvent> {
+        let Some((cols, rows)) = min_viewport(clients) else {
+            return Vec::new();
+        };
+        let ws = self.mux.active_workspace();
+        self.mux
+            .set_workspace_size(ws, cols.max(1), rows.max(1))
+            .unwrap_or_default()
     }
 
     fn handle_mux_events(
@@ -566,6 +612,13 @@ fn broadcast(clients: &mut HashMap<ClientId, ClientConn>, events: &[MuxEvent]) -
     )
 }
 
+fn min_viewport(clients: &HashMap<ClientId, ClientConn>) -> Option<(u16, u16)> {
+    clients
+        .values()
+        .map(|c| c.viewport)
+        .reduce(|(ac, ar), (bc, br)| (ac.min(bc), ar.min(br)))
+}
+
 /// Maps a surface cwd to a spawn argument, treating the empty `PathBuf` (the
 /// wire "no cwd" sentinel) as `None` so the PTY inherits the default directory.
 fn cwd_opt(cwd: &Path) -> Option<&Path> {
@@ -612,6 +665,7 @@ mod tests {
             tx,
             frame_tx,
             disconnect: None,
+            viewport: (80, 24),
         }
     }
 
@@ -730,6 +784,7 @@ mod tests {
                 tx: full_tx,
                 frame_tx,
                 disconnect: Some(Box::new(move || flag.store(true, Ordering::SeqCst))),
+                viewport: (80, 24),
             },
         );
 
