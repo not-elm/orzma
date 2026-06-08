@@ -14,6 +14,7 @@ path = "src/main.rs"
 ozmux_mux = { path = "../ozmux_mux" }
 ozmux_proto = { path = "../ozmux_proto" }
 ozmux_vt = { path = "../ozmux_vt", features = ["pty"] }
+alacritty_terminal = { workspace = true }
 crossbeam-channel = "0.5"
 tracing = { workspace = true }
 

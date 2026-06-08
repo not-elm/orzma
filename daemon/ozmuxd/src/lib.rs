@@ -3,6 +3,7 @@
 //! resulting `MuxEvent`s to every attached client. Terminal driver lifecycle,
 //! input routing, and frame fan-out are wired here (Plan 4b-2a T3).
 
+mod copymode;
 mod surface_io;
 mod transport;
 
