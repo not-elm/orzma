@@ -930,6 +930,14 @@ impl Mux {
         })
     }
 
+    /// Returns `pane`'s resolved cell size, or `None` when the owning workspace
+    /// has no size yet (startup / zero clients). Used to seed a freshly spawned
+    /// surface's PTY/Vt at the right size instead of a fixed 80x24.
+    pub fn resolved_pane_size(&self, pane: PaneId) -> Option<(u16, u16)> {
+        let (cols, rows) = self.node_cell_extent(NodeId::Pane(pane));
+        (cols > 0 && rows > 0).then_some((cols, rows))
+    }
+
     fn walk_bounds(&self, node: NodeId, bounds: Rect, out: &mut Vec<(PaneId, Rect)>) {
         match node {
             NodeId::Pane(p) => out.push((p, bounds)),
@@ -2245,6 +2253,24 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, MuxEvent::WorkspaceResized { workspace: w, cols: 100, rows: 30 } if *w == ws)),
             "a new size emits WorkspaceResized"
+        );
+    }
+
+    #[test]
+    fn resolved_pane_size_is_some_when_sized_none_when_unsized() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        assert_eq!(
+            mux.resolved_pane_size(pane),
+            None,
+            "unsized workspace → None"
+        );
+        mux.set_workspace_size(ws, 80, 24).unwrap();
+        assert_eq!(
+            mux.resolved_pane_size(pane),
+            Some((80, 24)),
+            "the sole pane fills the 80x24 workspace"
         );
     }
 

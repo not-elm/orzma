@@ -10,7 +10,7 @@ mod transport;
 pub use transport::{ServerHandle, default_socket_path};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use ozmux_mux::{Mux, MuxEvent, SessionId, SessionSnapshot, SurfaceId, SurfaceKind};
+use ozmux_mux::{Mux, MuxEvent, PaneId, SessionId, SessionSnapshot, SurfaceId, SurfaceKind};
 use ozmux_proto::{ClientMessage, ServerMessage};
 use ozmux_vt::pty::Pty;
 use ozmux_vt::vt::Vt;
@@ -145,6 +145,7 @@ impl Server {
                             self.spawn_surface(
                                 &mut surfaces,
                                 &clients,
+                                pane.pane,
                                 surf.surface,
                                 cwd_opt(&surf.cwd),
                                 &loop_tx,
@@ -450,13 +451,16 @@ impl Server {
         for ev in events {
             match ev {
                 MuxEvent::PaneCreated {
-                    surfaces: manifest, ..
+                    pane,
+                    surfaces: manifest,
+                    ..
                 } => {
                     for e in manifest {
                         if e.kind == SurfaceKind::Terminal {
                             self.spawn_surface(
                                 surfaces,
                                 clients,
+                                *pane,
                                 e.surface,
                                 cwd_opt(&e.cwd),
                                 loop_tx,
@@ -465,9 +469,13 @@ impl Server {
                     }
                 }
                 MuxEvent::SurfaceSpawned {
-                    surface, kind, cwd, ..
+                    pane,
+                    surface,
+                    kind,
+                    cwd,
+                    ..
                 } if *kind == SurfaceKind::Terminal => {
-                    self.spawn_surface(surfaces, clients, *surface, cwd_opt(cwd), loop_tx);
+                    self.spawn_surface(surfaces, clients, *pane, *surface, cwd_opt(cwd), loop_tx);
                 }
                 MuxEvent::SurfaceClosed { surface } => {
                     kill_surface(surfaces, *surface);
@@ -502,6 +510,7 @@ impl Server {
         &self,
         surfaces: &mut HashMap<SurfaceId, SurfaceHandle>,
         clients: &HashMap<ClientId, ClientConn>,
+        pane: PaneId,
         surface: SurfaceId,
         cwd: Option<&std::path::Path>,
         loop_tx: &Sender<LoopMsg>,
@@ -513,15 +522,16 @@ impl Server {
         if surfaces.contains_key(&surface) {
             return;
         }
+        let (cols, rows) = self.mux.resolved_pane_size(pane).unwrap_or((80, 24));
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let pty = match Pty::spawn(80, 24, &shell, cwd, &[]) {
+        let pty = match Pty::spawn(cols, rows, &shell, cwd, &[]) {
             Ok(p) => p,
             Err(e) => {
                 tracing::error!("failed to spawn PTY for surface {:?}: {e}", surface);
                 return;
             }
         };
-        let vt = Vt::new(80, 24);
+        let vt = Vt::new(cols, rows);
         let (input_tx, ctl_tx, join) = spawn_driver(surface, pty, vt, loop_tx.clone());
         for (id, conn) in clients {
             let _ = ctl_tx.send(DriverCtl::AddClient {
