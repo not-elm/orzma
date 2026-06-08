@@ -72,7 +72,7 @@ fn main() {
 
     // Thin-client plugin (wire read-path + in-process daemon).
     #[cfg(feature = "thin-client")]
-    app.add_plugins(thin_client::ThinClientMultiplexerPlugin);
+    app.add_plugins(thin_client::ThinClientMultiplexerPlugin::default());
 
     // Bootstrap is shared: the local build registers mux-seed + cursor; the
     // thin-client build registers cursor only (workspace is seeded by

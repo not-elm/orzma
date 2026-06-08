@@ -16,14 +16,19 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Holds the in-process daemon alive for the app's lifetime (Drop tears it down).
+/// Owns the daemon's lifetime relative to the GUI.
 #[derive(Resource)]
-pub(crate) struct ThinDaemon(
-    // NOTE: held only for its Drop (RAII teardown of the in-process daemon); the
-    // field is never read, so the dead-code lint must be silenced explicitly.
-    #[expect(dead_code, reason = "RAII guard: kept alive for Drop, never read")]
-    pub(crate)  ozmuxd::ServerHandle,
-);
+pub(crate) enum ThinDaemon {
+    /// Tests / dev: in-process daemon. `ServerHandle`'s Drop tears it down +
+    /// removes its socket. (RAII — kept alive for the side-effect.)
+    InProcess(
+        #[expect(dead_code, reason = "RAII guard: kept alive for Drop, never read")]
+        ozmuxd::ServerHandle,
+    ),
+    /// Real app: a detached out-of-process daemon. Nothing is held — it persists
+    /// past our exit; the next launch re-attaches.
+    OutOfProcess,
+}
 
 /// The wire client. NonSend because `Client` holds a `Box<dyn FnOnce()+Send>`
 /// shutdown hook (not `Sync`), and is only touched by the main-thread pump.
@@ -71,13 +76,40 @@ pub(crate) fn selection_type_to_kind(ty: SelectionType) -> ozmux_proto::Selectio
     }
 }
 
-/// Runs the GUI as a read-only thin client over an in-process `ozmuxd`.
-pub struct ThinClientMultiplexerPlugin;
+/// Whether the GUI runs an in-process daemon (tests/dev) or attaches to /
+/// spawns a separate `ozmuxd` process (the real app). Defaults to `InProcess`;
+/// Task 3 flips the default to `OutOfProcess` once `attach_or_spawn` is real.
+#[derive(Clone, Copy, Default)]
+pub(crate) enum DaemonMode {
+    #[default]
+    InProcess,
+    #[expect(
+        dead_code,
+        reason = "constructed once Task 3 flips the default to OutOfProcess"
+    )]
+    OutOfProcess,
+}
+
+/// Runs the GUI as a thin client over an `ozmuxd` daemon (in- or out-of-process).
+#[derive(Default)]
+pub struct ThinClientMultiplexerPlugin {
+    pub(crate) mode: DaemonMode,
+}
 
 impl Plugin for ThinClientMultiplexerPlugin {
     fn build(&self, app: &mut App) {
-        let (handle, client, snapshot) =
-            boot().expect("thin-client: in-process daemon boot failed");
+        let (daemon, client, snapshot) = match self.mode {
+            DaemonMode::InProcess => {
+                let (handle, client, snapshot) =
+                    boot_in_process().expect("thin-client: in-process daemon boot failed");
+                (ThinDaemon::InProcess(handle), client, snapshot)
+            }
+            DaemonMode::OutOfProcess => {
+                let (client, snapshot) =
+                    attach_or_spawn().expect("thin-client: could not start or attach ozmuxd");
+                (ThinDaemon::OutOfProcess, client, snapshot)
+            }
+        };
         let mut state = MuxState::from_snapshot(snapshot.clone());
         let mut queue = CommandQueue::default();
         {
@@ -89,7 +121,7 @@ impl Plugin for ThinClientMultiplexerPlugin {
         app.insert_resource(state);
         app.init_resource::<PendingFocus>();
         app.insert_resource(ThinWorkspaceSeq(2));
-        app.insert_resource(ThinDaemon(handle));
+        app.insert_resource(daemon);
         app.insert_non_send_resource(ThinClientConn(client));
         app.add_systems(
             Update,
@@ -232,7 +264,8 @@ fn handle_surface_event(
 
 /// Boots an in-process `ozmuxd` on a process-unique temp UDS, connects a
 /// `Client`, and returns the handle, client, and the Welcome snapshot.
-fn boot() -> std::io::Result<(ozmuxd::ServerHandle, Client<UnixStream>, SessionSnapshot)> {
+fn boot_in_process() -> std::io::Result<(ozmuxd::ServerHandle, Client<UnixStream>, SessionSnapshot)>
+{
     // NOTE: Socket path must be unique per boot call, not just per process, to
     //       prevent concurrent test instances (even with --test-threads=1, the
     //       static counter makes each plugin instance independently addressable
@@ -260,6 +293,13 @@ fn boot() -> std::io::Result<(ozmuxd::ServerHandle, Client<UnixStream>, SessionS
     Ok((handle, client, snapshot))
 }
 
+// NOTE: replaced by the real attach-or-spawn in Task 3. Stubbed so Task 2 keeps
+// the default `InProcess` mode working without an unresolved symbol.
+fn attach_or_spawn() -> std::io::Result<(Client<UnixStream>, SessionSnapshot)> {
+    let (_handle, client, snapshot) = boot_in_process()?;
+    Ok((client, snapshot))
+}
+
 /// Stamps the GUI-attach markers on the snapshot's active workspace so the
 /// focus/layout systems (`With<AttachedWorkspace>`) work.
 fn stamp_attached_workspace(commands: &mut Commands, state: &MuxState, snapshot: &SessionSnapshot) {
@@ -282,7 +322,9 @@ mod tests {
     fn headless_app() -> App {
         let mut app = App::new();
         app.add_plugins(bevy::MinimalPlugins);
-        app.add_plugins(ThinClientMultiplexerPlugin);
+        app.add_plugins(ThinClientMultiplexerPlugin {
+            mode: DaemonMode::InProcess,
+        });
         app.insert_resource(crate::clipboard::Clipboard::new());
         app
     }
