@@ -4,6 +4,7 @@
 
 use bevy::ecs::world::CommandQueue;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use bevy_terminal::SelectionType;
 use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalGrid, TerminalSnapshot};
 use ozmux_multiplexer::{
@@ -30,6 +31,12 @@ pub(crate) enum ThinDaemon {
     /// past our exit; the next launch re-attaches.
     OutOfProcess,
 }
+
+/// Set when the GUI has requested a clean exit (daemon connection lost, or an
+/// inconsistent daemon message in Task 5). The debug mirror-drift assert skips
+/// while this is set, because a fail-closed teardown can leave the ECS mid-batch.
+#[derive(Resource, Default)]
+pub(crate) struct ThinClientExiting(pub(crate) bool);
 
 /// The wire client. NonSend because `Client` holds a `Box<dyn FnOnce()+Send>`
 /// shutdown hook (not `Sync`), and is only touched by the main-thread pump.
@@ -122,6 +129,7 @@ impl Plugin for ThinClientMultiplexerPlugin {
         queue.apply(app.world_mut());
         app.insert_resource(state);
         app.init_resource::<PendingFocus>();
+        app.init_resource::<ThinClientExiting>();
         app.insert_resource(ThinWorkspaceSeq(2));
         app.insert_resource(daemon);
         app.insert_non_send_resource(ThinClientConn(client));
@@ -145,8 +153,11 @@ fn pump_thin_client(
     mut pending: ResMut<PendingFocus>,
     mut workspace_seq: ResMut<ThinWorkspaceSeq>,
     mut clipboard: ResMut<crate::clipboard::Clipboard>,
+    mut exiting: ResMut<ThinClientExiting>,
     read: MirrorReadCtx,
     attached_q: Query<Entity, With<AttachedWorkspace>>,
+    daemon: Res<ThinDaemon>,
+    windows: Query<Entity, With<PrimaryWindow>>,
 ) {
     let mut budget = 256u32;
     while budget > 0 {
@@ -155,7 +166,12 @@ fn pump_thin_client(
             Ok(Some(m)) => m,
             Ok(None) => break,
             Err(e) => {
-                error!("thin-client: wire poll error: {e}");
+                if matches!(*daemon, ThinDaemon::OutOfProcess) {
+                    error!("thin-client: daemon connection lost: {e}");
+                    request_clean_exit(&mut commands, &mut exiting, &windows);
+                } else {
+                    error!("thin-client: wire poll error: {e}");
+                }
                 break;
             }
         };
@@ -224,10 +240,31 @@ fn pump_thin_client(
     }
 }
 
+/// Requests a clean GUI exit by despawning the primary window (winit's native
+/// close path). Avoids the Bevy 0.18.1 macOS programmatic-`AppExit` freeze
+/// (#23313). Idempotent. Sets `ThinClientExiting` so the debug mirror assert
+/// skips during teardown.
+fn request_clean_exit(
+    commands: &mut Commands,
+    exiting: &mut ThinClientExiting,
+    windows: &Query<Entity, With<PrimaryWindow>>,
+) {
+    exiting.0 = true;
+    for win in windows.iter() {
+        commands.entity(win).despawn();
+    }
+}
+
 /// Debug-only: assert the ECS tree matches the authoritative fold + no map leaks.
 #[cfg(debug_assertions)]
 fn debug_assert_ecs_matches_fold(world: &mut World) {
     use ozmux_multiplexer::{assert_no_map_leaks, ecs_matches_fold};
+    if world
+        .get_resource::<ThinClientExiting>()
+        .is_some_and(|e| e.0)
+    {
+        return;
+    }
     if let Err(m) = ecs_matches_fold(world) {
         panic!("thin-client mirror drift: {m:?}");
     }
@@ -1018,6 +1055,23 @@ mod tests {
         assert!(
             has_selection,
             "thin apply_action ArmDrag → UpdateLocalSelection must fold into TerminalGrid.selection"
+        );
+    }
+
+    #[test]
+    fn pump_requests_clean_exit_when_daemon_connection_drops() {
+        let mut app = headless_app(); // InProcess: live ServerHandle held
+        // Drop the in-process daemon (its ServerHandle Drop shuts the loop +
+        // removes the socket → the client reader EOFs → the wire closes), then
+        // switch the resource to OutOfProcess so the pump takes the exit branch.
+        app.world_mut().remove_resource::<ThinDaemon>();
+        app.insert_resource(ThinDaemon::OutOfProcess);
+        let exited = pump_until(&mut app, std::time::Duration::from_secs(5), |app| {
+            app.world().resource::<ThinClientExiting>().0
+        });
+        assert!(
+            exited,
+            "a dropped daemon connection must set ThinClientExiting in OutOfProcess mode"
         );
     }
 
