@@ -444,20 +444,7 @@ impl Mux {
                 rows,
             });
         }
-        for (pane, (c, r)) in after {
-            let changed = before
-                .iter()
-                .find(|(p, _)| *p == pane)
-                .map(|(_, prev)| *prev != (c, r))
-                .unwrap_or(true);
-            if changed {
-                events.push(MuxEvent::PaneResized {
-                    pane,
-                    cols: c,
-                    rows: r,
-                });
-            }
-        }
+        events.extend(pane_resize_events(&before, &after));
         Ok(events)
     }
 
@@ -1368,6 +1355,34 @@ fn direction_to_axis_sign(d: PaneDirection) -> (SplitOrientation, i16) {
         PaneDirection::Down => (SplitOrientation::Vertical, 1),
         PaneDirection::Up => (SplitOrientation::Vertical, -1),
     }
+}
+
+/// Diffs `before` against `after` resolved pane sizes and returns one
+/// `MuxEvent::PaneResized` per pane whose size changed (a pane present only in
+/// `after` counts as changed). Both slices are `(PaneId, (cols, rows))`. When a
+/// workspace has no stored size both slices are empty (see
+/// `resolved_sizes_or_empty`), so this naturally emits nothing — never a
+/// `PaneResized { cols: 0, rows: 0 }`.
+fn pane_resize_events(
+    before: &[(PaneId, (u16, u16))],
+    after: &[(PaneId, (u16, u16))],
+) -> Vec<MuxEvent> {
+    let mut events = Vec::new();
+    for (pane, (c, r)) in after {
+        let changed = before
+            .iter()
+            .find(|(p, _)| p == pane)
+            .map(|(_, prev)| prev != &(*c, *r))
+            .unwrap_or(true);
+        if changed {
+            events.push(MuxEvent::PaneResized {
+                pane: *pane,
+                cols: *c,
+                rows: *r,
+            });
+        }
+    }
+    events
 }
 
 #[cfg(test)]
