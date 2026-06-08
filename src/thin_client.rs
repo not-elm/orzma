@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_terminal::SelectionType;
 use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalGrid, TerminalSnapshot};
+use nix::fcntl::{Flock, FlockArg};
 use ozmux_multiplexer::{
     AttachedWorkspace, MirrorReadCtx, MuxState, SessionSnapshot, WorkspaceCreatedAt,
     apply_events_checked, build_from_snapshot_checked,
@@ -423,6 +424,12 @@ fn attach_or_spawn() -> std::io::Result<(Client<UnixStream>, SessionSnapshot)> {
     Ok((client, snapshot))
 }
 
+/// The advisory-lock path guarding `attach_or_spawn` for a given socket: the
+/// socket path with its extension swapped to `.lock`.
+fn lockfile_path_for(socket_path: &std::path::Path) -> std::path::PathBuf {
+    socket_path.with_extension("lock")
+}
+
 /// Core of `attach_or_spawn`, parameterized on the socket path (so tests use a
 /// per-test temp path) and additionally surfacing the spawned `Child`: `Some`
 /// only when THIS call spawned a fresh daemon, `None` when it attached to one
@@ -435,6 +442,20 @@ fn attach_or_spawn_at_inner(
     SessionSnapshot,
     Option<std::process::Child>,
 )> {
+    let lock_path = lockfile_path_for(path);
+    // NOTE: create the parent before opening the lock — the GUI locks before
+    // the daemon creates $TMPDIR/ozmux, so the parent may not exist yet.
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    let _lock = Flock::lock(lock_file, FlockArg::LockExclusive)
+        .map_err(|(_file, errno)| std::io::Error::from(errno))?;
+
     let (stream, child) = match UnixStream::connect(path) {
         Ok(s) => (s, None),
         Err(_) => {
@@ -1133,6 +1154,7 @@ mod tests {
         );
         drop(client);
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(lockfile_path_for(&path));
     }
 
     #[test]
@@ -1161,5 +1183,42 @@ mod tests {
         );
         drop(c3);
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(lockfile_path_for(&path));
+    }
+
+    #[test]
+    fn concurrent_attach_or_spawn_serializes_to_one_daemon() {
+        let bin = ozmuxd_bin();
+        assert!(bin.exists(), "ozmuxd test binary must exist");
+        // SAFETY: the suite runs with --test-threads=1, and set_var here runs
+        // BEFORE the two worker threads are spawned, so no concurrent set_var
+        // races the reads inside attach_or_spawn_at_inner.
+        unsafe {
+            std::env::set_var("OZMUX_DAEMON_BIN", &bin);
+        }
+        let path = temp_socket("concurrent");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(lockfile_path_for(&path));
+
+        let p1 = path.clone();
+        let p2 = path.clone();
+        let h1 = std::thread::spawn(move || attach_or_spawn_at_inner(&p1));
+        let h2 = std::thread::spawn(move || attach_or_spawn_at_inner(&p2));
+        let (c1, _s1, child1) = h1.join().unwrap().expect("thread 1 attach-or-spawn");
+        let (c2, _s2, child2) = h2.join().unwrap().expect("thread 2 attach-or-spawn");
+
+        let spawned = child1.is_some() as u8 + child2.is_some() as u8;
+        // Wrap both children in DaemonReaper BEFORE the assert so a failed
+        // assertion still reaps the spawned daemon on unwind (no orphan leak).
+        let _r1 = child1.map(DaemonReaper);
+        let _r2 = child2.map(DaemonReaper);
+        drop(c1);
+        drop(c2);
+        assert_eq!(
+            spawned, 1,
+            "exactly one of the two concurrent callers spawns the daemon"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(lockfile_path_for(&path));
     }
 }
