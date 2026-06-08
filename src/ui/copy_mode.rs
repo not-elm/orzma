@@ -293,16 +293,17 @@ pub(crate) fn handle_enter_copy_mode_request(
     }
     #[cfg(feature = "thin-client")]
     {
+        let Ok(surface) = surface_ids.get(ev.entity).map(|c| c.0) else {
+            return;
+        };
         commands.entity(ev.entity).insert(CopyModeState);
-        if let Ok(surface) = surface_ids.get(ev.entity).map(|c| c.0) {
-            crate::thin_client::send_cmd(
-                &mut conn,
-                ozmux_proto::ClientMessage::CopyModeOp {
-                    surface,
-                    op: ozmux_proto::CopyModeOp::Enter,
-                },
-            );
-        }
+        crate::thin_client::send_cmd(
+            &mut conn,
+            ozmux_proto::ClientMessage::CopyModeOp {
+                surface,
+                op: ozmux_proto::CopyModeOp::Enter,
+            },
+        );
     }
 }
 

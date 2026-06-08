@@ -813,4 +813,73 @@ mod tests {
             "mouse-path SelectionStartAt + SelectionUpdateTo (no Enter) must fold into TerminalGrid.selection"
         );
     }
+
+    /// Covers the thin `apply_action`'s `ButtonAction` → `CopyModeOp` mapping
+    /// end-to-end against the real in-process daemon — the gap the wire-level
+    /// `thin_client_mouse_selection_renders` left (that test sends raw ops; this
+    /// one drives the gesture machine). An `ArmDrag` press records the anchor,
+    /// then a single `UpdateLocalSelection` to a different cell materializes the
+    /// drag (sending `SelectionStartAt` for the anchor + `SelectionUpdateTo` for
+    /// the new cell); the daemon's selection must round-trip into
+    /// `TerminalGrid.selection`.
+    #[test]
+    fn thin_client_mouse_apply_action_selection_round_trips() {
+        use crate::input::mouse_buttons::{MouseSelectionState, apply_action};
+        let (mut app, surface_id, surface_ent) = headless_app_with_grid();
+        wait_for_cells(&mut app, surface_ent);
+
+        let mut state = MouseSelectionState::default();
+
+        // 1-indexed cell coords, matching what the mouse path projects via
+        // `cell_at_local`. Anchor at (1, 1); drag to (5, 1) on first move.
+        let anchor = bevy_terminal::CellCoord { col: 1, row: 1 };
+        let moved = bevy_terminal::CellCoord { col: 5, row: 1 };
+
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            // Left press → ArmDrag: records the anchor, sends SelectionClear.
+            apply_action(
+                &mut conn,
+                &mut state,
+                bevy_terminal::ButtonEventKind::Press,
+                bevy_terminal::MouseButtonKind::Left,
+                bevy_terminal::ButtonAction::ArmDrag {
+                    ty: bevy_terminal::SelectionType::Simple,
+                    cell: anchor,
+                    side: bevy_terminal::Side::Left,
+                },
+                surface_ent,
+                surface_id,
+                false,
+                false,
+            );
+            // First inter-cell drag → UpdateLocalSelection: materializes the
+            // armed drag, sending SelectionStartAt (anchor) + SelectionUpdateTo.
+            apply_action(
+                &mut conn,
+                &mut state,
+                bevy_terminal::ButtonEventKind::Drag,
+                bevy_terminal::MouseButtonKind::Left,
+                bevy_terminal::ButtonAction::UpdateLocalSelection {
+                    cell: moved,
+                    side: bevy_terminal::Side::Right,
+                },
+                surface_ent,
+                surface_id,
+                false,
+                false,
+            );
+        }
+
+        let has_selection = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            app.world()
+                .get::<TerminalGrid>(surface_ent)
+                .map(|g| g.selection.is_some())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_selection,
+            "thin apply_action ArmDrag → UpdateLocalSelection must fold into TerminalGrid.selection"
+        );
+    }
 }

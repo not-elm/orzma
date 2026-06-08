@@ -1037,8 +1037,12 @@ fn cell_side_to_proto(side: Side) -> ozmux_proto::CellSide {
 /// over the wire as a `CopyModeOp` (the daemon drives selection + frame
 /// rendering). In copy mode, `ViGoto` is sent before any selection mutation so
 /// the daemon's vi cursor tracks the moving end of the selection.
+///
+/// `pub(crate)` so the real-daemon thin integration test in
+/// `crate::thin_client` can drive the `ButtonAction` → `CopyModeOp` mapping
+/// end-to-end (the wire-level mouse test exercises raw ops, not this mapping).
 #[cfg(feature = "thin-client")]
-fn apply_action(
+pub(crate) fn apply_action(
     conn: &mut crate::thin_client::ThinClientConn,
     state: &mut MouseSelectionState,
     event_kind: bevy_terminal::ButtonEventKind,
