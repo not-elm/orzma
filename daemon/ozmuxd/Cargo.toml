@@ -16,6 +16,7 @@ ozmux_proto = { path = "../ozmux_proto" }
 ozmux_vt = { path = "../ozmux_vt", features = ["pty"] }
 alacritty_terminal = { workspace = true }
 crossbeam-channel = "0.5"
+nix = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

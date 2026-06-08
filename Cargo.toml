@@ -21,7 +21,7 @@ debug = []
 # ozmuxd; the local Mux and write path are compiled out of ozmux_multiplexer and
 # the app swaps in ThinClientMultiplexerPlugin. (4c-1b-1 read-path; user-action
 # writes are 4c-1b-2.) Build/run with `--features thin-client`.
-thin-client = ["ozmux_multiplexer/thin-client", "ozmux_extension_host/thin-client", "dep:ozmuxd", "dep:ozmux_proto"]
+thin-client = ["ozmux_multiplexer/thin-client", "ozmux_extension_host/thin-client", "dep:ozmuxd", "dep:ozmux_proto", "dep:nix"]
 
 [dependencies]
 ab_glyph = "0.2"
@@ -37,6 +37,7 @@ ozmux_extension_host = { path = "crates/extension_host", features = ["cef"] }
 ozmux_multiplexer = { path = "crates/multiplexer" }
 ozmuxd = { path = "daemon/ozmuxd", optional = true }
 ozmux_proto = { path = "daemon/ozmux_proto", optional = true }
+nix = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -88,6 +89,7 @@ toml = "0.8"
 dirs = "5"
 unicode-width = "0.2"
 open = "5"
+nix = { version = "0.28", default-features = false, features = ["fs", "signal", "process"] }
 bevy_cef_core = { git = "https://github.com/not-elm/bevy_cef", branch = "poc/macos-accelerated-paint-iosurface"}
 
 [workspace.lints.clippy]

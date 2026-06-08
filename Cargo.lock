@@ -4632,6 +4632,7 @@ dependencies = [
  "bevy_terminal",
  "bevy_terminal_renderer",
  "cosmic-text",
+ "nix 0.28.0",
  "open",
  "ozmux_configs",
  "ozmux_extension_host",
@@ -4729,6 +4730,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "crossbeam-channel",
+ "nix 0.28.0",
  "ozmux_mux",
  "ozmux_proto",
  "ozmux_vt",
