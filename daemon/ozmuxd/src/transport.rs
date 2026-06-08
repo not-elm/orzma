@@ -114,9 +114,15 @@ impl Drop for ServerHandle {
         if let Some(j) = self.accept_join.take() {
             let _ = j.join();
         }
+        // NOTE: order is load-bearing. `drain_and_join` MUST run while the central
+        // loop is still alive — `loop_handle` (which sends `Shutdown` and joins the
+        // loop thread) drops AFTER this body via struct field order. An attached
+        // conn's writer thread is parked on its frame/out channels and unblocks only
+        // when the loop drops those senders in response to the reader's `Disconnect`
+        // (shutting the socket down does not wake a crossbeam `recv`). Draining after
+        // the loop is gone would deadlock `writer.join()`.
         self.registry.drain_and_join();
         let _ = std::fs::remove_file(&self.path);
-        // loop_handle's own Drop sends Shutdown and joins the loop thread.
     }
 }
 

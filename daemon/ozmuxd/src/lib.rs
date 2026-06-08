@@ -296,7 +296,6 @@ impl Server {
                     }
                 }
                 LoopMsg::Shutdown => {
-                    shutdown_requested.store(true, Ordering::SeqCst);
                     for (_, h) in surfaces.drain() {
                         let _ = h.ctl_tx.send(DriverCtl::Shutdown);
                         if let Some(j) = h.join {

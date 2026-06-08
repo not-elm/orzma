@@ -178,8 +178,8 @@ fn pump_thin_client(
         };
         match msg {
             ServerMessage::Events(batch) => {
-                if apply_events_checked(&mut commands, &mut state, &read, &batch).is_err() {
-                    error!("thin-client: inconsistent daemon event — stopping");
+                if let Err(e) = apply_events_checked(&mut commands, &mut state, &read, &batch) {
+                    error!("thin-client: inconsistent daemon event — stopping: {}", e.0);
                     stop_thin_client(&mut commands, &mut exiting, &daemon, &windows);
                     break;
                 }
