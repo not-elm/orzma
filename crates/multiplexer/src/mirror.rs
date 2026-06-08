@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 /// entity/slot the mirror has not built. Used only across the out-of-process
 /// trust boundary (the trusted local path `.expect()`s these away).
 #[derive(Debug)]
-pub struct MirrorError(pub &'static str);
+pub struct MirrorError(pub String);
 
 /// Startup ordering seam: `Materialize` builds the ECS mirror from `MuxState`
 /// before app-side bootstrap attaches the initial workspace.
@@ -315,9 +315,9 @@ fn realize_snapshot_node(
                 cols: *cols,
                 rows: *rows,
             });
-            let pane_snap = panes_by_id
-                .get(id)
-                .ok_or(MirrorError("snapshot: pane snapshot for layout pane"))?;
+            let pane_snap = panes_by_id.get(id).ok_or_else(|| {
+                MirrorError(format!("snapshot: pane snapshot for layout pane {id:?}"))
+            })?;
             let mut active_surface_ent = None;
             for surf in &pane_snap.surfaces {
                 let surf_ent =
@@ -329,8 +329,11 @@ fn realize_snapshot_node(
                     active_surface_ent = Some(surf_ent);
                 }
             }
-            let active_ent = active_surface_ent
-                .ok_or(MirrorError("snapshot: active surface entity must exist"))?;
+            let active_ent = active_surface_ent.ok_or_else(|| {
+                MirrorError(format!(
+                    "snapshot: active surface entity must exist for pane {id:?}"
+                ))
+            })?;
             commands.entity(pane_ent).insert(ActiveSurface(active_ent));
             Ok(pane_ent)
         }
@@ -425,7 +428,7 @@ pub fn apply_event(
             let &ws_ent = state
                 .workspaces
                 .get(*workspace)
-                .ok_or(MirrorError("PaneCreated: workspace"))?;
+                .ok_or_else(|| MirrorError(format!("PaneCreated: workspace {workspace:?}")))?;
             let pane_ent = spawn_pane(commands, state, *pane, ws_ent, 1.0);
 
             let is_root = state
@@ -434,10 +437,9 @@ pub fn apply_event(
                 .map(|r| r == NodeId::Pane(*pane))
                 .unwrap_or(false);
             if is_root {
-                let &container = state
-                    .layout_roots
-                    .get(*workspace)
-                    .ok_or(MirrorError("PaneCreated: layout root"))?;
+                let &container = state.layout_roots.get(*workspace).ok_or_else(|| {
+                    MirrorError(format!("PaneCreated: layout root {workspace:?}"))
+                })?;
                 commands.entity(pane_ent).insert(ChildOf(container));
             }
 
@@ -465,8 +467,9 @@ pub fn apply_event(
                 }
             }
 
-            let active_ent =
-                active_surface_ent.ok_or(MirrorError("PaneCreated: active surface"))?;
+            let active_ent = active_surface_ent.ok_or_else(|| {
+                MirrorError(format!("PaneCreated: active surface for pane {pane:?}"))
+            })?;
             commands.entity(pane_ent).insert(ActiveSurface(active_ent));
         }
 
@@ -479,7 +482,7 @@ pub fn apply_event(
             let &pane_ent = state
                 .panes
                 .get(*pane)
-                .ok_or(MirrorError("SurfaceSpawned: pane"))?;
+                .ok_or_else(|| MirrorError(format!("SurfaceSpawned: pane {pane:?}")))?;
             let surf_ent = spawn_surface(commands, state, *surface, pane_ent, kind.clone());
             if !cwd.as_os_str().is_empty() {
                 commands.entity(surf_ent).try_insert(Cwd(cwd.clone()));
@@ -501,14 +504,13 @@ pub fn apply_event(
         }
 
         MuxEvent::ActivePaneChanged { workspace, pane } => {
-            let &ws_ent = state
-                .workspaces
-                .get(*workspace)
-                .ok_or(MirrorError("ActivePaneChanged: workspace"))?;
+            let &ws_ent = state.workspaces.get(*workspace).ok_or_else(|| {
+                MirrorError(format!("ActivePaneChanged: workspace {workspace:?}"))
+            })?;
             let &pane_ent = state
                 .panes
                 .get(*pane)
-                .ok_or(MirrorError("ActivePaneChanged: pane"))?;
+                .ok_or_else(|| MirrorError(format!("ActivePaneChanged: pane {pane:?}")))?;
             commands.entity(ws_ent).insert(ActivePane(pane_ent));
         }
 
@@ -516,11 +518,11 @@ pub fn apply_event(
             let &pane_ent = state
                 .panes
                 .get(*pane)
-                .ok_or(MirrorError("ActiveSurfaceChanged: pane"))?;
+                .ok_or_else(|| MirrorError(format!("ActiveSurfaceChanged: pane {pane:?}")))?;
             let &surf_ent = state
                 .surfaces
                 .get(*surface)
-                .ok_or(MirrorError("ActiveSurfaceChanged: surface"))?;
+                .ok_or_else(|| MirrorError(format!("ActiveSurfaceChanged: surface {surface:?}")))?;
             commands.entity(pane_ent).insert(ActiveSurface(surf_ent));
         }
 
@@ -533,7 +535,7 @@ pub fn apply_event(
             let &ws_ent = state
                 .workspaces
                 .get(*workspace)
-                .ok_or(MirrorError("WorkspaceRenamed: workspace"))?;
+                .ok_or_else(|| MirrorError(format!("WorkspaceRenamed: workspace {workspace:?}")))?;
             commands.entity(ws_ent).insert(Name::new(name.clone()));
         }
 
@@ -605,23 +607,25 @@ pub fn apply_event(
             let &ws_ent = state
                 .workspaces
                 .get(*workspace)
-                .ok_or(MirrorError("LayoutChanged: workspace"))?;
+                .ok_or_else(|| MirrorError(format!("LayoutChanged: workspace {workspace:?}")))?;
             let slot_ent = match root {
                 NodeId::Pane(p) => *state
                     .panes
                     .get(*p)
-                    .ok_or(MirrorError("LayoutChanged: pane slot"))?,
+                    .ok_or_else(|| MirrorError(format!("LayoutChanged: pane slot {p:?}")))?,
                 NodeId::Split(s) => *state
                     .splits
                     .get(*s)
-                    .ok_or(MirrorError("LayoutChanged: split slot"))?,
+                    .ok_or_else(|| MirrorError(format!("LayoutChanged: split slot {s:?}")))?,
             };
             let parent = read
                 .child_of
                 .get(slot_ent)
                 .map(|c| c.parent())
                 .ok()
-                .ok_or(MirrorError("LayoutChanged: slot parent"))?;
+                .ok_or_else(|| {
+                    MirrorError(format!("LayoutChanged: slot parent (slot {slot_ent:?})"))
+                })?;
             let inherited_grow = read.grow_of(slot_ent);
             replace_slot(
                 commands,
@@ -637,20 +641,22 @@ pub fn apply_event(
         }
 
         MuxEvent::WorkspaceRootChanged { workspace, root } => {
-            let &ws_ent = state
-                .workspaces
-                .get(*workspace)
-                .ok_or(MirrorError("WorkspaceRootChanged: workspace"))?;
-            let &container = state
-                .layout_roots
-                .get(*workspace)
-                .ok_or(MirrorError("WorkspaceRootChanged: layout root"))?;
+            let &ws_ent = state.workspaces.get(*workspace).ok_or_else(|| {
+                MirrorError(format!("WorkspaceRootChanged: workspace {workspace:?}"))
+            })?;
+            let &container = state.layout_roots.get(*workspace).ok_or_else(|| {
+                MirrorError(format!("WorkspaceRootChanged: layout root {workspace:?}"))
+            })?;
             let slot_ent = read
                 .children
                 .get(container)
                 .ok()
                 .and_then(|kids| kids.iter().next())
-                .ok_or(MirrorError("WorkspaceRootChanged: root child"))?;
+                .ok_or_else(|| {
+                    MirrorError(format!(
+                        "WorkspaceRootChanged: root child (container {container:?})"
+                    ))
+                })?;
             replace_slot(
                 commands, state, read, *workspace, ws_ent, slot_ent, container, 1.0, root,
             );
