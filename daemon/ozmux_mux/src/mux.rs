@@ -521,20 +521,7 @@ impl Mux {
             split: ancestor,
             ratio: self.splits[ancestor].ratio(),
         }];
-        for (pane_id, (c, r)) in after {
-            let changed = before
-                .iter()
-                .find(|(p, _)| *p == pane_id)
-                .map(|(_, prev)| *prev != (c, r))
-                .unwrap_or(true);
-            if changed {
-                events.push(MuxEvent::PaneResized {
-                    pane: pane_id,
-                    cols: c,
-                    rows: r,
-                });
-            }
-        }
+        events.extend(pane_resize_events(&before, &after));
         Ok(events)
     }
 

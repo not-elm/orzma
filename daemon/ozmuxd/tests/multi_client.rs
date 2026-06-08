@@ -136,16 +136,6 @@ where
     false
 }
 
-/// The active workspace's single root pane's resolved cols in a client's mirror.
-// NOTE: assumes a single-workspace context — reads workspaces[0], NOT the active
-// workspace. Use active_workspace_pane_cols after a CreateWorkspace/SelectWorkspace.
-fn active_pane_cols(c: &ItClient) -> u16 {
-    match &c.mirror().to_snapshot().workspaces[0].layout {
-        LayoutNode::Pane { cols, .. } => *cols,
-        other => panic!("expected a single Pane layout, got {other:?}"),
-    }
-}
-
 /// The resolved root-pane cols of the *active* workspace (resolved via
 /// `active_workspace`, since workspaces are stored in insertion order, not
 /// active-first — a newly created workspace lands at the end of the list).
@@ -163,20 +153,6 @@ fn active_workspace_pane_cols(c: &ItClient) -> u16 {
     }
 }
 
-/// Re-reads `c`'s mirror until `active_pane_cols` equals `want` or `dur` elapses,
-/// draining events between polls. Returns the last observed value.
-fn wait_for_pane_cols(c: &mut ItClient, want: u16, dur: Duration) -> u16 {
-    let deadline = Instant::now() + dur;
-    loop {
-        drain(c);
-        let got = active_pane_cols(c);
-        if got == want || Instant::now() >= deadline {
-            return got;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
 /// Re-reads `c`'s mirror until the *active* workspace's root pane cols equal
 /// `want` or `dur` elapses, draining events between polls.
 fn wait_for_active_workspace_cols(c: &mut ItClient, want: u16, dur: Duration) -> u16 {
@@ -191,6 +167,23 @@ fn wait_for_active_workspace_cols(c: &mut ItClient, want: u16, dur: Duration) ->
     }
 }
 
+/// Polls both clients until their mirror snapshots converge, or the deadline elapses.
+/// Returns whether they converged.
+fn wait_for_mirrors_converge(a: &mut ItClient, b: &mut ItClient, dur: Duration) -> bool {
+    let deadline = Instant::now() + dur;
+    loop {
+        drain(a);
+        drain(b);
+        if a.mirror().to_snapshot() == b.mirror().to_snapshot() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Two clients at different viewports: the active workspace sizes to their
 /// component-wise MIN, and grows back to the lone client's size on disconnect.
 #[test]
@@ -199,24 +192,28 @@ fn grid_sizes_to_min_across_clients_and_grows_on_disconnect() {
     let server = Server::new().serve(&path).unwrap();
     let mut big = connect(&path, (100, 30));
     drain(&mut big);
-    assert_eq!(active_pane_cols(&big), 100, "single client → its own size");
+    assert_eq!(
+        active_workspace_pane_cols(&big),
+        100,
+        "single client → its own size"
+    );
 
     let mut small = connect_disconnectable(&path, (80, 24));
     assert_eq!(
-        wait_for_pane_cols(&mut big, 80, Duration::from_secs(2)),
+        wait_for_active_workspace_cols(&mut big, 80, Duration::from_secs(2)),
         80,
         "two clients → min (80)"
     );
     drain(&mut small);
     assert_eq!(
-        active_pane_cols(&small),
+        active_workspace_pane_cols(&small),
         80,
         "both mirrors agree on the min"
     );
 
     drop(small);
     assert_eq!(
-        wait_for_pane_cols(&mut big, 100, Duration::from_secs(2)),
+        wait_for_active_workspace_cols(&mut big, 100, Duration::from_secs(2)),
         100,
         "grid grows back to the lone client's size after disconnect"
     );
@@ -236,7 +233,7 @@ fn split_resizes_drivers_to_min_resolved_size() {
     let mut b = connect(&path, (80, 24));
     // The grid must settle at the min (80) before we split.
     assert_eq!(
-        wait_for_pane_cols(&mut a, 80, Duration::from_secs(2)),
+        wait_for_active_workspace_cols(&mut a, 80, Duration::from_secs(2)),
         80,
         "grid settles at min (80) before split"
     );
@@ -268,12 +265,8 @@ fn split_resizes_drivers_to_min_resolved_size() {
     );
 
     // Let `b` catch up, then assert both mirrors converged to the same split.
-    std::thread::sleep(Duration::from_millis(200));
-    drain(&mut a);
-    drain(&mut b);
-    assert_eq!(
-        a.mirror().to_snapshot(),
-        b.mirror().to_snapshot(),
+    assert!(
+        wait_for_mirrors_converge(&mut a, &mut b, Duration::from_secs(2)),
         "both client mirrors must converge to the same layout after the split"
     );
 
@@ -311,7 +304,7 @@ fn new_workspace_is_sized_to_client_min_not_zero() {
     let mut a = connect(&path, (100, 30));
     let mut b = connect(&path, (80, 24));
     assert_eq!(
-        wait_for_pane_cols(&mut a, 80, Duration::from_secs(2)),
+        wait_for_active_workspace_cols(&mut a, 80, Duration::from_secs(2)),
         80,
         "grid settles at min (80) before create-workspace"
     );

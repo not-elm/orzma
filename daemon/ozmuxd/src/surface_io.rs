@@ -165,8 +165,15 @@ fn run_driver(
                     clients.remove(&id);
                 }
                 Ok(DriverCtl::Resize { cols, rows }) => {
-                    vt.resize(cols, rows);
-                    let _ = pty.resize(cols, rows);
+                    // NOTE: a degenerate tiny grid (e.g. a 1-col workspace split
+                    // horizontally resolves a child pane to 0 cols) can deliver a
+                    // 0 dimension here; resizing a VT/PTY to 0 is invalid (alacritty
+                    // underflows on a 0-column grid and panics this driver thread),
+                    // so skip — the driver keeps its last valid size.
+                    if cols > 0 && rows > 0 {
+                        vt.resize(cols, rows);
+                        let _ = pty.resize(cols, rows);
+                    }
                 }
                 Ok(DriverCtl::Scroll { delta }) => {
                     vt.scroll(delta);
