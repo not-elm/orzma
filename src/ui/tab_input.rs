@@ -20,9 +20,6 @@ pub(crate) struct TabInteractionPlugin;
 
 impl Plugin for TabInteractionPlugin {
     fn build(&self, app: &mut App) {
-        #[cfg(not(feature = "thin-client"))]
-        app.add_systems(Update, drive_tab_clicks.in_set(InputPhase::Dispatch));
-        #[cfg(feature = "thin-client")]
         app.add_systems(Update, drive_tab_clicks.in_set(InputPhase::Dispatch));
         app.add_systems(Update, tab_hover_cursor.after(InputPhase::Hover));
     }
@@ -81,10 +78,12 @@ fn drive_tab_clicks(
         if *interaction != Interaction::Pressed {
             continue;
         }
+        let Ok(pane) = pane_ids.get(tab.pane).map(|c| c.0) else {
+            continue;
+        };
         if let Some(attached) = attached_workspace
             && query.workspace_of_pane(tab.pane) == Some(attached)
             && let Ok(workspace) = workspace_ids.get(attached).map(|c| c.0)
-            && let Ok(pane) = pane_ids.get(tab.pane).map(|c| c.0)
         {
             crate::thin_client::send_cmd(
                 &mut conn,
@@ -93,10 +92,9 @@ fn drive_tab_clicks(
         }
         // NOTE: the surface switch is intentionally unconditional, mirroring the
         // local arm — a tab click still selects its surface even with no attached
-        // workspace. Only the pane-focus step needs a workspace.
-        if let Ok(pane) = pane_ids.get(tab.pane).map(|c| c.0)
-            && let Ok(surface) = surface_ids.get(tab.surface).map(|c| c.0)
-        {
+        // workspace. Only the pane-focus step needs a workspace; do not gate this
+        // on `attached`.
+        if let Ok(surface) = surface_ids.get(tab.surface).map(|c| c.0) {
             crate::thin_client::send_cmd(
                 &mut conn,
                 ozmux_proto::ClientMessage::SetActiveSurface { pane, surface },
