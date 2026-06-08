@@ -97,9 +97,6 @@ pub(crate) struct MouseButtonsInputPlugin;
 impl Plugin for MouseButtonsInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MouseSelectionState>();
-        #[cfg(not(feature = "thin-client"))]
-        app.add_systems(Update, dispatch_mouse_buttons.in_set(InputPhase::Dispatch));
-        #[cfg(feature = "thin-client")]
         app.add_systems(Update, dispatch_mouse_buttons.in_set(InputPhase::Dispatch));
     }
 }

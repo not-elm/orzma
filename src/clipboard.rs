@@ -258,7 +258,10 @@ fn on_paste_from_clipboard(
     };
     let bracketed = grids
         .get(ev.entity)
-        .map(|g| g.modes.iter().any(|m| m == "bracketed-paste"))
+        .map(|g| {
+            bevy_terminal::modes_from_names(&g.modes)
+                .contains(bevy_terminal::TermMode::BRACKETED_PASTE)
+        })
         .unwrap_or(false);
     let Ok(surface) = surface_ids.get(ev.entity).map(|c| c.0) else {
         return;

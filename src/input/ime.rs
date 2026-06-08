@@ -315,7 +315,7 @@ pub(crate) fn read_ime_events(
     surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
 ) {
     for event in events.read() {
-        if let Some(commit_text) = apply_event(&mut state, event) {
+        if let Some(commit_text) = apply_event(&mut state, event).filter(|t| !t.is_empty()) {
             let Some(surface_ent) = crate::input::resolve_focused_terminal_readonly(
                 &attached_workspace,
                 &active_panes,

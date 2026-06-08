@@ -34,6 +34,15 @@ pub(crate) struct ThinClientConn(pub(crate) Client<UnixStream>);
 #[derive(Resource, Default)]
 pub(crate) struct PendingFocus(pub(crate) std::collections::HashSet<ozmux_proto::PaneId>);
 
+/// Monotonic creation-order counter for workspaces folded after attach. The boot
+/// workspace is stamped `WorkspaceCreatedAt(1)` (see `stamp_attached_workspace`),
+/// so post-boot workspaces start at 2. Mirrors the local `WorkspaceNameCounter`
+/// ordering the local path stamps via `MultiplexerCommands` (gated out here), so
+/// `FocusWorkspace`/status-bar sort by creation order instead of all tying at
+/// `u32::MAX`.
+#[derive(Resource)]
+struct ThinWorkspaceSeq(u32);
+
 /// Sends a command to the in-process daemon, logging (not propagating) send errors.
 pub(crate) fn send_cmd(conn: &mut ThinClientConn, msg: ozmux_proto::ClientMessage) {
     if let Err(e) = conn.0.send(msg) {
@@ -58,6 +67,7 @@ impl Plugin for ThinClientMultiplexerPlugin {
         queue.apply(app.world_mut());
         app.insert_resource(state);
         app.init_resource::<PendingFocus>();
+        app.insert_resource(ThinWorkspaceSeq(2));
         app.insert_resource(ThinDaemon(handle));
         app.insert_non_send_resource(ThinClientConn(client));
         app.add_systems(
@@ -78,6 +88,7 @@ fn pump_thin_client(
     mut state: ResMut<MuxState>,
     mut grids: Query<&mut TerminalGrid>,
     mut pending: ResMut<PendingFocus>,
+    mut workspace_seq: ResMut<ThinWorkspaceSeq>,
     read: MirrorReadCtx,
     attached_q: Query<Entity, With<AttachedWorkspace>>,
 ) {
@@ -107,6 +118,14 @@ fn pump_thin_client(
                                     surface: *surface,
                                 },
                             );
+                        }
+                        MuxEvent::WorkspaceCreated { workspace, .. } => {
+                            if let Some(ws_ent) = state.workspace_entity(*workspace) {
+                                commands
+                                    .entity(ws_ent)
+                                    .insert(WorkspaceCreatedAt(workspace_seq.0));
+                                workspace_seq.0 += 1;
+                            }
                         }
                         MuxEvent::WorkspaceSelected { workspace, .. } => {
                             if let Some(ws_ent) = state.workspace_entity(*workspace) {
@@ -397,6 +416,22 @@ mod tests {
         assert!(
             restamped,
             "pump's WorkspaceSelected re-stamp must move the single AttachedWorkspace to the new workspace"
+        );
+        // The pump must also stamp WorkspaceCreatedAt on the folded workspace
+        // (the local path does this via MultiplexerCommands, gated out here); the
+        // two workspaces must carry DISTINCT creation-order keys, else
+        // FocusWorkspace/status-bar sort by an arbitrary u32::MAX tie.
+        let mut stamps: Vec<u32> = {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<&WorkspaceCreatedAt, With<ozmux_multiplexer::WorkspaceMarker>>();
+            q.iter(app.world()).map(|c| c.0).collect()
+        };
+        stamps.sort_unstable();
+        assert_eq!(
+            stamps,
+            vec![1, 2],
+            "boot workspace keeps WorkspaceCreatedAt(1); the folded one is stamped 2 (distinct), not left unstamped",
         );
     }
 

@@ -101,15 +101,6 @@ impl Plugin for OzmuxShortcutPlugin {
                 .chain()
                 .in_set(OzmuxSystems::Input),
         );
-        #[cfg(not(feature = "thin-client"))]
-        app.add_systems(
-            Update,
-            dispatch_focused_key
-                .run_if(not(is_ime_composing))
-                .in_set(InputPhase::FocusedKey)
-                .after(read_ime_events),
-        );
-        #[cfg(feature = "thin-client")]
         app.add_systems(
             Update,
             dispatch_focused_key
@@ -310,7 +301,10 @@ pub(crate) fn dispatch_focused_key(
         };
         let app_cursor = grids
             .get(surface_ent)
-            .map(|g| g.modes.iter().any(|m| m == "app-cursor-keys"))
+            .map(|g| {
+                bevy_terminal::modes_from_names(&g.modes)
+                    .contains(bevy_terminal::TermMode::APP_CURSOR)
+            })
             .unwrap_or(false);
         if let Some(tk) = bevy_to_terminal_key(&ev.logical_key) {
             let tmods = shortcut_mods_to_terminal_mods(&mods);

@@ -49,9 +49,20 @@ impl ClientMirror {
         for ev in events {
             self.apply_event_no_prune(ev);
         }
-        for ws in &mut self.session.workspaces {
-            prune_panes(ws);
-            reorder_panes_to_layout(ws);
+        // NOTE: prune + reorder are only meaningful after a layout-mutating event
+        // (the only way a pane leaves the layout or changes leaf order); gating on
+        // it matches `apply_event` and skips the O(n^2) reorder on non-layout
+        // batches (e.g. PaneResized storms during a window-resize drag).
+        if events.iter().any(|e| {
+            matches!(
+                e,
+                MuxEvent::LayoutChanged { .. } | MuxEvent::WorkspaceRootChanged { .. }
+            )
+        }) {
+            for ws in &mut self.session.workspaces {
+                prune_panes(ws);
+                reorder_panes_to_layout(ws);
+            }
         }
     }
 
