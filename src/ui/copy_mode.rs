@@ -205,17 +205,19 @@ pub(crate) fn dispatch_key(
             commands.trigger(ExitCopyMode { entity });
         }
         CopyOp::ExitCopy => {
-            send_copy_op(conn, surface, ozmux_proto::CopyModeOp::CopySelection);
+            crate::thin_client::send_copy_op(conn, surface, ozmux_proto::CopyModeOp::CopySelection);
             commands.trigger(ExitCopyMode { entity });
         }
-        CopyOp::Motion(m) => send_copy_op(
+        CopyOp::Motion(m) => crate::thin_client::send_copy_op(
             conn,
             surface,
             ozmux_proto::CopyModeOp::ViMotion(vi_motion_to_kind(m)),
         ),
-        CopyOp::ScrollPageUp => send_copy_op(conn, surface, ozmux_proto::CopyModeOp::ScrollPageUp),
+        CopyOp::ScrollPageUp => {
+            crate::thin_client::send_copy_op(conn, surface, ozmux_proto::CopyModeOp::ScrollPageUp)
+        }
         CopyOp::ScrollPageDown => {
-            send_copy_op(conn, surface, ozmux_proto::CopyModeOp::ScrollPageDown)
+            crate::thin_client::send_copy_op(conn, surface, ozmux_proto::CopyModeOp::ScrollPageDown)
         }
         CopyOp::ToggleSelection(ty) => {
             let want_line = matches!(ty, SelectionType::Lines);
@@ -225,28 +227,19 @@ pub(crate) fn dispatch_key(
                 .and_then(|g| g.selection.as_ref().map(|s| s.kind));
             let op = match current {
                 None => ozmux_proto::CopyModeOp::SelectionStart {
-                    ty: selection_type_to_kind(ty),
+                    ty: crate::thin_client::selection_type_to_kind(ty),
                 },
                 Some(k) if is_line_geometry(k) == want_line => {
                     ozmux_proto::CopyModeOp::SelectionClear
                 }
                 Some(_) => ozmux_proto::CopyModeOp::SelectionChangeType {
-                    ty: selection_type_to_kind(ty),
+                    ty: crate::thin_client::selection_type_to_kind(ty),
                 },
             };
-            send_copy_op(conn, surface, op);
+            crate::thin_client::send_copy_op(conn, surface, op);
         }
     }
     exits
-}
-
-#[cfg(feature = "thin-client")]
-fn send_copy_op(
-    conn: &mut crate::thin_client::ThinClientConn,
-    surface: ozmux_proto::SurfaceId,
-    op: ozmux_proto::CopyModeOp,
-) {
-    crate::thin_client::send_cmd(conn, ozmux_proto::ClientMessage::CopyModeOp { surface, op });
 }
 
 #[cfg(feature = "thin-client")]
@@ -269,16 +262,6 @@ fn vi_motion_to_kind(m: ViMotion) -> ozmux_proto::ViMotionKind {
         // Bracket, paragraph) the keyboard map never produces, so reaching them
         // signals an upstream change in the mapper that this match must track.
         _ => unreachable!("map_key_to_copy_op only emits the twelve mapped motions"),
-    }
-}
-
-#[cfg(feature = "thin-client")]
-fn selection_type_to_kind(ty: SelectionType) -> ozmux_proto::SelectionKind {
-    match ty {
-        SelectionType::Simple => ozmux_proto::SelectionKind::Simple,
-        SelectionType::Block => ozmux_proto::SelectionKind::Block,
-        SelectionType::Lines => ozmux_proto::SelectionKind::Lines,
-        SelectionType::Semantic => ozmux_proto::SelectionKind::Semantic,
     }
 }
 

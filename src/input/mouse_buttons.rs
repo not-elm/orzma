@@ -13,7 +13,6 @@ use crate::input::current_modifiers;
 #[cfg(not(feature = "thin-client"))]
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::ui::Slotted;
-#[cfg(not(feature = "thin-client"))]
 use crate::ui::copy_mode::CopyModeState;
 #[cfg(not(feature = "thin-client"))]
 use bevy::input::ButtonState;
@@ -23,25 +22,20 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 #[cfg(not(feature = "thin-client"))]
 use bevy::window::{CursorMoved, PrimaryWindow};
-use bevy_terminal::Side;
+use bevy_terminal::{ButtonAction, CellCoord, SelectionType, Side};
 #[cfg(not(feature = "thin-client"))]
-use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType};
-#[cfg(not(feature = "thin-client"))]
+use bevy_terminal::{Column, Line, Point};
 use std::time::Instant;
 
 /// Per-frame state for the mouse-selection system.
 #[derive(Resource, Default)]
 pub(crate) struct MouseSelectionState {
-    #[cfg(not(feature = "thin-client"))]
     drag: Option<ActiveDrag>,
-    #[cfg(not(feature = "thin-client"))]
     last_click: Option<LastClick>,
     /// Next allowed autoscroll tick. `None` outside autoscroll.
-    #[cfg(not(feature = "thin-client"))]
     next_autoscroll_at: Option<Instant>,
 }
 
-#[cfg(not(feature = "thin-client"))]
 #[derive(Clone)]
 struct ActiveDrag {
     entity: Entity,
@@ -53,7 +47,6 @@ struct ActiveDrag {
     phase: DragPhase,
 }
 
-#[cfg(not(feature = "thin-client"))]
 impl ActiveDrag {
     /// Returns `true` once the selection has been materialized
     /// (`selection_start_at` has run). The Armed phase represents a
@@ -64,7 +57,6 @@ impl ActiveDrag {
     }
 }
 
-#[cfg(not(feature = "thin-client"))]
 #[derive(Clone)]
 enum DragPhase {
     /// Press has armed a drag; no inter-cell motion has occurred yet.
@@ -81,7 +73,6 @@ enum DragPhase {
     Active,
 }
 
-#[cfg(not(feature = "thin-client"))]
 struct LastClick {
     entity: Entity,
     cell: CellCoord,
@@ -166,7 +157,6 @@ pub(crate) fn cell_at_local(
 ///   - 1 if `now - last_click.at >= double_click_timeout`
 ///   - 1 if cursor drift exceeds `click_drift_px`
 ///   - else `(last_click.count % 3) + 1` (triple wraps to 1)
-#[cfg(not(feature = "thin-client"))]
 pub(crate) fn next_click_count(
     state: &mut MouseSelectionState,
     cfg: &ozmux_configs::mouse::MouseConfig,
@@ -239,7 +229,6 @@ pub(crate) fn try_click_to_focus(
 /// Drag-scroll tick period in ms, given distance past the pane edge in
 /// cells. Linear-step decay from `autoscroll_base_period_ms` floored at
 /// `autoscroll_min_period_ms`.
-#[cfg(not(feature = "thin-client"))]
 pub(crate) fn autoscroll_period_ms(
     cfg: &ozmux_configs::mouse::MouseConfig,
     distance_cells: u32,
@@ -353,7 +342,6 @@ fn run_autoscroll_tick(
 /// The drag stays anchored to the original pane — out-of-pane cursor
 /// positions clamp to the pane edge so a cursor that wanders into
 /// another pane still extends the original selection.
-#[cfg(not(feature = "thin-client"))]
 fn synthesize_drag_cell(
     state: &mut MouseSelectionState,
     cursor_phys: Vec2,
@@ -657,6 +645,7 @@ fn dispatch_mouse_buttons(
 #[cfg(feature = "thin-client")]
 fn dispatch_mouse_buttons(
     mut conn: bevy::ecs::system::NonSendMut<crate::thin_client::ThinClientConn>,
+    mut state: ResMut<MouseSelectionState>,
     mut buttons_msg: MessageReader<bevy::input::mouse::MouseButtonInput>,
     query: ozmux_multiplexer::MultiplexerQuery,
     keys: Res<ButtonInput<KeyCode>>,
@@ -669,8 +658,10 @@ fn dispatch_mouse_buttons(
     surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
     pane_ids: Query<&ozmux_multiplexer::MuxPaneId>,
     workspace_ids: Query<&ozmux_multiplexer::MuxWorkspaceId>,
+    copy_modes: Query<(), With<CopyModeState>>,
     primary_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
+    time: Res<Time<Real>>,
     attached_workspace: Query<
         Entity,
         (
@@ -731,35 +722,164 @@ fn dispatch_mouse_buttons(
             );
         }
 
-        // Mouse-protocol forwarding: only when the app enabled mouse mode.
+        // Selection / mouse-protocol routing requires both a grid (cell dims
+        // + modes) and a wire surface id; webview panes have neither.
         let Ok(grid) = grids.get(entity) else {
             continue;
         };
+        let Ok(surface) = surface_ids.get(entity).map(|c| c.0) else {
+            continue;
+        };
         let (col, row, side) = cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows);
+        let cell = bevy_terminal::CellCoord { col, row };
+
+        let kind = match ev.state {
+            bevy::input::ButtonState::Pressed => bevy_terminal::ButtonEventKind::Press,
+            bevy::input::ButtonState::Released => bevy_terminal::ButtonEventKind::Release,
+        };
+
+        let click_count = if matches!(kind, bevy_terminal::ButtonEventKind::Press)
+            && matches!(bevy_button, bevy_terminal::MouseButtonKind::Left)
+        {
+            next_click_count(
+                &mut state,
+                &configs.mouse,
+                entity,
+                cell,
+                cursor_logical,
+                time.last_update().unwrap_or_else(Instant::now),
+            )
+        } else {
+            1
+        };
+
         let evt = bevy_terminal::ButtonEvent {
-            kind: match ev.state {
-                bevy::input::ButtonState::Pressed => bevy_terminal::ButtonEventKind::Press,
-                bevy::input::ButtonState::Released => bevy_terminal::ButtonEventKind::Release,
-            },
+            kind,
             button: bevy_button,
-            cell: bevy_terminal::CellCoord { col, row },
+            cell,
             side,
-            click_count: 1,
+            click_count,
         };
         let modes = bevy_terminal::modes_from_names(&grid.modes);
-        match bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg) {
-            bevy_terminal::ButtonAction::WriteToPty(bytes)
-            | bevy_terminal::ButtonAction::ClearAndWriteToPty(bytes) => {
-                let Ok(surface) = surface_ids.get(entity).map(|c| c.0) else {
-                    continue;
-                };
-                crate::thin_client::send_cmd(
-                    &mut conn,
-                    ozmux_proto::ClientMessage::Input { surface, bytes },
-                );
-            }
-            _ => {}
+        let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
+        let in_copy_mode = copy_modes.get(entity).is_ok();
+        let selection_active = grid.selection.is_some();
+        apply_action(
+            &mut conn,
+            &mut state,
+            kind,
+            bevy_button,
+            action,
+            entity,
+            surface,
+            selection_active,
+            in_copy_mode,
+        );
+    }
+
+    // Drag-event synthesis: while a drag is in flight, turn cursor motion into
+    // `Drag` events anchored to the drag pane, de-duplicated by cell.
+    if let Some(drag_entity) = state.drag.as_ref().map(|d| d.entity) {
+        let pane_geometry = hosts.get(drag_entity).ok().and_then(|(_, node, xf)| {
+            grids
+                .get(drag_entity)
+                .ok()
+                .map(|g| (*node, *xf, g.cols, g.rows))
+        });
+        if let Some((cell, side)) = synthesize_drag_cell(
+            &mut state,
+            cursor_phys,
+            cell_w_phys,
+            cell_h_phys,
+            pane_geometry,
+        ) && let Ok(grid) = grids.get(drag_entity)
+            && let Ok(surface) = surface_ids.get(drag_entity).map(|c| c.0)
+        {
+            let modes = bevy_terminal::modes_from_names(&grid.modes);
+            let evt = bevy_terminal::ButtonEvent {
+                kind: bevy_terminal::ButtonEventKind::Drag,
+                button: bevy_terminal::MouseButtonKind::Left,
+                cell,
+                side,
+                click_count: 1,
+            };
+            let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
+            let in_copy_mode = copy_modes.get(drag_entity).is_ok();
+            let selection_active = grid.selection.is_some();
+            apply_action(
+                &mut conn,
+                &mut state,
+                evt.kind,
+                evt.button,
+                action,
+                drag_entity,
+                surface,
+                selection_active,
+                in_copy_mode,
+            );
         }
+    }
+
+    // Drag-scroll loop. Runs only for Active drags while the cursor is past the
+    // pane's vertical rect.
+    let now = time.last_update().unwrap_or_else(Instant::now);
+    if let Some(drag) = state.drag.as_ref().filter(|d| d.is_active()).cloned() {
+        if let Ok((_, node_ref, transform_ref)) = hosts.get(drag.entity)
+            && let Ok(grid) = grids.get(drag.entity)
+            && let Ok(surface) = surface_ids.get(drag.entity).map(|c| c.0)
+        {
+            let node = *node_ref;
+            let transform = *transform_ref;
+            let in_copy_mode = copy_modes.get(drag.entity).is_ok();
+            run_autoscroll_tick(
+                &mut conn,
+                &mut state,
+                cursor_phys,
+                now,
+                node,
+                transform,
+                cell_h_phys,
+                cell_w_phys,
+                &configs.mouse,
+                surface,
+                grid.cols,
+                grid.rows,
+                in_copy_mode,
+            );
+        }
+    } else {
+        state.next_autoscroll_at = None;
+    }
+
+    // End-of-frame guards (run for both Armed and Active phases).
+
+    // 1. Drop the drag when its entity is gone (pane closed mid-drag). This is
+    //    unambiguous and frame-latency-independent, unlike the selection-wipe
+    //    check below.
+    //
+    // TODO: port the local `should_drop_stale_drag` selection-wipe check
+    //    (Active drag + selection gone => alt-screen swap / screen reset).
+    //    Over the wire, `grid.selection` lags the optimistic local `Active`
+    //    transition by >=1 frame (the daemon's SelectionStartAt round-trip
+    //    arrives via the next pump, which runs before Input), so reading
+    //    `grid.selection.is_none()` here would falsely drop a freshly-started
+    //    drag every time. A faithful port needs a "selection acknowledged"
+    //    signal (e.g. only arm the wipe-check once a frame with our selection
+    //    has been observed) — deferred to keep T5 scoped to the core flow.
+    if let Some(drag) = state.drag.as_ref()
+        && grids.get(drag.entity).is_err()
+    {
+        state.drag = None;
+        state.next_autoscroll_at = None;
+    }
+
+    // 2. Resize clamp: clamp anchor_cell to current geometry so a mid-drag
+    //    pane resize doesn't leave us pointing past the new bottom-right.
+    if let Some(drag) = state.drag.as_mut()
+        && let Ok(grid) = grids.get(drag.entity)
+    {
+        drag.anchor_cell.col = drag.anchor_cell.col.min(grid.cols as u32).max(1);
+        drag.anchor_cell.row = drag.anchor_cell.row.min(grid.rows as u32).max(1);
     }
 }
 
@@ -890,6 +1010,260 @@ fn apply_action(
             handle.selection_clear();
         }
     }
+}
+
+/// Converts a 1-indexed `CellCoord` to a 0-indexed proto `ViewportPoint`
+/// (the wire analog of `to_viewport_point`). Both apply_action's selection
+/// arms and the thin autoscroll tick must use the same conversion.
+#[cfg(feature = "thin-client")]
+fn cell_to_viewport_point(cell: CellCoord) -> ozmux_proto::ViewportPoint {
+    ozmux_proto::ViewportPoint {
+        line: (cell.row as i32) - 1,
+        col: (cell.col as usize) - 1,
+    }
+}
+
+/// Converts a `bevy_terminal::Side` to its proto mirror `ozmux_proto::CellSide`.
+#[cfg(feature = "thin-client")]
+fn cell_side_to_proto(side: Side) -> ozmux_proto::CellSide {
+    match side {
+        Side::Left => ozmux_proto::CellSide::Left,
+        Side::Right => ozmux_proto::CellSide::Right,
+    }
+}
+
+/// Thin-client sink for the router's `ButtonAction`. Mirrors the local
+/// `apply_action`'s gesture-state mutation but sends each selection mutation
+/// over the wire as a `CopyModeOp` (the daemon drives selection + frame
+/// rendering). In copy mode, `ViGoto` is sent before any selection mutation so
+/// the daemon's vi cursor tracks the moving end of the selection.
+#[cfg(feature = "thin-client")]
+fn apply_action(
+    conn: &mut crate::thin_client::ThinClientConn,
+    state: &mut MouseSelectionState,
+    event_kind: bevy_terminal::ButtonEventKind,
+    event_button: bevy_terminal::MouseButtonKind,
+    action: ButtonAction,
+    entity: Entity,
+    surface: ozmux_proto::SurfaceId,
+    selection_active: bool,
+    in_copy_mode: bool,
+) {
+    // Left-release ALWAYS clears the drag state, regardless of which action the
+    // router emitted — covers the Shift-release-mid-drag corner where the
+    // router flips from local-route to PTY-forward between press and release.
+    if matches!(
+        (event_kind, event_button),
+        (
+            bevy_terminal::ButtonEventKind::Release,
+            bevy_terminal::MouseButtonKind::Left,
+        ),
+    ) {
+        state.drag = None;
+        state.next_autoscroll_at = None;
+    }
+
+    match action {
+        ButtonAction::Noop => {}
+        ButtonAction::WriteToPty(bytes) => {
+            crate::thin_client::send_cmd(
+                conn,
+                ozmux_proto::ClientMessage::Input { surface, bytes },
+            );
+        }
+        ButtonAction::ClearAndWriteToPty(bytes) => {
+            if selection_active {
+                crate::thin_client::send_copy_op(
+                    conn,
+                    surface,
+                    ozmux_proto::CopyModeOp::SelectionClear,
+                );
+            }
+            crate::thin_client::send_cmd(
+                conn,
+                ozmux_proto::ClientMessage::Input { surface, bytes },
+            );
+        }
+        ButtonAction::ArmDrag { ty, cell, side } => {
+            crate::thin_client::send_copy_op(
+                conn,
+                surface,
+                ozmux_proto::CopyModeOp::SelectionClear,
+            );
+            state.drag = Some(ActiveDrag {
+                entity,
+                anchor_cell: cell,
+                last_drag_cell: None,
+                phase: DragPhase::Armed {
+                    ty,
+                    anchor_side: side,
+                },
+            });
+        }
+        ButtonAction::StartLocalSelection { ty, cell, side } => {
+            let point = cell_to_viewport_point(cell);
+            if in_copy_mode {
+                crate::thin_client::send_copy_op(
+                    conn,
+                    surface,
+                    ozmux_proto::CopyModeOp::ViGoto { point },
+                );
+            }
+            crate::thin_client::send_copy_op(
+                conn,
+                surface,
+                ozmux_proto::CopyModeOp::SelectionStartAt {
+                    point,
+                    side: cell_side_to_proto(side),
+                    ty: crate::thin_client::selection_type_to_kind(ty),
+                },
+            );
+            state.drag = Some(ActiveDrag {
+                entity,
+                anchor_cell: cell,
+                last_drag_cell: None,
+                phase: DragPhase::Active,
+            });
+        }
+        ButtonAction::UpdateLocalSelection { cell, side } => {
+            let Some(drag) = state.drag.as_mut().filter(|d| d.entity == entity) else {
+                return;
+            };
+            // Materialize the selection now if the drag is still Armed (first
+            // inter-cell move). Anchor at the press cell, then extend.
+            if let DragPhase::Armed { ty, anchor_side } = drag.phase {
+                if drag.anchor_cell == cell {
+                    return;
+                }
+                let anchor_point = cell_to_viewport_point(drag.anchor_cell);
+                if in_copy_mode {
+                    crate::thin_client::send_copy_op(
+                        conn,
+                        surface,
+                        ozmux_proto::CopyModeOp::ViGoto {
+                            point: anchor_point,
+                        },
+                    );
+                }
+                crate::thin_client::send_copy_op(
+                    conn,
+                    surface,
+                    ozmux_proto::CopyModeOp::SelectionStartAt {
+                        point: anchor_point,
+                        side: cell_side_to_proto(anchor_side),
+                        ty: crate::thin_client::selection_type_to_kind(ty),
+                    },
+                );
+                drag.phase = DragPhase::Active;
+            }
+            let point = cell_to_viewport_point(cell);
+            if in_copy_mode {
+                crate::thin_client::send_copy_op(
+                    conn,
+                    surface,
+                    ozmux_proto::CopyModeOp::ViGoto { point },
+                );
+            }
+            crate::thin_client::send_copy_op(
+                conn,
+                surface,
+                ozmux_proto::CopyModeOp::SelectionUpdateTo {
+                    point,
+                    side: cell_side_to_proto(side),
+                },
+            );
+        }
+        ButtonAction::ClearLocalSelection => {
+            crate::thin_client::send_copy_op(
+                conn,
+                surface,
+                ozmux_proto::CopyModeOp::SelectionClear,
+            );
+        }
+    }
+}
+
+/// Thin-client autoscroll tick. Mirrors `run_autoscroll_tick`'s timer /
+/// geometry / edge-cell logic (all pure, GUI-side, reads grid dims), but sends
+/// the scroll + selection extension over the wire: `Scroll` then
+/// `SelectionUpdateTo` (and `ViGoto` first in copy mode).
+#[cfg(feature = "thin-client")]
+fn run_autoscroll_tick(
+    conn: &mut crate::thin_client::ThinClientConn,
+    state: &mut MouseSelectionState,
+    cursor_phys: Vec2,
+    now: Instant,
+    node: ComputedNode,
+    transform: UiGlobalTransform,
+    cell_h_phys: f32,
+    cell_w_phys: f32,
+    configs: &ozmux_configs::mouse::MouseConfig,
+    surface: ozmux_proto::SurfaceId,
+    cols: u16,
+    rows: u16,
+    in_copy_mode: bool,
+) {
+    // NOTE: UiGlobalTransform.translation is the node CENTER, not the
+    // top-left corner — every hit-test in this file relies on the
+    // `translation ± half * size` form.
+    let translation = transform.translation;
+    let half = node.size * 0.5;
+    let pane_top = translation.y - half.y;
+    let pane_bot = translation.y + half.y;
+
+    let above = cursor_phys.y < pane_top;
+    let below = cursor_phys.y > pane_bot;
+    if !above && !below {
+        state.next_autoscroll_at = None;
+        return;
+    }
+
+    let distance_cells = if above {
+        ((pane_top - cursor_phys.y) / cell_h_phys).floor().max(0.0) as u32
+    } else {
+        ((cursor_phys.y - pane_bot) / cell_h_phys).floor().max(0.0) as u32
+    };
+    let period_ms = autoscroll_period_ms(configs, distance_cells);
+    let period = std::time::Duration::from_millis(period_ms as u64);
+
+    let next_at = state.next_autoscroll_at.unwrap_or(now + period);
+    if now < next_at {
+        state.next_autoscroll_at = Some(next_at);
+        return;
+    }
+
+    let edge_local_y = if above { 0.0 } else { node.size.y };
+    let edge_local_x = (cursor_phys.x - (translation.x - half.x)).clamp(0.0, node.size.x);
+    let edge_local = Vec2::new(edge_local_x, edge_local_y);
+    let (col, row, side) = cell_at_local(edge_local, cell_w_phys, cell_h_phys, cols, rows);
+    let point = cell_to_viewport_point(CellCoord { col, row });
+
+    let scroll_delta: i32 = if above { 1 } else { -1 };
+
+    if in_copy_mode {
+        // NOTE: vi_goto must be sent BEFORE Scroll in copy mode. The daemon's
+        // scroll recomputes the selection end from the vi cursor; without the
+        // pre-scroll ViGoto, the end snaps back to the stale vi cursor before
+        // SelectionUpdateTo overwrites it.
+        crate::thin_client::send_copy_op(conn, surface, ozmux_proto::CopyModeOp::ViGoto { point });
+    }
+    crate::thin_client::send_cmd(
+        conn,
+        ozmux_proto::ClientMessage::Scroll {
+            surface,
+            delta: scroll_delta,
+        },
+    );
+    crate::thin_client::send_copy_op(
+        conn,
+        surface,
+        ozmux_proto::CopyModeOp::SelectionUpdateTo {
+            point,
+            side: cell_side_to_proto(side),
+        },
+    );
+
+    state.next_autoscroll_at = Some(now + period);
 }
 
 #[cfg(all(test, not(feature = "thin-client")))]

@@ -4,6 +4,7 @@
 
 use bevy::ecs::world::CommandQueue;
 use bevy::prelude::*;
+use bevy_terminal::SelectionType;
 use bevy_terminal_renderer::prelude::{TerminalDelta, TerminalGrid, TerminalSnapshot};
 use ozmux_multiplexer::{
     AttachedWorkspace, MirrorReadCtx, MuxState, SessionSnapshot, WorkspaceCreatedAt, apply_events,
@@ -47,6 +48,26 @@ struct ThinWorkspaceSeq(u32);
 pub(crate) fn send_cmd(conn: &mut ThinClientConn, msg: ozmux_proto::ClientMessage) {
     if let Err(e) = conn.0.send(msg) {
         error!("thin-client: send {e}");
+    }
+}
+
+/// Sends a `CopyModeOp` for `surface` to the daemon over the wire.
+pub(crate) fn send_copy_op(
+    conn: &mut ThinClientConn,
+    surface: ozmux_proto::SurfaceId,
+    op: ozmux_proto::CopyModeOp,
+) {
+    send_cmd(conn, ozmux_proto::ClientMessage::CopyModeOp { surface, op });
+}
+
+/// Converts a `bevy_terminal::SelectionType` to its proto mirror
+/// `ozmux_proto::SelectionKind`.
+pub(crate) fn selection_type_to_kind(ty: SelectionType) -> ozmux_proto::SelectionKind {
+    match ty {
+        SelectionType::Simple => ozmux_proto::SelectionKind::Simple,
+        SelectionType::Block => ozmux_proto::SelectionKind::Block,
+        SelectionType::Lines => ozmux_proto::SelectionKind::Lines,
+        SelectionType::Semantic => ozmux_proto::SelectionKind::Semantic,
     }
 }
 
