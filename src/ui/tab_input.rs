@@ -8,6 +8,10 @@ use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 #[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
+#[cfg(feature = "thin-client")]
+use ozmux_multiplexer::{
+    AttachedWorkspace, MultiplexerQuery, MuxPaneId, MuxSurfaceId, MuxWorkspaceId, WorkspaceMarker,
+};
 
 /// Wires tab intersurface: `drive_tab_clicks` (click → focus pane + switch
 /// surface) and `tab_hover_cursor` (pointer cursor on hover, after the hover
@@ -17,6 +21,8 @@ pub(crate) struct TabInteractionPlugin;
 impl Plugin for TabInteractionPlugin {
     fn build(&self, app: &mut App) {
         #[cfg(not(feature = "thin-client"))]
+        app.add_systems(Update, drive_tab_clicks.in_set(InputPhase::Dispatch));
+        #[cfg(feature = "thin-client")]
         app.add_systems(Update, drive_tab_clicks.in_set(InputPhase::Dispatch));
         app.add_systems(Update, tab_hover_cursor.after(InputPhase::Hover));
     }
@@ -47,6 +53,54 @@ fn drive_tab_clicks(
         // workspace. Do not gate this on `attached`.
         if let Err(e) = mux.set_active_surface(tab.pane, tab.surface) {
             tracing::warn!(target: "ozmux_gui::ui", ?e, "tab click: set_active_surface failed");
+        }
+    }
+}
+
+/// Thin/daemon arm: routes a left-press on a tab to the wire. Sends
+/// `SetActivePane` (defensively guarded to the attached workspace: both the
+/// daemon's `focus_pane` and the local `set_active_pane` derive the owning
+/// workspace from the pane id and ignore any workspace argument, so the guard
+/// never changes the outcome for a real click — only attached-workspace tabs
+/// are interactive — it just avoids forwarding a focus for a pane outside the
+/// attached workspace, matching the thin `mouse_buttons` arm) and
+/// `SetActiveSurface` (unconditional, mirroring the local arm — the surface
+/// switch applies even with no attached workspace).
+#[cfg(feature = "thin-client")]
+fn drive_tab_clicks(
+    mut conn: bevy::ecs::system::NonSendMut<crate::thin_client::ThinClientConn>,
+    tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
+    query: MultiplexerQuery,
+    pane_ids: Query<&MuxPaneId>,
+    surface_ids: Query<&MuxSurfaceId>,
+    workspace_ids: Query<&MuxWorkspaceId>,
+    attached: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+) {
+    let attached_workspace = attached.single().ok();
+    for (interaction, tab) in tabs.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if let Some(attached) = attached_workspace
+            && query.workspace_of_pane(tab.pane) == Some(attached)
+            && let Ok(workspace) = workspace_ids.get(attached).map(|c| c.0)
+            && let Ok(pane) = pane_ids.get(tab.pane).map(|c| c.0)
+        {
+            crate::thin_client::send_cmd(
+                &mut conn,
+                ozmux_proto::ClientMessage::SetActivePane { workspace, pane },
+            );
+        }
+        // NOTE: the surface switch is intentionally unconditional, mirroring the
+        // local arm — a tab click still selects its surface even with no attached
+        // workspace. Only the pane-focus step needs a workspace.
+        if let Ok(pane) = pane_ids.get(tab.pane).map(|c| c.0)
+            && let Ok(surface) = surface_ids.get(tab.surface).map(|c| c.0)
+        {
+            crate::thin_client::send_cmd(
+                &mut conn,
+                ozmux_proto::ClientMessage::SetActiveSurface { pane, surface },
+            );
         }
     }
 }

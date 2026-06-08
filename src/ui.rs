@@ -136,27 +136,11 @@ pub(crate) struct BrowserNavButton {
 }
 
 /// On a tab-bar Node: marks it clickable and records which Surface (in which
-/// Pane) selecting it activates. Read by `drive_tab_clicks` / `tab_hover_cursor`.
+/// Pane) selecting it activates. Read by `drive_tab_clicks` / `tab_hover_cursor`
+/// in both the local and thin builds.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct TabButton {
-    // NOTE: written by `build_tab` in both builds, but only READ by the
-    // local-only `drive_tab_clicks` click router; under thin-client the fields
-    // are write-only, so the dead-code lint must be silenced for that config.
-    #[cfg_attr(
-        feature = "thin-client",
-        expect(
-            dead_code,
-            reason = "click router is local-only; fields write-only under thin-client"
-        )
-    )]
     pub(crate) pane: Entity,
-    #[cfg_attr(
-        feature = "thin-client",
-        expect(
-            dead_code,
-            reason = "click router is local-only; fields write-only under thin-client"
-        )
-    )]
     pub(crate) surface: Entity,
 }
 

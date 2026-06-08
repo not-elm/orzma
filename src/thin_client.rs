@@ -672,6 +672,76 @@ mod tests {
         );
     }
 
+    /// Tab-click over the wire: spawning a `TabButton` + `Interaction::Pressed`
+    /// drives the thin `drive_tab_clicks` arm, which sends `SetActivePane` +
+    /// `SetActiveSurface`; the in-thread daemon applies them and the folded
+    /// snapshot moves the pane's `ActiveSurface` to the tab's surface.
+    #[test]
+    fn thin_client_tab_click_switches_active_surface_over_wire() {
+        use crate::ui::TabButton;
+        use crate::ui::tab_input::TabInteractionPlugin;
+        let mut app = headless_app();
+        app.add_plugins(TabInteractionPlugin);
+        let (pane_ent, pane_id) = sole_active_pane(&mut app);
+        let original_active = app
+            .world()
+            .get::<ActiveSurface>(pane_ent)
+            .expect("pane has ActiveSurface at boot")
+            .0;
+
+        // Spawn a 2nd surface over the wire WITHOUT registering PendingFocus, so
+        // the daemon does NOT auto-activate it — the original stays active and the
+        // tab click is what must switch it.
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            conn.0
+                .send(ozmux_proto::ClientMessage::SpawnSurface {
+                    pane: pane_id,
+                    kind: ozmux_proto::SurfaceKind::Terminal,
+                    cwd: None,
+                })
+                .expect("send SpawnSurface");
+        }
+        let grew = pump_until(&mut app, std::time::Duration::from_secs(10), |app| {
+            app.world()
+                .get::<ozmux_multiplexer::Surfaces>(pane_ent)
+                .map(|s| s.iter().count())
+                .unwrap_or(0)
+                >= 2
+        });
+        assert!(grew, "SpawnSurface must fold a 2nd surface onto the pane");
+
+        let second = app
+            .world()
+            .get::<ozmux_multiplexer::Surfaces>(pane_ent)
+            .expect("pane has Surfaces")
+            .iter()
+            .find(|&s| s != original_active)
+            .expect("a second, non-active surface");
+        assert_ne!(second, original_active);
+
+        // A freshly-spawned Interaction::Pressed satisfies the Changed<Interaction>
+        // filter on the first pump below.
+        app.world_mut().spawn((
+            TabButton {
+                pane: pane_ent,
+                surface: second,
+            },
+            bevy::prelude::Interaction::Pressed,
+        ));
+
+        let switched = pump_until(&mut app, std::time::Duration::from_secs(10), |app| {
+            app.world()
+                .get::<ActiveSurface>(pane_ent)
+                .map(|a| a.0 == second)
+                .unwrap_or(false)
+        });
+        assert!(
+            switched,
+            "tab click must send SetActivePane+SetActiveSurface over the wire and move ActiveSurface to the tab's surface"
+        );
+    }
+
     /// (c) `SpawnSurface` with the pane registered in `PendingFocus`: the pump
     /// sees the folded `SurfaceSpawned`, sends `SetActiveSurface`, and the
     /// daemon's `ActiveSurfaceChanged` re-homes the pane's `ActiveSurface` to
