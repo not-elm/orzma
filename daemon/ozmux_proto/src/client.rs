@@ -146,14 +146,20 @@ impl<W: Write> Client<W> {
         }
     }
 
-    /// Non-blocking poll; returns `Ok(None)` when the channel is empty or the
-    /// reader thread has ended.
+    /// Non-blocking poll. Returns `Ok(None)` when the channel is empty, and
+    /// `Err(UnexpectedEof)` when the reader thread has ended (daemon gone /
+    /// connection closed) so callers can distinguish "no message this frame"
+    /// from "the connection is dead". (`poll()` keeps mapping disconnect to
+    /// `Ok(None)` for the daemon drain-loop quiescence tests.)
     pub fn try_poll(&mut self) -> io::Result<Option<ServerMessage>> {
         match self.rx.try_recv() {
             Ok(Ok(msg)) => Ok(Some(self.fold(msg))),
             Ok(Err(e)) => Err(e),
             Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Ok(None),
+            Err(TryRecvError::Disconnected) => Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "daemon connection closed",
+            )),
         }
     }
 
@@ -245,6 +251,41 @@ mod tests {
         assert!(
             flag.load(Ordering::SeqCst),
             "drop must call the shutdown hook"
+        );
+    }
+
+    #[test]
+    fn try_poll_reports_disconnect_as_err_not_empty() {
+        let mux = Mux::new();
+        let snapshot = mux.snapshot(mux.sessions()[0]).unwrap();
+        let mut server_bytes = Vec::new();
+        write_message(
+            &mut server_bytes,
+            &ServerMessage::Welcome {
+                protocol_version: PROTOCOL_VERSION,
+                snapshot,
+            },
+        )
+        .unwrap();
+        // Cursor EOFs immediately after Welcome → the reader thread reads Ok(None)
+        // and exits, dropping the channel sender.
+        let reader = BufReader::new(Cursor::new(server_bytes));
+        let mut client = Client::connect(reader, Vec::<u8>::new(), (80, 24)).unwrap();
+        // Wait for the reader thread to observe EOF and drop the sender.
+        let mut saw_err = false;
+        for _ in 0..200 {
+            match client.try_poll() {
+                Ok(Some(_)) => {}
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                Err(_) => {
+                    saw_err = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_err,
+            "after the daemon side EOFs, try_poll must report the closed connection as Err"
         );
     }
 }
