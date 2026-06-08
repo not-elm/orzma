@@ -4,7 +4,6 @@
 //! page-webview node — and (in a later phase) a CEF webview attached to the
 //! laid-out page child after host-side omnibox resolution.
 
-#[cfg(not(feature = "thin-client"))]
 use crate::clipboard::Clipboard;
 use crate::configs::OzmuxConfigsResource;
 use crate::system_set::OzmuxSystems;
@@ -13,19 +12,15 @@ use crate::ui::{
     AddrBarText, AddressBarFocus, AddressEdit, BrowserNavButton, BrowserPageWebview,
     BrowserSurfaceMarker, BrowserToolbarState, NavAction, PageWebviewOf,
 };
-#[cfg(not(feature = "thin-client"))]
 use bevy::input::ButtonState;
-#[cfg(not(feature = "thin-client"))]
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, JustifyContent, Val};
-#[cfg(not(feature = "thin-client"))]
 use bevy::window::Ime;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use bevy_cef::prelude::*;
 use ozmux_configs::browser::resolve_omnibox_input;
 use ozmux_multiplexer::SurfaceKind;
-#[cfg(not(feature = "thin-client"))]
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerQuery, WorkspaceMarker};
 
 const TOOLBAR_HEIGHT_PX: f32 = 32.0;
@@ -53,7 +48,6 @@ impl Plugin for OzmuxBrowserRenderPlugin {
                     nav_button_hover_cursor.after(crate::input::InputPhase::Hover),
                 ),
             );
-        #[cfg(not(feature = "thin-client"))]
         app.add_systems(
             Update,
             (
@@ -372,7 +366,6 @@ fn spawn_nav_button(
 /// Applies keyboard input to the focused browser host's address-bar buffer.
 /// Enter resolves the omnibox and navigates the page webview, then blurs; Esc
 /// blurs without navigating.
-#[cfg(not(feature = "thin-client"))]
 fn browser_address_editor(
     mut commands: Commands,
     mut focus: ResMut<AddressBarFocus>,
@@ -468,7 +461,6 @@ fn browser_address_editor(
 /// `ime_policy_system`); on commit the text is inserted here. CJK input into the
 /// URL/search bar would otherwise be lost, since `read_ime_events` forwards
 /// commits to the active terminal, which a browser pane has none of.
-#[cfg(not(feature = "thin-client"))]
 fn apply_ime_to_address_bar(
     mut events: MessageReader<Ime>,
     focus: Res<AddressBarFocus>,
@@ -490,7 +482,6 @@ fn apply_ime_to_address_bar(
 }
 
 /// Clicking the address bar focuses it (seeding the buffer from the current URL).
-#[cfg(not(feature = "thin-client"))]
 fn focus_address_bar_on_click(
     mut focus: ResMut<AddressBarFocus>,
     clicked: Query<(&Interaction, &AddrBarText), Changed<Interaction>>,
@@ -511,7 +502,6 @@ fn focus_address_bar_on_click(
 }
 
 /// `Cmd+L` focuses the active browser pane's address bar (browser convention).
-#[cfg(not(feature = "thin-client"))]
 fn focus_address_bar_on_cmd_l(
     keys: Res<ButtonInput<KeyCode>>,
     mut focus: ResMut<AddressBarFocus>,
@@ -547,7 +537,6 @@ fn focus_address_bar_on_cmd_l(
 /// Run condition gating `blur_address_bar_on_focus_leave`: only poll while the
 /// address bar actually owns focus, so its heavy params (`MultiplexerQuery`,
 /// queries) are not fetched on the common unfocused path.
-#[cfg(not(feature = "thin-client"))]
 fn address_bar_is_focused(focus: Res<AddressBarFocus>) -> bool {
     focus.0.is_some()
 }
@@ -556,7 +545,6 @@ fn address_bar_is_focused(focus: Res<AddressBarFocus>) -> bool {
 /// no longer the focused browser host, or a left-click lands outside any address
 /// bar. Without this the bar stays focused after the user moves to a terminal,
 /// and `dispatch_focused_key`'s guard then suppresses all keyboard input.
-#[cfg(not(feature = "thin-client"))]
 fn blur_address_bar_on_focus_leave(
     mut focus: ResMut<AddressBarFocus>,
     mux: MultiplexerQuery,
@@ -581,7 +569,6 @@ fn blur_address_bar_on_focus_leave(
 }
 
 /// Returns the byte offset in `e.buffer` for the character at `idx`.
-#[cfg(not(feature = "thin-client"))]
 fn char_byte(e: &AddressEdit, idx: usize) -> usize {
     e.buffer
         .char_indices()
@@ -591,13 +578,11 @@ fn char_byte(e: &AddressEdit, idx: usize) -> usize {
 }
 
 /// Returns the number of Unicode scalar values in `e.buffer`.
-#[cfg(not(feature = "thin-client"))]
 fn char_count(e: &AddressEdit) -> usize {
     e.buffer.chars().count()
 }
 
 /// Inserts `c` at the caret position and advances the caret by one.
-#[cfg(not(feature = "thin-client"))]
 fn insert_char(e: &mut AddressEdit, c: char) {
     let at = char_byte(e, e.caret);
     e.buffer.insert(at, c);
@@ -605,7 +590,6 @@ fn insert_char(e: &mut AddressEdit, c: char) {
 }
 
 /// Inserts `s` at the caret position and advances the caret by `s.chars().count()`.
-#[cfg(not(feature = "thin-client"))]
 fn insert_str(e: &mut AddressEdit, s: &str) {
     let at = char_byte(e, e.caret);
     e.buffer.insert_str(at, s);
@@ -613,7 +597,6 @@ fn insert_str(e: &mut AddressEdit, s: &str) {
 }
 
 /// Removes the character immediately before the caret and moves the caret left by one.
-#[cfg(not(feature = "thin-client"))]
 fn backspace(e: &mut AddressEdit) {
     if e.caret == 0 {
         return;
@@ -625,7 +608,6 @@ fn backspace(e: &mut AddressEdit) {
 }
 
 /// Removes the character immediately at (after) the caret; the caret does not move.
-#[cfg(not(feature = "thin-client"))]
 fn delete(e: &mut AddressEdit) {
     if e.caret >= char_count(e) {
         return;
@@ -636,25 +618,21 @@ fn delete(e: &mut AddressEdit) {
 }
 
 /// Moves the caret one character to the left, clamped at 0.
-#[cfg(not(feature = "thin-client"))]
 fn caret_left(e: &mut AddressEdit) {
     e.caret = e.caret.saturating_sub(1);
 }
 
 /// Moves the caret one character to the right, clamped at `char_count`.
-#[cfg(not(feature = "thin-client"))]
 fn caret_right(e: &mut AddressEdit) {
     e.caret = (e.caret + 1).min(char_count(e));
 }
 
 /// Moves the caret to the start of the buffer.
-#[cfg(not(feature = "thin-client"))]
 fn caret_home(e: &mut AddressEdit) {
     e.caret = 0;
 }
 
 /// Moves the caret to the end of the buffer.
-#[cfg(not(feature = "thin-client"))]
 fn caret_end(e: &mut AddressEdit) {
     e.caret = char_count(e);
 }
@@ -1467,6 +1445,86 @@ mod tests {
             app.world().resource::<Captured>().0,
             vec![page],
             "RequestGoBack must fire when can_go_back is true"
+        );
+    }
+}
+
+#[cfg(test)]
+mod thin_compatible_tests {
+    use super::*;
+    use bevy::input::ButtonState;
+    use bevy::input::keyboard::{Key, KeyboardInput, NativeKeyCode};
+    use bevy::prelude::MinimalPlugins;
+
+    fn key_press(window: Entity, logical: Key) -> KeyboardInput {
+        KeyboardInput {
+            key_code: KeyCode::Unidentified(NativeKeyCode::Unidentified),
+            logical_key: logical,
+            state: ButtonState::Pressed,
+            repeat: false,
+            window,
+            text: None,
+        }
+    }
+
+    #[derive(Resource, Default)]
+    struct Navigated(Vec<(Entity, String)>);
+
+    /// `browser_address_editor` resolves the omnibox and fires `RequestNavigate`
+    /// on Enter, then clears focus — with NO `MultiplexerPlugin` and NO daemon,
+    /// so it runs identically in both the local and thin builds.
+    #[test]
+    fn editor_enter_navigates_in_both_configs() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<AddressBarFocus>();
+        app.init_resource::<crate::input::ime::ImeState>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(crate::configs::OzmuxConfigsResource(
+            ozmux_configs::OzmuxConfigs::default(),
+        ));
+        app.add_message::<KeyboardInput>();
+        app.add_systems(Update, browser_address_editor);
+
+        let window = app.world_mut().spawn_empty().id();
+        let page = app.world_mut().spawn_empty().id();
+        let host = app
+            .world_mut()
+            .spawn((AddressEdit::default(), BrowserPageWebview(page)))
+            .id();
+        app.world_mut().resource_mut::<AddressBarFocus>().0 = Some(host);
+
+        for c in "github.com".chars() {
+            app.world_mut()
+                .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+                .write(key_press(window, Key::Character(c.to_string().into())));
+        }
+        app.update();
+        assert_eq!(
+            app.world().get::<AddressEdit>(host).unwrap().buffer,
+            "github.com",
+            "typed characters accumulate in the focused bar's buffer",
+        );
+
+        app.init_resource::<Navigated>();
+        app.add_observer(|ev: On<RequestNavigate>, mut n: ResMut<Navigated>| {
+            n.0.push((ev.webview, ev.url.clone()));
+        });
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+            .write(key_press(window, Key::Enter));
+        app.update();
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().resource::<Navigated>().0,
+            vec![(page, "https://github.com".to_string())],
+            "Enter resolves the omnibox and fires RequestNavigate to the page webview",
+        );
+        assert_eq!(
+            app.world().resource::<AddressBarFocus>().0,
+            None,
+            "Enter clears address-bar focus",
         );
     }
 }
