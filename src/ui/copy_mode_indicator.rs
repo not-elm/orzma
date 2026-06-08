@@ -62,9 +62,54 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 // the "exactly one chip per host" property (Added fires per-system),
 // but introducing one is a smell — the constraint is documented as
 // this comment rather than enforced.
+#[cfg(not(feature = "thin-client"))]
 fn attach_indicator_to_surface_host(
     mut commands: Commands,
     hosts: Query<Entity, Added<bevy_terminal::TerminalHandle>>,
+    ui_font: Option<Res<TerminalUiFont>>,
+) {
+    for host in hosts.iter() {
+        commands.entity(host).with_children(|parent| {
+            parent.spawn((
+                CopyModeIndicator,
+                IndicatorCache::default(),
+                Text::new(""),
+                TextFont {
+                    font: ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default(),
+                    font_size: theme::COPY_MODE_INDICATOR_FONT_SIZE_PX,
+                    ..default()
+                },
+                BackgroundColor(palette::COPY_MODE_INDICATOR_BG),
+                TextColor(palette::COPY_MODE_INDICATOR_FG),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    padding: UiRect::axes(
+                        Val::Px(theme::COPY_MODE_INDICATOR_PADDING_X_PX),
+                        Val::Px(0.0),
+                    ),
+                    display: Display::None,
+                    ..default()
+                },
+            ));
+        });
+    }
+}
+
+/// Spawns a `CopyModeIndicator` chip as a child of every Surface host
+/// the first frame `TerminalGrid` is observed there. The
+/// `Added<TerminalGrid>` filter fires exactly once per host because
+/// `ui::terminal::attach_render_to_surfaces` is the only `TerminalGrid`
+/// inserter on Surface hosts in thin mode.
+// NOTE: A second reader of `Added<TerminalGrid>` would not violate
+// the "exactly one chip per host" property (Added fires per-system),
+// but introducing one is a smell — the constraint is documented as
+// this comment rather than enforced.
+#[cfg(feature = "thin-client")]
+fn attach_indicator_to_surface_host(
+    mut commands: Commands,
+    hosts: Query<Entity, Added<bevy_terminal_renderer::prelude::TerminalGrid>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     for host in hosts.iter() {
@@ -103,6 +148,7 @@ fn attach_indicator_to_surface_host(
 // NOTE: the chip's Display::Flex is set lazily here on first sight of
 // CopyModeState. Hiding on exit is the `On<Remove, CopyModeState>`
 // observer's job (Task 7), not this poll.
+#[cfg(not(feature = "thin-client"))]
 fn refresh_indicator(
     hosts: Query<(&bevy_terminal::TerminalHandle, &Children), With<CopyModeState>>,
     mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<CopyModeIndicator>>,
@@ -116,6 +162,42 @@ fn refresh_indicator(
         };
         let snap = handle.vi_indicator_snapshot();
         let (offset, total) = (snap.scroll_offset as u32, snap.history_size as u32);
+        let new_cache = IndicatorCache { offset, total };
+        // NOTE: the first-show path (Display::None → Flex) must always
+        // write the text even when the cache already matches the snapshot,
+        // because the chip's Text starts empty and the cache defaults to
+        // {0, 0} — the same as a fresh terminal's snapshot.
+        let becoming_visible = node.display != Display::Flex;
+        if *cache != new_cache || becoming_visible {
+            text.0 = format_indicator(offset, total);
+            *cache = new_cache;
+        }
+        if becoming_visible {
+            node.display = Display::Flex;
+        }
+    }
+}
+
+/// Updates each visible chip's `Text` and `IndicatorCache` from the
+/// host's mirrored `TerminalGrid` (`display_offset` / `history_size`).
+/// Gated by `any_with_component::<CopyModeState>` so the schedule
+/// short-circuits when nothing is in copy mode.
+// NOTE: the chip's Display::Flex is set lazily here on first sight of
+// CopyModeState. Hiding on exit is the `On<Remove, CopyModeState>`
+// observer's job (Task 7), not this poll.
+#[cfg(feature = "thin-client")]
+fn refresh_indicator(
+    hosts: Query<(&bevy_terminal_renderer::prelude::TerminalGrid, &Children), With<CopyModeState>>,
+    mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<CopyModeIndicator>>,
+) {
+    for (grid, children) in hosts.iter() {
+        let Some(chip) = children.iter().find(|c| chips.get(*c).is_ok()) else {
+            continue;
+        };
+        let Ok((mut text, mut node, mut cache)) = chips.get_mut(chip) else {
+            continue;
+        };
+        let (offset, total) = (grid.display_offset, grid.history_size);
         let new_cache = IndicatorCache { offset, total };
         // NOTE: the first-show path (Display::None → Flex) must always
         // write the text even when the cache already matches the snapshot,

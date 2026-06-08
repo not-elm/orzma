@@ -110,6 +110,7 @@ fn pump_thin_client(
     mut grids: Query<&mut TerminalGrid>,
     mut pending: ResMut<PendingFocus>,
     mut workspace_seq: ResMut<ThinWorkspaceSeq>,
+    mut clipboard: ResMut<crate::clipboard::Clipboard>,
     read: MirrorReadCtx,
     attached_q: Query<Entity, With<AttachedWorkspace>>,
 ) {
@@ -180,8 +181,11 @@ fn pump_thin_client(
             }
             ServerMessage::Welcome { .. } => {}
             ServerMessage::Error { message } => error!("thin-client: server error: {message}"),
-            // TODO(T3): deliver SelectionCopied text to the GUI clipboard.
-            ServerMessage::SelectionCopied { .. } => {}
+            ServerMessage::SelectionCopied { surface: _, text } => {
+                if !text.is_empty() {
+                    clipboard.write(text);
+                }
+            }
         }
     }
 }
@@ -279,6 +283,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::MinimalPlugins);
         app.add_plugins(ThinClientMultiplexerPlugin);
+        app.insert_resource(crate::clipboard::Clipboard::new());
         app
     }
 

@@ -319,6 +319,21 @@ pub(crate) fn dispatch_focused_key(
                         commands.trigger(EnterCopyModeActionEvent {
                             entity: surface_ent,
                         });
+                    } else if matches!(action, ShortcutAction::Copy)
+                        && let Some(surface_ent) = resolve_focused_terminal_readonly(
+                            &attached_workspace,
+                            &active_panes,
+                            &active_surfaces,
+                        )
+                        && let Ok(surf_id) = surface_ids.get(surface_ent).map(|c| c.0)
+                    {
+                        crate::thin_client::send_cmd(
+                            &mut conn,
+                            ozmux_proto::ClientMessage::CopyModeOp {
+                                surface: surf_id,
+                                op: ozmux_proto::CopyModeOp::CopySelection,
+                            },
+                        );
                     }
                 }
                 continue;
