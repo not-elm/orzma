@@ -46,7 +46,6 @@ pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
 /// Validates `uri` against the scheme allowlist and hands it to the
 /// OS default opener via `open::that_detached`. Disallowed URIs are
 /// dropped with a debug log; opener errors are warned.
-#[cfg(not(feature = "thin-client"))]
 pub(crate) fn try_open_uri(uri: &str) {
     if !is_allowed(uri) {
         debug!("hyperlink: dropping disallowed uri {}", uri);
@@ -57,12 +56,46 @@ pub(crate) fn try_open_uri(uri: &str) {
     }
 }
 
+/// The outcome of interpreting a left-button event over the terminal grid
+/// for OSC 8 hyperlink activation: `Open` carries the URI to hand to the
+/// OS opener; `Suppress` swallows the event WITHOUT opening (a modifier-held
+/// left release over a link, so the PTY/daemon never sees a release without
+/// a matching press); `Pass` routes the event normally.
+pub(crate) enum HyperlinkClick {
+    Open(bevy_terminal_renderer::schema::HyperlinkUri),
+    Suppress,
+    Pass,
+}
+
+/// Pure decision for the hyperlink intercept, shared verbatim by the local
+/// and thin mouse-button arms. `Open(uri)` for a modifier-held left press on
+/// a linked cell, `Suppress` for the matching modifier-held left release on a
+/// linked cell, `Pass` otherwise.
+pub(crate) fn hyperlink_click(
+    grid: &bevy_terminal_renderer::schema::TerminalGrid,
+    row: u16,
+    col: u16,
+    button: bevy_terminal::MouseButtonKind,
+    kind: bevy_terminal::ButtonEventKind,
+    modifier_held: bool,
+) -> HyperlinkClick {
+    if let Some(uri) = should_open_at(grid, row, col, button, kind, modifier_held) {
+        return HyperlinkClick::Open(uri);
+    }
+    if modifier_held
+        && button == bevy_terminal::MouseButtonKind::Left
+        && matches!(kind, bevy_terminal::ButtonEventKind::Release)
+        && grid.hyperlink_at(row, col).is_some()
+    {
+        return HyperlinkClick::Suppress;
+    }
+    HyperlinkClick::Pass
+}
+
 /// Pure predicate: returns the URI of the cell at `(row, col)` when
 /// a `Press + Left + modifier_held` event arrives on a linked cell;
-/// otherwise `None`. Centralizes the interception decision so
-/// `dispatch_mouse_buttons` only has to check the return value.
-#[cfg(not(feature = "thin-client"))]
-pub(crate) fn should_open_at(
+/// otherwise `None`. The `Press` half of `hyperlink_click`.
+fn should_open_at(
     grid: &bevy_terminal_renderer::schema::TerminalGrid,
     row: u16,
     col: u16,
@@ -79,12 +112,10 @@ pub(crate) fn should_open_at(
     grid.hyperlink_at(row, col).map(|(_id, uri)| uri.clone())
 }
 
-#[cfg(not(feature = "thin-client"))]
 const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
 
 /// Parses an RFC 3986 scheme: first byte ALPHA, continuation
 /// ALPHA / DIGIT / `+` / `-` / `.`. Returns `None` for malformed input.
-#[cfg(not(feature = "thin-client"))]
 fn scheme_of(uri: &str) -> Option<&str> {
     let (scheme, _) = uri.split_once(':')?;
     let mut bytes = scheme.bytes();
@@ -100,7 +131,6 @@ fn scheme_of(uri: &str) -> Option<&str> {
 
 /// Returns `true` when `uri` carries a scheme on the v1 allowlist
 /// (`http`, `https`, `mailto`, `ftp`), case-insensitive.
-#[cfg(not(feature = "thin-client"))]
 fn is_allowed(uri: &str) -> bool {
     scheme_of(uri)
         .map(|s| s.to_ascii_lowercase())
@@ -259,7 +289,7 @@ fn cursor_decision(target: HoverTarget) -> Option<SystemCursorIcon> {
     }
 }
 
-#[cfg(all(test, not(feature = "thin-client")))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -425,6 +455,70 @@ mod tests {
         )
         .expect("hyperlink present");
         assert_eq!(uri.as_str(), "https://example.com");
+    }
+
+    #[test]
+    fn hyperlink_click_opens_on_press_left_modifier_over_link() {
+        let grid = make_grid_with_link(0, 0, HyperlinkId(1));
+        match hyperlink_click(
+            &grid,
+            0,
+            0,
+            MouseButtonKind::Left,
+            ButtonEventKind::Press,
+            true,
+        ) {
+            HyperlinkClick::Open(uri) => assert_eq!(uri.as_str(), "https://example.com"),
+            _ => panic!("expected Open(uri) for a modifier-held left press over a link"),
+        }
+    }
+
+    #[test]
+    fn hyperlink_click_suppresses_on_release_left_modifier_over_link() {
+        let grid = make_grid_with_link(0, 0, HyperlinkId(1));
+        assert!(matches!(
+            hyperlink_click(
+                &grid,
+                0,
+                0,
+                MouseButtonKind::Left,
+                ButtonEventKind::Release,
+                true,
+            ),
+            HyperlinkClick::Suppress
+        ));
+    }
+
+    #[test]
+    fn hyperlink_click_passes_without_modifier() {
+        let grid = make_grid_with_link(0, 0, HyperlinkId(1));
+        assert!(matches!(
+            hyperlink_click(
+                &grid,
+                0,
+                0,
+                MouseButtonKind::Left,
+                ButtonEventKind::Press,
+                false,
+            ),
+            HyperlinkClick::Pass
+        ));
+    }
+
+    #[test]
+    fn hyperlink_click_passes_over_blank_cell() {
+        let grid = make_grid_with_link(1, 1, HyperlinkId(1));
+        assert!(matches!(
+            hyperlink_click(
+                &grid,
+                0,
+                0,
+                MouseButtonKind::Left,
+                ButtonEventKind::Press,
+                true,
+            ),
+            HyperlinkClick::Pass
+        ));
     }
 
     #[test]

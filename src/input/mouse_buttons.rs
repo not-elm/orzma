@@ -10,8 +10,7 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::current_modifiers;
-#[cfg(not(feature = "thin-client"))]
-use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
+use crate::input::hyperlink::{HyperlinkClick, hyperlink_click, link_modifier_held, try_open_uri};
 use crate::ui::Slotted;
 use crate::ui::copy_mode::CopyModeState;
 #[cfg(not(feature = "thin-client"))]
@@ -487,32 +486,27 @@ fn dispatch_mouse_buttons(
             1
         };
 
-        // NOTE: OSC 8 hyperlink interception — Cmd+Left (or Ctrl+Left) on
-        //       a linked cell. Press opens the URI and skips PTY routing;
-        //       Release also skips so the PTY does not see a release
-        //       without a matching press. The existing try_click_to_focus
-        //       call above is preserved so the pane still focuses.
-        if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
-            let modifier_held = link_modifier_held(&mods);
-            if modifier_held && let Ok(grid) = grids.get(entity) {
-                if let Some(uri) = should_open_at(
-                    grid,
-                    row.saturating_sub(1) as u16,
-                    col.saturating_sub(1) as u16,
-                    bevy_button,
-                    kind,
-                    modifier_held,
-                ) {
+        // NOTE: OSC 8 hyperlink interception — Cmd+Left (or Ctrl+Left) on a
+        //       linked cell. Press opens the URI and skips PTY routing; a
+        //       modifier-held release also skips so the PTY never sees a
+        //       release without a matching press. The try_click_to_focus call
+        //       above is preserved so the pane still focuses.
+        let modifier_held = link_modifier_held(&mods);
+        if modifier_held && let Ok(grid) = grids.get(entity) {
+            match hyperlink_click(
+                grid,
+                row.saturating_sub(1) as u16,
+                col.saturating_sub(1) as u16,
+                bevy_button,
+                kind,
+                modifier_held,
+            ) {
+                HyperlinkClick::Open(uri) => {
                     try_open_uri(uri.as_str());
                     continue;
                 }
-                if matches!(kind, bevy_terminal::ButtonEventKind::Release)
-                    && grid
-                        .hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
-                        .is_some()
-                {
-                    continue;
-                }
+                HyperlinkClick::Suppress => continue,
+                HyperlinkClick::Pass => {}
             }
         }
 
@@ -752,6 +746,30 @@ fn dispatch_mouse_buttons(
         } else {
             1
         };
+
+        // NOTE: OSC 8 hyperlink interception — mirrors the local arm. Cmd+Left
+        //       (or Ctrl+Left) on a linked cell: Press opens the URI and skips
+        //       wire routing; a modifier-held release skips so the daemon never
+        //       sees a release without a matching press. The SetActivePane
+        //       click-to-focus above still stands.
+        let modifier_held = link_modifier_held(&mods);
+        if modifier_held {
+            match hyperlink_click(
+                grid,
+                row.saturating_sub(1) as u16,
+                col.saturating_sub(1) as u16,
+                bevy_button,
+                kind,
+                modifier_held,
+            ) {
+                HyperlinkClick::Open(uri) => {
+                    try_open_uri(uri.as_str());
+                    continue;
+                }
+                HyperlinkClick::Suppress => continue,
+                HyperlinkClick::Pass => {}
+            }
+        }
 
         let evt = bevy_terminal::ButtonEvent {
             kind,
