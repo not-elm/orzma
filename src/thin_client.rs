@@ -159,6 +159,8 @@ fn pump_thin_client(
             }
             ServerMessage::Welcome { .. } => {}
             ServerMessage::Error { message } => error!("thin-client: server error: {message}"),
+            // TODO(T3): deliver SelectionCopied text to the GUI clipboard.
+            ServerMessage::SelectionCopied { .. } => {}
         }
     }
 }

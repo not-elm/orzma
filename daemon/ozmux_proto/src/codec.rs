@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use std::io::{self, Read, Write};
 
 /// The wire protocol version (bumped on any incompatible change).
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Maximum body bytes per message (malformed-frame guard + the eager-allocation
 /// ceiling on read). 8 MiB clears the ~1.83 MB worst-case decorated-TUI snapshot
@@ -56,7 +56,10 @@ pub fn read_message<R: Read, M: DeserializeOwned>(r: &mut R) -> io::Result<Optio
 #[cfg(test)]
 mod tests {
     use super::{MAX_MESSAGE_BYTES, read_message, write_message};
-    use crate::message::{ClientMessage, ServerMessage};
+    use crate::message::{
+        CellSide, ClientMessage, CopyModeOp, SelectionKind, ServerMessage, ViMotionKind,
+        ViewportPoint,
+    };
     use ozmux_mux::{
         MuxEvent, PaneDirection, PaneId, Side, SplitOrientation, SurfaceId, SurfaceKind,
         SwapOffset, WorkspaceId,
@@ -122,6 +125,26 @@ mod tests {
                 surface: SurfaceId::default(),
                 delta: 3,
             },
+            ClientMessage::CopyModeOp {
+                surface: SurfaceId::default(),
+                op: CopyModeOp::Enter,
+            },
+            ClientMessage::CopyModeOp {
+                surface: SurfaceId::default(),
+                op: CopyModeOp::ViMotion(ViMotionKind::WordRight),
+            },
+            ClientMessage::CopyModeOp {
+                surface: SurfaceId::default(),
+                op: CopyModeOp::SelectionStartAt {
+                    point: ViewportPoint { line: 3, col: 7 },
+                    side: CellSide::Left,
+                    ty: SelectionKind::Block,
+                },
+            },
+            ClientMessage::CopyModeOp {
+                surface: SurfaceId::default(),
+                op: CopyModeOp::CopySelection,
+            },
         ];
 
         let mut buf: Vec<u8> = Vec::new();
@@ -181,6 +204,10 @@ mod tests {
             ServerMessage::Frame {
                 surface: SurfaceId::default(),
                 frame: Frame::Delta(minimal_delta),
+            },
+            ServerMessage::SelectionCopied {
+                surface: SurfaceId::default(),
+                text: "hello\nworld".into(),
             },
         ];
 

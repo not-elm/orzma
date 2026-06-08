@@ -9,6 +9,116 @@ use ozmux_vt::frame::Frame;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// A 0-indexed viewport point (proto mirror of alacritty's viewport `Point`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewportPoint {
+    /// 0-indexed viewport row (0 = top visible row).
+    pub line: i32,
+    /// 0-indexed column.
+    pub col: usize,
+}
+
+/// Proto mirror of alacritty `index::Side` — which half of a cell a selection edge sits on.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CellSide {
+    /// The left half of the cell.
+    Left,
+    /// The right half of the cell.
+    Right,
+}
+
+/// Proto mirror of alacritty `SelectionType`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SelectionKind {
+    /// A simple character-wise selection.
+    Simple,
+    /// A rectangular block selection.
+    Block,
+    /// A whole-line selection.
+    Lines,
+    /// A semantic (word-boundary) selection.
+    Semantic,
+}
+
+/// Proto mirror of the subset of alacritty `ViMotion` the GUI emits in copy mode.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ViMotionKind {
+    /// Move one cell left.
+    Left,
+    /// Move one cell right.
+    Right,
+    /// Move one line up.
+    Up,
+    /// Move one line down.
+    Down,
+    /// Move to the first column of the line.
+    First,
+    /// Move to the last column of the line.
+    Last,
+    /// Move to the first occupied (non-blank) column of the line.
+    FirstOccupied,
+    /// Move to the top of the viewport.
+    High,
+    /// Move to the bottom of the viewport.
+    Low,
+    /// Move to the start of the next word.
+    WordRight,
+    /// Move to the start of the previous word.
+    WordLeft,
+    /// Move to the end of the next word.
+    WordRightEnd,
+}
+
+/// A copy-mode / selection / scroll-back operation on a surface's VT.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CopyModeOp {
+    /// Enter vi-mode (the vi-cursor appears in subsequent frames).
+    Enter,
+    /// Leave vi-mode (clears selection + snaps to the live tail).
+    Exit,
+    /// Move the vi-cursor by a motion.
+    ViMotion(ViMotionKind),
+    /// Place the vi-cursor at a viewport point.
+    ViGoto {
+        /// The target viewport point.
+        point: ViewportPoint,
+    },
+    /// Scroll one page toward history.
+    ScrollPageUp,
+    /// Scroll one page toward the tail.
+    ScrollPageDown,
+    /// Start a selection anchored at a point.
+    SelectionStartAt {
+        /// The anchor viewport point.
+        point: ViewportPoint,
+        /// Which half of the cell the anchor sits on.
+        side: CellSide,
+        /// The selection type.
+        ty: SelectionKind,
+    },
+    /// Extend the active selection to a point (no-op if none).
+    SelectionUpdateTo {
+        /// The viewport point to extend to.
+        point: ViewportPoint,
+        /// Which half of the cell the extent sits on.
+        side: CellSide,
+    },
+    /// Start a selection at the current vi-cursor.
+    SelectionStart {
+        /// The selection type.
+        ty: SelectionKind,
+    },
+    /// Drop the active selection.
+    SelectionClear,
+    /// Change the active selection's type.
+    SelectionChangeType {
+        /// The new selection type.
+        ty: SelectionKind,
+    },
+    /// Extract the selection's text -> `ServerMessage::SelectionCopied`.
+    CopySelection,
+}
+
 /// A message from a client to the daemon.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -115,6 +225,13 @@ pub enum ClientMessage {
         /// Signed row delta (positive scrolls back into history).
         delta: i32,
     },
+    /// A copy-mode / selection op on a surface's VT.
+    CopyModeOp {
+        /// The target surface.
+        surface: SurfaceId,
+        /// The operation.
+        op: CopyModeOp,
+    },
 }
 
 /// A message from the daemon to a client.
@@ -147,5 +264,13 @@ pub enum ServerMessage {
     Error {
         /// Human-readable reason.
         message: String,
+    },
+    /// The result of a `CopyModeOp::CopySelection`, delivered ONLY to the
+    /// originating client (reliable, not the lossy frame path).
+    SelectionCopied {
+        /// The surface the selection came from.
+        surface: SurfaceId,
+        /// The extracted selection text.
+        text: String,
     },
 }

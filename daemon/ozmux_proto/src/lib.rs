@@ -9,7 +9,9 @@ pub mod mirror;
 
 pub use client::Client;
 pub use codec::{MAX_MESSAGE_BYTES, PROTOCOL_VERSION, read_message, write_message};
-pub use message::{ClientMessage, ServerMessage};
+pub use message::{
+    CellSide, ClientMessage, CopyModeOp, SelectionKind, ServerMessage, ViMotionKind, ViewportPoint,
+};
 pub use mirror::ClientMirror;
 pub use ozmux_mux::{
     MuxEvent, PaneDirection, PaneId, Side, SplitOrientation, SurfaceId, SurfaceKind, SwapOffset,

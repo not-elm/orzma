@@ -313,6 +313,8 @@ impl Server {
             ClientMessage::Input { .. } => return (vec![], vec![]),
             // NOTE: Scroll is handled directly in the run loop (routed to the driver's ctl_tx) before apply_command.
             ClientMessage::Scroll { .. } => return (vec![], vec![]),
+            // TODO(T3): route CopyModeOp to the surface driver before apply_command.
+            ClientMessage::CopyModeOp { .. } => return (vec![], vec![]),
             ClientMessage::SetActiveSurface { pane, surface } => {
                 self.mux.set_active_surface(pane, surface)
             }
