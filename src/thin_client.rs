@@ -170,20 +170,16 @@ fn pump_thin_client(
             Ok(Some(m)) => m,
             Ok(None) => break,
             Err(e) => {
-                if matches!(*daemon, ThinDaemon::OutOfProcess) {
-                    error!("thin-client: daemon connection lost: {e}");
-                    request_clean_exit(&mut commands, &mut exiting, &windows);
-                } else {
-                    error!("thin-client: wire poll error: {e}");
-                }
+                error!("thin-client: wire connection lost: {e}");
+                stop_thin_client(&mut commands, &mut exiting, &daemon, &windows);
                 break;
             }
         };
         match msg {
             ServerMessage::Events(batch) => {
                 if apply_events_checked(&mut commands, &mut state, &read, &batch).is_err() {
-                    error!("thin-client: inconsistent daemon event — exiting");
-                    request_clean_exit(&mut commands, &mut exiting, &windows);
+                    error!("thin-client: inconsistent daemon event — stopping");
+                    stop_thin_client(&mut commands, &mut exiting, &daemon, &windows);
                     break;
                 }
                 for ev in &batch {
@@ -248,18 +244,25 @@ fn pump_thin_client(
     }
 }
 
-/// Requests a clean GUI exit by despawning the primary window (winit's native
-/// close path). Avoids the Bevy 0.18.1 macOS programmatic-`AppExit` freeze
-/// (#23313). Idempotent. Sets `ThinClientExiting` so the debug mirror assert
-/// skips during teardown.
-fn request_clean_exit(
+/// Stops the thin-client pump after a fatal wire condition (the daemon is gone,
+/// or it sent an inconsistent message). Always sets `ThinClientExiting`, so the
+/// pump's top-of-frame guard halts re-polling and the debug mirror assert skips
+/// during teardown. Out-of-process additionally despawns the `PrimaryWindow` to
+/// exit the GUI via winit's native close path (NOT `MessageWriter<AppExit>`,
+/// which hard-freezes on macOS under Bevy 0.18.1, #23313). In-process (tests /
+/// dev) has no window to close and the `App` owns its own lifetime, so it only
+/// stops pumping. Idempotent.
+fn stop_thin_client(
     commands: &mut Commands,
     exiting: &mut ThinClientExiting,
+    daemon: &ThinDaemon,
     windows: &Query<Entity, With<PrimaryWindow>>,
 ) {
     exiting.0 = true;
-    for win in windows.iter() {
-        commands.entity(win).despawn();
+    if matches!(daemon, ThinDaemon::OutOfProcess) {
+        for win in windows.iter() {
+            commands.entity(win).despawn();
+        }
     }
 }
 
@@ -325,18 +328,7 @@ fn boot_in_process() -> std::io::Result<(ozmuxd::ServerHandle, Client<UnixStream
     let handle = ozmuxd::Server::new().serve(&path)?;
 
     let stream = UnixStream::connect(&path)?;
-    let reader = BufReader::new(stream.try_clone()?);
-    let shutdown_handle = stream.try_clone()?;
-    let viewport = (80u16, 24u16);
-    let client = Client::connect_with_shutdown(
-        reader,
-        stream,
-        viewport,
-        Some(Box::new(move || {
-            let _ = shutdown_handle.shutdown(Shutdown::Both);
-        })),
-    )?;
-    let snapshot = client.mirror().to_snapshot();
+    let (client, snapshot) = connect_client(stream)?;
     Ok((handle, client, snapshot))
 }
 
@@ -390,27 +382,41 @@ fn connect_with_retry(socket_path: &std::path::Path) -> std::io::Result<UnixStre
     }
 }
 
-/// Attaches to a running daemon at `default_socket_path()` if present, else
-/// spawns a detached one and connects-with-retry. The shutdown hook closes only
-/// OUR connection on `Client` drop; the daemon survives (detach-on-exit).
-fn attach_or_spawn() -> std::io::Result<(Client<UnixStream>, SessionSnapshot)> {
-    attach_or_spawn_at(&ozmuxd::default_socket_path())
-}
-
-/// `attach_or_spawn`, parameterized on the socket path so tests can use a
-/// per-test temp path instead of the shared default. Drops any `Child` we
-/// spawned, orphaning the daemon (the persistence design); the real app never
-/// reaps it.
-fn attach_or_spawn_at(
-    path: &std::path::Path,
-) -> std::io::Result<(Client<UnixStream>, SessionSnapshot)> {
-    let (client, snapshot, _orphaned_child) = attach_or_spawn_at_inner(path)?;
+/// Builds a `Client` over `stream` — with a shutdown hook that closes only our
+/// connection on `Client` drop — plus the Welcome snapshot. Shared by the
+/// in-process and out-of-process acquisition paths so the viewport + shutdown
+/// wiring live in one place.
+fn connect_client(stream: UnixStream) -> std::io::Result<(Client<UnixStream>, SessionSnapshot)> {
+    let reader = BufReader::new(stream.try_clone()?);
+    let shutdown_handle = stream.try_clone()?;
+    let viewport = (80u16, 24u16);
+    let client = Client::connect_with_shutdown(
+        reader,
+        stream,
+        viewport,
+        Some(Box::new(move || {
+            let _ = shutdown_handle.shutdown(Shutdown::Both);
+        })),
+    )?;
+    let snapshot = client.mirror().to_snapshot();
     Ok((client, snapshot))
 }
 
-/// Core of `attach_or_spawn_at`, additionally surfacing the spawned `Child`:
-/// `Some` only when THIS call spawned a fresh daemon, `None` when it attached to
-/// one already running. Production drops the child (orphan); tests reap it on
+/// Attaches to a running daemon at `default_socket_path()` if present, else
+/// spawns a detached one and connects-with-retry. The shutdown hook closes only
+/// OUR connection on `Client` drop; the daemon survives (detach-on-exit). The
+/// `Child` from a fresh spawn is dropped here, orphaning the daemon (the
+/// persistence design); the real app never reaps it.
+fn attach_or_spawn() -> std::io::Result<(Client<UnixStream>, SessionSnapshot)> {
+    let (client, snapshot, _orphaned_child) =
+        attach_or_spawn_at_inner(&ozmuxd::default_socket_path())?;
+    Ok((client, snapshot))
+}
+
+/// Core of `attach_or_spawn`, parameterized on the socket path (so tests use a
+/// per-test temp path) and additionally surfacing the spawned `Child`: `Some`
+/// only when THIS call spawned a fresh daemon, `None` when it attached to one
+/// already running. Production drops the child (orphan); tests reap it on
 /// teardown so no daemon leaks.
 fn attach_or_spawn_at_inner(
     path: &std::path::Path,
@@ -426,18 +432,7 @@ fn attach_or_spawn_at_inner(
             (connect_with_retry(path)?, Some(child))
         }
     };
-    let reader = BufReader::new(stream.try_clone()?);
-    let shutdown_handle = stream.try_clone()?;
-    let viewport = (80u16, 24u16);
-    let client = Client::connect_with_shutdown(
-        reader,
-        stream,
-        viewport,
-        Some(Box::new(move || {
-            let _ = shutdown_handle.shutdown(Shutdown::Both);
-        })),
-    )?;
-    let snapshot = client.mirror().to_snapshot();
+    let (client, snapshot) = connect_client(stream)?;
     Ok((client, snapshot, child))
 }
 
