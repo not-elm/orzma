@@ -5,11 +5,12 @@ use crate::{CLIENT_QUEUE_DEPTH, ClientId, FRAME_QUEUE_DEPTH, LoopHandle, LoopMsg
 use crossbeam_channel::{Sender, bounded};
 use ozmux_mux::SessionSnapshot;
 use ozmux_proto::{ClientMessage, ServerMessage, read_message, write_message};
+use std::collections::HashMap;
 use std::io::{self, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -35,6 +36,8 @@ pub struct ServerHandle {
     #[expect(dead_code, reason = "held for Drop side-effect, not for its value")]
     loop_handle: LoopHandle,
     shutdown: Arc<AtomicBool>,
+    shutdown_requested: Arc<AtomicBool>,
+    registry: ConnRegistry,
     accept_join: Option<JoinHandle<()>>,
     path: PathBuf,
 }
@@ -46,7 +49,8 @@ impl Server {
     /// Any stale socket file at `path` is removed before binding. The parent
     /// directory is created if it does not already exist.
     pub fn serve(self, path: &Path) -> io::Result<ServerHandle> {
-        let loop_handle = self.spawn_loop();
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let loop_handle = self.spawn_loop(Arc::clone(&shutdown_requested));
         let loop_tx = loop_handle.sender();
 
         if let Some(parent) = path.parent() {
@@ -63,12 +67,14 @@ impl Server {
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let counter = Arc::new(AtomicU64::new(0));
+        let registry = ConnRegistry::default();
 
         let accept_join = {
             let shutdown = Arc::clone(&shutdown);
             let loop_tx = loop_tx.clone();
+            let registry = registry.clone();
             std::thread::spawn(move || {
-                run_accept(listener, shutdown, loop_tx, counter);
+                run_accept(listener, shutdown, loop_tx, counter, registry);
             })
         };
 
@@ -76,6 +82,8 @@ impl Server {
             loop_tx,
             loop_handle,
             shutdown,
+            shutdown_requested,
+            registry,
             accept_join: Some(accept_join),
             path: path.to_path_buf(),
         })
@@ -92,6 +100,12 @@ impl ServerHandle {
         self.loop_tx.send(LoopMsg::Snapshot { reply: tx }).ok()?;
         rx.recv_timeout(Duration::from_secs(2)).ok()
     }
+
+    /// True once the central loop has been asked to shut down (e.g. a wire
+    /// `ClientMessage::Shutdown`). The binary's `main` polls this to exit.
+    pub fn shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::SeqCst)
+    }
 }
 
 impl Drop for ServerHandle {
@@ -100,6 +114,7 @@ impl Drop for ServerHandle {
         if let Some(j) = self.accept_join.take() {
             let _ = j.join();
         }
+        self.registry.drain_and_join();
         let _ = std::fs::remove_file(&self.path);
         // loop_handle's own Drop sends Shutdown and joins the loop thread.
     }
@@ -110,6 +125,7 @@ fn run_accept(
     shutdown: Arc<AtomicBool>,
     loop_tx: Sender<LoopMsg>,
     counter: Arc<AtomicU64>,
+    registry: ConnRegistry,
 ) {
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -118,7 +134,7 @@ fn run_accept(
         match listener.accept() {
             Ok((stream, _)) => {
                 let id = ClientId(counter.fetch_add(1, Ordering::SeqCst));
-                if let Err(e) = spawn_conn(stream, id, loop_tx.clone()) {
+                if let Err(e) = spawn_conn(stream, id, loop_tx.clone(), registry.clone()) {
                     eprintln!("ozmuxd: failed to set up connection {}: {e}", id.0);
                 }
             }
@@ -131,17 +147,55 @@ fn run_accept(
     }
 }
 
-fn spawn_conn(stream: UnixStream, client_id: ClientId, loop_tx: Sender<LoopMsg>) -> io::Result<()> {
+struct ConnEntry {
+    teardown: UnixStream,
+    reader: JoinHandle<()>,
+    writer: JoinHandle<()>,
+}
+
+#[derive(Clone, Default)]
+struct ConnRegistry(Arc<Mutex<HashMap<ClientId, ConnEntry>>>);
+
+impl ConnRegistry {
+    fn insert(&self, id: ClientId, entry: ConnEntry) {
+        self.0.lock().unwrap().insert(id, entry);
+    }
+
+    fn remove(&self, id: ClientId) {
+        let _ = self.0.lock().unwrap().remove(&id);
+    }
+
+    fn drain_and_join(&self) {
+        // NOTE: take-then-join — never hold the lock across join(). A connection's
+        // reader self-removes (locks this map) as it exits; holding the lock across
+        // its join() would deadlock. mem::take empties the map under the lock, then
+        // we release it before shutting down + joining each entry.
+        let taken = std::mem::take(&mut *self.0.lock().unwrap());
+        for (_, e) in taken {
+            let _ = e.teardown.shutdown(std::net::Shutdown::Both);
+            let _ = e.reader.join();
+            let _ = e.writer.join();
+        }
+    }
+}
+
+fn spawn_conn(
+    stream: UnixStream,
+    client_id: ClientId,
+    loop_tx: Sender<LoopMsg>,
+    registry: ConnRegistry,
+) -> io::Result<()> {
     stream.set_nonblocking(false)?;
     let reader_stream = stream.try_clone()?;
     let teardown_stream = stream.try_clone()?;
+    let registry_teardown = stream.try_clone()?;
     let mut reader = BufReader::new(reader_stream);
     let mut writer = stream;
 
     let (out_tx, out_rx) = bounded::<ServerMessage>(CLIENT_QUEUE_DEPTH);
     let (frame_tx, frame_rx) = bounded::<ServerMessage>(FRAME_QUEUE_DEPTH);
 
-    std::thread::spawn(move || {
+    let writer_handle = std::thread::spawn(move || {
         loop {
             crossbeam_channel::select_biased! {
                 recv(out_rx) -> msg => match msg {
@@ -156,45 +210,63 @@ fn spawn_conn(stream: UnixStream, client_id: ClientId, loop_tx: Sender<LoopMsg>)
         }
     });
 
-    std::thread::spawn(move || {
-        match read_message::<_, ClientMessage>(&mut reader) {
-            Ok(Some(ClientMessage::Hello {
-                protocol_version,
-                viewport,
-            })) => {
-                if loop_tx
-                    .send(LoopMsg::Attach {
-                        client_id,
-                        writer: out_tx,
-                        frame_writer: frame_tx,
-                        viewport,
-                        protocol_version,
-                        disconnect: Some(Box::new(move || {
-                            let _ = teardown_stream.shutdown(std::net::Shutdown::Both);
-                        })),
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-            _ => return,
-        }
-
-        loop {
+    let reader_registry = registry.clone();
+    let reader_handle = std::thread::spawn(move || {
+        let body = move || {
             match read_message::<_, ClientMessage>(&mut reader) {
-                Ok(Some(msg)) => {
-                    if loop_tx.send(LoopMsg::ClientFrame(client_id, msg)).is_err() {
+                Ok(Some(ClientMessage::Hello {
+                    protocol_version,
+                    viewport,
+                })) => {
+                    if loop_tx
+                        .send(LoopMsg::Attach {
+                            client_id,
+                            writer: out_tx,
+                            frame_writer: frame_tx,
+                            viewport,
+                            protocol_version,
+                            disconnect: Some(Box::new(move || {
+                                let _ = teardown_stream.shutdown(std::net::Shutdown::Both);
+                            })),
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+
+            loop {
+                match read_message::<_, ClientMessage>(&mut reader) {
+                    Ok(Some(msg)) => {
+                        if loop_tx.send(LoopMsg::ClientFrame(client_id, msg)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) | Err(_) => {
+                        let _ = loop_tx.send(LoopMsg::Disconnect(client_id));
                         break;
                     }
                 }
-                Ok(None) | Err(_) => {
-                    let _ = loop_tx.send(LoopMsg::Disconnect(client_id));
-                    break;
-                }
             }
-        }
+        };
+        body();
+        reader_registry.remove(client_id);
     });
+
+    // NOTE: benign race — if the client disconnects between spawn and this insert,
+    // the reader's remove may run before insert, leaving a stale entry that lingers
+    // until the shutdown drain (which joins an already-dead thread instantly). No
+    // leak in practice; do not add synchronization for it.
+    registry.insert(
+        client_id,
+        ConnEntry {
+            teardown: registry_teardown,
+            reader: reader_handle,
+            writer: writer_handle,
+        },
+    );
 
     Ok(())
 }

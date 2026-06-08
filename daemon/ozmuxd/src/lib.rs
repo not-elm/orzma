@@ -16,6 +16,8 @@ use ozmux_vt::pty::Pty;
 use ozmux_vt::vt::Vt;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use surface_io::{DriverCtl, spawn_driver};
 
 /// Identifies a connected client within the daemon.
@@ -115,17 +117,22 @@ impl Server {
     }
 
     /// Spawns the central loop on its own thread; returns a handle.
-    pub(crate) fn spawn_loop(self) -> LoopHandle {
+    pub(crate) fn spawn_loop(self, shutdown_requested: Arc<AtomicBool>) -> LoopHandle {
         let (tx, rx) = unbounded::<LoopMsg>();
         let loop_tx = tx.clone();
-        let join = std::thread::spawn(move || self.run(rx, loop_tx));
+        let join = std::thread::spawn(move || self.run(rx, loop_tx, shutdown_requested));
         LoopHandle {
             tx,
             join: Some(join),
         }
     }
 
-    fn run(mut self, rx: Receiver<LoopMsg>, loop_tx: Sender<LoopMsg>) {
+    fn run(
+        mut self,
+        rx: Receiver<LoopMsg>,
+        loop_tx: Sender<LoopMsg>,
+        shutdown_requested: Arc<AtomicBool>,
+    ) {
         let mut clients: HashMap<ClientId, ClientConn> = HashMap::new();
         let mut surfaces: HashMap<SurfaceId, SurfaceHandle> = HashMap::new();
 
@@ -284,6 +291,7 @@ impl Server {
                     }
                 }
                 LoopMsg::Shutdown => {
+                    shutdown_requested.store(true, Ordering::SeqCst);
                     for (_, h) in surfaces.drain() {
                         let _ = h.ctl_tx.send(DriverCtl::Shutdown);
                         if let Some(j) = h.join {
@@ -728,7 +736,7 @@ mod tests {
 
     #[test]
     fn shutdown_invokes_disconnect_hooks() {
-        let handle = Server::new().spawn_loop();
+        let handle = Server::new().spawn_loop(Arc::new(AtomicBool::new(false)));
         let torn_down = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&torn_down);
         let (w_tx, _w_rx) = unbounded::<ServerMessage>();
@@ -754,7 +762,7 @@ mod tests {
 
     #[test]
     fn attach_then_split_broadcasts_and_snapshot_matches() {
-        let handle = Server::new().spawn_loop();
+        let handle = Server::new().spawn_loop(Arc::new(AtomicBool::new(false)));
         let (w_tx, w_rx) = unbounded::<ServerMessage>();
         let (f_tx, _f_rx) = unbounded::<ServerMessage>();
         handle.send(LoopMsg::Attach {
@@ -801,7 +809,7 @@ mod tests {
 
     #[test]
     fn scroll_wire_path_moves_display_offset() {
-        let handle = Server::new().spawn_loop();
+        let handle = Server::new().spawn_loop(Arc::new(AtomicBool::new(false)));
         let (w_tx, w_rx) = unbounded::<ServerMessage>();
         let (f_tx, f_rx) = unbounded::<ServerMessage>();
         handle.send(LoopMsg::Attach {
@@ -859,7 +867,7 @@ mod tests {
 
     #[test]
     fn protocol_version_mismatch_sends_error_and_does_not_attach() {
-        let handle = Server::new().spawn_loop();
+        let handle = Server::new().spawn_loop(Arc::new(AtomicBool::new(false)));
         let (w_tx, w_rx) = unbounded::<ServerMessage>();
         let (f_tx, _f_rx) = unbounded::<ServerMessage>();
         handle.send(LoopMsg::Attach {
@@ -884,7 +892,7 @@ mod tests {
 
     #[test]
     fn disconnect_removes_client_from_broadcast() {
-        let handle = Server::new().spawn_loop();
+        let handle = Server::new().spawn_loop(Arc::new(AtomicBool::new(false)));
         let (w_tx, w_rx) = unbounded::<ServerMessage>();
         let (f_tx, _f_rx) = unbounded::<ServerMessage>();
         handle.send(LoopMsg::Attach {
