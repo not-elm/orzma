@@ -73,6 +73,23 @@ pub(crate) fn resolve_focused_terminal_readonly(
     active_surfaces.get(pane).ok().map(|s| s.0)
 }
 
+/// Returns `true` when `surface` carries `SurfaceKind::Terminal`. The thin
+/// keyboard/IME dispatchers gate their terminal-`Input` send on this so a
+/// focused browser/extension surface (whose keystrokes belong to its own
+/// editor) never leaks a stray `Input` to the daemon. `SurfaceKind` is stamped
+/// at snapshot spawn — unlike `TerminalGrid`, which attaches a render-phase
+/// later — so this never drops a real keystroke in a terminal's pre-grid frame.
+#[cfg(feature = "thin-client")]
+pub(crate) fn is_terminal_surface(
+    surface_kinds: &Query<&ozmux_multiplexer::SurfaceKind>,
+    surface: Entity,
+) -> bool {
+    matches!(
+        surface_kinds.get(surface),
+        Ok(ozmux_multiplexer::SurfaceKind::Terminal)
+    )
+}
+
 /// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
 /// `Hover` (cursor / hyperlink hover detection) → `Dispatch`
 /// (mouse / wheel button routing) → `FocusedKey` (keyboard
@@ -243,6 +260,7 @@ pub(crate) fn dispatch_focused_key(
     active_panes: Query<&ActivePane>,
     active_surfaces: Query<&ActiveSurface>,
     surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
+    surface_kinds: Query<&ozmux_multiplexer::SurfaceKind>,
     grids: Query<&bevy_terminal_renderer::prelude::TerminalGrid>,
     copy_modes: Query<(), With<CopyModeState>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -328,6 +346,9 @@ pub(crate) fn dispatch_focused_key(
         let Some(surface_ent) = focused_surface else {
             continue;
         };
+        if !is_terminal_surface(&surface_kinds, surface_ent) {
+            continue;
+        }
         let Ok(surf_id) = surface_ids.get(surface_ent).map(|c| c.0) else {
             continue;
         };
@@ -629,6 +650,46 @@ fn forward_to_active_terminal(
 
 fn is_ime_composing(ime_state: Res<ImeState>) -> bool {
     ime_state.is_composing()
+}
+
+#[cfg(all(test, feature = "thin-client"))]
+mod thin_gate_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::default;
+    use ozmux_multiplexer::SurfaceKind;
+
+    /// `is_terminal_surface` returns true only for `SurfaceKind::Terminal`, so a
+    /// focused browser/extension surface is skipped by the thin key/IME send.
+    #[test]
+    fn is_terminal_surface_distinguishes_kinds() {
+        let mut world = World::new();
+        let terminal = world.spawn(SurfaceKind::Terminal).id();
+        let browser = world
+            .spawn(SurfaceKind::Browser {
+                initial_url: None,
+                profile: default(),
+            })
+            .id();
+        let missing = world.spawn_empty().id();
+
+        let (is_term, is_browser, is_missing) = world
+            .run_system_once(move |kinds: Query<&ozmux_multiplexer::SurfaceKind>| {
+                (
+                    is_terminal_surface(&kinds, terminal),
+                    is_terminal_surface(&kinds, browser),
+                    is_terminal_surface(&kinds, missing),
+                )
+            })
+            .unwrap();
+
+        assert!(is_term, "a Terminal surface is a terminal");
+        assert!(!is_browser, "a Browser surface is not a terminal");
+        assert!(
+            !is_missing,
+            "an entity with no SurfaceKind is not a terminal"
+        );
+    }
 }
 
 #[cfg(all(test, not(feature = "thin-client")))]

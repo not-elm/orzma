@@ -313,6 +313,7 @@ pub(crate) fn read_ime_events(
     active_panes: Query<&ozmux_multiplexer::ActivePane>,
     active_surfaces: Query<&ozmux_multiplexer::ActiveSurface>,
     surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
+    surface_kinds: Query<&ozmux_multiplexer::SurfaceKind>,
 ) {
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event).filter(|t| !t.is_empty()) {
@@ -323,6 +324,9 @@ pub(crate) fn read_ime_events(
             ) else {
                 continue;
             };
+            if !crate::input::is_terminal_surface(&surface_kinds, surface_ent) {
+                continue;
+            }
             let Ok(surf_id) = surface_ids.get(surface_ent).map(|c| c.0) else {
                 continue;
             };
