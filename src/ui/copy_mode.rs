@@ -12,12 +12,10 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
-#[cfg(not(feature = "thin-client"))]
 use bevy::input::keyboard::Key;
-use bevy_terminal::TerminalHandle;
 #[cfg(not(feature = "thin-client"))]
-use bevy_terminal::{PtyHandle, SelectionType, ViMotion};
-#[cfg(not(feature = "thin-client"))]
+use bevy_terminal::{PtyHandle, TerminalHandle};
+use bevy_terminal::{SelectionType, ViMotion};
 use ozmux_configs::shortcuts::Modifiers;
 
 /// Bevy Plugin: registers the two observers and inserts the global
@@ -55,7 +53,6 @@ pub struct ExitCopyMode {
 }
 
 /// Outcome of `map_key_to_copy_op` — what the dispatcher should do.
-#[cfg(not(feature = "thin-client"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyOp {
     /// `q` / `Esc` — leave copy mode, drop any selection.
@@ -82,7 +79,6 @@ pub enum CopyOp {
 /// rely on it. Without this gate, Cmd+V would trigger
 /// `ToggleSelection(Simple)` while in copy mode instead of falling
 /// through to the paste pipeline.
-#[cfg(not(feature = "thin-client"))]
 pub(crate) fn map_key_to_copy_op(key: &Key, mods: Modifiers) -> Option<CopyOp> {
     match key {
         Key::Escape => return Some(CopyOp::ExitCancel),
@@ -179,34 +175,189 @@ pub(crate) fn dispatch_key(
     exits
 }
 
+/// Thin-client copy-mode key dispatcher: maps the key to a `CopyOp` and sends
+/// the matching `ClientMessage::CopyModeOp` over the wire (the daemon drives
+/// vi-mode + selection + frame rendering). Mirrors the local `dispatch_key`'s
+/// `exits` contract so `src/input.rs` can bypass the gate for the rest of the
+/// frame after an exit.
+///
+/// Returns `true` when the op caused copy mode to exit (`ExitCancel` or
+/// `ExitCopy`).
+#[cfg(feature = "thin-client")]
+pub(crate) fn dispatch_key(
+    conn: &mut crate::thin_client::ThinClientConn,
+    commands: &mut Commands,
+    grids: &Query<&bevy_terminal_renderer::prelude::TerminalGrid>,
+    surface_ids: &Query<&ozmux_multiplexer::MuxSurfaceId>,
+    entity: Entity,
+    logical_key: Key,
+    mods: Modifiers,
+) -> bool {
+    let Some(op) = map_key_to_copy_op(&logical_key, mods) else {
+        return false;
+    };
+    let exits = matches!(op, CopyOp::ExitCancel | CopyOp::ExitCopy);
+    let Ok(surface) = surface_ids.get(entity).map(|c| c.0) else {
+        return exits;
+    };
+    match op {
+        CopyOp::ExitCancel => {
+            commands.trigger(ExitCopyMode { entity });
+        }
+        CopyOp::ExitCopy => {
+            send_copy_op(conn, surface, ozmux_proto::CopyModeOp::CopySelection);
+            commands.trigger(ExitCopyMode { entity });
+        }
+        CopyOp::Motion(m) => send_copy_op(
+            conn,
+            surface,
+            ozmux_proto::CopyModeOp::ViMotion(vi_motion_to_kind(m)),
+        ),
+        CopyOp::ScrollPageUp => send_copy_op(conn, surface, ozmux_proto::CopyModeOp::ScrollPageUp),
+        CopyOp::ScrollPageDown => {
+            send_copy_op(conn, surface, ozmux_proto::CopyModeOp::ScrollPageDown)
+        }
+        CopyOp::ToggleSelection(ty) => {
+            let want_line = matches!(ty, SelectionType::Lines);
+            let current = grids
+                .get(entity)
+                .ok()
+                .and_then(|g| g.selection.as_ref().map(|s| s.kind));
+            let op = match current {
+                None => ozmux_proto::CopyModeOp::SelectionStart {
+                    ty: selection_type_to_kind(ty),
+                },
+                Some(k) if is_line_geometry(k) == want_line => {
+                    ozmux_proto::CopyModeOp::SelectionClear
+                }
+                Some(_) => ozmux_proto::CopyModeOp::SelectionChangeType {
+                    ty: selection_type_to_kind(ty),
+                },
+            };
+            send_copy_op(conn, surface, op);
+        }
+    }
+    exits
+}
+
+#[cfg(feature = "thin-client")]
+fn send_copy_op(
+    conn: &mut crate::thin_client::ThinClientConn,
+    surface: ozmux_proto::SurfaceId,
+    op: ozmux_proto::CopyModeOp,
+) {
+    crate::thin_client::send_cmd(conn, ozmux_proto::ClientMessage::CopyModeOp { surface, op });
+}
+
+#[cfg(feature = "thin-client")]
+fn vi_motion_to_kind(m: ViMotion) -> ozmux_proto::ViMotionKind {
+    match m {
+        ViMotion::Left => ozmux_proto::ViMotionKind::Left,
+        ViMotion::Right => ozmux_proto::ViMotionKind::Right,
+        ViMotion::Up => ozmux_proto::ViMotionKind::Up,
+        ViMotion::Down => ozmux_proto::ViMotionKind::Down,
+        ViMotion::First => ozmux_proto::ViMotionKind::First,
+        ViMotion::Last => ozmux_proto::ViMotionKind::Last,
+        ViMotion::FirstOccupied => ozmux_proto::ViMotionKind::FirstOccupied,
+        ViMotion::High => ozmux_proto::ViMotionKind::High,
+        ViMotion::Low => ozmux_proto::ViMotionKind::Low,
+        ViMotion::WordRight => ozmux_proto::ViMotionKind::WordRight,
+        ViMotion::WordLeft => ozmux_proto::ViMotionKind::WordLeft,
+        ViMotion::WordRightEnd => ozmux_proto::ViMotionKind::WordRightEnd,
+        // NOTE: `map_key_to_copy_op` only ever emits the twelve motions above;
+        // `ViMotion` carries further alacritty variants (Middle, Semantic*,
+        // Bracket, paragraph) the keyboard map never produces, so reaching them
+        // signals an upstream change in the mapper that this match must track.
+        _ => unreachable!("map_key_to_copy_op only emits the twelve mapped motions"),
+    }
+}
+
+#[cfg(feature = "thin-client")]
+fn selection_type_to_kind(ty: SelectionType) -> ozmux_proto::SelectionKind {
+    match ty {
+        SelectionType::Simple => ozmux_proto::SelectionKind::Simple,
+        SelectionType::Block => ozmux_proto::SelectionKind::Block,
+        SelectionType::Lines => ozmux_proto::SelectionKind::Lines,
+        SelectionType::Semantic => ozmux_proto::SelectionKind::Semantic,
+    }
+}
+
+#[cfg(feature = "thin-client")]
+fn is_line_geometry(kind: bevy_terminal_renderer::prelude::SelectionKind) -> bool {
+    matches!(kind, bevy_terminal_renderer::prelude::SelectionKind::Line)
+}
+
 /// Observer for `EnterCopyModeActionEvent`. Inserts `CopyModeState` on the
-/// target entity and calls `TerminalHandle::enter_vi_mode`.
+/// target entity. The local arm also calls `TerminalHandle::enter_vi_mode`;
+/// the thin arm sends `CopyModeOp::Enter` so the daemon's vi-mode drives the
+/// frame's vi-cursor.
 pub(crate) fn handle_enter_copy_mode_request(
     ev: On<EnterCopyModeActionEvent>,
     mut commands: Commands,
-    mut q: Query<&mut TerminalHandle>,
+    #[cfg(not(feature = "thin-client"))] mut q: Query<&mut TerminalHandle>,
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
+    #[cfg(feature = "thin-client")] surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
 ) {
-    let Ok(mut handle) = q.get_mut(ev.entity) else {
-        return;
-    };
-    handle.enter_vi_mode();
-    commands.entity(ev.entity).insert(CopyModeState);
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let Ok(mut handle) = q.get_mut(ev.entity) else {
+            return;
+        };
+        handle.enter_vi_mode();
+        commands.entity(ev.entity).insert(CopyModeState);
+    }
+    #[cfg(feature = "thin-client")]
+    {
+        commands.entity(ev.entity).insert(CopyModeState);
+        if let Ok(surface) = surface_ids.get(ev.entity).map(|c| c.0) {
+            crate::thin_client::send_cmd(
+                &mut conn,
+                ozmux_proto::ClientMessage::CopyModeOp {
+                    surface,
+                    op: ozmux_proto::CopyModeOp::Enter,
+                },
+            );
+        }
+    }
 }
 
-/// Observer for `ExitCopyMode`. Removes `CopyModeState`, clears any
-/// selection, and calls `TerminalHandle::exit_vi_mode` (which snaps
-/// the viewport to the live tail).
+/// Observer for `ExitCopyMode`. Removes `CopyModeState`. The local arm clears
+/// any selection and calls `TerminalHandle::exit_vi_mode` (which snaps the
+/// viewport to the live tail); the thin arm sends `CopyModeOp::Exit` (the
+/// daemon's `exit_vi_mode` clears the selection + snaps).
 pub(crate) fn handle_exit_copy_mode(
     ev: On<ExitCopyMode>,
     mut commands: Commands,
-    mut q: Query<&mut TerminalHandle>,
+    #[cfg(not(feature = "thin-client"))] mut q: Query<&mut TerminalHandle>,
+    #[cfg(feature = "thin-client")] mut conn: bevy::ecs::system::NonSendMut<
+        crate::thin_client::ThinClientConn,
+    >,
+    #[cfg(feature = "thin-client")] surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
 ) {
-    let Ok(mut handle) = q.get_mut(ev.entity) else {
-        return;
-    };
-    handle.selection_clear();
-    handle.exit_vi_mode();
-    commands.entity(ev.entity).remove::<CopyModeState>();
+    #[cfg(not(feature = "thin-client"))]
+    {
+        let Ok(mut handle) = q.get_mut(ev.entity) else {
+            return;
+        };
+        handle.selection_clear();
+        handle.exit_vi_mode();
+        commands.entity(ev.entity).remove::<CopyModeState>();
+    }
+    #[cfg(feature = "thin-client")]
+    {
+        commands.entity(ev.entity).remove::<CopyModeState>();
+        if let Ok(surface) = surface_ids.get(ev.entity).map(|c| c.0) {
+            crate::thin_client::send_cmd(
+                &mut conn,
+                ozmux_proto::ClientMessage::CopyModeOp {
+                    surface,
+                    op: ozmux_proto::CopyModeOp::Exit,
+                },
+            );
+        }
+    }
 }
 
 #[cfg(all(test, not(feature = "thin-client")))]

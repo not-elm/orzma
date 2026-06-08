@@ -24,7 +24,6 @@ use crate::configs::OzmuxConfigsResource;
 use crate::input::ime::ImeState;
 use crate::input::ime::read_ime_events;
 use crate::system_set::OzmuxSystems;
-#[cfg(not(feature = "thin-client"))]
 use crate::ui::copy_mode::{
     CopyModeState, EnterCopyModeActionEvent, dispatch_key as dispatch_copy_mode_key,
 };
@@ -45,7 +44,6 @@ use ozmux_configs::shortcuts::{
 use ozmux_multiplexer::MultiplexerCommands;
 use ozmux_multiplexer::{ActivePane, ActiveSurface, AttachedWorkspace, WorkspaceMarker};
 use ozmux_multiplexer::{CycleDirection, PaneDirection, SplitOrientation, SwapOffset};
-#[cfg(not(feature = "thin-client"))]
 use std::collections::HashSet;
 
 /// Resolves the focused surface's entity via the attached workspace →
@@ -246,11 +244,13 @@ pub(crate) fn dispatch_focused_key(
     active_surfaces: Query<&ActiveSurface>,
     surface_ids: Query<&ozmux_multiplexer::MuxSurfaceId>,
     grids: Query<&bevy_terminal_renderer::prelude::TerminalGrid>,
+    copy_modes: Query<(), With<CopyModeState>>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
 ) {
     let bindings = &configs.shortcuts.bindings;
     let mods = current_modifiers(&keys);
+    let mut just_exited: HashSet<Entity> = HashSet::new();
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
@@ -264,6 +264,28 @@ pub(crate) fn dispatch_focused_key(
         let Ok(workspace) = attached_workspace.single() else {
             continue;
         };
+
+        let focused_surface =
+            resolve_focused_terminal_readonly(&attached_workspace, &active_panes, &active_surfaces);
+        if let Some(surface_ent) = focused_surface
+            && copy_modes.get(surface_ent).is_ok()
+            && !just_exited.contains(&surface_ent)
+        {
+            let exited = dispatch_copy_mode_key(
+                &mut conn,
+                &mut commands,
+                &grids,
+                &surface_ids,
+                surface_ent,
+                ev.logical_key.clone(),
+                mods.clone(),
+            );
+            if exited {
+                just_exited.insert(surface_ent);
+            }
+            continue;
+        }
+
         if is_modifier_only_key(&ev.logical_key) {
             continue;
         }
@@ -276,17 +298,28 @@ pub(crate) fn dispatch_focused_key(
                 if ev.repeat {
                     continue;
                 }
-                if !fire_action_event(&mut commands, &action, workspace)
-                    && matches!(action, ShortcutAction::Paste)
-                    && let Some(surface_ent) = resolve_focused_terminal_readonly(
-                        &attached_workspace,
-                        &active_panes,
-                        &active_surfaces,
-                    )
-                {
-                    commands.trigger(PasteFromClipboardActionEvent {
-                        entity: surface_ent,
-                    });
+                if !fire_action_event(&mut commands, &action, workspace) {
+                    if matches!(action, ShortcutAction::Paste)
+                        && let Some(surface_ent) = resolve_focused_terminal_readonly(
+                            &attached_workspace,
+                            &active_panes,
+                            &active_surfaces,
+                        )
+                    {
+                        commands.trigger(PasteFromClipboardActionEvent {
+                            entity: surface_ent,
+                        });
+                    } else if matches!(action, ShortcutAction::EnterCopyMode)
+                        && let Some(surface_ent) = resolve_focused_terminal_readonly(
+                            &attached_workspace,
+                            &active_panes,
+                            &active_surfaces,
+                        )
+                    {
+                        commands.trigger(EnterCopyModeActionEvent {
+                            entity: surface_ent,
+                        });
+                    }
                 }
                 continue;
             }
