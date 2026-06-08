@@ -220,6 +220,12 @@ pub(crate) fn dispatch_key(
             crate::thin_client::send_copy_op(conn, surface, ozmux_proto::CopyModeOp::ScrollPageDown)
         }
         CopyOp::ToggleSelection(ty) => {
+            // TODO: parity gap vs the local arm. The mirrored grid carries only
+            // render geometry (Char/Line), so mouse-made Block/Semantic
+            // selections look like Char here: `v` over them clears instead of
+            // re-typing to Simple, and the read is frame-lagged (pump runs
+            // `.before(Input)`) so a same-frame double-press can mis-decide.
+            // Faithful parity needs the alacritty SelectionType echoed on the frame.
             let want_line = matches!(ty, SelectionType::Lines);
             let current = grids
                 .get(entity)
@@ -297,20 +303,14 @@ pub(crate) fn handle_enter_copy_mode_request(
             return;
         };
         commands.entity(ev.entity).insert(CopyModeState);
-        crate::thin_client::send_cmd(
-            &mut conn,
-            ozmux_proto::ClientMessage::CopyModeOp {
-                surface,
-                op: ozmux_proto::CopyModeOp::Enter,
-            },
-        );
+        crate::thin_client::send_copy_op(&mut conn, surface, ozmux_proto::CopyModeOp::Enter);
     }
 }
 
 /// Observer for `ExitCopyMode`. Removes `CopyModeState`. The local arm clears
 /// any selection and calls `TerminalHandle::exit_vi_mode` (which snaps the
-/// viewport to the live tail); the thin arm sends `CopyModeOp::Exit` (the
-/// daemon's `exit_vi_mode` clears the selection + snaps).
+/// viewport to the live tail); the thin arm sends `CopyModeOp::Exit`, whose
+/// daemon handler clears the selection, exits vi-mode, and snaps to the tail.
 pub(crate) fn handle_exit_copy_mode(
     ev: On<ExitCopyMode>,
     mut commands: Commands,
@@ -333,13 +333,7 @@ pub(crate) fn handle_exit_copy_mode(
     {
         commands.entity(ev.entity).remove::<CopyModeState>();
         if let Ok(surface) = surface_ids.get(ev.entity).map(|c| c.0) {
-            crate::thin_client::send_cmd(
-                &mut conn,
-                ozmux_proto::ClientMessage::CopyModeOp {
-                    surface,
-                    op: ozmux_proto::CopyModeOp::Exit,
-                },
-            );
+            crate::thin_client::send_copy_op(&mut conn, surface, ozmux_proto::CopyModeOp::Exit);
         }
     }
 }

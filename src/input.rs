@@ -300,48 +300,32 @@ pub(crate) fn dispatch_focused_key(
                 }
                 if !fire_action_event(&mut commands, &action, workspace) {
                     if matches!(action, ShortcutAction::Paste)
-                        && let Some(surface_ent) = resolve_focused_terminal_readonly(
-                            &attached_workspace,
-                            &active_panes,
-                            &active_surfaces,
-                        )
+                        && let Some(surface_ent) = focused_surface
                     {
                         commands.trigger(PasteFromClipboardActionEvent {
                             entity: surface_ent,
                         });
                     } else if matches!(action, ShortcutAction::EnterCopyMode)
-                        && let Some(surface_ent) = resolve_focused_terminal_readonly(
-                            &attached_workspace,
-                            &active_panes,
-                            &active_surfaces,
-                        )
+                        && let Some(surface_ent) = focused_surface
                     {
                         commands.trigger(EnterCopyModeActionEvent {
                             entity: surface_ent,
                         });
                     } else if matches!(action, ShortcutAction::Copy)
-                        && let Some(surface_ent) = resolve_focused_terminal_readonly(
-                            &attached_workspace,
-                            &active_panes,
-                            &active_surfaces,
-                        )
+                        && let Some(surface_ent) = focused_surface
                         && let Ok(surf_id) = surface_ids.get(surface_ent).map(|c| c.0)
                     {
-                        crate::thin_client::send_cmd(
+                        crate::thin_client::send_copy_op(
                             &mut conn,
-                            ozmux_proto::ClientMessage::CopyModeOp {
-                                surface: surf_id,
-                                op: ozmux_proto::CopyModeOp::CopySelection,
-                            },
+                            surf_id,
+                            ozmux_proto::CopyModeOp::CopySelection,
                         );
                     }
                 }
                 continue;
             }
         }
-        let Some(surface_ent) =
-            resolve_focused_terminal_readonly(&attached_workspace, &active_panes, &active_surfaces)
-        else {
+        let Some(surface_ent) = focused_surface else {
             continue;
         };
         let Ok(surf_id) = surface_ids.get(surface_ent).map(|c| c.0) else {

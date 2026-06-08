@@ -69,31 +69,7 @@ fn attach_indicator_to_surface_host(
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     for host in hosts.iter() {
-        commands.entity(host).with_children(|parent| {
-            parent.spawn((
-                CopyModeIndicator,
-                IndicatorCache::default(),
-                Text::new(""),
-                TextFont {
-                    font: ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default(),
-                    font_size: theme::COPY_MODE_INDICATOR_FONT_SIZE_PX,
-                    ..default()
-                },
-                BackgroundColor(palette::COPY_MODE_INDICATOR_BG),
-                TextColor(palette::COPY_MODE_INDICATOR_FG),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(0.0),
-                    right: Val::Px(0.0),
-                    padding: UiRect::axes(
-                        Val::Px(theme::COPY_MODE_INDICATOR_PADDING_X_PX),
-                        Val::Px(0.0),
-                    ),
-                    display: Display::None,
-                    ..default()
-                },
-            ));
-        });
+        spawn_indicator_chip(&mut commands, host, &ui_font);
     }
 }
 
@@ -113,32 +89,42 @@ fn attach_indicator_to_surface_host(
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     for host in hosts.iter() {
-        commands.entity(host).with_children(|parent| {
-            parent.spawn((
-                CopyModeIndicator,
-                IndicatorCache::default(),
-                Text::new(""),
-                TextFont {
-                    font: ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default(),
-                    font_size: theme::COPY_MODE_INDICATOR_FONT_SIZE_PX,
-                    ..default()
-                },
-                BackgroundColor(palette::COPY_MODE_INDICATOR_BG),
-                TextColor(palette::COPY_MODE_INDICATOR_FG),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(0.0),
-                    right: Val::Px(0.0),
-                    padding: UiRect::axes(
-                        Val::Px(theme::COPY_MODE_INDICATOR_PADDING_X_PX),
-                        Val::Px(0.0),
-                    ),
-                    display: Display::None,
-                    ..default()
-                },
-            ));
-        });
+        spawn_indicator_chip(&mut commands, host, &ui_font);
     }
+}
+
+/// Spawns the initially-hidden `CopyModeIndicator` chip as a child of `host`.
+/// Shared by both feature arms of `attach_indicator_to_surface_host`.
+fn spawn_indicator_chip(
+    commands: &mut Commands,
+    host: Entity,
+    ui_font: &Option<Res<TerminalUiFont>>,
+) {
+    commands.entity(host).with_children(|parent| {
+        parent.spawn((
+            CopyModeIndicator,
+            IndicatorCache::default(),
+            Text::new(""),
+            TextFont {
+                font: ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default(),
+                font_size: theme::COPY_MODE_INDICATOR_FONT_SIZE_PX,
+                ..default()
+            },
+            BackgroundColor(palette::COPY_MODE_INDICATOR_BG),
+            TextColor(palette::COPY_MODE_INDICATOR_FG),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                right: Val::Px(0.0),
+                padding: UiRect::axes(
+                    Val::Px(theme::COPY_MODE_INDICATOR_PADDING_X_PX),
+                    Val::Px(0.0),
+                ),
+                display: Display::None,
+                ..default()
+            },
+        ));
+    });
 }
 
 /// Updates each visible chip's `Text` and `IndicatorCache` from the

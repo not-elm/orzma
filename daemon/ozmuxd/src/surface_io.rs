@@ -177,7 +177,10 @@ fn run_driver(
                 Ok(DriverCtl::CopyModeOp { client_id, op }) => {
                     match op {
                         ozmux_proto::CopyModeOp::Enter => vt.enter_vi_mode(),
-                        ozmux_proto::CopyModeOp::Exit => vt.exit_vi_mode(),
+                        ozmux_proto::CopyModeOp::Exit => {
+                            vt.selection_clear();
+                            vt.exit_vi_mode();
+                        }
                         ozmux_proto::CopyModeOp::ViMotion(k) => {
                             vt.vi_motion(crate::copymode::vi_motion_kind_to_alacritty(k))
                         }
