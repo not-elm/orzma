@@ -9,10 +9,6 @@ use alacritty_terminal::vi_mode::ViMotion;
 use ozmux_proto::{CellSide, SelectionKind, ViMotionKind, ViewportPoint};
 
 /// Converts the proto `ViMotionKind` to alacritty's `ViMotion`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by surface_io.rs in P4c-1c T3")
-)]
 pub(crate) fn vi_motion_kind_to_alacritty(k: ViMotionKind) -> ViMotion {
     match k {
         ViMotionKind::Left => ViMotion::Left,
@@ -31,10 +27,6 @@ pub(crate) fn vi_motion_kind_to_alacritty(k: ViMotionKind) -> ViMotion {
 }
 
 /// Converts the proto `SelectionKind` to alacritty's `SelectionType`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by surface_io.rs in P4c-1c T3")
-)]
 pub(crate) fn selection_kind_to_alacritty(k: SelectionKind) -> SelectionType {
     match k {
         SelectionKind::Simple => SelectionType::Simple,
@@ -45,10 +37,6 @@ pub(crate) fn selection_kind_to_alacritty(k: SelectionKind) -> SelectionType {
 }
 
 /// Converts the proto selection `CellSide` to alacritty's `index::Side`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by surface_io.rs in P4c-1c T3")
-)]
 pub(crate) fn side_to_alacritty(s: CellSide) -> Side {
     match s {
         CellSide::Left => Side::Left,
@@ -57,10 +45,6 @@ pub(crate) fn side_to_alacritty(s: CellSide) -> Side {
 }
 
 /// Converts the proto `ViewportPoint` to alacritty's viewport `Point`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by surface_io.rs in P4c-1c T3")
-)]
 pub(crate) fn viewport_point_to_alacritty(p: ViewportPoint) -> Point {
     Point::new(Line(p.line), Column(p.col))
 }

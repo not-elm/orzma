@@ -48,6 +48,13 @@ pub(crate) enum DriverCtl {
         /// Signed row delta (positive scrolls back into history).
         delta: i32,
     },
+    /// Apply a copy-mode op to this surface's VT (per-surface, ordered with input).
+    CopyModeOp {
+        /// The client that issued it (for routing `SelectionCopied` back).
+        client_id: ClientId,
+        /// The operation.
+        op: ozmux_proto::CopyModeOp,
+    },
     /// Stop the driver.
     Shutdown,
 }
@@ -163,6 +170,54 @@ fn run_driver(
                 }
                 Ok(DriverCtl::Scroll { delta }) => {
                     vt.scroll(delta);
+                    if let Some(f) = vt.emit() {
+                        fan_out(&mut clients, surface, &f);
+                    }
+                }
+                Ok(DriverCtl::CopyModeOp { client_id, op }) => {
+                    match op {
+                        ozmux_proto::CopyModeOp::Enter => vt.enter_vi_mode(),
+                        ozmux_proto::CopyModeOp::Exit => vt.exit_vi_mode(),
+                        ozmux_proto::CopyModeOp::ViMotion(k) => {
+                            vt.vi_motion(crate::copymode::vi_motion_kind_to_alacritty(k))
+                        }
+                        ozmux_proto::CopyModeOp::ViGoto { point } => {
+                            vt.vi_goto(crate::copymode::viewport_point_to_alacritty(point))
+                        }
+                        ozmux_proto::CopyModeOp::ScrollPageUp => vt.scroll_page_up(),
+                        ozmux_proto::CopyModeOp::ScrollPageDown => vt.scroll_page_down(),
+                        ozmux_proto::CopyModeOp::SelectionStartAt { point, side, ty } => vt
+                            .selection_start_at(
+                                crate::copymode::viewport_point_to_alacritty(point),
+                                crate::copymode::side_to_alacritty(side),
+                                crate::copymode::selection_kind_to_alacritty(ty),
+                            ),
+                        ozmux_proto::CopyModeOp::SelectionUpdateTo { point, side } => vt
+                            .selection_update_to(
+                                crate::copymode::viewport_point_to_alacritty(point),
+                                crate::copymode::side_to_alacritty(side),
+                            ),
+                        ozmux_proto::CopyModeOp::SelectionStart { ty } => {
+                            vt.selection_start(crate::copymode::selection_kind_to_alacritty(ty))
+                        }
+                        ozmux_proto::CopyModeOp::SelectionClear => vt.selection_clear(),
+                        ozmux_proto::CopyModeOp::SelectionChangeType { ty } => {
+                            vt.selection_change_type(crate::copymode::selection_kind_to_alacritty(
+                                ty,
+                            ));
+                        }
+                        ozmux_proto::CopyModeOp::CopySelection => {
+                            if let Some(text) = vt.selection_to_string()
+                                && !text.is_empty()
+                            {
+                                let _ = loop_tx.send(LoopMsg::SelectionCopied {
+                                    client_id,
+                                    surface,
+                                    text,
+                                });
+                            }
+                        }
+                    }
                     if let Some(f) = vt.emit() {
                         fan_out(&mut clients, surface, &f);
                     }

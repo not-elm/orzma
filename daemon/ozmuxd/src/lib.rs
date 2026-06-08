@@ -65,6 +65,15 @@ pub(crate) enum LoopMsg {
         /// The event.
         event: ozmux_vt::event::VtEvent,
     },
+    /// A driver extracted selection text for a copy; route it to one client.
+    SelectionCopied {
+        /// The originating client.
+        client_id: ClientId,
+        /// The surface.
+        surface: SurfaceId,
+        /// The extracted text.
+        text: String,
+    },
     /// Stop the loop.
     Shutdown,
 }
@@ -207,6 +216,11 @@ impl Server {
                         let _ = h.ctl_tx.send(DriverCtl::Scroll { delta });
                     }
                 }
+                LoopMsg::ClientFrame(cid, ClientMessage::CopyModeOp { surface, op }) => {
+                    if let Some(h) = surfaces.get(&surface) {
+                        let _ = h.ctl_tx.send(DriverCtl::CopyModeOp { client_id: cid, op });
+                    }
+                }
                 LoopMsg::ClientFrame(cid, cmd) => {
                     let (evicted, events) = self.apply_command(&mut clients, cid, cmd);
                     for dead_cid in evicted {
@@ -258,6 +272,17 @@ impl Server {
                         }
                     }
                 },
+                LoopMsg::SelectionCopied {
+                    client_id,
+                    surface,
+                    text,
+                } => {
+                    if let Some(conn) = clients.get(&client_id) {
+                        let _ = conn
+                            .tx
+                            .try_send(ServerMessage::SelectionCopied { surface, text });
+                    }
+                }
                 LoopMsg::Shutdown => {
                     for (_, h) in surfaces.drain() {
                         let _ = h.ctl_tx.send(DriverCtl::Shutdown);
@@ -314,7 +339,7 @@ impl Server {
             ClientMessage::Input { .. } => return (vec![], vec![]),
             // NOTE: Scroll is handled directly in the run loop (routed to the driver's ctl_tx) before apply_command.
             ClientMessage::Scroll { .. } => return (vec![], vec![]),
-            // TODO(T3): route CopyModeOp to the surface driver before apply_command.
+            // NOTE: CopyModeOp is routed to the driver's ctl_tx in the run loop before apply_command; unreachable here.
             ClientMessage::CopyModeOp { .. } => return (vec![], vec![]),
             ClientMessage::SetActiveSurface { pane, surface } => {
                 self.mux.set_active_surface(pane, surface)
