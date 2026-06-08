@@ -175,7 +175,8 @@ impl Mux {
     /// under a fresh `Split` (ratio `0.5`) that takes `pane`'s old layout slot.
     /// The new pane becomes the workspace's active pane.
     ///
-    /// Returns `[PaneCreated, LayoutChanged{root: Pane(pane)}, ActivePaneChanged]`.
+    /// Returns `[PaneCreated, LayoutChanged{root: Pane(pane)}, ActivePaneChanged,
+    /// PaneResized*]`.
     pub fn split_pane(
         &mut self,
         pane: PaneId,
@@ -185,6 +186,7 @@ impl Mux {
         cwd: Option<PathBuf>,
     ) -> MuxResult<Vec<MuxEvent>> {
         let workspace = self.owning_workspace_of_pane(pane)?;
+        let before = self.resolved_sizes_or_empty(workspace);
         let old_parent = self.pane(pane)?.parent;
 
         let surface = self.surfaces.insert(Surface {
@@ -214,7 +216,7 @@ impl Mux {
 
         let (cols, rows) = self.node_cell_extent(split_node);
         let subtree = self.build_layout_node(split_node, cols, rows);
-        Ok(vec![
+        let mut events = vec![
             MuxEvent::PaneCreated {
                 pane: new_pane,
                 workspace,
@@ -233,7 +235,10 @@ impl Mux {
                 workspace,
                 pane: new_pane,
             },
-        ])
+        ];
+        let after = self.resolved_sizes_or_empty(workspace);
+        events.extend(pane_resize_events(&before, &after));
+        Ok(events)
     }
 
     /// Close `pane`: promote its sibling into the grandparent slot, despawn the
@@ -241,9 +246,10 @@ impl Mux {
     /// workspace's only pane.
     ///
     /// Emits `[PaneClosed, SurfaceClosed*, (LayoutChanged | WorkspaceRootChanged),
-    /// ActivePaneChanged?]`.
+    /// ActivePaneChanged?, PaneResized*]`.
     pub fn close_pane(&mut self, pane: PaneId) -> MuxResult<Vec<MuxEvent>> {
         let workspace = self.owning_workspace_of_pane(pane)?;
+        let before = self.resolved_sizes_or_empty(workspace);
         let parent = self.pane(pane)?.parent;
         let split_id = match parent {
             Some(NodeId::Split(s)) => s,
@@ -300,6 +306,8 @@ impl Mux {
             });
         }
 
+        let after = self.resolved_sizes_or_empty(workspace);
+        events.extend(pane_resize_events(&before, &after));
         Ok(events)
     }
 
@@ -371,7 +379,7 @@ impl Mux {
     /// SLOT's ratio (slot-pinned, since ratios live on the split slots).
     /// `[]` (no-op) for a single-pane workspace.
     ///
-    /// Emits a `LayoutChanged` for each affected slot.
+    /// Emits a `LayoutChanged` for each affected slot, followed by `PaneResized*`.
     pub fn swap_pane(&mut self, pane: PaneId, offset: SwapOffset) -> MuxResult<Vec<MuxEvent>> {
         let workspace = self.owning_workspace_of_pane(pane)?;
         let ordered = self.ordered_panes(workspace)?;
@@ -393,6 +401,7 @@ impl Mux {
             return Ok(vec![]);
         }
 
+        let before = self.resolved_sizes_or_empty(workspace);
         let pa = self.pane(pane)?.parent.ok_or(MuxError::MissingParentCell)?;
         let pb = self
             .pane(other)?
@@ -420,6 +429,8 @@ impl Mux {
                 subtree,
             });
         }
+        let after = self.resolved_sizes_or_empty(workspace);
+        events.extend(pane_resize_events(&before, &after));
         Ok(events)
     }
 
@@ -694,6 +705,9 @@ impl Mux {
 
     /// Moves a surface into a new pane created by splitting its current pane.
     ///
+    /// Emits `[PaneCreated, LayoutChanged, ActivePaneChanged, ActiveSurfaceChanged?,
+    /// SurfaceMoved, PaneResized*]`.
+    ///
     /// Errors `CannotRemoveLastSurface` if the source pane has only one surface.
     pub fn break_surface_to_pane(
         &mut self,
@@ -705,6 +719,8 @@ impl Mux {
         if self.panes[source_pane].surfaces.len() < 2 {
             return Err(MuxError::CannotRemoveLastSurface(source_pane));
         }
+        let workspace = self.owning_workspace_of_pane(source_pane)?;
+        let before = self.resolved_sizes_or_empty(workspace);
 
         let mut events = self.split_pane_empty(source_pane, orientation, side)?;
 
@@ -761,6 +777,8 @@ impl Mux {
             to_pane: new_pane,
         });
 
+        let after = self.resolved_sizes_or_empty(workspace);
+        events.extend(pane_resize_events(&before, &after));
         Ok(events)
     }
 
@@ -1557,6 +1575,67 @@ mod tests {
             },
             _ => panic!("second event must be LayoutChanged"),
         }
+    }
+
+    #[test]
+    fn split_in_sized_workspace_emits_pane_resized_for_both_panes() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let original = mux.active_pane(ws).unwrap();
+        mux.set_workspace_size(ws, 80, 24).unwrap();
+
+        let events = mux
+            .split_pane(
+                original,
+                SplitOrientation::Horizontal,
+                Side::After,
+                SurfaceKind::Terminal,
+                None,
+            )
+            .unwrap();
+
+        let new_pane = events
+            .iter()
+            .find_map(|e| match e {
+                MuxEvent::PaneCreated { pane, .. } => Some(*pane),
+                _ => None,
+            })
+            .expect("split emits PaneCreated");
+
+        let resized: Vec<PaneId> = events
+            .iter()
+            .filter_map(|e| match e {
+                MuxEvent::PaneResized { pane, cols, rows } => {
+                    assert!(*cols > 0 && *rows > 0, "no zero-size PaneResized");
+                    Some(*pane)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(resized.contains(&original), "original pane must be resized");
+        assert!(resized.contains(&new_pane), "new pane must be resized");
+    }
+
+    #[test]
+    fn split_in_unsized_workspace_emits_no_pane_resized() {
+        let mut mux = Mux::new();
+        let ws = mux.active_workspace();
+        let original = mux.active_pane(ws).unwrap();
+        let events = mux
+            .split_pane(
+                original,
+                SplitOrientation::Horizontal,
+                Side::After,
+                SurfaceKind::Terminal,
+                None,
+            )
+            .unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, MuxEvent::PaneResized { .. })),
+            "an unsized workspace must not emit PaneResized (no 0x0 resize)"
+        );
     }
 
     #[test]
