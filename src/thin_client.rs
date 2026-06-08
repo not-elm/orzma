@@ -160,6 +160,9 @@ fn pump_thin_client(
     daemon: Res<ThinDaemon>,
     windows: Query<Entity, With<PrimaryWindow>>,
 ) {
+    if exiting.0 {
+        return;
+    }
     let mut budget = 256u32;
     while budget > 0 {
         budget -= 1;
