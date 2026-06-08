@@ -626,4 +626,191 @@ mod tests {
             "alt-screen-enter escape must fold into TerminalGrid.modes via snapshot/ModeChanged"
         );
     }
+
+    /// Sends a `CopyModeOp` for `surface_id` directly via the wire client.
+    fn send_op(app: &mut App, surface_id: ozmux_proto::SurfaceId, op: ozmux_proto::CopyModeOp) {
+        let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+        conn.0
+            .send(ozmux_proto::ClientMessage::CopyModeOp {
+                surface: surface_id,
+                op,
+            })
+            .expect("send CopyModeOp");
+    }
+
+    /// Pumps until the surface's `TerminalGrid.cells` is non-empty (the bootstrap
+    /// frame has folded), so subsequent ops act on a populated grid.
+    fn wait_for_cells(app: &mut App, surface_ent: Entity) {
+        pump_until(app, std::time::Duration::from_secs(5), |app| {
+            app.world()
+                .get::<TerminalGrid>(surface_ent)
+                .map(|g| !g.cells.is_empty())
+                .unwrap_or(false)
+        });
+    }
+
+    /// (f) Copy-mode entry over the wire: `CopyModeOp::Enter` enters vi-mode on
+    /// the daemon, which emits a frame whose `vi_cursor` is `Some`; the pump folds
+    /// it into the surface's `TerminalGrid.vi_cursor`. (Validates the daemon-driven
+    /// vi_cursor wire path; `CopyModeState` is GUI-managed and not registered here.)
+    #[test]
+    fn thin_client_copy_mode_enter_renders_vi_cursor() {
+        let (mut app, surface_id, surface_ent) = headless_app_with_grid();
+        wait_for_cells(&mut app, surface_ent);
+        send_op(&mut app, surface_id, ozmux_proto::CopyModeOp::Enter);
+        // A motion forces a fresh frame in case Enter alone coalesces away.
+        send_op(
+            &mut app,
+            surface_id,
+            ozmux_proto::CopyModeOp::ViMotion(ozmux_proto::ViMotionKind::Up),
+        );
+        let has_cursor = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            app.world()
+                .get::<TerminalGrid>(surface_ent)
+                .map(|g| g.vi_cursor.is_some())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_cursor,
+            "CopyModeOp::Enter → daemon vi-mode → frame.vi_cursor → pump must set TerminalGrid.vi_cursor"
+        );
+    }
+
+    /// (g) Keyboard copy-mode selection over the wire: enter copy mode, then
+    /// `SelectionStartAt` + `SelectionUpdateTo`; the daemon's selection lands in
+    /// the frame and the pump folds it into `TerminalGrid.selection`.
+    #[test]
+    fn thin_client_keyboard_selection_renders() {
+        let (mut app, surface_id, surface_ent) = headless_app_with_grid();
+        wait_for_cells(&mut app, surface_ent);
+        send_op(&mut app, surface_id, ozmux_proto::CopyModeOp::Enter);
+        send_op(
+            &mut app,
+            surface_id,
+            ozmux_proto::CopyModeOp::SelectionStartAt {
+                point: ozmux_proto::ViewportPoint { line: 0, col: 0 },
+                side: ozmux_proto::CellSide::Left,
+                ty: ozmux_proto::SelectionKind::Simple,
+            },
+        );
+        send_op(
+            &mut app,
+            surface_id,
+            ozmux_proto::CopyModeOp::SelectionUpdateTo {
+                point: ozmux_proto::ViewportPoint { line: 0, col: 5 },
+                side: ozmux_proto::CellSide::Right,
+            },
+        );
+        let has_selection = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            app.world()
+                .get::<TerminalGrid>(surface_ent)
+                .map(|g| g.selection.is_some())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_selection,
+            "Enter + SelectionStartAt + SelectionUpdateTo must fold into TerminalGrid.selection"
+        );
+    }
+
+    /// (h) `y` copy → clipboard over the wire: type known content, build a
+    /// whole-screen Lines selection in copy mode, `CopySelection`; the daemon
+    /// replies with `SelectionCopied`, the pump writes the `Clipboard`, and a
+    /// read-back yields the selected text. Skipped when arboard is unavailable
+    /// (headless CI) so the rest of the suite stays green.
+    #[test]
+    fn thin_client_copy_selection_writes_clipboard() {
+        let (mut app, surface_id, surface_ent) = headless_app_with_grid();
+        wait_for_cells(&mut app, surface_ent);
+        {
+            let mut conn = app.world_mut().non_send_resource_mut::<ThinClientConn>();
+            conn.0
+                .send(ozmux_proto::ClientMessage::Input {
+                    surface: surface_id,
+                    bytes: b"printf COPYME\n".to_vec(),
+                })
+                .expect("send Input");
+        }
+        let echoed = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            grid_contains(app, surface_ent, "COPYME")
+        });
+        assert!(
+            echoed,
+            "printf COPYME must surface in the grid before copying"
+        );
+        send_op(&mut app, surface_id, ozmux_proto::CopyModeOp::Enter);
+        send_op(
+            &mut app,
+            surface_id,
+            ozmux_proto::CopyModeOp::SelectionStartAt {
+                point: ozmux_proto::ViewportPoint { line: 0, col: 0 },
+                side: ozmux_proto::CellSide::Left,
+                ty: ozmux_proto::SelectionKind::Lines,
+            },
+        );
+        send_op(
+            &mut app,
+            surface_id,
+            ozmux_proto::CopyModeOp::SelectionUpdateTo {
+                point: ozmux_proto::ViewportPoint { line: 23, col: 0 },
+                side: ozmux_proto::CellSide::Right,
+            },
+        );
+        send_op(&mut app, surface_id, ozmux_proto::CopyModeOp::CopySelection);
+        if !app
+            .world_mut()
+            .resource_mut::<crate::clipboard::Clipboard>()
+            .is_available_for_test()
+        {
+            eprintln!("skipping: arboard unavailable in this environment (e.g. headless CI)");
+            return;
+        }
+        let copied = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            app.world_mut()
+                .resource_mut::<crate::clipboard::Clipboard>()
+                .read()
+                .map(|t| t.contains("COPYME"))
+                .unwrap_or(false)
+        });
+        assert!(
+            copied,
+            "CopySelection → SelectionCopied → pump → Clipboard must hold the selected \"COPYME\""
+        );
+    }
+
+    /// Mouse drag-select over the wire: the mouse path emits `SelectionStartAt`
+    /// then `SelectionUpdateTo` WITHOUT entering copy mode; the daemon's selection
+    /// still folds into `TerminalGrid.selection`.
+    #[test]
+    fn thin_client_mouse_selection_renders() {
+        let (mut app, surface_id, surface_ent) = headless_app_with_grid();
+        wait_for_cells(&mut app, surface_ent);
+        send_op(
+            &mut app,
+            surface_id,
+            ozmux_proto::CopyModeOp::SelectionStartAt {
+                point: ozmux_proto::ViewportPoint { line: 0, col: 0 },
+                side: ozmux_proto::CellSide::Left,
+                ty: ozmux_proto::SelectionKind::Simple,
+            },
+        );
+        send_op(
+            &mut app,
+            surface_id,
+            ozmux_proto::CopyModeOp::SelectionUpdateTo {
+                point: ozmux_proto::ViewportPoint { line: 0, col: 8 },
+                side: ozmux_proto::CellSide::Right,
+            },
+        );
+        let has_selection = pump_until(&mut app, std::time::Duration::from_secs(8), |app| {
+            app.world()
+                .get::<TerminalGrid>(surface_ent)
+                .map(|g| g.selection.is_some())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_selection,
+            "mouse-path SelectionStartAt + SelectionUpdateTo (no Enter) must fold into TerminalGrid.selection"
+        );
+    }
 }
