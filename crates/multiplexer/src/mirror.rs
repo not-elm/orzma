@@ -604,10 +604,11 @@ pub fn apply_event(
             root,
             subtree,
         } => {
-            let &ws_ent = state
-                .workspaces
-                .get(*workspace)
-                .ok_or_else(|| MirrorError(format!("LayoutChanged: workspace {workspace:?}")))?;
+            if !state.workspaces.contains_key(*workspace) {
+                return Err(MirrorError(format!(
+                    "LayoutChanged: workspace {workspace:?}"
+                )));
+            }
             let slot_ent = match root {
                 NodeId::Pane(p) => *state
                     .panes
@@ -627,23 +628,25 @@ pub fn apply_event(
                     MirrorError(format!("LayoutChanged: slot parent (slot {slot_ent:?})"))
                 })?;
             let inherited_grow = read.grow_of(slot_ent);
+            validate_subtree_panes(state, subtree)?;
             replace_slot(
                 commands,
                 state,
                 read,
                 *workspace,
-                ws_ent,
                 slot_ent,
                 parent,
                 inherited_grow,
                 subtree,
-            );
+            )?;
         }
 
         MuxEvent::WorkspaceRootChanged { workspace, root } => {
-            let &ws_ent = state.workspaces.get(*workspace).ok_or_else(|| {
-                MirrorError(format!("WorkspaceRootChanged: workspace {workspace:?}"))
-            })?;
+            if !state.workspaces.contains_key(*workspace) {
+                return Err(MirrorError(format!(
+                    "WorkspaceRootChanged: workspace {workspace:?}"
+                )));
+            }
             let &container = state.layout_roots.get(*workspace).ok_or_else(|| {
                 MirrorError(format!("WorkspaceRootChanged: layout root {workspace:?}"))
             })?;
@@ -657,9 +660,10 @@ pub fn apply_event(
                         "WorkspaceRootChanged: root child (container {container:?})"
                     ))
                 })?;
+            validate_subtree_panes(state, root)?;
             replace_slot(
-                commands, state, read, *workspace, ws_ent, slot_ent, container, 1.0, root,
-            );
+                commands, state, read, *workspace, slot_ent, container, 1.0, root,
+            )?;
         }
     }
     Ok(())
@@ -687,12 +691,11 @@ fn replace_slot(
     state: &mut MuxState,
     read: &MirrorReadCtx,
     ws: WorkspaceId,
-    ws_ent: Entity,
     slot_ent: Entity,
     parent: Entity,
     inherited_grow: f32,
     subtree: &LayoutNode,
-) {
+) -> Result<(), MirrorError> {
     let mut old_nodes = Vec::new();
     read.capture_subtree(slot_ent, &mut old_nodes);
 
@@ -707,7 +710,7 @@ fn replace_slot(
         collect_live_node_ids(layout, &mut mux_live);
     }
 
-    let new_root = realize_subtree(commands, state, ws_ent, subtree, inherited_grow);
+    let new_root = realize_subtree(commands, state, subtree, inherited_grow)?;
     // NOTE: use position-aware insertion so the new root lands at exactly the
     // slot's original index in the parent's Children list. Plain `ChildOf`
     // insertion would APPEND, corrupting first/second ordering when the replaced
@@ -739,32 +742,31 @@ fn replace_slot(
             ec.try_despawn();
         }
     }
+    Ok(())
 }
 
 /// Realizes `node` into ECS entities, REUSING any node already present in the
 /// reverse maps (split or pane). A reused split/pane is re-grown and (for
-/// inner nodes) reparented; a brand-new pane is spawned via `spawn_pane` and
-/// its surfaces query-bridged from the `Mux`. Returns the realized root entity
-/// (the caller reparents it onto the slot). `grow` is this node's `flex_grow`.
+/// inner nodes) reparented. A pane the mirror never built is rejected with
+/// `Err` (fail-closed) rather than spawned, so an inconsistent daemon cannot
+/// realize a phantom pane. Returns the realized root entity (the caller
+/// reparents it onto the slot). `grow` is this node's `flex_grow`.
 fn realize_subtree(
     commands: &mut Commands,
     state: &mut MuxState,
-    ws_ent: Entity,
     node: &LayoutNode,
     grow: f32,
-) -> Entity {
+) -> Result<Entity, MirrorError> {
     match node {
         LayoutNode::Pane { id, cols, rows, .. } => {
-            let pane_ent = if let Some(&pane_ent) = state.panes.get(*id) {
-                pane_ent
-            } else {
-                realize_new_pane(commands, state, *id, ws_ent, grow)
-            };
+            let &pane_ent = state.panes.get(*id).ok_or_else(|| {
+                MirrorError(format!("LayoutChanged subtree: pane {id:?} not in mirror"))
+            })?;
             commands.entity(pane_ent).insert(PaneDimensions {
                 cols: *cols,
                 rows: *rows,
             });
-            pane_ent
+            Ok(pane_ent)
         }
         LayoutNode::Split {
             id,
@@ -779,36 +781,15 @@ fn realize_subtree(
                 spawn_split(commands, state, *id, *orientation, grow)
             };
 
-            let first_ent = realize_subtree(commands, state, ws_ent, first, *ratio);
-            let second_ent = realize_subtree(commands, state, ws_ent, second, 1.0 - ratio);
+            let first_ent = realize_subtree(commands, state, first, *ratio)?;
+            let second_ent = realize_subtree(commands, state, second, 1.0 - ratio)?;
 
             commands.entity(first_ent).insert(ChildOf(split_ent));
             commands.entity(second_ent).insert(ChildOf(split_ent));
 
-            split_ent
+            Ok(split_ent)
         }
     }
-}
-
-/// Unreachable on the apply_event (wire) path.
-///
-/// On the wire path a pane is always realized by its `PaneCreated` arm (which
-/// precedes the `LayoutChanged` that references the pane), so `realize_subtree`
-/// always finds the pane already mapped and returns early. The materialize path
-/// uses `build_from_snapshot` / `realize_snapshot_node` instead. Reaching this
-/// function means events arrived out-of-order or are malformed.
-fn realize_new_pane(
-    _commands: &mut Commands,
-    _state: &mut MuxState,
-    _pane: PaneId,
-    _ws_ent: Entity,
-    _grow: f32,
-) -> Entity {
-    // NOTE: on the apply_event (wire) path a pane is always realized by its
-    // PaneCreated arm (which precedes the LayoutChanged referencing it), so
-    // realize_subtree never misses a pane here. The materialize path uses
-    // build_from_snapshot instead. Reaching this = malformed/out-of-order events.
-    unreachable!("realize_new_pane on the apply_event path: PaneCreated precedes LayoutChanged");
 }
 
 /// Collects every `NodeId` (splits and panes) present in `node` into `live`.
@@ -823,6 +804,27 @@ fn collect_live_node_ids(node: &LayoutNode, live: &mut HashSet<NodeId>) {
             live.insert(NodeId::Split(*id));
             collect_live_node_ids(first, live);
             collect_live_node_ids(second, live);
+        }
+    }
+}
+
+/// Confirms every `LayoutNode::Pane` id in `node` is already in the mirror, so a
+/// `LayoutChanged`/`WorkspaceRootChanged` subtree from an inconsistent daemon fails
+/// closed BEFORE `replace_slot` spawns anything (truly atomic — no orphaned splits).
+fn validate_subtree_panes(state: &MuxState, node: &LayoutNode) -> Result<(), MirrorError> {
+    match node {
+        LayoutNode::Pane { id, .. } => {
+            if !state.panes.contains_key(*id) {
+                return Err(MirrorError(format!(
+                    "LayoutChanged subtree: pane {id:?} not in mirror"
+                )));
+            }
+            Ok(())
+        }
+        LayoutNode::Split { first, second, .. } => {
+            validate_subtree_panes(state, first)?;
+            validate_subtree_panes(state, second)?;
+            Ok(())
         }
     }
 }
@@ -3025,6 +3027,90 @@ mod thin_client_tests {
             result,
             "apply_events_checked must return Err on an event referencing an unbuilt workspace, not panic"
         );
+    }
+
+    #[test]
+    fn layout_changed_with_unbuilt_subtree_pane_fails_closed() {
+        // Base: a real 1-pane Mux, built into the mirror (so workspace + root pane exist).
+        let mux = ozmux_mux::Mux::new();
+        let session = mux.sessions()[0];
+        let snapshot = mux.snapshot(session).unwrap();
+        let base_ws = mux.active_workspace();
+        let base_pane = mux.active_pane(base_ws).unwrap();
+
+        // A foreign Mux split harvested into a Split subtree whose pane ids are all
+        // from a foreign workspace's keyspace, so none are in our 1-pane mirror.
+        // NOTE: `new_workspace` advances the foreign slotmap keyspace first; a fresh
+        // Mux's first-workspace keys collide with the base's (both start at the same
+        // slotmap key), which would smuggle base_pane into the subtree.
+        let mut foreign = ozmux_mux::Mux::new();
+        foreign.new_workspace().unwrap();
+        let f_ws = foreign.active_workspace();
+        let f_pane = foreign.active_pane(f_ws).unwrap();
+        let f_events = foreign
+            .split_pane(
+                f_pane,
+                ozmux_mux::SplitOrientation::Horizontal,
+                ozmux_mux::Side::After,
+                ozmux_mux::SurfaceKind::Terminal,
+                None,
+            )
+            .unwrap();
+        let unbuilt_subtree = f_events
+            .iter()
+            .find_map(|e| match e {
+                MuxEvent::LayoutChanged { subtree, .. } => Some(subtree.clone()),
+                _ => None,
+            })
+            .expect("foreign split emits a LayoutChanged with a subtree");
+
+        let mut subtree_panes = HashSet::new();
+        ozmux_mux::collect_node_ids(&unbuilt_subtree, &mut subtree_panes);
+        assert!(
+            !subtree_panes.contains(&ozmux_mux::NodeId::Pane(base_pane)),
+            "fixture must not smuggle the built base pane into the foreign subtree"
+        );
+
+        // A LayoutChanged on OUR workspace, replacing OUR real pane slot with the
+        // foreign subtree (whose panes the mirror never built).
+        let bad_event = MuxEvent::LayoutChanged {
+            workspace: base_ws,
+            root: ozmux_mux::NodeId::Pane(base_pane),
+            subtree: unbuilt_subtree,
+        };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let mut state = MuxState::from_snapshot(snapshot.clone());
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, app.world());
+            build_from_snapshot_checked(&mut commands, &mut state, &snapshot)
+                .expect("base snapshot must build cleanly");
+        }
+        queue.apply(app.world_mut());
+        app.insert_resource(state);
+
+        let err = app
+            .world_mut()
+            .run_system_once(
+                move |mut commands: Commands, mut state: ResMut<MuxState>, read: MirrorReadCtx| {
+                    apply_events_checked(
+                        &mut commands,
+                        &mut state,
+                        &read,
+                        std::slice::from_ref(&bad_event),
+                    )
+                },
+            )
+            .unwrap();
+
+        assert!(
+            err.is_err(),
+            "an unbuilt subtree pane must fail closed, not panic"
+        );
+        let msg = err.unwrap_err().0;
+        assert!(msg.contains("not in mirror"), "fail-closed message: {msg}");
     }
 
     #[test]
