@@ -349,20 +349,30 @@ fn daemon_binary_path() -> std::io::Result<std::path::PathBuf> {
     Ok(dir.join("ozmuxd"))
 }
 
-/// Spawns a DETACHED `ozmuxd` on `socket_path`. `process_group(0)` (setpgid)
-/// puts it in its own process group so a terminal Ctrl-C does not reach it;
-/// stdio is nulled. The caller decides the child's fate: dropping the returned
-/// `Child` orphans the daemon (no reaping Drop on `std::process::Child`), so it
-/// persists past the GUI; calling `kill`/`wait` reaps it (the tests do this).
+/// Spawns a DETACHED `ozmuxd` on `socket_path`. A `setsid` `pre_exec` puts it in
+/// a new session (its own process group, no controlling terminal) so a terminal
+/// Ctrl-C does not reach it and it reparents to init if orphaned; stdio is nulled.
+/// The caller decides the child's fate: dropping the returned `Child` orphans the
+/// daemon (no reaping Drop on `std::process::Child`), so it persists past the GUI;
+/// calling `kill`/`wait` reaps it (the tests do this).
 fn spawn_daemon(socket_path: &std::path::Path) -> std::io::Result<std::process::Child> {
     let bin = daemon_binary_path()?;
-    std::process::Command::new(&bin)
-        .arg(socket_path)
-        .process_group(0)
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.arg(socket_path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .stderr(std::process::Stdio::null());
+    // SAFETY: pre_exec runs post-fork/pre-exec; setsid is async-signal-safe and
+    // creates a new session + process group (no controlling terminal), subsuming
+    // process_group(0) (the two cannot coexist — setpgid then setsid => EPERM).
+    unsafe {
+        cmd.pre_exec(|| {
+            nix::unistd::setsid()
+                .map(|_| ())
+                .map_err(std::io::Error::from)
+        });
+    }
+    cmd.spawn()
 }
 
 /// Polls `connect` every 10 ms up to a 2 s deadline (the freshly-spawned daemon
