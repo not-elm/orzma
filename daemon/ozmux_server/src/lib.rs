@@ -14,6 +14,8 @@ use tokio::io::AsyncWrite;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
+mod terminal;
+
 /// Broadcast ring capacity; a client that lags beyond this is dropped and must
 /// re-attach for a fresh snapshot (see `handle_client`).
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
