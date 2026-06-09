@@ -5,8 +5,8 @@ use futures_util::{SinkExt, StreamExt};
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
-use ozmux_mux::{MuxEvent, PaneId, Side, SplitOrientation, SurfaceKind};
-use ozmux_proto::{ClientMessage, MAX_MESSAGE_BYTES, ServerMessage};
+use ozmux_mux::{MuxEvent, PaneId, Side, SplitOrientation, SurfaceId, SurfaceKind};
+use ozmux_proto::{ClientMessage, CopyModeOp, MAX_MESSAGE_BYTES, SelectionKind, ServerMessage};
 use ozmux_server::OzmuxServer;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::task::JoinHandle;
@@ -75,6 +75,15 @@ async fn recv_error(reader: &mut ClientReader) {
             ServerMessage::Error { .. } => return,
             ServerMessage::Frame { .. } | ServerMessage::SurfaceEvent { .. } => continue,
             other => panic!("expected Error, got {other:?}"),
+        }
+    }
+}
+
+async fn recv_until_frame(reader: &mut ClientReader) -> SurfaceId {
+    loop {
+        match recv(reader).await {
+            ServerMessage::Frame { surface, .. } => return surface,
+            _ => continue,
         }
     }
 }
@@ -209,9 +218,18 @@ async fn closing_last_pane_errors_only_to_sender() {
     }
 }
 
-#[ignore = "replaced by data-plane input test in Unit 7"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn input_is_rejected_with_error() {
+async fn cold_attach_receives_frame_snapshot_for_seed_surface() {
+    let (name, _server) = spawn_server();
+    let (mut reader, _writer) = connect_client(&name).await;
+    let _welcome = recv(&mut reader).await;
+    let timed =
+        tokio::time::timeout(std::time::Duration::from_secs(5), recv_until_frame(&mut reader)).await;
+    assert!(timed.is_ok(), "cold-attach must deliver a Frame snapshot for the seed surface");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_produces_a_frame() {
     let (name, _server) = spawn_server();
     let (mut reader, mut writer) = connect_client(&name).await;
     let welcome = recv(&mut reader).await;
@@ -219,18 +237,56 @@ async fn input_is_rejected_with_error() {
         ServerMessage::Welcome { snapshot } => snapshot.workspaces[0].panes[0].active_surface,
         other => panic!("expected Welcome, got {other:?}"),
     };
-    send(
-        &mut writer,
-        ClientMessage::Input {
-            surface,
-            bytes: vec![b'x'],
-        },
-    )
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), recv_until_frame(&mut reader)).await;
+    send(&mut writer, ClientMessage::Input { surface, bytes: b"printf hi\n".to_vec() }).await;
+    let timed =
+        tokio::time::timeout(std::time::Duration::from_secs(5), recv_until_frame(&mut reader)).await;
+    assert!(timed.is_ok(), "input must drive a subsequent frame");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_surface_emits_initial_frame() {
+    let (name, _server) = spawn_server();
+    let (mut reader, mut writer) = connect_client(&name).await;
+    let welcome = recv(&mut reader).await;
+    let pane = active_pane_of(&welcome);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), recv_until_frame(&mut reader)).await;
+    send(&mut writer, ClientMessage::SpawnSurface { pane, kind: SurfaceKind::Terminal, cwd: None }).await;
+    let timed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let ServerMessage::Frame { .. } = recv(&mut reader).await {
+                return;
+            }
+        }
+    })
     .await;
-    match recv(&mut reader).await {
-        ServerMessage::Error { message } => assert!(message.contains("control-plane")),
-        other => panic!("expected Error, got {other:?}"),
-    }
+    assert!(timed.is_ok(), "a newly spawned terminal surface must emit an Initial frame");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn copy_selection_replies_to_origin_only() {
+    let (name, _server) = spawn_server();
+    let (mut reader, mut writer) = connect_client(&name).await;
+    let welcome = recv(&mut reader).await;
+    let surface = match &welcome {
+        ServerMessage::Welcome { snapshot } => snapshot.workspaces[0].panes[0].active_surface,
+        other => panic!("expected Welcome, got {other:?}"),
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), recv_until_frame(&mut reader)).await;
+    send(&mut writer, ClientMessage::Input { surface, bytes: b"X".to_vec() }).await;
+    send(&mut writer, ClientMessage::CopyMode { surface, op: CopyModeOp::Enter }).await;
+    send(&mut writer, ClientMessage::CopyMode { surface, op: CopyModeOp::SelectionStart { ty: SelectionKind::Simple } }).await;
+    send(&mut writer, ClientMessage::CopyMode { surface, op: CopyModeOp::CopySelection }).await;
+    let timed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let ServerMessage::SelectionCopied { surface: s, .. } = recv(&mut reader).await {
+                return s;
+            }
+        }
+    })
+    .await;
+    let s = timed.expect("CopySelection must reply with SelectionCopied");
+    assert_eq!(s, surface);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
