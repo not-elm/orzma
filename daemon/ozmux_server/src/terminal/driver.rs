@@ -11,7 +11,7 @@ use ozmux_vt::frame::{Frame, SnapshotReason};
 use ozmux_vt::pty::Pty;
 use ozmux_vt::vt::{OutputAction, Vt};
 use std::path::Path;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::Instant;
 use tokio::sync::broadcast;
 
@@ -25,13 +25,10 @@ pub(crate) struct SurfaceDriver {
 }
 
 impl SurfaceDriver {
-    /// Spawns the PTY + VT engine for `seed` and starts the driver thread. On a
+    /// Spawns the PTY + VT engine for `seed` on a detached driver thread. On a
     /// PTY spawn failure, logs and broadcasts `ChildExit { code: None }` so the
-    /// client can mark the surface dead; the thread exits immediately.
-    pub(crate) fn spawn(
-        seed: DriverSeed,
-        events_tx: broadcast::Sender<ServerMessage>,
-    ) -> JoinHandle<()> {
+    /// client can mark the surface dead, and no thread is started.
+    pub(crate) fn spawn(seed: DriverSeed, events_tx: broadcast::Sender<ServerMessage>) {
         let DriverSeed { surface, cols, rows, cwd, cmd_rx } = seed;
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let env = vec![("TERM".to_string(), "xterm-256color".to_string())];
@@ -40,15 +37,16 @@ impl SurfaceDriver {
             Ok(pty) => {
                 let vt = Vt::new(cols, rows);
                 let driver = SurfaceDriver { surface, pty, vt, cmd_rx, events_tx };
-                thread::spawn(move || driver.run())
+                thread::spawn(move || driver.run());
             }
             Err(error) => {
                 tracing::error!(?error, ?surface, "PTY spawn failed");
+                // NOTE: `cmd_rx` drops here, disconnecting the channel, so a later
+                // `route` to this surface fails fast instead of queueing undrained.
                 let _ = events_tx.send(ServerMessage::SurfaceEvent {
                     surface,
                     event: VtEvent::ChildExit { code: None },
                 });
-                thread::spawn(|| {})
             }
         }
     }
@@ -58,15 +56,15 @@ impl SurfaceDriver {
         // shell. The Select loop blocks forever on `deadline == None` until
         // output, so the bootstrap rescue must be primed here.
         self.pump(Instant::now());
+        // NOTE: clone the receivers once: each iteration's `Select` borrows
+        // these locals (not `self`), so the `&mut self` calls in the loop are
+        // unblocked. `crossbeam` receivers are ref-counted clones of the same
+        // channel, so they receive identically to the originals.
+        let chunk_rx = self.pty.chunk_receiver().clone();
+        let exit_rx = self.pty.exit_receiver().clone();
+        let cmd_rx = self.cmd_rx.clone();
         loop {
             let deadline = self.vt.next_deadline();
-            // NOTE: receivers are cloned out of `self` so `sel` does not hold a
-            // borrow on `self` past the `select`/`select_deadline` call.
-            // `crossbeam_channel::Receiver` is `Clone` (ref-counted), so this
-            // is allocation-free.
-            let chunk_rx = self.pty.chunk_receiver().clone();
-            let exit_rx = self.pty.exit_receiver().clone();
-            let cmd_rx = self.cmd_rx.clone();
 
             let mut sel = Select::new();
             let chunk_idx = sel.recv(&chunk_rx);
@@ -199,13 +197,14 @@ mod tests {
             cwd: None,
             cmd_rx,
         };
-        let join = SurfaceDriver::spawn(seed, events_tx);
+        SurfaceDriver::spawn(seed, events_tx);
         assert!(
             recv_until_frame(&mut rx),
             "quiet shell must still emit an Initial snapshot via startup pump"
         );
+        // Detached thread: dropping cmd_tx disconnects its command channel, so
+        // the driver's Select returns and the thread exits on its own.
         drop(cmd_tx);
-        let _ = join.join();
     }
 
     #[test]
@@ -219,11 +218,12 @@ mod tests {
             cwd: None,
             cmd_rx,
         };
-        let join = SurfaceDriver::spawn(seed, events_tx);
+        SurfaceDriver::spawn(seed, events_tx);
         assert!(recv_until_frame(&mut rx), "initial frame");
         cmd_tx.send(DriverCommand::Input(b"printf hello\n".to_vec())).unwrap();
         assert!(recv_until_frame(&mut rx), "input must drive a subsequent frame");
+        // Detached thread: dropping cmd_tx disconnects its command channel, so
+        // the driver's Select returns and the thread exits on its own.
         drop(cmd_tx);
-        let _ = join.join();
     }
 }

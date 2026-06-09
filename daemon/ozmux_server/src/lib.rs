@@ -27,6 +27,16 @@ const EVENT_CHANNEL_CAPACITY: usize = 1024;
 /// than allowed to block its own command path (including `Shutdown`).
 const CLIENT_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Default terminal size for a surface spawned before any client has reported a
+/// viewport (startup / zero clients); the first `PaneResized` reflows it.
+const DEFAULT_TERMINAL_SIZE: (u16, u16) = (80, 24);
+
+/// Max time to wait for a driver thread to answer a reply request (cold-attach
+/// snapshot, copy-selection text). A live driver answers well under this; a
+/// driver wedged on a blocking PTY write (or already gone) is bounded out so it
+/// cannot hang the client.
+const DRIVER_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 struct ServerState {
     multiplexer: Mutex<MultiPlexer>,
     events_tx: broadcast::Sender<ServerMessage>,
@@ -94,6 +104,19 @@ async fn write_server_message<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// Writes `msg` to a client bounded by `CLIENT_WRITE_TIMEOUT`. Returns
+/// `Ok(false)` when the write stalls (a non-draining reader) so the caller can
+/// drop the connection — mirrors the lag-drop policy. Real I/O errors propagate.
+async fn write_to_client<W: AsyncWrite + Unpin>(
+    framed_write: &mut FramedWrite<W, LengthDelimitedCodec>,
+    msg: &ServerMessage,
+) -> anyhow::Result<bool> {
+    match tokio::time::timeout(CLIENT_WRITE_TIMEOUT, write_server_message(framed_write, msg)).await {
+        Ok(result) => result.map(|()| true),
+        Err(_elapsed) => Ok(false),
+    }
+}
+
 async fn handle_client(
     stream: interprocess::local_socket::tokio::Stream,
     state: Arc<ServerState>,
@@ -109,7 +132,9 @@ async fn handle_client(
         let term_surfaces = terminal_surfaces(&snapshot);
         (events_rx, ServerMessage::Welcome { snapshot }, term_surfaces)
     };
-    write_server_message(&mut framed_write, &welcome).await?;
+    if !write_to_client(&mut framed_write, &welcome).await? {
+        return Ok(());
+    }
 
     // NOTE: subscribe (above, inside the lock) happens BEFORE these snapshot
     // requests, so every delta with seq >= the snapshot's seq is already
@@ -123,21 +148,17 @@ async fn handle_client(
         }
     }
     for (surface, rx) in snap_reqs {
-        // NOTE: a driver whose child exited but whose surface is still open
-        // (v1 does not auto-close on exit) has left its registry slot behind
-        // with no thread to answer; bound the wait so a dead surface cannot
-        // hang the attach. A live driver answers in well under this budget.
-        if let Ok(Ok(snapshot)) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), rx).await
-        {
-            write_server_message(
-                &mut framed_write,
-                &ServerMessage::Frame {
-                    surface,
-                    frame: ozmux_vt::frame::Frame::Snapshot(snapshot),
-                },
-            )
-            .await?;
+        // NOTE: a driver wedged on a blocking PTY write (or already gone) never
+        // answers; bound the wait so it cannot hang the attach. A live driver
+        // answers in well under this budget.
+        if let Ok(Ok(snapshot)) = tokio::time::timeout(DRIVER_REPLY_TIMEOUT, rx).await {
+            let frame = ServerMessage::Frame {
+                surface,
+                frame: ozmux_vt::frame::Frame::Snapshot(snapshot),
+            };
+            if !write_to_client(&mut framed_write, &frame).await? {
+                return Ok(());
+            }
         }
     }
 
@@ -166,19 +187,11 @@ async fn handle_client(
             event = events_rx.recv() => {
                 match event {
                     Ok(server_msg) => {
-                        match tokio::time::timeout(
-                            CLIENT_WRITE_TIMEOUT,
-                            write_server_message(&mut framed_write, &server_msg),
-                        )
-                        .await
-                        {
-                            Ok(result) => result?,
-                            Err(_elapsed) => {
-                                tracing::warn!(
-                                    "client write stalled past the timeout; dropping connection (client must re-attach)"
-                                );
-                                break;
-                            }
+                        if !write_to_client(&mut framed_write, &server_msg).await? {
+                            tracing::warn!(
+                                "client write stalled past the timeout; dropping connection (client must re-attach)"
+                            );
+                            break;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
@@ -275,10 +288,8 @@ async fn dispatch<W: AsyncWrite + Unpin>(
                     .terminals
                     .route(surface, DriverCommand::CopyMode { op, reply: Some(tx) })
                 {
-                    // NOTE: bound the wait — a dead-but-registered driver never replies.
-                    if let Ok(Ok(text)) =
-                        tokio::time::timeout(std::time::Duration::from_secs(2), rx).await
-                    {
+                    // NOTE: bound the wait — a wedged or already-gone driver never replies.
+                    if let Ok(Ok(text)) = tokio::time::timeout(DRIVER_REPLY_TIMEOUT, rx).await {
                         write_server_message(
                             framed_write,
                             &ServerMessage::SelectionCopied { surface, text },
@@ -309,7 +320,7 @@ fn reconcile_before_broadcast(
     for event in events {
         match event {
             MuxEvent::PaneCreated { pane, surfaces, .. } => {
-                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or((80, 24));
+                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
                 for entry in surfaces {
                     if entry.kind == SurfaceKind::Terminal
                         && let Some(seed) =
@@ -322,7 +333,7 @@ fn reconcile_before_broadcast(
             MuxEvent::SurfaceSpawned { pane, surface, kind, cwd }
                 if *kind == SurfaceKind::Terminal =>
             {
-                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or((80, 24));
+                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
                 if let Some(seed) = state.terminals.reserve(*surface, cols, rows, cwd.clone()) {
                     seeds.push(seed);
                 }
@@ -353,7 +364,7 @@ async fn seed_initial_terminals(state: &Arc<ServerState>) {
     let mut seeds = Vec::new();
     for ws in &snapshot.workspaces {
         for pane in &ws.panes {
-            let (cols, rows) = mux.resolved_pane_size(pane.pane).unwrap_or((80, 24));
+            let (cols, rows) = mux.resolved_pane_size(pane.pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
             for surf in &pane.surfaces {
                 if surf.kind == SurfaceKind::Terminal
                     && let Some(seed) =

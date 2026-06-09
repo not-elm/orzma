@@ -252,14 +252,8 @@ async fn spawn_surface_emits_initial_frame() {
     let pane = active_pane_of(&welcome);
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), recv_until_frame(&mut reader)).await;
     send(&mut writer, ClientMessage::SpawnSurface { pane, kind: SurfaceKind::Terminal, cwd: None }).await;
-    let timed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if let ServerMessage::Frame { .. } = recv(&mut reader).await {
-                return;
-            }
-        }
-    })
-    .await;
+    let timed =
+        tokio::time::timeout(std::time::Duration::from_secs(5), recv_until_frame(&mut reader)).await;
     assert!(timed.is_ok(), "a newly spawned terminal surface must emit an Initial frame");
 }
 

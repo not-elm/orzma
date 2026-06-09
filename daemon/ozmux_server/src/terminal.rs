@@ -12,7 +12,6 @@ use ozmux_vt::vt::{Vt, VtMotion, VtSelection};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::thread::JoinHandle;
 use tokio::sync::{broadcast, oneshot};
 
 /// A command sent from an async client task to a surface's driver thread.
@@ -41,7 +40,6 @@ pub(crate) struct DriverSeed {
 
 struct SurfaceHandle {
     cmd_tx: Sender<DriverCommand>,
-    join: Option<JoinHandle<()>>,
 }
 
 /// Maps a proto `CopyModeOp` onto the `Vt`'s alacritty-free API. Returns the
@@ -136,21 +134,24 @@ impl TerminalRegistry {
             return None;
         }
         let (cmd_tx, cmd_rx) = unbounded();
-        map.insert(surface, SurfaceHandle { cmd_tx, join: None });
+        map.insert(surface, SurfaceHandle { cmd_tx });
         let cwd = if cwd.as_os_str().is_empty() { None } else { Some(cwd) };
         Some(DriverSeed { surface, cols, rows, cwd, cmd_rx })
     }
 
-    /// Spawns the driver OS thread for a reserved seed and attaches its join
-    /// handle. Must run AFTER the structural broadcast so the driver's first
-    /// frame follows the `PaneCreated`/`SurfaceSpawned` event.
+    /// Spawns the (detached) driver thread for a reserved seed. Must run AFTER
+    /// the structural broadcast so the driver's first frame follows the
+    /// `PaneCreated`/`SurfaceSpawned` event.
+    ///
+    /// The thread is intentionally not joined. It self-terminates when its
+    /// command channel disconnects — `remove`, or the whole registry being
+    /// dropped (the default `HashMap` drop drops every `cmd_tx`) — or when the
+    /// child exits, and the OS reaps it on process exit. We do NOT block-join:
+    /// a driver wedged on a blocking `pty.write_all` (child not draining its
+    /// input) is not in `Select`, so dropping `cmd_tx` cannot wake it, and a
+    /// join would hang shutdown.
     pub(crate) fn spawn(&self, seed: DriverSeed, events_tx: broadcast::Sender<ServerMessage>) {
-        let surface = seed.surface;
-        let join = SurfaceDriver::spawn(seed, events_tx);
-        let mut map = self.map.lock().unwrap();
-        if let Some(handle) = map.get_mut(&surface) {
-            handle.join = Some(join);
-        }
+        SurfaceDriver::spawn(seed, events_tx);
     }
 
     /// Removes `surface`'s driver: dropping `cmd_tx` disconnects the driver's
@@ -158,29 +159,6 @@ impl TerminalRegistry {
     pub(crate) fn remove(&self, surface: SurfaceId) {
         let mut map = self.map.lock().unwrap();
         map.remove(&surface);
-    }
-}
-
-impl Drop for TerminalRegistry {
-    fn drop(&mut self) {
-        // NOTE: Disconnect every driver's command channel first (so each `Select`
-        // returns and the thread heads for the exit), then join. Dropping
-        // `cmd_tx` is what unblocks the driver loop; `Pty::Drop` then SIGHUPs
-        // the child as each thread unwinds.
-        let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        let joins: Vec<_> = map
-            .drain()
-            .filter_map(|(_, handle)| {
-                drop(handle.cmd_tx);
-                handle.join
-            })
-            .collect();
-        // NOTE: Drop the lock before joining so a driver thread that happens to touch
-        // the registry on its way out cannot deadlock against us.
-        drop(map);
-        for join in joins {
-            let _ = join.join();
-        }
     }
 }
 
