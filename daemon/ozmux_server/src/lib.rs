@@ -9,7 +9,7 @@ use interprocess::local_socket::tokio::Listener;
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
 use ozmux_mux::{MultiPlexer, MuxEvent, MuxResult, SurfaceKind};
-use ozmux_proto::{ClientMessage, MAX_MESSAGE_BYTES, ServerMessage};
+use ozmux_proto::{ClientMessage, CopyModeOp, MAX_MESSAGE_BYTES, ServerMessage};
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use tokio::sync::{Mutex, Notify, broadcast};
@@ -207,18 +207,35 @@ async fn dispatch<W: AsyncWrite + Unpin>(
         // NOTE: Shutdown is intercepted in handle_client before dispatch runs;
         // this arm only keeps the match exhaustive.
         ClientMessage::Shutdown => Ok(()),
-        ClientMessage::Input { .. }
-        | ClientMessage::Scroll { .. }
-        | ClientMessage::CopyMode { .. } => {
-            // TODO: data plane (Input/Scroll/CopyMode) needs an ozmux_vt frame
-            // source; this server is control-plane only.
-            write_server_message(
-                framed_write,
-                &ServerMessage::Error {
-                    message: "control-plane only; needs ozmux_vt".to_string(),
-                },
-            )
-            .await
+        ClientMessage::Input { surface, bytes } => {
+            state.terminals.route(surface, DriverCommand::Input(bytes));
+            Ok(())
+        }
+        ClientMessage::Scroll { surface, delta } => {
+            state.terminals.route(surface, DriverCommand::Scroll(delta));
+            Ok(())
+        }
+        ClientMessage::CopyMode { surface, op } => {
+            if matches!(op, CopyModeOp::CopySelection) {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if state
+                    .terminals
+                    .route(surface, DriverCommand::CopyMode { op, reply: Some(tx) })
+                    && let Ok(text) = rx.await
+                {
+                    write_server_message(
+                        framed_write,
+                        &ServerMessage::SelectionCopied { surface, text },
+                    )
+                    .await?;
+                }
+                Ok(())
+            } else {
+                state
+                    .terminals
+                    .route(surface, DriverCommand::CopyMode { op, reply: None });
+                Ok(())
+            }
         }
     }
 }

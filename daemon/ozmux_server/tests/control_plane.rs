@@ -202,6 +202,7 @@ async fn closing_last_pane_errors_only_to_sender() {
     }
 }
 
+#[ignore = "replaced by data-plane input test in Unit 7"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn input_is_rejected_with_error() {
     let (name, _server) = spawn_server();
