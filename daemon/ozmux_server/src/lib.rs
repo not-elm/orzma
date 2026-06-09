@@ -21,6 +21,12 @@ mod terminal;
 /// re-attach for a fresh snapshot (see `handle_client`).
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 
+/// Max time to spend writing one broadcast message to a client before treating
+/// the client as a stalled reader and dropping it (it must re-attach). Mirrors
+/// the lag-drop policy: a client that cannot keep up is disconnected rather
+/// than allowed to block its own command path (including `Shutdown`).
+const CLIENT_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 struct ServerState {
     multiplexer: Mutex<MultiPlexer>,
     events_tx: broadcast::Sender<ServerMessage>,
@@ -137,6 +143,7 @@ async fn handle_client(
 
     loop {
         tokio::select! {
+            biased;
             inbound = framed_read.next() => {
                 let Some(frame) = inbound else { break };
                 let bytes = match frame {
@@ -158,7 +165,22 @@ async fn handle_client(
             }
             event = events_rx.recv() => {
                 match event {
-                    Ok(server_msg) => write_server_message(&mut framed_write, &server_msg).await?,
+                    Ok(server_msg) => {
+                        match tokio::time::timeout(
+                            CLIENT_WRITE_TIMEOUT,
+                            write_server_message(&mut framed_write, &server_msg),
+                        )
+                        .await
+                        {
+                            Ok(result) => result?,
+                            Err(_elapsed) => {
+                                tracing::warn!(
+                                    "client write stalled past the timeout; dropping connection (client must re-attach)"
+                                );
+                                break;
+                            }
+                        }
+                    }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         tracing::warn!(
                             skipped,
