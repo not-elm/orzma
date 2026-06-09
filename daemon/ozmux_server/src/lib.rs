@@ -2,14 +2,14 @@
 //! fans `MuxEvent`s to every attached client over a length-prefixed
 //! UDS/NamedPipe wire. One task per connection.
 
-use std::sync::Arc;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use interprocess::local_socket::tokio::Listener;
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
-use ozmux_mux::MultiPlexer;
+use ozmux_mux::{MultiPlexer, MuxEvent, MuxResult};
 use ozmux_proto::{ClientMessage, MAX_MESSAGE_BYTES, ServerMessage};
+use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -108,6 +108,7 @@ async fn handle_client(
                     state.shutdown.notify_one();
                     break;
                 }
+                dispatch(&mut framed_write, &state, msg).await?;
             }
             event = events_rx.recv() => {
                 match event {
@@ -119,4 +120,130 @@ async fn handle_client(
         }
     }
     Ok(())
+}
+
+async fn dispatch<W: AsyncWrite + Unpin>(
+    framed_write: &mut FramedWrite<W, LengthDelimitedCodec>,
+    state: &ServerState,
+    msg: ClientMessage,
+) -> anyhow::Result<()> {
+    match msg {
+        ClientMessage::Split {
+            pane,
+            orientation,
+            side,
+            kind,
+            cwd,
+        } => {
+            apply(framed_write, state, |m| {
+                m.split_pane(pane, orientation, side, kind, cwd)
+            })
+            .await
+        }
+        ClientMessage::Close { pane } => apply(framed_write, state, |m| m.close_pane(pane)).await,
+        ClientMessage::Navigate { pane, direction } => {
+            apply(framed_write, state, |m| m.navigate(pane, direction)).await
+        }
+        ClientMessage::SetActivePane { pane, .. } => {
+            apply(framed_write, state, |m| m.focus_pane(pane)).await
+        }
+        ClientMessage::SetActiveSurface { surface } => {
+            apply(framed_write, state, |m| {
+                m.set_active_surface_by_surface(surface)
+            })
+            .await
+        }
+        ClientMessage::SwapPane { pane, offset } => {
+            apply(framed_write, state, |m| m.swap_pane(pane, offset)).await
+        }
+        ClientMessage::SpawnSurface { pane, kind, cwd } => {
+            apply(framed_write, state, |m| m.spawn_surface(pane, kind, cwd)).await
+        }
+        ClientMessage::BreakSurfaceToPane {
+            surface,
+            orientation,
+            side,
+        } => {
+            apply(framed_write, state, |m| {
+                m.break_surface_to_pane(surface, orientation, side)
+            })
+            .await
+        }
+        ClientMessage::SelectWorkspace { workspace } => {
+            apply(framed_write, state, |m| m.select_workspace(workspace)).await
+        }
+        ClientMessage::SetViewport { cols, rows } => {
+            apply(framed_write, state, |m| {
+                let workspace = m.active_workspace();
+                m.set_workspace_size(workspace, cols, rows)
+            })
+            .await
+        }
+        ClientMessage::CreateWorkspace { name } => {
+            apply(framed_write, state, |m| create_workspace(m, name)).await
+        }
+        ClientMessage::Health => Ok(()),
+        ClientMessage::Shutdown => Ok(()),
+        ClientMessage::Input { .. }
+        | ClientMessage::Scroll { .. }
+        | ClientMessage::CopyMode { .. } => {
+            // TODO: data plane (Input/Scroll/CopyMode) needs an ozmux_vt frame
+            // source; this server is control-plane only.
+            write_server_message(
+                framed_write,
+                &ServerMessage::Error {
+                    message: "control-plane only; needs ozmux_vt".to_string(),
+                },
+            )
+            .await
+        }
+    }
+}
+
+async fn apply<W, F>(
+    framed_write: &mut FramedWrite<W, LengthDelimitedCodec>,
+    state: &ServerState,
+    op: F,
+) -> anyhow::Result<()>
+where
+    W: AsyncWrite + Unpin,
+    F: FnOnce(&mut MultiPlexer) -> MuxResult<Vec<MuxEvent>>,
+{
+    let result = {
+        let mut mux = state.multiplexer.lock().await;
+        let result = op(&mut mux);
+        if let Ok(events) = &result
+            && !events.is_empty()
+        {
+            let _ = state.events_tx.send(ServerMessage::Events(events.clone()));
+        }
+        result
+    };
+    if let Err(error) = result {
+        write_server_message(
+            framed_write,
+            &ServerMessage::Error {
+                message: error.to_string(),
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn create_workspace(mux: &mut MultiPlexer, name: Option<String>) -> MuxResult<Vec<MuxEvent>> {
+    let mut events = mux.new_workspace()?;
+    // NOTE: the workspace already exists after `new_workspace`; the rename is
+    // best-effort so a rename failure can never discard the `new_workspace`
+    // events (which would advance mux state without ever broadcasting it).
+    if let Some(name) = name
+        && let Some(workspace) = events.iter().find_map(|event| match event {
+            MuxEvent::WorkspaceCreated { workspace, .. } => Some(*workspace),
+            _ => None,
+        })
+        && let Ok(rename_events) = mux.rename_workspace(workspace, name)
+    {
+        events.extend(rename_events);
+    }
+    Ok(events)
 }

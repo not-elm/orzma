@@ -5,6 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
+use ozmux_mux::{MuxEvent, PaneId, Side, SplitOrientation, SurfaceKind};
 use ozmux_proto::{ClientMessage, MAX_MESSAGE_BYTES, ServerMessage};
 use ozmux_server::OzmuxServer;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -50,8 +51,26 @@ async fn send(writer: &mut ClientWriter, msg: ClientMessage) {
 }
 
 async fn recv(reader: &mut ClientReader) -> ServerMessage {
-    let frame = reader.next().await.expect("stream closed").expect("decode error");
+    let frame = reader
+        .next()
+        .await
+        .expect("stream closed")
+        .expect("decode error");
     serde_json::from_slice(&frame).unwrap()
+}
+
+fn active_pane_of(welcome: &ServerMessage) -> PaneId {
+    match welcome {
+        ServerMessage::Welcome { snapshot } => {
+            let ws = snapshot
+                .workspaces
+                .iter()
+                .find(|w| w.workspace == snapshot.active_workspace)
+                .expect("active workspace present");
+            ws.active_pane
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -82,4 +101,149 @@ async fn shutdown_stops_the_server() {
         .expect("server did not stop within 5s")
         .expect("server task panicked");
     assert!(result.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn split_broadcasts_events_to_sender() {
+    let (name, _server) = spawn_server();
+    let (mut reader, mut writer) = connect_client(&name).await;
+    let welcome = recv(&mut reader).await;
+    let pane = active_pane_of(&welcome);
+    send(
+        &mut writer,
+        ClientMessage::Split {
+            pane,
+            orientation: SplitOrientation::Horizontal,
+            side: Side::After,
+            kind: SurfaceKind::Terminal,
+            cwd: None,
+        },
+    )
+    .await;
+    match recv(&mut reader).await {
+        ServerMessage::Events(events) => {
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, MuxEvent::PaneCreated { .. }))
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, MuxEvent::LayoutChanged { .. }))
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, MuxEvent::ActivePaneChanged { .. }))
+            );
+        }
+        other => panic!("expected Events, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn split_is_broadcast_to_all_clients() {
+    let (name, _server) = spawn_server();
+    let (mut reader_a, mut writer_a) = connect_client(&name).await;
+    let (mut reader_b, _writer_b) = connect_client(&name).await;
+    let welcome_a = recv(&mut reader_a).await;
+    let _welcome_b = recv(&mut reader_b).await;
+    let pane = active_pane_of(&welcome_a);
+    send(
+        &mut writer_a,
+        ClientMessage::Split {
+            pane,
+            orientation: SplitOrientation::Vertical,
+            side: Side::After,
+            kind: SurfaceKind::Terminal,
+            cwd: None,
+        },
+    )
+    .await;
+    for reader in [&mut reader_a, &mut reader_b] {
+        match recv(reader).await {
+            ServerMessage::Events(events) => {
+                assert!(
+                    events
+                        .iter()
+                        .any(|e| matches!(e, MuxEvent::PaneCreated { .. }))
+                );
+            }
+            other => panic!("expected Events, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_last_pane_errors_only_to_sender() {
+    let (name, _server) = spawn_server();
+    let (mut reader_a, mut writer_a) = connect_client(&name).await;
+    let (mut reader_b, _writer_b) = connect_client(&name).await;
+    let welcome_a = recv(&mut reader_a).await;
+    let _welcome_b = recv(&mut reader_b).await;
+    let pane = active_pane_of(&welcome_a);
+    send(&mut writer_a, ClientMessage::Close { pane }).await;
+    match recv(&mut reader_a).await {
+        ServerMessage::Error { .. } => {}
+        other => panic!("expected Error, got {other:?}"),
+    }
+    let quiet =
+        tokio::time::timeout(std::time::Duration::from_millis(300), recv(&mut reader_b)).await;
+    assert!(
+        quiet.is_err(),
+        "an error must not broadcast to other clients"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_is_rejected_with_error() {
+    let (name, _server) = spawn_server();
+    let (mut reader, mut writer) = connect_client(&name).await;
+    let welcome = recv(&mut reader).await;
+    let surface = match &welcome {
+        ServerMessage::Welcome { snapshot } => snapshot.workspaces[0].panes[0].active_surface,
+        other => panic!("expected Welcome, got {other:?}"),
+    };
+    send(
+        &mut writer,
+        ClientMessage::Input {
+            surface,
+            bytes: vec![b'x'],
+        },
+    )
+    .await;
+    match recv(&mut reader).await {
+        ServerMessage::Error { message } => assert!(message.contains("control-plane")),
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_workspace_broadcasts_created_and_renamed() {
+    let (name, _server) = spawn_server();
+    let (mut reader, mut writer) = connect_client(&name).await;
+    let _welcome = recv(&mut reader).await;
+    send(
+        &mut writer,
+        ClientMessage::CreateWorkspace {
+            name: Some("proj".to_string()),
+        },
+    )
+    .await;
+    match recv(&mut reader).await {
+        ServerMessage::Events(events) => {
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, MuxEvent::WorkspaceCreated { .. }))
+            );
+            assert!(
+                events.iter().any(
+                    |e| matches!(e, MuxEvent::WorkspaceRenamed { name, .. } if name == "proj")
+                )
+            );
+        }
+        other => panic!("expected Events, got {other:?}"),
+    }
 }
