@@ -159,10 +159,28 @@ impl TerminalRegistry {
         let mut map = self.map.lock().unwrap();
         map.remove(&surface);
     }
+}
 
-    /// True when `surface` has a registered driver.
-    pub(crate) fn contains(&self, surface: SurfaceId) -> bool {
-        self.map.lock().unwrap().contains_key(&surface)
+impl Drop for TerminalRegistry {
+    fn drop(&mut self) {
+        // NOTE: Disconnect every driver's command channel first (so each `Select`
+        // returns and the thread heads for the exit), then join. Dropping
+        // `cmd_tx` is what unblocks the driver loop; `Pty::Drop` then SIGHUPs
+        // the child as each thread unwinds.
+        let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        let joins: Vec<_> = map
+            .drain()
+            .filter_map(|(_, handle)| {
+                drop(handle.cmd_tx);
+                handle.join
+            })
+            .collect();
+        // NOTE: Drop the lock before joining so a driver thread that happens to touch
+        // the registry on its way out cannot deadlock against us.
+        drop(map);
+        for join in joins {
+            let _ = join.join();
+        }
     }
 }
 
@@ -204,7 +222,6 @@ mod tests {
             reg.reserve(s, 80, 24, PathBuf::new()).is_none(),
             "second reserve must be skipped"
         );
-        assert!(reg.contains(s));
     }
 
     #[test]
