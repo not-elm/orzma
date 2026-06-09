@@ -73,10 +73,7 @@ mod tests {
     #[test]
     fn client_messages_round_trip() {
         let messages = vec![
-            ClientMessage::Hello {
-                protocol_version: 3,
-                viewport: (80, 24),
-            },
+            ClientMessage::Health,
             ClientMessage::Split {
                 pane: PaneId::default(),
                 orientation: SplitOrientation::Horizontal,
@@ -85,7 +82,6 @@ mod tests {
                 cwd: None,
             },
             ClientMessage::SetActiveSurface {
-                pane: PaneId::default(),
                 surface: SurfaceId::default(),
             },
             ClientMessage::Close {
@@ -125,15 +121,15 @@ mod tests {
                 surface: SurfaceId::default(),
                 delta: 3,
             },
-            ClientMessage::CopyModeOp {
+            ClientMessage::CopyMode {
                 surface: SurfaceId::default(),
                 op: CopyModeOp::Enter,
             },
-            ClientMessage::CopyModeOp {
+            ClientMessage::CopyMode {
                 surface: SurfaceId::default(),
                 op: CopyModeOp::ViMotion(ViMotionKind::WordRight),
             },
-            ClientMessage::CopyModeOp {
+            ClientMessage::CopyMode {
                 surface: SurfaceId::default(),
                 op: CopyModeOp::SelectionStartAt {
                     point: ViewportPoint { line: 3, col: 7 },
@@ -141,7 +137,7 @@ mod tests {
                     ty: SelectionKind::Block,
                 },
             },
-            ClientMessage::CopyModeOp {
+            ClientMessage::CopyMode {
                 surface: SurfaceId::default(),
                 op: CopyModeOp::CopySelection,
             },

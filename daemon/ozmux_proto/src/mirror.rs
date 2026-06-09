@@ -106,7 +106,7 @@ impl ClientMirror {
                         rows: 0,
                     },
                     size: None,
-                    active_pane: None,
+                    active_pane: placeholder_pane_id,
                     panes: Vec::new(),
                 });
             }
@@ -118,7 +118,7 @@ impl ClientMirror {
             }
 
             MuxEvent::WorkspaceSelected { workspace, .. } => {
-                self.session.active_workspace = Some(*workspace);
+                self.session.active_workspace = *workspace;
             }
 
             MuxEvent::WorkspaceRenamed { workspace, name } => {
@@ -143,7 +143,7 @@ impl ClientMirror {
                             cwd: e.cwd.clone(),
                         })
                         .collect(),
-                    active_surface: Some(*active_surface),
+                    active_surface: *active_surface,
                 };
                 if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
                     // NOTE: when the workspace's pane list is empty, this is the
@@ -177,7 +177,7 @@ impl ClientMirror {
 
             MuxEvent::ActivePaneChanged { workspace, pane } => {
                 if let Some(ws) = find_workspace_mut(&mut self.session.workspaces, *workspace) {
-                    ws.active_pane = Some(*pane);
+                    ws.active_pane = *pane;
                 }
             }
 
@@ -244,7 +244,7 @@ impl ClientMirror {
 
             MuxEvent::ActiveSurfaceChanged { pane, surface } => {
                 if let Some(pane_snap) = find_pane_mut(&mut self.session.workspaces, *pane) {
-                    pane_snap.active_surface = Some(*surface);
+                    pane_snap.active_surface = *surface;
                 }
             }
 
@@ -437,9 +437,9 @@ fn apply_layout_node(ws: &mut WorkspaceSnapshot, target: NodeId, subtree: Layout
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{PROTOCOL_VERSION, read_message, write_message};
+    use crate::codec::{read_message, write_message};
     use crate::message::ServerMessage;
-    use ozmux_mux::{Mux, PaneDirection, Side, SplitOrientation, SurfaceKind, SwapOffset};
+    use ozmux_mux::{MultiPlexer, PaneDirection, Side, SplitOrientation, SurfaceKind, SwapOffset};
     use std::io::Cursor;
 
     fn id_key<T: serde::Serialize>(id: &T) -> String {
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn snapshot_plus_events_reconstructs_mux() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let session = mux.sessions()[0];
 
         let ws0 = mux.active_workspace();
@@ -576,7 +576,7 @@ mod tests {
         // NOT: a nested-split `LayoutChanged` collapse (replace_node recursion +
         // prune_panes dropping the closed pane) and a collapse-to-root
         // `WorkspaceRootChanged`.
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let session = mux.sessions()[0];
         let ws0 = mux.active_workspace();
         mux.set_workspace_size(ws0, 120, 40).unwrap();
@@ -634,7 +634,7 @@ mod tests {
         // Fix 1: new_workspace root-pane layout not established.
         // Fix 2: workspace size not on the wire.
         // Fix 3: break_surface_to_pane LayoutChanged subtree has stale surface_kind.
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let session = mux.sessions()[0];
 
         let ws0 = mux.active_workspace();
@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn welcome_codec_round_trip() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let session = mux.sessions()[0];
         let ws = mux.active_workspace();
         mux.set_workspace_size(ws, 80, 24).unwrap();
@@ -760,10 +760,7 @@ mod tests {
         .unwrap();
         let snap = mux.snapshot(session).unwrap();
 
-        let msg = ServerMessage::Welcome {
-            protocol_version: PROTOCOL_VERSION,
-            snapshot: snap,
-        };
+        let msg = ServerMessage::Welcome { snapshot: snap };
 
         let mut buf: Vec<u8> = Vec::new();
         write_message(&mut buf, &msg).unwrap();
@@ -778,7 +775,7 @@ mod tests {
         // Swap p2 with its Next neighbor p1 — a cross-parent swap.
         // apply_events must keep all three PaneSnapshots and match the
         // authoritative post-swap Mux snapshot.
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let session = mux.sessions()[0];
         let ws0 = mux.active_workspace();
         mux.set_workspace_size(ws0, 120, 40).unwrap();
@@ -837,7 +834,7 @@ mod tests {
 
     #[test]
     fn workspace_layout_and_root_getters_work() {
-        let mux = Mux::new();
+        let mux = MultiPlexer::new();
         let session = mux.sessions()[0];
         let snap = mux.snapshot(session).unwrap();
         let ws = snap.workspaces[0].workspace;

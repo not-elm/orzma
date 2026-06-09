@@ -1,10 +1,8 @@
-//! A connected ozmux client: sends `Hello`, builds a `ClientMirror` from the
-//! `Welcome` snapshot, then delivers streamed events via a background reader
-//! thread. Generic only over the writer so the caller can pass any `Write`.
+//! A connected ozmux client: builds a `ClientMirror` from the `Welcome`
+//! snapshot, then delivers streamed events via a background reader thread.
+//! Generic only over the writer so the caller can pass any `Write`.
 
-use crate::{
-    ClientMessage, ClientMirror, PROTOCOL_VERSION, ServerMessage, read_message, write_message,
-};
+use crate::{ClientMessage, ClientMirror, ServerMessage, read_message, write_message};
 use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError, unbounded};
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
@@ -18,6 +16,7 @@ pub struct Client<W: Write> {
     writer: W,
     rx: Receiver<io::Result<ServerMessage>>,
     mirror: ClientMirror,
+    shutdown: Option<Box<dyn FnOnce() + Send>>,
     // NOTE: on a no-timeout stream a dropped Client does NOT unblock the blocked
     // reader read — callers MUST pass a shutdown closure to connect_with_shutdown
     // or the reader thread leaks one thread per connect/drop cycle.
@@ -25,18 +24,14 @@ pub struct Client<W: Write> {
 }
 
 impl<W: Write> Client<W> {
-    /// Connects: sends `Hello{viewport}`, reads the `Welcome` **synchronously**
-    /// (before the reader thread starts), builds the mirror, then spawns the
-    /// background reader. Delegates to `connect_with_shutdown` with `None`.
+    /// Reads the `Welcome` snapshot **synchronously** (before the reader thread
+    /// starts), builds the mirror, then spawns the background reader. Delegates
+    /// to `connect_with_shutdown` with `None`.
     ///
-    /// Errors on EOF before `Welcome`, a protocol-version mismatch, or an
-    /// `Error`/unexpected message in place of `Welcome`.
-    pub fn connect<R: BufRead + Send + 'static>(
-        reader: R,
-        writer: W,
-        viewport: (u16, u16),
-    ) -> io::Result<Self> {
-        Self::connect_with_shutdown(reader, writer, viewport, None)
+    /// Errors on EOF before `Welcome`, or an `Error`/unexpected message in place
+    /// of `Welcome`.
+    pub fn connect<R: BufRead + Send + 'static>(reader: R, writer: W) -> io::Result<Self> {
+        Self::connect_with_shutdown(reader, writer, None)
     }
 
     /// Connects identically to `connect` but also accepts an optional `shutdown`
@@ -47,32 +42,13 @@ impl<W: Write> Client<W> {
     /// cleanly rather than leaking per connect/drop cycle.
     pub fn connect_with_shutdown<R: BufRead + Send + 'static>(
         mut reader: R,
-        mut writer: W,
-        viewport: (u16, u16),
+        writer: W,
         shutdown: Option<Box<dyn FnOnce() + Send>>,
     ) -> io::Result<Self> {
-        write_message(
-            &mut writer,
-            &ClientMessage::Hello {
-                protocol_version: PROTOCOL_VERSION,
-                viewport,
-            },
-        )?;
         let welcome = read_message::<_, ServerMessage>(&mut reader)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "no Welcome"))?;
         let mirror = match welcome {
-            ServerMessage::Welcome {
-                protocol_version,
-                snapshot,
-            } => {
-                if protocol_version != PROTOCOL_VERSION {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "protocol version mismatch — a different ozmuxd is already running; run `ozmuxd --kill` and relaunch",
-                    ));
-                }
-                ClientMirror::from_snapshot(snapshot)
-            }
+            ServerMessage::Welcome { snapshot } => ClientMirror::from_snapshot(snapshot),
             ServerMessage::Error { message } => {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, message));
             }
@@ -113,6 +89,7 @@ impl<W: Write> Client<W> {
             writer,
             rx,
             mirror,
+            shutdown,
             _reader: reader_thread,
         })
     }
@@ -166,15 +143,23 @@ impl<W: Write> Client<W> {
     }
 }
 
+impl<W: Write> Drop for Client<W> {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            shutdown();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_mux::Mux;
+    use ozmux_mux::MultiPlexer;
     use std::io::{BufReader, Cursor};
 
     #[test]
-    fn connect_builds_mirror_from_welcome_and_sends_hello() {
-        let mux = Mux::new();
+    fn connect_builds_mirror_from_welcome() {
+        let mux = MultiPlexer::new();
         let session = mux.sessions()[0];
         let snapshot = mux.snapshot(session).unwrap();
 
@@ -182,7 +167,6 @@ mod tests {
         write_message(
             &mut server_bytes,
             &ServerMessage::Welcome {
-                protocol_version: PROTOCOL_VERSION,
                 snapshot: snapshot.clone(),
             },
         )
@@ -190,41 +174,21 @@ mod tests {
 
         let reader = BufReader::new(Cursor::new(server_bytes));
         let writer: Vec<u8> = Vec::new();
-        let client = Client::connect(reader, writer, (80, 24)).unwrap();
+        let client = Client::connect(reader, writer).unwrap();
 
         assert_eq!(client.mirror().to_snapshot(), snapshot);
-    }
-
-    #[test]
-    fn connect_errors_on_version_mismatch() {
-        let mux = Mux::new();
-        let snapshot = mux.snapshot(mux.sessions()[0]).unwrap();
-        let mut server_bytes = Vec::new();
-        write_message(
-            &mut server_bytes,
-            &ServerMessage::Welcome {
-                protocol_version: PROTOCOL_VERSION + 1,
-                snapshot,
-            },
-        )
-        .unwrap();
-        let reader = BufReader::new(Cursor::new(server_bytes));
-        assert!(Client::connect(reader, Vec::<u8>::new(), (80, 24)).is_err());
     }
 
     #[test]
     fn drop_invokes_the_shutdown_hook() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
-        let mux = Mux::new();
+        let mux = MultiPlexer::new();
         let snapshot = mux.snapshot(mux.sessions()[0]).unwrap();
         let mut server_bytes = Vec::new();
         write_message(
             &mut server_bytes,
-            &ServerMessage::Welcome {
-                protocol_version: PROTOCOL_VERSION,
-                snapshot,
-            },
+            &ServerMessage::Welcome { snapshot },
         )
         .unwrap();
         let reader = BufReader::new(Cursor::new(server_bytes));
@@ -233,7 +197,6 @@ mod tests {
         let client = Client::connect_with_shutdown(
             reader,
             Vec::<u8>::new(),
-            (80, 24),
             Some(Box::new(move || f.store(true, Ordering::SeqCst))),
         )
         .unwrap();
@@ -246,21 +209,18 @@ mod tests {
 
     #[test]
     fn try_poll_reports_disconnect_as_err_not_empty() {
-        let mux = Mux::new();
+        let mux = MultiPlexer::new();
         let snapshot = mux.snapshot(mux.sessions()[0]).unwrap();
         let mut server_bytes = Vec::new();
         write_message(
             &mut server_bytes,
-            &ServerMessage::Welcome {
-                protocol_version: PROTOCOL_VERSION,
-                snapshot,
-            },
+            &ServerMessage::Welcome { snapshot },
         )
         .unwrap();
         // Cursor EOFs immediately after Welcome → the reader thread reads Ok(None)
         // and exits, dropping the channel sender.
         let reader = BufReader::new(Cursor::new(server_bytes));
-        let mut client = Client::connect(reader, Vec::<u8>::new(), (80, 24)).unwrap();
+        let mut client = Client::connect(reader, Vec::<u8>::new()).unwrap();
         // Wait for the reader thread to observe EOF and drop the sender.
         let mut saw_err = false;
         for _ in 0..200 {
