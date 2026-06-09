@@ -59,6 +59,16 @@ async fn recv(reader: &mut ClientReader) -> ServerMessage {
     serde_json::from_slice(&frame).unwrap()
 }
 
+async fn recv_events(reader: &mut ClientReader) -> Vec<MuxEvent> {
+    loop {
+        match recv(reader).await {
+            ServerMessage::Events(events) => return events,
+            ServerMessage::Frame { .. } | ServerMessage::SurfaceEvent { .. } => continue,
+            other => panic!("expected Events, got {other:?}"),
+        }
+    }
+}
+
 fn active_pane_of(welcome: &ServerMessage) -> PaneId {
     match welcome {
         ServerMessage::Welcome { snapshot } => {
@@ -120,26 +130,22 @@ async fn split_broadcasts_events_to_sender() {
         },
     )
     .await;
-    match recv(&mut reader).await {
-        ServerMessage::Events(events) => {
-            assert!(
-                events
-                    .iter()
-                    .any(|e| matches!(e, MuxEvent::PaneCreated { .. }))
-            );
-            assert!(
-                events
-                    .iter()
-                    .any(|e| matches!(e, MuxEvent::LayoutChanged { .. }))
-            );
-            assert!(
-                events
-                    .iter()
-                    .any(|e| matches!(e, MuxEvent::ActivePaneChanged { .. }))
-            );
-        }
-        other => panic!("expected Events, got {other:?}"),
-    }
+    let events = recv_events(&mut reader).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, MuxEvent::PaneCreated { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, MuxEvent::LayoutChanged { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, MuxEvent::ActivePaneChanged { .. }))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -162,16 +168,12 @@ async fn split_is_broadcast_to_all_clients() {
     )
     .await;
     for reader in [&mut reader_a, &mut reader_b] {
-        match recv(reader).await {
-            ServerMessage::Events(events) => {
-                assert!(
-                    events
-                        .iter()
-                        .any(|e| matches!(e, MuxEvent::PaneCreated { .. }))
-                );
-            }
-            other => panic!("expected Events, got {other:?}"),
-        }
+        let events = recv_events(reader).await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MuxEvent::PaneCreated { .. }))
+        );
     }
 }
 
@@ -188,12 +190,16 @@ async fn closing_last_pane_errors_only_to_sender() {
         ServerMessage::Error { .. } => {}
         other => panic!("expected Error, got {other:?}"),
     }
-    let quiet =
-        tokio::time::timeout(std::time::Duration::from_millis(300), recv(&mut reader_b)).await;
-    assert!(
-        quiet.is_err(),
-        "an error must not broadcast to other clients"
-    );
+    // NOTE: terminal drivers broadcast Frame/SurfaceEvent messages continuously;
+    // drain those and assert no Error arrives within the window.
+    let deadline = std::time::Duration::from_millis(300);
+    loop {
+        match tokio::time::timeout(deadline, recv(&mut reader_b)).await {
+            Err(_) => break,
+            Ok(ServerMessage::Frame { .. } | ServerMessage::SurfaceEvent { .. }) => continue,
+            Ok(other) => panic!("an error must not broadcast to other clients; got {other:?}"),
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -231,21 +237,17 @@ async fn create_workspace_broadcasts_created_with_name() {
         },
     )
     .await;
-    match recv(&mut reader).await {
-        ServerMessage::Events(events) => {
-            assert!(
-                events.iter().any(
-                    |e| matches!(e, MuxEvent::WorkspaceCreated { name, .. } if name == "proj")
-                ),
-                "the requested name arrives atomically on WorkspaceCreated"
-            );
-            assert!(
-                !events
-                    .iter()
-                    .any(|e| matches!(e, MuxEvent::WorkspaceRenamed { .. })),
-                "naming is atomic at creation; no separate rename event"
-            );
-        }
-        other => panic!("expected Events, got {other:?}"),
-    }
+    let events = recv_events(&mut reader).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, MuxEvent::WorkspaceCreated { name, .. } if name == "proj")),
+        "the requested name arrives atomically on WorkspaceCreated"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, MuxEvent::WorkspaceRenamed { .. })),
+        "naming is atomic at creation; no separate rename event"
+    );
 }

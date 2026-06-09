@@ -3,11 +3,12 @@
 //! UDS/NamedPipe wire. One task per connection.
 
 use bytes::Bytes;
+use crate::terminal::{DriverCommand, TerminalRegistry};
 use futures_util::{SinkExt, StreamExt};
 use interprocess::local_socket::tokio::Listener;
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
-use ozmux_mux::{MultiPlexer, MuxEvent, MuxResult};
+use ozmux_mux::{MultiPlexer, MuxEvent, MuxResult, SurfaceKind};
 use ozmux_proto::{ClientMessage, MAX_MESSAGE_BYTES, ServerMessage};
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -24,6 +25,7 @@ struct ServerState {
     multiplexer: Mutex<MultiPlexer>,
     events_tx: broadcast::Sender<ServerMessage>,
     shutdown: Notify,
+    terminals: TerminalRegistry,
 }
 
 /// A control-plane ozmux daemon: accepts client connections on a local socket,
@@ -44,6 +46,7 @@ impl OzmuxServer {
             multiplexer: Mutex::new(MultiPlexer::default()),
             events_tx,
             shutdown: Notify::new(),
+            terminals: TerminalRegistry::new(),
         });
         Ok(Self { listener, state })
     }
@@ -51,6 +54,7 @@ impl OzmuxServer {
     /// Accepts connections until a client sends `Shutdown`, spawning one task per
     /// connection.
     pub async fn start(&self) -> anyhow::Result<()> {
+        seed_initial_terminals(&self.state).await;
         loop {
             tokio::select! {
                 conn = self.listener.accept() => {
@@ -219,6 +223,78 @@ async fn dispatch<W: AsyncWrite + Unpin>(
     }
 }
 
+/// Reserves routing slots for Terminal surfaces created by `events`, returning
+/// the seeds to spawn AFTER the structural broadcast. Tears down closed
+/// surfaces and resizes panes (order-independent; done before the broadcast).
+fn reconcile_before_broadcast(
+    state: &ServerState,
+    mux: &MultiPlexer,
+    events: &[MuxEvent],
+) -> Vec<crate::terminal::DriverSeed> {
+    let mut seeds = Vec::new();
+    for event in events {
+        match event {
+            MuxEvent::PaneCreated { pane, surfaces, .. } => {
+                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or((80, 24));
+                for entry in surfaces {
+                    if entry.kind == SurfaceKind::Terminal
+                        && let Some(seed) =
+                            state.terminals.reserve(entry.surface, cols, rows, entry.cwd.clone())
+                    {
+                        seeds.push(seed);
+                    }
+                }
+            }
+            MuxEvent::SurfaceSpawned { pane, surface, kind, cwd }
+                if *kind == SurfaceKind::Terminal =>
+            {
+                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or((80, 24));
+                if let Some(seed) = state.terminals.reserve(*surface, cols, rows, cwd.clone()) {
+                    seeds.push(seed);
+                }
+            }
+            MuxEvent::SurfaceClosed { surface } => state.terminals.remove(*surface),
+            MuxEvent::PaneResized { pane, cols, rows } => {
+                if let Ok(surfaces) = mux.surfaces(*pane) {
+                    for surface in surfaces {
+                        state
+                            .terminals
+                            .route(surface, DriverCommand::Resize { cols: *cols, rows: *rows });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    seeds
+}
+
+/// Spawns drivers for the Terminal surfaces present in the seeded multiplexer
+/// (startup / no clients). No broadcast-ordering concern: no client is attached.
+async fn seed_initial_terminals(state: &Arc<ServerState>) {
+    let mux = state.multiplexer.lock().await;
+    let Ok(snapshot) = mux.snapshot(mux.active_session()) else {
+        return;
+    };
+    let mut seeds = Vec::new();
+    for ws in &snapshot.workspaces {
+        for pane in &ws.panes {
+            let (cols, rows) = mux.resolved_pane_size(pane.pane).unwrap_or((80, 24));
+            for surf in &pane.surfaces {
+                if surf.kind == SurfaceKind::Terminal
+                    && let Some(seed) =
+                        state.terminals.reserve(surf.surface, cols, rows, surf.cwd.clone())
+                {
+                    seeds.push(seed);
+                }
+            }
+        }
+    }
+    for seed in seeds {
+        state.terminals.spawn(seed, state.events_tx.clone());
+    }
+}
+
 async fn apply<W, F>(
     framed_write: &mut FramedWrite<W, LengthDelimitedCodec>,
     state: &ServerState,
@@ -237,7 +313,14 @@ where
         match op(&mut mux) {
             Ok(events) => {
                 if !events.is_empty() {
+                    // NOTE: reserve routing slots + teardown/resize BEFORE the broadcast so a
+                    // client that sees a new surface can immediately route to it; spawn driver
+                    // threads AFTER so their first frame follows the structural event.
+                    let seeds = reconcile_before_broadcast(state, &mux, &events);
                     let _ = state.events_tx.send(ServerMessage::Events(events));
+                    for seed in seeds {
+                        state.terminals.spawn(seed, state.events_tx.clone());
+                    }
                 }
                 None
             }
