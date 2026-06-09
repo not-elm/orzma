@@ -20,6 +20,7 @@ ozmux_proto = { path = "../ozmux_proto/" }
 ozmux_mux = { path = "../ozmux_mux" }
 ozmux_vt = { path = "../ozmux_vt", features = ["pty"] }
 crossbeam-channel = "0.5"
+libc = "0.2"
 
 [lints]
 workspace = true

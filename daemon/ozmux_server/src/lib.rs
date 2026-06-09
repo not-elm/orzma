@@ -15,7 +15,9 @@ use tokio::io::AsyncWrite;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
+mod socket;
 mod terminal;
+pub use socket::socket_path;
 
 /// Broadcast ring capacity; a client that lags beyond this is dropped and must
 /// re-attach for a fresh snapshot (see `handle_client`).
