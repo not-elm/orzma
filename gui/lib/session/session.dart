@@ -13,20 +13,36 @@ import 'mirror.dart';
 /// chords into outgoing layout commands. Notifies listeners on every state change.
 class Session extends ChangeNotifier {
   final void Function(ClientMessage) _send;
+  final Future<void> Function()? _onClose;
   ClientMirror? _mirror;
   StreamSubscription<ServerMessage>? _sub;
+  bool _disconnected = false;
 
   /// Builds a session over an explicit message stream + send sink (testable).
-  Session({required Stream<ServerMessage> incoming, required this._send}) {
-    _sub = incoming.listen(_onMessage);
+  /// `onClose` (optional) releases the underlying transport on [dispose].
+  Session({
+    required Stream<ServerMessage> incoming,
+    required this._send,
+    this._onClose,
+  }) {
+    _sub = incoming.listen(_onMessage, onError: _onClosed, onDone: _onClosed);
   }
 
   /// Builds a session bound to a live [DaemonConnection].
   factory Session.fromConnection(DaemonConnection conn) =>
-      Session(incoming: conn.messages, send: conn.send);
+      Session(incoming: conn.messages, send: conn.send, onClose: conn.close);
 
   /// The current reconstructed session state, or null before the first Welcome.
   SessionState? get state => _mirror?.state;
+
+  /// True once the daemon connection has errored or closed; the UI shows this as
+  /// a disconnected/error state while keeping the last-known layout on screen.
+  bool get disconnected => _disconnected;
+
+  void _onClosed([Object? _]) {
+    _disconnected = true;
+    notifyListeners();
+  }
 
   void _onMessage(ServerMessage m) {
     switch (m) {
@@ -101,6 +117,7 @@ class Session extends ChangeNotifier {
   @override
   void dispose() {
     _sub?.cancel();
+    _onClose?.call();
     super.dispose();
   }
 }

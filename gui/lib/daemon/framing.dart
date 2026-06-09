@@ -1,5 +1,9 @@
 import 'dart:typed_data';
 
+/// Maximum decoded body size, mirroring the daemon's `MAX_MESSAGE_BYTES` (8 MiB).
+/// Caps the attacker/corruption-controlled `_need` allocation on a torn prefix.
+const int maxFrameBytes = 8 * 1024 * 1024;
+
 /// Prefixes `body` with a big-endian u32 length, matching the daemon's
 /// `[u32 BE len][json]` wire framing.
 Uint8List frameMessage(Uint8List body) {
@@ -26,6 +30,9 @@ class FrameDecoder {
         _need = ByteData.sublistView(bytes, offset, offset + 4)
             .getUint32(0, Endian.big);
         offset += 4;
+        if (_need! > maxFrameBytes) {
+          throw FormatException('frame length $_need exceeds $maxFrameBytes');
+        }
       }
       if (bytes.length - offset < _need!) break;
       out.add(Uint8List.sublistView(bytes, offset, offset + _need!));

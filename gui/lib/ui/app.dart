@@ -58,7 +58,12 @@ class _OzmuxHomeState extends State<OzmuxHome> {
                 ),
               ),
               StatusStrip(
-                state: st == null ? ConnState.connecting : ConnState.connected,
+                state: widget.session.disconnected
+                    ? ConnState.error
+                    : st == null
+                        ? ConnState.connecting
+                        : ConnState.connected,
+                detail: widget.session.disconnected ? 'daemon disconnected' : '',
                 workspaces:
                     st?.workspaces.map((w) => w.name).toList() ?? const [],
                 activeWorkspace: st == null ? 0 : _activeIndex(st),
