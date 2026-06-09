@@ -4082,10 +4082,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "crossbeam-channel",
  "futures-util",
  "interprocess",
  "ozmux_mux",
  "ozmux_proto",
+ "ozmux_vt",
  "serde_json",
  "tokio",
  "tokio-util",

@@ -96,13 +96,44 @@ async fn handle_client(
     let mut framed_read = FramedRead::new(read_half, codec());
     let mut framed_write = FramedWrite::new(write_half, codec());
 
-    let (mut events_rx, welcome) = {
+    let (mut events_rx, welcome, term_surfaces) = {
         let mux = state.multiplexer.lock().await;
         let events_rx = state.events_tx.subscribe();
         let snapshot = mux.snapshot(mux.active_session())?;
-        (events_rx, ServerMessage::Welcome { snapshot })
+        let term_surfaces = terminal_surfaces(&snapshot);
+        (events_rx, ServerMessage::Welcome { snapshot }, term_surfaces)
     };
     write_server_message(&mut framed_write, &welcome).await?;
+
+    // NOTE: subscribe (above, inside the lock) happens BEFORE these snapshot
+    // requests, so every delta with seq >= the snapshot's seq is already
+    // buffered in `events_rx`; the client reconciles by seq, so socket arrival
+    // order does not matter. Send each snapshot ONLY to this client.
+    let mut snap_reqs = Vec::new();
+    for surface in term_surfaces {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if state.terminals.route(surface, DriverCommand::Snapshot(tx)) {
+            snap_reqs.push((surface, rx));
+        }
+    }
+    for (surface, rx) in snap_reqs {
+        // NOTE: a driver whose child exited but whose surface is still open
+        // (v1 does not auto-close on exit) has left its registry slot behind
+        // with no thread to answer; bound the wait so a dead surface cannot
+        // hang the attach. A live driver answers in well under this budget.
+        if let Ok(Ok(snapshot)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx).await
+        {
+            write_server_message(
+                &mut framed_write,
+                &ServerMessage::Frame {
+                    surface,
+                    frame: ozmux_vt::frame::Frame::Snapshot(snapshot),
+                },
+            )
+            .await?;
+        }
+    }
 
     loop {
         tokio::select! {
@@ -221,13 +252,17 @@ async fn dispatch<W: AsyncWrite + Unpin>(
                 if state
                     .terminals
                     .route(surface, DriverCommand::CopyMode { op, reply: Some(tx) })
-                    && let Ok(text) = rx.await
                 {
-                    write_server_message(
-                        framed_write,
-                        &ServerMessage::SelectionCopied { surface, text },
-                    )
-                    .await?;
+                    // NOTE: bound the wait — a dead-but-registered driver never replies.
+                    if let Ok(Ok(text)) =
+                        tokio::time::timeout(std::time::Duration::from_secs(2), rx).await
+                    {
+                        write_server_message(
+                            framed_write,
+                            &ServerMessage::SelectionCopied { surface, text },
+                        )
+                        .await?;
+                    }
                 }
                 Ok(())
             } else {
@@ -310,6 +345,22 @@ async fn seed_initial_terminals(state: &Arc<ServerState>) {
     for seed in seeds {
         state.terminals.spawn(seed, state.events_tx.clone());
     }
+}
+
+/// Collects the Terminal-kind surfaces from a session snapshot (the surfaces
+/// that have a driver and thus a frame to resnapshot on cold-attach).
+fn terminal_surfaces(snapshot: &ozmux_mux::SessionSnapshot) -> Vec<ozmux_mux::SurfaceId> {
+    let mut out = Vec::new();
+    for ws in &snapshot.workspaces {
+        for pane in &ws.panes {
+            for surf in &pane.surfaces {
+                if surf.kind == SurfaceKind::Terminal {
+                    out.push(surf.surface);
+                }
+            }
+        }
+    }
+    out
 }
 
 async fn apply<W, F>(

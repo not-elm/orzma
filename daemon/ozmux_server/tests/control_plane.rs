@@ -69,6 +69,16 @@ async fn recv_events(reader: &mut ClientReader) -> Vec<MuxEvent> {
     }
 }
 
+async fn recv_error(reader: &mut ClientReader) {
+    loop {
+        match recv(reader).await {
+            ServerMessage::Error { .. } => return,
+            ServerMessage::Frame { .. } | ServerMessage::SurfaceEvent { .. } => continue,
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+}
+
 fn active_pane_of(welcome: &ServerMessage) -> PaneId {
     match welcome {
         ServerMessage::Welcome { snapshot } => {
@@ -186,10 +196,7 @@ async fn closing_last_pane_errors_only_to_sender() {
     let _welcome_b = recv(&mut reader_b).await;
     let pane = active_pane_of(&welcome_a);
     send(&mut writer_a, ClientMessage::Close { pane }).await;
-    match recv(&mut reader_a).await {
-        ServerMessage::Error { .. } => {}
-        other => panic!("expected Error, got {other:?}"),
-    }
+    recv_error(&mut reader_a).await;
     // NOTE: terminal drivers broadcast Frame/SurfaceEvent messages continuously;
     // drain those and assert no Error arrives within the window.
     let deadline = std::time::Duration::from_millis(300);
