@@ -2,6 +2,8 @@
 //! Dart client (which mirrors this formula). Kept in one place because the path
 //! is protocol surface.
 
+use interprocess::local_socket::traits::tokio::Stream as _;
+use interprocess::local_socket::{GenericFilePath, ToFsName};
 use std::path::{Path, PathBuf};
 
 /// Returns the ozmux daemon socket path:
@@ -13,6 +15,16 @@ pub fn socket_path() -> PathBuf {
     let uid = unsafe { libc::getuid() };
     let tmpdir = std::env::var_os("TMPDIR").map(PathBuf::from);
     resolve_socket_path(tmpdir.as_deref(), uid)
+}
+
+/// Returns true if a daemon is already accepting on the shared socket path.
+pub async fn socket_is_live() -> bool {
+    let Ok(name) = socket_path().to_fs_name::<GenericFilePath>() else {
+        return false;
+    };
+    interprocess::local_socket::tokio::Stream::connect(name)
+        .await
+        .is_ok()
 }
 
 fn resolve_socket_path(tmpdir: Option<&Path>, uid: u32) -> PathBuf {

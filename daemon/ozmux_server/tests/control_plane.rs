@@ -4,10 +4,11 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::tokio::prelude::*;
-use interprocess::local_socket::{GenericNamespaced, ToNsName};
+use interprocess::local_socket::{GenericFilePath, ToFsName};
 use ozmux_mux::{MuxEvent, PaneId, Side, SplitOrientation, SurfaceId, SurfaceKind};
 use ozmux_proto::{ClientMessage, CopyModeOp, MAX_MESSAGE_BYTES, SelectionKind, ServerMessage};
 use ozmux_server::OzmuxServer;
+use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -17,9 +18,9 @@ type ClientWriter = FramedWrite<interprocess::local_socket::tokio::SendHalf, Len
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-fn unique_name() -> String {
+fn unique_name() -> std::path::PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("ozmux-test-{}-{}.sock", std::process::id(), n)
+    std::env::temp_dir().join(format!("ozmux-test-{}-{}.sock", std::process::id(), n))
 }
 
 fn codec() -> LengthDelimitedCodec {
@@ -28,16 +29,17 @@ fn codec() -> LengthDelimitedCodec {
         .new_codec()
 }
 
-fn spawn_server() -> (String, JoinHandle<anyhow::Result<()>>) {
-    let name = unique_name();
-    let server = OzmuxServer::new(&name).unwrap();
+fn spawn_server() -> (std::path::PathBuf, JoinHandle<anyhow::Result<()>>) {
+    let path = unique_name();
+    let _ = std::fs::remove_file(&path);
+    let server = OzmuxServer::new(&path).unwrap();
     let handle = tokio::spawn(async move { server.start().await });
-    (name, handle)
+    (path, handle)
 }
 
-async fn connect_client(name: &str) -> (ClientReader, ClientWriter) {
-    let nsname = name.to_ns_name::<GenericNamespaced>().unwrap();
-    let stream = Stream::connect(nsname).await.unwrap();
+async fn connect_client(path: &Path) -> (ClientReader, ClientWriter) {
+    let name = path.to_fs_name::<GenericFilePath>().unwrap();
+    let stream = Stream::connect(name).await.unwrap();
     let (read_half, write_half) = stream.split();
     (
         FramedRead::new(read_half, codec()),

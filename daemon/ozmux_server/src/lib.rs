@@ -7,7 +7,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use interprocess::local_socket::tokio::Listener;
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
-use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
+use interprocess::local_socket::{GenericFilePath, ListenerOptions, ToFsName};
 use ozmux_mux::{Multiplexer, MuxEvent, MuxResult, SurfaceKind};
 use ozmux_proto::{ClientMessage, CopyModeOp, MAX_MESSAGE_BYTES, ServerMessage};
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 mod socket;
 mod terminal;
-pub use socket::socket_path;
+pub use socket::{socket_is_live, socket_path};
 
 /// Broadcast ring capacity; a client that lags beyond this is dropped and must
 /// re-attach for a fresh snapshot (see `handle_client`).
@@ -55,9 +55,11 @@ pub struct OzmuxServer {
 }
 
 impl OzmuxServer {
-    /// Binds the local socket `socket_name` and seeds an empty multiplexer.
-    pub fn new(socket_name: &str) -> anyhow::Result<Self> {
-        let name = socket_name.to_ns_name::<GenericNamespaced>()?;
+    /// Binds the filesystem socket at `socket_path` and seeds an empty multiplexer.
+    /// The caller (`ozmux run`) is responsible for `create_dir_all` on the parent
+    /// directory and for unlinking a stale path first.
+    pub fn new(socket_path: &std::path::Path) -> anyhow::Result<Self> {
+        let name = socket_path.to_fs_name::<GenericFilePath>()?;
         let listener = ListenerOptions::new().name(name).create_tokio()?;
         let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let state = Arc::new(ServerState {

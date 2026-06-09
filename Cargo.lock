@@ -4039,6 +4039,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ozmux_server",
+ "tokio",
  "tracing",
 ]
 
@@ -4085,6 +4086,7 @@ dependencies = [
  "crossbeam-channel",
  "futures-util",
  "interprocess",
+ "libc",
  "ozmux_mux",
  "ozmux_proto",
  "ozmux_vt",
