@@ -317,20 +317,31 @@ pub(crate) fn dispatch_focused_key(
                     continue;
                 }
                 if !fire_action_event(&mut commands, &action, workspace) {
+                    // NOTE: these three branches target the focused surface AS a
+                    //       terminal, so gate them on is_terminal_surface — a focused
+                    //       browser/extension surface must NOT get CopyModeState
+                    //       stamped (it would freeze the pane, since the copy-mode
+                    //       branch above then steals every key) or a stray wire op.
+                    //       The local arm is implicitly guarded by TerminalHandle
+                    //       absence. App-global chords run via fire_action_event above
+                    //       and are intentionally NOT gated (they work in the bar).
                     if matches!(action, ShortcutAction::Paste)
                         && let Some(surface_ent) = focused_surface
+                        && is_terminal_surface(&surface_kinds, surface_ent)
                     {
                         commands.trigger(PasteFromClipboardActionEvent {
                             entity: surface_ent,
                         });
                     } else if matches!(action, ShortcutAction::EnterCopyMode)
                         && let Some(surface_ent) = focused_surface
+                        && is_terminal_surface(&surface_kinds, surface_ent)
                     {
                         commands.trigger(EnterCopyModeActionEvent {
                             entity: surface_ent,
                         });
                     } else if matches!(action, ShortcutAction::Copy)
                         && let Some(surface_ent) = focused_surface
+                        && is_terminal_surface(&surface_kinds, surface_ent)
                         && let Ok(surf_id) = surface_ids.get(surface_ent).map(|c| c.0)
                     {
                         crate::thin_client::send_copy_op(
