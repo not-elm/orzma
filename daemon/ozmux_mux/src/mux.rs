@@ -272,17 +272,8 @@ impl MultiPlexer {
         self.set_node_parent(sibling, grandparent);
         self.rewrite_child_pointer(workspace, grandparent, NodeId::Split(split_id), sibling);
 
-        let removed_surfaces = self.panes[pane].surfaces.clone();
-        for surface in &removed_surfaces {
-            self.surfaces.remove(*surface);
-        }
-        self.panes.remove(pane);
         self.splits.remove(split_id);
-
-        let mut events = vec![MuxEvent::PaneClosed { pane }];
-        for surface in removed_surfaces {
-            events.push(MuxEvent::SurfaceClosed { surface });
-        }
+        let mut events = self.destroy_pane(pane);
 
         let reached_root = grandparent.is_none();
         if reached_root {
@@ -628,63 +619,34 @@ impl MultiPlexer {
     /// `WorkspaceSelected` is appended. If a replacement was auto-created, a
     /// full `new_workspace` event sequence is prepended.
     pub fn close_workspace(&mut self, workspace: WorkspaceId) -> MuxResult<Vec<MuxEvent>> {
-        self.workspace(workspace)?;
-        let session = self.active_session;
-
-        // Walk the whole subtree (intact) to remove EVERY split, pane, and
-        // surface. Removing only each leaf's parent split (its parent) would
-        // leak interior splits whose two children are both splits.
         let root = self.workspace(workspace)?.root;
-        let mut events: Vec<MuxEvent> = Vec::new();
-        let mut split_ids: Vec<SplitId> = Vec::new();
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            match node {
-                NodeId::Split(s) => {
-                    let split = &self.splits[s];
-                    stack.push(split.second);
-                    stack.push(split.first);
-                    split_ids.push(s);
-                }
-                NodeId::Pane(p) => {
-                    let surfaces = self.panes[p].surfaces.clone();
-                    events.push(MuxEvent::PaneClosed { pane: p });
-                    for surface in surfaces {
-                        events.push(MuxEvent::SurfaceClosed { surface });
-                        self.surfaces.remove(surface);
-                    }
-                    self.panes.remove(p);
-                }
-            }
-        }
-        for s in split_ids {
-            self.splits.remove(s);
-        }
-        self.workspaces.remove(workspace);
-        let sess = &mut self.sessions[session];
-        sess.workspaces.retain(|w| *w != workspace);
+        let session = self.active_session;
+        let was_active = self.sessions[session].active == workspace;
 
+        let mut events = self.cascade_destroy_subtree(root);
+        self.workspaces.remove(workspace);
+        self.sessions[session].workspaces.retain(|w| *w != workspace);
         events.push(MuxEvent::WorkspaceDestroyed { workspace });
 
-        let was_active = sess.active == workspace;
         if !was_active {
             return Ok(events);
         }
 
+        // The active workspace was destroyed: re-point the session to the
+        // previous workspace, or auto-create a replacement so the session is
+        // never left empty (the always-one-workspace invariant).
         if let Some(&remaining) = self.sessions[session].workspaces.last() {
             self.sessions[session].active = remaining;
             events.push(MuxEvent::WorkspaceSelected {
                 session,
                 workspace: remaining,
             });
+            Ok(events)
         } else {
-            // NOTE: The session must always have at least one workspace; auto-create
-            // when the last one is closed to keep the invariant without erroring.
             let mut replacement = self.new_workspace(None)?;
             replacement.append(&mut events);
-            return Ok(replacement);
+            Ok(replacement)
         }
-        Ok(events)
     }
 
     /// Adds a surface to a pane without changing the active surface.
@@ -1167,6 +1129,47 @@ impl MultiPlexer {
                 NodeId::Split(s) => cur = self.splits[s].first,
             }
         }
+    }
+
+    /// Removes `pane` and all of its surfaces from the arena, returning
+    /// `[PaneClosed, SurfaceClosed*]`. Does NOT touch the layout tree (splits)
+    /// or the owning workspace — callers handle the structural relinking.
+    fn destroy_pane(&mut self, pane: PaneId) -> Vec<MuxEvent> {
+        let mut events = vec![MuxEvent::PaneClosed { pane }];
+        for surface in self.panes[pane].surfaces.clone() {
+            events.push(MuxEvent::SurfaceClosed { surface });
+            self.surfaces.remove(surface);
+        }
+        self.panes.remove(pane);
+        events
+    }
+
+    /// Destroys every split, pane, and surface in the subtree rooted at `root`,
+    /// returning `[PaneClosed, SurfaceClosed*]` per pane in DFS (left-first)
+    /// order.
+    ///
+    /// Walking the whole subtree (not just each leaf's parent split) is
+    /// required: removing only leaf parents would leak interior splits whose
+    /// two children are both splits.
+    fn cascade_destroy_subtree(&mut self, root: NodeId) -> Vec<MuxEvent> {
+        let mut events = Vec::new();
+        let mut split_ids = Vec::new();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            match node {
+                NodeId::Split(s) => {
+                    let split = &self.splits[s];
+                    stack.push(split.second);
+                    stack.push(split.first);
+                    split_ids.push(s);
+                }
+                NodeId::Pane(p) => events.extend(self.destroy_pane(p)),
+            }
+        }
+        for s in split_ids {
+            self.splits.remove(s);
+        }
+        events
     }
 
     fn node_cell_extent(&self, node: NodeId) -> (u16, u16) {
