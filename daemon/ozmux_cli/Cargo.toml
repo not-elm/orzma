@@ -12,6 +12,7 @@ ozmux_server = { path = "../ozmux_server/" }
 tracing = { workspace = true }
 clap = { version = "4.6.0", features = [ "derive" ] }
 anyhow = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true

@@ -1,8 +1,10 @@
+//! `ozmux daemon` subcommand group: lifecycle management for the ozmux daemon process.
+
 use crate::CommandExecutor;
 
 mod start;
-mod stop;
 
+/// Subcommands for managing the ozmux daemon lifecycle.
 #[derive(Debug, clap::Subcommand)]
 pub enum Daemon {
     Start(start::Start),
