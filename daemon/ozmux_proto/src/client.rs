@@ -22,15 +22,6 @@ pub struct Client<W: Write> {
     // reader read — callers MUST pass a shutdown closure to connect_with_shutdown
     // or the reader thread leaks one thread per connect/drop cycle.
     _reader: std::thread::JoinHandle<()>,
-    shutdown: Option<Box<dyn FnOnce() + Send>>,
-}
-
-impl<W: Write> Drop for Client<W> {
-    fn drop(&mut self) {
-        if let Some(f) = self.shutdown.take() {
-            f();
-        }
-    }
 }
 
 impl<W: Write> Client<W> {
@@ -123,7 +114,6 @@ impl<W: Write> Client<W> {
             rx,
             mirror,
             _reader: reader_thread,
-            shutdown,
         })
     }
 

@@ -7,7 +7,7 @@ edition = "2024"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ozmuxd"
+name = "ozmux"
 path = "src/main.rs"
 
 [dependencies]
@@ -18,10 +18,8 @@ alacritty_terminal = { workspace = true }
 crossbeam-channel = "0.5"
 nix = { workspace = true }
 tracing = { workspace = true }
-
-[dev-dependencies]
-ozmux_proto = { path = "../ozmux_proto" }
-ozmux_mux = { path = "../ozmux_mux" }
+clap = { version = "4.6.0", features = [ "derive" ] }
+anyhow = { workspace = true }
 
 [lints]
 workspace = true

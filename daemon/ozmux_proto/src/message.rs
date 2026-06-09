@@ -122,14 +122,7 @@ pub enum CopyModeOp {
 /// A message from a client to the daemon.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
-    /// Attach handshake: protocol version + the client's usable viewport in
-    /// cells (chrome already deducted client-side).
-    Hello {
-        /// Wire protocol version the client speaks.
-        protocol_version: u32,
-        /// Usable viewport in `(cols, rows)` cells.
-        viewport: (u16, u16),
-    },
+    Health,
     /// Split a pane.
     Split {
         /// The pane to split.
@@ -145,8 +138,6 @@ pub enum ClientMessage {
     },
     /// Set the active surface within a pane.
     SetActiveSurface {
-        /// The pane.
-        pane: PaneId,
         /// The surface to activate.
         surface: SurfaceId,
     },
@@ -226,7 +217,7 @@ pub enum ClientMessage {
         delta: i32,
     },
     /// A copy-mode / selection op on a surface's VT.
-    CopyModeOp {
+    CopyMode {
         /// The target surface.
         surface: SurfaceId,
         /// The operation.
@@ -239,10 +230,8 @@ pub enum ClientMessage {
 /// A message from the daemon to a client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerMessage {
-    /// Handshake reply: version + the cold-attach snapshot.
+    /// Handshake reply: the cold-attach snapshot.
     Welcome {
-        /// Wire protocol version the daemon speaks.
-        protocol_version: u32,
         /// Full session state at the moment of attach.
         snapshot: SessionSnapshot,
     },
