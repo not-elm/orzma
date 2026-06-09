@@ -4028,6 +4028,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_server"
+version = "0.1.0"
+
+[[package]]
 name = "ozmux_vt"
 version = "0.1.0"
 dependencies = [
