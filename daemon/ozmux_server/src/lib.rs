@@ -102,8 +102,17 @@ async fn handle_client(
         tokio::select! {
             inbound = framed_read.next() => {
                 let Some(frame) = inbound else { break };
-                let Ok(bytes) = frame else { break };
-                let Ok(msg) = serde_json::from_slice::<ClientMessage>(&bytes) else { continue };
+                let bytes = match frame {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        tracing::warn!(?error, "frame decode error; closing connection");
+                        break;
+                    }
+                };
+                let Ok(msg) = serde_json::from_slice::<ClientMessage>(&bytes) else {
+                    tracing::warn!("dropping malformed ClientMessage frame");
+                    continue;
+                };
                 if matches!(msg, ClientMessage::Shutdown) {
                     state.shutdown.notify_one();
                     break;
@@ -113,7 +122,13 @@ async fn handle_client(
             event = events_rx.recv() => {
                 match event {
                     Ok(server_msg) => write_server_message(&mut framed_write, &server_msg).await?,
-                    Err(broadcast::error::RecvError::Lagged(_)) => break,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            skipped,
+                            "client lagged past the event buffer; dropping connection (client must re-attach)"
+                        );
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -183,6 +198,8 @@ async fn dispatch<W: AsyncWrite + Unpin>(
             apply(framed_write, state, |m| create_workspace(m, name)).await
         }
         ClientMessage::Health => Ok(()),
+        // NOTE: Shutdown is intercepted in handle_client before dispatch runs;
+        // this arm only keeps the match exhaustive.
         ClientMessage::Shutdown => Ok(()),
         ClientMessage::Input { .. }
         | ClientMessage::Scroll { .. }
@@ -209,24 +226,24 @@ where
     W: AsyncWrite + Unpin,
     F: FnOnce(&mut MultiPlexer) -> MuxResult<Vec<MuxEvent>>,
 {
-    let result = {
+    // NOTE: the broadcast send MUST stay inside this lock scope — publishing the
+    // events while the mutating command still holds the mux lock is the
+    // cold-attach gapless invariant. Only the error message escapes the block, so
+    // the per-client error write happens without holding the lock across an await.
+    let error = {
         let mut mux = state.multiplexer.lock().await;
-        let result = op(&mut mux);
-        if let Ok(events) = &result
-            && !events.is_empty()
-        {
-            let _ = state.events_tx.send(ServerMessage::Events(events.clone()));
+        match op(&mut mux) {
+            Ok(events) => {
+                if !events.is_empty() {
+                    let _ = state.events_tx.send(ServerMessage::Events(events));
+                }
+                None
+            }
+            Err(error) => Some(error.to_string()),
         }
-        result
     };
-    if let Err(error) = result {
-        write_server_message(
-            framed_write,
-            &ServerMessage::Error {
-                message: error.to_string(),
-            },
-        )
-        .await?;
+    if let Some(message) = error {
+        write_server_message(framed_write, &ServerMessage::Error { message }).await?;
     }
     Ok(())
 }
