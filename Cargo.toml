@@ -1,62 +1,8 @@
-[package]
-name = "ozmux-gui"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-readme.workspace = true
-authors.workspace = true
-publish.workspace = true
-
-[[bin]]
-name = "ozmux-gui"
-path = "src/main.rs"
-
-[features]
-# Dev-only diagnostics. Enables the CEF `remote-debugging-port` (a local
-# Chromium DevTools/CDP endpoint on 127.0.0.1:9222) for inspecting the embedded
-# extension webview. Off by default so the endpoint is not exposed in normal
-# builds; enable with `cargo run --features debug`.
-debug = []
-# Thin-client build: the app runs as a read-only thin client over an in-process
-# ozmuxd; the local Mux and write path are compiled out of ozmux_multiplexer and
-# the app swaps in ThinClientMultiplexerPlugin. (4c-1b-1 read-path; user-action
-# writes are 4c-1b-2.) Build/run with `--features thin-client`.
-thin-client = ["ozmux_multiplexer/thin-client", "ozmux_extension_host/thin-client", "dep:ozmuxd", "dep:ozmux_proto", "dep:nix"]
-
-[dependencies]
-ab_glyph = "0.2"
-arboard = { version = "3", features = ["wayland-data-control"] }
-bevy = { workspace = true }
-bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "poc/macos-accelerated-paint-iosurface", features = ["debug"] }
-bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
-bevy_terminal = { path = "crates/bevy_terminal" }
-cosmic-text = "0.16"
-open = { workspace = true }
-ozmux_configs = { path = "crates/configs" }
-ozmux_extension_host = { path = "crates/extension_host", features = ["cef"] }
-ozmux_multiplexer = { path = "crates/multiplexer" }
-ozmuxd = { path = "daemon/ozmuxd", optional = true }
-ozmux_proto = { path = "daemon/ozmux_proto", optional = true }
-nix = { workspace = true, optional = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
-unicode-width = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
-
-[lints]
-workspace = true
-
 [workspace]
 resolver = "2"
 members = [
   "crates/*",
-  "daemon/ozmux_vt",
-  "daemon/ozmux_mux",
-  "daemon/ozmux_proto",
-  "daemon/ozmuxd",
+  "daemon/*",
 ]
 
 [workspace.package]
