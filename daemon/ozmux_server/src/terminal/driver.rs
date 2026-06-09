@@ -28,7 +28,7 @@ impl SurfaceDriver {
     /// Spawns the PTY + VT engine for `seed` on a detached driver thread. On a
     /// PTY spawn failure, logs and broadcasts `ChildExit { code: None }` so the
     /// client can mark the surface dead, and no thread is started.
-    pub(crate) fn spawn(seed: DriverSeed, events_tx: broadcast::Sender<ServerMessage>) {
+    pub fn spawn(seed: DriverSeed, events_tx: broadcast::Sender<ServerMessage>) {
         let DriverSeed { surface, cols, rows, cwd, cmd_rx } = seed;
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let env = vec![("TERM".to_string(), "xterm-256color".to_string())];

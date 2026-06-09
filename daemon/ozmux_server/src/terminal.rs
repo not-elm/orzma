@@ -105,13 +105,13 @@ pub(crate) struct TerminalRegistry {
 
 impl TerminalRegistry {
     /// Creates an empty registry.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self { map: Mutex::new(HashMap::new()) }
     }
 
     /// Sends `cmd` to `surface`'s driver. Returns `false` when no driver is
     /// registered (already-closed surface); the caller drops the command.
-    pub(crate) fn route(&self, surface: SurfaceId, cmd: DriverCommand) -> bool {
+    pub fn route(&self, surface: SurfaceId, cmd: DriverCommand) -> bool {
         let map = self.map.lock().unwrap();
         match map.get(&surface) {
             Some(handle) => handle.cmd_tx.send(cmd).is_ok(),
@@ -122,7 +122,7 @@ impl TerminalRegistry {
     /// Reserves a routing slot for `surface` and returns the seed used to spawn
     /// the driver thread AFTER the structural broadcast. Empty `cwd` -> `None`.
     /// Returns `None` (skips) when `surface` is already registered (idempotent).
-    pub(crate) fn reserve(
+    pub fn reserve(
         &self,
         surface: SurfaceId,
         cols: u16,
@@ -150,13 +150,13 @@ impl TerminalRegistry {
     /// a driver wedged on a blocking `pty.write_all` (child not draining its
     /// input) is not in `Select`, so dropping `cmd_tx` cannot wake it, and a
     /// join would hang shutdown.
-    pub(crate) fn spawn(&self, seed: DriverSeed, events_tx: broadcast::Sender<ServerMessage>) {
+    pub fn spawn(&self, seed: DriverSeed, events_tx: broadcast::Sender<ServerMessage>) {
         SurfaceDriver::spawn(seed, events_tx);
     }
 
     /// Removes `surface`'s driver: dropping `cmd_tx` disconnects the driver's
     /// command receiver, so its `Select` returns and the thread exits.
-    pub(crate) fn remove(&self, surface: SurfaceId) {
+    pub fn remove(&self, surface: SurfaceId) {
         let mut map = self.map.lock().unwrap();
         map.remove(&surface);
     }
