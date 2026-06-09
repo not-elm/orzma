@@ -4026,6 +4026,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ozmux_server",
+ "tracing",
+]
+
+[[package]]
 name = "ozmux_configs"
 version = "0.1.0"
 dependencies = [
@@ -4087,21 +4097,6 @@ dependencies = [
  "tracing",
  "unicode-width",
  "vte",
-]
-
-[[package]]
-name = "ozmuxd"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "clap",
- "crossbeam-channel",
- "nix 0.28.0",
- "ozmux_mux",
- "ozmux_proto",
- "ozmux_vt",
- "tracing",
 ]
 
 [[package]]

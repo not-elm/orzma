@@ -1,5 +1,5 @@
 [package]
-name = "ozmuxd"
+name = "ozmux_cli"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,12 +8,7 @@ name = "ozmux"
 path = "src/main.rs"
 
 [dependencies]
-ozmux_mux = { path = "../ozmux_mux" }
-ozmux_proto = { path = "../ozmux_proto" }
-ozmux_vt = { path = "../ozmux_vt", features = ["pty"] }
-alacritty_terminal = { workspace = true }
-crossbeam-channel = "0.5"
-nix = { workspace = true }
+ozmux_server = { path = "../ozmux_server/" }
 tracing = { workspace = true }
 clap = { version = "4.6.0", features = [ "derive" ] }
 anyhow = { workspace = true }

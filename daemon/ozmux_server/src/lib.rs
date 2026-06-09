@@ -45,7 +45,6 @@ async fn handle_client(
         line.clear();
 
         let n = reader.read_line(&mut line).await?;
-
         if n == 0 {
             break;
         }
@@ -53,13 +52,20 @@ async fn handle_client(
             continue;
         };
         todo!("ClientMessageをパターンマッチし、適切な処理を行う。");
-        match request {
+        let events = match request {
+            ClientMessage::Split {
+                pane,
+                orientation,
+                side,
+                kind,
+                cwd,
+            } => multiplexer.split_pane(pane, orientation, side, kind, cwd),
             _ => todo!(),
-        }
+        };
 
-        let response = format!("echo: {line}");
-        write_half.write_all(response.as_bytes()).await?;
-        write_half.flush().await?;
+        todo!("eventsを元にクライアント側にイベントを送信する");
+        // write_half.write_all(response.as_bytes()).await?;
+        // write_half.flush().await?;
     }
 
     Ok(())
