@@ -18,7 +18,7 @@ pub use error::{MuxError, MuxResult};
 pub use event::{MuxEvent, SurfaceEntry};
 pub use geometry::Rect;
 pub use id::{NodeId, PaneId, SessionId, SplitId, SurfaceId, WorkspaceId};
-pub use mux::Mux;
+pub use mux::MultiPlexer;
 pub use snapshot::{PaneSnapshot, SessionSnapshot, SurfaceState, WorkspaceSnapshot};
 pub use surface::{BrowserProfile, Surface, SurfaceKind};
 pub use tree::{LayoutNode, Pane, Side, Split, SplitOrientation, collect_node_ids};

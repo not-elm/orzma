@@ -92,6 +92,11 @@ impl MultiPlexer {
         mux
     }
 
+    /// The active session's id.
+    pub fn active_session(&self) -> SessionId {
+        self.active_session
+    }
+
     /// The active session's active workspace.
     pub fn active_workspace(&self) -> WorkspaceId {
         self.sessions[self.active_session].active
@@ -373,6 +378,19 @@ impl MultiPlexer {
         }
         self.panes[pane].active_surface = surface;
         Ok(vec![MuxEvent::ActiveSurfaceChanged { pane, surface }])
+    }
+
+    /// Sets the active surface, resolving its pane internally.
+    ///
+    /// Wire callers that hold only a `SurfaceId` need not know the owning pane.
+    /// Emits `[ActiveSurfaceChanged]`, or `[]` if already active.
+    /// Errors `SurfaceNotFound` if unknown.
+    pub fn set_active_surface_by_surface(
+        &mut self,
+        surface: SurfaceId,
+    ) -> MuxResult<Vec<MuxEvent>> {
+        let pane = self.pane_of_surface(surface)?;
+        self.set_active_surface(pane, surface)
     }
 
     /// Swap `pane` with its prev/next neighbor in DFS leaf order, keeping each
@@ -868,7 +886,7 @@ impl MultiPlexer {
             .sessions
             .get(session)
             .ok_or(MuxError::SessionNotFound(session))?;
-        let active_workspace = Some(sess.active);
+        let active_workspace = sess.active;
         let workspace_ids = sess.workspaces.clone();
 
         let mut workspaces = Vec::with_capacity(workspace_ids.len());
@@ -876,14 +894,14 @@ impl MultiPlexer {
             let ws = self.workspace(ws_id)?;
             let name = ws.name.clone();
             let size = ws.size;
-            let active_pane = Some(ws.active_pane);
+            let active_pane = ws.active_pane;
             let layout = self.workspace_layout(ws_id)?;
 
             let ordered = self.ordered_panes(ws_id)?;
             let mut panes = Vec::with_capacity(ordered.len());
             for pane_id in ordered {
                 let pane = &self.panes[pane_id];
-                let active_surface = Some(pane.active_surface);
+                let active_surface = pane.active_surface;
                 let surfaces = self
                     .pane_surface_entries(pane_id)
                     .into_iter()
@@ -2789,6 +2807,39 @@ mod tests {
         assert_eq!(
             surface_entry_cwd, cwd,
             "PaneCreated SurfaceEntry.cwd must equal the seeded cwd"
+        );
+    }
+
+    #[test]
+    fn active_session_returns_the_seeded_session() {
+        let mux = MultiPlexer::new();
+        assert_eq!(mux.active_session(), mux.sessions()[0]);
+    }
+
+    #[test]
+    fn set_active_surface_by_surface_resolves_pane_and_switches() {
+        let mut mux = MultiPlexer::new();
+        let ws = mux.active_workspace();
+        let pane = mux.active_pane(ws).unwrap();
+        let spawn = mux.spawn_surface(pane, SurfaceKind::Terminal, None).unwrap();
+        let new_surface = match spawn[0] {
+            MuxEvent::SurfaceSpawned { surface, .. } => surface,
+            _ => panic!("first event must be SurfaceSpawned"),
+        };
+        let events = mux.set_active_surface_by_surface(new_surface).unwrap();
+        assert_eq!(
+            events,
+            vec![MuxEvent::ActiveSurfaceChanged { pane, surface: new_surface }]
+        );
+        assert_eq!(mux.active_surface(pane).unwrap(), new_surface);
+    }
+
+    #[test]
+    fn set_active_surface_by_surface_unknown_is_surface_not_found() {
+        let mut mux = MultiPlexer::new();
+        assert_eq!(
+            mux.set_active_surface_by_surface(SurfaceId::default()),
+            Err(MuxError::SurfaceNotFound(SurfaceId::default()))
         );
     }
 }
