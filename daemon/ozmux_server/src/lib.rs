@@ -12,7 +12,7 @@ pub struct OzmuxServer {
 
 impl OzmuxServer {
     pub fn new() -> anyhow::Result<Self> {
-        let name = "ozmux-daemon.sock".to_ns_name::<GenericNamespaced>()?;
+        let name = "ozmux-server.sock".to_ns_name::<GenericNamespaced>()?;
         let listener = ListenerOptions::new().name(name).create_tokio()?;
         let multiplexer = Arc::new(MultiPlexer::default());
         Ok(Self {
@@ -51,7 +51,9 @@ async fn handle_client(
         let Ok(request) = serde_json::from_str::<ClientMessage>(&line) else {
             continue;
         };
-        todo!("ClientMessageをパターンマッチし、適切な処理を行う。");
+        todo!(
+            "ClientMessageをパターンマッチし、適切な処理を行う。パターンマッチ内の処理は基本的にはmultixplerなどに移譲できる状態が望ましい。"
+        );
         let events = match request {
             ClientMessage::Split {
                 pane,
