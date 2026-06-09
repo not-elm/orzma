@@ -36,7 +36,7 @@ struct Workspace {
 }
 
 /// The multiplexer aggregate root.
-pub struct Mux {
+pub struct MultiPlexer {
     sessions: SlotMap<SessionId, Session>,
     active_session: SessionId,
     workspaces: SlotMap<WorkspaceId, Workspace>,
@@ -46,18 +46,18 @@ pub struct Mux {
     name_counter: u32,
 }
 
-impl Default for Mux {
+impl Default for MultiPlexer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Mux {
+impl MultiPlexer {
     /// Builds the initial state: one default session with one workspace
     /// holding a single terminal pane. Active pointers are valid
     /// immediately. (Initial state is conveyed as a snapshot, so no events.)
     pub fn new() -> Self {
-        let mut mux = Mux {
+        let mut mux = MultiPlexer {
             sessions: SlotMap::with_key(),
             active_session: SessionId::default(),
             workspaces: SlotMap::with_key(),
@@ -1406,7 +1406,7 @@ mod tests {
 
     #[test]
     fn new_seeds_one_session_workspace_pane_surface() {
-        let mux = Mux::new();
+        let mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let panes = mux.ordered_panes(ws).unwrap();
         assert_eq!(panes.len(), 1);
@@ -1422,7 +1422,7 @@ mod tests {
 
     #[test]
     fn stale_pane_id_is_pane_not_found() {
-        let mux = Mux::new();
+        let mux = MultiPlexer::new();
         assert_eq!(
             mux.surfaces(PaneId::default()),
             Err(MuxError::PaneNotFound(PaneId::default()))
@@ -1431,7 +1431,7 @@ mod tests {
 
     #[test]
     fn single_pane_fills_workspace_and_resolves_full_size() {
-        let mux = Mux::new();
+        let mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let bounds = mux.pane_bounds(ws).unwrap();
@@ -1453,7 +1453,7 @@ mod tests {
 
     use Rect;
 
-    fn split_after(mux: &mut Mux, pane: PaneId, orientation: SplitOrientation) -> PaneId {
+    fn split_after(mux: &mut MultiPlexer, pane: PaneId, orientation: SplitOrientation) -> PaneId {
         let events = mux
             .split_pane(pane, orientation, Side::After, SurfaceKind::Terminal, None)
             .unwrap();
@@ -1463,7 +1463,7 @@ mod tests {
         }
     }
 
-    fn root_split(mux: &Mux, workspace: WorkspaceId) -> SplitId {
+    fn root_split(mux: &MultiPlexer, workspace: WorkspaceId) -> SplitId {
         match mux.workspaces[workspace].root {
             NodeId::Split(s) => s,
             NodeId::Pane(_) => panic!("workspace root is a pane, not a split"),
@@ -1472,7 +1472,7 @@ mod tests {
 
     #[test]
     fn split_pane_inserts_split_reparents_target_and_sets_grows() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let target = mux.active_pane(ws).unwrap();
 
@@ -1536,7 +1536,7 @@ mod tests {
 
     #[test]
     fn split_pane_before_orders_new_then_target() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let target = mux.active_pane(ws).unwrap();
 
@@ -1574,7 +1574,7 @@ mod tests {
 
     #[test]
     fn split_in_sized_workspace_emits_pane_resized_for_both_panes() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let original = mux.active_pane(ws).unwrap();
         mux.set_workspace_size(ws, 80, 24).unwrap();
@@ -1613,7 +1613,7 @@ mod tests {
 
     #[test]
     fn split_in_unsized_workspace_emits_no_pane_resized() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let original = mux.active_pane(ws).unwrap();
         let events = mux
@@ -1635,7 +1635,7 @@ mod tests {
 
     #[test]
     fn close_pane_promotes_sibling_into_slot_and_despawns_split() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let target = mux.active_pane(ws).unwrap();
         let new_pane = split_after(&mut mux, target, SplitOrientation::Horizontal);
@@ -1654,7 +1654,7 @@ mod tests {
 
     #[test]
     fn close_pane_at_root_emits_workspace_root_changed() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let target = mux.active_pane(ws).unwrap();
         let new_pane = split_after(&mut mux, target, SplitOrientation::Horizontal);
@@ -1680,7 +1680,7 @@ mod tests {
 
     #[test]
     fn close_non_root_split_emits_layout_changed() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p1 = mux.active_pane(ws).unwrap();
         let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
@@ -1708,7 +1708,7 @@ mod tests {
 
     #[test]
     fn close_last_pane_errors() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         assert_eq!(
@@ -1719,7 +1719,7 @@ mod tests {
 
     #[test]
     fn closing_pane_removes_its_surfaces() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let target = mux.active_pane(ws).unwrap();
         let new_pane = split_after(&mut mux, target, SplitOrientation::Horizontal);
@@ -1743,7 +1743,7 @@ mod tests {
 
     #[test]
     fn focus_pane_emits_only_on_change() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p1 = mux.active_pane(ws).unwrap();
         let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
@@ -1761,7 +1761,7 @@ mod tests {
 
     #[test]
     fn cycle_pane_wraps_in_dfs_order() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p1 = mux.active_pane(ws).unwrap();
         let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
@@ -1790,7 +1790,7 @@ mod tests {
 
     #[test]
     fn set_active_surface_changed_only() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let s1 = mux.active_surface(pane).unwrap();
@@ -1811,7 +1811,7 @@ mod tests {
         );
     }
 
-    fn dir_bounds(mux: &Mux, ws: WorkspaceId, pane: PaneId) -> Rect {
+    fn dir_bounds(mux: &MultiPlexer, ws: WorkspaceId, pane: PaneId) -> Rect {
         mux.pane_bounds(ws)
             .unwrap()
             .into_iter()
@@ -1822,7 +1822,7 @@ mod tests {
 
     #[test]
     fn horizontal_split_right_then_left_wraps() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let left = mux.active_pane(ws).unwrap();
         let right = split_after(&mut mux, left, SplitOrientation::Horizontal);
@@ -1846,7 +1846,7 @@ mod tests {
 
     #[test]
     fn vertical_split_down_and_up_wrap() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let top = mux.active_pane(ws).unwrap();
         let bottom = split_after(&mut mux, top, SplitOrientation::Vertical);
@@ -1865,7 +1865,7 @@ mod tests {
 
     #[test]
     fn single_pane_returns_none_in_all_directions() {
-        let mux = Mux::new();
+        let mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p = mux.active_pane(ws).unwrap();
         assert_eq!(
@@ -1893,7 +1893,7 @@ mod tests {
 
     #[test]
     fn two_by_two_grid_picks_geometric_neighbor() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p1 = mux.active_pane(ws).unwrap();
         let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
@@ -1915,7 +1915,7 @@ mod tests {
 
     #[test]
     fn deep_horizontal_split_keeps_immediate_neighbor() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let first = mux.active_pane(ws).unwrap();
         let mut current_pane = first;
@@ -1933,7 +1933,7 @@ mod tests {
 
     #[test]
     fn tiebreak_prefers_most_recent_active_point() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let tl = mux.active_pane(ws).unwrap();
         let r = split_after(&mut mux, tl, SplitOrientation::Horizontal);
@@ -1972,7 +1972,7 @@ mod tests {
 
     #[test]
     fn navigate_focuses_geometric_neighbor() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let left = mux.active_pane(ws).unwrap();
         let right = split_after(&mut mux, left, SplitOrientation::Horizontal);
@@ -1993,13 +1993,13 @@ mod tests {
         );
     }
 
-    fn swap_resolved(mux: &Mux, ws: WorkspaceId) -> Vec<(PaneId, (u16, u16))> {
+    fn swap_resolved(mux: &MultiPlexer, ws: WorkspaceId) -> Vec<(PaneId, (u16, u16))> {
         mux.resolve_sizes(ws, 120, 40).unwrap()
     }
 
     #[test]
     fn swap_pane_swaps_positions_and_slot_grows() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let a = mux.active_pane(ws).unwrap();
         let b = split_after(&mut mux, a, SplitOrientation::Horizontal);
@@ -2037,14 +2037,14 @@ mod tests {
 
     #[test]
     fn swap_pane_single_pane_is_noop() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         assert_eq!(mux.swap_pane(pane, SwapOffset::Next).unwrap(), vec![]);
     }
 
-    fn two_panes_h(cols: u16, rows: u16) -> (Mux, WorkspaceId, PaneId, PaneId, SplitId) {
-        let mut mux = Mux::new();
+    fn two_panes_h(cols: u16, rows: u16) -> (MultiPlexer, WorkspaceId, PaneId, PaneId, SplitId) {
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let left = mux.active_pane(ws).unwrap();
         let right = split_after(&mut mux, left, SplitOrientation::Horizontal);
@@ -2102,7 +2102,7 @@ mod tests {
 
     #[test]
     fn resize_in_2x2_grid_resolves_cross_axis_and_same_axis_ancestors() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p1 = mux.active_pane(ws).unwrap();
         let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
@@ -2129,7 +2129,7 @@ mod tests {
 
     #[test]
     fn resize_clamps_via_recursive_min_check_in_same_axis_chain() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p1 = mux.active_pane(ws).unwrap();
         let p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
@@ -2182,7 +2182,7 @@ mod tests {
 
     #[test]
     fn resize_pane_returns_noop_without_workspace_size() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p1 = mux.active_pane(ws).unwrap();
         let _p2 = split_after(&mut mux, p1, SplitOrientation::Horizontal);
@@ -2194,7 +2194,7 @@ mod tests {
 
     #[test]
     fn resize_pane_returns_noop_for_single_pane_workspace() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let p = mux.active_pane(ws).unwrap();
         mux.set_workspace_size(ws, 120, 40).unwrap();
@@ -2203,7 +2203,7 @@ mod tests {
 
     #[test]
     fn set_workspace_size_emits_resized_for_changed_panes() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let left = mux.active_pane(ws).unwrap();
         let right = split_after(&mut mux, left, SplitOrientation::Horizontal);
@@ -2245,7 +2245,7 @@ mod tests {
 
     #[test]
     fn resolved_pane_size_is_some_when_sized_none_when_unsized() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         assert_eq!(
@@ -2263,7 +2263,7 @@ mod tests {
 
     #[test]
     fn create_workspace_spawns_root_pane_surface_tree() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let events = mux.new_workspace().unwrap();
 
         let (session, workspace) = match events[0] {
@@ -2304,7 +2304,7 @@ mod tests {
 
     #[test]
     fn rename_workspace_mutates_name_and_only_fires_changed_on_actual_change() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
 
         let events = mux.rename_workspace(ws, "new-name".to_string()).unwrap();
@@ -2323,7 +2323,7 @@ mod tests {
 
     #[test]
     fn close_workspace_despawns_workspace_and_descendants() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let first_ws = mux.active_workspace();
         let evs = mux.new_workspace().unwrap();
         let second_ws = match evs[0] {
@@ -2361,7 +2361,7 @@ mod tests {
 
     #[test]
     fn close_workspace_frees_interior_splits() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         mux.new_workspace().unwrap();
         let ws1 = mux.active_workspace();
         let p1 = mux.active_pane(ws1).unwrap();
@@ -2410,7 +2410,7 @@ mod tests {
 
     #[test]
     fn select_workspace_changes_active_and_is_changed_only() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let first_ws = mux.active_workspace();
         let evs = mux.new_workspace().unwrap();
         let second_ws = match evs[0] {
@@ -2437,7 +2437,7 @@ mod tests {
     #[test]
     fn break_surface_to_pane_preserves_moved_surface_kind() {
         use std::path::PathBuf;
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let ext = SurfaceKind::Extension {
@@ -2496,7 +2496,7 @@ mod tests {
 
     #[test]
     fn add_surface_spawns_surface_child_of_pane() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let original_active = mux.active_surface(pane).unwrap();
@@ -2531,7 +2531,7 @@ mod tests {
 
     #[test]
     fn add_surface_stamps_surfaceof_and_appears_in_surfaces() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let original = mux.active_surface(pane).unwrap();
@@ -2549,7 +2549,7 @@ mod tests {
 
     #[test]
     fn break_surface_to_pane_creates_new_pane_with_moved_surface() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let source_pane = mux.active_pane(ws).unwrap();
 
@@ -2610,7 +2610,7 @@ mod tests {
 
     #[test]
     fn break_surface_to_pane_returns_error_when_source_pane_has_only_one_surface() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let surface = mux.active_surface(pane).unwrap();
@@ -2624,7 +2624,7 @@ mod tests {
 
     #[test]
     fn close_surface_removes_surface_and_repoints_active() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let s1 = mux.active_surface(pane).unwrap();
@@ -2657,7 +2657,7 @@ mod tests {
 
     #[test]
     fn close_surface_last_surface_errors() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let surface = mux.active_surface(pane).unwrap();
@@ -2670,7 +2670,7 @@ mod tests {
 
     #[test]
     fn workspace_layout_serde_round_trips() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         mux.split_pane(
@@ -2690,7 +2690,7 @@ mod tests {
 
     #[test]
     fn set_surface_cwd_changed_only() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let surface = mux.active_surface(pane).unwrap();
@@ -2712,7 +2712,7 @@ mod tests {
 
     #[test]
     fn set_surface_cwd_ignores_empty_path() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let surface = mux.active_surface(pane).unwrap();
@@ -2737,7 +2737,7 @@ mod tests {
 
     #[test]
     fn spawn_surface_with_cwd_seeds_surface_and_event() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let cwd = PathBuf::from("/tmp");
@@ -2767,7 +2767,7 @@ mod tests {
 
     #[test]
     fn split_pane_with_cwd_seeds_surface_and_pane_created_entry() {
-        let mut mux = Mux::new();
+        let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
         let cwd = PathBuf::from("/workdir");

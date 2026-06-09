@@ -8,6 +8,13 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
+interprocess = { version  = "2", features = ["tokio"] }
+anyhow = { workspace = true }
+tokio = { version = "1", features = ["io-util"] }
+tracing = { workspace = true } 
+serde_json = { workspace = true }
+ozmux_proto = { path = "../ozmux_proto/" }
+ozmux_mux = { path = "../ozmux_mux" }
 
 [lints]
 workspace = true
