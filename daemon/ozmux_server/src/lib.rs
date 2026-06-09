@@ -3,25 +3,45 @@
 //! UDS/NamedPipe wire. One task per connection.
 
 use bytes::Bytes;
+use crate::terminal::{DriverCommand, TerminalRegistry};
 use futures_util::{SinkExt, StreamExt};
 use interprocess::local_socket::tokio::Listener;
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
-use ozmux_mux::{MultiPlexer, MuxEvent, MuxResult};
-use ozmux_proto::{ClientMessage, MAX_MESSAGE_BYTES, ServerMessage};
+use ozmux_mux::{MultiPlexer, MuxEvent, MuxResult, SurfaceKind};
+use ozmux_proto::{ClientMessage, CopyModeOp, MAX_MESSAGE_BYTES, ServerMessage};
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
+mod terminal;
+
 /// Broadcast ring capacity; a client that lags beyond this is dropped and must
 /// re-attach for a fresh snapshot (see `handle_client`).
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
+/// Max time to spend writing one broadcast message to a client before treating
+/// the client as a stalled reader and dropping it (it must re-attach). Mirrors
+/// the lag-drop policy: a client that cannot keep up is disconnected rather
+/// than allowed to block its own command path (including `Shutdown`).
+const CLIENT_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Default terminal size for a surface spawned before any client has reported a
+/// viewport (startup / zero clients); the first `PaneResized` reflows it.
+const DEFAULT_TERMINAL_SIZE: (u16, u16) = (80, 24);
+
+/// Max time to wait for a driver thread to answer a reply request (cold-attach
+/// snapshot, copy-selection text). A live driver answers well under this; a
+/// driver wedged on a blocking PTY write (or already gone) is bounded out so it
+/// cannot hang the client.
+const DRIVER_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 struct ServerState {
     multiplexer: Mutex<MultiPlexer>,
     events_tx: broadcast::Sender<ServerMessage>,
     shutdown: Notify,
+    terminals: TerminalRegistry,
 }
 
 /// A control-plane ozmux daemon: accepts client connections on a local socket,
@@ -42,6 +62,7 @@ impl OzmuxServer {
             multiplexer: Mutex::new(MultiPlexer::default()),
             events_tx,
             shutdown: Notify::new(),
+            terminals: TerminalRegistry::new(),
         });
         Ok(Self { listener, state })
     }
@@ -49,6 +70,7 @@ impl OzmuxServer {
     /// Accepts connections until a client sends `Shutdown`, spawning one task per
     /// connection.
     pub async fn start(&self) -> anyhow::Result<()> {
+        seed_initial_terminals(&self.state).await;
         loop {
             tokio::select! {
                 conn = self.listener.accept() => {
@@ -82,6 +104,19 @@ async fn write_server_message<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// Writes `msg` to a client bounded by `CLIENT_WRITE_TIMEOUT`. Returns
+/// `Ok(false)` when the write stalls (a non-draining reader) so the caller can
+/// drop the connection — mirrors the lag-drop policy. Real I/O errors propagate.
+async fn write_to_client<W: AsyncWrite + Unpin>(
+    framed_write: &mut FramedWrite<W, LengthDelimitedCodec>,
+    msg: &ServerMessage,
+) -> anyhow::Result<bool> {
+    match tokio::time::timeout(CLIENT_WRITE_TIMEOUT, write_server_message(framed_write, msg)).await {
+        Ok(result) => result.map(|()| true),
+        Err(_elapsed) => Ok(false),
+    }
+}
+
 async fn handle_client(
     stream: interprocess::local_socket::tokio::Stream,
     state: Arc<ServerState>,
@@ -90,16 +125,46 @@ async fn handle_client(
     let mut framed_read = FramedRead::new(read_half, codec());
     let mut framed_write = FramedWrite::new(write_half, codec());
 
-    let (mut events_rx, welcome) = {
+    let (mut events_rx, welcome, term_surfaces) = {
         let mux = state.multiplexer.lock().await;
         let events_rx = state.events_tx.subscribe();
         let snapshot = mux.snapshot(mux.active_session())?;
-        (events_rx, ServerMessage::Welcome { snapshot })
+        let term_surfaces = terminal_surfaces(&snapshot);
+        (events_rx, ServerMessage::Welcome { snapshot }, term_surfaces)
     };
-    write_server_message(&mut framed_write, &welcome).await?;
+    if !write_to_client(&mut framed_write, &welcome).await? {
+        return Ok(());
+    }
+
+    // NOTE: subscribe (above, inside the lock) happens BEFORE these snapshot
+    // requests, so every delta with seq >= the snapshot's seq is already
+    // buffered in `events_rx`; the client reconciles by seq, so socket arrival
+    // order does not matter. Send each snapshot ONLY to this client.
+    let mut snap_reqs = Vec::new();
+    for surface in term_surfaces {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if state.terminals.route(surface, DriverCommand::Snapshot(tx)) {
+            snap_reqs.push((surface, rx));
+        }
+    }
+    for (surface, rx) in snap_reqs {
+        // NOTE: a driver wedged on a blocking PTY write (or already gone) never
+        // answers; bound the wait so it cannot hang the attach. A live driver
+        // answers in well under this budget.
+        if let Ok(Ok(snapshot)) = tokio::time::timeout(DRIVER_REPLY_TIMEOUT, rx).await {
+            let frame = ServerMessage::Frame {
+                surface,
+                frame: ozmux_vt::frame::Frame::Snapshot(snapshot),
+            };
+            if !write_to_client(&mut framed_write, &frame).await? {
+                return Ok(());
+            }
+        }
+    }
 
     loop {
         tokio::select! {
+            biased;
             inbound = framed_read.next() => {
                 let Some(frame) = inbound else { break };
                 let bytes = match frame {
@@ -121,7 +186,14 @@ async fn handle_client(
             }
             event = events_rx.recv() => {
                 match event {
-                    Ok(server_msg) => write_server_message(&mut framed_write, &server_msg).await?,
+                    Ok(server_msg) => {
+                        if !write_to_client(&mut framed_write, &server_msg).await? {
+                            tracing::warn!(
+                                "client write stalled past the timeout; dropping connection (client must re-attach)"
+                            );
+                            break;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         tracing::warn!(
                             skipped,
@@ -195,26 +267,133 @@ async fn dispatch<W: AsyncWrite + Unpin>(
             .await
         }
         ClientMessage::CreateWorkspace { name } => {
-            apply(framed_write, state, |m| create_workspace(m, name)).await
+            apply(framed_write, state, |m| m.new_workspace(name)).await
         }
         ClientMessage::Health => Ok(()),
         // NOTE: Shutdown is intercepted in handle_client before dispatch runs;
         // this arm only keeps the match exhaustive.
         ClientMessage::Shutdown => Ok(()),
-        ClientMessage::Input { .. }
-        | ClientMessage::Scroll { .. }
-        | ClientMessage::CopyMode { .. } => {
-            // TODO: data plane (Input/Scroll/CopyMode) needs an ozmux_vt frame
-            // source; this server is control-plane only.
-            write_server_message(
-                framed_write,
-                &ServerMessage::Error {
-                    message: "control-plane only; needs ozmux_vt".to_string(),
-                },
-            )
-            .await
+        ClientMessage::Input { surface, bytes } => {
+            state.terminals.route(surface, DriverCommand::Input(bytes));
+            Ok(())
+        }
+        ClientMessage::Scroll { surface, delta } => {
+            state.terminals.route(surface, DriverCommand::Scroll(delta));
+            Ok(())
+        }
+        ClientMessage::CopyMode { surface, op } => {
+            if matches!(op, CopyModeOp::CopySelection) {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if state
+                    .terminals
+                    .route(surface, DriverCommand::CopyMode { op, reply: Some(tx) })
+                {
+                    // NOTE: bound the wait — a wedged or already-gone driver never replies.
+                    if let Ok(Ok(text)) = tokio::time::timeout(DRIVER_REPLY_TIMEOUT, rx).await {
+                        write_server_message(
+                            framed_write,
+                            &ServerMessage::SelectionCopied { surface, text },
+                        )
+                        .await?;
+                    }
+                }
+                Ok(())
+            } else {
+                state
+                    .terminals
+                    .route(surface, DriverCommand::CopyMode { op, reply: None });
+                Ok(())
+            }
         }
     }
+}
+
+/// Reserves routing slots for Terminal surfaces created by `events`, returning
+/// the seeds to spawn AFTER the structural broadcast. Tears down closed
+/// surfaces and resizes panes (order-independent; done before the broadcast).
+fn reconcile_before_broadcast(
+    state: &ServerState,
+    mux: &MultiPlexer,
+    events: &[MuxEvent],
+) -> Vec<crate::terminal::DriverSeed> {
+    let mut seeds = Vec::new();
+    for event in events {
+        match event {
+            MuxEvent::PaneCreated { pane, surfaces, .. } => {
+                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
+                for entry in surfaces {
+                    if entry.kind == SurfaceKind::Terminal
+                        && let Some(seed) =
+                            state.terminals.reserve(entry.surface, cols, rows, entry.cwd.clone())
+                    {
+                        seeds.push(seed);
+                    }
+                }
+            }
+            MuxEvent::SurfaceSpawned { pane, surface, kind, cwd }
+                if *kind == SurfaceKind::Terminal =>
+            {
+                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
+                if let Some(seed) = state.terminals.reserve(*surface, cols, rows, cwd.clone()) {
+                    seeds.push(seed);
+                }
+            }
+            MuxEvent::SurfaceClosed { surface } => state.terminals.remove(*surface),
+            MuxEvent::PaneResized { pane, cols, rows } => {
+                if let Ok(surfaces) = mux.surfaces(*pane) {
+                    for surface in surfaces {
+                        state
+                            .terminals
+                            .route(surface, DriverCommand::Resize { cols: *cols, rows: *rows });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    seeds
+}
+
+/// Spawns drivers for the Terminal surfaces present in the seeded multiplexer
+/// (startup / no clients). No broadcast-ordering concern: no client is attached.
+async fn seed_initial_terminals(state: &Arc<ServerState>) {
+    let mux = state.multiplexer.lock().await;
+    let Ok(snapshot) = mux.snapshot(mux.active_session()) else {
+        return;
+    };
+    let mut seeds = Vec::new();
+    for ws in &snapshot.workspaces {
+        for pane in &ws.panes {
+            let (cols, rows) = mux.resolved_pane_size(pane.pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
+            for surf in &pane.surfaces {
+                if surf.kind == SurfaceKind::Terminal
+                    && let Some(seed) =
+                        state.terminals.reserve(surf.surface, cols, rows, surf.cwd.clone())
+                {
+                    seeds.push(seed);
+                }
+            }
+        }
+    }
+    for seed in seeds {
+        state.terminals.spawn(seed, state.events_tx.clone());
+    }
+}
+
+/// Collects the Terminal-kind surfaces from a session snapshot (the surfaces
+/// that have a driver and thus a frame to resnapshot on cold-attach).
+fn terminal_surfaces(snapshot: &ozmux_mux::SessionSnapshot) -> Vec<ozmux_mux::SurfaceId> {
+    let mut out = Vec::new();
+    for ws in &snapshot.workspaces {
+        for pane in &ws.panes {
+            for surf in &pane.surfaces {
+                if surf.kind == SurfaceKind::Terminal {
+                    out.push(surf.surface);
+                }
+            }
+        }
+    }
+    out
 }
 
 async fn apply<W, F>(
@@ -235,7 +414,14 @@ where
         match op(&mut mux) {
             Ok(events) => {
                 if !events.is_empty() {
+                    // NOTE: reserve routing slots + teardown/resize BEFORE the broadcast so a
+                    // client that sees a new surface can immediately route to it; spawn driver
+                    // threads AFTER so their first frame follows the structural event.
+                    let seeds = reconcile_before_broadcast(state, &mux, &events);
                     let _ = state.events_tx.send(ServerMessage::Events(events));
+                    for seed in seeds {
+                        state.terminals.spawn(seed, state.events_tx.clone());
+                    }
                 }
                 None
             }
@@ -246,21 +432,4 @@ where
         write_server_message(framed_write, &ServerMessage::Error { message }).await?;
     }
     Ok(())
-}
-
-fn create_workspace(mux: &mut MultiPlexer, name: Option<String>) -> MuxResult<Vec<MuxEvent>> {
-    let mut events = mux.new_workspace()?;
-    // NOTE: the workspace already exists after `new_workspace`; the rename is
-    // best-effort so a rename failure can never discard the `new_workspace`
-    // events (which would advance mux state without ever broadcasting it).
-    if let Some(name) = name
-        && let Some(workspace) = events.iter().find_map(|event| match event {
-            MuxEvent::WorkspaceCreated { workspace, .. } => Some(*workspace),
-            _ => None,
-        })
-        && let Ok(rename_events) = mux.rename_workspace(workspace, name)
-    {
-        events.extend(rename_events);
-    }
-    Ok(events)
 }

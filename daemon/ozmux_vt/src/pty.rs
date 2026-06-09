@@ -78,7 +78,8 @@ impl Pty {
             pixel_height: 0,
         };
         self.master
-            .get_mut()?
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
             .resize(size)
             .map_err(|e| anyhow::anyhow!("PTY resize failed: {e}"))?;
         Ok(())
@@ -86,7 +87,10 @@ impl Pty {
 
     /// Writes bytes to the PTY master.
     pub fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
-        self.writer.get_mut()?.write_all(bytes)
+        self.writer
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .write_all(bytes)
     }
 
     /// Non-blocking poll for the next PTY chunk from the reader thread.

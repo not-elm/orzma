@@ -272,17 +272,8 @@ impl MultiPlexer {
         self.set_node_parent(sibling, grandparent);
         self.rewrite_child_pointer(workspace, grandparent, NodeId::Split(split_id), sibling);
 
-        let removed_surfaces = self.panes[pane].surfaces.clone();
-        for surface in &removed_surfaces {
-            self.surfaces.remove(*surface);
-        }
-        self.panes.remove(pane);
         self.splits.remove(split_id);
-
-        let mut events = vec![MuxEvent::PaneClosed { pane }];
-        for surface in removed_surfaces {
-            events.push(MuxEvent::SurfaceClosed { surface });
-        }
+        let mut events = self.destroy_pane(pane);
 
         let reached_root = grandparent.is_none();
         if reached_root {
@@ -544,10 +535,11 @@ impl MultiPlexer {
     }
 
     /// Creates a workspace in the active session, seeding one terminal pane and
-    /// surface. Makes the new workspace active.
+    /// surface. Makes the new workspace active. `name` overrides the default
+    /// monotonic name when `Some`, applied atomically at creation.
     ///
     /// Returns `[WorkspaceCreated, PaneCreated, WorkspaceSelected, ActivePaneChanged]`.
-    pub fn new_workspace(&mut self) -> MuxResult<Vec<MuxEvent>> {
+    pub fn new_workspace(&mut self, name: Option<String>) -> MuxResult<Vec<MuxEvent>> {
         let session = self.active_session;
         let surface = self.surfaces.insert(Surface {
             kind: SurfaceKind::Terminal,
@@ -560,10 +552,11 @@ impl MultiPlexer {
         });
         let created_at = self.name_counter;
         self.name_counter += 1;
+        let name = name.unwrap_or_else(|| format!("{created_at}"));
         let workspace = self.workspaces.insert(Workspace {
             root: NodeId::Pane(pane),
             active_pane: pane,
-            name: format!("{created_at}"),
+            name: name.clone(),
             created_at,
             size: None,
         });
@@ -573,7 +566,7 @@ impl MultiPlexer {
             MuxEvent::WorkspaceCreated {
                 session,
                 workspace,
-                name: format!("{created_at}"),
+                name,
             },
             MuxEvent::PaneCreated {
                 pane,
@@ -626,63 +619,34 @@ impl MultiPlexer {
     /// `WorkspaceSelected` is appended. If a replacement was auto-created, a
     /// full `new_workspace` event sequence is prepended.
     pub fn close_workspace(&mut self, workspace: WorkspaceId) -> MuxResult<Vec<MuxEvent>> {
-        self.workspace(workspace)?;
-        let session = self.active_session;
-
-        // Walk the whole subtree (intact) to remove EVERY split, pane, and
-        // surface. Removing only each leaf's parent split (its parent) would
-        // leak interior splits whose two children are both splits.
         let root = self.workspace(workspace)?.root;
-        let mut events: Vec<MuxEvent> = Vec::new();
-        let mut split_ids: Vec<SplitId> = Vec::new();
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            match node {
-                NodeId::Split(s) => {
-                    let split = &self.splits[s];
-                    stack.push(split.second);
-                    stack.push(split.first);
-                    split_ids.push(s);
-                }
-                NodeId::Pane(p) => {
-                    let surfaces = self.panes[p].surfaces.clone();
-                    events.push(MuxEvent::PaneClosed { pane: p });
-                    for surface in surfaces {
-                        events.push(MuxEvent::SurfaceClosed { surface });
-                        self.surfaces.remove(surface);
-                    }
-                    self.panes.remove(p);
-                }
-            }
-        }
-        for s in split_ids {
-            self.splits.remove(s);
-        }
-        self.workspaces.remove(workspace);
-        let sess = &mut self.sessions[session];
-        sess.workspaces.retain(|w| *w != workspace);
+        let session = self.active_session;
+        let was_active = self.sessions[session].active == workspace;
 
+        let mut events = self.cascade_destroy_subtree(root);
+        self.workspaces.remove(workspace);
+        self.sessions[session].workspaces.retain(|w| *w != workspace);
         events.push(MuxEvent::WorkspaceDestroyed { workspace });
 
-        let was_active = sess.active == workspace;
         if !was_active {
             return Ok(events);
         }
 
+        // The active workspace was destroyed: re-point the session to the
+        // previous workspace, or auto-create a replacement so the session is
+        // never left empty (the always-one-workspace invariant).
         if let Some(&remaining) = self.sessions[session].workspaces.last() {
             self.sessions[session].active = remaining;
             events.push(MuxEvent::WorkspaceSelected {
                 session,
                 workspace: remaining,
             });
+            Ok(events)
         } else {
-            // NOTE: The session must always have at least one workspace; auto-create
-            // when the last one is closed to keep the invariant without erroring.
-            let mut replacement = self.new_workspace()?;
+            let mut replacement = self.new_workspace(None)?;
             replacement.append(&mut events);
-            return Ok(replacement);
+            Ok(replacement)
         }
-        Ok(events)
     }
 
     /// Adds a surface to a pane without changing the active surface.
@@ -1165,6 +1129,47 @@ impl MultiPlexer {
                 NodeId::Split(s) => cur = self.splits[s].first,
             }
         }
+    }
+
+    /// Removes `pane` and all of its surfaces from the arena, returning
+    /// `[PaneClosed, SurfaceClosed*]`. Does NOT touch the layout tree (splits)
+    /// or the owning workspace — callers handle the structural relinking.
+    fn destroy_pane(&mut self, pane: PaneId) -> Vec<MuxEvent> {
+        let mut events = vec![MuxEvent::PaneClosed { pane }];
+        for surface in self.panes[pane].surfaces.clone() {
+            events.push(MuxEvent::SurfaceClosed { surface });
+            self.surfaces.remove(surface);
+        }
+        self.panes.remove(pane);
+        events
+    }
+
+    /// Destroys every split, pane, and surface in the subtree rooted at `root`,
+    /// returning `[PaneClosed, SurfaceClosed*]` per pane in DFS (left-first)
+    /// order.
+    ///
+    /// Walking the whole subtree (not just each leaf's parent split) is
+    /// required: removing only leaf parents would leak interior splits whose
+    /// two children are both splits.
+    fn cascade_destroy_subtree(&mut self, root: NodeId) -> Vec<MuxEvent> {
+        let mut events = Vec::new();
+        let mut split_ids = Vec::new();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            match node {
+                NodeId::Split(s) => {
+                    let split = &self.splits[s];
+                    stack.push(split.second);
+                    stack.push(split.first);
+                    split_ids.push(s);
+                }
+                NodeId::Pane(p) => events.extend(self.destroy_pane(p)),
+            }
+        }
+        for s in split_ids {
+            self.splits.remove(s);
+        }
+        events
     }
 
     fn node_cell_extent(&self, node: NodeId) -> (u16, u16) {
@@ -2282,7 +2287,7 @@ mod tests {
     #[test]
     fn create_workspace_spawns_root_pane_surface_tree() {
         let mut mux = MultiPlexer::new();
-        let events = mux.new_workspace().unwrap();
+        let events = mux.new_workspace(None).unwrap();
 
         let (session, workspace) = match events[0] {
             MuxEvent::WorkspaceCreated {
@@ -2343,7 +2348,7 @@ mod tests {
     fn close_workspace_despawns_workspace_and_descendants() {
         let mut mux = MultiPlexer::new();
         let first_ws = mux.active_workspace();
-        let evs = mux.new_workspace().unwrap();
+        let evs = mux.new_workspace(None).unwrap();
         let second_ws = match evs[0] {
             MuxEvent::WorkspaceCreated { workspace, .. } => workspace,
             _ => panic!("WorkspaceCreated expected"),
@@ -2380,7 +2385,7 @@ mod tests {
     #[test]
     fn close_workspace_frees_interior_splits() {
         let mut mux = MultiPlexer::new();
-        mux.new_workspace().unwrap();
+        mux.new_workspace(None).unwrap();
         let ws1 = mux.active_workspace();
         let p1 = mux.active_pane(ws1).unwrap();
         // Build SplitA(SplitB(p1, p1b), SplitC(p2, p2b)) — SplitA is interior
@@ -2430,7 +2435,7 @@ mod tests {
     fn select_workspace_changes_active_and_is_changed_only() {
         let mut mux = MultiPlexer::new();
         let first_ws = mux.active_workspace();
-        let evs = mux.new_workspace().unwrap();
+        let evs = mux.new_workspace(None).unwrap();
         let second_ws = match evs[0] {
             MuxEvent::WorkspaceCreated { workspace, .. } => workspace,
             _ => panic!("WorkspaceCreated expected"),
@@ -2821,7 +2826,9 @@ mod tests {
         let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
-        let spawn = mux.spawn_surface(pane, SurfaceKind::Terminal, None).unwrap();
+        let spawn = mux
+            .spawn_surface(pane, SurfaceKind::Terminal, None)
+            .unwrap();
         let new_surface = match spawn[0] {
             MuxEvent::SurfaceSpawned { surface, .. } => surface,
             _ => panic!("first event must be SurfaceSpawned"),
@@ -2829,7 +2836,10 @@ mod tests {
         let events = mux.set_active_surface_by_surface(new_surface).unwrap();
         assert_eq!(
             events,
-            vec![MuxEvent::ActiveSurfaceChanged { pane, surface: new_surface }]
+            vec![MuxEvent::ActiveSurfaceChanged {
+                pane,
+                surface: new_surface
+            }]
         );
         assert_eq!(mux.active_surface(pane).unwrap(), new_surface);
     }
