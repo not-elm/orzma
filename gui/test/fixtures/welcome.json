@@ -1,0 +1,105 @@
+{
+  "Welcome": {
+    "snapshot": {
+      "session": {
+        "idx": 1,
+        "version": 1
+      },
+      "active_workspace": {
+        "idx": 1,
+        "version": 1
+      },
+      "workspaces": [
+        {
+          "workspace": {
+            "idx": 1,
+            "version": 1
+          },
+          "name": "0",
+          "layout": {
+            "Split": {
+              "id": {
+                "idx": 1,
+                "version": 1
+              },
+              "orientation": "Horizontal",
+              "ratio": 0.5,
+              "first": {
+                "Pane": {
+                  "id": {
+                    "idx": 1,
+                    "version": 1
+                  },
+                  "surface_kind": "Terminal",
+                  "cols": 60,
+                  "rows": 40
+                }
+              },
+              "second": {
+                "Pane": {
+                  "id": {
+                    "idx": 2,
+                    "version": 1
+                  },
+                  "surface_kind": "Terminal",
+                  "cols": 60,
+                  "rows": 40
+                }
+              }
+            }
+          },
+          "size": [
+            120,
+            40
+          ],
+          "active_pane": {
+            "idx": 2,
+            "version": 1
+          },
+          "panes": [
+            {
+              "pane": {
+                "idx": 1,
+                "version": 1
+              },
+              "surfaces": [
+                {
+                  "surface": {
+                    "idx": 1,
+                    "version": 1
+                  },
+                  "kind": "Terminal",
+                  "cwd": ""
+                }
+              ],
+              "active_surface": {
+                "idx": 1,
+                "version": 1
+              }
+            },
+            {
+              "pane": {
+                "idx": 2,
+                "version": 1
+              },
+              "surfaces": [
+                {
+                  "surface": {
+                    "idx": 2,
+                    "version": 1
+                  },
+                  "kind": "Terminal",
+                  "cwd": ""
+                }
+              ],
+              "active_surface": {
+                "idx": 2,
+                "version": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
