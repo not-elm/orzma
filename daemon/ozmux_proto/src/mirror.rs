@@ -439,7 +439,7 @@ mod tests {
     use super::*;
     use crate::codec::{read_message, write_message};
     use crate::message::ServerMessage;
-    use ozmux_mux::{MultiPlexer, PaneDirection, Side, SplitOrientation, SurfaceKind, SwapOffset};
+    use ozmux_mux::{Multiplexer, PaneDirection, Side, SplitOrientation, SurfaceKind, SwapOffset};
     use std::io::Cursor;
 
     fn id_key<T: serde::Serialize>(id: &T) -> String {
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn snapshot_plus_events_reconstructs_mux() {
-        let mut mux = MultiPlexer::new();
+        let mut mux = Multiplexer::new();
         let session = mux.sessions()[0];
 
         let ws0 = mux.active_workspace();
@@ -576,7 +576,7 @@ mod tests {
         // NOT: a nested-split `LayoutChanged` collapse (replace_node recursion +
         // prune_panes dropping the closed pane) and a collapse-to-root
         // `WorkspaceRootChanged`.
-        let mut mux = MultiPlexer::new();
+        let mut mux = Multiplexer::new();
         let session = mux.sessions()[0];
         let ws0 = mux.active_workspace();
         mux.set_workspace_size(ws0, 120, 40).unwrap();
@@ -634,7 +634,7 @@ mod tests {
         // Fix 1: new_workspace root-pane layout not established.
         // Fix 2: workspace size not on the wire.
         // Fix 3: break_surface_to_pane LayoutChanged subtree has stale surface_kind.
-        let mut mux = MultiPlexer::new();
+        let mut mux = Multiplexer::new();
         let session = mux.sessions()[0];
 
         let ws0 = mux.active_workspace();
@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn welcome_codec_round_trip() {
-        let mut mux = MultiPlexer::new();
+        let mut mux = Multiplexer::new();
         let session = mux.sessions()[0];
         let ws = mux.active_workspace();
         mux.set_workspace_size(ws, 80, 24).unwrap();
@@ -775,7 +775,7 @@ mod tests {
         // Swap p2 with its Next neighbor p1 — a cross-parent swap.
         // apply_events must keep all three PaneSnapshots and match the
         // authoritative post-swap Mux snapshot.
-        let mut mux = MultiPlexer::new();
+        let mut mux = Multiplexer::new();
         let session = mux.sessions()[0];
         let ws0 = mux.active_workspace();
         mux.set_workspace_size(ws0, 120, 40).unwrap();
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn workspace_layout_and_root_getters_work() {
-        let mux = MultiPlexer::new();
+        let mux = Multiplexer::new();
         let session = mux.sessions()[0];
         let snap = mux.snapshot(session).unwrap();
         let ws = snap.workspaces[0].workspace;

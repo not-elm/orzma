@@ -154,12 +154,12 @@ impl<W: Write> Drop for Client<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_mux::MultiPlexer;
+    use ozmux_mux::Multiplexer;
     use std::io::{BufReader, Cursor};
 
     #[test]
     fn connect_builds_mirror_from_welcome() {
-        let mux = MultiPlexer::new();
+        let mux = Multiplexer::new();
         let session = mux.sessions()[0];
         let snapshot = mux.snapshot(session).unwrap();
 
@@ -183,14 +183,10 @@ mod tests {
     fn drop_invokes_the_shutdown_hook() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
-        let mux = MultiPlexer::new();
+        let mux = Multiplexer::new();
         let snapshot = mux.snapshot(mux.sessions()[0]).unwrap();
         let mut server_bytes = Vec::new();
-        write_message(
-            &mut server_bytes,
-            &ServerMessage::Welcome { snapshot },
-        )
-        .unwrap();
+        write_message(&mut server_bytes, &ServerMessage::Welcome { snapshot }).unwrap();
         let reader = BufReader::new(Cursor::new(server_bytes));
         let flag = Arc::new(AtomicBool::new(false));
         let f = flag.clone();
@@ -209,14 +205,10 @@ mod tests {
 
     #[test]
     fn try_poll_reports_disconnect_as_err_not_empty() {
-        let mux = MultiPlexer::new();
+        let mux = Multiplexer::new();
         let snapshot = mux.snapshot(mux.sessions()[0]).unwrap();
         let mut server_bytes = Vec::new();
-        write_message(
-            &mut server_bytes,
-            &ServerMessage::Welcome { snapshot },
-        )
-        .unwrap();
+        write_message(&mut server_bytes, &ServerMessage::Welcome { snapshot }).unwrap();
         // Cursor EOFs immediately after Welcome → the reader thread reads Ok(None)
         // and exits, dropping the channel sender.
         let reader = BufReader::new(Cursor::new(server_bytes));

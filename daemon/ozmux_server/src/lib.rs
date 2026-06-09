@@ -2,13 +2,13 @@
 //! fans `MuxEvent`s to every attached client over a length-prefixed
 //! UDS/NamedPipe wire. One task per connection.
 
-use bytes::Bytes;
 use crate::terminal::{DriverCommand, TerminalRegistry};
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use interprocess::local_socket::tokio::Listener;
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
-use ozmux_mux::{MultiPlexer, MuxEvent, MuxResult, SurfaceKind};
+use ozmux_mux::{Multiplexer, MuxEvent, MuxResult, SurfaceKind};
 use ozmux_proto::{ClientMessage, CopyModeOp, MAX_MESSAGE_BYTES, ServerMessage};
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -38,7 +38,7 @@ const DEFAULT_TERMINAL_SIZE: (u16, u16) = (80, 24);
 const DRIVER_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 struct ServerState {
-    multiplexer: Mutex<MultiPlexer>,
+    multiplexer: Mutex<Multiplexer>,
     events_tx: broadcast::Sender<ServerMessage>,
     shutdown: Notify,
     terminals: TerminalRegistry,
@@ -59,7 +59,7 @@ impl OzmuxServer {
         let listener = ListenerOptions::new().name(name).create_tokio()?;
         let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let state = Arc::new(ServerState {
-            multiplexer: Mutex::new(MultiPlexer::default()),
+            multiplexer: Mutex::new(Multiplexer::default()),
             events_tx,
             shutdown: Notify::new(),
             terminals: TerminalRegistry::new(),
@@ -111,7 +111,12 @@ async fn write_to_client<W: AsyncWrite + Unpin>(
     framed_write: &mut FramedWrite<W, LengthDelimitedCodec>,
     msg: &ServerMessage,
 ) -> anyhow::Result<bool> {
-    match tokio::time::timeout(CLIENT_WRITE_TIMEOUT, write_server_message(framed_write, msg)).await {
+    match tokio::time::timeout(
+        CLIENT_WRITE_TIMEOUT,
+        write_server_message(framed_write, msg),
+    )
+    .await
+    {
         Ok(result) => result.map(|()| true),
         Err(_elapsed) => Ok(false),
     }
@@ -130,7 +135,11 @@ async fn handle_client(
         let events_rx = state.events_tx.subscribe();
         let snapshot = mux.snapshot(mux.active_session())?;
         let term_surfaces = terminal_surfaces(&snapshot);
-        (events_rx, ServerMessage::Welcome { snapshot }, term_surfaces)
+        (
+            events_rx,
+            ServerMessage::Welcome { snapshot },
+            term_surfaces,
+        )
     };
     if !write_to_client(&mut framed_write, &welcome).await? {
         return Ok(());
@@ -284,10 +293,13 @@ async fn dispatch<W: AsyncWrite + Unpin>(
         ClientMessage::CopyMode { surface, op } => {
             if matches!(op, CopyModeOp::CopySelection) {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                if state
-                    .terminals
-                    .route(surface, DriverCommand::CopyMode { op, reply: Some(tx) })
-                {
+                if state.terminals.route(
+                    surface,
+                    DriverCommand::CopyMode {
+                        op,
+                        reply: Some(tx),
+                    },
+                ) {
                     // NOTE: bound the wait — a wedged or already-gone driver never replies.
                     if let Ok(Ok(text)) = tokio::time::timeout(DRIVER_REPLY_TIMEOUT, rx).await {
                         write_server_message(
@@ -313,27 +325,36 @@ async fn dispatch<W: AsyncWrite + Unpin>(
 /// surfaces and resizes panes (order-independent; done before the broadcast).
 fn reconcile_before_broadcast(
     state: &ServerState,
-    mux: &MultiPlexer,
+    mux: &Multiplexer,
     events: &[MuxEvent],
 ) -> Vec<crate::terminal::DriverSeed> {
     let mut seeds = Vec::new();
     for event in events {
         match event {
             MuxEvent::PaneCreated { pane, surfaces, .. } => {
-                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
+                let (cols, rows) = mux
+                    .resolved_pane_size(*pane)
+                    .unwrap_or(DEFAULT_TERMINAL_SIZE);
                 for entry in surfaces {
                     if entry.kind == SurfaceKind::Terminal
                         && let Some(seed) =
-                            state.terminals.reserve(entry.surface, cols, rows, entry.cwd.clone())
+                            state
+                                .terminals
+                                .reserve(entry.surface, cols, rows, entry.cwd.clone())
                     {
                         seeds.push(seed);
                     }
                 }
             }
-            MuxEvent::SurfaceSpawned { pane, surface, kind, cwd }
-                if *kind == SurfaceKind::Terminal =>
-            {
-                let (cols, rows) = mux.resolved_pane_size(*pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
+            MuxEvent::SurfaceSpawned {
+                pane,
+                surface,
+                kind,
+                cwd,
+            } if *kind == SurfaceKind::Terminal => {
+                let (cols, rows) = mux
+                    .resolved_pane_size(*pane)
+                    .unwrap_or(DEFAULT_TERMINAL_SIZE);
                 if let Some(seed) = state.terminals.reserve(*surface, cols, rows, cwd.clone()) {
                     seeds.push(seed);
                 }
@@ -342,9 +363,13 @@ fn reconcile_before_broadcast(
             MuxEvent::PaneResized { pane, cols, rows } => {
                 if let Ok(surfaces) = mux.surfaces(*pane) {
                     for surface in surfaces {
-                        state
-                            .terminals
-                            .route(surface, DriverCommand::Resize { cols: *cols, rows: *rows });
+                        state.terminals.route(
+                            surface,
+                            DriverCommand::Resize {
+                                cols: *cols,
+                                rows: *rows,
+                            },
+                        );
                     }
                 }
             }
@@ -364,11 +389,15 @@ async fn seed_initial_terminals(state: &Arc<ServerState>) {
     let mut seeds = Vec::new();
     for ws in &snapshot.workspaces {
         for pane in &ws.panes {
-            let (cols, rows) = mux.resolved_pane_size(pane.pane).unwrap_or(DEFAULT_TERMINAL_SIZE);
+            let (cols, rows) = mux
+                .resolved_pane_size(pane.pane)
+                .unwrap_or(DEFAULT_TERMINAL_SIZE);
             for surf in &pane.surfaces {
                 if surf.kind == SurfaceKind::Terminal
                     && let Some(seed) =
-                        state.terminals.reserve(surf.surface, cols, rows, surf.cwd.clone())
+                        state
+                            .terminals
+                            .reserve(surf.surface, cols, rows, surf.cwd.clone())
                 {
                     seeds.push(seed);
                 }
@@ -403,7 +432,7 @@ async fn apply<W, F>(
 ) -> anyhow::Result<()>
 where
     W: AsyncWrite + Unpin,
-    F: FnOnce(&mut MultiPlexer) -> MuxResult<Vec<MuxEvent>>,
+    F: FnOnce(&mut Multiplexer) -> MuxResult<Vec<MuxEvent>>,
 {
     // NOTE: the broadcast send MUST stay inside this lock scope — publishing the
     // events while the mutating command still holds the mux lock is the
