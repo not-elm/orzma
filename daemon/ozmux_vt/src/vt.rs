@@ -61,6 +61,49 @@ pub struct ViIndicatorSnapshot {
     pub history_size: usize,
 }
 
+/// Alacritty-free vi-motion selector for cross-crate callers (the daemon's
+/// copy-mode adapter), mirroring the subset the GUI emits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VtMotion {
+    /// Move left one cell.
+    Left,
+    /// Move right one cell.
+    Right,
+    /// Move up one line.
+    Up,
+    /// Move down one line.
+    Down,
+    /// Jump to the first column of the (logical) line.
+    First,
+    /// Jump to the last occupied column of the (logical) line.
+    Last,
+    /// Jump to the first non-empty cell of the line.
+    FirstOccupied,
+    /// Move to the top visible row.
+    High,
+    /// Move to the bottom visible row.
+    Low,
+    /// Move to the start of the next whitespace-separated word.
+    WordRight,
+    /// Move to the start of the previous whitespace-separated word.
+    WordLeft,
+    /// Move to the end of the current whitespace-separated word.
+    WordRightEnd,
+}
+
+/// Alacritty-free selection-type selector for cross-crate callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VtSelection {
+    /// Character-granularity selection.
+    Simple,
+    /// Rectangular block selection.
+    Block,
+    /// Full-line selection.
+    Lines,
+    /// Semantically-separated word selection.
+    Semantic,
+}
+
 /// Inner `Dimensions` impl exposed to `Term::new` / `Term::resize`.
 ///
 /// Alacritty's own `TermSize` is `pub(crate)` so we provide a minimal
@@ -509,6 +552,61 @@ impl Vt {
         true
     }
 
+    /// Drives `vi_motion` from an alacritty-free selector.
+    pub fn vi_motion_kind(&mut self, motion: VtMotion) {
+        use alacritty_terminal::vi_mode::ViMotion as M;
+        let m = match motion {
+            VtMotion::Left => M::Left,
+            VtMotion::Right => M::Right,
+            VtMotion::Up => M::Up,
+            VtMotion::Down => M::Down,
+            VtMotion::First => M::First,
+            VtMotion::Last => M::Last,
+            VtMotion::FirstOccupied => M::FirstOccupied,
+            VtMotion::High => M::High,
+            VtMotion::Low => M::Low,
+            VtMotion::WordRight => M::WordRight,
+            VtMotion::WordLeft => M::WordLeft,
+            VtMotion::WordRightEnd => M::WordRightEnd,
+        };
+        self.vi_motion(m);
+    }
+
+    /// Places the vi cursor at a viewport point (0-based row/col) without
+    /// exposing alacritty's `Point` to callers.
+    pub fn vi_goto_view(&mut self, line: i32, col: usize) {
+        use alacritty_terminal::index::{Column, Line, Point};
+        self.vi_goto(Point::new(Line(line), Column(col)));
+    }
+
+    /// Starts a selection of `ty` at a viewport point; `side_right` chooses
+    /// the right half of the cell.
+    pub fn selection_start_at_view(&mut self, line: i32, col: usize, side_right: bool, ty: VtSelection) {
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        let point = Point::new(Line(line), Column(col));
+        let side = if side_right { Side::Right } else { Side::Left };
+        self.selection_start_at(point, side, vt_selection_to_alacritty(ty));
+    }
+
+    /// Extends the active selection to a viewport point.
+    pub fn selection_update_to_view(&mut self, line: i32, col: usize, side_right: bool) {
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        let point = Point::new(Line(line), Column(col));
+        let side = if side_right { Side::Right } else { Side::Left };
+        self.selection_update_to(point, side);
+    }
+
+    /// Starts a selection of `ty` at the current vi cursor.
+    pub fn selection_start_kind(&mut self, ty: VtSelection) {
+        self.selection_start(vt_selection_to_alacritty(ty));
+    }
+
+    /// Switches the active selection's type, preserving the anchor. Returns
+    /// `false` when no selection is active.
+    pub fn selection_change_type_kind(&mut self, ty: VtSelection) -> bool {
+        self.selection_change_type(vt_selection_to_alacritty(ty))
+    }
+
     /// Reads the current cols / rows / cursor.
     pub fn read_geometry(&self) -> (u16, u16, Cursor) {
         let cols = self.term.columns() as u16;
@@ -829,6 +927,16 @@ fn hash_row<T>(term: &Term<T>, line: Line, cursor: &Cursor, viewport_y: u16) -> 
         cursor.blinking.hash(&mut h);
     }
     h.finish()
+}
+
+fn vt_selection_to_alacritty(ty: VtSelection) -> alacritty_terminal::selection::SelectionType {
+    use alacritty_terminal::selection::SelectionType as S;
+    match ty {
+        VtSelection::Simple => S::Simple,
+        VtSelection::Block => S::Block,
+        VtSelection::Lines => S::Lines,
+        VtSelection::Semantic => S::Semantic,
+    }
 }
 
 fn hash_acolor(c: &AColor, h: &mut DefaultHasher) {
@@ -1295,6 +1403,35 @@ mod tests {
             matches!(f, Frame::Delta(_)),
             "force_snapshot must leave the delta base intact, got a {f:?}"
         );
+    }
+
+    #[test]
+    fn vi_motion_kind_down_advances_like_alacritty_down() {
+        let mut vt = Vt::new(10, 5);
+        vt.enter_vi_mode();
+        let before = vt.term.vi_mode_cursor.point.line.0;
+        vt.vi_motion_kind(VtMotion::Down);
+        let after = vt.term.vi_mode_cursor.point.line.0;
+        assert_eq!(after, before + 1, "VtMotion::Down must advance one line");
+    }
+
+    #[test]
+    fn selection_start_at_view_creates_selection_via_neutral_api() {
+        let mut vt = Vt::new(80, 24);
+        vt.selection_start_at_view(5, 10, false, VtSelection::Simple);
+        assert_eq!(vt.selection_type(), Some(alacritty_terminal::selection::SelectionType::Simple));
+        assert!(vt.selection_to_string().is_some());
+    }
+
+    #[test]
+    fn selection_start_kind_lines_sets_lines_type() {
+        let mut vt = Vt::new(10, 3);
+        vt.enter_vi_mode();
+        vt.selection_start_kind(VtSelection::Lines);
+        assert!(matches!(
+            vt.selection_type(),
+            Some(alacritty_terminal::selection::SelectionType::Lines)
+        ));
     }
 
     #[test]
