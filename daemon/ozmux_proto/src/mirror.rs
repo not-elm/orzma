@@ -509,7 +509,7 @@ mod tests {
         let mut delta_events: Vec<MuxEvent> = Vec::new();
 
         // new_workspace → creates ws1.
-        let nw_evs = mux.new_workspace().unwrap();
+        let nw_evs = mux.new_workspace(None).unwrap();
         let ws1 = match &nw_evs[0] {
             MuxEvent::WorkspaceCreated { workspace, .. } => *workspace,
             _ => panic!("expected WorkspaceCreated"),
@@ -654,7 +654,7 @@ mod tests {
         let mut delta_events: Vec<MuxEvent> = Vec::new();
 
         // Fix 1: new_workspace creates ws1 post-snapshot.
-        let nw_evs = mux.new_workspace().unwrap();
+        let nw_evs = mux.new_workspace(None).unwrap();
         let ws1 = match &nw_evs[0] {
             MuxEvent::WorkspaceCreated { workspace, .. } => *workspace,
             _ => panic!("expected WorkspaceCreated"),

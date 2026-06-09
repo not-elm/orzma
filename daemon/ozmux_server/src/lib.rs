@@ -195,7 +195,7 @@ async fn dispatch<W: AsyncWrite + Unpin>(
             .await
         }
         ClientMessage::CreateWorkspace { name } => {
-            apply(framed_write, state, |m| create_workspace(m, name)).await
+            apply(framed_write, state, |m| m.new_workspace(name)).await
         }
         ClientMessage::Health => Ok(()),
         // NOTE: Shutdown is intercepted in handle_client before dispatch runs;
@@ -246,21 +246,4 @@ where
         write_server_message(framed_write, &ServerMessage::Error { message }).await?;
     }
     Ok(())
-}
-
-fn create_workspace(mux: &mut MultiPlexer, name: Option<String>) -> MuxResult<Vec<MuxEvent>> {
-    let mut events = mux.new_workspace()?;
-    // NOTE: the workspace already exists after `new_workspace`; the rename is
-    // best-effort so a rename failure can never discard the `new_workspace`
-    // events (which would advance mux state without ever broadcasting it).
-    if let Some(name) = name
-        && let Some(workspace) = events.iter().find_map(|event| match event {
-            MuxEvent::WorkspaceCreated { workspace, .. } => Some(*workspace),
-            _ => None,
-        })
-        && let Ok(rename_events) = mux.rename_workspace(workspace, name)
-    {
-        events.extend(rename_events);
-    }
-    Ok(events)
 }

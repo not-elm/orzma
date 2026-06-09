@@ -544,10 +544,11 @@ impl MultiPlexer {
     }
 
     /// Creates a workspace in the active session, seeding one terminal pane and
-    /// surface. Makes the new workspace active.
+    /// surface. Makes the new workspace active. `name` overrides the default
+    /// monotonic name when `Some`, applied atomically at creation.
     ///
     /// Returns `[WorkspaceCreated, PaneCreated, WorkspaceSelected, ActivePaneChanged]`.
-    pub fn new_workspace(&mut self) -> MuxResult<Vec<MuxEvent>> {
+    pub fn new_workspace(&mut self, name: Option<String>) -> MuxResult<Vec<MuxEvent>> {
         let session = self.active_session;
         let surface = self.surfaces.insert(Surface {
             kind: SurfaceKind::Terminal,
@@ -560,10 +561,11 @@ impl MultiPlexer {
         });
         let created_at = self.name_counter;
         self.name_counter += 1;
+        let name = name.unwrap_or_else(|| format!("{created_at}"));
         let workspace = self.workspaces.insert(Workspace {
             root: NodeId::Pane(pane),
             active_pane: pane,
-            name: format!("{created_at}"),
+            name: name.clone(),
             created_at,
             size: None,
         });
@@ -573,7 +575,7 @@ impl MultiPlexer {
             MuxEvent::WorkspaceCreated {
                 session,
                 workspace,
-                name: format!("{created_at}"),
+                name,
             },
             MuxEvent::PaneCreated {
                 pane,
@@ -678,7 +680,7 @@ impl MultiPlexer {
         } else {
             // NOTE: The session must always have at least one workspace; auto-create
             // when the last one is closed to keep the invariant without erroring.
-            let mut replacement = self.new_workspace()?;
+            let mut replacement = self.new_workspace(None)?;
             replacement.append(&mut events);
             return Ok(replacement);
         }
@@ -2282,7 +2284,7 @@ mod tests {
     #[test]
     fn create_workspace_spawns_root_pane_surface_tree() {
         let mut mux = MultiPlexer::new();
-        let events = mux.new_workspace().unwrap();
+        let events = mux.new_workspace(None).unwrap();
 
         let (session, workspace) = match events[0] {
             MuxEvent::WorkspaceCreated {
@@ -2343,7 +2345,7 @@ mod tests {
     fn close_workspace_despawns_workspace_and_descendants() {
         let mut mux = MultiPlexer::new();
         let first_ws = mux.active_workspace();
-        let evs = mux.new_workspace().unwrap();
+        let evs = mux.new_workspace(None).unwrap();
         let second_ws = match evs[0] {
             MuxEvent::WorkspaceCreated { workspace, .. } => workspace,
             _ => panic!("WorkspaceCreated expected"),
@@ -2380,7 +2382,7 @@ mod tests {
     #[test]
     fn close_workspace_frees_interior_splits() {
         let mut mux = MultiPlexer::new();
-        mux.new_workspace().unwrap();
+        mux.new_workspace(None).unwrap();
         let ws1 = mux.active_workspace();
         let p1 = mux.active_pane(ws1).unwrap();
         // Build SplitA(SplitB(p1, p1b), SplitC(p2, p2b)) — SplitA is interior
@@ -2430,7 +2432,7 @@ mod tests {
     fn select_workspace_changes_active_and_is_changed_only() {
         let mut mux = MultiPlexer::new();
         let first_ws = mux.active_workspace();
-        let evs = mux.new_workspace().unwrap();
+        let evs = mux.new_workspace(None).unwrap();
         let second_ws = match evs[0] {
             MuxEvent::WorkspaceCreated { workspace, .. } => workspace,
             _ => panic!("WorkspaceCreated expected"),
@@ -2821,7 +2823,9 @@ mod tests {
         let mut mux = MultiPlexer::new();
         let ws = mux.active_workspace();
         let pane = mux.active_pane(ws).unwrap();
-        let spawn = mux.spawn_surface(pane, SurfaceKind::Terminal, None).unwrap();
+        let spawn = mux
+            .spawn_surface(pane, SurfaceKind::Terminal, None)
+            .unwrap();
         let new_surface = match spawn[0] {
             MuxEvent::SurfaceSpawned { surface, .. } => surface,
             _ => panic!("first event must be SurfaceSpawned"),
@@ -2829,7 +2833,10 @@ mod tests {
         let events = mux.set_active_surface_by_surface(new_surface).unwrap();
         assert_eq!(
             events,
-            vec![MuxEvent::ActiveSurfaceChanged { pane, surface: new_surface }]
+            vec![MuxEvent::ActiveSurfaceChanged {
+                pane,
+                surface: new_surface
+            }]
         );
         assert_eq!(mux.active_surface(pane).unwrap(), new_surface);
     }

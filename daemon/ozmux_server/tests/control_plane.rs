@@ -220,7 +220,7 @@ async fn input_is_rejected_with_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn create_workspace_broadcasts_created_and_renamed() {
+async fn create_workspace_broadcasts_created_with_name() {
     let (name, _server) = spawn_server();
     let (mut reader, mut writer) = connect_client(&name).await;
     let _welcome = recv(&mut reader).await;
@@ -234,14 +234,16 @@ async fn create_workspace_broadcasts_created_and_renamed() {
     match recv(&mut reader).await {
         ServerMessage::Events(events) => {
             assert!(
-                events
-                    .iter()
-                    .any(|e| matches!(e, MuxEvent::WorkspaceCreated { .. }))
+                events.iter().any(
+                    |e| matches!(e, MuxEvent::WorkspaceCreated { name, .. } if name == "proj")
+                ),
+                "the requested name arrives atomically on WorkspaceCreated"
             );
             assert!(
-                events.iter().any(
-                    |e| matches!(e, MuxEvent::WorkspaceRenamed { name, .. } if name == "proj")
-                )
+                !events
+                    .iter()
+                    .any(|e| matches!(e, MuxEvent::WorkspaceRenamed { .. })),
+                "naming is atomic at creation; no separate rename event"
             );
         }
         other => panic!("expected Events, got {other:?}"),
