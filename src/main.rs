@@ -10,6 +10,7 @@ mod extension_render;
 mod font;
 mod input;
 mod multiplexer;
+mod osc_webview;
 mod system_set;
 mod theme;
 mod ui;
@@ -19,6 +20,7 @@ use crate::browser_render::OzmuxBrowserRenderPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::extension_manager::ExtensionManagerPlugin;
 use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
+use crate::osc_webview::OzmuxOscWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
@@ -76,6 +78,7 @@ fn main() {
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
+            OzmuxOscWebviewPlugin,
             ExtensionManagerPlugin::new(endpoints),
             OzmuxActionPlugin,
         ))

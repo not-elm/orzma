@@ -6,6 +6,7 @@
 //! system does not retry on subsequent frames.
 
 use crate::extension_manager::ExtensionRegistry;
+use crate::osc_webview::OscWebviewGate;
 use crate::system_set::OzmuxSystems;
 use crate::ui::{TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
@@ -13,9 +14,9 @@ use bevy::ui::UiSystems;
 use bevy_terminal::{
     Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle,
 };
-use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
+use bevy_terminal_renderer::TerminalCellMetricsResource;
 use ozmux_extension_host::terminal_env;
 use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneMarker, SurfaceOf};
 
@@ -66,6 +67,7 @@ fn finish_terminal_setup(
     pane_workspaces: Query<&OwningWorkspace, With<PaneMarker>>,
     registry: Option<Res<ExtensionRegistry>>,
     cwds: Query<&Cwd>,
+    gate: Option<Res<OscWebviewGate>>,
 ) {
     for surface in surfaces.iter() {
         let mut env = match registry.as_ref() {
@@ -80,13 +82,17 @@ fn finish_terminal_setup(
         };
         env.push(("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string()));
         let seed = cwds.get(surface).ok().map(|c| c.0.clone());
+        let osc_gate = gate
+            .as_ref()
+            .map(|g| g.0.clone())
+            .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
         let opts = SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
             cwd: Some(resolve_spawn_cwd(seed)),
             env,
-            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            osc_webview_gate: osc_gate,
         };
         let bundle = match TerminalBundle::spawn(opts) {
             Ok(b) => b,
