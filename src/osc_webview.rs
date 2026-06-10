@@ -97,9 +97,16 @@ fn on_osc_webview_request(
                 so.0 == pane && view_id.as_ref().is_none_or(|v| m.view_id == *v)
             });
             if let Some((surface, m, _)) = target {
-                let origin = m.terminal_surface;
-                let _ = mux.set_active_surface(pane, origin);
-                let _ = mux.close_surface(pane, surface);
+                // NOTE: the origin terminal may already be despawned (its tab was
+                // closed while the webview tab was active). Only repoint to it when
+                // it is still a live surface; otherwise `close_surface` repoints to
+                // a surviving sibling, never leaving `ActiveSurface` dangling.
+                if surface_of.contains(m.terminal_surface) {
+                    let _ = mux.set_active_surface(pane, m.terminal_surface);
+                }
+                if let Err(e) = mux.close_surface(pane, surface) {
+                    tracing::warn!(?e, "osc-webview: unmount close_surface failed");
+                }
             }
         }
     }
@@ -236,6 +243,66 @@ mod tests {
             surface_count(&app, pane),
             1,
             "pane must return to a single surface after unmount"
+        );
+    }
+
+    #[test]
+    fn unmount_with_despawned_origin_falls_back_to_live_survivor() {
+        let mut app = make_test_app();
+        register_view(&mut app, "dash", true);
+
+        let (pane, origin) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.pane, o.surface)
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        // A second live terminal so a survivor exists after the origin is closed.
+        let survivor = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.add_surface(pane, SurfaceKind::Terminal)
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        app.world_mut().trigger(OscWebviewRequest {
+            entity: origin,
+            verb: OscWebviewVerb::Mount {
+                view_id: "dash".into(),
+            },
+        });
+        app.world_mut().flush();
+        let webview = active_surface(&app, pane).expect("webview active");
+
+        // The origin terminal tab is closed while the webview tab is showing.
+        app.world_mut().entity_mut(origin).despawn();
+        app.world_mut().flush();
+
+        // A surviving terminal in the same pane drives the unmount.
+        app.world_mut().trigger(OscWebviewRequest {
+            entity: survivor,
+            verb: OscWebviewVerb::Unmount { view_id: None },
+        });
+        app.world_mut().flush();
+        app.update();
+
+        assert!(
+            app.world().get_entity(webview).is_err(),
+            "unmount must despawn the webview surface"
+        );
+        assert_ne!(
+            active_surface(&app, pane),
+            Some(origin),
+            "must never repoint ActiveSurface to the despawned origin"
+        );
+        assert_eq!(
+            active_surface(&app, pane),
+            Some(survivor),
+            "active falls back to the live surviving surface"
         );
     }
 

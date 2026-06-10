@@ -54,9 +54,19 @@ impl Perform for OscWebviewCapture {
                 Some(view_id) => OscWebviewVerb::Mount { view_id },
                 None => return,
             },
-            Some(b"unmount") => OscWebviewVerb::Unmount {
-                view_id: params.get(2).copied().and_then(valid_view_id),
-            },
+            Some(b"unmount") => {
+                // NOTE: a present-but-invalid view-id is a malformed sequence, not
+                // an implicit "unmount any". Drop it; only an ABSENT third param
+                // means "unmount the pane's OSC webview".
+                let view_id = match params.get(2).copied() {
+                    Some(raw) => match valid_view_id(raw) {
+                        Some(v) => Some(v),
+                        None => return,
+                    },
+                    None => None,
+                };
+                OscWebviewVerb::Unmount { view_id }
+            }
             _ => return,
         };
         if let Err(e) = self.control_tx.send(ControlFrame::OscWebview(verb)) {
@@ -105,5 +115,42 @@ mod tests {
         let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
         cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"../etc/passwd"], true);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn unmount_without_view_id_targets_any() {
+        let (tx, rx) = unbounded();
+        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
+        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount"], true);
+        assert_eq!(
+            rx.try_recv(),
+            Ok(ControlFrame::OscWebview(OscWebviewVerb::Unmount {
+                view_id: None
+            }))
+        );
+    }
+
+    #[test]
+    fn unmount_with_valid_view_id_targets_it() {
+        let (tx, rx) = unbounded();
+        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
+        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"dash"], true);
+        assert_eq!(
+            rx.try_recv(),
+            Ok(ControlFrame::OscWebview(OscWebviewVerb::Unmount {
+                view_id: Some("dash".into())
+            }))
+        );
+    }
+
+    #[test]
+    fn unmount_with_invalid_view_id_dropped() {
+        let (tx, rx) = unbounded();
+        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
+        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"../etc/passwd"], true);
+        assert!(
+            rx.try_recv().is_err(),
+            "a present-but-invalid unmount view-id must drop, not unmount-any"
+        );
     }
 }
