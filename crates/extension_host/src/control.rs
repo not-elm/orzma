@@ -21,6 +21,8 @@ pub enum ControlOp {
     AddSurface(AddSurfaceParams),
     /// Make `surface_id` the invoking pane's active surface.
     Activate(ActivateParams),
+    /// Publish a named view into the `ViewRegistry` under the authenticated caller.
+    RegisterView(RegisterViewParams),
 }
 
 /// Parameters of a `split` control request.
@@ -46,6 +48,18 @@ pub struct AddSurfaceParams {
 pub struct ActivateParams {
     /// The SDK surface id (entity bits, decimal string) to activate.
     pub surface_id: String,
+}
+
+/// Parameters of a `register_view` control request.
+#[derive(Deserialize)]
+pub struct RegisterViewParams {
+    /// PTY-facing identifier used to reference this view from OSC sequences.
+    pub view_id: String,
+    /// HTML entry path relative to the owning extension dir (e.g. `dash.html`).
+    pub entry: String,
+    /// Whether the mounted webview accepts pointer/keyboard input.
+    #[serde(default)]
+    pub interactive: bool,
 }
 
 /// Protocol-side split side (mapped to `ozmux_multiplexer::Side` by the bridge).
@@ -123,6 +137,8 @@ pub enum ControlReply {
     AddSurface { new_surface_id: u64 },
     /// Activate succeeded (no payload).
     Activate,
+    /// Generic acknowledgement (no payload); used by ops that only write state.
+    Ok,
 }
 
 /// The bridge's verdict for a control request, sent back over the oneshot.
@@ -134,6 +150,7 @@ pub enum ControlResponse {
 }
 
 /// A control error (mapped to a wire `error` frame).
+#[derive(Debug)]
 pub struct ControlError {
     /// Stable error code (`pane_not_found` / `bad_request` / `internal`).
     pub code: String,
@@ -172,6 +189,11 @@ pub fn parse_call(line: &str) -> Result<(String, ControlRequest), ControlParseEr
             let params: ActivateParams = serde_json::from_value(raw.params)
                 .map_err(|e| ControlParseError::BadRequest(e.to_string()))?;
             ControlOp::Activate(params)
+        }
+        "register_view" => {
+            let params: RegisterViewParams = serde_json::from_value(raw.params)
+                .map_err(|e| ControlParseError::BadRequest(e.to_string()))?;
+            ControlOp::RegisterView(params)
         }
         other => {
             return Err(ControlParseError::BadRequest(format!(
@@ -226,6 +248,10 @@ pub fn encode_response(id: &str, resp: &ControlResponse) -> String {
             },
         },
         ControlResponse::Ok(ControlReply::Activate) => Wire::Result {
+            id,
+            payload: Payload::Empty {},
+        },
+        ControlResponse::Ok(ControlReply::Ok) => Wire::Result {
             id,
             payload: Payload::Empty {},
         },

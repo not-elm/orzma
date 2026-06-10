@@ -10,7 +10,8 @@ use bevy::prelude::*;
 use ozmux_configs::path::{SystemEnv, extensions_dir};
 use ozmux_extension_host::host::{EndpointRegistry, ExtensionEndpoints, LifecycleEvent};
 use ozmux_extension_host::{
-    CommandExtension, CommandExtensionConfig, ExtensionControlSet, Manifest, apply_control_request,
+    CommandExtension, CommandExtensionConfig, ExtensionControlSet, Manifest, ViewRegistry,
+    apply_control_request,
 };
 use ozmux_multiplexer::MultiplexerCommands;
 use std::collections::HashSet;
@@ -79,6 +80,7 @@ impl Plugin for ExtensionManagerPlugin {
             extensions,
             endpoints,
         });
+        app.init_resource::<ViewRegistry>();
         app.add_systems(
             Update,
             (
@@ -156,10 +158,14 @@ fn discover_extensions(roots: &[PathBuf]) -> Vec<DiscoveredExtension> {
     found
 }
 
-fn drain_all_control_requests(registry: Res<ExtensionRegistry>, mut mux: MultiplexerCommands) {
-    for ext in registry.extensions.values() {
+fn drain_all_control_requests(
+    mut view_registry: ResMut<ViewRegistry>,
+    registry: Res<ExtensionRegistry>,
+    mut mux: MultiplexerCommands,
+) {
+    for (name, ext) in registry.extensions.iter() {
         while let Ok((req, responder)) = ext.control_requests().try_recv() {
-            apply_control_request(&mut mux, req, responder);
+            apply_control_request(&mut mux, &mut view_registry, name, req, responder);
         }
     }
 }

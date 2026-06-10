@@ -15,6 +15,8 @@ export {
   type Orientation,
   Pane,
   type PaneId,
+  type RegisterViewArgs,
+  registerView,
   type Side,
   type SplitArgs,
   type SurfaceSpecInput,

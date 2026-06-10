@@ -5,9 +5,10 @@
 use crate::command::{CommandExtension, CommandExtensionConfig, Responder};
 use crate::control::{
     ActivateParams, AddSurfaceParams, ControlError, ControlOp, ControlOrientation, ControlReply,
-    ControlRequest, ControlResponse, ControlSide, SplitParams, SurfaceKindSpec,
+    ControlRequest, ControlResponse, ControlSide, RegisterViewParams, SplitParams, SurfaceKindSpec,
 };
 use crate::path_prefix::extension_path_prefix;
+use crate::registry::{RegisteredView, ViewRegistry};
 use bevy::prelude::*;
 use ozmux_multiplexer::{
     BrowserProfile, Cwd, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, Side,
@@ -17,7 +18,12 @@ use std::path::PathBuf;
 
 /// The launched command extension, owned by the app as a Resource.
 #[derive(Resource)]
-pub struct ControlExtension(pub CommandExtension);
+pub struct ControlExtension {
+    /// The extension's authenticated identity (the `name` field from its config).
+    pub name: String,
+    /// The running extension handle.
+    pub ext: CommandExtension,
+}
 
 /// System-set label for the control-bridge drain, so a consumer (`ozmux-gui`)
 /// can order its UI rebuild after it.
@@ -50,12 +56,14 @@ impl ExtensionControlPlugin {
 
 impl Plugin for ExtensionControlPlugin {
     fn build(&self, app: &mut App) {
+        let name = self.config.name.clone();
         match CommandExtension::spawn(self.config.clone()) {
             Ok(ext) => {
-                app.insert_resource(ControlExtension(ext));
+                app.insert_resource(ControlExtension { name, ext });
             }
             Err(e) => eprintln!("ozmux: failed to launch command extension: {e}"),
         }
+        app.init_resource::<ViewRegistry>();
         app.add_systems(
             Update,
             drain_control_requests
@@ -108,9 +116,13 @@ pub fn terminal_env(
     env
 }
 
-fn drain_control_requests(ext: Res<ControlExtension>, mut mux: MultiplexerCommands) {
-    while let Ok((req, responder)) = ext.0.control_requests().try_recv() {
-        apply_control_request(&mut mux, req, responder);
+fn drain_control_requests(
+    mut view_registry: ResMut<ViewRegistry>,
+    ext: Res<ControlExtension>,
+    mut mux: MultiplexerCommands,
+) {
+    while let Ok((req, responder)) = ext.ext.control_requests().try_recv() {
+        apply_control_request(&mut mux, &mut view_registry, &ext.name, req, responder);
     }
 }
 
@@ -118,8 +130,14 @@ fn drain_control_requests(ext: Res<ControlExtension>, mut mux: MultiplexerComman
 /// extension via `responder`. Shared by the single-extension
 /// `drain_control_requests` and the multi-extension manager's drain, so every
 /// extension's control socket applies ops through the same path.
+///
+/// `caller` is the authenticated extension identity (the key under which the
+/// extension is registered server-side) — it must never be taken from the
+/// request payload, which is attacker-controlled.
 pub fn apply_control_request(
     mux: &mut MultiplexerCommands,
+    view_registry: &mut ViewRegistry,
+    caller: &str,
     req: ControlRequest,
     responder: Responder,
 ) {
@@ -127,6 +145,7 @@ pub fn apply_control_request(
         ControlOp::Split(p) => handle_split(mux, req.pane_bits, p),
         ControlOp::AddSurface(p) => handle_add_surface(mux, req.pane_bits, p),
         ControlOp::Activate(p) => handle_activate(mux, req.pane_bits, p),
+        ControlOp::RegisterView(p) => handle_register_view(view_registry, caller, p),
     };
     let _ = responder.send(match resp {
         Ok(reply) => ControlResponse::Ok(reply),
@@ -235,6 +254,22 @@ fn handle_add_surface(
     Ok(ControlReply::AddSurface {
         new_surface_id: surface.to_bits(),
     })
+}
+
+fn handle_register_view(
+    registry: &mut ViewRegistry,
+    caller: &str,
+    p: RegisterViewParams,
+) -> Result<ControlReply, ControlError> {
+    registry.register(
+        p.view_id,
+        RegisteredView {
+            entry: p.entry,
+            owning_ext: caller.to_string(),
+            interactive: p.interactive,
+        },
+    );
+    Ok(ControlReply::Ok)
 }
 
 fn handle_activate(
@@ -347,8 +382,11 @@ mod tests {
         let mut resp_tx = Some(resp_tx);
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
+                let mut reg = ViewRegistry::default();
                 apply_control_request(
                     &mut mux,
+                    &mut reg,
+                    "test_caller",
                     browser_split_request(pane_bits),
                     resp_tx.take().unwrap(),
                 );
@@ -398,7 +436,14 @@ mod tests {
         let mut resp_tx = Some(resp_tx);
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply_control_request(&mut mux, split_request(pane_bits), resp_tx.take().unwrap());
+                let mut reg = ViewRegistry::default();
+                apply_control_request(
+                    &mut mux,
+                    &mut reg,
+                    "test_caller",
+                    split_request(pane_bits),
+                    resp_tx.take().unwrap(),
+                );
             })
             .unwrap();
         world.flush();
@@ -446,8 +491,11 @@ mod tests {
         let mut resp_tx = Some(resp_tx);
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
+                let mut reg = ViewRegistry::default();
                 apply_control_request(
                     &mut mux,
+                    &mut reg,
+                    "test_caller",
                     split_request(999_999_999),
                     resp_tx.take().unwrap(),
                 );
@@ -471,7 +519,14 @@ mod tests {
         let mut tx = Some(tx);
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply_control_request(&mut mux, add_surface_request(pane_bits), tx.take().unwrap());
+                let mut reg = ViewRegistry::default();
+                apply_control_request(
+                    &mut mux,
+                    &mut reg,
+                    "test_caller",
+                    add_surface_request(pane_bits),
+                    tx.take().unwrap(),
+                );
             })
             .unwrap();
         world.flush();
@@ -521,7 +576,14 @@ mod tests {
         });
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply_control_request(&mut mux, req.take().unwrap(), tx.take().unwrap());
+                let mut reg = ViewRegistry::default();
+                apply_control_request(
+                    &mut mux,
+                    &mut reg,
+                    "test_caller",
+                    req.take().unwrap(),
+                    tx.take().unwrap(),
+                );
             })
             .unwrap();
         world.flush();
@@ -564,7 +626,14 @@ mod tests {
         let mut req = Some(req);
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply_control_request(&mut mux, req.take().unwrap(), tx.take().unwrap());
+                let mut reg = ViewRegistry::default();
+                apply_control_request(
+                    &mut mux,
+                    &mut reg,
+                    "test_caller",
+                    req.take().unwrap(),
+                    tx.take().unwrap(),
+                );
             })
             .unwrap();
         world.flush();
@@ -625,7 +694,14 @@ mod tests {
         let mut req = Some(req);
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply_control_request(&mut mux, req.take().unwrap(), tx.take().unwrap());
+                let mut reg = ViewRegistry::default();
+                apply_control_request(
+                    &mut mux,
+                    &mut reg,
+                    "test_caller",
+                    req.take().unwrap(),
+                    tx.take().unwrap(),
+                );
             })
             .unwrap();
         world.flush();
@@ -683,7 +759,14 @@ mod tests {
         });
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                apply_control_request(&mut mux, req.take().unwrap(), tx.take().unwrap());
+                let mut reg = ViewRegistry::default();
+                apply_control_request(
+                    &mut mux,
+                    &mut reg,
+                    "test_caller",
+                    req.take().unwrap(),
+                    tx.take().unwrap(),
+                );
             })
             .unwrap();
         world.flush();
@@ -699,5 +782,21 @@ mod tests {
             active_before,
             "the foreign activate must not mutate the pane's ActiveSurface"
         );
+    }
+
+    #[test]
+    fn register_view_writes_registry_with_authenticated_owner() {
+        use crate::control::RegisterViewParams;
+        let mut reg = ViewRegistry::default();
+        let params = RegisterViewParams {
+            view_id: "dash".into(),
+            entry: "d.html".into(),
+            interactive: true,
+        };
+        handle_register_view(&mut reg, "memo", params).unwrap();
+        let v = reg.get("dash").unwrap();
+        assert_eq!(v.owning_ext, "memo");
+        assert_eq!(v.entry, "d.html");
+        assert!(v.interactive);
     }
 }
