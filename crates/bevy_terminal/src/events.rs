@@ -10,6 +10,7 @@
 //! `#[event_target] entity` field routes the trigger to the
 //! correct observer.
 
+use crate::vt::listener::OscWebviewVerb;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use std::path::PathBuf;
@@ -65,6 +66,15 @@ pub struct TerminalCurrentDir {
     #[event_target]
     pub entity: Entity,
     pub path: PathBuf,
+}
+
+/// An OSC-driven webview mount/unmount request from a terminal surface's PTY.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct OscWebviewRequest {
+    #[event_target]
+    pub entity: Entity,
+    /// The verb (mount or unmount) parsed from the OSC 5379 payload.
+    pub verb: OscWebviewVerb,
 }
 
 /// Subset of keys the terminal input codec understands. Keeps the public

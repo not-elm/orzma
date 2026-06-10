@@ -620,6 +620,7 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let surface = install_active_terminal_surface(app);

@@ -293,6 +293,26 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(())
     }
 
+    /// Despawn one surface from a multi-surface pane. If `surface` is currently
+    /// active, `ActiveSurface` is repointed to a surviving sibling before the
+    /// despawn. Returns `Ok(())` on success; the surface entity is always
+    /// queued for despawn regardless of whether it was the active surface.
+    ///
+    /// The despawn is unconditional: closing the pane's last surface leaves the
+    /// pane with no surfaces and `ActiveSurface` unchanged. Callers that want to
+    /// tear down the whole pane should call `close_pane` instead.
+    pub fn close_surface(&mut self, pane: Entity, surface: Entity) -> MultiplexerResult<()> {
+        let active = self.panes.get(pane).ok().map(|(a, _, _, _)| a.0);
+        if active == Some(surface) {
+            let survivor = self.surfaces_of_pane(pane).find(|&s| s != surface);
+            if let Some(survivor) = survivor {
+                self.set_active_surface(pane, survivor)?;
+            }
+        }
+        self.commands.entity(surface).despawn();
+        Ok(())
+    }
+
     /// Swap a pane's contents with its prev/next neighbor in the layout's
     /// DFS leaf traversal. No-op for single-pane workspaces.
     pub fn swap_pane(
@@ -1331,6 +1351,41 @@ mod tests {
             })
             .unwrap();
         assert!(surfaces.contains(&outcome.surface) && surfaces.contains(&s2));
+    }
+
+    #[test]
+    fn close_surface_despawns_one_surface_and_repoints_active() {
+        let mut world = World::new();
+        world.init_resource::<WorkspaceNameCounter>();
+        let outcome = world
+            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
+            .unwrap();
+        let second_surface = world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                let s = mux.add_surface(outcome.pane, SurfaceKind::Terminal);
+                mux.set_active_surface(outcome.pane, s).unwrap();
+                s
+            })
+            .unwrap();
+        world.flush();
+
+        world
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.close_surface(outcome.pane, second_surface)
+            })
+            .unwrap()
+            .unwrap();
+        world.flush();
+
+        assert!(
+            world.get::<SurfaceMarker>(second_surface).is_none(),
+            "second_surface despawned"
+        );
+        assert_eq!(
+            world.get::<ActiveSurface>(outcome.pane).map(|a| a.0),
+            Some(outcome.surface),
+            "active repointed to the surviving terminal surface"
+        );
     }
 
     #[test]

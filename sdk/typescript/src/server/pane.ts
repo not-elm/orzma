@@ -13,6 +13,29 @@ import {
 } from './handlers-server.ts';
 import { Surface, type SurfaceId, type SurfaceKind } from './surface.ts';
 
+/** Arguments for {@link registerView}. */
+export interface RegisterViewArgs {
+  /** PTY-facing identifier used to reference this view from OSC sequences. */
+  viewId: string;
+  /** Absolute path (or `process.cwd()`-relative path) to the HTML entry file. */
+  html: string;
+  /** Whether the mounted webview accepts pointer/keyboard input. Defaults to `false`. */
+  interactive?: boolean;
+}
+
+/**
+ * Publishes a named view into the host's `ViewRegistry` under the authenticated
+ * extension identity. The view can then be mounted by OSC sequences referencing
+ * `viewId`; the host never trusts the caller to supply its own `owning_ext`.
+ */
+export async function registerView(paneId: PaneId, args: RegisterViewArgs): Promise<void> {
+  await callControl('register_view', paneId, {
+    view_id: args.viewId,
+    entry: toEntry(args.html),
+    interactive: args.interactive ?? false,
+  });
+}
+
 /**
  * The HTML entry path the webview loads, relative to the extension dir (the
  * asset root = `process.cwd()`), normalized to forward slashes so it is a

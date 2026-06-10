@@ -23,22 +23,32 @@ export interface ActivateControlParams {
   surface_id: string;
 }
 
+/** Parameters for a `register_view` control call. */
+export interface RegisterViewControlParams {
+  view_id: string;
+  entry: string;
+  interactive: boolean;
+}
+
 type ControlParamsByOp = {
   split: SplitControlParams;
   add_surface: AddSurfaceControlParams;
   activate: ActivateControlParams;
+  register_view: RegisterViewControlParams;
 };
 
 type ControlReplyByOp = {
   split: { new_pane_id: string; new_surface_id: string };
   add_surface: { new_surface_id: string };
   activate: Record<string, never>;
+  register_view: Record<string, never>;
 };
 
 const SYNTHETIC_REPLY: { [K in keyof ControlReplyByOp]: () => ControlReplyByOp[K] } = {
   split: () => ({ new_pane_id: crypto.randomUUID(), new_surface_id: crypto.randomUUID() }),
   add_surface: () => ({ new_surface_id: crypto.randomUUID() }),
   activate: () => ({}) satisfies Record<string, never>,
+  register_view: () => ({}) satisfies Record<string, never>,
 };
 
 const CONNECT_TIMEOUT_MS = 5000;

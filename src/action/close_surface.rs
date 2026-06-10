@@ -33,11 +33,9 @@ fn apply_close_surface(trigger: On<CloseSurfaceActionEvent>, mut mux: Multiplexe
 
     let surface_count = mux.surfaces_of_pane(active_pane).count();
     if surface_count > 1 {
-        // TODO: despawn a single Surface without closing the Pane. Requires
-        // a `despawn_surface` method on MultiplexerCommands (or equivalent)
-        // that handles ActiveSurface repointing. Deferred to Task 16.
-        let _ = active_surface;
-        tracing::debug!(target: "ozmux_gui::commands", "CloseSurface (multi-surface): deferred to Task 16");
+        if let Err(err) = mux.close_surface(active_pane, active_surface) {
+            tracing::warn!(target: "ozmux_gui::commands", ?err, "CloseSurface (multi): close_surface failed");
+        }
         return;
     }
 

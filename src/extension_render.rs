@@ -5,6 +5,7 @@
 //! extension's handlers socket.
 
 use crate::extension_manager::ExtensionRegistry;
+use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
 use crate::ui::{AddressBarFocus, BrowserPageWebview, ExtensionSurfaceMarker};
 use bevy::platform::collections::HashMap;
@@ -15,7 +16,7 @@ use ozmux_extension_host::host::EndpointRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
     AttachedWorkspace, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind,
-    WorkspaceMarker,
+    SurfaceMarker, WorkspaceMarker,
 };
 
 /// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension surface,
@@ -42,8 +43,8 @@ struct ExtensionHandlersBridge(HandlersBridge);
 
 /// `surface_id → webview entity` map, populated by the inbound observer the first time
 /// a surface emits a frame, and read by the outbound drain to address a
-/// `HostEmitEvent` at the originating webview.
-// TODO: multi-surface — prune WebviewSurfaceIdMap + call HandlersBridge::disconnect(surface_id) on surface close (RemovedComponents<SurfaceMarker>); for the single memo surface this holds one entry.
+/// `HostEmitEvent` at the originating webview. Pruned by `prune_webview_id_map_on_remove`
+/// when the owning surface is despawned.
 #[derive(Resource, Default)]
 struct WebviewSurfaceIdMap(HashMap<String, Entity>);
 
@@ -106,6 +107,7 @@ impl Plugin for OzmuxExtensionRenderPlugin {
             .init_resource::<ExtensionHandlersBridge>()
             .init_resource::<WebviewSurfaceIdMap>()
             .add_observer(on_ozmux_frame)
+            .add_observer(prune_webview_id_map_on_remove)
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
             .add_observer(log_webview_load_error)
@@ -139,6 +141,7 @@ fn sync_focused_webview(
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     webviews: Query<(), With<WebviewSource>>,
+    non_interactive: Query<(), With<NonInteractive>>,
     browser_hosts: Query<&BrowserPageWebview>,
     address_focus: Option<Res<AddressBarFocus>>,
 ) {
@@ -147,6 +150,7 @@ fn sync_focused_webview(
         &mux,
         &attached_workspace,
         &webviews,
+        &non_interactive,
         &browser_hosts,
         bar_focused_surface,
     );
@@ -156,7 +160,8 @@ fn sync_focused_webview(
 }
 
 /// The active pane's focused webview entity, or `None` when the active surface
-/// is not a webview (e.g. a terminal pane) or when the address bar owns input.
+/// is not a webview (e.g. a terminal pane), when the address bar owns input,
+/// or when the surface is render-only (`NonInteractive`).
 ///
 /// For extension surfaces the webview is on the Surface entity itself
 /// (`WebviewSource`). For browser surfaces the webview is on the
@@ -166,6 +171,7 @@ fn active_webview(
     mux: &MultiplexerCommands,
     attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     webviews: &Query<(), With<WebviewSource>>,
+    non_interactive: &Query<(), With<NonInteractive>>,
     browser_hosts: &Query<&BrowserPageWebview>,
     bar_focused_surface: Option<Entity>,
 ) -> Option<Entity> {
@@ -173,6 +179,9 @@ fn active_webview(
     let pane = mux.workspaces_active_pane(workspace)?;
     let surface = mux.panes_active_surface(pane)?;
     if webviews.contains(surface) {
+        if non_interactive.contains(surface) {
+            return None;
+        }
         return Some(surface);
     }
     if let Ok(page) = browser_hosts.get(surface) {
@@ -401,6 +410,21 @@ fn log_webview_load_error(load: On<LoadError>) {
         url = %load.url,
         "webview load error"
     );
+}
+
+/// Prunes the `WebviewSurfaceIdMap` entry and disconnects the handler connection
+/// for a surface that is being despawned. Runs pre-removal so `ExtensionSurfaceId`
+/// is still readable on the entity.
+fn prune_webview_id_map_on_remove(
+    ev: On<Remove, SurfaceMarker>,
+    mut map: ResMut<WebviewSurfaceIdMap>,
+    bridge: Res<ExtensionHandlersBridge>,
+    ids: Query<&ExtensionSurfaceId>,
+) {
+    if let Ok(id) = ids.get(ev.entity) {
+        map.0.remove(&id.0);
+        bridge.0.disconnect(&id.0);
+    }
 }
 
 #[cfg(test)]
@@ -835,6 +859,120 @@ mod tests {
             app.world().resource::<FocusedWebview>().0,
             None,
             "address-bar focus releases CEF focus"
+        );
+    }
+
+    #[test]
+    fn non_interactive_webview_surface_never_takes_keyboard_focus() {
+        use crate::osc_webview::NonInteractive;
+        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<FocusedWebview>();
+        app.add_systems(Update, sync_focused_webview);
+
+        let (workspace, _pane) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane)
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        let render_only_pane = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(_pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split_pane")
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        let render_only_surface = app
+            .world_mut()
+            .run_system_once(move |mux: MultiplexerCommands| {
+                mux.panes_active_surface(render_only_pane)
+                    .expect("render-only surface")
+            })
+            .unwrap();
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
+        app.world_mut().entity_mut(render_only_surface).insert((
+            WebviewSource::new(webview_url("memo", "ui/app.html")),
+            NonInteractive,
+        ));
+
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.set_active_pane(workspace, render_only_pane)
+                    .expect("set_active_pane");
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "NonInteractive webview surface must never become FocusedWebview"
+        );
+    }
+
+    #[test]
+    fn prune_webview_id_map_removes_entry_on_surface_despawn() {
+        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<ExtensionHandlersBridge>();
+        app.init_resource::<WebviewSurfaceIdMap>();
+        app.add_observer(prune_webview_id_map_on_remove);
+
+        let (pane, surface) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.pane, o.surface)
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(ExtensionSurfaceId("x".into()));
+        app.world_mut()
+            .resource_mut::<WebviewSurfaceIdMap>()
+            .0
+            .insert("x".into(), surface);
+        app.world_mut().flush();
+
+        assert!(
+            app.world()
+                .resource::<WebviewSurfaceIdMap>()
+                .0
+                .contains_key("x"),
+            "entry must be present before despawn"
+        );
+
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.close_surface(pane, surface).expect("close_surface");
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        assert!(
+            !app.world()
+                .resource::<WebviewSurfaceIdMap>()
+                .0
+                .contains_key("x"),
+            "entry must be pruned after surface is despawned"
         );
     }
 }

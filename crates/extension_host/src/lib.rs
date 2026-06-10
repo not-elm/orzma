@@ -11,6 +11,7 @@ pub mod host;
 pub mod manifest;
 pub mod path_prefix;
 pub mod protocol;
+pub mod registry;
 pub mod scheme;
 
 pub use bridge::{
@@ -20,10 +21,11 @@ pub use bridge::{
 pub use command::{CommandExtension, CommandExtensionConfig};
 pub use control::{
     ActivateParams, AddSurfaceParams, ControlError, ControlOp, ControlOrientation,
-    ControlParseError, ControlReply, ControlRequest, ControlResponse, ControlSide, SplitParams,
-    SurfaceKindSpec, SurfaceSpec, encode_response, parse_call,
+    ControlParseError, ControlReply, ControlRequest, ControlResponse, ControlSide,
+    RegisterViewParams, SplitParams, SurfaceKindSpec, SurfaceSpec, encode_response, parse_call,
 };
 pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
 pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
 pub use protocol::{ProtocolError, Request, Response};
+pub use registry::{RegisteredView, ViewRegistry};

@@ -37,6 +37,7 @@ fn bundle_emits_initial_snapshot_within_a_few_ticks() {
         shell: "/bin/sh".to_string(),
         cwd: None,
         env: vec![("PS1".into(), "$ ".into())],
+        osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
     .expect("spawn shell");
     app.world_mut().spawn(bundle);

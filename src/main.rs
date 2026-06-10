@@ -10,6 +10,7 @@ mod extension_render;
 mod font;
 mod input;
 mod multiplexer;
+mod osc_webview;
 mod system_set;
 mod theme;
 mod ui;
@@ -22,6 +23,7 @@ use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
+use crate::osc_webview::OzmuxOscWebviewPlugin;
 use bevy::prelude::*;
 use bevy_terminal::TerminalHandlePlugin;
 use bevy_terminal_renderer::TerminalRendererPlugin;
@@ -76,6 +78,7 @@ fn main() {
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
+            OzmuxOscWebviewPlugin,
             ExtensionManagerPlugin::new(endpoints),
             OzmuxActionPlugin,
         ))

@@ -8,6 +8,7 @@ use crate::browser::BrowserPatch;
 use crate::font::FontPatch;
 use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::mouse::MousePatch;
+use crate::osc_webview::OscWebviewPatch;
 use crate::shortcuts::Shortcuts;
 use crate::theme::ThemePatch;
 use serde::Deserialize;
@@ -23,13 +24,14 @@ pub(crate) struct RawConfigs {
     pub(crate) browser: Option<BrowserPatch>,
     pub(crate) mouse: Option<MousePatch>,
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
+    pub(crate) osc_webview: Option<OscWebviewPatch>,
 }
 
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `bindings` is full-replace when present.
-    /// The `theme`, `font`, `browser`, `mouse`, and `inactive_pane` sections use
-    /// their respective `Patch::apply_to` for per-field merge.
+    /// The `theme`, `font`, `browser`, `mouse`, `inactive_pane`, and `osc_webview`
+    /// sections use their respective `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(shortcuts) = self.shortcuts {
             base.shortcuts = shortcuts;
@@ -48,6 +50,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.inactive_pane {
             base.inactive_pane = patch.apply_to(base.inactive_pane);
+        }
+        if let Some(patch) = self.osc_webview {
+            base.osc_webview = patch.apply_to(base.osc_webview);
         }
         base
     }
@@ -157,6 +162,27 @@ opacity = 2.0
         assert_eq!(
             merged.inactive_pane,
             crate::inactive_pane::InactivePaneConfig::default()
+        );
+    }
+
+    #[test]
+    fn osc_webview_enabled_merges_from_toml() {
+        let toml_str = r#"
+[osc_webview]
+enabled = true
+"#;
+        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert!(
+            merged.osc_webview.enabled,
+            "[osc_webview] enabled = true must merge through the real Raw->apply_to path"
+        );
+
+        let empty: RawConfigs = toml::from_str("").unwrap();
+        let defaulted = empty.apply_to(OzmuxConfigs::default());
+        assert!(
+            !defaulted.osc_webview.enabled,
+            "empty TOML must keep the default-off gate"
         );
     }
 

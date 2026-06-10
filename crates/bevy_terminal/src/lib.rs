@@ -10,6 +10,7 @@ mod handle;
 mod input_codec;
 mod mouse_encode;
 mod osc7;
+mod osc_webview;
 mod palette;
 mod plugin;
 mod pty;
@@ -25,12 +26,13 @@ pub use bundle::{SpawnOptions, TerminalBundle};
 pub use buttons::{ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind};
 pub use coalescer::Coalescer;
 pub use events::{
-    TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir, TerminalKey,
-    TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
+    OscWebviewRequest, TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir,
+    TerminalKey, TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
 pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use mouse_encode::ProtocolModifiers;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::{TerminalTitle, sanitize_title};
+pub use vt::listener::OscWebviewVerb;
 pub use wheel::{CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers};
