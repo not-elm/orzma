@@ -86,6 +86,7 @@ fn finish_terminal_setup(
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
             cwd: Some(resolve_spawn_cwd(seed)),
             env,
+            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let bundle = match TerminalBundle::spawn(opts) {
             Ok(b) => b,

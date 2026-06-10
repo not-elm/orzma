@@ -1047,6 +1047,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
         // Fresh bundle has no selection. An Armed drag should NOT be
@@ -1072,6 +1073,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
         // Active drag + no Term::selection = alacritty wiped it out
@@ -1099,6 +1101,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
         let entity = app.world_mut().spawn(bundle).id();
@@ -1190,6 +1193,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
         let entity = app.world_mut().spawn(bundle).id();
@@ -1363,6 +1367,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
         let entity = app.world_mut().spawn(bundle).id();

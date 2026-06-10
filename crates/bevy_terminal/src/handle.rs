@@ -2,10 +2,11 @@
 
 use crate::coalescer::Coalescer;
 use crate::events::{
-    TerminalBell, TerminalClipboardStore, TerminalCurrentDir, TerminalModeChanged,
-    TerminalTitleChanged,
+    OscWebviewRequest, TerminalBell, TerminalClipboardStore, TerminalCurrentDir,
+    TerminalModeChanged, TerminalTitleChanged,
 };
 use crate::osc7::Osc7Capture;
+use crate::osc_webview::OscWebviewCapture;
 use crate::pty::PtyHandle;
 use crate::title::{TerminalTitle, sanitize_title};
 use crate::vt::damage::{DamageVerdict, DirtyRows};
@@ -32,6 +33,8 @@ use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use vte::Parser;
 
 /// Inner `Dimensions` impl exposed to `Term::new` / `Term::resize`.
@@ -101,6 +104,8 @@ pub struct TerminalHandle {
     control_rx: Receiver<ControlFrame>,
     osc7_parser: Parser,
     osc7: Osc7Capture,
+    osc_webview_parser: Parser,
+    osc_webview: OscWebviewCapture,
 }
 
 impl TerminalHandle {
@@ -113,9 +118,11 @@ impl TerminalHandle {
         reply_rx: Receiver<Vec<u8>>,
         control_rx: Receiver<ControlFrame>,
         control_tx: Sender<ControlFrame>,
+        gate: Arc<AtomicBool>,
     ) -> Self {
         let size = LocalDim::new(cols, rows);
         let term = Term::new(Config::default(), &size, listener);
+        let control_tx2 = control_tx.clone();
         Self {
             term,
             parser: Processor::new(),
@@ -138,6 +145,8 @@ impl TerminalHandle {
                 control_tx,
                 gethostname::gethostname().to_string_lossy().into_owned(),
             ),
+            osc_webview_parser: Parser::new(),
+            osc_webview: OscWebviewCapture::new(control_tx2, gate),
         }
     }
 
@@ -148,6 +157,7 @@ impl TerminalHandle {
         }
         self.parser.advance(&mut self.term, chunk);
         self.osc7_parser.advance(&mut self.osc7, chunk);
+        self.osc_webview_parser.advance(&mut self.osc_webview, chunk);
     }
 
     /// Returns true if the current `Term` cursor differs from the most
@@ -586,6 +596,9 @@ impl TerminalHandle {
                 ControlFrame::CurrentDir(path) => {
                     commands.trigger(TerminalCurrentDir { entity, path });
                 }
+                ControlFrame::OscWebview(verb) => {
+                    commands.trigger(OscWebviewRequest { entity, verb });
+                }
             }
         }
     }
@@ -947,7 +960,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         h.first_emit = false;
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_selection = None;
@@ -978,7 +991,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         h.first_emit = false;
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_vi_cursor = None;
@@ -1004,7 +1017,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         assert!(!h.term.mode().contains(TermMode::VI));
         h.enter_vi_mode(&mut coalescer);
@@ -1020,7 +1033,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         let was_vi = h.term.mode().contains(TermMode::VI);
@@ -1041,7 +1054,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         let before = h.term.vi_mode_cursor.point.line.0;
@@ -1059,7 +1072,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
@@ -1085,7 +1098,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
@@ -1114,7 +1127,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         // Put "X" at the cursor cell so selection_to_string yields a non-empty string.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
@@ -1145,7 +1158,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         h.selection_start(
@@ -1166,7 +1179,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         assert!(h.selection_to_string().is_none());
     }
 
@@ -1179,7 +1192,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         assert!(h.selection_type().is_none());
@@ -1203,7 +1216,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         // Push some content so selection_to_string is meaningful.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
@@ -1266,6 +1279,7 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let mut h = bundle.handle;
@@ -1305,6 +1319,7 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let mut handle = bundle.handle;
@@ -1333,6 +1348,7 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let mut handle = bundle.handle;
@@ -1360,6 +1376,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn");
         let TerminalBundle {
@@ -1387,6 +1404,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -1415,7 +1433,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         assert!(
@@ -1443,6 +1461,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -1481,6 +1500,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -1505,6 +1525,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -1537,6 +1558,7 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -1579,7 +1601,7 @@ mod tests {
             reply_tx,
             control_tx: control_tx.clone(),
         };
-        let mut handle = TerminalHandle::new(80, 24, listener, reply_rx, control_rx, control_tx);
+        let mut handle = TerminalHandle::new(80, 24, listener, reply_rx, control_rx, control_tx, Arc::new(AtomicBool::new(false)));
         handle.advance(b"\x1b]7;file://localhost/tmp\x07");
 
         app.world_mut().spawn((handle, TerminalTitle::default()));
@@ -1600,6 +1622,62 @@ mod tests {
             vec![PathBuf::from("/tmp")]
         );
     }
+
+    #[test]
+    fn advance_osc_webview_then_drain_triggers_request() {
+        use crate::events::OscWebviewRequest;
+        use crate::title::TerminalTitle;
+        use crate::vt::listener::{ControlFrame, TermListener};
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::prelude::*;
+        use crossbeam_channel::unbounded;
+
+        #[derive(Resource, Default)]
+        struct Seen(Vec<crate::vt::listener::OscWebviewVerb>);
+
+        let mut app = App::new();
+        app.init_resource::<Seen>();
+        app.add_observer(|ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
+            seen.0.push(ev.event().verb.clone());
+        });
+
+        let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
+        let (control_tx, control_rx) = unbounded::<ControlFrame>();
+        let listener = TermListener {
+            reply_tx,
+            control_tx: control_tx.clone(),
+        };
+        let mut handle = TerminalHandle::new(
+            80,
+            24,
+            listener,
+            reply_rx,
+            control_rx,
+            control_tx,
+            Arc::new(AtomicBool::new(true)),
+        );
+        handle.advance(b"\x1b]5379;mount;dash\x07");
+
+        app.world_mut().spawn((handle, TerminalTitle::default()));
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands,
+                 q: Query<(Entity, &TerminalHandle, &mut TerminalTitle)>| {
+                    for (entity, handle, mut title) in q {
+                        handle.drain_control_events(&mut commands, entity, &mut title);
+                    }
+                },
+            )
+            .unwrap();
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            vec![crate::vt::listener::OscWebviewVerb::Mount {
+                view_id: "dash".into()
+            }]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1614,7 +1692,7 @@ mod accessor_tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        TerminalHandle::new(80, 24, listener, reply_rx, ctrl_rx, ctrl_tx)
+        TerminalHandle::new(80, 24, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)))
     }
 
     #[test]

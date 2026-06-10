@@ -10,6 +10,15 @@
 use crossbeam_channel::Sender;
 use std::path::PathBuf;
 
+/// Verb carried by `ControlFrame::OscWebview`: mount a registered view by id, or unmount.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OscWebviewVerb {
+    /// Mount a registered webview by its unique identifier.
+    Mount { view_id: String },
+    /// Unmount the active webview, optionally scoped to a specific view id.
+    Unmount { view_id: Option<String> },
+}
+
 /// Best-effort control frames forwarded from `TermListener`. The
 /// channel is currently unbounded; see spec § Risks > "control_tx is
 /// unbounded" for the back-pressure trade-off.
@@ -25,6 +34,8 @@ pub(crate) enum ControlFrame {
     },
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
+    /// An OSC-driven webview mount/unmount request from the PTY.
+    OscWebview(OscWebviewVerb),
 }
 
 /// Reply-required reply bytes (currently just `PtyWrite`). The

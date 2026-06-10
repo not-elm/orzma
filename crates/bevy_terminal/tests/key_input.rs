@@ -64,6 +64,7 @@ fn terminal_key_input_writes_encoded_bytes_to_pty() {
         shell: "/bin/cat".to_string(),
         cwd: None,
         env: Vec::new(),
+        osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
     .expect("spawn /bin/cat");
     let entity = app.world_mut().spawn(bundle).id();
