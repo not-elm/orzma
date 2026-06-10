@@ -5,8 +5,8 @@ use crate::events::{
     OscWebviewRequest, TerminalBell, TerminalClipboardStore, TerminalCurrentDir,
     TerminalModeChanged, TerminalTitleChanged,
 };
-use crate::osc7::Osc7Capture;
 use crate::osc_webview::OscWebviewCapture;
+use crate::osc7::Osc7Capture;
 use crate::pty::PtyHandle;
 use crate::title::{TerminalTitle, sanitize_title};
 use crate::vt::damage::{DamageVerdict, DirtyRows};
@@ -157,7 +157,8 @@ impl TerminalHandle {
         }
         self.parser.advance(&mut self.term, chunk);
         self.osc7_parser.advance(&mut self.osc7, chunk);
-        self.osc_webview_parser.advance(&mut self.osc_webview, chunk);
+        self.osc_webview_parser
+            .advance(&mut self.osc_webview, chunk);
     }
 
     /// Returns true if the current `Term` cursor differs from the most
@@ -960,7 +961,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         h.first_emit = false;
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_selection = None;
@@ -991,7 +1000,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         h.first_emit = false;
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_vi_cursor = None;
@@ -1017,7 +1034,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         assert!(!h.term.mode().contains(TermMode::VI));
         h.enter_vi_mode(&mut coalescer);
@@ -1033,7 +1058,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         let was_vi = h.term.mode().contains(TermMode::VI);
@@ -1054,7 +1087,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         let before = h.term.vi_mode_cursor.point.line.0;
@@ -1072,7 +1113,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
@@ -1098,7 +1147,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
@@ -1127,7 +1184,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         // Put "X" at the cursor cell so selection_to_string yields a non-empty string.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
@@ -1158,7 +1223,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         h.selection_start(
@@ -1179,7 +1252,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         assert!(h.selection_to_string().is_none());
     }
 
@@ -1192,7 +1273,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         assert!(h.selection_type().is_none());
@@ -1216,7 +1305,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         // Push some content so selection_to_string is meaningful.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
@@ -1433,7 +1530,15 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::new(
+            10,
+            3,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         assert!(
@@ -1601,7 +1706,15 @@ mod tests {
             reply_tx,
             control_tx: control_tx.clone(),
         };
-        let mut handle = TerminalHandle::new(80, 24, listener, reply_rx, control_rx, control_tx, Arc::new(AtomicBool::new(false)));
+        let mut handle = TerminalHandle::new(
+            80,
+            24,
+            listener,
+            reply_rx,
+            control_rx,
+            control_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
         handle.advance(b"\x1b]7;file://localhost/tmp\x07");
 
         app.world_mut().spawn((handle, TerminalTitle::default()));
@@ -1692,7 +1805,15 @@ mod accessor_tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        TerminalHandle::new(80, 24, listener, reply_rx, ctrl_rx, ctrl_tx, Arc::new(AtomicBool::new(false)))
+        TerminalHandle::new(
+            80,
+            24,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        )
     }
 
     #[test]

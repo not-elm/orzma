@@ -29,10 +29,10 @@ pub use events::{
     OscWebviewRequest, TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir,
     TerminalKey, TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
 };
-pub use vt::listener::OscWebviewVerb;
 pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use mouse_encode::ProtocolModifiers;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::{TerminalTitle, sanitize_title};
+pub use vt::listener::OscWebviewVerb;
 pub use wheel::{CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers};

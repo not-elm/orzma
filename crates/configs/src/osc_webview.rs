@@ -37,8 +37,10 @@ mod tests {
 
     #[test]
     fn patch_overrides_when_present() {
-        let patched =
-            OscWebviewPatch { enabled: Some(true) }.apply_to(OscWebviewConfig::default());
+        let patched = OscWebviewPatch {
+            enabled: Some(true),
+        }
+        .apply_to(OscWebviewConfig::default());
         assert!(patched.enabled);
     }
 }

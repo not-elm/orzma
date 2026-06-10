@@ -14,9 +14,9 @@ use bevy::ui::UiSystems;
 use bevy_terminal::{
     Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle,
 };
+use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
-use bevy_terminal_renderer::TerminalCellMetricsResource;
 use ozmux_extension_host::terminal_env;
 use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneMarker, SurfaceOf};
 

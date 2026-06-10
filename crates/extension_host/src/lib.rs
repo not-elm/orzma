@@ -24,8 +24,8 @@ pub use control::{
     ControlParseError, ControlReply, ControlRequest, ControlResponse, ControlSide,
     RegisterViewParams, SplitParams, SurfaceKindSpec, SurfaceSpec, encode_response, parse_call,
 };
-pub use registry::{RegisteredView, ViewRegistry};
 pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
 pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
 pub use protocol::{ProtocolError, Request, Response};
+pub use registry::{RegisteredView, ViewRegistry};

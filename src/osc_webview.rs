@@ -8,8 +8,8 @@ use ozmux_multiplexer::{
     ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind, SurfaceOf,
 };
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Shared default-off gate for the OSC-driven webview feature. The same atomic
 /// is cloned into every terminal's `SpawnOptions.osc_webview_gate`.

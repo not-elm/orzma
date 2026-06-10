@@ -297,6 +297,10 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     /// active, `ActiveSurface` is repointed to a surviving sibling before the
     /// despawn. Returns `Ok(())` on success; the surface entity is always
     /// queued for despawn regardless of whether it was the active surface.
+    ///
+    /// The despawn is unconditional: closing the pane's last surface leaves the
+    /// pane with no surfaces and `ActiveSurface` unchanged. Callers that want to
+    /// tear down the whole pane should call `close_pane` instead.
     pub fn close_surface(&mut self, pane: Entity, surface: Entity) -> MultiplexerResult<()> {
         let active = self.panes.get(pane).ok().map(|(a, _, _, _)| a.0);
         if active == Some(surface) {
@@ -1356,7 +1360,7 @@ mod tests {
         let outcome = world
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
-        let webview = world
+        let second_surface = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
                 let s = mux.add_surface(outcome.pane, SurfaceKind::Terminal);
                 mux.set_active_surface(outcome.pane, s).unwrap();
@@ -1367,13 +1371,16 @@ mod tests {
 
         world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.close_surface(outcome.pane, webview)
+                mux.close_surface(outcome.pane, second_surface)
             })
             .unwrap()
             .unwrap();
         world.flush();
 
-        assert!(world.get::<SurfaceMarker>(webview).is_none(), "webview despawned");
+        assert!(
+            world.get::<SurfaceMarker>(second_surface).is_none(),
+            "second_surface despawned"
+        );
         assert_eq!(
             world.get::<ActiveSurface>(outcome.pane).map(|a| a.0),
             Some(outcome.surface),
