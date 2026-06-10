@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 /// The ozmux daemon socket path — mirror of `ozmux_server::socket_path`
@@ -9,7 +10,7 @@ String ozmuxSocketPath() {
   final tmp = Platform.environment['TMPDIR'];
   if (tmp != null && tmp.startsWith('/')) {
     final p = '${_stripTrailingSlash(tmp)}/ozmux-$uid/default.sock';
-    if (p.length <= 103) return p;
+    if (utf8.encode(p).length <= 103) return p;
   }
   return '/tmp/ozmux-$uid/default.sock';
 }

@@ -32,7 +32,10 @@ class _OzmuxAppState extends State<OzmuxApp> {
     try {
       final conn =
           await DaemonLauncher(socketPath: ozmuxSocketPath()).ensureRunning();
-      if (!mounted) return;
+      if (!mounted) {
+        await conn.close();
+        return;
+      }
       setState(() => _session = Session.fromConnection(conn));
     } catch (e) {
       if (!mounted) return;
@@ -41,6 +44,12 @@ class _OzmuxAppState extends State<OzmuxApp> {
         _status = 'daemon error: $e';
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _session?.dispose();
+    super.dispose();
   }
 
   @override

@@ -81,11 +81,11 @@ class ClientMirror {
 
   /// Folds an event batch, deferring pane prune/reorder to the end.
   void applyEvents(List<MuxEvent> events) {
+    var layoutTouched = false;
     for (final e in events) {
+      if (e is LayoutChanged || e is WorkspaceRootChanged) layoutTouched = true;
       _applyNoPrune(e);
     }
-    final layoutTouched =
-        events.any((e) => e is LayoutChanged || e is WorkspaceRootChanged);
     if (layoutTouched) {
       for (final ws in state.workspaces) {
         _prunePanes(ws);
@@ -254,35 +254,28 @@ class ClientMirror {
 
   void _prunePanes(MutableWorkspace ws) {
     final live = <PaneId>{};
-    _collectPaneIds(ws.layout, live);
+    _visitLeafPanes(ws.layout, live.add);
     ws.panes.removeWhere((p) => !live.contains(p.pane));
   }
 
-  void _collectPaneIds(LayoutNode node, Set<PaneId> out) {
+  void _visitLeafPanes(LayoutNode node, void Function(PaneId) visit) {
     if (node is LayoutSplit) {
-      _collectPaneIds(node.first, out);
-      _collectPaneIds(node.second, out);
+      _visitLeafPanes(node.first, visit);
+      _visitLeafPanes(node.second, visit);
     } else if (node is LayoutPane) {
-      out.add(node.id);
+      visit(node.id);
     }
   }
 
   void _reorderPanesToLayout(MutableWorkspace ws) {
     final order = <PaneId>[];
-    _dfsLeafPanes(ws.layout, order);
-    ws.panes.sort((a, b) {
-      final ia = order.indexOf(a.pane);
-      final ib = order.indexOf(b.pane);
-      return (ia < 0 ? order.length : ia).compareTo(ib < 0 ? order.length : ib);
-    });
+    _visitLeafPanes(ws.layout, order.add);
+    final pos = <PaneId, int>{};
+    for (var i = 0; i < order.length; i++) {
+      pos[order[i]] = i;
+    }
+    ws.panes.sort((a, b) =>
+        (pos[a.pane] ?? order.length).compareTo(pos[b.pane] ?? order.length));
   }
 
-  void _dfsLeafPanes(LayoutNode node, List<PaneId> out) {
-    if (node is LayoutSplit) {
-      _dfsLeafPanes(node.first, out);
-      _dfsLeafPanes(node.second, out);
-    } else if (node is LayoutPane) {
-      out.add(node.id);
-    }
-  }
 }

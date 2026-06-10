@@ -23,6 +23,10 @@ fn main() {
     let snapshot = mux.snapshot(session).unwrap();
 
     let args: Vec<String> = std::env::args().collect();
+    if args.len() < 3 {
+        eprintln!("usage: dump_fixtures <welcome.json> <events_split.json>");
+        std::process::exit(2);
+    }
     std::fs::write(
         &args[1],
         serde_json::to_vec_pretty(&ServerMessage::Welcome { snapshot }).unwrap(),

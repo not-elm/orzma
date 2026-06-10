@@ -37,7 +37,7 @@ class DaemonConnection {
   /// Sends a command to the daemon.
   void send(ClientMessage msg) {
     final body = utf8.encode(jsonEncode(msg.toJson()));
-    _socket.add(frameMessage(Uint8List.fromList(body)));
+    _socket.add(frameMessage(body));
   }
 
   /// Closes the connection.
@@ -49,16 +49,29 @@ class DaemonConnection {
         _controller.add(const FrameMessage());
         continue;
       }
-      _controller.add(ServerMessage.fromJson(
-          jsonDecode(utf8.decode(body)) as Map<String, dynamic>));
+      try {
+        final decoded = jsonDecode(utf8.decode(body));
+        if (decoded is! Map<String, dynamic>) {
+          _controller.addError(FormatException('expected a JSON object message'));
+          continue;
+        }
+        _controller.add(ServerMessage.fromJson(decoded));
+      } on FormatException catch (e) {
+        _controller.addError(e);
+      } on TypeError catch (e) {
+        _controller.addError(StateError('malformed server message: $e'));
+      }
     }
   }
 }
 
+final RegExp _firstKeyPattern = RegExp(r'^\{\s*"([A-Za-z]+)"');
+
 String? _peekFirstKey(Uint8List body) {
   if (body.isEmpty || body[0] != 0x7b /* { */) return null;
   final end = body.length < 64 ? body.length : 64;
-  final s = utf8.decode(body.sublist(0, end), allowMalformed: true);
-  final m = RegExp(r'^\{\s*"([A-Za-z]+)"').firstMatch(s);
-  return m?.group(1);
+  // ASCII-only scan: the tag and JSON structural bytes are all ASCII, so a
+  // latin1 decode of the prefix is allocation-light and never throws.
+  final s = String.fromCharCodes(body, 0, end);
+  return _firstKeyPattern.firstMatch(s)?.group(1);
 }

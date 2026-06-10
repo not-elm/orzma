@@ -23,8 +23,13 @@ class DaemonLauncher {
   Future<DaemonConnection> ensureRunning() async {
     final existing = await _tryConnect();
     if (existing != null) return existing;
-    await Process.start(binaryPath, ['run'],
-        mode: ProcessStartMode.detached);
+    try {
+      await Process.start(binaryPath, ['run'], mode: ProcessStartMode.detached);
+    } on ProcessException catch (e) {
+      throw StateError(
+          'could not start the ozmux daemon binary "$binaryPath" ($e). '
+          'Set OZMUX_BIN to the daemon binary path or add `ozmux` to PATH.');
+    }
     final deadline = DateTime.now().add(const Duration(seconds: 3));
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 100));

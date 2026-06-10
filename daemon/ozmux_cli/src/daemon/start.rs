@@ -10,6 +10,10 @@ pub struct Start {}
 
 impl CommandExecutor for Start {
     async fn execute(self) -> anyhow::Result<()> {
+        if ozmux_server::socket_is_live().await {
+            println!("ozmux daemon already running");
+            return Ok(());
+        }
         let exe = std::env::current_exe()?;
         let child = Command::new(exe)
             .arg("run")
