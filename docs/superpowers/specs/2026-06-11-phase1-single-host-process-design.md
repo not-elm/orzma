@@ -1,6 +1,6 @@
 # Phase 1: 単一ホストプロセス + ユーザー拡張可能なホストAPI — 設計
 
-- Status: Draft (brainstorming approved; revised per `/forte:spec-review` 2026-06-11, pre-implementation)
+- Status: Draft (brainstorming approved; revised per `/forte:spec-review` 2026-06-11; asset path revised 2026-06-11 — Rust serves static assets directly, see §4④)
 - Date: 2026-06-11
 - Scope: `docs/memo.md` の **Phase 1 のみ**。Phase 2 (OSC インライン Webview レンダリング) / Phase 3 (tmux -CC) は本書末尾にロードマップとして記録するのみで、本設計の対象外。
 
@@ -56,8 +56,8 @@ capability は **namespace 単位**。`capabilities = ["fs"]` は `window.fs.*` 
 
 **既存の `ExtensionManagerPlugin` / `src/extension_manager.rs` を「単一ホストマネージャ」へ作り替える**(新規 `HostProcessPlugin` を並列に足すのではなく、既存が持つ `EndpointRegistry` 共有・readiness 公開・ドレインを再利用する)。起動時に **`node <bundled-host-entry>` を 1 つだけ** spawn・監視する。
 
-- **host runtime はアプリ同梱**(ユーザー提供ではない)。esbuild が `host/` パッケージを `assets/host.mjs` にバンドルし、Rust バイナリへ `include_str!` で埋め込む。実行時にランタイムディレクトリへ `host.mjs` として書き出し、`node host.mjs` として spawn する。host は `<repo>/extensions/*` と `~/.config/ozmux/extensions/*` の `api.ts` を **dynamic import** して API オブジェクトを集約し、アセット配信と RPC ディスパッチを担う。
-- **spawn 時の env:** 単一 RPC ソケットパス・アセットソケットパス・extensions ディレクトリパス。ランタイムルート(ソケット置き場)は **1 つだけ**(0700 perms)。現状の per-PID / per-extension ディレクトリツリーは廃止。
+- **host runtime はアプリ同梱**(ユーザー提供ではない)。esbuild が `host/` パッケージを `assets/host.mjs` にバンドルし、Rust バイナリへ `include_str!` で埋め込む。実行時にランタイムディレクトリへ `host.mjs` として書き出し、`node host.mjs` として spawn する。host は `<repo>/extensions/*` と `~/.config/ozmux/extensions/*` の `api.ts` を **dynamic import** して API オブジェクトを集約し、**RPC ディスパッチを担う**。**静的アセット配信は host を経由せず Rust が直接行う**(④の決定 C を参照。host はアセットソケットを持たない)。
+- **spawn 時の env:** 単一 RPC ソケットパス・extensions ディレクトリパス・manifest パス・ready パス。ランタイムルート(ソケット置き場)は **1 つだけ**(0700 perms)。現状の per-PID / per-extension ディレクトリツリーは廃止。アセットソケットは無い(Rust 直接配信)。
 - **readiness:** host が全拡張のロード後に `.ready` を返す。ロード失敗(後述の type-stripping 制約違反を含む)は名前付きで報告 → Rust 側でログ。Rust はタイムアウト付きで待機。
 - **監視 / 障害:** Phase 1 は **自動再起動なし(YAGNI)**。host がクラッシュ / exit したら `HostProcessDown` 状態を立て、以降の host-API 呼び出しは `host_unavailable` で **グレースフルに reject**。自動再起動は将来課題。
 - **終了:** アプリ終了時に子プロセスへ SIGTERM、ランタイムルートを掃除。
@@ -159,10 +159,19 @@ Approach A の心臓部。**既存の `JsEmitEventPlugin` / `HostEmitEvent` / `P
 - OSC webview パーサ(`osc_webview.rs`)、`OscMounted`/`NonInteractive`、mount/unmount observer。
 - `ViewRegistry` ——ただし **manifest 由来でロード**するよう変更し、**`capabilities` フィールドを追加**。mount 時に caps を `GrantedNamespaces` として surface entity へコピー。
 - `JsEmitEventPlugin` / `HostEmitEvent` / `PreloadScripts` 機構(③ で再利用)。
-- `EndpointRegistry` ——**そのまま残し、全拡張名を「単一 host のアセットソケット」1 つへ向ける**(name→endpoint マップは不変、scheme handler は無改修)。
-- `ozmux-ext://` scheme + アセット配信。bevy_cef 連携、`extension_render` の surface 描画。
+- `EndpointRegistry` ——**レガシー(per-extension socket fetch)経路のためにそのまま残す**。新モデルの拡張アセットはこの経路を使わない(下記決定 C)。Step 5 のレガシー撤去時に縮退。
+- `ozmux-ext://` scheme。bevy_cef 連携、`extension_render` の surface 描画。
 
-> **アセットプロトコルの変更(必須):** `scheme.rs` は `ozmux-ext://<name>/<path>` を `<name>` で dispatch するが、現行の `fetch(&endpoints, path)` / `protocol::Request { path }` は **`<name>` を落として `path` だけ**を host へ渡す(`scheme.rs:75`, `protocol.rs:13`)。全名が同一ソケットを指す単一 host 構成では、host が**どの拡張か判別できない**。アセットリクエストを **`{ extension, path }`**(または `extension/path` プレフィックス)へ拡張する。Node 側 `serveAssets` と protocol fixture も更新。
+> **アセット配信の決定 C(Rust 直接配信 / 確定 2026-06-11):** `scheme.rs` は `ozmux-ext://<name>/<path>` を `<name>` で dispatch する。現行の `fetch(&endpoints, path)` / `protocol::Request { path }` は **`<name>` を落として `path` だけ**を host へ渡す(`scheme.rs:75`, `protocol.rs:13`)ため、全名が同一ソケットを指す単一 host 構成では host が**どの拡張か判別できない**。
+>
+> **これを「host にアセットソケットを足して `{extension, path}` を送る」のではなく、「Rust が静的アセットを直接配信する」で解決する(検討で却下した案: host が `serveAssets`。Phase 1 のアセットは `assetRoot` 配下の静的ファイルであり、`api.ts`/RPC が動的部分を担うため、JS ランタイムを経由する必要がない)。**
+>
+> 具体的には:
+> - **Rust 側アセットルートレジストリ**を新設(`EndpointRegistry` と同じく `CefPlugin::build()` 前に構築し late-insert を許す `Arc<RwLock<HashMap<String, PathBuf>>>` パターン)。単一 host spawn 時に、discovery 済み各拡張の `name → assetRoot`(`BuiltHostManifest` が既に保持)を登録する。
+> - `scheme.rs` の handler は **新モデル名 → assetRoot.join(相対 path) を解決・トラバーサル検証・`std::fs::read`・拡張子から MIME 推定**して直接返す。**レガシー名 → 従来の socket `fetch`**(共存ウィンドウのみの二経路。Step 5 で後者を撤去)。
+> - **`protocol.rs` / `serveAssets` / アセットソケット env は新モデルでは不要**(プロトコルバージョンは bump しない — ローカル限定 IPC で skew が無いため)。`host_descriptor.rs` の `assetRoot` フィールドは Node が使わなくなる(Rust 側レジストリへ移すか、未使用のまま残すかは実装時に決める)。
+> - **トラバーサル防御:** URL path に `..` が含まれ得るため、解決結果が `assetRoot` 配下に留まることを scheme handler 側で検証する(`is_safe_rel` 相当のコンポーネント検査、または canonicalize + prefix チェック)。
+> - **MIME:** 拡張子 → MIME の小さなマップ(`mime_guess` クレート追加 or 手書き match)。実装時に選択。`bare_mime` で正規化済み。
 
 **移行(example / test fixture)**
 - 現 `@memo` を **新モデルの同梱サンプル拡張**に作り替え:`extensions/memo/{api.ts(例: `fs` namespace), index.html(`window.fs.read` を呼ぶ), ozmux.toml(view `memo.main`, capabilities=["fs"])}`。正典の例 + 統合テスト fixture とする。
@@ -179,7 +188,7 @@ Approach A の心臓部。**既存の `JsEmitEventPlugin` / `HostEmitEvent` / `P
 - **capability 強制(最重要):** granted に含まれない namespace を呼ぶと `capability_denied` で reject され host へ転送されないこと。**信頼鍵が `Receive<_>.webview` Entity 由来**で、JS payload の "surfaceId" を詐称しても勝てないこと。`GrantedNamespaces` コンポーネント経由の O(1) チェック。
 - **manifest パース:** `ozmux.toml` → `ViewRegistry`(views + capabilities)、namespace 衝突の先勝ち+警告。
 - **OSC mount リンク:** mount で `GrantedNamespaces` が surface entity に立つ、unmount(despawn)で自動解放。
-- **アセットルーティング:** `{extension, path}` 拡張リクエストが正しい拡張のアセットへ解決されること。
+- **アセット配信(Rust 直接 / 決定 C):** scheme handler が `assetRoot.join(path)` を正しいファイルへ解決すること。`..` トラバーサルを拒否(解決結果が `assetRoot` 配下に留まる)。拡張子から MIME を推定。未知の拡張名 / 不存在パスは 404。レガシー名は従来どおり socket fetch に dispatch されること(共存)。
 - **host ライフサイクル:** `host_unavailable` 時のグレースフル reject。
 
 **host ランタイム(vitest, `@ozmux/host`)**
