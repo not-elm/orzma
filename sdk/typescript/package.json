@@ -8,6 +8,10 @@
       "types": "./src/server/index.ts",
       "default": "./src/server/index.ts"
     },
+    "./host": {
+      "types": "./src/host/index.ts",
+      "default": "./src/host/index.ts"
+    },
     "./cmd-shim": {
       "types": "./src/server/cmd-shim.ts",
       "default": "./src/server/cmd-shim.ts"
