@@ -94,6 +94,7 @@ fn percent_decode(s: &str) -> Option<String> {
 /// True when `p` is a non-empty relative path made only of normal components
 /// (no `..`, no `.`, no leading `/`, no Windows prefix). Mirrors
 /// `host_descriptor::is_safe_rel`, applied here to the request path.
+// TODO: lexical check only — a symlink inside the extension dir is still followed by std::fs::read; add a canonicalize + prefix check if extension-dir contents ever become untrusted (Phase 1 trusts them).
 fn is_safe_rel_path(p: &Path) -> bool {
     !p.as_os_str().is_empty()
         && p.components()
