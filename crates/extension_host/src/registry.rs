@@ -15,6 +15,9 @@ pub struct RegisteredView {
     pub owning_ext: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub interactive: bool,
+    /// Host-API namespaces a webview mounting this view may call (namespace
+    /// granularity). Empty for control-plane registrations (legacy path).
+    pub capabilities: Vec<String>,
 }
 
 /// Maps a PTY-facing `view_id` to its trusted, control-plane-registered source.
@@ -46,9 +49,14 @@ mod tests {
                 entry: "dash.html".into(),
                 owning_ext: "memo".into(),
                 interactive: true,
+                capabilities: vec!["fs".into()],
             },
         );
         assert_eq!(reg.get("dashboard").map(|v| v.interactive), Some(true));
+        assert_eq!(
+            reg.get("dashboard").map(|v| v.capabilities.clone()),
+            Some(vec!["fs".to_string()])
+        );
         assert!(reg.get("missing").is_none());
     }
 }

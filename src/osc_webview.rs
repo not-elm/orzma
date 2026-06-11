@@ -135,6 +135,7 @@ mod tests {
                 entry: "ui/dash.html".into(),
                 owning_ext: "memo".into(),
                 interactive,
+                capabilities: Vec::new(),
             },
         );
     }
