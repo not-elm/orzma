@@ -57,7 +57,7 @@ capability は **namespace 単位**。`capabilities = ["fs"]` は `window.fs.*` 
 **既存の `ExtensionManagerPlugin` / `src/extension_manager.rs` を「単一ホストマネージャ」へ作り替える**(新規 `HostProcessPlugin` を並列に足すのではなく、既存が持つ `EndpointRegistry` 共有・readiness 公開・ドレインを再利用する)。起動時に **`node <bundled-host-entry>` を 1 つだけ** spawn・監視する。
 
 - **host runtime はアプリ同梱**(ユーザー提供ではない)。esbuild が `host/` パッケージを `assets/host.mjs` にバンドルし、Rust バイナリへ `include_str!` で埋め込む。実行時にランタイムディレクトリへ `host.mjs` として書き出し、`node host.mjs` として spawn する。host は `<repo>/extensions/*` と `~/.config/ozmux/extensions/*` の `api.ts` を **dynamic import** して API オブジェクトを集約し、**RPC ディスパッチを担う**。**静的アセット配信は host を経由せず Rust が直接行う**(④の決定 C を参照。host はアセットソケットを持たない)。
-- **spawn 時の env:** 単一 RPC ソケットパス・extensions ディレクトリパス・manifest パス・ready パス。ランタイムルート(ソケット置き場)は **1 つだけ**(0700 perms)。現状の per-PID / per-extension ディレクトリツリーは廃止。アセットソケットは無い(Rust 直接配信)。
+- **spawn 時の env:** `OZMUX_HOST_RPC_SOCK`・`OZMUX_HOST_MANIFEST`・`OZMUX_HOST_READY_PATH` の 3 つ(拡張ディレクトリは manifest の `apiPaths`/`assetRoot` が持つので env では渡さない)。ランタイムルート(ソケット置き場)は **1 つだけ**(0700 perms)。現状の per-PID / per-extension ディレクトリツリーは廃止。アセットソケットは無い(Rust 直接配信)。
 - **readiness:** host が全拡張のロード後に `.ready` を返す。ロード失敗(後述の type-stripping 制約違反を含む)は名前付きで報告 → Rust 側でログ。Rust はタイムアウト付きで待機。
 - **監視 / 障害:** Phase 1 は **自動再起動なし(YAGNI)**。host がクラッシュ / exit したら `HostProcessDown` 状態を立て、以降の host-API 呼び出しは `host_unavailable` で **グレースフルに reject**。自動再起動は将来課題。
 - **終了:** アプリ終了時に子プロセスへ SIGTERM、ランタイムルートを掃除。
@@ -167,11 +167,12 @@ Approach A の心臓部。**既存の `JsEmitEventPlugin` / `HostEmitEvent` / `P
 > **これを「host にアセットソケットを足して `{extension, path}` を送る」のではなく、「Rust が静的アセットを直接配信する」で解決する(検討で却下した案: host が `serveAssets`。Phase 1 のアセットは `assetRoot` 配下の静的ファイルであり、`api.ts`/RPC が動的部分を担うため、JS ランタイムを経由する必要がない)。**
 >
 > 具体的には:
-> - **Rust 側アセットルートレジストリ**を新設(`EndpointRegistry` と同じく `CefPlugin::build()` 前に構築し late-insert を許す `Arc<RwLock<HashMap<String, PathBuf>>>` パターン)。単一 host spawn 時に、discovery 済み各拡張の `name → assetRoot`(`BuiltHostManifest` が既に保持)を登録する。
+> - **アセットソース・レジストリ**(`name → Static(assetRoot: PathBuf) | Legacy(ExtensionEndpoints)` の **1 本**)で新旧両経路を 1 マップに統合する(並列レジストリは足さない)。共存ウィンドウと名前衝突を型でそのまま表現でき、ルックアップが一本化される。`assetRoot` は discovery 時(`DiscoveredExtension.dir`)に **同期的に確定**するため、`EndpointRegistry` の `RwLock`(readiness で socket path を非同期 publish する事情)は静的経路には当てはまらない。ただし handler は `CefPlugin::build()` 時に生成され discovery はその後に走るので、late-insert 用の最小限の `RwLock`/`OnceLock` は依然必要。
 > - `scheme.rs` の handler は **新モデル名 → assetRoot.join(相対 path) を解決・トラバーサル検証・`std::fs::read`・拡張子から MIME 推定**して直接返す。**レガシー名 → 従来の socket `fetch`**(共存ウィンドウのみの二経路。Step 5 で後者を撤去)。
-> - **`protocol.rs` / `serveAssets` / アセットソケット env は新モデルでは不要**(プロトコルバージョンは bump しない — ローカル限定 IPC で skew が無いため)。`host_descriptor.rs` の `assetRoot` フィールドは Node が使わなくなる(Rust 側レジストリへ移すか、未使用のまま残すかは実装時に決める)。
-> - **トラバーサル防御:** URL path に `..` が含まれ得るため、解決結果が `assetRoot` 配下に留まることを scheme handler 側で検証する(`is_safe_rel` 相当のコンポーネント検査、または canonicalize + prefix チェック)。
-> - **MIME:** 拡張子 → MIME の小さなマップ(`mime_guess` クレート追加 or 手書き match)。実装時に選択。`bare_mime` で正規化済み。
+> - **`serveAssets` / アセットソケット env は新モデルでは不要**(プロトコルバージョンも bump しない — ローカル限定 IPC で skew が無い)。ただし **`protocol.rs` 自体はレガシー `fetch` 経路が使うため Step 5 まで残す**(『不要』なのは新モデル経路のみ)。`host_descriptor.rs` の `assetRoot` は Node が読まなくなるので **Node 向け descriptor JSON(`ExtensionDescriptorJson` + Node 側 zod スキーマ)から削除**し、Rust 側レジストリは `BuiltHostManifest::new` が消費する同じ `&[DiscoveredExtension]` の `.dir` から直接構築する。
+> - **トラバーサル防御(信頼境界):** リクエスト path は webview 由来で `parse_url` は `..` を除去しない(`scheme.rs:18`)。`is_safe_rel` は manifest path にしか効かないため、**リクエスト path に同等のコンポーネント検査を新規適用**する。さらに **percent-encoded トラバーサル(`%2e%2e` / `%2f`)** に備え、検証前に **1 度だけ percent-decode** する。CEF の `STANDARD` scheme は URL を正規化するが **唯一の防御にしない**(`ozmux-ext://memo/%2e%2e/x` と `%2f` で CEF が `handle` に渡す実文字列を確認する単体/統合テストを追加)。symlink 経由の脱出は Phase 1 ではユーザー信頼の拡張ディレクトリ前提で許容し(必要時に canonicalize + prefix を追加)、その方針を明記。`index.html` 既定は URL ルールとして維持。
+> - **MIME:** 拡張子 → MIME。`mime_guess` は **現状この workspace の依存に無い**(`Cargo.lock` 確認済み。唯一の MIME 系 `tree_magic_mini` は wl-clipboard-rs 経由のマジックバイト判定で用途が違う)ため、追加は **新規依存 → 導入前にユーザー確認**(リポジトリのセキュリティ規約)。Phase 1 が配るアセット型は html/js/css/wasm/png/svg/woff2 程度なので **~12 アーム程度の手書き match でも十分**。いずれも `bare_mime` で bare 型へ正規化して返す(charset 付き Content-Type は webview 白画面化の既知の罠 — `scheme.rs:196`)。
+> - **サイズガード:** 巨大アセットを単一 `std::fs::read` でメモリに載せ render プロセスを詰まらせないよう、`std::fs::metadata().len()` で上限チェック(`protocol.rs` の `MAX_BODY_LEN` = 64 MiB を再利用)。将来は `CefSchemeBody::Reader`(bevy_cef 対応済み)でストリーミングへ。
 
 **移行(example / test fixture)**
 - 現 `@memo` を **新モデルの同梱サンプル拡張**に作り替え:`extensions/memo/{api.ts(例: `fs` namespace), index.html(`window.fs.read` を呼ぶ), ozmux.toml(view `memo.main`, capabilities=["fs"])}`。正典の例 + 統合テスト fixture とする。
