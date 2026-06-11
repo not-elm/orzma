@@ -6,5 +6,6 @@ export type { HostManifest, PluginDescriptor } from './descriptors.ts';
 export { parseHostManifest } from './descriptors.ts';
 export type { HostCallFrame, HostResultFrame } from './dispatch.ts';
 export { dispatchHostCall } from './dispatch.ts';
+export { loadHostApi } from './load.ts';
 export type { ApiImporter, LoadedPlugin, MergeResult } from './plugin-loader.ts';
 export { loadPlugin, mergeApis } from './plugin-loader.ts';
