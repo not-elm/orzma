@@ -10,6 +10,7 @@ pub mod handlers_bridge;
 pub mod host;
 pub mod manifest;
 pub mod path_prefix;
+pub mod plugin_manifest;
 pub mod protocol;
 pub mod registry;
 pub mod scheme;
@@ -27,5 +28,6 @@ pub use control::{
 pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
 pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
+pub use plugin_manifest::{ManifestView, PluginManifest, PluginManifestError};
 pub use protocol::{ProtocolError, Request, Response};
 pub use registry::{RegisteredView, ViewRegistry};
