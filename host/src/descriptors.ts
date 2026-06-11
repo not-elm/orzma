@@ -3,7 +3,6 @@ import { z } from 'zod';
 const extensionDescriptorSchema = z.object({
   name: z.string(),
   apiPaths: z.array(z.string()),
-  assetRoot: z.string(),
 });
 
 const hostManifestSchema = z.object({

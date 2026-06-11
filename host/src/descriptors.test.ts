@@ -5,12 +5,10 @@ describe('parseHostManifest', () => {
   it('parses a well-formed manifest', () => {
     const m = parseHostManifest(
       JSON.stringify({
-        extensions: [{ name: 'memo', apiPaths: ['/abs/memo/api/fs.ts'], assetRoot: '/abs/memo' }],
+        extensions: [{ name: 'memo', apiPaths: ['/abs/memo/api/fs.ts'] }],
       }),
     );
-    expect(m.extensions).toEqual([
-      { name: 'memo', apiPaths: ['/abs/memo/api/fs.ts'], assetRoot: '/abs/memo' },
-    ]);
+    expect(m.extensions).toEqual([{ name: 'memo', apiPaths: ['/abs/memo/api/fs.ts'] }]);
   });
 
   it('accepts an empty extensions array', () => {
@@ -28,8 +26,8 @@ describe('parseHostManifest', () => {
 
   it('throws when a extension entry has the wrong shape', () => {
     expect(() => parseHostManifest('{"extensions":[{"name":"x"}]}')).toThrow(/host manifest/i);
-    expect(() =>
-      parseHostManifest('{"extensions":[{"name":"x","apiPaths":"y","assetRoot":"z"}]}'),
-    ).toThrow(/host manifest/i);
+    expect(() => parseHostManifest('{"extensions":[{"name":"x","apiPaths":"y"}]}')).toThrow(
+      /host manifest/i,
+    );
   });
 });
