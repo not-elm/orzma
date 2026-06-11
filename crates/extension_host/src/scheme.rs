@@ -1,5 +1,6 @@
-//! `ozmux-ext://<name>/<path>` custom-scheme handler bridging a webview URL to
-//! the extension's bytes via `crate::fetch`. Behind the `cef` feature.
+//! `ozmux-ext://<name>/<path>` custom-scheme handler dispatching to either the
+//! in-process static asset resolver or the legacy socket `fetch`, behind the
+//! `cef` feature.
 
 #[cfg(feature = "cef")]
 use crate::asset::{AssetOutcome, serve_static_asset};

@@ -1,4 +1,4 @@
-//! Static-asset resolution for the Rust-direct asset path (spec §4④ decision C):
+//! Static-asset resolution for the Rust-direct `ozmux-ext://` asset path:
 //! percent-decode a webview-supplied request path, reject traversal, read the
 //! file under the extension's asset root, and infer a bare MIME type. Pure (no
 //! `cef` dependency) so it is unit-testable on its own.

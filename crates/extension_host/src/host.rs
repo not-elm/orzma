@@ -130,7 +130,7 @@ impl ExtensionEndpoints {
 /// directory; legacy command-extensions fetch over their per-extension socket.
 #[derive(Clone)]
 pub enum AssetSource {
-    /// Serve static files directly from this extension directory (decision C).
+    /// Serve static files directly from this extension directory.
     Static(PathBuf),
     /// Fetch assets over the legacy per-extension socket endpoint.
     Legacy(ExtensionEndpoints),
