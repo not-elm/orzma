@@ -1,8 +1,10 @@
-//! CEF integration for extension surfaces: the `ozmux-ext://` asset scheme and
-//! the `window.ozmux` JS extension, the webview spawn-once system that attaches
-//! a `bevy_cef` webview to each Extension Surface host, and the handler RPC
-//! bridge (Task 9) that routes `window.ozmux` frames between the page and the
-//! extension's handlers socket.
+//! CEF integration for extension surfaces: the `ozmux-ext://` asset scheme, the
+//! webview spawn-once system that attaches a `bevy_cef` webview to each Extension
+//! Surface host, and two coexisting JS bridges injected per surface — the legacy
+//! `window.ozmux` handler RPC bridge (routing frames to the extension's handlers
+//! socket) and the new-model `window.<ns>.<method>` host-API bridge
+//! (capability-gated `host.call` frames forwarded to the single Node host via
+//! `HostRpc`, with replies routed back on the `ozmux` channel).
 
 use crate::extension_manager::ExtensionRegistry;
 use crate::osc_webview::GrantedNamespaces;
@@ -73,7 +75,10 @@ impl HostRpc {
 
     /// Drops the client and clears in-flight correlation (host exited):
     /// subsequent calls reject `host_unavailable`. `next_id` is reset by the
-    /// following `set_client`, not here.
+    /// following `set_client`, not here. In-flight calls awaiting a host reply
+    /// are dropped without settling their page Promise (Phase 1 has no per-call
+    /// timeout); the page sees a hung Promise until reload — acceptable under the
+    /// no-auto-restart scope.
     pub(crate) fn clear_client(&mut self) {
         self.client = None;
         self.inflight.clear();
@@ -107,6 +112,9 @@ struct WebviewMountUnresolved;
 /// `sdk/typescript/src/surface/ozmux-bridge.ts`.
 pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 
+/// JS defining the new-model `window.<ns>.<method>` host-API bridge over
+/// `cef.emit` / `cef.listen`, injected (with `window.__ozmuxGranted`) per
+/// new-model webview as a `PreloadScripts` entry instead of `OZMUX_EXTENSION_JS`.
 const HOST_BRIDGE_JS: &str = include_str!("extension_render/host_bridge.js");
 
 /// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
