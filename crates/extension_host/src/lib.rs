@@ -3,6 +3,7 @@
 //! (behind the `cef` feature) bridges its UI bytes through a `bevy_cef`
 //! `ozmux-ext://` custom scheme.
 
+pub mod asset;
 pub mod bridge;
 pub mod command;
 pub mod control;
