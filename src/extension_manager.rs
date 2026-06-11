@@ -7,18 +7,28 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use ozmux_configs::path::{SystemEnv, extensions_dir};
-use ozmux_extension_host::host::{EndpointRegistry, ExtensionEndpoints, LifecycleEvent};
+use ozmux_configs::path::{SystemEnv, extensions_dir, plugins_dir};
+use ozmux_extension_host::host::{
+    EndpointRegistry, ExtensionEndpoints, LifecycleEvent, RuntimeRoot,
+};
 use ozmux_extension_host::{
-    CommandExtension, CommandExtensionConfig, ExtensionControlSet, Manifest, ViewRegistry,
-    apply_control_request,
+    CommandExtension, CommandExtensionConfig, ExtensionControlSet, HostProcess, Manifest,
+    RegisteredView, ViewRegistry, apply_control_request, build_host_manifest, discover_plugins,
 };
 use ozmux_multiplexer::MultiplexerCommands;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::PathBuf;
+use std::time::Duration;
 
 const EXTENSION_MAIN: &str = "bootstrap.ts";
 const PACKAGE_JSON: &str = "package.json";
+const READY_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Resource)]
+struct HostRuntime {
+    host: HostProcess,
+}
 
 struct DiscoveredExtension {
     config: CommandExtensionConfig,
@@ -80,12 +90,45 @@ impl Plugin for ExtensionManagerPlugin {
             extensions,
             endpoints,
         });
-        app.init_resource::<ViewRegistry>();
+        let plugins = discover_plugins(&plugin_roots());
+        let built = build_host_manifest(&plugins);
+        let descriptor_json =
+            serde_json::to_string(&built.manifest).expect("host manifest serializes");
+        {
+            let mut view_registry = app.world_mut().get_resource_or_init::<ViewRegistry>();
+            register_views(&mut view_registry, built.views);
+        }
+        let host_entry: OsString = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("sdk/typescript/src/host/main.ts")
+            .into_os_string();
+        match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "host")
+            .map_err(|e| e.to_string())
+            .and_then(|rt| {
+                HostProcess::spawn(host_entry, rt, &descriptor_json, READY_TIMEOUT)
+                    .map_err(|e| e.to_string())
+            }) {
+            Ok(host) => {
+                for plugin in &plugins {
+                    // NOTE: coexistence slice — a plugin sharing a name with a
+                    // launched legacy extension would clobber its asset endpoint
+                    // (last-write-wins). Skip + warn; Step 5 removes the legacy half.
+                    if self.endpoints.get(&plugin.name).is_some() {
+                        tracing::warn!(name = %plugin.name, "plugin name collides with a legacy extension; skipping");
+                        continue;
+                    }
+                    self.endpoints
+                        .insert(plugin.name.clone(), ExtensionEndpoints::default());
+                }
+                app.insert_resource(HostRuntime { host });
+            }
+            Err(e) => tracing::error!(error = %e, "failed to spawn single host process"),
+        }
         app.add_systems(
             Update,
             (
                 drain_all_control_requests.in_set(ExtensionControlSet::Drain),
                 publish_ready_endpoints,
+                poll_host_lifecycle,
             ),
         );
     }
@@ -182,10 +225,62 @@ fn publish_ready_endpoints(registry: Res<ExtensionRegistry>) {
     }
 }
 
+fn poll_host_lifecycle(host: Option<Res<HostRuntime>>) {
+    let Some(host) = host else {
+        return;
+    };
+    while let Ok(event) = host.host.events().try_recv() {
+        match event {
+            LifecycleEvent::Ready => tracing::info!("single host process ready"),
+            LifecycleEvent::SpawnFailed { error } => {
+                tracing::error!(%error, "single host failed to become ready")
+            }
+            LifecycleEvent::Exited { status } => {
+                tracing::warn!(?status, "single host process exited")
+            }
+        }
+    }
+}
+
+fn plugin_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    match plugins_dir(&SystemEnv) {
+        Ok(dir) => roots.push(dir),
+        Err(e) => tracing::warn!(error = %e, "could not resolve user plugins dir"),
+    }
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins"));
+    roots
+}
+
+fn register_views(registry: &mut ViewRegistry, views: Vec<(String, RegisteredView)>) {
+    for (view_id, view) in views {
+        registry.register(view_id, view);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+
+    #[test]
+    fn register_views_populates_registry_with_capabilities() {
+        let mut reg = ViewRegistry::default();
+        register_views(
+            &mut reg,
+            vec![(
+                "memo.main".to_string(),
+                RegisteredView {
+                    entry: "index.html".into(),
+                    owning_ext: "memo".into(),
+                    interactive: true,
+                    capabilities: vec!["fs".into()],
+                },
+            )],
+        );
+        let v = reg.get("memo.main").expect("registered");
+        assert_eq!(v.capabilities, vec!["fs".to_string()]);
+        assert_eq!(v.owning_ext, "memo");
+    }
 
     fn memo_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions/memo")
