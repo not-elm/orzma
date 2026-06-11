@@ -1,7 +1,7 @@
 //! Parses a plugin's `ozmux.toml` manifest: the views it publishes for OSC
 //! mounting and the host-API capabilities each view is granted.
 
-use crate::error::ExtensionError;
+use crate::error::{ExtensionError, ExtensionResult};
 use crate::registry::ViewId;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -30,7 +30,7 @@ pub struct ManifestView {
 
 impl PluginManifest {
     /// Parses an `ozmux.toml` string into a `PluginManifest`.
-    pub fn parse(text: &str) -> Result<Self, ExtensionError> {
+    pub fn parse(text: &str) -> ExtensionResult<Self> {
         let raw: RawManifest = toml::from_str(text).map_err(ExtensionError::Toml)?;
         let views = raw
             .views

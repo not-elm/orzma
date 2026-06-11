@@ -29,7 +29,7 @@ pub use control::{
     ControlParseError, ControlReply, ControlRequest, ControlResponse, ControlSide,
     RegisterViewParams, SplitParams, SurfaceKindSpec, SurfaceSpec, encode_response, parse_call,
 };
-pub use error::ExtensionError;
+pub use error::{ExtensionError, ExtensionResult};
 pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
 pub use host_descriptor::{BuiltHostManifest, HostManifestJson, PluginDescriptorJson};
 pub use host_process::{HostProcess, PreparedHost};
