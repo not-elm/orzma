@@ -42,7 +42,9 @@ export function mergeApis(plugins: LoadedPlugin[]): MergeResult {
 
 /**
  * Loads one plugin's `api.ts` default export via the injected importer. Throws
- * when the module does not default-export an object.
+ * when the module does not default-export a namespace object (an array is
+ * rejected too, since `typeof [] === 'object'` would otherwise slip through and
+ * `mergeApis` would register numeric-index "namespaces").
  */
 export async function loadPlugin(
   name: string,
@@ -51,7 +53,7 @@ export async function loadPlugin(
 ): Promise<LoadedPlugin> {
   const mod = await importer(apiPath);
   const def = mod.default;
-  if (def === null || typeof def !== 'object') {
+  if (def === null || typeof def !== 'object' || Array.isArray(def)) {
     throw new Error(`plugin "${name}" api.ts must default-export an object`);
   }
   return { name, api: def as ApiNamespaceMap };

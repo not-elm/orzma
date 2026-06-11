@@ -61,4 +61,11 @@ describe('loadPlugin', () => {
       /default-export an object/,
     );
   });
+
+  it('rejects an array default export (typeof [] === "object")', async () => {
+    const importer = async () => ({ default: [{ fs: { read: async () => 'x' } }] });
+    await expect(loadPlugin('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
+      /default-export an object/,
+    );
+  });
 });
