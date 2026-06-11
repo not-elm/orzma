@@ -14627,6 +14627,7 @@ async function dispatchHostCall(api, frame) {
 
 // src/rpc-server.ts
 var MAX_RPC_LINE_BYTES = 8 * 1024 * 1024;
+var MAX_RPC_RESULT_BYTES = 8 * 1024 * 1024;
 async function bindHostRpcServer(sockPath, api) {
   await fs.unlink(sockPath).catch(() => {
   });
@@ -14679,8 +14680,18 @@ async function bindHostRpcServer(sockPath, api) {
       return;
     }
     const frame = { reqId, ns, method, args: args.map(decodeHostValue) };
-    dispatchHostCall(api, frame).then((result) => conn.write(`${JSON.stringify(result)}
-`)).catch((err) => {
+    dispatchHostCall(api, frame).then((result) => {
+      const resultLine = JSON.stringify(result);
+      if (Buffer.byteLength(resultLine, "utf8") > MAX_RPC_RESULT_BYTES) {
+        conn.write(
+          `${JSON.stringify({ reqId: frame.reqId, ok: false, error: "host result exceeds max size" })}
+`
+        );
+        return;
+      }
+      conn.write(`${resultLine}
+`);
+    }).catch((err) => {
       console.error("host rpc: dispatch threw", err);
       conn.write(
         `${JSON.stringify({ reqId: frame.reqId, ok: false, error: "internal host error" })}
