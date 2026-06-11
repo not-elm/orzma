@@ -2,8 +2,9 @@
 //! capability-bearing `ViewRegistry` entries from discovered plugins.
 
 use crate::plugin_discovery::DiscoveredPlugin;
-use crate::registry::RegisteredView;
+use crate::registry::{RegisteredView, ViewId};
 use serde::Serialize;
+use std::path::PathBuf;
 
 /// One plugin's load + serve descriptor, serialized as camelCase to match the
 /// Node host's `parseHostManifest` zod schema.
@@ -13,7 +14,7 @@ pub struct PluginDescriptorJson {
     /// Plugin name (the `ozmux-ext://<name>` host).
     pub name: String,
     /// Absolute paths of the plugin's api `.ts` files (traversal-validated).
-    pub api_paths: Vec<String>,
+    pub api_paths: Vec<PathBuf>,
     /// Absolute plugin directory the host serves assets from.
     pub asset_root: String,
 }
@@ -31,7 +32,7 @@ pub struct BuiltHostManifest {
     /// Serialized to the `OZMUX_HOST_MANIFEST` file for the Node host.
     pub manifest: HostManifestJson,
     /// `(view_id, RegisteredView)` pairs to insert into `ViewRegistry`.
-    pub views: Vec<(String, RegisteredView)>,
+    pub views: Vec<(ViewId, RegisteredView)>,
 }
 
 impl BuiltHostManifest {
@@ -47,7 +48,7 @@ impl BuiltHostManifest {
             let mut api_paths = Vec::new();
             for rel in &plugin.manifest.api {
                 if is_safe_rel(rel) {
-                    api_paths.push(plugin.dir.join(rel).to_string_lossy().into_owned());
+                    api_paths.push(plugin.dir.join(rel));
                 } else {
                     bevy::log::warn!(plugin = %plugin.name, path = %rel, "unsafe api path; skipping");
                 }
@@ -67,7 +68,7 @@ impl BuiltHostManifest {
                     continue;
                 }
                 views.push((
-                    view.id.clone(),
+                    ViewId::new(view.id.clone()),
                     RegisteredView {
                         entry: view.entry.clone(),
                         owning_ext: plugin.name.clone(),
@@ -141,7 +142,7 @@ mod tests {
         )]);
         assert_eq!(built.views.len(), 1);
         let (id, rv) = &built.views[0];
-        assert_eq!(id, "memo.main");
+        assert_eq!(id.as_str(), "memo.main");
         assert_eq!(rv.owning_ext, "memo");
         assert_eq!(rv.entry, "index.html");
         assert_eq!(rv.capabilities, vec!["fs".to_string()]);

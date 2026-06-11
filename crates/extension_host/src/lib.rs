@@ -36,4 +36,4 @@ pub use path_prefix::extension_path_prefix;
 pub use plugin_discovery::{DiscoveredPlugin, discover_plugins};
 pub use plugin_manifest::{ManifestView, PluginManifest, PluginManifestError};
 pub use protocol::{ProtocolError, Request, Response};
-pub use registry::{RegisteredView, ViewRegistry};
+pub use registry::{RegisteredView, ViewId, ViewRegistry};

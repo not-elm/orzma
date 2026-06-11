@@ -6,6 +6,27 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+/// A PTY-facing view identifier — the `OSC mount;<id>` key a view is addressed by.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ViewId(String);
+
+impl ViewId {
+    /// Wraps a raw view id string.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// The id as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Unwraps into the owned id string.
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
 /// A view an extension has published for OSC mounting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegisteredView {

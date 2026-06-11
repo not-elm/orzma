@@ -13,7 +13,7 @@ use ozmux_extension_host::host::{
 };
 use ozmux_extension_host::{
     BuiltHostManifest, CommandExtension, CommandExtensionConfig, ExtensionControlSet, HostProcess,
-    Manifest, RegisteredView, ViewRegistry, apply_control_request, discover_plugins,
+    Manifest, RegisteredView, ViewId, ViewRegistry, apply_control_request, discover_plugins,
 };
 use ozmux_multiplexer::MultiplexerCommands;
 use std::collections::HashSet;
@@ -252,9 +252,9 @@ fn plugin_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn register_views(registry: &mut ViewRegistry, views: Vec<(String, RegisteredView)>) {
+fn register_views(registry: &mut ViewRegistry, views: Vec<(ViewId, RegisteredView)>) {
     for (view_id, view) in views {
-        registry.register(view_id, view);
+        registry.register(view_id.into_inner(), view);
     }
 }
 
@@ -268,7 +268,7 @@ mod tests {
         register_views(
             &mut reg,
             vec![(
-                "memo.main".to_string(),
+                ViewId::new("memo.main"),
                 RegisteredView {
                     entry: "index.html".into(),
                     owning_ext: "memo".into(),
