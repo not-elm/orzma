@@ -65,21 +65,15 @@ pub(crate) struct HostRpc {
 impl HostRpc {
     /// Installs a freshly-connected client, clearing any stale correlation /
     /// counter from a previous host generation.
-    #[allow(
-        dead_code,
-        reason = "production caller added in Task 5: extension_manager connect-on-ready/exit wiring; tests already exercise it"
-    )]
     pub(crate) fn set_client(&mut self, client: HostRpcClient) {
         self.client = Some(client);
         self.inflight.clear();
         self.next_id = 0;
     }
 
-    /// Drops the client (host exited): subsequent calls reject `host_unavailable`.
-    #[allow(
-        dead_code,
-        reason = "production caller added in Task 5: extension_manager connect-on-ready/exit wiring; tests already exercise it"
-    )]
+    /// Drops the client and clears in-flight correlation (host exited):
+    /// subsequent calls reject `host_unavailable`. `next_id` is reset by the
+    /// following `set_client`, not here.
     pub(crate) fn clear_client(&mut self) {
         self.client = None;
         self.inflight.clear();

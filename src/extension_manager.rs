@@ -5,6 +5,7 @@
 //! renderer routes per extension off each surface's `OwningExtension`, and the
 //! control bridge drain runs across every launched extension.
 
+use crate::extension_render::HostRpc;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use ozmux_configs::path::{SystemEnv, extensions_dir};
@@ -13,7 +14,8 @@ use ozmux_extension_host::host::{
 };
 use ozmux_extension_host::{
     BuiltHostManifest, CommandExtension, CommandExtensionConfig, ExtensionControlSet, HostProcess,
-    Manifest, RegisteredView, ViewId, ViewRegistry, apply_control_request, discover_extensions,
+    HostRpcClient, Manifest, RegisteredView, ViewId, ViewRegistry, apply_control_request,
+    discover_extensions,
 };
 use ozmux_multiplexer::MultiplexerCommands;
 use std::collections::HashSet;
@@ -229,18 +231,34 @@ fn publish_ready_endpoints(registry: Res<ExtensionRegistry>) {
     }
 }
 
-fn poll_host_lifecycle(host: Option<Res<HostRuntime>>) {
+fn poll_host_lifecycle(mut host_rpc: Option<ResMut<HostRpc>>, host: Option<Res<HostRuntime>>) {
     let Some(host) = host else {
         return;
     };
     while let Ok(event) = host.host.events().try_recv() {
         match event {
-            LifecycleEvent::Ready => tracing::info!("single host process ready"),
+            LifecycleEvent::Ready => match HostRpcClient::connect(host.host.rpc_sock_path()) {
+                Ok(client) => {
+                    tracing::info!("single host process ready; RPC connected");
+                    if let Some(hr) = host_rpc.as_mut() {
+                        hr.set_client(client);
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, "single host ready but RPC connect failed");
+                }
+            },
             LifecycleEvent::SpawnFailed { error } => {
-                tracing::error!(%error, "single host failed to become ready")
+                tracing::error!(%error, "single host failed to become ready");
+                if let Some(hr) = host_rpc.as_mut() {
+                    hr.clear_client();
+                }
             }
             LifecycleEvent::Exited { status } => {
-                tracing::warn!(?status, "single host process exited")
+                tracing::warn!(?status, "single host process exited");
+                if let Some(hr) = host_rpc.as_mut() {
+                    hr.clear_client();
+                }
             }
         }
     }
@@ -415,6 +433,20 @@ mod tests {
         assert_eq!(
             found[0].config.main,
             std::ffi::OsString::from("bootstrap.ts")
+        );
+    }
+
+    #[test]
+    fn clearing_the_host_client_drops_stale_in_flight_correlation() {
+        use crate::extension_render::HostRpc;
+        let mut hr = HostRpc::default();
+        hr.note_in_flight_for_test("0", bevy::prelude::Entity::PLACEHOLDER, "h0");
+        assert_eq!(hr.count_in_flight_for_test(), 1);
+        hr.clear_client();
+        assert_eq!(
+            hr.count_in_flight_for_test(),
+            0,
+            "clear_client wipes stale correlation"
         );
     }
 }
