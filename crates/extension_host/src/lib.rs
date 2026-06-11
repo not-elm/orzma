@@ -29,10 +29,8 @@ pub use control::{
     RegisterViewParams, SplitParams, SurfaceKindSpec, SurfaceSpec, encode_response, parse_call,
 };
 pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
-pub use host_descriptor::{
-    BuiltHostManifest, HostManifestJson, PluginDescriptorJson, build_host_manifest,
-};
-pub use host_process::{HostProcess, PreparedHost, prepare_host_runtime};
+pub use host_descriptor::{BuiltHostManifest, HostManifestJson, PluginDescriptorJson};
+pub use host_process::{HostProcess, PreparedHost};
 pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
 pub use plugin_discovery::{DiscoveredPlugin, discover_plugins};

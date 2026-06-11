@@ -12,8 +12,8 @@ use ozmux_extension_host::host::{
     EndpointRegistry, ExtensionEndpoints, LifecycleEvent, RuntimeRoot,
 };
 use ozmux_extension_host::{
-    CommandExtension, CommandExtensionConfig, ExtensionControlSet, HostProcess, Manifest,
-    RegisteredView, ViewRegistry, apply_control_request, build_host_manifest, discover_plugins,
+    BuiltHostManifest, CommandExtension, CommandExtensionConfig, ExtensionControlSet, HostProcess,
+    Manifest, RegisteredView, ViewRegistry, apply_control_request, discover_plugins,
 };
 use ozmux_multiplexer::MultiplexerCommands;
 use std::collections::HashSet;
@@ -91,7 +91,7 @@ impl Plugin for ExtensionManagerPlugin {
             endpoints,
         });
         let plugins = discover_plugins(&plugin_roots());
-        let built = build_host_manifest(&plugins);
+        let built = BuiltHostManifest::new(&plugins);
         let descriptor_json =
             serde_json::to_string(&built.manifest).expect("host manifest serializes");
         {

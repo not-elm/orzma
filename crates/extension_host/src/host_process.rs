@@ -22,34 +22,36 @@ pub struct PreparedHost {
     pub env: Vec<(String, String)>,
 }
 
-/// Writes the descriptor JSON into `dir` and assembles the host's paths + env.
-///
-/// `dir` must be a 0700 runtime directory (e.g. `RuntimeRoot::bin_dir()`).
-pub fn prepare_host_runtime(dir: &Path, descriptor_json: &str) -> std::io::Result<PreparedHost> {
-    let rpc_sock_path = dir.join("host.rpc.sock");
-    let manifest_path = dir.join("host-manifest.json");
-    let ready_path = dir.join(".host-ready");
-    std::fs::write(&manifest_path, descriptor_json)?;
-    let env = vec![
-        (
-            "OZMUX_HOST_RPC_SOCK".into(),
-            rpc_sock_path.to_string_lossy().into_owned(),
-        ),
-        (
-            "OZMUX_HOST_MANIFEST".into(),
-            manifest_path.to_string_lossy().into_owned(),
-        ),
-        (
-            "OZMUX_HOST_READY_PATH".into(),
-            ready_path.to_string_lossy().into_owned(),
-        ),
-    ];
-    Ok(PreparedHost {
-        rpc_sock_path,
-        manifest_path,
-        ready_path,
-        env,
-    })
+impl PreparedHost {
+    /// Writes the descriptor JSON into `dir` and assembles the host's paths + env.
+    ///
+    /// `dir` must be a 0700 runtime directory (e.g. `RuntimeRoot::bin_dir()`).
+    pub fn new(dir: &Path, descriptor_json: &str) -> std::io::Result<Self> {
+        let rpc_sock_path = dir.join("host.rpc.sock");
+        let manifest_path = dir.join("host-manifest.json");
+        let ready_path = dir.join(".host-ready");
+        std::fs::write(&manifest_path, descriptor_json)?;
+        let env = vec![
+            (
+                "OZMUX_HOST_RPC_SOCK".into(),
+                rpc_sock_path.to_string_lossy().into_owned(),
+            ),
+            (
+                "OZMUX_HOST_MANIFEST".into(),
+                manifest_path.to_string_lossy().into_owned(),
+            ),
+            (
+                "OZMUX_HOST_READY_PATH".into(),
+                ready_path.to_string_lossy().into_owned(),
+            ),
+        ];
+        Ok(Self {
+            rpc_sock_path,
+            manifest_path,
+            ready_path,
+            env,
+        })
+    }
 }
 
 /// A running single Node host process.
@@ -71,7 +73,7 @@ impl HostProcess {
         descriptor_json: &str,
         ready_timeout: Duration,
     ) -> std::io::Result<Self> {
-        let prepared = prepare_host_runtime(runtime.bin_dir(), descriptor_json)?;
+        let prepared = PreparedHost::new(runtime.bin_dir(), descriptor_json)?;
         let child = Command::new("node")
             .arg(&entry)
             .envs(prepared.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -140,7 +142,7 @@ mod tests {
     #[test]
     fn prepare_writes_descriptor_and_builds_env() {
         let runtime = tempdir().unwrap();
-        let prepared = prepare_host_runtime(runtime.path(), r#"{"plugins":[]}"#).unwrap();
+        let prepared = PreparedHost::new(runtime.path(), r#"{"plugins":[]}"#).unwrap();
 
         let written = std::fs::read_to_string(&prepared.manifest_path).unwrap();
         assert_eq!(written, r#"{"plugins":[]}"#);

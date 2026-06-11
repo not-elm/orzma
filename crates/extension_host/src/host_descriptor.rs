@@ -34,53 +34,55 @@ pub struct BuiltHostManifest {
     pub views: Vec<(String, RegisteredView)>,
 }
 
-/// Builds the descriptor JSON + validated view entries from discovered plugins.
-/// A relative path component (`..`) in an api or entry path, and an empty or
-/// whitespace-bearing `view_id`, are rejected (skipped with a warning) — the
-/// trust boundary that keeps manifest data from escaping the plugin dir.
-pub fn build_host_manifest(plugins: &[DiscoveredPlugin]) -> BuiltHostManifest {
-    let mut descriptors = Vec::new();
-    let mut views = Vec::new();
-    for plugin in plugins {
-        let asset_root = plugin.dir.to_string_lossy().into_owned();
-        let mut api_paths = Vec::new();
-        for rel in &plugin.manifest.api {
-            if is_safe_rel(rel) {
-                api_paths.push(plugin.dir.join(rel).to_string_lossy().into_owned());
-            } else {
-                bevy::log::warn!(plugin = %plugin.name, path = %rel, "unsafe api path; skipping");
+impl BuiltHostManifest {
+    /// Builds the descriptor JSON + validated view entries from discovered plugins.
+    /// A relative path component (`..`) in an api or entry path, and an empty or
+    /// whitespace-bearing `view_id`, are rejected (skipped with a warning) — the
+    /// trust boundary that keeps manifest data from escaping the plugin dir.
+    pub fn new(plugins: &[DiscoveredPlugin]) -> Self {
+        let mut descriptors = Vec::new();
+        let mut views = Vec::new();
+        for plugin in plugins {
+            let asset_root = plugin.dir.to_string_lossy().into_owned();
+            let mut api_paths = Vec::new();
+            for rel in &plugin.manifest.api {
+                if is_safe_rel(rel) {
+                    api_paths.push(plugin.dir.join(rel).to_string_lossy().into_owned());
+                } else {
+                    bevy::log::warn!(plugin = %plugin.name, path = %rel, "unsafe api path; skipping");
+                }
+            }
+            descriptors.push(PluginDescriptorJson {
+                name: plugin.name.clone(),
+                api_paths,
+                asset_root,
+            });
+            for view in &plugin.manifest.views {
+                if view.id.is_empty() || view.id.chars().any(char::is_whitespace) {
+                    bevy::log::warn!(plugin = %plugin.name, id = %view.id, "invalid view id; skipping");
+                    continue;
+                }
+                if !is_safe_rel(&view.entry) {
+                    bevy::log::warn!(plugin = %plugin.name, entry = %view.entry, "unsafe view entry; skipping");
+                    continue;
+                }
+                views.push((
+                    view.id.clone(),
+                    RegisteredView {
+                        entry: view.entry.clone(),
+                        owning_ext: plugin.name.clone(),
+                        interactive: view.interactive,
+                        capabilities: view.capabilities.clone(),
+                    },
+                ));
             }
         }
-        descriptors.push(PluginDescriptorJson {
-            name: plugin.name.clone(),
-            api_paths,
-            asset_root,
-        });
-        for view in &plugin.manifest.views {
-            if view.id.is_empty() || view.id.chars().any(char::is_whitespace) {
-                bevy::log::warn!(plugin = %plugin.name, id = %view.id, "invalid view id; skipping");
-                continue;
-            }
-            if !is_safe_rel(&view.entry) {
-                bevy::log::warn!(plugin = %plugin.name, entry = %view.entry, "unsafe view entry; skipping");
-                continue;
-            }
-            views.push((
-                view.id.clone(),
-                RegisteredView {
-                    entry: view.entry.clone(),
-                    owning_ext: plugin.name.clone(),
-                    interactive: view.interactive,
-                    capabilities: view.capabilities.clone(),
-                },
-            ));
+        Self {
+            manifest: HostManifestJson {
+                plugins: descriptors,
+            },
+            views,
         }
-    }
-    BuiltHostManifest {
-        manifest: HostManifestJson {
-            plugins: descriptors,
-        },
-        views,
     }
 }
 
@@ -121,7 +123,7 @@ mod tests {
 
     #[test]
     fn builds_camelcase_descriptor_with_absolute_paths() {
-        let built = build_host_manifest(&[plugin("memo", "/abs/memo", &["api/fs.ts"], vec![])]);
+        let built = BuiltHostManifest::new(&[plugin("memo", "/abs/memo", &["api/fs.ts"], vec![])]);
         let json = serde_json::to_string(&built.manifest).unwrap();
         assert_eq!(
             json,
@@ -131,7 +133,7 @@ mod tests {
 
     #[test]
     fn builds_view_entries_with_capabilities() {
-        let built = build_host_manifest(&[plugin(
+        let built = BuiltHostManifest::new(&[plugin(
             "memo",
             "/abs/memo",
             &[],
@@ -148,7 +150,7 @@ mod tests {
 
     #[test]
     fn rejects_path_traversal_in_entry_and_api() {
-        let built = build_host_manifest(&[plugin(
+        let built = BuiltHostManifest::new(&[plugin(
             "bad",
             "/abs/bad",
             &["../escape.ts"],
@@ -160,7 +162,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_or_whitespace_view_id() {
-        let built = build_host_manifest(&[plugin(
+        let built = BuiltHostManifest::new(&[plugin(
             "p",
             "/abs/p",
             &[],
