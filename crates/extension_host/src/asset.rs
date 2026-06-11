@@ -5,10 +5,6 @@
 
 use std::path::Path;
 
-/// Upper bound on a single static asset, mirroring `protocol::MAX_BODY_LEN`
-/// (64 MiB): a larger file would buffer wholesale into the render process.
-const MAX_ASSET_LEN: u64 = 64 * 1024 * 1024;
-
 /// The outcome of resolving and reading one static-asset request.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AssetOutcome {
@@ -62,6 +58,10 @@ pub fn serve_static_asset(root: &Path, raw_path: &str) -> AssetOutcome {
         Err(_) => AssetOutcome::NotFound,
     }
 }
+
+/// Upper bound on a single static asset, mirroring `protocol::MAX_BODY_LEN`
+/// (64 MiB): a larger file would buffer wholesale into the render process.
+const MAX_ASSET_LEN: u64 = 64 * 1024 * 1024;
 
 fn exceeds_limit(len: u64) -> bool {
     len > MAX_ASSET_LEN
@@ -206,6 +206,16 @@ mod tests {
         let dir = tempdir().unwrap();
         assert_eq!(
             serve_static_asset(dir.path(), "nope.html"),
+            AssetOutcome::NotFound
+        );
+    }
+
+    #[test]
+    fn directory_path_is_not_found() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        assert_eq!(
+            serve_static_asset(dir.path(), "sub"),
             AssetOutcome::NotFound
         );
     }
