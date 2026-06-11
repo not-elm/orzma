@@ -62,9 +62,9 @@ export async function bindHostRpcServer(
       return;
     }
     if (typeof raw !== 'object' || raw === null) {
-      // A non-object JSON value (null, number, string) carries no addressable
-      // reqId; drop it. JSON.parse('null') returns null, which would otherwise
-      // throw on destructure and crash the host process.
+      // NOTE: a non-object JSON value (null, number, string) carries no
+      // addressable reqId; drop it. JSON.parse('null') returns null, which would
+      // otherwise throw on the destructure below and crash the host process.
       return;
     }
     const { reqId, ns, method, args } = raw as Partial<HostCallFrame>;
@@ -83,7 +83,13 @@ export async function bindHostRpcServer(
     dispatchHostCall(api, frame)
       .then((result) => conn.write(`${JSON.stringify(result)}\n`))
       .catch((err) => {
+        // NOTE: dispatchHostCall is contracted never to reject; reply with an
+        // error frame anyway so a future regression cannot leave the caller's
+        // reqId Promise hanging forever.
         console.error('host rpc: dispatch threw', err);
+        conn.write(
+          `${JSON.stringify({ reqId: frame.reqId, ok: false, error: 'internal host error' })}\n`,
+        );
       });
   }
 }
