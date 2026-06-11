@@ -107,6 +107,8 @@ struct WebviewMountUnresolved;
 /// `sdk/typescript/src/surface/ozmux-bridge.ts`.
 pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 
+const HOST_BRIDGE_JS: &str = include_str!("extension_render/host_bridge.js");
+
 /// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
 /// `AssetSourceRegistry` the extension manager populates: `Static(<dir>)` for
 /// new-model extensions (served directly by Rust) and `Legacy(...)` for legacy
@@ -278,6 +280,7 @@ fn finish_extension_setup(
             Without<WebviewMountUnresolved>,
         ),
     >,
+    granted: Query<&GrantedNamespaces>,
 ) {
     for (surface, computed) in surfaces.iter() {
         let Some(logical) = pane_logical_size(computed.size(), computed.inverse_scale_factor())
@@ -310,10 +313,21 @@ fn finish_extension_setup(
         // entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
         let ctx_js = context_preload_js(workspace, pane, surface, name);
+        let preload = match granted.get(surface) {
+            Ok(g) => {
+                let list: Vec<&String> = g.0.iter().collect();
+                let granted_js = format!(
+                    "window.__ozmuxGranted={};",
+                    serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+                );
+                PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()])
+            }
+            Err(_) => PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
+        };
         commands.entity(surface).insert((
             WebviewSource::new(url),
             WebviewSize(logical),
-            PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
+            preload,
             MaterialNode(materials.add(WebviewUiMaterial::default())),
         ));
     }
@@ -1374,6 +1388,42 @@ mod tests {
 
         app.world_mut().resource_mut::<HostRpc>().clear_client();
         let _ = server.join();
+    }
+
+    #[test]
+    fn new_model_surface_gets_host_bridge_and_granted_list() {
+        let mut app = make_test_app();
+        app.add_systems(Update, finish_extension_setup);
+        let mut caps = std::collections::HashSet::new();
+        caps.insert("fs".to_string());
+        let (host, ..) = spawn_extension_host(
+            &mut app,
+            (
+                laid_out_node(Vec2::new(800.0, 600.0)),
+                GrantedNamespaces(caps),
+            ),
+        );
+        app.update();
+
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(host)
+            .expect("new-model surface must carry the host bridge as a PreloadScript");
+        assert!(
+            preload.0.iter().any(|s| s == HOST_BRIDGE_JS),
+            "the host-API bridge JS must be injected for a surface with GrantedNamespaces"
+        );
+        assert!(
+            preload
+                .0
+                .iter()
+                .any(|s| s.starts_with("window.__ozmuxGranted=") && s.contains("\"fs\"")),
+            "the granted-namespace list must be injected before the bridge"
+        );
+        assert!(
+            !preload.0.iter().any(|s| s == OZMUX_EXTENSION_JS),
+            "legacy ozmux.js must NOT be injected for a new-model surface"
+        );
     }
 
     #[test]
