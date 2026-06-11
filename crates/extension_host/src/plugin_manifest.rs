@@ -6,6 +6,8 @@ use serde::Deserialize;
 /// A plugin's resolved manifest: the views it publishes for OSC mounting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifest {
+    /// Plugin-relative paths of the api `.ts` files this plugin loads (multiple allowed).
+    pub api: Vec<String>,
     /// Views this plugin publishes, addressable by `view_id` from OSC mounts.
     pub views: Vec<ManifestView>,
 }
@@ -37,7 +39,10 @@ impl PluginManifest {
                 interactive: v.interactive,
             })
             .collect();
-        Ok(Self { views })
+        Ok(Self {
+            api: raw.api,
+            views,
+        })
     }
 }
 
@@ -51,6 +56,8 @@ pub enum PluginManifestError {
 
 #[derive(Deserialize)]
 struct RawManifest {
+    #[serde(default)]
+    api: Vec<String>,
     #[serde(default)]
     views: Vec<RawView>,
 }
@@ -122,5 +129,28 @@ entry = "a.html"
             PluginManifest::parse("[[views]"),
             Err(PluginManifestError::Toml(_))
         ));
+    }
+
+    #[test]
+    fn parses_plugin_level_api_files() {
+        let text = r#"
+api = ["api/fs.ts", "api/net.ts"]
+
+[[views]]
+id = "memo.main"
+entry = "index.html"
+"#;
+        let m = PluginManifest::parse(text).unwrap();
+        assert_eq!(
+            m.api,
+            vec!["api/fs.ts".to_string(), "api/net.ts".to_string()]
+        );
+        assert_eq!(m.views.len(), 1);
+    }
+
+    #[test]
+    fn api_defaults_to_empty() {
+        let m = PluginManifest::parse("[[views]]\nid = \"v\"\nentry = \"a.html\"\n").unwrap();
+        assert!(m.api.is_empty());
     }
 }
