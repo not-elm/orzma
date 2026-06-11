@@ -1,7 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.4.14/schema.json",
   "files": {
-    "includes": ["sdk/**", "extensions/**", "!**/node_modules", "!**/dist", "!**/target"],
+    "includes": [
+      "host/**",
+      "sdk/**",
+      "extensions/**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/target",
+      "!assets/host.mjs"
+    ],
     "ignoreUnknown": true
   },
   "vcs": {

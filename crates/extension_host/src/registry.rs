@@ -6,6 +6,27 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+/// A PTY-facing view identifier — the `OSC mount;<id>` key a view is addressed by.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ViewId(String);
+
+impl ViewId {
+    /// Wraps a raw view id string.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// The id as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Unwraps into the owned id string.
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
 /// A view an extension has published for OSC mounting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegisteredView {
@@ -15,6 +36,9 @@ pub struct RegisteredView {
     pub owning_ext: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub interactive: bool,
+    /// Host-API namespaces a webview mounting this view may call (namespace
+    /// granularity). Empty for control-plane registrations (legacy path).
+    pub capabilities: Vec<String>,
 }
 
 /// Maps a PTY-facing `view_id` to its trusted, control-plane-registered source.
@@ -46,9 +70,14 @@ mod tests {
                 entry: "dash.html".into(),
                 owning_ext: "memo".into(),
                 interactive: true,
+                capabilities: vec!["fs".into()],
             },
         );
         assert_eq!(reg.get("dashboard").map(|v| v.interactive), Some(true));
+        assert_eq!(
+            reg.get("dashboard").map(|v| v.capabilities.clone()),
+            Some(vec!["fs".to_string()])
+        );
         assert!(reg.get("missing").is_none());
     }
 }

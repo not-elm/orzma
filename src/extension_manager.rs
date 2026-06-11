@@ -8,19 +8,28 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use ozmux_configs::path::{SystemEnv, extensions_dir};
-use ozmux_extension_host::host::{EndpointRegistry, ExtensionEndpoints, LifecycleEvent};
+use ozmux_extension_host::host::{
+    EndpointRegistry, ExtensionEndpoints, LifecycleEvent, RuntimeRoot,
+};
 use ozmux_extension_host::{
-    CommandExtension, CommandExtensionConfig, ExtensionControlSet, Manifest, ViewRegistry,
-    apply_control_request,
+    BuiltHostManifest, CommandExtension, CommandExtensionConfig, ExtensionControlSet, HostProcess,
+    Manifest, RegisteredView, ViewId, ViewRegistry, apply_control_request, discover_extensions,
 };
 use ozmux_multiplexer::MultiplexerCommands;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
 
 const EXTENSION_MAIN: &str = "bootstrap.ts";
 const PACKAGE_JSON: &str = "package.json";
+const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
-struct DiscoveredExtension {
+#[derive(Resource)]
+struct HostRuntime {
+    host: HostProcess,
+}
+
+struct DiscoveredCommandExtension {
     config: CommandExtensionConfig,
 }
 
@@ -31,7 +40,7 @@ pub(crate) struct ExtensionRegistry {
     /// Extension name → its running process handle.
     pub(crate) extensions: HashMap<String, CommandExtension>,
     /// Shared name → asset-endpoint map read by the `ozmux-ext://` scheme. The
-    /// scheme handler reads its own clone (passed to `cef_plugin` in `main`);
+    /// scheme handler reads its own clone (passed to `cef_extension` in `main`);
     /// the resource holds the canonical handle so it stays alive for the app's
     /// lifetime, and `publish_ready_endpoints` writes each extension's live
     /// asset socket path into it once the extension signals readiness.
@@ -45,17 +54,49 @@ pub(crate) struct ExtensionManagerPlugin {
 }
 
 impl ExtensionManagerPlugin {
-    /// Builds the plugin sharing `endpoints` with the CEF scheme handler so the
+    /// Builds the extension sharing `endpoints` with the CEF scheme handler so the
     /// handler reads the very registry the manager populates on launch.
     pub(crate) fn new(endpoints: EndpointRegistry) -> Self {
         Self { endpoints }
+    }
+
+    fn spawn_single_host(&self, app: &mut App) {
+        let extensions = discover_extensions(&extension_roots());
+        let built = BuiltHostManifest::new(&extensions);
+        let descriptor_json =
+            serde_json::to_string(&built.manifest).expect("host manifest serializes");
+        {
+            let mut view_registry = app.world_mut().get_resource_or_init::<ViewRegistry>();
+            register_views(&mut view_registry, built.views);
+        }
+        match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "host")
+            .map_err(|e| e.to_string())
+            .and_then(|rt| {
+                HostProcess::spawn(rt, &descriptor_json, READY_TIMEOUT).map_err(|e| e.to_string())
+            }) {
+            Ok(host) => {
+                for extension in &extensions {
+                    // NOTE: coexistence slice — an extension dir sharing a name with
+                    // a launched legacy command-extension would clobber its asset
+                    // endpoint (last-write-wins). Skip + warn; Step 5 removes legacy.
+                    if self.endpoints.get(&extension.name).is_some() {
+                        tracing::warn!(name = %extension.name, "extension name collides with a legacy command-extension; skipping");
+                        continue;
+                    }
+                    self.endpoints
+                        .insert(extension.name.clone(), ExtensionEndpoints::default());
+                }
+                app.insert_resource(HostRuntime { host });
+            }
+            Err(e) => tracing::error!(error = %e, "failed to spawn single host process"),
+        }
     }
 }
 
 impl Plugin for ExtensionManagerPlugin {
     fn build(&self, app: &mut App) {
         let roots = discovery_roots();
-        let found = discover_extensions(&roots);
+        let found = discover_command_extensions(&roots);
         let mut extensions = HashMap::new();
         let endpoints = self.endpoints.clone();
         for d in found {
@@ -80,12 +121,13 @@ impl Plugin for ExtensionManagerPlugin {
             extensions,
             endpoints,
         });
-        app.init_resource::<ViewRegistry>();
+        self.spawn_single_host(app);
         app.add_systems(
             Update,
             (
                 drain_all_control_requests.in_set(ExtensionControlSet::Drain),
                 publish_ready_endpoints,
+                poll_host_lifecycle,
             ),
         );
     }
@@ -108,12 +150,12 @@ fn discovery_roots() -> Vec<PathBuf> {
 }
 
 /// Scans each root for subdirectories carrying a `package.json`, parses each as
-/// a manifest, and builds one `DiscoveredExtension` per valid manifest. The
+/// a manifest, and builds one `DiscoveredCommandExtension` per valid manifest. The
 /// entry script is fixed to `bootstrap.ts`. Names are deduplicated across all
 /// roots (first occurrence wins; later duplicates are skipped). Directory
 /// entries are sorted for deterministic ordering; subdirs lacking a
 /// `package.json` or with a parse error are skipped with a warning.
-fn discover_extensions(roots: &[PathBuf]) -> Vec<DiscoveredExtension> {
+fn discover_command_extensions(roots: &[PathBuf]) -> Vec<DiscoveredCommandExtension> {
     let mut found = Vec::new();
     let mut seen = HashSet::new();
     for root in roots {
@@ -146,7 +188,7 @@ fn discover_extensions(roots: &[PathBuf]) -> Vec<DiscoveredExtension> {
                 tracing::warn!(name = %manifest.name, "duplicate extension name; skipping later occurrence");
                 continue;
             }
-            found.push(DiscoveredExtension {
+            found.push(DiscoveredCommandExtension {
                 config: CommandExtensionConfig {
                     name: manifest.name,
                     dir,
@@ -182,10 +224,67 @@ fn publish_ready_endpoints(registry: Res<ExtensionRegistry>) {
     }
 }
 
+fn poll_host_lifecycle(host: Option<Res<HostRuntime>>) {
+    let Some(host) = host else {
+        return;
+    };
+    while let Ok(event) = host.host.events().try_recv() {
+        match event {
+            LifecycleEvent::Ready => tracing::info!("single host process ready"),
+            LifecycleEvent::SpawnFailed { error } => {
+                tracing::error!(%error, "single host failed to become ready")
+            }
+            LifecycleEvent::Exited { status } => {
+                tracing::warn!(?status, "single host process exited")
+            }
+        }
+    }
+}
+
+/// Roots scanned for the single host's extensions: the user dir always, plus
+/// the project-root bundled `extensions/` only under the `debug` feature.
+fn extension_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    match extensions_dir(&SystemEnv) {
+        Ok(dir) => roots.push(dir),
+        Err(e) => tracing::warn!(error = %e, "could not resolve user extensions dir"),
+    }
+    // NOTE: the project-root bundled `extensions/` is dev-only — it is baked at
+    // compile time (CARGO_MANIFEST_DIR) and absent from a shipped binary.
+    #[cfg(feature = "debug")]
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions"));
+    roots
+}
+
+fn register_views(registry: &mut ViewRegistry, views: Vec<(ViewId, RegisteredView)>) {
+    for (view_id, view) in views {
+        registry.register(view_id.into_inner(), view);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+
+    #[test]
+    fn register_views_populates_registry_with_capabilities() {
+        let mut reg = ViewRegistry::default();
+        register_views(
+            &mut reg,
+            vec![(
+                ViewId::new("memo.main"),
+                RegisteredView {
+                    entry: "index.html".into(),
+                    owning_ext: "memo".into(),
+                    interactive: true,
+                    capabilities: vec!["fs".into()],
+                },
+            )],
+        );
+        let v = reg.get("memo.main").expect("registered");
+        assert_eq!(v.capabilities, vec!["fs".to_string()]);
+        assert_eq!(v.owning_ext, "memo");
+    }
 
     fn memo_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions/memo")
@@ -264,7 +363,7 @@ mod tests {
         mk("memo");
         mk("note");
         std::fs::create_dir_all(tmp.path().join("not-an-ext")).unwrap();
-        let found = discover_extensions(&[tmp.path().to_path_buf()]);
+        let found = discover_command_extensions(&[tmp.path().to_path_buf()]);
         assert_eq!(found.len(), 2);
     }
 
@@ -279,8 +378,10 @@ mod tests {
         };
         mk(root_a.path(), "memo");
         mk(root_b.path(), "memo");
-        let found =
-            discover_extensions(&[root_a.path().to_path_buf(), root_b.path().to_path_buf()]);
+        let found = discover_command_extensions(&[
+            root_a.path().to_path_buf(),
+            root_b.path().to_path_buf(),
+        ]);
         assert_eq!(
             found.len(),
             1,
@@ -299,7 +400,7 @@ mod tests {
             r#"{"name":"memo","main":"other.js"}"#,
         )
         .unwrap();
-        let found = discover_extensions(&[tmp.path().to_path_buf()]);
+        let found = discover_command_extensions(&[tmp.path().to_path_buf()]);
         assert_eq!(
             found[0].config.main,
             std::ffi::OsString::from("bootstrap.ts")

@@ -7,6 +7,7 @@ use ozmux_extension_host::ViewRegistry;
 use ozmux_multiplexer::{
     ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind, SurfaceOf,
 };
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +29,18 @@ pub(crate) struct OscMounted {
 /// input forwarded to the embedded page).
 #[derive(Component, Debug, Default)]
 pub(crate) struct NonInteractive;
+
+/// The host-API namespaces an OSC-mounted webview is permitted to call, copied
+/// from its registered view's `capabilities` at mount time. The host-API bridge
+/// (Step 3) reads this as the per-surface capability grant; it is the in-ECS
+/// trust record, never derived from webview-supplied data.
+#[derive(Component, Debug, Clone, Default)]
+// NOTE: the production (non-test) build has no reader yet, so dead_code fires;
+// #[expect] cannot suppress it because the test binary DOES read the field
+// (the expectation would then fail under cfg(test)). Remove when the host-API
+// bridge (Step 3) adds a non-test reader.
+#[allow(dead_code)]
+pub(crate) struct GrantedNamespaces(pub(crate) HashSet<String>);
 
 /// Wires the OSC-webview mount/unmount observer and the config-driven gate.
 pub(crate) struct OzmuxOscWebviewPlugin;
@@ -75,6 +88,7 @@ fn on_osc_webview_request(
             let interactive = view.interactive;
             let entry = PathBuf::from(&view.entry);
             let owning = view.owning_ext.clone();
+            let capabilities = view.capabilities.clone();
             let view_id = view_id.clone();
             let surface = mux.add_surface(pane, SurfaceKind::Extension { entry });
             mux.insert_on(surface, ExtensionSurfaceId(format!("osc:{view_id}")));
@@ -85,6 +99,10 @@ fn on_osc_webview_request(
                     view_id,
                     terminal_surface,
                 },
+            );
+            mux.insert_on(
+                surface,
+                GrantedNamespaces(capabilities.into_iter().collect()),
             );
             if !interactive {
                 mux.insert_on(surface, NonInteractive);
@@ -135,6 +153,19 @@ mod tests {
                 entry: "ui/dash.html".into(),
                 owning_ext: "memo".into(),
                 interactive,
+                capabilities: Vec::new(),
+            },
+        );
+    }
+
+    fn register_view_with_caps(app: &mut App, view_id: &str, interactive: bool, caps: &[&str]) {
+        app.world_mut().resource_mut::<ViewRegistry>().register(
+            view_id.into(),
+            RegisteredView {
+                entry: "ui/dash.html".into(),
+                owning_ext: "memo".into(),
+                interactive,
+                capabilities: caps.iter().map(|s| (*s).to_string()).collect(),
             },
         );
     }
@@ -417,6 +448,39 @@ mod tests {
             active_surface(&app, pane),
             Some(first_webview),
             "duplicate mount must reactivate the existing webview surface"
+        );
+    }
+
+    #[test]
+    fn mount_stamps_granted_namespaces_from_view_capabilities() {
+        let mut app = make_test_app();
+        register_view_with_caps(&mut app, "dash", true, &["fs"]);
+
+        let (pane, terminal_surface) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.pane, o.surface)
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        app.world_mut().trigger(OscWebviewRequest {
+            entity: terminal_surface,
+            verb: OscWebviewVerb::Mount {
+                view_id: "dash".into(),
+            },
+        });
+        app.world_mut().flush();
+
+        let active = active_surface(&app, pane).expect("active surface");
+        let granted = app
+            .world()
+            .get::<GrantedNamespaces>(active)
+            .expect("mount must stamp GrantedNamespaces");
+        assert!(
+            granted.0.contains("fs"),
+            "granted namespaces must contain the view's capability"
         );
     }
 }

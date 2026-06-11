@@ -267,6 +267,7 @@ fn handle_register_view(
             entry: p.entry,
             owning_ext: caller.to_string(),
             interactive: p.interactive,
+            capabilities: Vec::new(),
         },
     );
     Ok(ControlReply::Ok)
