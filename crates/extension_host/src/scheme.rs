@@ -95,15 +95,16 @@ impl CefSchemeHandler for OzmuxExtScheme {
         match source {
             AssetSource::Static(root) => match serve_static_asset(&root, path) {
                 AssetOutcome::Ok { content_type, body } => {
+                    let mime = bare_mime(&content_type);
                     bevy::log::debug!(
                         url = %request.url,
-                        mime = %content_type,
+                        mime = %mime,
                         bytes = body.len(),
                         "ozmux-ext static asset served"
                     );
                     CefSchemeResponse {
                         status: 200,
-                        mime_type: content_type,
+                        mime_type: mime,
                         headers: Vec::new(),
                         body: CefSchemeBody::Bytes(body),
                     }
