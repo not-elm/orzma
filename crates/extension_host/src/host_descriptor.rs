@@ -6,7 +6,7 @@ use crate::registry::{RegisteredView, ViewId};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// One extension's load + serve descriptor, serialized as camelCase to match the
+/// One extension's load descriptor, serialized as camelCase to match the
 /// Node host's `parseHostManifest` zod schema.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

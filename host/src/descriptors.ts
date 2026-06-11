@@ -9,7 +9,7 @@ const hostManifestSchema = z.object({
   extensions: z.array(extensionDescriptorSchema),
 });
 
-/** One extension's load + serve descriptor, produced by Rust and consumed by the host. */
+/** One extension's load descriptor, produced by Rust and consumed by the host. */
 export type ExtensionDescriptor = z.infer<typeof extensionDescriptorSchema>;
 
 /** The handoff Rust writes (referenced by `OZMUX_HOST_MANIFEST`) and the host reads at startup. */
