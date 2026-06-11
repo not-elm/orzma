@@ -1,17 +1,23 @@
-//! Spawns the single Node host process (the `@ozmux/sdk/host` entry): writes the
-//! descriptor JSON, sets the host env, and polls the ready file via run_lifecycle.
+//! Spawns the single Node host process from the embedded `assets/host.mjs`
+//! bundle: writes the descriptor JSON + the host script into the runtime dir,
+//! sets the host env, and polls the ready file via `run_lifecycle`.
 
 use crate::host::{LifecycleEvent, RuntimeRoot, run_lifecycle};
 use crossbeam_channel::{Receiver, bounded};
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// The host's runtime paths + spawn env, with the descriptor JSON already written.
+/// The esbuild-bundled host runtime (`host/src/main.ts` → `assets/host.mjs`),
+/// embedded so a shipped binary is self-contained (no dev-tree dependency).
+const HOST_RUNTIME_JS: &str = include_str!("../../../assets/host.mjs");
+
+/// The host's runtime paths + spawn env, with the host script + descriptor JSON already written.
 pub struct PreparedHost {
+    /// The embedded host runtime written into the runtime dir; the `node` entry.
+    pub host_script_path: PathBuf,
     /// RPC UDS the host binds (Rust connects here in Step 4).
     pub rpc_sock_path: PathBuf,
     /// Descriptor JSON file (`OZMUX_HOST_MANIFEST`) the host reads at startup.
@@ -23,13 +29,16 @@ pub struct PreparedHost {
 }
 
 impl PreparedHost {
-    /// Writes the descriptor JSON into `dir` and assembles the host's paths + env.
+    /// Writes the embedded host script + the descriptor JSON into `dir` and
+    /// assembles the host's paths + env.
     ///
     /// `dir` must be a 0700 runtime directory (e.g. `RuntimeRoot::bin_dir()`).
     pub fn new(dir: &Path, descriptor_json: &str) -> std::io::Result<Self> {
+        let host_script_path = dir.join("host.mjs");
         let rpc_sock_path = dir.join("host.rpc.sock");
         let manifest_path = dir.join("host-manifest.json");
         let ready_path = dir.join(".host-ready");
+        std::fs::write(&host_script_path, HOST_RUNTIME_JS)?;
         std::fs::write(&manifest_path, descriptor_json)?;
         let env = vec![
             (
@@ -46,6 +55,7 @@ impl PreparedHost {
             ),
         ];
         Ok(Self {
+            host_script_path,
             rpc_sock_path,
             manifest_path,
             ready_path,
@@ -65,17 +75,16 @@ pub struct HostProcess {
 }
 
 impl HostProcess {
-    /// Spawns `node <entry>` with the host env, writing `descriptor_json` first
-    /// and polling the ready file for up to `ready_timeout`.
+    /// Spawns `node host.mjs` (the embedded bundle) with the host env, writing
+    /// `descriptor_json` first and polling the ready file for up to `ready_timeout`.
     pub fn spawn(
-        entry: OsString,
         runtime: RuntimeRoot,
         descriptor_json: &str,
         ready_timeout: Duration,
     ) -> std::io::Result<Self> {
         let prepared = PreparedHost::new(runtime.bin_dir(), descriptor_json)?;
         let child = Command::new("node")
-            .arg(&entry)
+            .arg(&prepared.host_script_path)
             .envs(prepared.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::null())
             .spawn()?;
@@ -140,12 +149,15 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn prepare_writes_descriptor_and_builds_env() {
+    fn prepare_writes_host_script_descriptor_and_builds_env() {
         let runtime = tempdir().unwrap();
-        let prepared = PreparedHost::new(runtime.path(), r#"{"plugins":[]}"#).unwrap();
+        let prepared = PreparedHost::new(runtime.path(), r#"{"extensions":[]}"#).unwrap();
+
+        assert_eq!(prepared.host_script_path.file_name().unwrap(), "host.mjs");
+        assert!(prepared.host_script_path.exists());
 
         let written = std::fs::read_to_string(&prepared.manifest_path).unwrap();
-        assert_eq!(written, r#"{"plugins":[]}"#);
+        assert_eq!(written, r#"{"extensions":[]}"#);
 
         let env: std::collections::HashMap<_, _> = prepared.env.iter().cloned().collect();
         assert_eq!(

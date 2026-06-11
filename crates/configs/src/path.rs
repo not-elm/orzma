@@ -10,7 +10,6 @@ pub(crate) const ENV_OZMUX_CONFIG: &str = "OZMUX_CONFIG";
 pub(crate) const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 const CONFIG_REL_PATH: &str = "ozmux/config.toml";
 const EXTENSIONS_REL_PATH: &str = "ozmux/extensions";
-const PLUGINS_REL_PATH: &str = "ozmux/plugins";
 const HOME_CONFIG_DIR: &str = ".config";
 
 /// Abstraction over environment lookups used to resolve user-specified
@@ -71,23 +70,6 @@ pub fn extensions_dir(env: &dyn Env) -> OzmuxConfigsResult<PathBuf> {
     }
     if let Some(home) = env.home_dir() {
         return Ok(home.join(HOME_CONFIG_DIR).join(EXTENSIONS_REL_PATH));
-    }
-    Err(OzmuxConfigsError::HomeDirNotFound)
-}
-
-/// Resolves the user plugins directory (`$XDG_CONFIG_HOME/ozmux/plugins` or
-/// `~/.config/ozmux/plugins`).
-///
-/// Precedence: `$XDG_CONFIG_HOME/ozmux/plugins` →
-/// `<home_dir>/.config/ozmux/plugins`. Returns `HomeDirNotFound` only
-/// when both lookups fail. `$OZMUX_CONFIG` is intentionally not consulted
-/// because it points to a config file, not a directory.
-pub fn plugins_dir(env: &dyn Env) -> OzmuxConfigsResult<PathBuf> {
-    if let Some(xdg) = env.var(ENV_XDG_CONFIG_HOME) {
-        return Ok(PathBuf::from(xdg).join(PLUGINS_REL_PATH));
-    }
-    if let Some(home) = env.home_dir() {
-        return Ok(home.join(HOME_CONFIG_DIR).join(PLUGINS_REL_PATH));
     }
     Err(OzmuxConfigsError::HomeDirNotFound)
 }
@@ -259,30 +241,6 @@ mod tests {
             extensions_dir(&env).unwrap_err(),
             OzmuxConfigsError::HomeDirNotFound
         ));
-    }
-
-    #[test]
-    fn plugins_dir_uses_xdg_when_set() {
-        let env = FakeEnv {
-            vars: HashMap::from([("XDG_CONFIG_HOME".into(), "/xdg".into())]),
-            home: Some(PathBuf::from("/home/u")),
-        };
-        assert_eq!(
-            plugins_dir(&env).unwrap(),
-            PathBuf::from("/xdg/ozmux/plugins")
-        );
-    }
-
-    #[test]
-    fn plugins_dir_falls_back_to_home_config() {
-        let env = FakeEnv {
-            vars: HashMap::new(),
-            home: Some(PathBuf::from("/home/u")),
-        };
-        assert_eq!(
-            plugins_dir(&env).unwrap(),
-            PathBuf::from("/home/u/.config/ozmux/plugins")
-        );
     }
 
     #[test]

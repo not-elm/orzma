@@ -7,17 +7,16 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use ozmux_configs::path::{SystemEnv, extensions_dir, plugins_dir};
+use ozmux_configs::path::{SystemEnv, extensions_dir};
 use ozmux_extension_host::host::{
     EndpointRegistry, ExtensionEndpoints, LifecycleEvent, RuntimeRoot,
 };
 use ozmux_extension_host::{
     BuiltHostManifest, CommandExtension, CommandExtensionConfig, ExtensionControlSet, HostProcess,
-    Manifest, RegisteredView, ViewId, ViewRegistry, apply_control_request, discover_plugins,
+    Manifest, RegisteredView, ViewId, ViewRegistry, apply_control_request, discover_extensions,
 };
 use ozmux_multiplexer::MultiplexerCommands;
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -30,7 +29,7 @@ struct HostRuntime {
     host: HostProcess,
 }
 
-struct DiscoveredExtension {
+struct DiscoveredCommandExtension {
     config: CommandExtensionConfig,
 }
 
@@ -41,7 +40,7 @@ pub(crate) struct ExtensionRegistry {
     /// Extension name → its running process handle.
     pub(crate) extensions: HashMap<String, CommandExtension>,
     /// Shared name → asset-endpoint map read by the `ozmux-ext://` scheme. The
-    /// scheme handler reads its own clone (passed to `cef_plugin` in `main`);
+    /// scheme handler reads its own clone (passed to `cef_extension` in `main`);
     /// the resource holds the canonical handle so it stays alive for the app's
     /// lifetime, and `publish_ready_endpoints` writes each extension's live
     /// asset socket path into it once the extension signals readiness.
@@ -55,7 +54,7 @@ pub(crate) struct ExtensionManagerPlugin {
 }
 
 impl ExtensionManagerPlugin {
-    /// Builds the plugin sharing `endpoints` with the CEF scheme handler so the
+    /// Builds the extension sharing `endpoints` with the CEF scheme handler so the
     /// handler reads the very registry the manager populates on launch.
     pub(crate) fn new(endpoints: EndpointRegistry) -> Self {
         Self { endpoints }
@@ -65,7 +64,7 @@ impl ExtensionManagerPlugin {
 impl Plugin for ExtensionManagerPlugin {
     fn build(&self, app: &mut App) {
         let roots = discovery_roots();
-        let found = discover_extensions(&roots);
+        let found = discover_command_extensions(&roots);
         let mut extensions = HashMap::new();
         let endpoints = self.endpoints.clone();
         for d in found {
@@ -90,34 +89,30 @@ impl Plugin for ExtensionManagerPlugin {
             extensions,
             endpoints,
         });
-        let plugins = discover_plugins(&plugin_roots());
-        let built = BuiltHostManifest::new(&plugins);
+        let extensions = discover_extensions(&extension_roots());
+        let built = BuiltHostManifest::new(&extensions);
         let descriptor_json =
             serde_json::to_string(&built.manifest).expect("host manifest serializes");
         {
             let mut view_registry = app.world_mut().get_resource_or_init::<ViewRegistry>();
             register_views(&mut view_registry, built.views);
         }
-        let host_entry: OsString = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("sdk/typescript/src/host/main.ts")
-            .into_os_string();
         match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "host")
             .map_err(|e| e.to_string())
             .and_then(|rt| {
-                HostProcess::spawn(host_entry, rt, &descriptor_json, READY_TIMEOUT)
-                    .map_err(|e| e.to_string())
+                HostProcess::spawn(rt, &descriptor_json, READY_TIMEOUT).map_err(|e| e.to_string())
             }) {
             Ok(host) => {
-                for plugin in &plugins {
-                    // NOTE: coexistence slice — a plugin sharing a name with a
-                    // launched legacy extension would clobber its asset endpoint
-                    // (last-write-wins). Skip + warn; Step 5 removes the legacy half.
-                    if self.endpoints.get(&plugin.name).is_some() {
-                        tracing::warn!(name = %plugin.name, "plugin name collides with a legacy extension; skipping");
+                for extension in &extensions {
+                    // NOTE: coexistence slice — an extension dir sharing a name with
+                    // a launched legacy command-extension would clobber its asset
+                    // endpoint (last-write-wins). Skip + warn; Step 5 removes legacy.
+                    if self.endpoints.get(&extension.name).is_some() {
+                        tracing::warn!(name = %extension.name, "extension name collides with a legacy command-extension; skipping");
                         continue;
                     }
                     self.endpoints
-                        .insert(plugin.name.clone(), ExtensionEndpoints::default());
+                        .insert(extension.name.clone(), ExtensionEndpoints::default());
                 }
                 app.insert_resource(HostRuntime { host });
             }
@@ -151,12 +146,12 @@ fn discovery_roots() -> Vec<PathBuf> {
 }
 
 /// Scans each root for subdirectories carrying a `package.json`, parses each as
-/// a manifest, and builds one `DiscoveredExtension` per valid manifest. The
+/// a manifest, and builds one `DiscoveredCommandExtension` per valid manifest. The
 /// entry script is fixed to `bootstrap.ts`. Names are deduplicated across all
 /// roots (first occurrence wins; later duplicates are skipped). Directory
 /// entries are sorted for deterministic ordering; subdirs lacking a
 /// `package.json` or with a parse error are skipped with a warning.
-fn discover_extensions(roots: &[PathBuf]) -> Vec<DiscoveredExtension> {
+fn discover_command_extensions(roots: &[PathBuf]) -> Vec<DiscoveredCommandExtension> {
     let mut found = Vec::new();
     let mut seen = HashSet::new();
     for root in roots {
@@ -189,7 +184,7 @@ fn discover_extensions(roots: &[PathBuf]) -> Vec<DiscoveredExtension> {
                 tracing::warn!(name = %manifest.name, "duplicate extension name; skipping later occurrence");
                 continue;
             }
-            found.push(DiscoveredExtension {
+            found.push(DiscoveredCommandExtension {
                 config: CommandExtensionConfig {
                     name: manifest.name,
                     dir,
@@ -242,13 +237,18 @@ fn poll_host_lifecycle(host: Option<Res<HostRuntime>>) {
     }
 }
 
-fn plugin_roots() -> Vec<PathBuf> {
+/// Roots scanned for the single host's extensions: the user dir always, plus
+/// the project-root bundled `extensions/` only under the `debug` feature.
+fn extension_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    match plugins_dir(&SystemEnv) {
+    match extensions_dir(&SystemEnv) {
         Ok(dir) => roots.push(dir),
-        Err(e) => tracing::warn!(error = %e, "could not resolve user plugins dir"),
+        Err(e) => tracing::warn!(error = %e, "could not resolve user extensions dir"),
     }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins"));
+    // NOTE: the project-root bundled `extensions/` is dev-only — it is baked at
+    // compile time (CARGO_MANIFEST_DIR) and absent from a shipped binary.
+    #[cfg(feature = "debug")]
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions"));
     roots
 }
 
@@ -359,7 +359,7 @@ mod tests {
         mk("memo");
         mk("note");
         std::fs::create_dir_all(tmp.path().join("not-an-ext")).unwrap();
-        let found = discover_extensions(&[tmp.path().to_path_buf()]);
+        let found = discover_command_extensions(&[tmp.path().to_path_buf()]);
         assert_eq!(found.len(), 2);
     }
 
@@ -374,8 +374,10 @@ mod tests {
         };
         mk(root_a.path(), "memo");
         mk(root_b.path(), "memo");
-        let found =
-            discover_extensions(&[root_a.path().to_path_buf(), root_b.path().to_path_buf()]);
+        let found = discover_command_extensions(&[
+            root_a.path().to_path_buf(),
+            root_b.path().to_path_buf(),
+        ]);
         assert_eq!(
             found.len(),
             1,
@@ -394,7 +396,7 @@ mod tests {
             r#"{"name":"memo","main":"other.js"}"#,
         )
         .unwrap();
-        let found = discover_extensions(&[tmp.path().to_path_buf()]);
+        let found = discover_command_extensions(&[tmp.path().to_path_buf()]);
         assert_eq!(
             found[0].config.main,
             std::ffi::OsString::from("bootstrap.ts")

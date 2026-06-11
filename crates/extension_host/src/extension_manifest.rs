@@ -1,4 +1,4 @@
-//! Parses a plugin's `ozmux.toml` manifest: the views it publishes for OSC
+//! Parses a extension's `ozmux.toml` manifest: the views it publishes for OSC
 //! mounting and the host-API capabilities each view is granted.
 
 use crate::error::{ExtensionError, ExtensionResult};
@@ -6,21 +6,21 @@ use crate::registry::ViewId;
 use serde::Deserialize;
 use std::path::PathBuf;
 
-/// A plugin's resolved manifest: the views it publishes for OSC mounting.
+/// A extension's resolved manifest: the views it publishes for OSC mounting.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginManifest {
-    /// Plugin-relative paths of the api `.ts` files this plugin loads (multiple allowed).
+pub struct ExtensionManifest {
+    /// Extension-relative paths of the api `.ts` files this extension loads (multiple allowed).
     pub api: Vec<PathBuf>,
-    /// Views this plugin publishes, addressable by `view_id` from OSC mounts.
-    pub views: Vec<ManifestView>,
+    /// Views this extension publishes, addressable by `view_id` from OSC mounts.
+    pub views: Vec<ExtensionView>,
 }
 
-/// One view a plugin publishes for OSC mounting, with its capability grant.
+/// One view a extension publishes for OSC mounting, with its capability grant.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManifestView {
+pub struct ExtensionView {
     /// PTY-facing identifier referenced by `OSC mount;<id>`.
     pub id: ViewId,
-    /// HTML entry path relative to the plugin dir (e.g. `index.html`).
+    /// HTML entry path relative to the extension dir (e.g. `index.html`).
     pub entry: PathBuf,
     /// Host-API namespaces this view's webview may call (namespace granularity).
     pub capabilities: Vec<String>,
@@ -28,14 +28,14 @@ pub struct ManifestView {
     pub interactive: bool,
 }
 
-impl PluginManifest {
-    /// Parses an `ozmux.toml` string into a `PluginManifest`.
+impl ExtensionManifest {
+    /// Parses an `ozmux.toml` string into a `ExtensionManifest`.
     pub fn parse(text: &str) -> ExtensionResult<Self> {
         let raw: RawManifest = toml::from_str(text).map_err(ExtensionError::Toml)?;
         let views = raw
             .views
             .into_iter()
-            .map(|v| ManifestView {
+            .map(|v| ExtensionView {
                 id: ViewId::new(v.id),
                 entry: v.entry,
                 capabilities: v.capabilities,
@@ -80,7 +80,7 @@ entry = "index.html"
 capabilities = ["fs"]
 interactive = true
 "#;
-        let m = PluginManifest::parse(text).unwrap();
+        let m = ExtensionManifest::parse(text).unwrap();
         assert_eq!(m.views.len(), 1);
         let v = &m.views[0];
         assert_eq!(v.id.as_str(), "memo.main");
@@ -96,14 +96,14 @@ interactive = true
 id = "v"
 entry = "a.html"
 "#;
-        let v = &PluginManifest::parse(text).unwrap().views[0];
+        let v = &ExtensionManifest::parse(text).unwrap().views[0];
         assert!(v.capabilities.is_empty());
         assert!(!v.interactive);
     }
 
     #[test]
     fn empty_text_has_no_views() {
-        assert!(PluginManifest::parse("").unwrap().views.is_empty());
+        assert!(ExtensionManifest::parse("").unwrap().views.is_empty());
     }
 
     #[test]
@@ -113,7 +113,7 @@ entry = "a.html"
 entry = "a.html"
 "#;
         assert!(matches!(
-            PluginManifest::parse(text),
+            ExtensionManifest::parse(text),
             Err(ExtensionError::Toml(_))
         ));
     }
@@ -121,13 +121,13 @@ entry = "a.html"
     #[test]
     fn rejects_malformed_toml() {
         assert!(matches!(
-            PluginManifest::parse("[[views]"),
+            ExtensionManifest::parse("[[views]"),
             Err(ExtensionError::Toml(_))
         ));
     }
 
     #[test]
-    fn parses_plugin_level_api_files() {
+    fn parses_extension_level_api_files() {
         let text = r#"
 api = ["api/fs.ts", "api/net.ts"]
 
@@ -135,7 +135,7 @@ api = ["api/fs.ts", "api/net.ts"]
 id = "memo.main"
 entry = "index.html"
 "#;
-        let m = PluginManifest::parse(text).unwrap();
+        let m = ExtensionManifest::parse(text).unwrap();
         assert_eq!(
             m.api,
             vec![PathBuf::from("api/fs.ts"), PathBuf::from("api/net.ts")]
@@ -145,7 +145,7 @@ entry = "index.html"
 
     #[test]
     fn api_defaults_to_empty() {
-        let m = PluginManifest::parse("[[views]]\nid = \"v\"\nentry = \"a.html\"\n").unwrap();
+        let m = ExtensionManifest::parse("[[views]]\nid = \"v\"\nentry = \"a.html\"\n").unwrap();
         assert!(m.api.is_empty());
     }
 }

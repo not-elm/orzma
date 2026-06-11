@@ -1,29 +1,29 @@
 //! Builds the host-manifest descriptor JSON (consumed by the Node host) and the
-//! capability-bearing `ViewRegistry` entries from discovered plugins.
+//! capability-bearing `ViewRegistry` entries from discovered extensions.
 
-use crate::plugin_discovery::DiscoveredPlugin;
+use crate::extension_discovery::DiscoveredExtension;
 use crate::registry::{RegisteredView, ViewId};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// One plugin's load + serve descriptor, serialized as camelCase to match the
+/// One extension's load + serve descriptor, serialized as camelCase to match the
 /// Node host's `parseHostManifest` zod schema.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginDescriptorJson {
-    /// Plugin name (the `ozmux-ext://<name>` host).
+pub struct ExtensionDescriptorJson {
+    /// Extension name (the `ozmux-ext://<name>` host).
     pub name: String,
-    /// Absolute paths of the plugin's api `.ts` files (traversal-validated).
+    /// Absolute paths of the extension's api `.ts` files (traversal-validated).
     pub api_paths: Vec<PathBuf>,
-    /// Absolute plugin directory the host serves assets from.
+    /// Absolute extension directory the host serves assets from.
     pub asset_root: String,
 }
 
 /// The host-manifest JSON Rust writes to `OZMUX_HOST_MANIFEST`.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostManifestJson {
-    /// One descriptor per discovered plugin.
-    pub plugins: Vec<PluginDescriptorJson>,
+    /// One descriptor per discovered extension.
+    pub extensions: Vec<ExtensionDescriptorJson>,
 }
 
 /// The descriptor JSON plus the `ViewRegistry` entries to register.
@@ -36,43 +36,43 @@ pub struct BuiltHostManifest {
 }
 
 impl BuiltHostManifest {
-    /// Builds the descriptor JSON + validated view entries from discovered plugins.
+    /// Builds the descriptor JSON + validated view entries from discovered extensions.
     /// A relative path component (`..`) in an api or entry path, and an empty or
     /// whitespace-bearing `view_id`, are rejected (skipped with a warning) — the
-    /// trust boundary that keeps manifest data from escaping the plugin dir.
-    pub fn new(plugins: &[DiscoveredPlugin]) -> Self {
+    /// trust boundary that keeps manifest data from escaping the extension dir.
+    pub fn new(extensions: &[DiscoveredExtension]) -> Self {
         let mut descriptors = Vec::new();
         let mut views = Vec::new();
-        for plugin in plugins {
-            let asset_root = plugin.dir.to_string_lossy().into_owned();
+        for extension in extensions {
+            let asset_root = extension.dir.to_string_lossy().into_owned();
             let mut api_paths = Vec::new();
-            for rel in &plugin.manifest.api {
+            for rel in &extension.manifest.api {
                 if is_safe_rel(rel) {
-                    api_paths.push(plugin.dir.join(rel));
+                    api_paths.push(extension.dir.join(rel));
                 } else {
-                    bevy::log::warn!(plugin = %plugin.name, path = %rel.display(), "unsafe api path; skipping");
+                    bevy::log::warn!(extension = %extension.name, path = %rel.display(), "unsafe api path; skipping");
                 }
             }
-            descriptors.push(PluginDescriptorJson {
-                name: plugin.name.clone(),
+            descriptors.push(ExtensionDescriptorJson {
+                name: extension.name.clone(),
                 api_paths,
                 asset_root,
             });
-            for view in &plugin.manifest.views {
+            for view in &extension.manifest.views {
                 if view.id.as_str().is_empty() || view.id.as_str().chars().any(char::is_whitespace)
                 {
-                    bevy::log::warn!(plugin = %plugin.name, id = %view.id.as_str(), "invalid view id; skipping");
+                    bevy::log::warn!(extension = %extension.name, id = %view.id.as_str(), "invalid view id; skipping");
                     continue;
                 }
                 if !is_safe_rel(&view.entry) {
-                    bevy::log::warn!(plugin = %plugin.name, entry = %view.entry.display(), "unsafe view entry; skipping");
+                    bevy::log::warn!(extension = %extension.name, entry = %view.entry.display(), "unsafe view entry; skipping");
                     continue;
                 }
                 views.push((
                     view.id.clone(),
                     RegisteredView {
                         entry: view.entry.to_string_lossy().into_owned(),
-                        owning_ext: plugin.name.clone(),
+                        owning_ext: extension.name.clone(),
                         interactive: view.interactive,
                         capabilities: view.capabilities.clone(),
                     },
@@ -81,7 +81,7 @@ impl BuiltHostManifest {
         }
         Self {
             manifest: HostManifestJson {
-                plugins: descriptors,
+                extensions: descriptors,
             },
             views,
         }
@@ -100,22 +100,27 @@ fn is_safe_rel(rel: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin_manifest::{ManifestView, PluginManifest};
+    use crate::extension_manifest::{ExtensionManifest, ExtensionView};
     use std::path::PathBuf;
 
-    fn plugin(name: &str, dir: &str, api: &[&str], views: Vec<ManifestView>) -> DiscoveredPlugin {
-        DiscoveredPlugin {
+    fn extension(
+        name: &str,
+        dir: &str,
+        api: &[&str],
+        views: Vec<ExtensionView>,
+    ) -> DiscoveredExtension {
+        DiscoveredExtension {
             name: name.into(),
             dir: PathBuf::from(dir),
-            manifest: PluginManifest {
+            manifest: ExtensionManifest {
                 api: api.iter().copied().map(PathBuf::from).collect(),
                 views,
             },
         }
     }
 
-    fn view(id: &str, entry: &str, caps: &[&str]) -> ManifestView {
-        ManifestView {
+    fn view(id: &str, entry: &str, caps: &[&str]) -> ExtensionView {
+        ExtensionView {
             id: ViewId::new(id),
             entry: entry.into(),
             capabilities: caps.iter().map(|s| s.to_string()).collect(),
@@ -125,17 +130,18 @@ mod tests {
 
     #[test]
     fn builds_camelcase_descriptor_with_absolute_paths() {
-        let built = BuiltHostManifest::new(&[plugin("memo", "/abs/memo", &["api/fs.ts"], vec![])]);
+        let built =
+            BuiltHostManifest::new(&[extension("memo", "/abs/memo", &["api/fs.ts"], vec![])]);
         let json = serde_json::to_string(&built.manifest).unwrap();
         assert_eq!(
             json,
-            r#"{"plugins":[{"name":"memo","apiPaths":["/abs/memo/api/fs.ts"],"assetRoot":"/abs/memo"}]}"#
+            r#"{"extensions":[{"name":"memo","apiPaths":["/abs/memo/api/fs.ts"],"assetRoot":"/abs/memo"}]}"#
         );
     }
 
     #[test]
     fn builds_view_entries_with_capabilities() {
-        let built = BuiltHostManifest::new(&[plugin(
+        let built = BuiltHostManifest::new(&[extension(
             "memo",
             "/abs/memo",
             &[],
@@ -152,19 +158,19 @@ mod tests {
 
     #[test]
     fn rejects_path_traversal_in_entry_and_api() {
-        let built = BuiltHostManifest::new(&[plugin(
+        let built = BuiltHostManifest::new(&[extension(
             "bad",
             "/abs/bad",
             &["../escape.ts"],
             vec![view("bad.v", "../../etc/passwd", &[])],
         )]);
-        assert!(built.manifest.plugins[0].api_paths.is_empty());
+        assert!(built.manifest.extensions[0].api_paths.is_empty());
         assert!(built.views.is_empty());
     }
 
     #[test]
     fn rejects_empty_or_whitespace_view_id() {
-        let built = BuiltHostManifest::new(&[plugin(
+        let built = BuiltHostManifest::new(&[extension(
             "p",
             "/abs/p",
             &[],

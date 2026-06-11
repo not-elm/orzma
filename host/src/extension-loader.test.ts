@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { loadPlugin, mergeApis } from './plugin-loader.ts';
+import { loadExtension, mergeApis } from './extension-loader.ts';
 
 describe('mergeApis', () => {
-  it('merges disjoint namespaces from multiple plugins', () => {
+  it('merges disjoint namespaces from multiple extensions', () => {
     const { api, warnings } = mergeApis([
       { name: 'a', api: { fs: { read: async () => 1 } } },
       { name: 'b', api: { net: { get: async () => 2 } } },
@@ -11,7 +11,7 @@ describe('mergeApis', () => {
     expect(warnings).toEqual([]);
   });
 
-  it('keeps the earlier plugin on namespace collision and warns for the later', () => {
+  it('keeps the earlier extension on namespace collision and warns for the later', () => {
     const first = { read: async () => 'first' };
     const { api, warnings } = mergeApis([
       { name: 'a', api: { fs: first } },
@@ -33,38 +33,38 @@ describe('mergeApis', () => {
   });
 });
 
-describe('loadPlugin', () => {
-  it('returns the default export as the plugin api', async () => {
+describe('loadExtension', () => {
+  it('returns the default export as the extension api', async () => {
     const importer = async () => ({ default: { fs: { read: async () => 'ok' } } });
-    const p = await loadPlugin('memo', '/abs/memo/api.ts', importer);
+    const p = await loadExtension('memo', '/abs/memo/api.ts', importer);
     expect(p.name).toBe('memo');
     expect(Object.keys(p.api)).toEqual(['fs']);
   });
 
   it('rejects when the module has no object default export', async () => {
     const importer = async () => ({ default: 42 });
-    await expect(loadPlugin('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
+    await expect(loadExtension('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
       /default-export an object/,
     );
   });
 
   it('rejects when the module has no default export', async () => {
     const importer = async () => ({});
-    await expect(loadPlugin('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
+    await expect(loadExtension('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
       /default-export an object/,
     );
   });
 
   it('rejects when the default export is null', async () => {
     const importer = async () => ({ default: null });
-    await expect(loadPlugin('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
+    await expect(loadExtension('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
       /default-export an object/,
     );
   });
 
   it('rejects an array default export (typeof [] === "object")', async () => {
     const importer = async () => ({ default: [{ fs: { read: async () => 'x' } }] });
-    await expect(loadPlugin('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
+    await expect(loadExtension('bad', '/abs/bad/api.ts', importer)).rejects.toThrow(
       /default-export an object/,
     );
   });

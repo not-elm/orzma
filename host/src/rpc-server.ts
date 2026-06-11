@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as net from 'node:net';
+import type { ApiNamespaceMap } from './api-types.ts';
 import { decodeHostValue } from './binary-codec.ts';
-import type { ApiNamespaceMap } from './define-api.ts';
 import { dispatchHostCall, type HostCallFrame } from './dispatch.ts';
 
 const MAX_RPC_LINE_BYTES = 8 * 1024 * 1024;

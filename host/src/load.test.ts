@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { PluginDescriptor } from './descriptors.ts';
+import type { ExtensionDescriptor } from './descriptors.ts';
+import type { ApiImporter } from './extension-loader.ts';
 import { loadHostApi } from './load.ts';
-import type { ApiImporter } from './plugin-loader.ts';
 
 function fakeImporter(modules: Record<string, unknown>): ApiImporter {
   return async (specifier: string) => {
@@ -10,14 +10,14 @@ function fakeImporter(modules: Record<string, unknown>): ApiImporter {
   };
 }
 
-const d = (name: string, apiPaths: string[]): PluginDescriptor => ({
+const d = (name: string, apiPaths: string[]): ExtensionDescriptor => ({
   name,
   apiPaths,
   assetRoot: `/p/${name}`,
 });
 
 describe('loadHostApi', () => {
-  it('merges multiple api files within one plugin', async () => {
+  it('merges multiple api files within one extension', async () => {
     const importer = fakeImporter({
       '/a/fs.ts': { fs: { read: async () => 'r' } },
       '/a/net.ts': { net: { get: async () => 'g' } },
@@ -44,7 +44,7 @@ describe('loadHostApi', () => {
 
   it('is fail-soft: a broken api file is skipped with a warning, others still load', async () => {
     const importer = fakeImporter({
-      '/a/bad.ts': 42, // non-object default → loadPlugin throws
+      '/a/bad.ts': 42, // non-object default → loadExtension throws
       '/a/ok.ts': { fs: { read: async () => 'r' } },
     });
     const { api, warnings } = await loadHostApi([d('a', ['/a/bad.ts', '/a/ok.ts'])], importer);

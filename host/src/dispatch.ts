@@ -1,5 +1,5 @@
+import type { ApiNamespaceMap } from './api-types.ts';
 import { encodeHostValue } from './binary-codec.ts';
-import type { ApiNamespaceMap } from './define-api.ts';
 
 /** A host call as it arrives off the wire (the trusted surface identity lives Rust-side, not here). */
 export interface HostCallFrame {

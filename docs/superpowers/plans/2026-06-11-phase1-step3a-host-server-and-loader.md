@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Complete the runnable `@ozmux/sdk/host` — the descriptor handoff contract Rust will produce, a multi-file API loader composing Step 2's `loadPlugin`, a UDS RPC server that symmetrically decodes args + dispatches + encodes results, and the `node` host entry that ties env → load → bind → ready — all as isolated TypeScript, vitest-tested with real Unix sockets, with NO Rust and zero impact on the running app.
+**Goal:** Complete the runnable `@ozmux/host` — the descriptor handoff contract Rust will produce, a multi-file API loader composing Step 2's `loadExtension`, a UDS RPC server that symmetrically decodes args + dispatches + encodes results, and the `node` host entry that ties env → load → bind → ready — all as isolated TypeScript, vitest-tested with real Unix sockets, with NO Rust and zero impact on the running app.
 
-**Architecture (refined per design Q&A + spec-review):** Rust owns plugin discovery + `ozmux.toml` parsing + trust data; it resolves each plugin's manifest-declared `api = [...]` files to absolute paths and writes a descriptor handoff (`{ plugins: [{ name, apiPaths[], assetRoot }] }`). The host is a dumb executor: read the descriptors, `import()` each api path (no `api.ts` hardcoding — the manifest names the file(s), multiple allowed), `mergeApis` across all loaded units **user-plugins-first**, bind the RPC server, then signal readiness via a **filesystem marker** (matching the existing Rust poll). The RPC server decodes `{__u8}` args before dispatch (symmetric with result-encode), bounds inbound framing, replies with an error frame to any `reqId`-addressable malformed call, and never re-checks capabilities (Rust-side, Step 4).
+**Architecture (refined per design Q&A + spec-review):** Rust owns extension discovery + `ozmux.toml` parsing + trust data; it resolves each extension's manifest-declared `api = [...]` files to absolute paths and writes a descriptor handoff (`{ extensions: [{ name, apiPaths[], assetRoot }] }`). The host is a dumb executor: read the descriptors, `import()` each api path (no `api.ts` hardcoding — the manifest names the file(s), multiple allowed), `mergeApis` across all loaded units **user-extensions-first**, bind the RPC server, then signal readiness via a **filesystem marker** (matching the existing Rust poll). The RPC server decodes `{__u8}` args before dispatch (symmetric with result-encode), bounds inbound framing, replies with an error frame to any `reqId`-addressable malformed call, and never re-checks capabilities (Rust-side, Step 4).
 
 **Tech Stack:** TypeScript (strict, nodenext, verbatimModuleSyntax), `zod` (already a workspace dep) for the descriptor schema, vitest with real `node:net` UDS sockets, `node:fs/promises`. Biome.
 
@@ -12,15 +12,15 @@
 
 ## Where this fits
 
-Steps 1 ✅, 2 ✅. **Step 3a (this doc)** = runnable host (TS, isolated). **Step 3b** (next) = Rust: extend `PluginManifest` with the plugin-level `api: Vec<String>` field, plugin discovery (user-first) → write the descriptor JSON, parse `ozmux.toml` → `ViewRegistry` with capabilities + `entry`/`id` validation, reshape `ExtensionManagerPlugin` to spawn exactly one host, **asset `{plugin,path}` protocol + `OZMUX_HOST_ASSET_SOCK`**. Step 4 = webview host-API bridge. Step 5 = remove old machinery. Step 6 = memo plugin migration + E2E.
+Steps 1 ✅, 2 ✅. **Step 3a (this doc)** = runnable host (TS, isolated). **Step 3b** (next) = Rust: extend `ExtensionManifest` with the extension-level `api: Vec<String>` field, extension discovery (user-first) → write the descriptor JSON, parse `ozmux.toml` → `ViewRegistry` with capabilities + `entry`/`id` validation, reshape `ExtensionManagerPlugin` to spawn exactly one host, **asset `{extension,path}` protocol + `OZMUX_HOST_ASSET_SOCK`**. Step 4 = webview host-API bridge. Step 5 = remove old machinery. Step 6 = memo extension migration + E2E.
 
 ### 3a → 3b handoff contract (frozen here)
 - **Env vars Step 3b must set when spawning `node main.ts`:** `OZMUX_HOST_RPC_SOCK` (RPC UDS path), `OZMUX_HOST_MANIFEST` (path to the descriptor JSON file Rust writes), `OZMUX_HOST_READY_PATH` (path the host `touch`es after binding — Rust polls its existence).
-- **Descriptor JSON shape:** `{ "plugins": [{ "name": string, "apiPaths": string[] (absolute), "assetRoot": string (absolute) }] }`. Rust resolves the manifest `api = [...]` entries to absolute paths and is responsible for path-traversal + plugin-name safety validation (the host trusts the descriptor — it is the trust boundary, not the host).
+- **Descriptor JSON shape:** `{ "extensions": [{ "name": string, "apiPaths": string[] (absolute), "assetRoot": string (absolute) }] }`. Rust resolves the manifest `api = [...]` entries to absolute paths and is responsible for path-traversal + extension-name safety validation (the host trusts the descriptor — it is the trust boundary, not the host).
 - **Readiness = filesystem marker** (NOT a stdout line): chosen because the current Rust lifecycle already polls `<path>/.ready` existence (`crates/extension_host/src/command.rs:174-177`) and only pipes stdin (`:151-161`). 3b points that poll at `OZMUX_HOST_READY_PATH`; no stdout-reader plumbing is added.
-- **Deferred to 3b (intentional, not an oversight):** asset serving. `assetRoot` is carried in the descriptor *now* but **unconsumed in 3a**; the asset server + its `OZMUX_HOST_ASSET_SOCK` env + the `{plugin,path}` request reshape (design spec §④) all land in 3b. Until then, OSC-mounting a view yields a blank webview — expected on the feature branch.
+- **Deferred to 3b (intentional, not an oversight):** asset serving. `assetRoot` is carried in the descriptor *now* but **unconsumed in 3a**; the asset server + its `OZMUX_HOST_ASSET_SOCK` env + the `{extension,path}` request reshape (design spec §④) all land in 3b. Until then, OSC-mounting a view yields a blank webview — expected on the feature branch.
 
-Spec: `docs/superpowers/specs/2026-06-11-phase1-single-host-process-design.md` (§②, §③). Conventions: `.claude/rules/typescript.md` (JSDoc on exports; comments TODO/NOTE/biome-ignore only; `.ts` import extensions; `import type`/`export type`). Run tests from `sdk/typescript/` (`pnpm test`), lint from repo root (`pnpm lint`).
+Spec: `docs/superpowers/specs/2026-06-11-phase1-single-host-process-design.md` (§②, §③). Conventions: `.claude/rules/typescript.md` (JSDoc on exports; comments TODO/NOTE/biome-ignore only; `.ts` import extensions; `import type`/`export type`). Run tests from `host/` (`pnpm test`), lint from repo root (`pnpm lint`).
 
 ---
 
@@ -28,18 +28,18 @@ Spec: `docs/superpowers/specs/2026-06-11-phase1-single-host-process-design.md` (
 
 | File | Responsibility | Action |
 | --- | --- | --- |
-| `sdk/typescript/src/host/descriptors.ts` | zod schema → `PluginDescriptor`/`HostManifest` types + `parseHostManifest` | Create |
-| `sdk/typescript/src/host/load.ts` | `loadHostApi(plugins, importer)` — multi-file, user-first, **fail-soft** merge | Create |
-| `sdk/typescript/src/host/rpc-server.ts` | `bindHostRpcServer(sockPath, api)` — bounded UDS NDJSON RPC, symmetric arg-decode, error-frame on malformed | Create |
-| `sdk/typescript/src/host/main.ts` | `node` host entry: env → load → bind → ready-file | Create |
-| `sdk/typescript/src/host/index.ts` | barrel re-exports | Modify |
+| `host/src/descriptors.ts` | zod schema → `ExtensionDescriptor`/`HostManifest` types + `parseHostManifest` | Create |
+| `host/src/load.ts` | `loadHostApi(extensions, importer)` — multi-file, user-first, **fail-soft** merge | Create |
+| `host/src/rpc-server.ts` | `bindHostRpcServer(sockPath, api)` — bounded UDS NDJSON RPC, symmetric arg-decode, error-frame on malformed | Create |
+| `host/src/main.ts` | `node` host entry: env → load → bind → ready-file | Create |
+| `host/src/index.ts` | barrel re-exports | Modify |
 | `*.test.ts` next to each | vitest | Create |
 
 ---
 
 ## Task 1: descriptor contract (`descriptors.ts`, zod)
 
-**Files:** Create `sdk/typescript/src/host/descriptors.ts` + `descriptors.test.ts`; modify `index.ts`.
+**Files:** Create `host/src/descriptors.ts` + `descriptors.test.ts`; modify `index.ts`.
 
 - [ ] **Step 1: Write the failing test** — `descriptors.test.ts`:
 
@@ -51,55 +51,55 @@ describe('parseHostManifest', () => {
   it('parses a well-formed manifest', () => {
     const m = parseHostManifest(
       JSON.stringify({
-        plugins: [{ name: 'memo', apiPaths: ['/abs/memo/api/fs.ts'], assetRoot: '/abs/memo' }],
+        extensions: [{ name: 'memo', apiPaths: ['/abs/memo/api/fs.ts'], assetRoot: '/abs/memo' }],
       }),
     );
-    expect(m.plugins).toEqual([
+    expect(m.extensions).toEqual([
       { name: 'memo', apiPaths: ['/abs/memo/api/fs.ts'], assetRoot: '/abs/memo' },
     ]);
   });
 
-  it('accepts an empty plugins array', () => {
-    expect(parseHostManifest('{"plugins":[]}').plugins).toEqual([]);
+  it('accepts an empty extensions array', () => {
+    expect(parseHostManifest('{"extensions":[]}').extensions).toEqual([]);
   });
 
   it('throws on malformed JSON', () => {
     expect(() => parseHostManifest('{not json')).toThrow(/host manifest/i);
   });
 
-  it('throws when plugins is missing or not an array', () => {
+  it('throws when extensions is missing or not an array', () => {
     expect(() => parseHostManifest('{}')).toThrow(/host manifest/i);
-    expect(() => parseHostManifest('{"plugins":"x"}')).toThrow(/host manifest/i);
+    expect(() => parseHostManifest('{"extensions":"x"}')).toThrow(/host manifest/i);
   });
 
-  it('throws when a plugin entry has the wrong shape', () => {
-    expect(() => parseHostManifest('{"plugins":[{"name":"x"}]}')).toThrow(/host manifest/i);
+  it('throws when an extension entry has the wrong shape', () => {
+    expect(() => parseHostManifest('{"extensions":[{"name":"x"}]}')).toThrow(/host manifest/i);
     expect(() =>
-      parseHostManifest('{"plugins":[{"name":"x","apiPaths":"y","assetRoot":"z"}]}'),
+      parseHostManifest('{"extensions":[{"name":"x","apiPaths":"y","assetRoot":"z"}]}'),
     ).toThrow(/host manifest/i);
   });
 });
 ```
 
-- [ ] **Step 2: Run, expect fail** — from `sdk/typescript/`: `pnpm test descriptors` → FAIL (module not found).
+- [ ] **Step 2: Run, expect fail** — from `host/`: `pnpm test descriptors` → FAIL (module not found).
 
-- [ ] **Step 3: Implement** — `sdk/typescript/src/host/descriptors.ts`:
+- [ ] **Step 3: Implement** — `host/src/descriptors.ts`:
 
 ```ts
 import { z } from 'zod';
 
-const pluginDescriptorSchema = z.object({
+const extensionDescriptorSchema = z.object({
   name: z.string(),
   apiPaths: z.array(z.string()),
   assetRoot: z.string(),
 });
 
 const hostManifestSchema = z.object({
-  plugins: z.array(pluginDescriptorSchema),
+  extensions: z.array(extensionDescriptorSchema),
 });
 
-/** One plugin's load + serve descriptor, produced by Rust and consumed by the host. */
-export type PluginDescriptor = z.infer<typeof pluginDescriptorSchema>;
+/** One extension's load + serve descriptor, produced by Rust and consumed by the host. */
+export type ExtensionDescriptor = z.infer<typeof extensionDescriptorSchema>;
 
 /** The handoff Rust writes (referenced by `OZMUX_HOST_MANIFEST`) and the host reads at startup. */
 export type HostManifest = z.infer<typeof hostManifestSchema>;
@@ -120,21 +120,21 @@ export function parseHostManifest(json: string): HostManifest {
 }
 ```
 
-> The plugin name / path safety validation lives Rust-side (it produces the descriptor); the host schema only checks structural shape. `z.infer` makes the schema the single source of truth for `HostManifest`/`PluginDescriptor`.
+> The extension name / path safety validation lives Rust-side (it produces the descriptor); the host schema only checks structural shape. `z.infer` makes the schema the single source of truth for `HostManifest`/`ExtensionDescriptor`.
 
 - [ ] **Step 4: Re-export** — append to `index.ts`:
 
 ```ts
 export { parseHostManifest } from './descriptors.ts';
-export type { HostManifest, PluginDescriptor } from './descriptors.ts';
+export type { HostManifest, ExtensionDescriptor } from './descriptors.ts';
 ```
 
-- [ ] **Step 5: Verify** — `pnpm test descriptors` → PASS (5 tests); `pnpm check-types` clean; repo-root `pnpm lint` clean (confirm `zod` import resolves — it is in `sdk/typescript/package.json` deps as `"zod": "catalog:"`).
+- [ ] **Step 5: Verify** — `pnpm test descriptors` → PASS (5 tests); `pnpm check-types` clean; repo-root `pnpm lint` clean (confirm `zod` import resolves — it is in `host/package.json` deps as `"zod": "catalog:"`).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add sdk/typescript/src/host/descriptors.ts sdk/typescript/src/host/descriptors.test.ts sdk/typescript/src/host/index.ts
+git add host/src/descriptors.ts host/src/descriptors.test.ts host/src/index.ts
 git commit -m "feat(sdk/host): add zod host-manifest descriptor contract"
 ```
 
@@ -142,15 +142,15 @@ git commit -m "feat(sdk/host): add zod host-manifest descriptor contract"
 
 ## Task 2: multi-file API loader (`load.ts`, fail-soft)
 
-**Files:** Create `sdk/typescript/src/host/load.ts` + `load.test.ts`; modify `index.ts`.
+**Files:** Create `host/src/load.ts` + `load.test.ts`; modify `index.ts`.
 
 - [ ] **Step 1: Write the failing test** — `load.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import type { PluginDescriptor } from './descriptors.ts';
+import type { ExtensionDescriptor } from './descriptors.ts';
 import { loadHostApi } from './load.ts';
-import type { ApiImporter } from './plugin-loader.ts';
+import type { ApiImporter } from './extension-loader.ts';
 
 function fakeImporter(modules: Record<string, unknown>): ApiImporter {
   return async (specifier: string) => {
@@ -159,10 +159,10 @@ function fakeImporter(modules: Record<string, unknown>): ApiImporter {
   };
 }
 
-const d = (name: string, apiPaths: string[]): PluginDescriptor => ({ name, apiPaths, assetRoot: `/p/${name}` });
+const d = (name: string, apiPaths: string[]): ExtensionDescriptor => ({ name, apiPaths, assetRoot: `/p/${name}` });
 
 describe('loadHostApi', () => {
-  it('merges multiple api files within one plugin', async () => {
+  it('merges multiple api files within one extension', async () => {
     const importer = fakeImporter({
       '/a/fs.ts': { fs: { read: async () => 'r' } },
       '/a/net.ts': { net: { get: async () => 'g' } },
@@ -189,7 +189,7 @@ describe('loadHostApi', () => {
 
   it('is fail-soft: a broken api file is skipped with a warning, others still load', async () => {
     const importer = fakeImporter({
-      '/a/bad.ts': 42, // non-object default → loadPlugin throws
+      '/a/bad.ts': 42, // non-object default → loadExtension throws
       '/a/ok.ts': { fs: { read: async () => 'r' } },
     });
     const { api, warnings } = await loadHostApi([d('a', ['/a/bad.ts', '/a/ok.ts'])], importer);
@@ -208,33 +208,33 @@ describe('loadHostApi', () => {
 
 - [ ] **Step 2: Run, expect fail** — `pnpm test load` → FAIL.
 
-- [ ] **Step 3: Implement** — `sdk/typescript/src/host/load.ts`:
+- [ ] **Step 3: Implement** — `host/src/load.ts`:
 
 ```ts
-import type { PluginDescriptor } from './descriptors.ts';
-import { type ApiImporter, type MergeResult, loadPlugin, mergeApis } from './plugin-loader.ts';
+import type { ExtensionDescriptor } from './descriptors.ts';
+import { type ApiImporter, type MergeResult, loadExtension, mergeApis } from './extension-loader.ts';
 
 /**
- * Loads every api file of every plugin (in the given order) via the injected
+ * Loads every api file of every extension (in the given order) via the injected
  * importer and merges them. Fail-soft: a file that fails to import or validate is
- * recorded as a warning and skipped, so one broken plugin never disables the
- * others in the single host process. The caller's order — user plugins first —
+ * recorded as a warning and skipped, so one broken extension never disables the
+ * others in the single host process. The caller's order — user extensions first —
  * drives first-wins on namespace collisions; the warning label is
- * `"<plugin> (<path>)"` so an intra-plugin collision is legible.
+ * `"<extension> (<path>)"` so an intra-extension collision is legible.
  */
 export async function loadHostApi(
-  plugins: PluginDescriptor[],
+  extensions: ExtensionDescriptor[],
   importer: ApiImporter,
 ): Promise<MergeResult> {
   const units = [];
   const loadWarnings: string[] = [];
-  for (const plugin of plugins) {
-    for (const apiPath of plugin.apiPaths) {
+  for (const extension of extensions) {
+    for (const apiPath of extension.apiPaths) {
       try {
-        units.push(await loadPlugin(`${plugin.name} (${apiPath})`, apiPath, importer));
+        units.push(await loadExtension(`${extension.name} (${apiPath})`, apiPath, importer));
       } catch (e) {
         loadWarnings.push(
-          `plugin "${plugin.name}" api file ${apiPath} failed to load: ${e instanceof Error ? e.message : String(e)}`,
+          `extension "${extension.name}" api file ${apiPath} failed to load: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
     }
@@ -255,7 +255,7 @@ export { loadHostApi } from './load.ts';
 - [ ] **Step 6: Commit**
 
 ```bash
-git add sdk/typescript/src/host/load.ts sdk/typescript/src/host/load.test.ts sdk/typescript/src/host/index.ts
+git add host/src/load.ts host/src/load.test.ts host/src/index.ts
 git commit -m "feat(sdk/host): add fail-soft multi-file user-first api loader"
 ```
 
@@ -263,7 +263,7 @@ git commit -m "feat(sdk/host): add fail-soft multi-file user-first api loader"
 
 ## Task 3: RPC socket server (`rpc-server.ts`)
 
-**Files:** Create `sdk/typescript/src/host/rpc-server.ts` + `rpc-server.test.ts`; modify `index.ts`.
+**Files:** Create `host/src/rpc-server.ts` + `rpc-server.test.ts`; modify `index.ts`.
 
 - [ ] **Step 1: Write the failing test** — `rpc-server.test.ts` (real UDS, mirrors `handlers-server.test.ts` style):
 
@@ -368,7 +368,7 @@ describe('bindHostRpcServer', () => {
 
 - [ ] **Step 2: Run, expect fail** — `pnpm test rpc-server` → FAIL.
 
-- [ ] **Step 3: Implement** — `sdk/typescript/src/host/rpc-server.ts`:
+- [ ] **Step 3: Implement** — `host/src/rpc-server.ts`:
 
 ```ts
 import * as fs from 'node:fs/promises';
@@ -453,12 +453,12 @@ export async function bindHostRpcServer(sockPath: string, api: ApiNamespaceMap):
 export { bindHostRpcServer } from './rpc-server.ts';
 ```
 
-- [ ] **Step 5: Verify** — `pnpm test rpc-server` → PASS (5 tests); `pnpm test host` → all host tests green; `pnpm check-types` clean; repo-root `pnpm lint` clean over `src/host/**`.
+- [ ] **Step 5: Verify** — `pnpm test rpc-server` → PASS (5 tests); `pnpm test host` → all host tests green; `pnpm check-types` clean; repo-root `pnpm lint` clean over `host/src/**`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add sdk/typescript/src/host/rpc-server.ts sdk/typescript/src/host/rpc-server.test.ts sdk/typescript/src/host/index.ts
+git add host/src/rpc-server.ts host/src/rpc-server.test.ts host/src/index.ts
 git commit -m "feat(sdk/host): add bounded UDS RPC server with symmetric arg decode"
 ```
 
@@ -466,7 +466,7 @@ git commit -m "feat(sdk/host): add bounded UDS RPC server with symmetric arg dec
 
 ## Task 4: `node` host entry (`main.ts`)
 
-**Files:** Create `sdk/typescript/src/host/main.ts` + `main.test.ts`.
+**Files:** Create `host/src/main.ts` + `main.test.ts`.
 
 > `main.ts` is the executable Step 3b spawns as `node <main.ts>`. The testable logic (reading env + the descriptor file) is the exported `readHostStartup`; the socket bind + ready-file write are glue gated behind `import.meta.main` (verified to be `false` when vitest imports the module on Node v24, so the test does NOT boot a server).
 
@@ -492,7 +492,7 @@ describe('readHostStartup', () => {
     const manifestPath = path.join(dir, 'host.json');
     await fs.writeFile(
       manifestPath,
-      JSON.stringify({ plugins: [{ name: 'memo', apiPaths: ['/abs/a.ts'], assetRoot: '/abs' }] }),
+      JSON.stringify({ extensions: [{ name: 'memo', apiPaths: ['/abs/a.ts'], assetRoot: '/abs' }] }),
     );
     const startup = await readHostStartup({
       OZMUX_HOST_RPC_SOCK: '/tmp/x.sock',
@@ -501,7 +501,7 @@ describe('readHostStartup', () => {
     });
     expect(startup.rpcSockPath).toBe('/tmp/x.sock');
     expect(startup.readyPath).toBe('/tmp/x.ready');
-    expect(startup.manifest.plugins[0].name).toBe('memo');
+    expect(startup.manifest.extensions[0].name).toBe('memo');
   });
 
   it('throws naming each missing required env var', async () => {
@@ -520,7 +520,7 @@ describe('readHostStartup', () => {
 
 - [ ] **Step 2: Run, expect fail** — `pnpm test main` → FAIL.
 
-- [ ] **Step 3: Implement** — `sdk/typescript/src/host/main.ts`:
+- [ ] **Step 3: Implement** — `host/src/main.ts`:
 
 ```ts
 import * as fs from 'node:fs/promises';
@@ -549,7 +549,7 @@ export async function readHostStartup(env: Record<string, string | undefined>): 
 
 async function main(): Promise<void> {
   const { rpcSockPath, readyPath, manifest } = await readHostStartup(process.env);
-  const { api, warnings } = await loadHostApi(manifest.plugins, (s) => import(s));
+  const { api, warnings } = await loadHostApi(manifest.extensions, (s) => import(s));
   for (const w of warnings) console.error(`host: ${w}`);
   await bindHostRpcServer(rpcSockPath, api);
   // NOTE: readiness is a FILE written ONLY after the RPC socket is listening, so
@@ -568,12 +568,12 @@ if (import.meta.main) {
 
 > `import.meta.main` is recognized by `@types/node` (`ImportMeta.main: boolean`) under this repo's `nodenext`/`verbatimModuleSyntax` tsconfig and is `false` when vitest imports the module — verified during spec-review. No fallback guard is needed.
 
-- [ ] **Step 4: Verify** — `pnpm test main` → PASS (2 tests). `pnpm test host` → ALL host tests green. `pnpm check-types` clean. Repo-root `pnpm lint` clean over `src/host/**`. Confirm importing `main.ts` in the test does NOT bind a server or hang (the boot guard works).
+- [ ] **Step 4: Verify** — `pnpm test main` → PASS (2 tests). `pnpm test host` → ALL host tests green. `pnpm check-types` clean. Repo-root `pnpm lint` clean over `host/src/**`. Confirm importing `main.ts` in the test does NOT bind a server or hang (the boot guard works).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add sdk/typescript/src/host/main.ts sdk/typescript/src/host/main.test.ts
+git add host/src/main.ts host/src/main.test.ts
 git commit -m "feat(sdk/host): add node host entry (env -> load -> bind -> ready file)"
 ```
 
@@ -581,22 +581,22 @@ git commit -m "feat(sdk/host): add node host entry (env -> load -> bind -> ready
 
 ## Done criteria for Step 3a
 
-- `pnpm test host` green across all `src/host/*.test.ts` (Step 2's suites + 3a's descriptors / load / rpc-server / main).
-- `pnpm check-types` clean; `pnpm lint` clean over `src/host/**`.
+- `pnpm test host` green across all `host/src/*.test.ts` (Step 2's suites + 3a's descriptors / load / rpc-server / main).
+- `pnpm check-types` clean; `pnpm lint` clean over `host/src/**`.
 - Importing `main.ts` does not start a server (boot guard verified); the ready file is written only after the RPC socket binds.
 - The RPC server: bounds inbound line size + `maxConnections`, decodes `{__u8}` args, and replies with an error frame (never a silent drop) to any `reqId`-addressable malformed call.
 - `loadHostApi` is fail-soft (one broken api file → warning + skip, not a dead host).
 - No Rust touched; no existing SDK module affected; the host is runnable but not yet spawned (Step 3b wires it).
 
-After 3a lands, Step 3b is authored against the Rust internals (`command.rs` spawn/env/readiness-poll, `host.rs` RuntimeRoot/EndpointRegistry, `scheme.rs`/`protocol.rs`, `extension_manager.rs`, `main.rs`, `configs/`): extend `PluginManifest` with `api: Vec<String>`, discover plugins user-first, write the `HostManifest` JSON + the `OZMUX_HOST_{RPC_SOCK,MANIFEST,READY_PATH}` env + spawn one `node main.ts` (pointing the existing `.ready` poll at `OZMUX_HOST_READY_PATH`), parse `ozmux.toml` → `ViewRegistry` (caps + `entry`/`id` validation), and the asset `{plugin,path}` protocol + `OZMUX_HOST_ASSET_SOCK`.
+After 3a lands, Step 3b is authored against the Rust internals (`command.rs` spawn/env/readiness-poll, `host.rs` RuntimeRoot/EndpointRegistry, `scheme.rs`/`protocol.rs`, `extension_manager.rs`, `main.rs`, `configs/`): extend `ExtensionManifest` with `api: Vec<String>`, discover extensions user-first, write the `HostManifest` JSON + the `OZMUX_HOST_{RPC_SOCK,MANIFEST,READY_PATH}` env + spawn one `node main.ts` (pointing the existing `.ready` poll at `OZMUX_HOST_READY_PATH`), parse `ozmux.toml` → `ViewRegistry` (caps + `entry`/`id` validation), and the asset `{extension,path}` protocol + `OZMUX_HOST_ASSET_SOCK`.
 
 ### Step 3b carry-forward (from Step 3a final integration review)
 - **JSON keys are camelCase:** the Rust descriptor writer must emit `apiPaths`/`assetRoot` exactly (serde `#[serde(rename_all = "camelCase")]` or explicit renames) to match the zod schema.
-- **`apiPaths` + `assetRoot` must be absolute** when Rust writes them; path-traversal + plugin-name safety validation lives Rust-side (the host trusts the descriptor).
+- **`apiPaths` + `assetRoot` must be absolute** when Rust writes them; path-traversal + extension-name safety validation lives Rust-side (the host trusts the descriptor).
 - **Readiness:** repoint the existing `command.rs` `.ready` existence-poll at `OZMUX_HOST_READY_PATH` (no new mechanism); the host writes that file only after the RPC socket binds.
-- **User-first ordering:** push `~/.config/ozmux/plugins/*` before `<repo>/plugins/*` in the descriptor `plugins` array (`loadHostApi` is already user-first by input order) — an intentional reversal of `extension_manager.rs`'s current bundled-first order.
+- **User-first ordering:** push `~/.config/ozmux/extensions/*` before `<repo>/extensions/*` in the descriptor `extensions` array (`loadHostApi` is already user-first by input order) — an intentional reversal of `extension_manager.rs`'s current bundled-first order.
 - **Step 4 (bridge) note:** the host's RPC `.catch` now replies with an `internal host error` frame; the Rust↔host relay should still tolerate a missing reply per `reqId` (timeout/cleanup) so a dead host never wedges a webview Promise.
 
 ## Status: Step 3a COMPLETE (2026-06-11)
 
-All 4 tasks landed, each through an independent spec+quality review; final integration review: READY. Commits `b16a3bc`, `568c30b`, `e5a285c`, `e703594`, plus review-follow-up `fe8e5fe`. Evidence: `@ozmux/sdk` host suite **38/38** (8 files), `pnpm check-types` clean, `pnpm lint` clean over `src/host/**`. Isolated TS — no Rust touched, zero impact on the running app. Two review-caught defects fixed mid-step: an `Array` default-export hole in `loadPlugin` (code-review) and a `JSON.parse('null')` host-crash in the RPC server (integration review).
+All 4 tasks landed, each through an independent spec+quality review; final integration review: READY. Commits `b16a3bc`, `568c30b`, `e5a285c`, `e703594`, plus review-follow-up `fe8e5fe`. Evidence: `@ozmux/host` host suite **38/38** (8 files), `pnpm check-types` clean, `pnpm lint` clean over `host/src/**`. Isolated TS — no Rust touched, zero impact on the running app. Two review-caught defects fixed mid-step: an `Array` default-export hole in `loadExtension` (code-review) and a `JSON.parse('null')` host-crash in the RPC server (integration review).

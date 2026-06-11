@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Introduce the Rust capability/trust data model — `ozmux.toml` plugin-manifest parsing, a capability-aware `ViewRegistry`, and a `GrantedNamespaces` component stamped onto OSC-mounted surfaces — without changing the running process model or removing anything.
+**Goal:** Introduce the Rust capability/trust data model — `ozmux.toml` extension-manifest parsing, a capability-aware `ViewRegistry`, and a `GrantedNamespaces` component stamped onto OSC-mounted surfaces — without changing the running process model or removing anything.
 
-**Architecture:** A new `plugin_manifest` module parses `ozmux.toml` into views (`id` / `entry` / `capabilities` / `interactive`). `RegisteredView` gains a `capabilities` field. The existing OSC-mount observer copies a view's capabilities onto the new surface entity as a `GrantedNamespaces(HashSet<String>)` component, which the later host-API bridge (Step 3) will read as the per-surface capability grant. This step is **purely additive** — the app still runs the old per-extension model and all existing tests keep passing.
+**Architecture:** A new `extension_manifest` module parses `ozmux.toml` into views (`id` / `entry` / `capabilities` / `interactive`). `RegisteredView` gains a `capabilities` field. The existing OSC-mount observer copies a view's capabilities onto the new surface entity as a `GrantedNamespaces(HashSet<String>)` component, which the later host-API bridge (Step 3) will read as the per-surface capability grant. This step is **purely additive** — the app still runs the old per-extension model and all existing tests keep passing.
 
 **Tech Stack:** Rust 2024, Bevy 0.18 ECS, `toml`, `serde`, `thiserror`.
 
@@ -14,11 +14,11 @@
 
 Each step is its own plan document, authored just-in-time against the then-current code so it never goes stale:
 
-1. **Step 1 (this doc) — Capability & manifest foundation** (Rust, additive): `plugin_manifest` parser, `RegisteredView.capabilities`, `GrantedNamespaces` at mount.
-2. **Step 2 — Single host process + plugin loader**: `@ozmux/sdk/host` runtime (loads `plugins/*/api.ts`, RPC dispatch, asset server); reshape `ExtensionManagerPlugin` to spawn exactly one `node` host; scan plugin roots, parse `ozmux.toml`, populate `ViewRegistry` with capabilities; extend the asset `Request` to `{plugin, path}`; config plugin roots (user-first).
+1. **Step 1 (this doc) — Capability & manifest foundation** (Rust, additive): `extension_manifest` parser, `RegisteredView.capabilities`, `GrantedNamespaces` at mount.
+2. **Step 2 — Single host process + extension loader**: `@ozmux/host` runtime (loads `extensions/*/api.ts`, RPC dispatch, asset server); reshape `ExtensionManagerPlugin` to spawn exactly one `node` host; scan extension roots, parse `ozmux.toml`, populate `ViewRegistry` with capabilities; extend the asset `Request` to `{extension, path}`; config extension roots (user-first).
 3. **Step 3 — Host-API bridge**: Proxy preload injection (replace `ozmux.js`), single-object `cef.emit`, Rust capability gate keyed on `Receive<_>.webview` Entity + `GrantedNamespaces`, forward to host socket, `reqId→Entity` correlation + `HostEmitEvent` return, base64 `{__u8}` binary codec + max-size guardrail.
 4. **Step 4 — Remove old machinery**: delete command shim / handlers / channels / `bootstrap()` / control plane (`register_view`/`split`/`add_surface`/`activate`) / `handlers_bridge`; remove `window.ozmux.call/subscribe`; drop SDK `./server` + `./cmd-shim`.
-5. **Step 5 — memo migration + `plugins/*` root**: convert `@memo` to `plugins/memo` (`api.ts` + `ozmux.toml` + `index.html`); add `plugins/*` workspace + discovery root (user-first); E2E.
+5. **Step 5 — memo migration + `extensions/*` root**: convert `@memo` to `extensions/memo` (`api.ts` + `ozmux.toml` + `index.html`); add `extensions/*` workspace + discovery root (user-first); E2E.
 
 Spec: `docs/superpowers/specs/2026-06-11-phase1-single-host-process-design.md`.
 
@@ -30,8 +30,8 @@ Spec: `docs/superpowers/specs/2026-06-11-phase1-single-host-process-design.md`.
 
 | File | Responsibility | Action |
 | --- | --- | --- |
-| `crates/extension_host/src/plugin_manifest.rs` | Parse `ozmux.toml` → `PluginManifest { views: Vec<ManifestView> }` | Create |
-| `crates/extension_host/src/lib.rs` | Declare + re-export `plugin_manifest` | Modify |
+| `crates/extension_host/src/extension_manifest.rs` | Parse `ozmux.toml` → `ExtensionManifest { views: Vec<ExtensionView> }` | Create |
+| `crates/extension_host/src/lib.rs` | Declare + re-export `extension_manifest` | Modify |
 | `crates/extension_host/Cargo.toml` | Add `toml` dependency | Modify |
 | `crates/extension_host/src/registry.rs` | Add `capabilities` to `RegisteredView` | Modify |
 | `crates/extension_host/src/bridge.rs` | Update `handle_register_view` literal | Modify |
@@ -39,13 +39,13 @@ Spec: `docs/superpowers/specs/2026-06-11-phase1-single-host-process-design.md`.
 
 ---
 
-## Task 1: `ozmux.toml` plugin manifest parser
+## Task 1: `ozmux.toml` extension manifest parser
 
 **Files:**
-- Create: `crates/extension_host/src/plugin_manifest.rs`
+- Create: `crates/extension_host/src/extension_manifest.rs`
 - Modify: `crates/extension_host/Cargo.toml`
 - Modify: `crates/extension_host/src/lib.rs:11` (module declarations) and `:28` (re-exports)
-- Test: inline `#[cfg(test)] mod tests` in `plugin_manifest.rs`
+- Test: inline `#[cfg(test)] mod tests` in `extension_manifest.rs`
 
 - [ ] **Step 1: Add the `toml` dependency**
 
@@ -57,10 +57,10 @@ toml = { workspace = true }
 
 - [ ] **Step 2: Create the parser file with a failing test**
 
-Create `crates/extension_host/src/plugin_manifest.rs` with the test module only first (the types it references do not exist yet, so it will fail to compile):
+Create `crates/extension_host/src/extension_manifest.rs` with the test module only first (the types it references do not exist yet, so it will fail to compile):
 
 ```rust
-//! Parses a plugin's `ozmux.toml` manifest: the views it publishes for OSC
+//! Parses an extension's `ozmux.toml` manifest: the views it publishes for OSC
 //! mounting and the host-API capabilities each view is granted.
 
 use serde::Deserialize;
@@ -78,7 +78,7 @@ entry = "index.html"
 capabilities = ["fs"]
 interactive = true
 "#;
-        let m = PluginManifest::parse(text).unwrap();
+        let m = ExtensionManifest::parse(text).unwrap();
         assert_eq!(m.views.len(), 1);
         let v = &m.views[0];
         assert_eq!(v.id, "memo.main");
@@ -94,14 +94,14 @@ interactive = true
 id = "v"
 entry = "a.html"
 "#;
-        let v = &PluginManifest::parse(text).unwrap().views[0];
+        let v = &ExtensionManifest::parse(text).unwrap().views[0];
         assert!(v.capabilities.is_empty());
         assert!(!v.interactive);
     }
 
     #[test]
     fn empty_text_has_no_views() {
-        assert!(PluginManifest::parse("").unwrap().views.is_empty());
+        assert!(ExtensionManifest::parse("").unwrap().views.is_empty());
     }
 
     #[test]
@@ -111,16 +111,16 @@ entry = "a.html"
 entry = "a.html"
 "#;
         assert!(matches!(
-            PluginManifest::parse(text),
-            Err(PluginManifestError::Toml(_))
+            ExtensionManifest::parse(text),
+            Err(ExtensionManifestError::Toml(_))
         ));
     }
 
     #[test]
     fn rejects_malformed_toml() {
         assert!(matches!(
-            PluginManifest::parse("[[views]"),
-            Err(PluginManifestError::Toml(_))
+            ExtensionManifest::parse("[[views]"),
+            Err(ExtensionManifestError::Toml(_))
         ));
     }
 }
@@ -128,27 +128,27 @@ entry = "a.html"
 
 - [ ] **Step 3: Run the test to verify it fails**
 
-Run: `cargo test -p ozmux_extension_host plugin_manifest`
-Expected: compile error — `cannot find type PluginManifest`/`PluginManifestError` in this scope.
+Run: `cargo test -p ozmux_extension_host extension_manifest`
+Expected: compile error — `cannot find type ExtensionManifest`/`ExtensionManifestError` in this scope.
 
 - [ ] **Step 4: Implement the parser**
 
 Insert this implementation **above** the `#[cfg(test)] mod tests` block (immediately after the `use serde::Deserialize;` line):
 
 ```rust
-/// A plugin's resolved manifest: the views it publishes for OSC mounting.
+/// An extension's resolved manifest: the views it publishes for OSC mounting.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginManifest {
-    /// Views this plugin publishes, addressable by `view_id` from OSC mounts.
-    pub views: Vec<ManifestView>,
+pub struct ExtensionManifest {
+    /// Views this extension publishes, addressable by `view_id` from OSC mounts.
+    pub views: Vec<ExtensionView>,
 }
 
-/// One view a plugin publishes for OSC mounting, with its capability grant.
+/// One view an extension publishes for OSC mounting, with its capability grant.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManifestView {
+pub struct ExtensionView {
     /// PTY-facing identifier referenced by `OSC mount;<id>`.
     pub id: String,
-    /// HTML entry path relative to the plugin dir (e.g. `index.html`).
+    /// HTML entry path relative to the extension dir (e.g. `index.html`).
     pub entry: String,
     /// Host-API namespaces this view's webview may call (namespace granularity).
     pub capabilities: Vec<String>,
@@ -156,14 +156,14 @@ pub struct ManifestView {
     pub interactive: bool,
 }
 
-impl PluginManifest {
-    /// Parses an `ozmux.toml` string into a `PluginManifest`.
-    pub fn parse(text: &str) -> Result<Self, PluginManifestError> {
-        let raw: RawManifest = toml::from_str(text).map_err(PluginManifestError::Toml)?;
+impl ExtensionManifest {
+    /// Parses an `ozmux.toml` string into a `ExtensionManifest`.
+    pub fn parse(text: &str) -> Result<Self, ExtensionManifestError> {
+        let raw: RawManifest = toml::from_str(text).map_err(ExtensionManifestError::Toml)?;
         let views = raw
             .views
             .into_iter()
-            .map(|v| ManifestView {
+            .map(|v| ExtensionView {
                 id: v.id,
                 entry: v.entry,
                 capabilities: v.capabilities,
@@ -174,9 +174,9 @@ impl PluginManifest {
     }
 }
 
-/// A failure to parse a plugin manifest.
+/// A failure to parse an extension manifest.
 #[derive(Debug, thiserror::Error)]
-pub enum PluginManifestError {
+pub enum ExtensionManifestError {
     /// Malformed or invalid `ozmux.toml`.
     #[error("invalid ozmux.toml: {0}")]
     Toml(#[source] toml::de::Error),
@@ -204,25 +204,25 @@ struct RawView {
 In `crates/extension_host/src/lib.rs`, add the module declaration in alphabetical order among the existing `pub mod` lines (after `pub mod path_prefix;` at line 12):
 
 ```rust
-pub mod plugin_manifest;
+pub mod extension_manifest;
 ```
 
 And add the re-export after the `manifest` re-export (line 28, `pub use manifest::{Manifest, ManifestError};`):
 
 ```rust
-pub use plugin_manifest::{ManifestView, PluginManifest, PluginManifestError};
+pub use extension_manifest::{ExtensionManifest, ExtensionManifestError, ExtensionView};
 ```
 
 - [ ] **Step 6: Run the test to verify it passes**
 
-Run: `cargo test -p ozmux_extension_host plugin_manifest`
+Run: `cargo test -p ozmux_extension_host extension_manifest`
 Expected: PASS (5 tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/extension_host/Cargo.toml crates/extension_host/src/plugin_manifest.rs crates/extension_host/src/lib.rs
-git commit -m "feat(extension_host): parse ozmux.toml plugin manifest with view capabilities"
+git add crates/extension_host/Cargo.toml crates/extension_host/src/extension_manifest.rs crates/extension_host/src/lib.rs
+git commit -m "feat(extension_host): parse ozmux.toml extension manifest with view capabilities"
 ```
 
 ---
@@ -434,13 +434,13 @@ git commit -m "feat(osc-webview): stamp GrantedNamespaces on mount from view cap
 - No existing behavior removed; the app still builds and runs the legacy per-extension model.
 - `cargo clippy --workspace` and `cargo fmt` clean (run `make fix-lint` before the final commit if needed).
 
-After this step lands, Step 2 (single host process + plugin loader) will be authored against the updated tree.
+After this step lands, Step 2 (single host process + extension loader) will be authored against the updated tree.
 
 ## Carry into Step 2 (from Step 1 final integration review)
 
 - **Validate `entry` for path traversal before it reaches `SurfaceKind::Extension`.** Step 2 is where parsed `ozmux.toml` `entry` values first flow into the multiplexer. Add a "non-empty, no `..` component" check in the manifest loader (or at registry insertion) to close the directory-traversal window before Step 3 opens the API bridge.
-- **Validate `id` format/uniqueness.** The registry is indexed by `id`; require non-empty, whitespace-free (recommended `<plugin>.<view>` shape) so `OSC mount;<view_id>` stays unambiguous, and reject duplicate ids across plugins (consistent with the first-wins + warning namespace rule).
-- **Confirm the `pub` re-exports earn their keep.** When Step 2 adds the manifest→registry wiring in `src/`, verify `PluginManifest`/`ManifestView`/`PluginManifestError` are actually imported cross-crate; demote to `pub(crate)` only if the caller turns out to live inside the same crate.
+- **Validate `id` format/uniqueness.** The registry is indexed by `id`; require non-empty, whitespace-free (recommended `<extension>.<view>` shape) so `OSC mount;<view_id>` stays unambiguous, and reject duplicate ids across extensions (consistent with the first-wins + warning namespace rule).
+- **Confirm the `pub` re-exports earn their keep.** When Step 2 adds the manifest→registry wiring in `src/`, verify `ExtensionManifest`/`ExtensionView`/`ExtensionManifestError` are actually imported cross-crate; demote to `pub(crate)` only if the caller turns out to live inside the same crate.
 
 ## Status: Step 1 COMPLETE (2026-06-11)
 

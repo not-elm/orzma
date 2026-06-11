@@ -1,17 +1,17 @@
 import { z } from 'zod';
 
-const pluginDescriptorSchema = z.object({
+const extensionDescriptorSchema = z.object({
   name: z.string(),
   apiPaths: z.array(z.string()),
   assetRoot: z.string(),
 });
 
 const hostManifestSchema = z.object({
-  plugins: z.array(pluginDescriptorSchema),
+  extensions: z.array(extensionDescriptorSchema),
 });
 
-/** One plugin's load + serve descriptor, produced by Rust and consumed by the host. */
-export type PluginDescriptor = z.infer<typeof pluginDescriptorSchema>;
+/** One extension's load + serve descriptor, produced by Rust and consumed by the host. */
+export type ExtensionDescriptor = z.infer<typeof extensionDescriptorSchema>;
 
 /** The handoff Rust writes (referenced by `OZMUX_HOST_MANIFEST`) and the host reads at startup. */
 export type HostManifest = z.infer<typeof hostManifestSchema>;

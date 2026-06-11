@@ -26,7 +26,7 @@ export async function readHostStartup(
 
 async function main(): Promise<void> {
   const { rpcSockPath, readyPath, manifest } = await readHostStartup(process.env);
-  const { api, warnings } = await loadHostApi(manifest.plugins, (s) => import(s));
+  const { api, warnings } = await loadHostApi(manifest.extensions, (s) => import(s));
   for (const w of warnings) console.error(`host: ${w}`);
   await bindHostRpcServer(rpcSockPath, api);
   // NOTE: readiness is a FILE written ONLY after the RPC socket is listening, so

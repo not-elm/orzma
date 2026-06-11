@@ -1,7 +1,7 @@
-import type { ApiNamespaceMap } from './define-api.ts';
+import type { ApiNamespaceMap } from './api-types.ts';
 
-/** A single plugin's loaded API, keyed by plugin name for collision reporting. */
-export interface LoadedPlugin {
+/** A single extension's loaded API, keyed by extension name for collision reporting. */
+export interface LoadedExtension {
   name: string;
   api: ApiNamespaceMap;
 }
@@ -16,45 +16,45 @@ export interface MergeResult {
 export type ApiImporter = (specifier: string) => Promise<{ default?: unknown }>;
 
 /**
- * Merges plugin APIs into one namespace map. Namespaces are globally unique; on
- * collision the earlier plugin (by input order) wins and a warning is recorded
- * for the later one. Callers pass plugins in a deterministic order (sorted dir
+ * Merges extension APIs into one namespace map. Namespaces are globally unique; on
+ * collision the earlier extension (by input order) wins and a warning is recorded
+ * for the later one. Callers pass extensions in a deterministic order (sorted dir
  * name) so first-wins is stable.
  */
-export function mergeApis(plugins: LoadedPlugin[]): MergeResult {
+export function mergeApis(extensions: LoadedExtension[]): MergeResult {
   const api: ApiNamespaceMap = Object.create(null);
   const owner: Record<string, string> = Object.create(null);
   const warnings: string[] = [];
-  for (const plugin of plugins) {
-    for (const ns of Object.keys(plugin.api)) {
+  for (const extension of extensions) {
+    for (const ns of Object.keys(extension.api)) {
       if (ns in api) {
         warnings.push(
-          `namespace "${ns}" from plugin "${plugin.name}" ignored; already provided by "${owner[ns]}"`,
+          `namespace "${ns}" from extension "${extension.name}" ignored; already provided by "${owner[ns]}"`,
         );
         continue;
       }
-      api[ns] = plugin.api[ns];
-      owner[ns] = plugin.name;
+      api[ns] = extension.api[ns];
+      owner[ns] = extension.name;
     }
   }
   return { api, warnings };
 }
 
 /**
- * Loads one plugin's `api.ts` default export via the injected importer. Throws
+ * Loads one extension's `api.ts` default export via the injected importer. Throws
  * when the module does not default-export a namespace object (an array is
  * rejected too, since `typeof [] === 'object'` would otherwise slip through and
  * `mergeApis` would register numeric-index "namespaces").
  */
-export async function loadPlugin(
+export async function loadExtension(
   name: string,
   apiPath: string,
   importer: ApiImporter,
-): Promise<LoadedPlugin> {
+): Promise<LoadedExtension> {
   const mod = await importer(apiPath);
   const def = mod.default;
   if (def === null || typeof def !== 'object' || Array.isArray(def)) {
-    throw new Error(`plugin "${name}" api.ts must default-export an object`);
+    throw new Error(`extension "${name}" api.ts must default-export an object`);
   }
   return { name, api: def as ApiNamespaceMap };
 }

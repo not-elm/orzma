@@ -3,7 +3,7 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ApiNamespaceMap } from './define-api.ts';
+import type { ApiNamespaceMap } from './api-types.ts';
 import { bindHostRpcServer } from './rpc-server.ts';
 
 let server: net.Server | undefined;

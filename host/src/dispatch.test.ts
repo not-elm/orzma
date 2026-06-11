@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ApiNamespaceMap } from './define-api.ts';
+import type { ApiNamespaceMap } from './api-types.ts';
 import { dispatchHostCall } from './dispatch.ts';
 
 const api: ApiNamespaceMap = {

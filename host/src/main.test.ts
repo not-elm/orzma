@@ -17,7 +17,9 @@ describe('readHostStartup', () => {
     const manifestPath = path.join(dir, 'host.json');
     await fs.writeFile(
       manifestPath,
-      JSON.stringify({ plugins: [{ name: 'memo', apiPaths: ['/abs/a.ts'], assetRoot: '/abs' }] }),
+      JSON.stringify({
+        extensions: [{ name: 'memo', apiPaths: ['/abs/a.ts'], assetRoot: '/abs' }],
+      }),
     );
     const startup = await readHostStartup({
       OZMUX_HOST_RPC_SOCK: '/tmp/x.sock',
@@ -26,7 +28,7 @@ describe('readHostStartup', () => {
     });
     expect(startup.rpcSockPath).toBe('/tmp/x.sock');
     expect(startup.readyPath).toBe('/tmp/x.ready');
-    expect(startup.manifest.plugins[0].name).toBe('memo');
+    expect(startup.manifest.extensions[0].name).toBe('memo');
   });
 
   it('throws naming each missing required env var', async () => {
