@@ -59,6 +59,38 @@ impl ExtensionManagerPlugin {
     pub(crate) fn new(endpoints: EndpointRegistry) -> Self {
         Self { endpoints }
     }
+
+    fn spawn_single_host(&self, app: &mut App) {
+        let extensions = discover_extensions(&extension_roots());
+        let built = BuiltHostManifest::new(&extensions);
+        let descriptor_json =
+            serde_json::to_string(&built.manifest).expect("host manifest serializes");
+        {
+            let mut view_registry = app.world_mut().get_resource_or_init::<ViewRegistry>();
+            register_views(&mut view_registry, built.views);
+        }
+        match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "host")
+            .map_err(|e| e.to_string())
+            .and_then(|rt| {
+                HostProcess::spawn(rt, &descriptor_json, READY_TIMEOUT).map_err(|e| e.to_string())
+            }) {
+            Ok(host) => {
+                for extension in &extensions {
+                    // NOTE: coexistence slice — an extension dir sharing a name with
+                    // a launched legacy command-extension would clobber its asset
+                    // endpoint (last-write-wins). Skip + warn; Step 5 removes legacy.
+                    if self.endpoints.get(&extension.name).is_some() {
+                        tracing::warn!(name = %extension.name, "extension name collides with a legacy command-extension; skipping");
+                        continue;
+                    }
+                    self.endpoints
+                        .insert(extension.name.clone(), ExtensionEndpoints::default());
+                }
+                app.insert_resource(HostRuntime { host });
+            }
+            Err(e) => tracing::error!(error = %e, "failed to spawn single host process"),
+        }
+    }
 }
 
 impl Plugin for ExtensionManagerPlugin {
@@ -89,35 +121,7 @@ impl Plugin for ExtensionManagerPlugin {
             extensions,
             endpoints,
         });
-        let extensions = discover_extensions(&extension_roots());
-        let built = BuiltHostManifest::new(&extensions);
-        let descriptor_json =
-            serde_json::to_string(&built.manifest).expect("host manifest serializes");
-        {
-            let mut view_registry = app.world_mut().get_resource_or_init::<ViewRegistry>();
-            register_views(&mut view_registry, built.views);
-        }
-        match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "host")
-            .map_err(|e| e.to_string())
-            .and_then(|rt| {
-                HostProcess::spawn(rt, &descriptor_json, READY_TIMEOUT).map_err(|e| e.to_string())
-            }) {
-            Ok(host) => {
-                for extension in &extensions {
-                    // NOTE: coexistence slice — an extension dir sharing a name with
-                    // a launched legacy command-extension would clobber its asset
-                    // endpoint (last-write-wins). Skip + warn; Step 5 removes legacy.
-                    if self.endpoints.get(&extension.name).is_some() {
-                        tracing::warn!(name = %extension.name, "extension name collides with a legacy command-extension; skipping");
-                        continue;
-                    }
-                    self.endpoints
-                        .insert(extension.name.clone(), ExtensionEndpoints::default());
-                }
-                app.insert_resource(HostRuntime { host });
-            }
-            Err(e) => tracing::error!(error = %e, "failed to spawn single host process"),
-        }
+        self.spawn_single_host(app);
         app.add_systems(
             Update,
             (
