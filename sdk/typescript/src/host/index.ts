@@ -9,3 +9,4 @@ export { dispatchHostCall } from './dispatch.ts';
 export { loadHostApi } from './load.ts';
 export type { ApiImporter, LoadedPlugin, MergeResult } from './plugin-loader.ts';
 export { loadPlugin, mergeApis } from './plugin-loader.ts';
+export { bindHostRpcServer } from './rpc-server.ts';
