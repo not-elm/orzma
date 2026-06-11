@@ -159,7 +159,7 @@ Approach A の心臓部。**既存の `JsEmitEventPlugin` / `HostEmitEvent` / `P
 - OSC webview パーサ(`osc_webview.rs`)、`OscMounted`/`NonInteractive`、mount/unmount observer。
 - `ViewRegistry` ——ただし **manifest 由来でロード**するよう変更し、**`capabilities` フィールドを追加**。mount 時に caps を `GrantedNamespaces` として surface entity へコピー。
 - `JsEmitEventPlugin` / `HostEmitEvent` / `PreloadScripts` 機構(③ で再利用)。
-- `EndpointRegistry` ——**レガシー(per-extension socket fetch)経路のためにそのまま残す**。新モデルの拡張アセットはこの経路を使わない(下記決定 C)。Step 5 のレガシー撤去時に縮退。
+- `ExtensionEndpoints` / `fetch`(per-extension socket fetch)——**レガシー経路のために残す**。ただし dispatch マップ `EndpointRegistry` は下記決定 C の **`AssetSourceRegistry`(`Static | Legacy(ExtensionEndpoints)`)に置き換える**(レガシー名は `Legacy` variant として存続)。Step 5 のレガシー撤去時に `Legacy` を削除。
 - `ozmux-ext://` scheme。bevy_cef 連携、`extension_render` の surface 描画。
 
 > **アセット配信の決定 C(Rust 直接配信 / 確定 2026-06-11):** `scheme.rs` は `ozmux-ext://<name>/<path>` を `<name>` で dispatch する。現行の `fetch(&endpoints, path)` / `protocol::Request { path }` は **`<name>` を落として `path` だけ**を host へ渡す(`scheme.rs:75`, `protocol.rs:13`)ため、全名が同一ソケットを指す単一 host 構成では host が**どの拡張か判別できない**。
