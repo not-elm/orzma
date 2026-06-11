@@ -4,7 +4,7 @@
 use crate::plugin_discovery::DiscoveredPlugin;
 use crate::registry::{RegisteredView, ViewId};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// One plugin's load + serve descriptor, serialized as camelCase to match the
 /// Node host's `parseHostManifest` zod schema.
@@ -50,7 +50,7 @@ impl BuiltHostManifest {
                 if is_safe_rel(rel) {
                     api_paths.push(plugin.dir.join(rel));
                 } else {
-                    bevy::log::warn!(plugin = %plugin.name, path = %rel, "unsafe api path; skipping");
+                    bevy::log::warn!(plugin = %plugin.name, path = %rel.display(), "unsafe api path; skipping");
                 }
             }
             descriptors.push(PluginDescriptorJson {
@@ -59,18 +59,19 @@ impl BuiltHostManifest {
                 asset_root,
             });
             for view in &plugin.manifest.views {
-                if view.id.is_empty() || view.id.chars().any(char::is_whitespace) {
-                    bevy::log::warn!(plugin = %plugin.name, id = %view.id, "invalid view id; skipping");
+                if view.id.as_str().is_empty() || view.id.as_str().chars().any(char::is_whitespace)
+                {
+                    bevy::log::warn!(plugin = %plugin.name, id = %view.id.as_str(), "invalid view id; skipping");
                     continue;
                 }
                 if !is_safe_rel(&view.entry) {
-                    bevy::log::warn!(plugin = %plugin.name, entry = %view.entry, "unsafe view entry; skipping");
+                    bevy::log::warn!(plugin = %plugin.name, entry = %view.entry.display(), "unsafe view entry; skipping");
                     continue;
                 }
                 views.push((
-                    ViewId::new(view.id.clone()),
+                    view.id.clone(),
                     RegisteredView {
-                        entry: view.entry.clone(),
+                        entry: view.entry.to_string_lossy().into_owned(),
                         owning_ext: plugin.name.clone(),
                         interactive: view.interactive,
                         capabilities: view.capabilities.clone(),
@@ -87,11 +88,11 @@ impl BuiltHostManifest {
     }
 }
 
-/// True when `rel` is a non-empty relative path with no `..` component and no leading `/`.
-fn is_safe_rel(rel: &str) -> bool {
-    !rel.is_empty()
-        && !rel.starts_with('/')
-        && std::path::Path::new(rel)
+/// True when `rel` is a non-empty relative path made only of normal components
+/// (no `..`, no `.`, no leading `/`).
+fn is_safe_rel(rel: &Path) -> bool {
+    !rel.as_os_str().is_empty()
+        && rel
             .components()
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
@@ -107,7 +108,7 @@ mod tests {
             name: name.into(),
             dir: PathBuf::from(dir),
             manifest: PluginManifest {
-                api: api.iter().map(|s| s.to_string()).collect(),
+                api: api.iter().copied().map(PathBuf::from).collect(),
                 views,
             },
         }
@@ -115,7 +116,7 @@ mod tests {
 
     fn view(id: &str, entry: &str, caps: &[&str]) -> ManifestView {
         ManifestView {
-            id: id.into(),
+            id: ViewId::new(id),
             entry: entry.into(),
             capabilities: caps.iter().map(|s| s.to_string()).collect(),
             interactive: true,

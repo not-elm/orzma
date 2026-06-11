@@ -89,7 +89,7 @@ mod tests {
             found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
             ["a", "b"]
         );
-        assert_eq!(found[0].manifest.api, vec!["a.ts".to_string()]);
+        assert_eq!(found[0].manifest.api, vec![PathBuf::from("a.ts")]);
     }
 
     #[test]
@@ -100,7 +100,7 @@ mod tests {
         write_plugin(bundled.path(), "memo", "api = [\"bundled.ts\"]\n");
         let found = discover_plugins(&[user.path().to_path_buf(), bundled.path().to_path_buf()]);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].manifest.api, vec!["user.ts".to_string()]);
+        assert_eq!(found[0].manifest.api, vec![PathBuf::from("user.ts")]);
     }
 
     #[test]

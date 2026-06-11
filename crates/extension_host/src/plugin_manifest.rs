@@ -1,13 +1,16 @@
 //! Parses a plugin's `ozmux.toml` manifest: the views it publishes for OSC
 //! mounting and the host-API capabilities each view is granted.
 
+use crate::error::ExtensionError;
+use crate::registry::ViewId;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 /// A plugin's resolved manifest: the views it publishes for OSC mounting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifest {
     /// Plugin-relative paths of the api `.ts` files this plugin loads (multiple allowed).
-    pub api: Vec<String>,
+    pub api: Vec<PathBuf>,
     /// Views this plugin publishes, addressable by `view_id` from OSC mounts.
     pub views: Vec<ManifestView>,
 }
@@ -16,9 +19,9 @@ pub struct PluginManifest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestView {
     /// PTY-facing identifier referenced by `OSC mount;<id>`.
-    pub id: String,
+    pub id: ViewId,
     /// HTML entry path relative to the plugin dir (e.g. `index.html`).
-    pub entry: String,
+    pub entry: PathBuf,
     /// Host-API namespaces this view's webview may call (namespace granularity).
     pub capabilities: Vec<String>,
     /// Whether the mounted webview accepts pointer/keyboard input.
@@ -27,13 +30,13 @@ pub struct ManifestView {
 
 impl PluginManifest {
     /// Parses an `ozmux.toml` string into a `PluginManifest`.
-    pub fn parse(text: &str) -> Result<Self, PluginManifestError> {
-        let raw: RawManifest = toml::from_str(text).map_err(PluginManifestError::Toml)?;
+    pub fn parse(text: &str) -> Result<Self, ExtensionError> {
+        let raw: RawManifest = toml::from_str(text).map_err(ExtensionError::Toml)?;
         let views = raw
             .views
             .into_iter()
             .map(|v| ManifestView {
-                id: v.id,
+                id: ViewId::new(v.id),
                 entry: v.entry,
                 capabilities: v.capabilities,
                 interactive: v.interactive,
@@ -46,18 +49,10 @@ impl PluginManifest {
     }
 }
 
-/// A failure to parse a plugin manifest.
-#[derive(Debug, thiserror::Error)]
-pub enum PluginManifestError {
-    /// Malformed or invalid `ozmux.toml`.
-    #[error("invalid ozmux.toml: {0}")]
-    Toml(#[source] toml::de::Error),
-}
-
 #[derive(Deserialize)]
 struct RawManifest {
     #[serde(default)]
-    api: Vec<String>,
+    api: Vec<PathBuf>,
     #[serde(default)]
     views: Vec<RawView>,
 }
@@ -65,7 +60,7 @@ struct RawManifest {
 #[derive(Deserialize)]
 struct RawView {
     id: String,
-    entry: String,
+    entry: PathBuf,
     #[serde(default)]
     capabilities: Vec<String>,
     #[serde(default)]
@@ -88,8 +83,8 @@ interactive = true
         let m = PluginManifest::parse(text).unwrap();
         assert_eq!(m.views.len(), 1);
         let v = &m.views[0];
-        assert_eq!(v.id, "memo.main");
-        assert_eq!(v.entry, "index.html");
+        assert_eq!(v.id.as_str(), "memo.main");
+        assert_eq!(v.entry, PathBuf::from("index.html"));
         assert_eq!(v.capabilities, vec!["fs".to_string()]);
         assert!(v.interactive);
     }
@@ -119,7 +114,7 @@ entry = "a.html"
 "#;
         assert!(matches!(
             PluginManifest::parse(text),
-            Err(PluginManifestError::Toml(_))
+            Err(ExtensionError::Toml(_))
         ));
     }
 
@@ -127,7 +122,7 @@ entry = "a.html"
     fn rejects_malformed_toml() {
         assert!(matches!(
             PluginManifest::parse("[[views]"),
-            Err(PluginManifestError::Toml(_))
+            Err(ExtensionError::Toml(_))
         ));
     }
 
@@ -143,7 +138,7 @@ entry = "index.html"
         let m = PluginManifest::parse(text).unwrap();
         assert_eq!(
             m.api,
-            vec!["api/fs.ts".to_string(), "api/net.ts".to_string()]
+            vec![PathBuf::from("api/fs.ts"), PathBuf::from("api/net.ts")]
         );
         assert_eq!(m.views.len(), 1);
     }

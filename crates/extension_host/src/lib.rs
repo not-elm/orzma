@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod command;
 pub mod control;
+pub mod error;
 pub mod handlers_bridge;
 pub mod host;
 pub mod host_descriptor;
@@ -28,12 +29,13 @@ pub use control::{
     ControlParseError, ControlReply, ControlRequest, ControlResponse, ControlSide,
     RegisterViewParams, SplitParams, SurfaceKindSpec, SurfaceSpec, encode_response, parse_call,
 };
+pub use error::ExtensionError;
 pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
 pub use host_descriptor::{BuiltHostManifest, HostManifestJson, PluginDescriptorJson};
 pub use host_process::{HostProcess, PreparedHost};
 pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
 pub use plugin_discovery::{DiscoveredPlugin, discover_plugins};
-pub use plugin_manifest::{ManifestView, PluginManifest, PluginManifestError};
+pub use plugin_manifest::{ManifestView, PluginManifest};
 pub use protocol::{ProtocolError, Request, Response};
 pub use registry::{RegisteredView, ViewId, ViewRegistry};
