@@ -35,11 +35,6 @@ pub(crate) struct NonInteractive;
 /// (Step 3) reads this as the per-surface capability grant; it is the in-ECS
 /// trust record, never derived from webview-supplied data.
 #[derive(Component, Debug, Clone, Default)]
-// NOTE: the production (non-test) build has no reader yet, so dead_code fires;
-// #[expect] cannot suppress it because the test binary DOES read the field
-// (the expectation would then fail under cfg(test)). Remove when the host-API
-// bridge (Step 3) adds a non-test reader.
-#[allow(dead_code)]
 pub(crate) struct GrantedNamespaces(pub(crate) HashSet<String>);
 
 /// Wires the OSC-webview mount/unmount observer and the config-driven gate.
