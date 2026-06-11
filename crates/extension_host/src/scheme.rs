@@ -2,7 +2,10 @@
 //! the extension's bytes via `crate::fetch`. Behind the `cef` feature.
 
 #[cfg(feature = "cef")]
-use crate::host::{EndpointRegistry, ExtensionEndpoints, FetchError, fetch};
+use crate::asset::{AssetOutcome, serve_static_asset};
+use crate::host::{AssetSource, AssetSourceRegistry};
+#[cfg(feature = "cef")]
+use crate::host::{FetchError, fetch};
 #[cfg(feature = "cef")]
 use bevy_cef_core::prelude::{
     CefCustomScheme, CefSchemeBody, CefSchemeHandler, CefSchemeOptions, CefSchemeRequest,
@@ -53,67 +56,87 @@ fn bare_mime(content_type: &str) -> String {
 pub const SCHEME_NAME: &str = "ozmux-ext";
 
 /// Serves `ozmux-ext://<name>/<path>` for every registered extension by
-/// dispatching on `<name>` through a shared endpoint registry and fetching from
-/// the matched extension's live socket endpoint.
+/// dispatching on `<name>` through a shared asset-source registry.
 #[cfg(feature = "cef")]
 pub struct OzmuxExtScheme {
-    registry: EndpointRegistry,
+    registry: AssetSourceRegistry,
 }
 
 #[cfg(feature = "cef")]
 impl OzmuxExtScheme {
-    /// Builds a handler bound to the shared endpoint registry.
-    pub fn new(registry: EndpointRegistry) -> Self {
+    /// Builds a handler bound to the shared asset-source registry.
+    pub fn new(registry: AssetSourceRegistry) -> Self {
         Self { registry }
     }
 }
 
-/// Resolves the extension endpoint for an `ozmux-ext://<name>/<path>` URL via the
-/// registry. Returns `Ok((endpoints, path))` to fetch, or `Err(status)` for a
+/// Resolves the [`AssetSource`] for an `ozmux-ext://<name>/<path>` URL via the
+/// registry. Returns `Ok((source, path))` to serve, or `Err(status)` for a
 /// direct error response (404 unknown/unparseable name).
-#[cfg(feature = "cef")]
+#[cfg_attr(not(feature = "cef"), allow(dead_code))]
 fn resolve_request<'a>(
-    registry: &EndpointRegistry,
+    registry: &AssetSourceRegistry,
     url: &'a str,
-) -> Result<(ExtensionEndpoints, &'a str), u16> {
+) -> Result<(AssetSource, &'a str), u16> {
     let (name, path) = parse_url(url).ok_or(404u16)?;
-    let endpoints = registry.get(name).ok_or(404u16)?;
-    Ok((endpoints, path))
+    let source = registry.get(name).ok_or(404u16)?;
+    Ok((source, path))
 }
 
 #[cfg(feature = "cef")]
 impl CefSchemeHandler for OzmuxExtScheme {
     fn handle(&self, request: &CefSchemeRequest) -> CefSchemeResponse {
-        let (endpoints, path) = match resolve_request(&self.registry, &request.url) {
+        let (source, path) = match resolve_request(&self.registry, &request.url) {
             Ok(resolved) => resolved,
             Err(404) => return CefSchemeResponse::not_found(),
             Err(status) => return status_text(status, "extension dispatch failed"),
         };
-        match fetch(&endpoints, path) {
-            Ok(r) => {
-                let mime = bare_mime(&r.content_type);
-                bevy::log::debug!(
-                    url = %request.url,
-                    status = r.status,
-                    mime = %mime,
-                    bytes = r.body.len(),
-                    "ozmux-ext asset served"
-                );
-                CefSchemeResponse {
-                    status: r.status,
-                    mime_type: mime,
-                    headers: Vec::new(),
-                    body: CefSchemeBody::Bytes(r.body),
+        match source {
+            AssetSource::Static(root) => match serve_static_asset(&root, path) {
+                AssetOutcome::Ok { content_type, body } => {
+                    bevy::log::debug!(
+                        url = %request.url,
+                        mime = %content_type,
+                        bytes = body.len(),
+                        "ozmux-ext static asset served"
+                    );
+                    CefSchemeResponse {
+                        status: 200,
+                        mime_type: content_type,
+                        headers: Vec::new(),
+                        body: CefSchemeBody::Bytes(body),
+                    }
                 }
-            }
-            Err(FetchError::NotReady) => {
-                bevy::log::debug!(url = %request.url, "ozmux-ext asset endpoint not ready");
-                status_text(503, "extension not ready")
-            }
-            Err(e) => {
-                bevy::log::warn!(url = %request.url, error = %e, "ozmux-ext asset fetch failed");
-                status_text(502, "extension fetch failed")
-            }
+                AssetOutcome::NotFound => CefSchemeResponse::not_found(),
+                AssetOutcome::Forbidden => status_text(403, "forbidden asset path"),
+                AssetOutcome::TooLarge => status_text(413, "asset too large"),
+            },
+            AssetSource::Legacy(endpoints) => match fetch(&endpoints, path) {
+                Ok(r) => {
+                    let mime = bare_mime(&r.content_type);
+                    bevy::log::debug!(
+                        url = %request.url,
+                        status = r.status,
+                        mime = %mime,
+                        bytes = r.body.len(),
+                        "ozmux-ext legacy asset served"
+                    );
+                    CefSchemeResponse {
+                        status: r.status,
+                        mime_type: mime,
+                        headers: Vec::new(),
+                        body: CefSchemeBody::Bytes(r.body),
+                    }
+                }
+                Err(FetchError::NotReady) => {
+                    bevy::log::debug!(url = %request.url, "ozmux-ext legacy endpoint not ready");
+                    status_text(503, "extension not ready")
+                }
+                Err(e) => {
+                    bevy::log::warn!(url = %request.url, error = %e, "ozmux-ext legacy fetch failed");
+                    status_text(502, "extension fetch failed")
+                }
+            },
         }
     }
 }
@@ -131,9 +154,9 @@ fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
 }
 
 /// Builds the `ozmux-ext` scheme registration to pass to `CefPlugin`, dispatching
-/// every `ozmux-ext://<name>/…` URL through the shared endpoint registry.
+/// every `ozmux-ext://<name>/…` URL through the shared asset-source registry.
 #[cfg(feature = "cef")]
-pub fn custom_scheme(registry: EndpointRegistry) -> CefCustomScheme {
+pub fn custom_scheme(registry: AssetSourceRegistry) -> CefCustomScheme {
     CefCustomScheme {
         name: SCHEME_NAME.to_string(),
         options: CefSchemeOptions::STANDARD
@@ -209,23 +232,25 @@ mod tests {
         assert_eq!(bare_mime("; charset=utf-8"), "application/octet-stream");
     }
 
-    #[cfg(feature = "cef")]
     #[test]
-    fn dispatch_resolves_registered_name_and_404s_unknown_even_after_late_insert() {
-        use crate::host::{EndpointRegistry, ExtensionEndpoints};
-        let registry = EndpointRegistry::default();
-        // unknown name → 404
+    fn dispatch_resolves_static_and_legacy_and_404s_unknown_after_late_insert() {
+        use crate::host::{AssetSource, AssetSourceRegistry, ExtensionEndpoints};
+        use std::path::PathBuf;
+        let registry = AssetSourceRegistry::default();
         assert_eq!(
             resolve_request(&registry, "ozmux-ext://ghost/index.html").err(),
             Some(404)
         );
-        // register AFTER construction → now resolvable (handler reads live registry)
-        registry.insert("memo", ExtensionEndpoints::default());
-        let (_ep, path) =
+        registry.insert("memo", AssetSource::Static(PathBuf::from("/abs/memo")));
+        let (source, path) =
             resolve_request(&registry, "ozmux-ext://memo/app.js").expect("registered");
+        assert!(matches!(source, AssetSource::Static(ref p) if p == &PathBuf::from("/abs/memo")));
         assert_eq!(path, "app.js");
-        // empty path defaults to index.html (parse_url behavior preserved)
-        let (_ep, path2) = resolve_request(&registry, "ozmux-ext://memo").expect("registered");
+        let (_src, path2) = resolve_request(&registry, "ozmux-ext://memo").expect("registered");
         assert_eq!(path2, "index.html");
+        registry.insert("md", AssetSource::Legacy(ExtensionEndpoints::default()));
+        let (legacy, _p) =
+            resolve_request(&registry, "ozmux-ext://md/index.html").expect("registered");
+        assert!(matches!(legacy, AssetSource::Legacy(_)));
     }
 }

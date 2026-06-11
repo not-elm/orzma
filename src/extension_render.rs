@@ -12,7 +12,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
 use ozmux_extension_host::HandlersBridge;
-use ozmux_extension_host::host::EndpointRegistry;
+use ozmux_extension_host::host::AssetSourceRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
     AttachedWorkspace, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind,
@@ -60,15 +60,16 @@ struct WebviewMountUnresolved;
 pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 
 /// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
-/// `EndpointRegistry` the extension manager populates per extension on launch.
-/// The handler reads the live registry on each request, so endpoints registered
-/// after `CefPlugin::build()` resolve; frames for unregistered names 404. The
-/// `window.ozmux` bridge is intentionally NOT registered as a global extension
-/// here; it is injected per-webview via `PreloadScripts` in
+/// `AssetSourceRegistry` the extension manager populates: `Static(<dir>)` for
+/// new-model extensions (served directly by Rust) and `Legacy(...)` for legacy
+/// command-extensions. The handler reads the live registry on each request, so
+/// entries registered after `CefPlugin::build()` resolve; unregistered names
+/// 404. The `window.ozmux` bridge is intentionally NOT registered as a global
+/// extension here; it is injected per-webview via `PreloadScripts` in
 /// `finish_extension_setup` (see the NOTE there).
-pub fn cef_plugin(endpoints: EndpointRegistry) -> CefPlugin {
+pub fn cef_plugin(registry: AssetSourceRegistry) -> CefPlugin {
     CefPlugin {
-        custom_schemes: vec![custom_scheme(endpoints)],
+        custom_schemes: vec![custom_scheme(registry)],
         command_line_config: cef_command_line_config(),
         ..Default::default()
     }

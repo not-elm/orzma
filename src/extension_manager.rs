@@ -1,7 +1,7 @@
 //! Discovers ozmux Node extensions from the bundled + user extension roots,
 //! launches each as a `CommandExtension`, and owns the live per-extension
 //! registry (process handles + the shared `ozmux-ext://` asset
-//! `EndpointRegistry`). Replaces the old single hardcoded memo wiring: the
+//! `AssetSourceRegistry`). Replaces the old single hardcoded memo wiring: the
 //! renderer routes per extension off each surface's `OwningExtension`, and the
 //! control bridge drain runs across every launched extension.
 
@@ -9,7 +9,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use ozmux_configs::path::{SystemEnv, extensions_dir};
 use ozmux_extension_host::host::{
-    EndpointRegistry, ExtensionEndpoints, LifecycleEvent, RuntimeRoot,
+    AssetSource, AssetSourceRegistry, ExtensionEndpoints, LifecycleEvent, RuntimeRoot,
 };
 use ozmux_extension_host::{
     BuiltHostManifest, CommandExtension, CommandExtensionConfig, ExtensionControlSet, HostProcess,
@@ -39,24 +39,24 @@ struct DiscoveredCommandExtension {
 pub(crate) struct ExtensionRegistry {
     /// Extension name → its running process handle.
     pub(crate) extensions: HashMap<String, CommandExtension>,
-    /// Shared name → asset-endpoint map read by the `ozmux-ext://` scheme. The
-    /// scheme handler reads its own clone (passed to `cef_extension` in `main`);
+    /// Shared name → asset-source map read by the `ozmux-ext://` scheme. The
+    /// scheme handler reads its own clone (passed to `cef_plugin` in `main`);
     /// the resource holds the canonical handle so it stays alive for the app's
-    /// lifetime, and `publish_ready_endpoints` writes each extension's live
-    /// asset socket path into it once the extension signals readiness.
-    endpoints: EndpointRegistry,
+    /// lifetime. Legacy command-extensions are `Legacy(...)`; new-model
+    /// extensions are `Static(<dir>)` served directly by Rust.
+    endpoints: AssetSourceRegistry,
 }
 
 /// Discovers + launches every extension at Startup and drains each launched
 /// extension's control socket into the multiplexer every frame.
 pub(crate) struct ExtensionManagerPlugin {
-    endpoints: EndpointRegistry,
+    endpoints: AssetSourceRegistry,
 }
 
 impl ExtensionManagerPlugin {
     /// Builds the extension sharing `endpoints` with the CEF scheme handler so the
     /// handler reads the very registry the manager populates on launch.
-    pub(crate) fn new(endpoints: EndpointRegistry) -> Self {
+    pub(crate) fn new(endpoints: AssetSourceRegistry) -> Self {
         Self { endpoints }
     }
 
@@ -78,13 +78,15 @@ impl ExtensionManagerPlugin {
                 for extension in &extensions {
                     // NOTE: coexistence slice — an extension dir sharing a name with
                     // a launched legacy command-extension would clobber its asset
-                    // endpoint (last-write-wins). Skip + warn; Step 5 removes legacy.
+                    // source (last-write-wins). Skip + warn; Step 5 removes legacy.
                     if self.endpoints.get(&extension.name).is_some() {
                         tracing::warn!(name = %extension.name, "extension name collides with a legacy command-extension; skipping");
                         continue;
                     }
-                    self.endpoints
-                        .insert(extension.name.clone(), ExtensionEndpoints::default());
+                    self.endpoints.insert(
+                        extension.name.clone(),
+                        AssetSource::Static(extension.dir.clone()),
+                    );
                 }
                 app.insert_resource(HostRuntime { host });
             }
@@ -108,7 +110,10 @@ impl Plugin for ExtensionManagerPlugin {
                     // (FetchError::NotReady → 503), instead of hitting ECONNREFUSED
                     // on a socket the child has not bound (502). The real socket
                     // path is published by `publish_ready_endpoints` on readiness.
-                    endpoints.insert(name.clone(), ExtensionEndpoints::default());
+                    endpoints.insert(
+                        name.clone(),
+                        AssetSource::Legacy(ExtensionEndpoints::default()),
+                    );
                     extensions.insert(name, ext);
                 }
                 Err(e) => {
@@ -216,7 +221,7 @@ fn publish_ready_endpoints(registry: Res<ExtensionRegistry>) {
     for (name, ext) in registry.extensions.iter() {
         while let Ok(event) = ext.events().try_recv() {
             if let LifecycleEvent::Ready = event
-                && let Some(ep) = registry.endpoints.get(name)
+                && let Some(ep) = registry.endpoints.legacy_endpoint(name)
             {
                 ep.set(ext.asset_sock_path().to_path_buf());
             }
@@ -316,12 +321,14 @@ mod tests {
         )
         .expect("spawn memo");
 
-        let endpoints = EndpointRegistry::default();
-        endpoints.insert("memo", ExtensionEndpoints::default());
+        let endpoints = AssetSourceRegistry::default();
+        endpoints.insert("memo", AssetSource::Legacy(ExtensionEndpoints::default()));
         let mut extensions: HashMap<String, CommandExtension> = HashMap::new();
         extensions.insert("memo".into(), ext);
 
-        let registered = endpoints.get("memo").expect("name resolves at spawn");
+        let registered = endpoints
+            .legacy_endpoint("memo")
+            .expect("name resolves at spawn");
         assert!(
             registered.get().is_none(),
             "before readiness the endpoint must resolve the name but have no socket (NotReady -> 503, not 502)"
@@ -337,7 +344,11 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(25);
         loop {
             app.update();
-            if endpoints.get("memo").and_then(|ep| ep.get()).is_some() {
+            if endpoints
+                .legacy_endpoint("memo")
+                .and_then(|ep| ep.get())
+                .is_some()
+            {
                 break;
             }
             assert!(

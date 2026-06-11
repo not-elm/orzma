@@ -33,7 +33,7 @@ use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
-use ozmux_extension_host::host::EndpointRegistry;
+use ozmux_extension_host::host::AssetSourceRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
@@ -42,7 +42,7 @@ use ui::{
 };
 
 fn main() {
-    let endpoints = EndpointRegistry::default();
+    let registry = AssetSourceRegistry::default();
     App::new()
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
@@ -53,7 +53,7 @@ fn main() {
                 }),
                 ..default()
             }),
-            cef_plugin(endpoints.clone()),
+            cef_plugin(registry.clone()),
         ))
         .add_plugins((
             TerminalHandlePlugin,
@@ -79,7 +79,7 @@ fn main() {
             ImePlugin,
             ImeOverlayPlugin,
             OzmuxOscWebviewPlugin,
-            ExtensionManagerPlugin::new(endpoints),
+            ExtensionManagerPlugin::new(registry),
             OzmuxActionPlugin,
         ))
         .run();
