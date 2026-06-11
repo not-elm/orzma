@@ -14524,8 +14524,7 @@ config(en_default());
 // src/descriptors.ts
 var extensionDescriptorSchema = external_exports.object({
   name: external_exports.string(),
-  apiPaths: external_exports.array(external_exports.string()),
-  assetRoot: external_exports.string()
+  apiPaths: external_exports.array(external_exports.string())
 });
 var hostManifestSchema = external_exports.object({
   extensions: external_exports.array(extensionDescriptorSchema)

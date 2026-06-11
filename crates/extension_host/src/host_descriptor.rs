@@ -6,7 +6,7 @@ use crate::registry::{RegisteredView, ViewId};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// One extension's load + serve descriptor, serialized as camelCase to match the
+/// One extension's load descriptor, serialized as camelCase to match the
 /// Node host's `parseHostManifest` zod schema.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,8 +15,6 @@ pub struct ExtensionDescriptorJson {
     pub name: String,
     /// Absolute paths of the extension's api `.ts` files (traversal-validated).
     pub api_paths: Vec<PathBuf>,
-    /// Absolute extension directory the host serves assets from.
-    pub asset_root: String,
 }
 
 /// The host-manifest JSON Rust writes to `OZMUX_HOST_MANIFEST`.
@@ -44,7 +42,6 @@ impl BuiltHostManifest {
         let mut descriptors = Vec::new();
         let mut views = Vec::new();
         for extension in extensions {
-            let asset_root = extension.dir.to_string_lossy().into_owned();
             let mut api_paths = Vec::new();
             for rel in &extension.manifest.api {
                 if is_safe_rel(rel) {
@@ -56,7 +53,6 @@ impl BuiltHostManifest {
             descriptors.push(ExtensionDescriptorJson {
                 name: extension.name.clone(),
                 api_paths,
-                asset_root,
             });
             for view in &extension.manifest.views {
                 if view.id.as_str().is_empty() || view.id.as_str().chars().any(char::is_whitespace)
@@ -135,7 +131,7 @@ mod tests {
         let json = serde_json::to_string(&built.manifest).unwrap();
         assert_eq!(
             json,
-            r#"{"extensions":[{"name":"memo","apiPaths":["/abs/memo/api/fs.ts"],"assetRoot":"/abs/memo"}]}"#
+            r#"{"extensions":[{"name":"memo","apiPaths":["/abs/memo/api/fs.ts"]}]}"#
         );
     }
 

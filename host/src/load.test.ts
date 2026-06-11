@@ -13,7 +13,6 @@ function fakeImporter(modules: Record<string, unknown>): ApiImporter {
 const d = (name: string, apiPaths: string[]): ExtensionDescriptor => ({
   name,
   apiPaths,
-  assetRoot: `/p/${name}`,
 });
 
 describe('loadHostApi', () => {

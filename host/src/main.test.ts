@@ -18,7 +18,7 @@ describe('readHostStartup', () => {
     await fs.writeFile(
       manifestPath,
       JSON.stringify({
-        extensions: [{ name: 'memo', apiPaths: ['/abs/a.ts'], assetRoot: '/abs' }],
+        extensions: [{ name: 'memo', apiPaths: ['/abs/a.ts'] }],
       }),
     );
     const startup = await readHostStartup({

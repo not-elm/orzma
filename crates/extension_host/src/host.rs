@@ -125,22 +125,48 @@ impl ExtensionEndpoints {
     }
 }
 
-/// A shared, interior-mutable map of extension name → its live endpoint. Built
-/// before extensions launch (the CEF scheme handler is constructed at
-/// `CefPlugin::build()`) and populated by the host as each extension becomes
-/// ready, so the handler reads names registered after its own construction.
-#[derive(Clone, Default)]
-pub struct EndpointRegistry(Arc<RwLock<HashMap<String, ExtensionEndpoints>>>);
+/// The asset source for one extension name, dispatched by the `ozmux-ext://`
+/// scheme handler. New-model extensions serve static files directly from a
+/// directory; legacy command-extensions fetch over their per-extension socket.
+#[derive(Clone)]
+pub enum AssetSource {
+    /// Serve static files directly from this extension directory.
+    Static(PathBuf),
+    /// Fetch assets over the legacy per-extension socket endpoint.
+    Legacy(ExtensionEndpoints),
+}
 
-impl EndpointRegistry {
-    /// Returns (cloning) the endpoint handle for `name`, if registered.
-    pub fn get(&self, name: &str) -> Option<ExtensionEndpoints> {
+/// A shared, interior-mutable map of extension name → its [`AssetSource`]. Built
+/// before extensions launch (the CEF scheme handler is constructed at
+/// `CefPlugin::build()`) and populated as each extension is discovered/becomes
+/// ready, so the handler reads names registered after its own construction.
+///
+/// # Invariants
+/// A `Legacy` entry's [`ExtensionEndpoints`] is the same handle the manager
+/// publishes the live socket path into on readiness; `Static` entries are fixed
+/// at discovery time.
+#[derive(Clone, Default)]
+pub struct AssetSourceRegistry(Arc<RwLock<HashMap<String, AssetSource>>>);
+
+impl AssetSourceRegistry {
+    /// Returns (cloning) the asset source for `name`, if registered.
+    pub fn get(&self, name: &str) -> Option<AssetSource> {
         self.0.read().unwrap().get(name).cloned()
     }
 
-    /// Inserts/replaces the endpoint handle for `name`.
-    pub fn insert(&self, name: impl Into<String>, endpoints: ExtensionEndpoints) {
-        self.0.write().unwrap().insert(name.into(), endpoints);
+    /// Inserts/replaces the asset source for `name`.
+    pub fn insert(&self, name: impl Into<String>, source: AssetSource) {
+        self.0.write().unwrap().insert(name.into(), source);
+    }
+
+    /// Returns the legacy endpoint handle for `name`, or `None` when the name is
+    /// unregistered or is a `Static` source. Used to publish the live socket
+    /// path on readiness.
+    pub fn legacy_endpoint(&self, name: &str) -> Option<ExtensionEndpoints> {
+        match self.0.read().unwrap().get(name) {
+            Some(AssetSource::Legacy(ep)) => Some(ep.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -319,6 +345,24 @@ mod tests {
                 let _ = write_response(&mut stream, &resp);
             }
         })
+    }
+
+    #[test]
+    fn asset_registry_distinguishes_static_and_legacy() {
+        use std::path::PathBuf;
+        let reg = AssetSourceRegistry::default();
+        reg.insert("memo", AssetSource::Static(PathBuf::from("/abs/memo")));
+        reg.insert("md", AssetSource::Legacy(ExtensionEndpoints::default()));
+
+        assert!(
+            matches!(reg.get("memo"), Some(AssetSource::Static(ref p)) if p == &PathBuf::from("/abs/memo"))
+        );
+        assert!(matches!(reg.get("md"), Some(AssetSource::Legacy(_))));
+        assert!(reg.get("ghost").is_none());
+
+        assert!(reg.legacy_endpoint("md").is_some());
+        assert!(reg.legacy_endpoint("memo").is_none());
+        assert!(reg.legacy_endpoint("ghost").is_none());
     }
 
     #[test]
