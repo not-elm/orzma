@@ -9,6 +9,7 @@ pub mod control;
 pub mod handlers_bridge;
 pub mod host;
 pub mod host_descriptor;
+pub mod host_process;
 pub mod manifest;
 pub mod path_prefix;
 pub mod plugin_discovery;
@@ -31,6 +32,7 @@ pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
 pub use host_descriptor::{
     BuiltHostManifest, HostManifestJson, PluginDescriptorJson, build_host_manifest,
 };
+pub use host_process::{HostProcess, PreparedHost, prepare_host_runtime};
 pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
 pub use plugin_discovery::{DiscoveredPlugin, discover_plugins};
