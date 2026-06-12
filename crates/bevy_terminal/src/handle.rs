@@ -107,7 +107,7 @@ pub struct TerminalHandle {
     force_next_emit: bool,
     #[expect(
         dead_code,
-        reason = "read once run_history_maintenance is fleshed out in the follow-up task"
+        reason = "read by the saturation gate in the follow-up task"
     )]
     scroll_cap: usize,
     control_tx: Sender<ControlFrame>,
@@ -241,10 +241,7 @@ impl TerminalHandle {
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<()> {
-        let dim = LocalDim::new(cols, rows);
-        self.term.resize(dim);
-        self.row_hashes.clear();
-        self.frozen_valid = false;
+        self.resize_grid(cols, rows);
         pty.resize(cols, rows)?;
         self.stage_full_damage_and_arm(coalescer);
         Ok(())
@@ -896,6 +893,9 @@ impl TerminalHandle {
         if self.parser.sync_bytes_count() > 0 {
             self.parser.stop_sync(&mut self.term);
         }
+        // NOTE: maintenance (fold) must run BEFORE the anchor is stamped —
+        // same-chunk "CSI 3 J then mount-inline" depends on this order
+        // (spec §3).
         self.run_history_maintenance();
         let anchor = if matches!(verb, OscWebviewVerb::MountInline { .. }) {
             if self.term.mode().contains(TermMode::ALT_SCREEN) {
@@ -926,19 +926,29 @@ impl TerminalHandle {
         }
     }
 
+    /// Resizes the alacritty grid and invalidates the resize-sensitive
+    /// caches: `row_hashes` (post-resize rows must not be hash-filtered
+    /// against pre-resize hashes) and the frozen history baseline
+    /// (reflow changes `history_size`; the next primary-screen
+    /// observation skips the fold and re-baselines, spec §3).
+    fn resize_grid(&mut self, cols: u16, rows: u16) {
+        let dim = LocalDim::new(cols, rows);
+        self.term.resize(dim);
+        self.row_hashes.clear();
+        self.frozen_valid = false;
+    }
+
     /// Per-segment `history_base` maintenance (spec §3):
     /// fold `history_size` decreases into `history_base`, synthesize an
     /// unmount-all on every fold, keep a frozen baseline across alt screen,
-    /// and track saturation (handled in `update_saturation`).
+    /// and track saturation (handled in `update_saturation`). Callers that
+    /// stamp anchors must run this first (see `handle_webview_verb`).
     fn run_history_maintenance(&mut self) {
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
             return;
         }
         let h = self.term.history_size();
         if self.frozen_valid && h < self.frozen_history {
-            // NOTE: fold BEFORE any anchor is stamped at this stop point —
-            // the same-chunk "CSI 3 J then mount-inline" case is only
-            // correct in this order (spec §3).
             self.history_base += (self.frozen_history - h) as u64;
             self.send_synthetic_unmount_all();
         }
@@ -2039,6 +2049,18 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn resize_invalidates_baseline_and_next_segment_rebaselines_without_fold() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        h.resize_grid(20, 8);
+        h.advance(b"x");
+        assert!(
+            rx.try_recv().is_err(),
+            "re-baseline after resize must not fold/unmount"
+        );
     }
 
     #[test]
