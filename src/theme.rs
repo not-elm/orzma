@@ -28,8 +28,6 @@ pub const ACCENT: Color = Color::srgb(0.302, 0.561, 0.851);
 
 /// `SurfaceKind::Terminal` placeholder background.
 pub const SURFACE_TERMINAL: Color = Color::srgb(0.094, 0.094, 0.110);
-/// `SurfaceKind::Browser` placeholder background.
-pub const SURFACE_BROWSER: Color = Color::srgb(0.094, 0.149, 0.220);
 /// `SurfaceKind::Extension` placeholder background.
 pub const SURFACE_EXTENSION: Color = Color::srgb(0.094, 0.180, 0.110);
 

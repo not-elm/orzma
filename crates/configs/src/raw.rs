@@ -4,7 +4,6 @@
 use crate::OzmuxConfigs;
 use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
-use crate::browser::BrowserPatch;
 use crate::font::FontPatch;
 use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::mouse::MousePatch;
@@ -21,7 +20,6 @@ pub(crate) struct RawConfigs {
     pub(crate) shortcuts: Option<Shortcuts>,
     pub(crate) theme: Option<ThemePatch>,
     pub(crate) font: Option<FontPatch>,
-    pub(crate) browser: Option<BrowserPatch>,
     pub(crate) mouse: Option<MousePatch>,
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
     pub(crate) osc_webview: Option<OscWebviewPatch>,
@@ -30,7 +28,7 @@ pub(crate) struct RawConfigs {
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `bindings` is full-replace when present.
-    /// The `theme`, `font`, `browser`, `mouse`, `inactive_pane`, and `osc_webview`
+    /// The `theme`, `font`, `mouse`, `inactive_pane`, and `osc_webview`
     /// sections use their respective `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(shortcuts) = self.shortcuts {
@@ -41,9 +39,6 @@ impl RawConfigs {
         }
         if let Some(patch) = self.font {
             base.font = patch.apply_to(base.font);
-        }
-        if let Some(patch) = self.browser {
-            base.browser = patch.apply_to(base.browser);
         }
         if let Some(patch) = self.mouse {
             base.mouse = patch.apply_to(base.mouse);

@@ -1,5 +1,5 @@
 //! Tab-title label formatting. `tab_label` renders a terminal surface's live
-//! `Cwd` (home-abbreviated, front-truncated) and a browser/extension surface's
+//! `Cwd` (home-abbreviated, front-truncated) and an extension surface's
 //! live `WebTitle` (sanitized, back-truncated), blank until a title arrives;
 //! `LabelCtx` carries the per-rebuild inputs.
 
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// Placeholder shown for a terminal surface whose `Cwd` is not yet known.
 const TERMINAL_PLACEHOLDER: &str = "";
-/// Placeholder shown for a browser/extension surface with no webview title yet.
+/// Placeholder shown for an extension surface with no webview title yet.
 const WEB_PLACEHOLDER: &str = "";
 
 /// Per-refresh inputs for `tab_label`, built once per `refresh_pane_tabs` run
@@ -22,7 +22,7 @@ pub(crate) struct LabelCtx {
 
 /// Returns the tab-title string for a surface. Terminal surfaces render their
 /// home-abbreviated, front-truncated `Cwd` (`TERMINAL_PLACEHOLDER` when unknown).
-/// Browser/extension surfaces render their sanitized, back-truncated `WebTitle`
+/// Extension surfaces render their sanitized, back-truncated `WebTitle`
 /// (`WEB_PLACEHOLDER` when absent or empty).
 pub(crate) fn tab_label(
     kind: &SurfaceKind,
@@ -190,24 +190,10 @@ mod tests {
         assert_eq!(out.chars().count(), MAX);
     }
 
-    fn browser() -> SurfaceKind {
-        use ozmux_multiplexer::BrowserProfile;
-        SurfaceKind::Browser {
-            initial_url: None,
-            profile: BrowserProfile::default(),
-        }
-    }
-
     fn ext() -> SurfaceKind {
         SurfaceKind::Extension {
             entry: PathBuf::from("/tmp/ext"),
         }
-    }
-
-    #[test]
-    fn browser_renders_web_title() {
-        let wt = WebTitle("GitHub".into());
-        assert_eq!(tab_label(&browser(), None, Some(&wt), None, MAX), "GitHub");
     }
 
     #[test]
@@ -217,20 +203,20 @@ mod tests {
     }
 
     #[test]
-    fn browser_blank_without_title() {
-        assert_eq!(tab_label(&browser(), None, None, None, MAX), "");
+    fn extension_blank_without_title() {
+        assert_eq!(tab_label(&ext(), None, None, None, MAX), "");
     }
 
     #[test]
-    fn browser_blank_on_empty_title() {
+    fn extension_blank_on_empty_title() {
         let wt = WebTitle(String::new());
-        assert_eq!(tab_label(&browser(), None, Some(&wt), None, MAX), "");
+        assert_eq!(tab_label(&ext(), None, Some(&wt), None, MAX), "");
     }
 
     #[test]
     fn web_title_back_truncates() {
         let wt = WebTitle("A very long page title that exceeds the budget".into());
-        let out = tab_label(&browser(), None, Some(&wt), None, MAX);
+        let out = tab_label(&ext(), None, Some(&wt), None, MAX);
         assert!(out.starts_with("A very"), "got {out}");
         assert!(out.ends_with('…'), "got {out}");
         assert!(
@@ -243,8 +229,8 @@ mod tests {
     #[test]
     fn web_title_truncate_boundary() {
         let wt = WebTitle("hello".into());
-        assert_eq!(tab_label(&browser(), None, Some(&wt), None, 1), "…");
-        assert_eq!(tab_label(&browser(), None, Some(&wt), None, 0), "");
+        assert_eq!(tab_label(&ext(), None, Some(&wt), None, 1), "…");
+        assert_eq!(tab_label(&ext(), None, Some(&wt), None, 0), "");
     }
 
     #[test]

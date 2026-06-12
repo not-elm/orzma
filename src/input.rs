@@ -116,12 +116,6 @@ pub(crate) fn dispatch_focused_key(
     configs: Res<OzmuxConfigsResource>,
     copy_modes: Query<(), With<CopyModeState>>,
 ) {
-    // NOTE: when the browser address bar owns focus, the active pane is always a
-    // browser host (no `TerminalHandle`), so every terminal action below
-    // (forward/paste/copy/scroll) no-ops on it and `browser_address_editor`
-    // (ordered after this) consumes the bar's typed keys. App-global chords are
-    // intentionally NOT suppressed — they keep working in the bar, as in a real
-    // browser omnibox.
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
     // sees the same modifier snapshot. Read once outside the loop.
@@ -468,7 +462,7 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
 /// Resolves the active surface entity for `workspace` and triggers a
 /// `TerminalKeyInput` on it. Silently no-ops when the workspace has no
 /// active pane/surface yet, or when the target entity has no
-/// `TerminalHandle` (e.g. Browser Surface) — the `bevy_terminal`
+/// `TerminalHandle` (e.g. an extension surface) — the `bevy_terminal`
 /// observer handles that case by also no-op'ing.
 fn forward_to_active_terminal(
     commands: &mut Commands,

@@ -1,6 +1,6 @@
 # ozmux
 
-A terminal multiplexer with an embedded browser, built as a single
+A terminal multiplexer built as a single
 [Bevy](https://bevyengine.org/) application (`ozmux-gui`). Terminal emulation,
 GPU rendering, layout, input, and in-process CEF webview rendering all run in
 one ECS world. Node extensions (e.g. `@memo`) are spawned as child processes.

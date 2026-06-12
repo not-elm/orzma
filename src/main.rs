@@ -2,7 +2,6 @@
 
 mod action;
 mod bootstrap;
-mod browser_render;
 mod clipboard;
 mod configs;
 mod extension_manager;
@@ -16,7 +15,6 @@ mod theme;
 mod ui;
 
 use crate::action::OzmuxActionPlugin;
-use crate::browser_render::OzmuxBrowserRenderPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::extension_manager::ExtensionManagerPlugin;
 use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
@@ -66,7 +64,6 @@ fn main() {
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
             OzmuxExtensionRenderPlugin,
-            OzmuxBrowserRenderPlugin,
             CopyModePlugin,
             ClipboardActionPlugin,
             CopyModeIndicatorPlugin,

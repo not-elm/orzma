@@ -75,62 +75,6 @@ pub struct TerminalSurfaceMarker;
 #[derive(Component)]
 pub(crate) struct ExtensionSurfaceMarker;
 
-/// Marks a Surface entity whose `kind` is `Browser`. The browser renderer
-/// (`crate::browser_render`) queries `With<BrowserSurfaceMarker>` to find
-/// surfaces that need a native toolbar + a `bevy_cef` page webview attached.
-#[derive(Component)]
-pub(crate) struct BrowserSurfaceMarker;
-
-/// On a browser Surface entity: points to its page-webview child entity. Its
-/// presence also marks the surface's chrome as already built (mount-once gate).
-#[derive(Component)]
-pub(crate) struct BrowserPageWebview(pub(crate) Entity);
-
-/// On a browser page-webview child: points back to its owning Surface entity.
-/// Lets navigation observers (which fire on the webview entity) reach the
-/// surface.
-#[derive(Component)]
-pub(crate) struct PageWebviewOf(pub(crate) Entity);
-
-/// On a browser surface host: the latest navigation state, written by the
-/// `AddressChanged` / `LoadingStateChanged` observers and read by the toolbar
-/// render + button-enablement systems.
-#[derive(Component, Default, Clone)]
-pub(crate) struct BrowserToolbarState {
-    pub(crate) url: String,
-    pub(crate) is_loading: bool,
-    pub(crate) can_go_back: bool,
-    pub(crate) can_go_forward: bool,
-}
-
-/// On a browser surface host: the address-bar edit buffer + caret. Pure edit
-/// logic lives in `crate::browser_render`.
-#[derive(Component, Default, Clone)]
-pub(crate) struct AddressEdit {
-    pub(crate) buffer: String,
-    pub(crate) caret: usize,
-}
-
-/// On the address-bar node inside a browser toolbar: marks it and points to
-/// its owning host. The node is a `Button` so it can be clicked to focus.
-#[derive(Component)]
-pub(crate) struct AddrBarText(pub(crate) Entity);
-
-/// A toolbar navigation action a `BrowserNavButton` performs.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum NavAction {
-    Back,
-    Forward,
-    Reload,
-}
-
-/// On a toolbar button: its owning host + the action it triggers.
-#[derive(Component)]
-pub(crate) struct BrowserNavButton {
-    pub(crate) host: Entity,
-    pub(crate) action: NavAction,
-}
-
 /// On a tab-bar Node: marks it clickable and records which Surface (in which
 /// Pane) selecting it activates. Read by `drive_tab_clicks` / `tab_hover_cursor`.
 #[derive(Component, Clone, Copy)]
@@ -138,11 +82,6 @@ pub(crate) struct TabButton {
     pub(crate) pane: Entity,
     pub(crate) surface: Entity,
 }
-
-/// The browser Surface entity whose address bar currently owns the keyboard,
-/// or `None`. Read by the browser editor + `dispatch_focused_key`.
-#[derive(Resource, Default)]
-pub(crate) struct AddressBarFocus(pub(crate) Option<Entity>);
 
 /// Records that `TerminalBundle::spawn` failed for this host, so
 /// `finish_terminal_setup` will not retry on subsequent frames.
