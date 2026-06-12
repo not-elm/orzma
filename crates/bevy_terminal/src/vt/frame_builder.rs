@@ -41,6 +41,7 @@ pub(crate) fn build_snapshot<T>(
     term: &Term<T>,
     entity: Entity,
     seq: u32,
+    history_base: u64,
     reason: SnapshotReason,
     interner: &mut HyperlinkInterner,
 ) -> FrameSnapshot {
@@ -68,6 +69,7 @@ pub(crate) fn build_snapshot<T>(
             .collect(),
         display_offset: term.grid().display_offset() as u32,
         history_size: term.history_size() as u32,
+        history_base,
         vi_cursor: extract_vi_cursor(term),
         selection: extract_selection_range(term),
     }
@@ -81,6 +83,7 @@ pub(crate) fn build_delta<T>(
     term: &Term<T>,
     entity: Entity,
     seq: u32,
+    history_base: u64,
     rows: &[u16],
     interner: &mut HyperlinkInterner,
 ) -> FrameDelta {
@@ -103,6 +106,8 @@ pub(crate) fn build_delta<T>(
             .map(|(id, uri)| Hyperlink { id, uri })
             .collect(),
         display_offset: term.grid().display_offset() as u32,
+        history_size: term.history_size() as u32,
+        history_base,
         vi_cursor: extract_vi_cursor(term),
         selection: extract_selection_range(term),
     }
@@ -456,6 +461,7 @@ mod tests {
             &term,
             Entity::PLACEHOLDER,
             5,
+            0,
             SnapshotReason::Initial,
             &mut interner,
         );
@@ -484,6 +490,7 @@ mod tests {
             &term,
             Entity::PLACEHOLDER,
             0,
+            0,
             SnapshotReason::Initial,
             &mut interner,
         );
@@ -501,6 +508,7 @@ mod tests {
         let snap = build_snapshot(
             &term,
             Entity::PLACEHOLDER,
+            0,
             0,
             SnapshotReason::Initial,
             &mut interner,
@@ -521,6 +529,7 @@ mod tests {
             &term,
             Entity::PLACEHOLDER,
             0,
+            0,
             SnapshotReason::Initial,
             &mut interner,
         );
@@ -539,6 +548,7 @@ mod tests {
             &term,
             Entity::PLACEHOLDER,
             0,
+            0,
             SnapshotReason::Initial,
             &mut interner,
         );
@@ -552,7 +562,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "xyz");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 9, &[0u16], &mut interner);
+        let delta = build_delta(&term, Entity::PLACEHOLDER, 9, 0, &[0u16], &mut interner);
         assert_eq!(delta.seq, 9);
         assert_eq!(delta.dirty_rows.len(), 1);
         assert_eq!(delta.dirty_rows[0].row, 0);
@@ -569,7 +579,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "aaa\r\nbbb\r\nccc");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, &[0, 2], &mut interner);
+        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, 0, &[0, 2], &mut interner);
         assert_eq!(delta.dirty_rows.len(), 2);
         assert_eq!(delta.dirty_rows[0].row, 0);
         assert_eq!(delta.dirty_rows[1].row, 2);
@@ -579,7 +589,7 @@ mod tests {
     fn delta_empty_rows_slice_yields_empty_dirty_rows() {
         let term = make_term(10, 3);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 100, &[], &mut interner);
+        let delta = build_delta(&term, Entity::PLACEHOLDER, 100, 0, &[], &mut interner);
         assert_eq!(delta.seq, 100);
         assert!(delta.dirty_rows.is_empty());
     }
@@ -589,7 +599,7 @@ mod tests {
         let mut term = make_term(10, 3);
         install_text(&mut term, "abc");
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 1, &[0], &mut interner);
+        let delta = build_delta(&term, Entity::PLACEHOLDER, 1, 0, &[0], &mut interner);
         assert_eq!(delta.cursor.x, 3);
         assert_eq!(delta.cursor.y, 0);
         assert!(delta.cursor.visible);
@@ -654,11 +664,13 @@ mod tests {
             &term,
             Entity::PLACEHOLDER,
             0,
+            4,
             SnapshotReason::Initial,
             &mut interner,
         );
         assert_eq!(snap.display_offset, 2);
         assert!(snap.history_size >= 2, "history_size={}", snap.history_size);
+        assert_eq!(snap.history_base, 4);
     }
 
     #[test]
@@ -754,6 +766,7 @@ mod tests {
             &term,
             Entity::PLACEHOLDER,
             0,
+            0,
             SnapshotReason::Initial,
             &mut interner,
         );
@@ -781,7 +794,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Top);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, &[0u16], &mut interner);
+        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, 4, &[0u16], &mut interner);
         let row0: String = delta.dirty_rows[0]
             .runs
             .iter()
@@ -791,6 +804,11 @@ mod tests {
             row0.starts_with("alpha"),
             "delta row 0 after Scroll::Top should be oldest history line; got {row0:?}",
         );
+        assert!(
+            delta.history_size > 0,
+            "delta must mirror Term::history_size"
+        );
+        assert_eq!(delta.history_base, 4);
     }
 
     #[test]
@@ -944,6 +962,7 @@ mod tests {
             &term,
             Entity::PLACEHOLDER,
             0,
+            0,
             SnapshotReason::Initial,
             &mut interner,
         );
@@ -967,7 +986,7 @@ mod tests {
         sel.update(p, Side::Right);
         term.selection = Some(sel);
         let mut interner = HyperlinkInterner::new();
-        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, &[0u16], &mut interner);
+        let delta = build_delta(&term, Entity::PLACEHOLDER, 0, 0, &[0u16], &mut interner);
         assert!(
             delta.selection.is_some(),
             "selection present → delta must carry it"

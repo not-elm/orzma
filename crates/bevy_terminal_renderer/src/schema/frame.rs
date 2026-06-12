@@ -31,6 +31,10 @@ pub struct FrameSnapshot {
     /// Total scrollback history line count (upper bound for display_offset).
     #[serde(default)]
     pub history_size: u32,
+    /// Cumulative lines trimmed from the top of scrollback (monotonic;
+    /// advances only on history-destroying folds — spec §3).
+    #[serde(default)]
+    pub history_base: u64,
     /// Vi-mode cursor (active only in copy mode). Absent in normal mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vi_cursor: Option<ViCursor>,
@@ -58,6 +62,12 @@ pub struct FrameDelta {
     /// Lines scrolled back from the live tail. `0` = at live tail.
     #[serde(default)]
     pub display_offset: u32,
+    /// Total scrollback history line count (upper bound for display_offset).
+    #[serde(default)]
+    pub history_size: u32,
+    /// Cumulative lines trimmed from the top of scrollback (monotonic).
+    #[serde(default)]
+    pub history_base: u64,
     /// Vi-mode cursor (active only in copy mode). Absent in normal mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vi_cursor: Option<ViCursor>,

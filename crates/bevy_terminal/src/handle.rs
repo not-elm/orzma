@@ -70,10 +70,9 @@ impl Dimensions for LocalDim {
 /// Snapshot of the data the copy-mode indicator needs.
 ///
 /// Reading `Term` directly (rather than the renderer-side `TerminalGrid`
-/// component) is deliberate: `FrameDelta` does not carry `history_size`,
-/// so a `TerminalGrid` mirror would be stale between snapshots and the
-/// indicator would briefly display the wrong `total` under sustained
-/// PTY output.
+/// component) keeps the indicator exact under sustained PTY output:
+/// frames are coalesced, so the mirror may lag by up to one coalesce
+/// window even though `FrameDelta` now carries `history_size`.
 #[derive(Debug, Clone, Copy)]
 pub struct ViIndicatorSnapshot {
     /// 0-based scroll offset from the live tail (0 = bottom).
@@ -843,7 +842,14 @@ impl TerminalHandle {
         seq: u32,
         reason: SnapshotReason,
     ) {
-        let snap = build_snapshot(&self.term, entity, seq, reason, &mut self.hyperlinks);
+        let snap = build_snapshot(
+            &self.term,
+            entity,
+            seq,
+            self.history_base,
+            reason,
+            &mut self.hyperlinks,
+        );
         commands.trigger(snap);
         self.rebuild_full_row_hashes();
     }
@@ -874,7 +880,14 @@ impl TerminalHandle {
         rows: Vec<u16>,
         kept_hashes: Vec<(i32, u64)>,
     ) {
-        let delta = build_delta(&self.term, entity, seq, &rows, &mut self.hyperlinks);
+        let delta = build_delta(
+            &self.term,
+            entity,
+            seq,
+            self.history_base,
+            &rows,
+            &mut self.hyperlinks,
+        );
         self.scratch_dirty = rows;
         commands.trigger(delta);
         for (line_i32, h) in kept_hashes {
@@ -2255,6 +2268,31 @@ mod tests {
             h.test_frame_seq(),
             1,
             "with the flag consumed, an identical staged-noop emit must not advance seq"
+        );
+    }
+
+    #[test]
+    fn force_flag_survives_a_no_damage_abort() {
+        use bevy::ecs::world::{CommandQueue, World};
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let _ = rx.try_recv().expect("mount frame");
+        assert!(h.test_force_next_emit());
+
+        h.pending_damage = None;
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut coalescer = Coalescer::default();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            h.emit(&mut commands, entity, &mut coalescer);
+        }
+        queue.apply(&mut world);
+
+        assert!(
+            h.test_force_next_emit(),
+            "a no-damage abort must DEFER the forced frame, not discard it — hoisting the mem::take above the pending_damage guard wedges the GUI's first-projection hold"
         );
     }
 
