@@ -2310,6 +2310,104 @@ mod tests {
         );
         assert!(!reached(u32::MAX - 1, 2));
     }
+
+    #[test]
+    fn drain_forwards_mount_inline_anchor_to_request() {
+        use crate::events::OscWebviewRequest;
+        use crate::title::TerminalTitle;
+        use crate::vt::listener::{ControlFrame, InlineAnchor, OscWebviewVerb};
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::prelude::*;
+
+        #[derive(Resource, Default)]
+        struct Seen(Vec<OscWebviewRequest>);
+
+        let mut app = App::new();
+        app.init_resource::<Seen>();
+        app.add_observer(|ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
+            seen.0.push(ev.event().clone());
+        });
+
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (inject_tx, inject_rx) = crossbeam_channel::unbounded::<ControlFrame>();
+        let (ctrl_tx, _ctrl_rx) = crossbeam_channel::unbounded::<ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let handle = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            inject_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        inject_tx
+            .send(ControlFrame::OscWebview {
+                verb: OscWebviewVerb::MountInline {
+                    view_id: "memo".into(),
+                    rows: 3,
+                    cols: 10,
+                },
+                anchor: Some(InlineAnchor {
+                    line: 42,
+                    col: 7,
+                    frame_seq: 9,
+                }),
+            })
+            .unwrap();
+
+        app.world_mut().spawn((handle, TerminalTitle::default()));
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands,
+                 q: Query<(Entity, &TerminalHandle, &mut TerminalTitle)>| {
+                    for (entity, handle, mut title) in q {
+                        handle.drain_control_events(&mut commands, entity, &mut title);
+                    }
+                },
+            )
+            .unwrap();
+        app.world_mut().flush();
+
+        let seen = app.world().resource::<Seen>();
+        assert_eq!(seen.0.len(), 1, "exactly one OscWebviewRequest triggered");
+        let req = &seen.0[0];
+        assert!(
+            matches!(
+                req.verb,
+                OscWebviewVerb::MountInline {
+                    ref view_id,
+                    rows: 3,
+                    cols: 10
+                } if view_id == "memo"
+            ),
+            "verb must be MountInline{{memo, 3, 10}}, got {:?}",
+            req.verb
+        );
+        assert_eq!(
+            req.anchor,
+            Some(InlineAnchor {
+                line: 42,
+                col: 7,
+                frame_seq: 9
+            }),
+            "anchor must cross the drain boundary unchanged"
+        );
+    }
+
+    #[test]
+    fn c1_osc_introducer_is_rejected_not_parsed() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x9d5379;mount-inline;memo;3;10\x9c");
+        assert!(
+            rx.try_recv().is_err(),
+            "8-bit C1 OSC introducer must not reach the capture (spec section 2: 7-bit ESC ] only)"
+        );
+    }
 }
 
 #[cfg(test)]
