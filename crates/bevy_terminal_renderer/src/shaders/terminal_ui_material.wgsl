@@ -140,7 +140,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
     let colors = resolve_cell_colors(hit.cell);
     var color = colors.bg;
-    color = composite_inline_overlays(hit, color);
+    color = paint_inline_overlays(hit, color);
     color = paint_primary_glyph(hit, colors.fg, color);
     color = paint_left_overdraw(hit, color);
     return paint_cell_overlays(hit, colors.fg, color);
@@ -367,7 +367,7 @@ fn is_in_selection_uniform(
 }
 
 // ============================================================================
-// Inline-overlay compositing (webview textures)
+// Inline-overlay compositing
 // ============================================================================
 
 // Inline-overlay compositing (spec §6.2): samples each ACTIVE overlay slot
@@ -381,7 +381,7 @@ fn is_in_selection_uniform(
 // is partially scrolled above the viewport), so partial visibility never
 // distorts the image; grid-edge clipping is inherent because only in-grid
 // fragments reach paint_grid_cell.
-fn composite_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
+fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     var color = base;
     let p_px = vec2<f32>(f32(hit.col), f32(hit.row)) * params.cell_size_px + hit.in_cell_px;
     // NOTE: bindings cannot be dynamically indexed in core WGSL — the four
