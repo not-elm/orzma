@@ -101,15 +101,7 @@ pub struct TerminalHandle {
     window_open_mode: Option<TermMode>,
     frame_seq: u32,
     history_base: u64,
-    #[expect(
-        dead_code,
-        reason = "read once run_history_maintenance is fleshed out in the follow-up task"
-    )]
     frozen_history: usize,
-    #[expect(
-        dead_code,
-        reason = "read once run_history_maintenance is fleshed out in the follow-up task"
-    )]
     frozen_valid: bool,
     saturated: bool,
     force_next_emit: bool,
@@ -252,6 +244,7 @@ impl TerminalHandle {
         let dim = LocalDim::new(cols, rows);
         self.term.resize(dim);
         self.row_hashes.clear();
+        self.frozen_valid = false;
         pty.resize(cols, rows)?;
         self.stage_full_damage_and_arm(coalescer);
         Ok(())
@@ -933,9 +926,42 @@ impl TerminalHandle {
         }
     }
 
-    /// Per-segment history_base maintenance (spec §3). Fleshed out in a
-    /// follow-up task; the call sites are already final.
-    fn run_history_maintenance(&mut self) {}
+    /// Per-segment `history_base` maintenance (spec §3):
+    /// fold `history_size` decreases into `history_base`, synthesize an
+    /// unmount-all on every fold, keep a frozen baseline across alt screen,
+    /// and track saturation (handled in `update_saturation`).
+    fn run_history_maintenance(&mut self) {
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        let h = self.term.history_size();
+        if self.frozen_valid && h < self.frozen_history {
+            // NOTE: fold BEFORE any anchor is stamped at this stop point —
+            // the same-chunk "CSI 3 J then mount-inline" case is only
+            // correct in this order (spec §3).
+            self.history_base += (self.frozen_history - h) as u64;
+            self.send_synthetic_unmount_all();
+        }
+        self.frozen_history = h;
+        self.frozen_valid = true;
+        self.update_saturation(h);
+    }
+
+    /// Saturation gate state (spec §3). Fleshed out in the next task;
+    /// the call site is already final.
+    fn update_saturation(&mut self, _history_size: usize) {}
+
+    /// Sends the VT-synthesized unmount-all used by both the fold rule and
+    /// the saturation first-arrival rule.
+    fn send_synthetic_unmount_all(&mut self) {
+        let frame = ControlFrame::OscWebview {
+            verb: OscWebviewVerb::UnmountInline { view_id: None },
+            anchor: None,
+        };
+        if let Err(e) = self.control_tx.send(frame) {
+            tracing::warn!(?e, "control_tx send(synthetic UnmountInline) failed");
+        }
+    }
 }
 
 /// Classification used by `decide_frame_kind` to select snapshot vs
@@ -1927,6 +1953,116 @@ mod tests {
         };
         assert_eq!(get(first), 0);
         assert_eq!(get(second), 2);
+    }
+
+    fn seed_scrollback(h: &mut TerminalHandle, lines: usize) {
+        let mut payload = Vec::new();
+        for i in 0..lines {
+            payload.extend_from_slice(format!("l{i}\r\n").as_bytes());
+        }
+        h.advance(&payload);
+    }
+
+    #[test]
+    fn clear_scrollback_folds_into_history_base_and_unmounts_all() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        let hist_before = h.vi_indicator_snapshot().history_size;
+        assert!(hist_before > 0, "precondition: scrollback non-empty");
+        h.advance(b"\x1b[3J");
+        let frame = rx.try_recv().expect("synthesized UnmountInline");
+        assert_eq!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                anchor: None,
+            }
+        );
+    }
+
+    #[test]
+    fn clear_then_mount_in_same_chunk_anchors_after_fold() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        let hist = h.vi_indicator_snapshot().history_size as u64;
+        let mut payload = b"\x1b[3J".to_vec();
+        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(&payload);
+        let first = rx.try_recv().expect("fold unmount first");
+        assert!(matches!(
+            first,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                ..
+            }
+        ));
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount second")
+        else {
+            panic!("expected mount frame with anchor");
+        };
+        // NOTE: the invariant is anchor = history_base(=hist)
+        // + history_size(0 after 3J) + live cursor row. cursor.y from
+        // read_geometry is the viewport row, which equals the live-grid
+        // row because display_offset is 0 at the live tail.
+        let (_, _, cursor) = h.read_geometry();
+        assert_eq!(anchor.line, hist + cursor.y as u64);
+    }
+
+    #[test]
+    fn alt_screen_roundtrip_does_not_fold() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        h.advance(b"\x1b[?1049h");
+        h.advance(b"\x1b[?1049l");
+        assert!(
+            rx.try_recv().is_err(),
+            "no synthesized frames on alt roundtrip"
+        );
+    }
+
+    #[test]
+    fn alt_exit_plus_clear_in_one_chunk_still_folds() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        h.advance(b"\x1b[?1049h");
+        h.advance(b"\x1b[?1049l\x1b[3J");
+        let frame = rx
+            .try_recv()
+            .expect("fold must be detected against the frozen baseline");
+        assert!(matches!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bel_terminated_mount_at_exact_chunk_end_is_drained_in_same_call() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x07");
+        assert!(
+            matches!(rx.try_recv(), Ok(ControlFrame::OscWebview { .. })),
+            "verb must be drained in the same advance call even when the chunk ends at BEL"
+        );
+    }
+
+    #[test]
+    fn mount_anchor_col_reflects_text_before_osc_on_same_row() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"ab\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(a), ..
+        } = rx.try_recv().expect("frame")
+        else {
+            panic!("expected mount frame");
+        };
+        assert_eq!(a.col, 2, "cursor column after printing 'ab' is 2");
+        assert_eq!(a.line, 0);
     }
 }
 
