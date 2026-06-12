@@ -65,7 +65,8 @@ pub struct FrameDelta {
     /// Total scrollback history line count (upper bound for display_offset).
     #[serde(default)]
     pub history_size: u32,
-    /// Cumulative lines trimmed from the top of scrollback (monotonic).
+    /// Cumulative lines trimmed from the top of scrollback (monotonic;
+    /// advances only on history-destroying folds — spec §3).
     #[serde(default)]
     pub history_base: u64,
     /// Vi-mode cursor (active only in copy mode). Absent in normal mode.
