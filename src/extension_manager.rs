@@ -173,6 +173,15 @@ fn discover_command_extensions(roots: &[PathBuf]) -> Vec<DiscoveredCommandExtens
         let mut dirs: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
         dirs.sort();
         for dir in dirs {
+            // NOTE: a dir carrying `ozmux.toml` is a new-model extension; legacy
+            // discovery must skip it before touching `package.json`. The new-model
+            // `package.json` has no `name`, so parsing it would log a spurious
+            // "failed to parse" error every boot; skipping here keeps the two
+            // discovery models structurally separate instead of relying on that
+            // parse-error side effect.
+            if dir.join("ozmux.toml").is_file() {
+                continue;
+            }
             let manifest_path = dir.join(PACKAGE_JSON);
             if !manifest_path.is_file() {
                 continue;
@@ -291,6 +300,7 @@ fn register_views(registry: &mut ViewRegistry, views: Vec<(ViewId, RegisteredVie
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozmux_extension_host::ExtensionManifest;
 
     #[test]
     fn register_views_populates_registry_with_capabilities() {
@@ -310,74 +320,6 @@ mod tests {
         let v = reg.get("memo.main").expect("registered");
         assert_eq!(v.capabilities, vec!["fs".to_string()]);
         assert_eq!(v.owning_ext, "memo");
-    }
-
-    fn memo_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions/memo")
-    }
-
-    fn node_and_memo_available() -> bool {
-        let node = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("command -v node")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        node && memo_dir().join("node_modules/@ozmux/sdk").exists()
-    }
-
-    #[test]
-    fn endpoint_stays_unpublished_until_extension_is_ready() {
-        if !node_and_memo_available() {
-            eprintln!("skipping: node or memo's @ozmux/sdk link not available");
-            return;
-        }
-        let ext = CommandExtension::spawn_with_timeout(
-            CommandExtensionConfig {
-                name: "memo".into(),
-                dir: memo_dir(),
-                main: EXTENSION_MAIN.into(),
-            },
-            Duration::from_secs(20),
-        )
-        .expect("spawn memo");
-
-        let endpoints = AssetSourceRegistry::default();
-        endpoints.insert("memo", AssetSource::Legacy(ExtensionEndpoints::default()));
-        let mut extensions: HashMap<String, CommandExtension> = HashMap::new();
-        extensions.insert("memo".into(), ext);
-
-        let registered = endpoints
-            .legacy_endpoint("memo")
-            .expect("name resolves at spawn");
-        assert!(
-            registered.get().is_none(),
-            "before readiness the endpoint must resolve the name but have no socket (NotReady -> 503, not 502)"
-        );
-
-        let mut app = App::new();
-        app.insert_resource(ExtensionRegistry {
-            extensions,
-            endpoints: endpoints.clone(),
-        });
-        app.add_systems(Update, publish_ready_endpoints);
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(25);
-        loop {
-            app.update();
-            if endpoints
-                .legacy_endpoint("memo")
-                .and_then(|ep| ep.get())
-                .is_some()
-            {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "asset endpoint was never published after readiness"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        }
     }
 
     #[test]
@@ -436,6 +378,44 @@ mod tests {
         assert_eq!(
             found[0].config.main,
             std::ffi::OsString::from("bootstrap.ts")
+        );
+    }
+
+    #[test]
+    fn bundled_memo_manifest_publishes_memo_main_with_fs_capability() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions/memo/ozmux.toml");
+        let toml = std::fs::read_to_string(&path).expect("memo ozmux.toml exists");
+        let m = ExtensionManifest::parse(&toml).expect("memo ozmux.toml parses");
+        assert_eq!(m.api, vec![PathBuf::from("api.ts")], "memo declares api.ts");
+        assert_eq!(m.views.len(), 1, "memo publishes exactly one view");
+        let v = &m.views[0];
+        assert_eq!(v.id.as_str(), "memo.main");
+        assert_eq!(v.entry, PathBuf::from("index.html"));
+        assert_eq!(v.capabilities, vec!["fs".to_string()]);
+        assert!(v.interactive, "memo.main is interactive");
+    }
+
+    #[test]
+    fn legacy_discovery_skips_new_model_memo() {
+        let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions");
+        let found = discover_command_extensions(&[bundled]);
+        assert!(
+            !found.iter().any(|d| d.config.name == "memo"),
+            "memo carries an ozmux.toml (new-model); legacy discovery must skip it"
+        );
+    }
+
+    #[test]
+    fn legacy_discovery_skips_dirs_with_ozmux_toml_even_when_named() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("ext");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("package.json"), r#"{"name":"ext"}"#).unwrap();
+        std::fs::write(d.join("ozmux.toml"), "api = [\"api.ts\"]\n").unwrap();
+        let found = discover_command_extensions(&[tmp.path().to_path_buf()]);
+        assert!(
+            found.is_empty(),
+            "a dir with ozmux.toml is new-model; legacy discovery skips it before parsing package.json, even when package.json has a name"
         );
     }
 

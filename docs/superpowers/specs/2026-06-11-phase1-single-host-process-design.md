@@ -1,6 +1,6 @@
 # Phase 1: 単一ホストプロセス + ユーザー拡張可能なホストAPI — 設計
 
-- Status: Draft (brainstorming approved; revised per `/forte:spec-review` 2026-06-11; asset path revised 2026-06-11 — Rust serves static assets directly, see §4④)
+- Status: Draft (brainstorming approved; revised per `/forte:spec-review` 2026-06-11; asset path revised 2026-06-11 — Rust serves static assets directly, see §4④; step order + browser/md disposition recorded 2026-06-12 after #97/Step 4, see §4④「実装ステップ順序・移行スコープ」)
 - Date: 2026-06-11
 - Scope: `docs/memo.md` の **Phase 1 のみ**。Phase 2 (OSC インライン Webview レンダリング) / Phase 3 (tmux -CC) は本書末尾にロードマップとして記録するのみで、本設計の対象外。
 
@@ -181,6 +181,12 @@ Approach A の心臓部。**既存の `JsEmitEventPlugin` / `HostEmitEvent` / `P
 **移行(example / test fixture)**
 - 現 `@memo` を **新モデルの同梱サンプル拡張**に作り替え:`extensions/memo/{api.ts(例: `fs` namespace), index.html(`window.fs.read` を呼ぶ), ozmux.toml(view `memo.main`, capabilities=["fs"])}`。正典の例 + 統合テスト fixture とする。
 - **`extensions/*` を追加ルートとして先に導入**(host-API モデルに必要なのはこれだけ)。
+
+**実装ステップ順序・移行スコープ(2026-06-12 確定 / #97 = Step 4 完了後)**
+- **順序:Step 6(新モデル memo + E2E)を Step 5(レガシー撤去)より先**に実施する。新経路が実体で動くこと(OSC mount→`window.fs.read`→reply の E2E グリーン)を先に証明してから、レガシー基盤を撤去する。spec 上記「`extensions/*` を追加ルートとして先に導入」と整合。
+- **Step 6 で memo のレガシーファイルを削除:**`extensions/memo` を新モデルへ全面置換する際、`bootstrap.ts` / `package.json` / `tsconfig.json` を**削除**する。これがないと **legacy discovery(package.json ベース)と新 discovery(`ozmux.toml` ベース)が memo を二重登録**する。削除後は legacy 経路が memo を拾わず、新 discovery のみが `memo.main`(caps=["fs"])を `ViewRegistry` へ登録する(`extension_manager.rs` の `register_views` は実装済み)。
+- **配線は実装済みの確認:**manifest→`ViewRegistry`→`GrantedNamespaces`→host loader(`api.ts` の dynamic import)の経路は既存(Step 1〜4)で揃っている。よって Step 6 は **ファイル追加(`api.ts`/`ozmux.toml`)+ `index.html` 置換 + レガシーファイル削除 + E2E** でほぼ完結し、新規 Rust 配線は最小。
+- **他レガシー拡張(`extensions/browser` / `extensions/md`)は Step 5 で削除**(新モデルへ移行しない)。両者は現状レガシー `bootstrap()` で spawn されており、Step 6 のウィンドウ中は legacy のまま動作。Step 5 のレガシー撤去と同時にディレクトリごと削除し、撤去をクリーンに保つ(必要なら将来個別に新モデルへ移行)。
 
 **SDK 変更**
 - `@ozmux/sdk`:`./server`(bootstrap/control/handlers)・`./cmd-shim` を **削除**。

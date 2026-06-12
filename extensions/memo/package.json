@@ -1,18 +1,7 @@
 {
-  "name": "memo",
-  "main": "bootstrap.ts",
-  "version": "1.0.0",
-  "description": "",
   "type": "module",
   "scripts": {
     "check-types": "tsc --noEmit"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@10.30.2",
-  "dependencies": {
-    "@ozmux/sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

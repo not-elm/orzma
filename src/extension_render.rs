@@ -1464,4 +1464,158 @@ mod tests {
             "prune must drop ONLY the despawned surface's in-flight calls (retain, not clear)"
         );
     }
+
+    fn node_available() -> bool {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("command -v node")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Standard-alphabet base64 of `bytes` (no deps; `base64` is only transitive).
+    /// Used to assert the `{__u8}` envelope the host returns for a binary value.
+    fn base64_standard(bytes: &[u8]) -> String {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = *chunk.get(1).unwrap_or(&0);
+            let b2 = *chunk.get(2).unwrap_or(&0);
+            out.push(T[(b0 >> 2) as usize] as char);
+            out.push(T[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+            out.push(if chunk.len() > 1 {
+                T[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                T[(b2 & 0x3f) as usize] as char
+            } else {
+                '='
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn e2e_memo_fs_read_round_trips_through_the_real_host_and_gates_capabilities() {
+        use ozmux_extension_host::host::{LifecycleEvent, RuntimeRoot};
+        use ozmux_extension_host::{
+            BuiltHostManifest, HostProcess, HostRpcClient, discover_extensions,
+        };
+        use std::time::{Duration, Instant};
+
+        if !node_available() {
+            eprintln!("skipping e2e: node not available");
+            return;
+        }
+
+        // 1. Discover the bundled memo and build the host descriptor JSON.
+        let extensions_root =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions");
+        let extensions = discover_extensions(&[extensions_root]);
+        assert!(
+            extensions.iter().any(|e| e.name == "memo"),
+            "bundled memo must be discovered via ozmux.toml"
+        );
+        let built = BuiltHostManifest::new(&extensions);
+        let descriptor_json = serde_json::to_string(&built.manifest).expect("manifest serializes");
+
+        // 2. Spawn the real Node host and wait for readiness.
+        let runtime =
+            RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "host-e2e")
+                .expect("runtime root");
+        let host = HostProcess::spawn(runtime, &descriptor_json, Duration::from_secs(20))
+            .expect("spawn host");
+        let ready_deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            match host.events().recv_timeout(Duration::from_millis(200)) {
+                Ok(LifecycleEvent::Ready) => break,
+                Ok(LifecycleEvent::SpawnFailed { error }) => panic!("host spawn failed: {error}"),
+                Ok(LifecycleEvent::Exited { status }) => panic!("host exited early: {status:?}"),
+                Err(e) if e.is_disconnected() => {
+                    panic!("lifecycle channel closed before Ready was sent")
+                }
+                Err(_) => assert!(Instant::now() < ready_deadline, "host never became ready"),
+            }
+        }
+        let client = HostRpcClient::connect(host.rpc_sock_path()).expect("rpc connect");
+
+        // 3. Headless app with the capability gate + reply drain + a real client.
+        let mut app = gate_app();
+        app.add_systems(Update, drain_host_rpc_responses);
+        app.world_mut().resource_mut::<HostRpc>().set_client(client);
+
+        // 4. A webview granted the "fs" namespace (the trust record on the entity).
+        let mut caps = std::collections::HashSet::new();
+        caps.insert("fs".to_string());
+        let webview = app.world_mut().spawn(GrantedNamespaces(caps)).id();
+
+        // 5. fs.read of a known temp file.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        let content = b"hello from memo fs.read";
+        std::fs::write(&file, content).unwrap();
+
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "host.call", "reqId": "p0", "ns": "fs", "method": "read",
+                "args": [file.to_string_lossy()]
+            })),
+        });
+
+        // 6. Pump until the reply lands.
+        let reply_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            app.update();
+            if !app.world().resource::<CapturedEmits>().0.is_empty() {
+                break;
+            }
+            assert!(
+                Instant::now() < reply_deadline,
+                "fs.read reply never returned"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let cap = app.world().resource::<CapturedEmits>();
+        assert_eq!(cap.0.len(), 1, "exactly one reply");
+        let (target, payload) = &cap.0[0];
+        assert_eq!(*target, webview, "reply targets the originating webview");
+        let reply: serde_json::Value = serde_json::from_str(payload).unwrap();
+        assert_eq!(reply["reqId"], "p0", "page-local reqId restored");
+        assert_eq!(reply["ok"], true, "fs.read succeeded: {payload}");
+        assert_eq!(
+            reply["value"]["__u8"]
+                .as_str()
+                .expect("binary {__u8} envelope"),
+            base64_standard(content),
+            "fs.read returns the file's bytes as a base64 envelope"
+        );
+
+        // 7. Capability gate: an ungranted namespace is rejected, host not called.
+        app.world_mut().resource_mut::<CapturedEmits>().0.clear();
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "host.call", "reqId": "p1", "ns": "net", "method": "get", "args": []
+            })),
+        });
+        app.world_mut().flush();
+        let cap = app.world().resource::<CapturedEmits>();
+        assert_eq!(cap.0.len(), 1, "exactly one reject");
+        assert!(
+            cap.0[0].1.contains("capability_denied"),
+            "an ungranted namespace must be rejected, not forwarded"
+        );
+        assert!(
+            app.world().resource::<HostRpc>().inflight.is_empty(),
+            "a denied call must not be forwarded to the host"
+        );
+
+        app.world_mut().resource_mut::<HostRpc>().clear_client();
+        drop(host);
+    }
 }
