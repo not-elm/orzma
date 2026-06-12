@@ -7,7 +7,7 @@
 use crate::osc_webview::GrantedNamespaces;
 use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
-use crate::ui::{AddressBarFocus, BrowserPageWebview, ExtensionSurfaceMarker};
+use crate::ui::ExtensionSurfaceMarker;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
@@ -172,64 +172,34 @@ impl Plugin for OzmuxExtensionRenderPlugin {
 /// from the active pane fixes both — keyboard follows the focused pane, and CEF
 /// blurs the webview on focus-leave (`bevy_cef`'s `apply_webview_focus` releases
 /// CEF focus when `FocusedWebview` becomes `None`).
-///
-/// For browser surfaces the webview lives on a child entity pointed to by
-/// `BrowserPageWebview`; `active_webview` resolves through that indirection.
-/// When `AddressBarFocus` names the active surface, CEF focus is released so
-/// the address bar can own the keyboard.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
-    browser_hosts: Query<&BrowserPageWebview>,
-    address_focus: Option<Res<AddressBarFocus>>,
 ) {
-    let bar_focused_surface = address_focus.as_ref().and_then(|f| f.0);
-    let active = active_webview(
-        &mux,
-        &attached_workspace,
-        &webviews,
-        &non_interactive,
-        &browser_hosts,
-        bar_focused_surface,
-    );
+    let active = active_webview(&mux, &attached_workspace, &webviews, &non_interactive);
     if focused.0 != active {
         focused.0 = active;
     }
 }
 
 /// The active pane's focused webview entity, or `None` when the active surface
-/// is not a webview (e.g. a terminal pane), when the address bar owns input,
-/// or when the surface is render-only (`NonInteractive`).
-///
-/// For extension surfaces the webview is on the Surface entity itself
-/// (`WebviewSource`). For browser surfaces the webview is on the
-/// `BrowserPageWebview` child; when `bar_focused_surface` matches the Surface,
-/// returns `None` to release CEF focus.
+/// is not a webview (e.g. a terminal pane) or is render-only
+/// (`NonInteractive`). For extension surfaces the webview is on the Surface
+/// entity itself (`WebviewSource`).
 fn active_webview(
     mux: &MultiplexerCommands,
     attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     webviews: &Query<(), With<WebviewSource>>,
     non_interactive: &Query<(), With<NonInteractive>>,
-    browser_hosts: &Query<&BrowserPageWebview>,
-    bar_focused_surface: Option<Entity>,
 ) -> Option<Entity> {
     let workspace = attached_workspace.iter().next()?;
     let pane = mux.workspaces_active_pane(workspace)?;
     let surface = mux.panes_active_surface(pane)?;
-    if webviews.contains(surface) {
-        if non_interactive.contains(surface) {
-            return None;
-        }
+    if webviews.contains(surface) && !non_interactive.contains(surface) {
         return Some(surface);
-    }
-    if let Ok(page) = browser_hosts.get(surface) {
-        if bar_focused_surface == Some(surface) {
-            return None;
-        }
-        return Some(page.0);
     }
     None
 }
@@ -808,56 +778,6 @@ mod tests {
         assert_eq!(frame.0["id"], "c0");
         assert_eq!(frame.0["name"], "greet");
         assert_eq!(frame.0["payload"]["x"], 1);
-    }
-
-    #[test]
-    fn focused_webview_resolves_browser_child_and_respects_address_focus() {
-        use crate::ui::{AddressBarFocus, BrowserPageWebview};
-        use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
-        app.init_resource::<FocusedWebview>();
-        app.init_resource::<AddressBarFocus>();
-        app.add_systems(Update, sync_focused_webview);
-
-        let (workspace, _pane, surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.workspace, o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.world_mut()
-            .entity_mut(workspace)
-            .insert(AttachedWorkspace);
-
-        // The Surface entity IS its own host; it owns the page-webview child.
-        let child = app
-            .world_mut()
-            .spawn(WebviewSource::new("https://example.com"))
-            .id();
-        app.world_mut()
-            .entity_mut(surface)
-            .insert(BrowserPageWebview(child));
-
-        app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(child),
-            "active browser pane focuses its page-webview child"
-        );
-
-        app.world_mut().resource_mut::<AddressBarFocus>().0 = Some(surface);
-        app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "address-bar focus releases CEF focus"
-        );
     }
 
     #[test]

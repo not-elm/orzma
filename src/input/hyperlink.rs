@@ -5,7 +5,7 @@
 
 use crate::input::mouse_buttons::{cell_at_local, resolve_pane_at_phys};
 use crate::input::{InputPhase, current_modifiers};
-use crate::ui::{BrowserPageWebview, Slotted};
+use crate::ui::Slotted;
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -109,8 +109,6 @@ fn hyperlink_hover_and_cursor(
     hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), (With<SurfaceMarker>, With<Slotted>)>,
     grids: Query<&TerminalGrid>,
     webview_hosts: Query<&WebviewSource>,
-    browser_hosts: Query<&BrowserPageWebview>,
-    nodes: Query<(&ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
@@ -149,13 +147,7 @@ fn hyperlink_hover_and_cursor(
                     has_link: id.is_some(),
                     modifier_held: hover.modifier_held,
                 }
-            } else if cursor_over_cef_area(
-                entity,
-                cursor_phys,
-                &webview_hosts,
-                &browser_hosts,
-                &nodes,
-            ) {
+            } else if webview_hosts.get(entity).is_ok() {
                 HoverTarget::Webview
             } else {
                 HoverTarget::Default
@@ -173,30 +165,6 @@ fn reset_hover_state(hover: &mut HyperlinkHoverState) {
     hover.entity = None;
     hover.hyperlink_id = None;
     hover.modifier_held = false;
-}
-
-/// Returns `true` when `cursor_phys` is inside the host's CEF render
-/// area. For an Extension surface the whole host carries `WebviewSource`,
-/// so the host itself is the render area; for a Browser surface only the
-/// `BrowserPageWebview` child is CEF — the toolbar above it is native
-/// chrome and must NOT count, so it is hit-tested separately.
-fn cursor_over_cef_area(
-    host: Entity,
-    cursor_phys: Vec2,
-    webview_hosts: &Query<&WebviewSource>,
-    browser_hosts: &Query<&BrowserPageWebview>,
-    nodes: &Query<(&ComputedNode, &UiGlobalTransform)>,
-) -> bool {
-    if webview_hosts.get(host).is_ok() {
-        return true;
-    }
-    let Ok(page) = browser_hosts.get(host) else {
-        return false;
-    };
-    let Ok((node, transform)) = nodes.get(page.0) else {
-        return false;
-    };
-    node.contains_point(*transform, cursor_phys)
 }
 
 /// Applies a cursor decision: writes the icon when `Some`, leaves the
@@ -231,8 +199,7 @@ fn write_cursor_icon(
 
 /// Which region the mouse is over, distilled to what the cursor needs.
 /// `Default` covers everything that is neither terminal grid nor a CEF
-/// render area (chrome, gaps, the browser toolbar, an unobservable
-/// window).
+/// render area (chrome, gaps, an unobservable window).
 enum HoverTarget {
     Terminal { has_link: bool, modifier_held: bool },
     Webview,

@@ -4,7 +4,6 @@
 
 #![warn(missing_docs)]
 
-use crate::browser::BrowserConfig;
 use crate::font::FontConfig;
 use crate::inactive_pane::InactivePaneConfig;
 use crate::osc_webview::OscWebviewConfig;
@@ -13,7 +12,6 @@ use crate::theme::Theme;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 use std::path::Path;
 
-pub mod browser;
 pub mod error;
 pub mod font;
 pub mod inactive_pane;
@@ -33,8 +31,6 @@ pub struct OzmuxConfigs {
     pub theme: Theme,
     /// Font configuration.
     pub font: FontConfig,
-    /// Browser surface configuration.
-    pub browser: BrowserConfig,
     /// Mouse-input configuration.
     pub mouse: mouse::MouseConfig,
     /// Inactive-pane dimming configuration.

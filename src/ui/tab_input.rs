@@ -1,6 +1,6 @@
 //! Tab intersurface: left-click a tab to focus its pane and switch to its
-//! surface, plus a pointer cursor while hovering a tab. Mirrors the browser
-//! toolbar's `Interaction`-driven pattern in `crate::browser_render`.
+//! surface, plus a pointer cursor while hovering a tab, both driven by Bevy
+//! UI `Interaction` changes.
 
 use crate::input::InputPhase;
 use crate::ui::TabButton;
@@ -34,7 +34,7 @@ impl Plugin for TabInteractionPlugin {
 
 /// Routes a left-press on a tab to a focus + surface switch: focuses the tab's
 /// pane (`set_active_pane`) and makes the tab's surface active
-/// (`set_active_surface`). Mirrors `crate::browser_render::drive_nav_buttons`.
+/// (`set_active_surface`).
 fn drive_tab_clicks(
     mut mux: MultiplexerCommands,
     tabs: Query<(&Interaction, &TabButton), Changed<Interaction>>,
@@ -64,7 +64,7 @@ fn drive_tab_clicks(
 /// clickable. Runs after `InputPhase::Hover` so it wins over the hyperlink
 /// system's baseline cursor write; leaving a tab reverts to that baseline (the
 /// I-beam over terminal text, the arrow over chrome) when the hyperlink system
-/// re-asserts. Mirrors `crate::browser_render::nav_button_hover_cursor`.
+/// re-asserts.
 fn tab_hover_cursor(
     tabs: Query<&Interaction, With<TabButton>>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,

@@ -148,13 +148,6 @@ pub enum SurfaceKind {
         /// HTML entry path (relative to the extension dir) the webview loads.
         entry: PathBuf,
     },
-    /// An embedded Chromium browser surface.
-    Browser {
-        /// URL to navigate to on creation, or `None` to use the browser default.
-        initial_url: Option<String>,
-        /// Storage profile for this browser instance.
-        profile: BrowserProfile,
-    },
 }
 
 /// The current working directory of a surface. For terminal surfaces this is
@@ -162,26 +155,6 @@ pub enum SurfaceKind {
 /// means "unknown" — the terminal spawner falls back to `$HOME`.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct Cwd(pub PathBuf);
-
-/// Storage profile for a Browser Surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BrowserProfile {
-    /// A named persistent profile stored under the given name.
-    Named {
-        /// Profile directory name (relative to the browser data root).
-        name: String,
-    },
-    /// A temporary profile that is discarded when the surface closes.
-    Incognito,
-}
-
-impl Default for BrowserProfile {
-    fn default() -> Self {
-        BrowserProfile::Named {
-            name: "default".to_string(),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -212,14 +185,6 @@ mod tests {
     #[test]
     fn copy_mode_default_is_off() {
         assert_eq!(CopyMode::default(), CopyMode::Off);
-    }
-
-    #[test]
-    fn browser_profile_default_is_named_default() {
-        assert!(matches!(
-            BrowserProfile::default(),
-            BrowserProfile::Named { name } if name == "default",
-        ));
     }
 
     #[test]
