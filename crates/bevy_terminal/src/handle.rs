@@ -670,14 +670,21 @@ impl TerminalHandle {
         let curr_vi_cursor = extract_vi_cursor(&self.term);
         let curr_selection = extract_selection_range(&self.term);
 
-        if self.is_noop_emit(
-            &dirty,
-            &curr_cursor,
-            prev_mode,
-            curr_mode,
-            curr_vi_cursor,
-            curr_selection,
-        ) {
+        // NOTE: force_next_emit guarantees a grid frame with the stamped seq
+        // reaches the renderer even for an OSC-only chunk (no damage, no
+        // cursor move) — without it the GUI's first-projection hold (spec §5)
+        // would never release for clients that violate the newline contract.
+        let force = std::mem::take(&mut self.force_next_emit);
+        if !force
+            && self.is_noop_emit(
+                &dirty,
+                &curr_cursor,
+                prev_mode,
+                curr_mode,
+                curr_vi_cursor,
+                curr_selection,
+            )
+        {
             self.finalize_emit(coalescer);
             return;
         }
@@ -957,6 +964,7 @@ impl TerminalHandle {
     /// scrollback cap, trims become unobservable, so all inline webviews
     /// are unmounted once and further mounts are rejected until the
     /// history shrinks below the cap again (e.g. CSI 3 J).
+    // TODO: decide scroll_cap == 0 semantics when config-driven scrollback lands (0 >= 0 saturates immediately).
     fn update_saturation(&mut self, history_size: usize) {
         if history_size >= self.scroll_cap {
             if !self.saturated {
@@ -979,6 +987,16 @@ impl TerminalHandle {
         if let Err(e) = self.control_tx.send(frame) {
             tracing::warn!(?e, "control_tx send(synthetic UnmountInline) failed");
         }
+    }
+
+    #[cfg(test)]
+    fn test_force_next_emit(&self) -> bool {
+        self.force_next_emit
+    }
+
+    #[cfg(test)]
+    fn test_frame_seq(&self) -> u32 {
+        self.frame_seq
     }
 }
 
@@ -2098,8 +2116,8 @@ mod tests {
     #[test]
     fn saturation_first_arrival_unmounts_all_and_rejects_mounts() {
         let (mut h, rx) = handle_with_gate_on(10, 3);
-        let mut payload = Vec::with_capacity(64 * 1024);
-        for _ in 0..10_010 {
+        let mut payload = Vec::new();
+        for _ in 0..h.scroll_cap + 10 {
             payload.extend_from_slice(b"x\r\n");
         }
         h.advance(&payload);
@@ -2123,7 +2141,14 @@ mod tests {
             "mount-inline rejected while saturated"
         );
         h.advance(b"\x1b[3J");
-        let _fold = rx.try_recv().expect("fold unmount on clear");
+        let fold = rx.try_recv().expect("fold unmount on clear");
+        assert!(matches!(
+            fold,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                ..
+            }
+        ));
         h.advance(b"\x1b]5379;mount-inline;memo;2;5\x1b\\");
         let frame = rx.try_recv().expect("mount accepted after clear");
         assert!(matches!(
@@ -2146,10 +2171,106 @@ mod tests {
         );
         h.advance(b"\x1b[?1049l");
         h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
-        assert!(
-            rx.try_recv().is_ok(),
-            "accepted again after returning to primary"
+        let frame = rx
+            .try_recv()
+            .expect("accepted again after returning to primary");
+        assert!(matches!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::MountInline { .. },
+                anchor: Some(_)
+            }
+        ));
+    }
+
+    #[test]
+    fn mount_inside_synchronized_update_samples_flushed_state() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let mut payload = b"\x1b[?2026h\r\n\r\n".to_vec();
+        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(&payload);
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount frame")
+        else {
+            panic!("expected mount with anchor");
+        };
+        assert_eq!(
+            anchor.line, 2,
+            "stop_sync must flush the BSU buffer before sampling"
         );
+    }
+
+    #[test]
+    fn mount_stamps_next_emit_seq_and_force_flag_bypasses_noop() {
+        use bevy::ecs::world::{CommandQueue, World};
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount frame")
+        else {
+            panic!("expected mount with anchor");
+        };
+        assert_eq!(
+            anchor.frame_seq, 0,
+            "stamped seq = value the NEXT emit carries"
+        );
+        assert!(
+            h.test_force_next_emit(),
+            "accepted mount must arm the force flag"
+        );
+
+        h.first_emit = false;
+        h.prev_cursor = Some(extract_cursor(&h.term));
+        h.pending_damage = Some(crate::vt::damage::DirtyRows::Rows(Vec::new()));
+
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut coalescer = Coalescer::default();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            h.emit(&mut commands, entity, &mut coalescer);
+        }
+        queue.apply(&mut world);
+
+        assert_eq!(
+            h.test_frame_seq(),
+            1,
+            "forced emit must consume seq 0 (a frame was emitted despite no observable change)"
+        );
+        assert!(!h.test_force_next_emit(), "force flag is one-shot");
+
+        h.pending_damage = Some(crate::vt::damage::DirtyRows::Rows(Vec::new()));
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            h.emit(&mut commands, entity, &mut coalescer);
+        }
+        queue.apply(&mut world);
+        assert_eq!(
+            h.test_frame_seq(),
+            1,
+            "with the flag consumed, an identical staged-noop emit must not advance seq"
+        );
+    }
+
+    #[test]
+    fn seq_wrap_comparison_is_serial_number_arithmetic() {
+        fn reached(last_seq: u32, stamped: u32) -> bool {
+            last_seq.wrapping_sub(stamped) as i32 >= 0
+        }
+        assert!(reached(5, 5));
+        assert!(reached(6, 5));
+        assert!(!reached(4, 5));
+        assert!(
+            reached(2, u32::MAX - 1),
+            "wrap: last_seq passed the boundary"
+        );
+        assert!(!reached(u32::MAX - 1, 2));
     }
 }
 
