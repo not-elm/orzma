@@ -19,71 +19,36 @@
         color: #c0caf5;
         border: 1px solid #414868;
       }
-      button[disabled] { opacity: 0.5; }
-      #result, #clock { margin-top: 1rem; }
+      #out { margin-top: 1rem; white-space: pre-wrap; }
+      .err { color: #f7768e; }
     </style>
   </head>
   <body>
     <h1>Memo</h1>
     <section>
-      <p>handler RPC demo</p>
-      <input id="name" type="text" placeholder="Your name" />
-      <button id="send" type="button">Send</button>
-      <p id="result"></p>
-    </section>
-    <section>
-      <p>channel demo</p>
-      <button id="start-clock" type="button">Start clock</button>
-      <button id="stop-clock" type="button" disabled>Stop clock</button>
-      <p id="clock">(idle)</p>
+      <p>host-API demo: read a file through <code>window.fs.read</code></p>
+      <input id="path" type="text" placeholder="/absolute/path/to/file" size="40" />
+      <button id="read" type="button">Read</button>
+      <div id="out">(enter a path and press Read)</div>
     </section>
 
     <script type="module">
-      const client = window.ozmux.createClient();
-      const sendBtn = document.getElementById("send");
-      const result = document.getElementById("result");
-      const startBtn = document.getElementById("start-clock");
-      const stopBtn = document.getElementById("stop-clock");
-      const clockEl = document.getElementById("clock");
+      const readBtn = document.getElementById("read");
+      const out = document.getElementById("out");
 
-      sendBtn.addEventListener("click", async () => {
-        const name = document.getElementById("name").value;
+      readBtn.addEventListener("click", async () => {
+        const path = document.getElementById("path").value;
+        out.classList.remove("err");
+        out.textContent = "reading…";
         try {
-          const resp = await client.call("greet", { name });
-          result.textContent = resp.message;
+          // window.fs is a Proxy injected per granted namespace by the host
+          // bridge; read() returns a Uint8Array decoded from the {__u8} envelope.
+          const bytes = await window.fs.read(path);
+          out.textContent = new TextDecoder().decode(bytes);
         } catch (e) {
-          result.textContent = `error: ${e.message}`;
+          out.classList.add("err");
+          out.textContent = `error: ${e.message}`;
         }
-      });
-
-      let activeAbort = null;
-
-      startBtn.addEventListener("click", async () => {
-        if (activeAbort) return;
-        const ac = new AbortController();
-        activeAbort = ac;
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        try {
-          for await (const ev of client.subscribe(
-            "clock",
-            { intervalMs: 1000 },
-            { signal: ac.signal },
-          )) {
-            clockEl.textContent = ev.time;
-          }
-          clockEl.textContent = "(stopped)";
-        } catch (e) {
-          clockEl.textContent = `error: ${e.message}`;
-        } finally {
-          if (activeAbort === ac) activeAbort = null;
-          startBtn.disabled = false;
-          stopBtn.disabled = true;
-        }
-      });
-
-      stopBtn.addEventListener("click", () => {
-        activeAbort?.abort();
       });
     </script>
   </body>
