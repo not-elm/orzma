@@ -291,6 +291,7 @@ fn register_views(registry: &mut ViewRegistry, views: Vec<(ViewId, RegisteredVie
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozmux_extension_host::ExtensionManifest;
 
     #[test]
     fn register_views_populates_registry_with_capabilities() {
@@ -436,6 +437,30 @@ mod tests {
         assert_eq!(
             found[0].config.main,
             std::ffi::OsString::from("bootstrap.ts")
+        );
+    }
+
+    #[test]
+    fn bundled_memo_manifest_publishes_memo_main_with_fs_capability() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions/memo/ozmux.toml");
+        let toml = std::fs::read_to_string(&path).expect("memo ozmux.toml exists");
+        let m = ExtensionManifest::parse(&toml).expect("memo ozmux.toml parses");
+        assert_eq!(m.api, vec![PathBuf::from("api.ts")], "memo declares api.ts");
+        assert_eq!(m.views.len(), 1, "memo publishes exactly one view");
+        let v = &m.views[0];
+        assert_eq!(v.id.as_str(), "memo.main");
+        assert_eq!(v.entry, PathBuf::from("index.html"));
+        assert_eq!(v.capabilities, vec!["fs".to_string()]);
+        assert!(v.interactive, "memo.main is interactive");
+    }
+
+    #[test]
+    fn legacy_discovery_skips_new_model_memo() {
+        let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions");
+        let found = discover_command_extensions(&[bundled]);
+        assert!(
+            !found.iter().any(|d| d.config.name == "memo"),
+            "memo's package.json has no name (new-model); legacy discovery must skip it"
         );
     }
 
