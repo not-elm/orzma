@@ -28,17 +28,6 @@ pub struct SpawnOptions {
     /// Initial working directory for the spawned shell.
     pub cwd: Option<PathBuf>,
     /// Arbitrary environment variables forwarded to the shell.
-    ///
-    /// # Invariants
-    ///
-    /// The caller is responsible for OZMUX_* keys (`OZMUX_PANE_ID`,
-    /// `OZMUX_SURFACE_ID`, `OZMUX_SESSION_ID`) and for any PATH augmentation.
-    ///
-    /// **PATH ordering is load-bearing**: if the caller prepends
-    /// extension `bin/` directories to PATH, the ozmux `__builtin/`
-    /// directory MUST appear FIRST so that built-in shims win over
-    /// same-named extension binaries. This responsibility lives with
-    /// the caller (see `ozmux_extension_host::path_prefix`).
     pub env: Vec<(String, String)>,
     /// Shared gate controlling whether OSC 5379 webview sequences are processed.
     /// Off by default — callers that want webview support enable this at spawn time.

@@ -1,12 +1,9 @@
 //! CEF integration for extension surfaces: the `ozmux-ext://` asset scheme, the
 //! webview spawn-once system that attaches a `bevy_cef` webview to each Extension
-//! Surface host, and two coexisting JS bridges injected per surface — the legacy
-//! `window.ozmux` handler RPC bridge (routing frames to the extension's handlers
-//! socket) and the new-model `window.<ns>.<method>` host-API bridge
-//! (capability-gated `host.call` frames forwarded to the single Node host via
-//! `HostRpc`, with replies routed back on the `ozmux` channel).
+//! Surface host, and the `window.<ns>.<method>` host-API bridge injected per
+//! surface (capability-gated `host.call` frames forwarded to the single Node host
+//! via `HostRpc`, with replies routed back on the `ozmux` channel).
 
-use crate::extension_manager::ExtensionRegistry;
 use crate::osc_webview::GrantedNamespaces;
 use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
@@ -14,13 +11,12 @@ use crate::ui::{AddressBarFocus, BrowserPageWebview, ExtensionSurfaceMarker};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use ozmux_extension_host::HandlersBridge;
 use ozmux_extension_host::HostRpcClient;
 use ozmux_extension_host::host::AssetSourceRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
-    AttachedWorkspace, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind,
-    SurfaceMarker, WorkspaceMarker,
+    AttachedWorkspace, MultiplexerCommands, OwningExtension, SurfaceKind, SurfaceMarker,
+    WorkspaceMarker,
 };
 use serde_json::Value;
 
@@ -30,28 +26,16 @@ fn webview_url(extension_name: &str, entry: &str) -> String {
     format!("ozmux-ext://{extension_name}/{entry}")
 }
 
-/// One handler/channel frame emitted by the page's `window.ozmux` (the JSON the
-/// SDK handlers-server speaks). Carried verbatim to the handlers bridge.
+/// One frame emitted by the page bridge `host_bridge.js` via
+/// `cef.emit({ kind: 'host.call', … })`, inspected by `on_host_call_frame`.
 ///
 /// `#[serde(transparent)]` makes it deserialize from the bare emitted object
-/// (`{kind, id, name, payload}`), not from a `{"0": …}` wrapper — `bevy_cef`'s
+/// (`{kind, reqId, ns, method, args}`), not from a `{"0": …}` wrapper — `bevy_cef`'s
 /// `cef.emit(frame)` serializes only its first argument into one global
 /// `Receive<OzmuxFrame>`.
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(transparent)]
 struct OzmuxFrame(serde_json::Value);
-
-/// Owns the per-surface handler-socket connections and the shared outbound
-/// channel that `drain_handler_responses` pumps back to the page.
-#[derive(Resource, Default)]
-struct ExtensionHandlersBridge(HandlersBridge);
-
-/// `surface_id → webview entity` map, populated by the inbound observer the first time
-/// a surface emits a frame, and read by the outbound drain to address a
-/// `HostEmitEvent` at the originating webview. Pruned by `prune_webview_id_map_on_remove`
-/// when the owning surface is despawned.
-#[derive(Resource, Default)]
-struct WebviewSurfaceIdMap(HashMap<String, Entity>);
 
 /// The connected host RPC client plus the in-flight `globalReqId → (webview,
 /// pageReqId)` correlation. `globalReqId` is minted Rust-side (a monotonic
@@ -107,29 +91,23 @@ impl HostRpc {
 #[derive(Component)]
 struct WebviewMountUnresolved;
 
-/// JS defining `window.ozmux` over `cef.emit` / `cef.listen`, injected per
-/// webview as a `PreloadScripts` entry (see `finish_extension_setup`). Mirrors
-/// `sdk/typescript/src/surface/ozmux-bridge.ts`.
-pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
-
 /// JS defining the new-model `window.<ns>.<method>` host-API bridge over
 /// `cef.emit` / `cef.listen`, injected (with `window.__ozmuxGranted`) per
-/// new-model webview as a `PreloadScripts` entry instead of `OZMUX_EXTENSION_JS`.
+/// webview as a `PreloadScripts` entry.
 const HOST_BRIDGE_JS: &str = include_str!("extension_render/host_bridge.js");
 
 /// The `kind` discriminator that routes a `Receive<OzmuxFrame>` to the new-model
-/// host-API path (`on_host_call_frame`) instead of the legacy handler path
-/// (`on_ozmux_frame`). The page side emits the matching literal in `host_bridge.js`.
+/// host-API path (`on_host_call_frame`). The page side emits the matching literal
+/// in `host_bridge.js`.
 const HOST_CALL_KIND: &str = "host.call";
 
 /// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
-/// `AssetSourceRegistry` the extension manager populates: `Static(<dir>)` for
-/// new-model extensions (served directly by Rust) and `Legacy(...)` for legacy
-/// command-extensions. The handler reads the live registry on each request, so
-/// entries registered after `CefPlugin::build()` resolve; unregistered names
-/// 404. The `window.ozmux` bridge is intentionally NOT registered as a global
-/// extension here; it is injected per-webview via `PreloadScripts` in
-/// `finish_extension_setup` (see the NOTE there).
+/// `AssetSourceRegistry` (extension name → on-disk asset root) the extension
+/// manager populates; Rust serves the files directly. The handler reads the live
+/// registry on each request, so entries registered after `CefPlugin::build()`
+/// resolve; unregistered names 404. The host-API bridge is intentionally NOT
+/// registered as a global extension here; it is injected per-webview via
+/// `PreloadScripts` in `finish_extension_setup` (see the NOTE there).
 pub fn cef_plugin(registry: AssetSourceRegistry) -> CefPlugin {
     CefPlugin {
         custom_schemes: vec![custom_scheme(registry)],
@@ -168,12 +146,9 @@ pub struct OzmuxExtensionRenderPlugin;
 impl Plugin for OzmuxExtensionRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(JsEmitEventPlugin::<OzmuxFrame>::default())
-            .init_resource::<ExtensionHandlersBridge>()
-            .init_resource::<WebviewSurfaceIdMap>()
             .init_resource::<HostRpc>()
-            .add_observer(on_ozmux_frame)
             .add_observer(on_host_call_frame)
-            .add_observer(prune_webview_id_map_on_remove)
+            .add_observer(drop_inflight_host_calls_on_webview_despawn)
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
             .add_observer(log_webview_load_error)
@@ -181,7 +156,6 @@ impl Plugin for OzmuxExtensionRenderPlugin {
                 Update,
                 (
                     finish_extension_setup.in_set(OzmuxSystems::SetupSurface),
-                    drain_handler_responses,
                     drain_host_rpc_responses,
                     sync_focused_webview.after(OzmuxSystems::Input),
                 ),
@@ -318,25 +292,30 @@ fn finish_extension_setup(
         let name = owner.0.as_str();
         let url = webview_url(name, &entry);
         tracing::debug!(?surface, ?logical, %url, "spawning extension webview");
-        // NOTE: `window.ozmux` MUST be a PreloadScript, not a global CefExtension.
-        // ozmux.js calls cef.listen() at top level; a global extension runs that
-        // during V8 context creation, where there is no entered V8 context, so the
-        // native cef.listen handler's v8_context_get_current_context() crashes the
-        // render process. PreloadScripts are eval'd at on_context_created inside an
-        // entered context (and their exceptions are caught, not fatal), so
+        // NOTE: `window.<ns>` MUST be a PreloadScript, not a global CefExtension.
+        // host_bridge.js calls cef.listen() at top level; a global extension runs
+        // that during V8 context creation, where there is no entered V8 context, so
+        // the native cef.listen handler's v8_context_get_current_context() crashes
+        // the render process. PreloadScripts are eval'd at on_context_created inside
+        // an entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
         let ctx_js = context_preload_js(workspace, pane, surface, name);
-        let preload = match granted.get(surface) {
-            Ok(g) => {
-                let list: Vec<&String> = g.0.iter().collect();
-                let granted_js = format!(
-                    "window.__ozmuxGranted={};",
-                    serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+        let granted_json = match granted.get(surface) {
+            Ok(g) => serde_json::to_string(&g.0).expect("namespace set serializes infallibly"),
+            Err(_) => {
+                // NOTE: every OSC-mounted Extension surface is stamped with
+                // GrantedNamespaces at mount; reaching setup without it means a
+                // non-OSC creation path skipped the stamp, so the webview would
+                // silently get zero capabilities — flag the invariant break.
+                tracing::warn!(
+                    ?surface,
+                    "extension surface has no GrantedNamespaces; injecting empty grant"
                 );
-                PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()])
+                "[]".to_string()
             }
-            Err(_) => PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
         };
+        let granted_js = format!("window.__ozmuxGranted={granted_json};");
+        let preload = PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()]);
         commands.entity(surface).insert((
             WebviewSource::new(url),
             WebviewSize(logical),
@@ -394,64 +373,6 @@ fn pane_logical_size(physical: Vec2, inverse_scale_factor: f32) -> Option<Vec2> 
     }
 }
 
-/// Resolves the SDK surface id (`surface_id`) for the webview entity that
-/// emitted a frame: the webview entity *is* the Extension Surface, so it
-/// carries the `ExtensionSurfaceId` directly. Returns `None` when the surface
-/// has not yet been stamped by the control bridge.
-fn surface_id_for_webview(
-    webview: Entity,
-    surface_ids: &Query<&ExtensionSurfaceId>,
-) -> Option<String> {
-    Some(surface_ids.get(webview).ok()?.0.clone())
-}
-
-/// Inbound: a `window.ozmux` `cef.emit(frame)` arrives as `Receive<OzmuxFrame>`
-/// targeting the emitting webview. Resolves the webview's `surface_id` and its owning
-/// extension's handlers socket (via the surface's `OwningExtension` and the
-/// `ExtensionRegistry`), connects idempotently, records the `surface_id → webview`
-/// mapping for the outbound path, and forwards the frame.
-///
-/// Frames are dropped when the webview cannot be resolved to a `surface_id`/owner
-/// (the surface has not been stamped yet) or the owning extension is not in
-/// the registry (failed to launch) — there is no handler set to address.
-fn on_ozmux_frame(
-    frame: On<Receive<OzmuxFrame>>,
-    bridge: Res<ExtensionHandlersBridge>,
-    registry: Res<ExtensionRegistry>,
-    mut surface_id_map: ResMut<WebviewSurfaceIdMap>,
-    owners: Query<&OwningExtension>,
-    surface_ids: Query<&ExtensionSurfaceId>,
-) {
-    let webview = frame.webview;
-    if frame
-        .payload
-        .0
-        .get("kind")
-        .and_then(serde_json::Value::as_str)
-        == Some(HOST_CALL_KIND)
-    {
-        return;
-    }
-    let Some(surface_id) = surface_id_for_webview(webview, &surface_ids) else {
-        return;
-    };
-    let Ok(owner) = owners.get(webview) else {
-        return;
-    };
-    let Some(ext) = registry.extensions.get(&owner.0) else {
-        return;
-    };
-    let sock = ext.handlers_sock_path().to_path_buf();
-    if let Err(e) = bridge.0.connect(surface_id.clone(), sock) {
-        tracing::warn!(%surface_id, error = %e, "extension handlers connect failed");
-        return;
-    }
-    surface_id_map.0.insert(surface_id.clone(), webview);
-    if let Ok(frame_json) = serde_json::to_string(&frame.payload.0) {
-        bridge.0.send(&surface_id, frame_json);
-    }
-}
-
 /// Inbound (new-model host API): a `window.<ns>.<method>` call arrives as a
 /// `Receive<OzmuxFrame>` with `kind:"host.call"`. The trusted caller is
 /// `frame.webview` (bound per-webview by `bevy_cef`, never the JS payload); its
@@ -459,9 +380,9 @@ fn on_ozmux_frame(
 /// forwarded to the single host over a Rust-minted global `reqId`; denied or
 /// host-down calls reject the page-local Promise directly.
 ///
-/// Runs as a SECOND observer on the shared `Receive<OzmuxFrame>` event (NOT a
-/// second `JsEmitEventPlugin`): observers are broadcast, so the legacy
-/// `on_ozmux_frame` still fires for the same frame and ignores `host.call`.
+/// Registered as an observer on the shared `Receive<OzmuxFrame>` event (NOT a
+/// second `JsEmitEventPlugin`): the event carries all frames; non-`host.call`
+/// frames are ignored via the early return on `HOST_CALL_KIND`.
 fn on_host_call_frame(
     frame: On<Receive<OzmuxFrame>>,
     mut commands: Commands,
@@ -525,30 +446,10 @@ fn on_host_call_frame(
 }
 
 /// Emits a `{reqId, ok:false, error}` reply to a single webview on the `"ozmux"`
-/// channel (shared with the legacy outbound), settling the page-local Promise.
+/// channel, settling the page-local Promise.
 fn reject_host_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
     let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
     commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
-}
-
-/// Outbound: drains handler responses `(surface_id, frame)` and re-emits each to the
-/// originating webview as a `HostEmitEvent` on the `"ozmux"` channel, which the
-/// page's `cef.listen('ozmux', …)` receives (as a JSON string it `JSON.parse`s).
-/// Non-blocking; responses for an unmapped `surface_id` (no inbound seen yet) are
-/// dropped.
-fn drain_handler_responses(
-    bridge: Res<ExtensionHandlersBridge>,
-    surface_id_map: Res<WebviewSurfaceIdMap>,
-    mut commands: Commands,
-) {
-    while let Ok((surface_id, frame)) = bridge.0.outbound().try_recv() {
-        let Some(&webview) = surface_id_map.0.get(&surface_id) else {
-            continue;
-        };
-        let value: serde_json::Value =
-            serde_json::from_str(&frame).unwrap_or(serde_json::Value::Null);
-        commands.trigger(HostEmitEvent::new(webview, "ozmux", &value));
-    }
 }
 
 /// Outbound (new-model host API): drains the host's NDJSON reply lines, maps the
@@ -610,20 +511,12 @@ fn log_webview_load_error(load: On<LoadError>) {
     );
 }
 
-/// Prunes the `WebviewSurfaceIdMap` entry, disconnects the handler connection,
-/// and drops any in-flight host RPC calls for a surface that is being despawned.
-/// Runs pre-removal so `ExtensionSurfaceId` is still readable on the entity.
-fn prune_webview_id_map_on_remove(
+/// Drops any in-flight host RPC calls originating from a surface/webview that is
+/// being despawned, so their replies are not routed back to a dead entity.
+fn drop_inflight_host_calls_on_webview_despawn(
     ev: On<Remove, SurfaceMarker>,
-    mut map: ResMut<WebviewSurfaceIdMap>,
     mut host_rpc: ResMut<HostRpc>,
-    bridge: Res<ExtensionHandlersBridge>,
-    ids: Query<&ExtensionSurfaceId>,
 ) {
-    if let Ok(id) = ids.get(ev.entity) {
-        map.0.remove(&id.0);
-        bridge.0.disconnect(&id.0);
-    }
     host_rpc
         .inflight
         .retain(|_, (entity, _)| *entity != ev.entity);
@@ -782,57 +675,6 @@ mod tests {
     }
 
     #[test]
-    fn attaches_webview_pointed_at_memo_to_extension_host() {
-        let mut app = make_test_app();
-        app.add_systems(Update, finish_extension_setup);
-        let (host, ..) = spawn_extension_host(&mut app, laid_out_node(Vec2::new(800.0, 600.0)));
-        app.update();
-
-        let source = app
-            .world()
-            .get::<WebviewSource>(host)
-            .expect("extension host must receive a WebviewSource");
-        match source {
-            WebviewSource::Url(url) => {
-                assert_eq!(url, &webview_url("memo", "ui/app.html"));
-                assert_eq!(url, "ozmux-ext://memo/ui/app.html");
-            }
-            other => panic!("expected a Url source, got {other:?}"),
-        }
-        assert!(
-            app.world()
-                .get::<MaterialNode<WebviewUiMaterial>>(host)
-                .is_some(),
-            "extension host must receive a WebviewUiMaterial MaterialNode"
-        );
-        assert_eq!(
-            app.world().get::<WebviewSize>(host).map(|s| s.0),
-            Some(Vec2::new(800.0, 600.0)),
-            "the webview must be seeded with the pane's laid-out logical size, not the 800x800 default"
-        );
-        let preload = app
-            .world()
-            .get::<PreloadScripts>(host)
-            .expect("the webview must carry the window.ozmux bridge as a PreloadScript");
-        assert!(
-            preload.0.iter().any(|s| s == OZMUX_EXTENSION_JS),
-            "window.ozmux must be injected as a PreloadScript (a global CefExtension calling cef.listen at load crashes the renderer)"
-        );
-        assert!(
-            preload
-                .0
-                .first()
-                .is_some_and(|s| s.starts_with("window.__ozmuxContext=")),
-            "the context PreloadScript must be injected before the bridge, so window.__ozmuxContext is set when the getter reads it"
-        );
-        assert!(
-            preload.0[0].contains("role:\"extension\"")
-                && preload.0[0].contains("extensionName:\"memo\""),
-            "the context PreloadScript must carry the extension role and name"
-        );
-    }
-
-    #[test]
     fn warns_once_and_marks_host_when_surface_lacks_owning_extension() {
         let mut app = make_test_app();
         app.add_systems(Update, finish_extension_setup);
@@ -969,52 +811,6 @@ mod tests {
     }
 
     #[test]
-    fn surface_id_for_webview_resolves_through_host_surface_entity() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut app = make_test_app();
-        let world = app.world_mut();
-        // The webview entity IS the Extension Surface; it carries the id directly.
-        let surface = world.spawn(ExtensionSurfaceId("aid-42".into())).id();
-        let stray = world.spawn_empty().id();
-
-        let resolved = world
-            .run_system_once(move |surface_ids: Query<&ExtensionSurfaceId>| {
-                (
-                    surface_id_for_webview(surface, &surface_ids),
-                    surface_id_for_webview(stray, &surface_ids),
-                )
-            })
-            .unwrap();
-
-        assert_eq!(resolved.0.as_deref(), Some("aid-42"));
-        assert_eq!(
-            resolved.1, None,
-            "a webview with no ExtensionSurfaceId must resolve to no surface_id"
-        );
-    }
-
-    #[test]
-    fn surface_id_for_webview_is_none_when_surface_lacks_surface_id() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        let mut app = make_test_app();
-        let world = app.world_mut();
-        let surface = world.spawn_empty().id();
-
-        let resolved = world
-            .run_system_once(move |surface_ids: Query<&ExtensionSurfaceId>| {
-                surface_id_for_webview(surface, &surface_ids)
-            })
-            .unwrap();
-
-        assert_eq!(
-            resolved, None,
-            "an unstamped surface (no ExtensionSurfaceId) must resolve to no surface_id"
-        );
-    }
-
-    #[test]
     fn focused_webview_resolves_browser_child_and_respects_address_focus() {
         use crate::ui::{AddressBarFocus, BrowserPageWebview};
         use bevy::ecs::system::RunSystemOnce;
@@ -1125,16 +921,14 @@ mod tests {
     }
 
     #[test]
-    fn prune_webview_id_map_removes_entry_on_surface_despawn() {
+    fn surface_despawn_drops_its_in_flight_host_calls() {
         use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.init_resource::<ExtensionHandlersBridge>();
-        app.init_resource::<WebviewSurfaceIdMap>();
         app.init_resource::<HostRpc>();
-        app.add_observer(prune_webview_id_map_on_remove);
+        app.add_observer(drop_inflight_host_calls_on_webview_despawn);
 
         let (pane, surface) = app
             .world_mut()
@@ -1146,20 +940,13 @@ mod tests {
         app.world_mut().flush();
 
         app.world_mut()
-            .entity_mut(surface)
-            .insert(ExtensionSurfaceId("x".into()));
-        app.world_mut()
-            .resource_mut::<WebviewSurfaceIdMap>()
-            .0
-            .insert("x".into(), surface);
-        app.world_mut().flush();
+            .resource_mut::<HostRpc>()
+            .note_in_flight_for_test("0", surface, "h0");
 
-        assert!(
-            app.world()
-                .resource::<WebviewSurfaceIdMap>()
-                .0
-                .contains_key("x"),
-            "entry must be present before despawn"
+        assert_eq!(
+            app.world().resource::<HostRpc>().count_in_flight_for_test(),
+            1,
+            "the in-flight call must be tracked before despawn"
         );
 
         app.world_mut()
@@ -1170,12 +957,10 @@ mod tests {
         app.world_mut().flush();
         app.update();
 
-        assert!(
-            !app.world()
-                .resource::<WebviewSurfaceIdMap>()
-                .0
-                .contains_key("x"),
-            "entry must be pruned after surface is despawned"
+        assert_eq!(
+            app.world().resource::<HostRpc>().count_in_flight_for_test(),
+            0,
+            "the surface's in-flight host RPC must be dropped on despawn"
         );
     }
 
@@ -1433,10 +1218,6 @@ mod tests {
                 .any(|s| s.starts_with("window.__ozmuxGranted=") && s.contains("\"fs\"")),
             "the granted-namespace list must be injected before the bridge"
         );
-        assert!(
-            !preload.0.iter().any(|s| s == OZMUX_EXTENSION_JS),
-            "legacy ozmux.js must NOT be injected for a new-model surface"
-        );
     }
 
     #[test]
@@ -1444,9 +1225,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<HostRpc>();
-        app.init_resource::<ExtensionHandlersBridge>();
-        app.init_resource::<WebviewSurfaceIdMap>();
-        app.add_observer(prune_webview_id_map_on_remove);
+        app.add_observer(drop_inflight_host_calls_on_webview_despawn);
 
         let surface = app.world_mut().spawn(SurfaceMarker).id();
         let other = app.world_mut().spawn(SurfaceMarker).id();

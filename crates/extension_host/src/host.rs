@@ -1,11 +1,8 @@
-//! Tokio-free extension host: a per-extension runtime root, the shared socket-path
-//! endpoint, a blocking `fetch`, and (Task 3) the process spawn + lifecycle.
+//! Tokio-free extension host: a per-extension runtime root, the shared asset
+//! registry, and the process spawn + lifecycle.
 
-use crate::protocol::{ProtocolError, Request, Response, read_response, write_request};
 use crossbeam_channel::Sender;
 use std::collections::HashMap;
-use std::net::Shutdown;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +10,6 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
-const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A per-extension runtime directory tree (`<base>/<pid>/<name>/{sock,bin}/`), removed on drop.
 pub struct RuntimeRoot {
@@ -106,113 +102,22 @@ impl Drop for RuntimeRoot {
     }
 }
 
-/// The resolved socket path of the (single, for this slice) live extension.
-///
-/// Written once by the host thread on readiness and cleared on exit; read by
-/// the scheme handler on the CEF thread.
+/// A shared, interior-mutable map of extension name → its on-disk asset root.
+/// Built before extensions launch (the CEF scheme handler is constructed at
+/// `CefPlugin::build()`) and populated as each extension is discovered, so the
+/// handler reads names registered after its own construction.
 #[derive(Clone, Default)]
-pub struct ExtensionEndpoints(Arc<RwLock<Option<PathBuf>>>);
-
-impl ExtensionEndpoints {
-    /// Returns the live socket path, or `None` before readiness / after exit.
-    pub fn get(&self) -> Option<PathBuf> {
-        self.0.read().unwrap().clone()
-    }
-
-    /// Publishes the live socket path so the scheme handler can fetch from it.
-    pub fn set(&self, path: PathBuf) {
-        *self.0.write().unwrap() = Some(path);
-    }
-}
-
-/// The asset source for one extension name, dispatched by the `ozmux-ext://`
-/// scheme handler. New-model extensions serve static files directly from a
-/// directory; legacy command-extensions fetch over their per-extension socket.
-#[derive(Clone)]
-pub enum AssetSource {
-    /// Serve static files directly from this extension directory.
-    Static(PathBuf),
-    /// Fetch assets over the legacy per-extension socket endpoint.
-    Legacy(ExtensionEndpoints),
-}
-
-/// A shared, interior-mutable map of extension name → its [`AssetSource`]. Built
-/// before extensions launch (the CEF scheme handler is constructed at
-/// `CefPlugin::build()`) and populated as each extension is discovered/becomes
-/// ready, so the handler reads names registered after its own construction.
-///
-/// # Invariants
-/// A `Legacy` entry's [`ExtensionEndpoints`] is the same handle the manager
-/// publishes the live socket path into on readiness; `Static` entries are fixed
-/// at discovery time.
-#[derive(Clone, Default)]
-pub struct AssetSourceRegistry(Arc<RwLock<HashMap<String, AssetSource>>>);
+pub struct AssetSourceRegistry(Arc<RwLock<HashMap<String, PathBuf>>>);
 
 impl AssetSourceRegistry {
-    /// Returns (cloning) the asset source for `name`, if registered.
-    pub fn get(&self, name: &str) -> Option<AssetSource> {
+    /// Returns (cloning) the asset root for `name`, if registered.
+    pub fn get(&self, name: &str) -> Option<PathBuf> {
         self.0.read().unwrap().get(name).cloned()
     }
 
-    /// Inserts/replaces the asset source for `name`.
-    pub fn insert(&self, name: impl Into<String>, source: AssetSource) {
-        self.0.write().unwrap().insert(name.into(), source);
-    }
-
-    /// Returns the legacy endpoint handle for `name`, or `None` when the name is
-    /// unregistered or is a `Static` source. Used to publish the live socket
-    /// path on readiness.
-    pub fn legacy_endpoint(&self, name: &str) -> Option<ExtensionEndpoints> {
-        match self.0.read().unwrap().get(name) {
-            Some(AssetSource::Legacy(ep)) => Some(ep.clone()),
-            _ => None,
-        }
-    }
-}
-
-/// A failure while fetching an asset from the extension.
-#[derive(Debug, thiserror::Error)]
-pub enum FetchError {
-    /// No live endpoint yet (pre-readiness or post-exit).
-    #[error("extension endpoint is not ready")]
-    NotReady,
-    /// Connect / read / write / timeout failure.
-    #[error("extension fetch I/O error: {0}")]
-    Io(#[source] std::io::Error),
-    /// The response frame was malformed.
-    #[error("extension protocol error: {0}")]
-    Protocol(#[source] ProtocolError),
-}
-
-/// Fetches `path` from the currently-live extension endpoint.
-pub fn fetch(endpoints: &ExtensionEndpoints, path: &str) -> Result<Response, FetchError> {
-    let sock = endpoints.get().ok_or(FetchError::NotReady)?;
-    fetch_at(&sock, path)
-}
-
-pub(crate) fn fetch_at(sock: &Path, path: &str) -> Result<Response, FetchError> {
-    let mut stream = UnixStream::connect(sock).map_err(FetchError::Io)?;
-    stream
-        .set_read_timeout(Some(FETCH_TIMEOUT))
-        .map_err(FetchError::Io)?;
-    stream
-        .set_write_timeout(Some(FETCH_TIMEOUT))
-        .map_err(FetchError::Io)?;
-    write_request(
-        &mut stream,
-        &Request {
-            path: path.to_string(),
-        },
-    )
-    .map_err(map_proto)?;
-    stream.shutdown(Shutdown::Write).map_err(FetchError::Io)?;
-    read_response(&mut stream).map_err(map_proto)
-}
-
-fn map_proto(e: ProtocolError) -> FetchError {
-    match e {
-        ProtocolError::Io(io) => FetchError::Io(io),
-        other => FetchError::Protocol(other),
+    /// Inserts/replaces the asset root for `name`.
+    pub fn insert(&self, name: impl Into<String>, root: PathBuf) {
+        self.0.write().unwrap().insert(name.into(), root);
     }
 }
 
@@ -265,10 +170,6 @@ pub(crate) fn run_lifecycle(
     // "listener-up ≠ app-ready" gap where a process could accept connections
     // before its handler is registered.
     let deadline = Instant::now() + ready_timeout;
-    // TODO: each fetch_at attempt uses the fixed FETCH_TIMEOUT (5s) for its
-    // read/write, so a ready_timeout shorter than 5s is only honored between
-    // attempts, not during one hung attempt. Parametrize fetch_at's timeout if
-    // an extension can bind the socket but stall on the first request.
     let ready = loop {
         if is_ready() {
             break true;
@@ -334,68 +235,13 @@ pub(crate) fn run_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Response, read_request, write_response};
-    use std::os::unix::net::UnixListener;
-
-    fn serve_once(sock: std::path::PathBuf, resp: Response) -> std::thread::JoinHandle<()> {
-        let listener = UnixListener::bind(&sock).unwrap();
-        std::thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let _ = read_request(&mut stream);
-                let _ = write_response(&mut stream, &resp);
-            }
-        })
-    }
 
     #[test]
-    fn asset_registry_distinguishes_static_and_legacy() {
-        use std::path::PathBuf;
+    fn asset_registry_stores_and_retrieves_path() {
         let reg = AssetSourceRegistry::default();
-        reg.insert("memo", AssetSource::Static(PathBuf::from("/abs/memo")));
-        reg.insert("md", AssetSource::Legacy(ExtensionEndpoints::default()));
-
-        assert!(
-            matches!(reg.get("memo"), Some(AssetSource::Static(ref p)) if p == &PathBuf::from("/abs/memo"))
-        );
-        assert!(matches!(reg.get("md"), Some(AssetSource::Legacy(_))));
-        assert!(reg.get("ghost").is_none());
-
-        assert!(reg.legacy_endpoint("md").is_some());
-        assert!(reg.legacy_endpoint("memo").is_none());
-        assert!(reg.legacy_endpoint("ghost").is_none());
-    }
-
-    #[test]
-    fn fetch_returns_served_response() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("e.sock");
-        let h = serve_once(
-            sock.clone(),
-            Response {
-                status: 200,
-                content_type: "text/html".into(),
-                body: b"<h1>hi</h1>".to_vec(),
-            },
-        );
-        let got = fetch_at(&sock, "index.html").unwrap();
-        assert_eq!(got.status, 200);
-        assert_eq!(got.body, b"<h1>hi</h1>");
-        h.join().unwrap();
-    }
-
-    #[test]
-    fn fetch_not_ready_when_endpoint_unset() {
-        let endpoints = ExtensionEndpoints::default();
-        assert!(matches!(
-            fetch(&endpoints, "index.html"),
-            Err(FetchError::NotReady)
-        ));
-    }
-
-    #[test]
-    fn fetch_io_error_when_socket_absent() {
-        let missing = std::path::Path::new("/tmp/ozmux-does-not-exist.sock");
-        assert!(matches!(fetch_at(missing, "x"), Err(FetchError::Io(_))));
+        reg.insert("memo", PathBuf::from("/abs/memo"));
+        assert_eq!(reg.get("memo"), Some(PathBuf::from("/abs/memo")));
+        assert_eq!(reg.get("ghost"), None);
     }
 
     #[test]

@@ -5,7 +5,6 @@
 //! exactly once. Failures mark the entity with `TerminalSpawnFailed` so the
 //! system does not retry on subsequent frames.
 
-use crate::extension_manager::ExtensionRegistry;
 use crate::osc_webview::OscWebviewGate;
 use crate::system_set::OzmuxSystems;
 use crate::ui::{TerminalSpawnFailed, TerminalSurfaceMarker};
@@ -17,7 +16,6 @@ use bevy_terminal::{
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
-use ozmux_extension_host::terminal_env;
 use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneMarker, SurfaceOf};
 
 pub struct OzmuxTerminalUiPlugin;
@@ -42,16 +40,8 @@ impl Plugin for OzmuxTerminalUiPlugin {
 /// Spawns a `TerminalBundle` and attaches `TerminalRenderBundle` for each
 /// freshly-spawned Terminal Surface host. Runs every Update tick but only
 /// targets entities that lack `TerminalHandle` and `TerminalSpawnFailed`,
-/// so the per-entity work happens exactly once.
-///
-/// When extensions were launched (the `ExtensionRegistry` resource), the
-/// spawned terminal's env is seeded via `terminal_env` with every launched
-/// extension's bin dir so any `@<cmd>` shim resolves and can reach the control
-/// bridge. The bridge keys on `OZMUX_PANE_ID` being the multiplexer Pane
-/// `Entity`, so the surface's owning Pane / Workspace are resolved via the
-/// `SurfaceOf` / `OwningWorkspace` relationships: surface → Pane → Workspace.
-/// If the chain cannot be resolved (or no extension launched) the env is
-/// empty — the terminal still works, just without `@<cmd>` support.
+/// so the per-entity work happens exactly once. The spawned env carries only
+/// `TERM_PROGRAM`.
 fn finish_terminal_setup(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -63,24 +53,12 @@ fn finish_terminal_setup(
             Without<TerminalSpawnFailed>,
         ),
     >,
-    owners: Query<&SurfaceOf>,
-    pane_workspaces: Query<&OwningWorkspace, With<PaneMarker>>,
-    registry: Option<Res<ExtensionRegistry>>,
     cwds: Query<&Cwd>,
     gate: Option<Res<OscWebviewGate>>,
 ) {
     for surface in surfaces.iter() {
-        let mut env = match registry.as_ref() {
-            Some(registry) => match resolve_pane_workspace(surface, &owners, &pane_workspaces) {
-                Some((pane, workspace)) => {
-                    let exts: Vec<_> = registry.extensions.values().collect();
-                    terminal_env(&exts, pane, workspace)
-                }
-                None => Vec::new(),
-            },
-            None => Vec::new(),
-        };
-        env.push(("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string()));
+        let env: Vec<(String, String)> =
+            vec![("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string())];
         let seed = cwds.get(surface).ok().map(|c| c.0.clone());
         let osc_gate = gate
             .as_ref()
