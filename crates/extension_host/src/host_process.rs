@@ -131,7 +131,7 @@ impl Drop for HostProcess {
     fn drop(&mut self) {
         // NOTE: signal shutdown before take()/join() so the lifecycle thread
         // observes it and kills the child if it holds the Arc out of the mutex
-        // (mirroring CommandExtension::Drop's SeqCst ordering guarantee).
+        // (SeqCst so the shutdown flag is visible to the lifecycle thread before the child is killed).
         self.shutdown.store(true, Ordering::SeqCst);
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
