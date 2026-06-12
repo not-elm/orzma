@@ -26,6 +26,7 @@ struct TerminalParams {
     hover_hyperlink_id: u32,
     hover_active: u32,
     dim: f32,
+    overlay_rects: array<vec4<i32>, 4>,
 };
 
 struct Cell {
@@ -62,6 +63,14 @@ struct CellColors {
 @group(1) @binding(2) var<storage, read> glyphs: array<Glyph>;
 @group(1) @binding(3) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(4) var atlas_sampler: sampler;
+@group(1) @binding(5) var overlay0_tex: texture_2d<f32>;
+@group(1) @binding(6) var overlay0_samp: sampler;
+@group(1) @binding(7) var overlay1_tex: texture_2d<f32>;
+@group(1) @binding(8) var overlay1_samp: sampler;
+@group(1) @binding(9) var overlay2_tex: texture_2d<f32>;
+@group(1) @binding(10) var overlay2_samp: sampler;
+@group(1) @binding(11) var overlay3_tex: texture_2d<f32>;
+@group(1) @binding(12) var overlay3_samp: sampler;
 
 // NOTE: Must stay in sync with `ozmux_terminal_protocol::style::*`. The
 //       Rust-side test `style_bits_match_protocol_constants` asserts the
@@ -125,11 +134,13 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 // Top-level pipeline stages
 // ============================================================================
 
-// Pipeline for a fragment that lies inside the grid: background → primary
-// glyph → left-neighbor overdraw → text decorations → cursor → selection.
+// Pipeline for a fragment that lies inside the grid: background → inline
+// overlays → primary glyph → left-neighbor overdraw → text decorations →
+// cursor → selection.
 fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
     let colors = resolve_cell_colors(hit.cell);
     var color = colors.bg;
+    color = composite_inline_overlays(hit, color);
     color = paint_primary_glyph(hit, colors.fg, color);
     color = paint_left_overdraw(hit, color);
     return paint_cell_overlays(hit, colors.fg, color);
@@ -353,6 +364,85 @@ fn is_in_selection_uniform(
     if row == lo_r && col < lo_c { return false; }
     if row == hi_r && col > hi_c { return false; }
     return true;
+}
+
+// ============================================================================
+// Inline-overlay compositing (webview textures)
+// ============================================================================
+
+// Inline-overlay compositing (spec §6.2): samples each ACTIVE overlay slot
+// whose cell-rect contains this fragment and composites it OVER the cell
+// background. Source is premultiplied alpha (CEF convention, spec §6.3);
+// the sRGB texture view linearizes on read, so values mix in linear space
+// with no manual conversion. Glyphs paint AFTER overlays, so terminal text
+// sits on top of an inline webview.
+//
+// uv derives from the UNCLIPPED rect (rect.x may be negative when the rect
+// is partially scrolled above the viewport), so partial visibility never
+// distorts the image; grid-edge clipping is inherent because only in-grid
+// fragments reach paint_grid_cell.
+fn composite_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
+    var color = base;
+    let p_px = vec2<f32>(f32(hit.col), f32(hit.row)) * params.cell_size_px + hit.in_cell_px;
+    // NOTE: bindings cannot be dynamically indexed in core WGSL — the four
+    // slots are unrolled by hand; keep slot order identical to the Rust
+    // `set_overlays` field order or textures swap silently.
+    {
+        let uv = overlay_uv(params.overlay_rects[0], p_px, hit);
+        if uv.x >= 0.0 {
+            let s = textureSampleLevel(overlay0_tex, overlay0_samp, uv, 0.0);
+            color = blend_premultiplied_over(color, s);
+        }
+    }
+    {
+        let uv = overlay_uv(params.overlay_rects[1], p_px, hit);
+        if uv.x >= 0.0 {
+            let s = textureSampleLevel(overlay1_tex, overlay1_samp, uv, 0.0);
+            color = blend_premultiplied_over(color, s);
+        }
+    }
+    {
+        let uv = overlay_uv(params.overlay_rects[2], p_px, hit);
+        if uv.x >= 0.0 {
+            let s = textureSampleLevel(overlay2_tex, overlay2_samp, uv, 0.0);
+            color = blend_premultiplied_over(color, s);
+        }
+    }
+    {
+        let uv = overlay_uv(params.overlay_rects[3], p_px, hit);
+        if uv.x >= 0.0 {
+            let s = textureSampleLevel(overlay3_tex, overlay3_samp, uv, 0.0);
+            color = blend_premultiplied_over(color, s);
+        }
+    }
+    return color;
+}
+
+// Returns the overlay-local uv for `rect = (row, col, rows, cols)` at the
+// fragment's grid position, or vec2(-1.0) when the slot is inactive
+// (rows == 0) or the fragment's CELL lies outside the rect. The hit test is
+// cell-quantized (placeholder-cell semantics); the uv itself is pixel-exact
+// against the unclipped rect.
+fn overlay_uv(rect: vec4<i32>, p_px: vec2<f32>, hit: CellHit) -> vec2<f32> {
+    let miss = vec2<f32>(-1.0, -1.0);
+    if rect.z == 0 {
+        return miss;
+    }
+    let row = i32(hit.row);
+    let col = i32(hit.col);
+    if row < rect.x || row >= rect.x + rect.z || col < rect.y || col >= rect.y + rect.w {
+        return miss;
+    }
+    let origin_px = vec2<f32>(f32(rect.y), f32(rect.x)) * params.cell_size_px;
+    let size_px = vec2<f32>(f32(rect.w), f32(rect.z)) * params.cell_size_px;
+    return (p_px - origin_px) / size_px;
+}
+
+// Premultiplied-alpha OVER in linear space (src premultiplied per CEF; dst is
+// the terminal cell background, opaque in practice).
+fn blend_premultiplied_over(dst: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
+    let inv = 1.0 - src.a;
+    return vec4<f32>(src.rgb + dst.rgb * inv, src.a + dst.a * inv);
 }
 
 // ============================================================================

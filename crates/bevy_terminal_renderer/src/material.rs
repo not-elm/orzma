@@ -449,7 +449,10 @@ fn update_terminal_material(
     // reference to the initial (empty) atlas texture even after
     // `sync_atlas_image` re-uploads pixels — the glyphs are present on GPU
     // but the shader's `textureSampleLevel` returns 0. The actual GPU upload
-    // cost is bounded by `needs_rebuild` below.
+    // cost is bounded by `needs_rebuild` below. The same every-frame Modified
+    // is also the overlay-texture rebind lifeline: a bevy_cef headless target
+    // re-creates its GPU texture on resize, and only this rebuild repoints
+    // the bind group at it (spec §4).
     // NOTE: Skip the entire system when PrimaryWindow is transiently
     // absent (display hotplug, brief winit reconnect). Trade-off: the
     // `mat.params = ...` write below would fire AssetEvent::Modified
